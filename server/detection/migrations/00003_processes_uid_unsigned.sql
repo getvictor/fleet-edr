@@ -13,8 +13,6 @@ ALTER TABLE processes
 -- +goose StatementEnd
 
 -- +goose Down
--- +goose StatementBegin
-ALTER TABLE processes
-	MODIFY uid INT,
-	MODIFY gid INT;
--- +goose StatementEnd
+-- Intentionally a no-op. Narrowing uid/gid back to a signed INT would fail (or silently corrupt) on any row that has since stored a
+-- value above 2147483647, e.g. nobody = 4294967294, so a real rollback is unsafe and would reintroduce the overflow bug. Migrations
+-- are forward-only (ADR-0009); this Down deliberately does nothing.

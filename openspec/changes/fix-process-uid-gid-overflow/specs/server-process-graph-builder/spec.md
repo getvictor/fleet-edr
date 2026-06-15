@@ -14,7 +14,7 @@ The system SHALL persist process effective UID and GID values across the entire 
 
 ### Requirement: A single unpersistable event does not stall batch processing
 
-The system SHALL isolate a single event that fails with a permanent (non-retryable) persistence error so that it does not block the rest of its batch or any subsequent batch. Such an event MUST be dropped, and logged, while the remaining events in the batch are still materialized and the batch is reported successful so the processor marks it processed rather than re-fetching it. An event that fails with a transient (retryable) error MUST instead cause the batch to be reported as failed so the processor retries it and no data is lost to a recoverable fault.
+The system SHALL isolate a single event that fails with a permanent (non-retryable) error so that it does not block the rest of its batch or any subsequent batch. A permanent error is one that recurs identically on every retry: a payload that cannot be parsed (a JSON syntax or type error), or a value the database can never store (a data-integrity violation). Such an event MUST be dropped, and logged, while the remaining events in the batch are still materialized and the batch is reported successful so the processor marks it processed rather than re-fetching it. An event that fails with a transient (retryable) error MUST instead cause the batch to be reported as failed so the processor retries it and no data is lost to a recoverable fault.
 
 #### Scenario: A poison event is dropped and the batch advances
 
@@ -23,6 +23,14 @@ The system SHALL isolate a single event that fails with a permanent (non-retryab
 - **THEN** the valid event's process record is materialized
 - **AND** the batch is reported successful so the processor marks it processed and does not retry it
 - **AND** the poison event is not stored
+
+#### Scenario: A malformed event is dropped and the batch advances
+
+- **GIVEN** a batch containing one event whose payload cannot be parsed and one valid event
+- **WHEN** the builder processes the batch
+- **THEN** the valid event's process record is materialized
+- **AND** the batch is reported successful so the processor marks it processed and does not retry it
+- **AND** the malformed event is not stored
 
 #### Scenario: A transient failure retries the batch
 

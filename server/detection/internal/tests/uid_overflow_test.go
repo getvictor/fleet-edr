@@ -45,8 +45,8 @@ func TestProcessGraph_HighUIDProcessPersists(t *testing.T) {
 	b, db := newBuilder(t)
 	ctx := t.Context()
 
-	const nobodyUID int64 = 4294967294 // -2 as uint32
-	const noneGID int64 = 4294967295   // KAUTH_UID_NONE, -1 as uint32
+	const nobodyUID int64 = 4294967294 // nobody, -2 as uint32
+	const noneGID int64 = 4294967295   // the unset-id sentinel, -1 as uint32
 	now := time.Now().UnixNano()
 	events := []api.Event{
 		{EventID: "fork-nobody", HostID: "h", TimestampNs: now, EventType: "fork",
@@ -94,4 +94,29 @@ func TestProcessBatch_PermanentErrorDoesNotWedgeBatch(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM processes WHERE pid = 11`).Scan(&poison))
 	assert.Equal(t, 0, poison, "the poison event is dropped, not stored")
+}
+
+// spec:server-process-graph-builder/a-single-unpersistable-event-does-not-stall-batch-processing/a-malformed-event-is-dropped-and-the-batch-advances
+func TestProcessBatch_MalformedPayloadDoesNotWedgeBatch(t *testing.T) {
+	t.Parallel()
+	b, db := newBuilder(t)
+	ctx := t.Context()
+
+	now := time.Now().UnixNano()
+	// A non-MySQL poison: the exec payload's pid is a string where an int is expected, so json.Unmarshal returns a deterministic
+	// UnmarshalTypeError. Without classifying parse failures as permanent, this would fail the batch and wedge the pipeline the same
+	// way the uid overflow did (issue #379 review follow-up).
+	events := []api.Event{
+		{EventID: "good-fork-2", HostID: "good2", TimestampNs: now, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":20,"parent_pid":1}`)},
+		{EventID: "malformed-exec", HostID: "good2", TimestampNs: now + 1, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":"not-a-number"}`)},
+	}
+
+	require.NoError(t, b.ProcessBatch(ctx, events))
+
+	var good int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM processes WHERE host_id = 'good2' AND pid = 20`).Scan(&good))
+	assert.Equal(t, 1, good, "the valid event is materialized despite the malformed sibling")
 }

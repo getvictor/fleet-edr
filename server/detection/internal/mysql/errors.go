@@ -10,9 +10,12 @@ import (
 // identically on every retry. They are distinguished from transient faults (deadlock, lock-wait timeout, dropped connection) that a
 // retry can clear.
 var permanentDataErrors = map[uint16]struct{}{
+	1048: {}, // ER_BAD_NULL_ERROR: NULL into a NOT NULL column
+	1062: {}, // ER_DUP_ENTRY: duplicate value for a unique key (the row already exists; retrying never clears it)
 	1264: {}, // ER_WARN_DATA_OUT_OF_RANGE: value outside the column's range (e.g. a uid_t past signed INT)
 	1265: {}, // ER_WARN_DATA_TRUNCATED
 	1292: {}, // ER_TRUNCATED_WRONG_VALUE
+	1364: {}, // ER_NO_DEFAULT_FOR_FIELD: a required column with no default was omitted
 	1366: {}, // ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
 	1406: {}, // ER_DATA_TOO_LONG
 	3819: {}, // ER_CHECK_CONSTRAINT_VIOLATED

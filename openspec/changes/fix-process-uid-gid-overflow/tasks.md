@@ -8,6 +8,9 @@
 
 - [x] `internal/mysql/errors.go`: `IsPermanentDataError` classifying MySQL data-integrity error numbers (1264, 1265, 1292, 1366, 1406, 3819); unknown errors treated as transient.
 - [x] `internal/graph/builder.go` `ProcessBatch`: drop events that fail with a permanent error (log `event dropped: permanent processing error`); fail the batch only for transient errors so the processor retries them.
+- [x] `internal/graph/builder.go` `permanentError`: also classify deterministic parse failures (`*json.SyntaxError`, `*json.UnmarshalTypeError`) as permanent, so a malformed payload (or a uid that overflows the Go type on 32-bit) cannot wedge the batch (review follow-up).
+- [x] `internal/mysql/errors.go`: include 1048 (bad null), 1062 (dup entry), 1364 (no default) as permanent (review follow-up).
+- [x] Migration `00003`: Down is a documented no-op (narrowing back to signed INT would overflow rows that now hold values > 2147483647; forward-only per ADR-0009) (review follow-up).
 
 ## 3. Spec
 

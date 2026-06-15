@@ -24,6 +24,9 @@ func TestIsPermanentDataError(t *testing.T) {
 		{"out-of-range uid (1264)", &driver.MySQLError{Number: 1264, Message: "Out of range value for column 'uid' at row 1"}, true},
 		{"data too long (1406)", &driver.MySQLError{Number: 1406, Message: "Data too long for column 'host_id'"}, true},
 		{"check constraint violated (3819)", &driver.MySQLError{Number: 3819}, true},
+		{"bad null (1048)", &driver.MySQLError{Number: 1048}, true},
+		{"duplicate entry (1062)", &driver.MySQLError{Number: 1062}, true},
+		{"no default for field (1364)", &driver.MySQLError{Number: 1364}, true},
 		{"wrapped out-of-range is still permanent", fmt.Errorf("insert process: %w", &driver.MySQLError{Number: 1264}), true},
 		// spec:server-process-graph-builder/a-single-unpersistable-event-does-not-stall-batch-processing/a-transient-failure-retries-the-batch
 		{"deadlock (1213) is transient", &driver.MySQLError{Number: 1213}, false},
