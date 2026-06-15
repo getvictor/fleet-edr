@@ -185,7 +185,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [x] OTLP/gRPC export with no-op fallback when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset
 - [x] W3C `traceparent` + `baggage` propagators installed unconditionally
 - [x] `otelhttp` auto-instrumentation on the HTTP server
-- [x] `otelsql` instrumentation with `db.client.connection` metrics (idle / in-use / max)
+- [x] `otelsql` instrumentation with `db.sql.connection` metrics (idle / in-use / max)
 - [x] `otelslog` bridge so structured logs carry trace context
 - [x] Atomic provider publish: providers built fully before any global is set
 - [x] Resource attributes from env + host + process detectors, plus build-time `service.version`
