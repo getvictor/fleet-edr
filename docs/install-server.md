@@ -8,7 +8,7 @@ The server tier is stateless: it holds no in-process state that outlives a reque
 
 ### Multi-replica (high availability): reference
 
-Two or more server replicas behind a load balancer, in front of one MySQL. This is the recommended topology: a replica can be drained and restarted (or rolled to a new version) without a maintenance window, because the load balancer routes around a draining replica and sessions are MySQL-backed, so there are no sticky sessions to strand. Use `packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative to the NGINX proxy that adds active `/readyz` health checks. The setup steps below apply unchanged except that you also generate a shared `session_signing_key` secret (`openssl rand -hex 32 > secrets/session_signing_key`), which every replica must share so a session minted on one validates on another.
+Two or more server replicas behind a load balancer, in front of one MySQL. This is the recommended topology: a replica can be drained and restarted (or rolled to a new version) without a maintenance window, because the load balancer routes around a draining replica and sessions are MySQL-backed, so there are no sticky sessions to strand. Use `packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative that adds active `/readyz` health checks. The setup steps below apply unchanged except that you also generate a shared `session_signing_key` secret (`openssl rand -hex 32 > secrets/session_signing_key`), which every replica must share so a session minted on one validates on another.
 
 Properties this topology relies on, each pinned by a test in the `server-availability` spec: the processor scales across replicas via `SKIP LOCKED`; sessions and CSRF tokens validate on any replica; the periodic maintenance tasks run on exactly one replica via MySQL advisory locking; and schema migrations are applied under an advisory lock so a rolling upgrade never runs two migration applies against one database at once.
 
@@ -22,18 +22,18 @@ One server replica + MySQL, from the root `docker-compose.prod.yml`. Simplest to
 
 The control-plane availability target for the multi-replica topology is **99.9%** (the management, query, ingest, and alerting plane: the UI, the API, and `/api/events` ingestion). The full architecture rationale is in [ADR-0011](adr/0011-ha-architecture.md).
 
-How the topology reaches it: N stateless replicas behind a load balancer mean a single replica can crash, be drained, or be rolled to a new version without the control plane going down, because the LB routes around any replica that is not reporting `/readyz` ready and sessions are MySQL-backed (any replica serves any request). Rolling upgrade (see [operations.md](operations.md#rolling-upgrade-multi-replica)) is therefore not a maintenance window.
+How it reaches that: a replica can crash, drain, or roll to a new version without taking the control plane down, because MySQL-backed sessions let any replica serve any request and the load balancer pulls a draining replica from rotation. With the HAProxy config (or NGINX Plus) that pull is active, driven by `/readyz` polling, so a replica is removed before a request fails; the default open-source NGINX has only passive failover (it marks a replica down after failed forwards). A [rolling upgrade](operations.md#rolling-upgrade-multi-replica) is therefore not a maintenance window.
 
-**Endpoint protection does not depend on control-plane availability.** This is the honest resilience story for a customer:
+**Endpoint protection does not depend on control-plane availability:**
 
 - **Enforcement continues during an outage.** Application-control block decisions are made in the macOS system extension from a cached policy snapshot, not by a server round-trip, so a server or network outage does not open a hole in enforcement.
 - **No endpoint data is lost (up to the queue cap).** When the server is unreachable the agent buffers events in its local SQLite queue and uploads them when the server returns; `edr.agent.queue.dropped` increments only if the queue hits its cap. Detection and alerting run server-side, so alerts for events captured during an outage are generated when the backlog uploads (delayed, not lost).
 
-Three caveats on the SLA, stated plainly:
+Three caveats on the SLA:
 
 1. **It is the control plane, not your infrastructure.** The 99.9% target is the EDR server tier. It is conditional on the load balancer and MySQL you operate being available; the EDR does not monitor or guarantee those.
-2. **MySQL is a single point of failure in the reference stack.** v0.1.0 ships a single MySQL; the customer brings a replicated or managed MySQL for a fully HA datastore. A MySQL outage takes the control plane down regardless of how many server replicas are running (endpoint enforcement still continues, per above).
-3. **Single region, single MySQL writer.** There is no multi-region or active-active deployment in v0.1.0; geo-distribution and read-routing are deferred to a later release.
+2. **MySQL is a single point of failure in the reference stack.** v0.1.1 ships a single MySQL; the customer brings a replicated or managed MySQL for a fully HA datastore. A MySQL outage takes the control plane down regardless of how many server replicas are running (endpoint enforcement still continues, per above).
+3. **Single region, single MySQL writer.** There is no multi-region or active-active deployment in v0.1.1; geo-distribution and read-routing are deferred to a later release.
 
 ## Prerequisites
 
@@ -122,7 +122,7 @@ EDR_TLS_KEY_FILE=/tls/privkey.pem
 
 ```sh
 cat > .env <<'EOF'
-EDR_VERSION=v0.1.0
+EDR_VERSION=v0.1.1
 OTEL_EXPORTER_OTLP_ENDPOINT=
 EOF
 ```
@@ -155,14 +155,14 @@ Local dev deployment (`task dev:server`, issue #140: TLS by default with the sel
 curl -sk https://localhost:8088/readyz | jq .
 ```
 
-`-k` is acceptable here because the cert is a known self-signed dev cert; never ship `-k` in an automation script against a real deployment; install mkcert locally for warning-free dev (`brew install mkcert nss && mkcert -install`) and the cert validates without the flag.
+`-k` is acceptable here because the cert is a known self-signed dev cert. Install mkcert for warning-free dev (`brew install mkcert nss && mkcert -install`) and it validates without the flag.
 
 Expect:
 
 ```json
 {
   "status": "ok",
-  "version": "v0.1.0",
+  "version": "v0.1.1",
   "uptime_seconds": 12,
   "checks": {
     "db": { "status": "ok", "latency_ms": 2 }
