@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
@@ -30,6 +31,41 @@ func TestBuildResource_ServiceInstanceID(t *testing.T) {
 		}
 		require.True(t, found, "resource must carry service.instance.id so every emitted span inherits it")
 		assert.Equal(t, "instance-abc", got)
+	})
+}
+
+// TestBuildResource_DeploymentEnvironment pins that the telemetry resource always carries a deployment environment, under both the
+// current semconv key (deployment.environment.name) and the deprecated deployment.environment, defaulting to "default" and overridable
+// via OTEL_RESOURCE_ATTRIBUTES. The attribute lives on the resource, so every span / metric / log inherits it, which is what lets the
+// bundled SigNoz dashboards drive a dynamic environment selector.
+func TestBuildResource_DeploymentEnvironment(t *testing.T) {
+	deprecatedKey := attribute.Key("deployment.environment")
+	envOf := func(t *testing.T) map[attribute.Key]string {
+		t.Helper()
+		res, err := buildResource(t.Context(), Options{ServiceName: "test-svc"})
+		require.NoError(t, err)
+		got := map[attribute.Key]string{}
+		for _, kv := range res.Attributes() {
+			if kv.Key == semconv.DeploymentEnvironmentNameKey || kv.Key == deprecatedKey {
+				got[kv.Key] = kv.Value.AsString()
+			}
+		}
+		return got
+	}
+
+	t.Run("spec:observability-instrumentation/telemetry-carries-a-deployment-environment-resource-attribute/default-deployment-environment", func(t *testing.T) {
+		got := envOf(t)
+		assert.Equal(t, "default", got[semconv.DeploymentEnvironmentNameKey], "deployment.environment.name defaults to 'default'")
+		assert.Equal(t, "default", got[deprecatedKey], "deprecated deployment.environment defaults to 'default'")
+	})
+
+	t.Run("spec:observability-instrumentation/telemetry-carries-a-deployment-environment-resource-attribute/operator-overrides-the-deployment-environment", func(t *testing.T) {
+		// resource.WithFromEnv() runs after the deployment defaults, so an OTEL_RESOURCE_ATTRIBUTES value wins on conflict. t.Setenv
+		// forbids t.Parallel, which keeps this subtest from racing the process-global env var.
+		t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=staging,deployment.environment.name=staging")
+		got := envOf(t)
+		assert.Equal(t, "staging", got[semconv.DeploymentEnvironmentNameKey], "OTEL_RESOURCE_ATTRIBUTES overrides deployment.environment.name")
+		assert.Equal(t, "staging", got[deprecatedKey], "OTEL_RESOURCE_ATTRIBUTES overrides the deprecated deployment.environment")
 	})
 }
 

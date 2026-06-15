@@ -217,6 +217,15 @@ func buildResource(ctx context.Context, opts Options) (*resource.Resource, error
 	// The resource detectors below read OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME, host, and process info. Merging with the explicit
 	// attributes gives operator-supplied values priority while still picking up free metadata.
 	return resource.New(ctx,
+		// deployment.environment defaults FIRST so the OTEL_RESOURCE_ATTRIBUTES detector below overrides them on conflict (resource.New
+		// merges later options over earlier ones). Emitting both the current semconv key (deployment.environment.name) and the deprecated
+		// deployment.environment unconditionally keeps the attribute present in every SigNoz instance a fleet-edr binary reports to, which
+		// is what lets the config/observability dashboards drive a dynamic environment selector. Fixed to "default" (single-environment
+		// product today); an operator scopes per environment by setting OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<name>.
+		resource.WithAttributes(
+			semconv.DeploymentEnvironmentName("default"),
+			attribute.String("deployment.environment", "default"), // deprecated attribute still consumed by SigNoz
+		),
 		resource.WithFromEnv(),
 		resource.WithHost(),
 		resource.WithProcess(),
