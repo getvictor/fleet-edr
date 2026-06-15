@@ -507,7 +507,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = extension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = extension;
+				INFOPLIST_KEY_CFBundleDisplayName = "Fleet EDR Security Extension";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -531,7 +531,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = extension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = extension;
+				INFOPLIST_KEY_CFBundleDisplayName = "Fleet EDR Security Extension";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -555,7 +555,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = networkextension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = networkextension;
+				INFOPLIST_KEY_CFBundleDisplayName = "Fleet EDR Network Extension";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -579,7 +579,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = networkextension/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = networkextension;
+				INFOPLIST_KEY_CFBundleDisplayName = "Fleet EDR Network Extension";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

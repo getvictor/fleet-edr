@@ -57,27 +57,25 @@ If any of these fail, STOP. Don't install. File an issue at https://github.com/g
 
 ### Optional: verify the Sigstore signature
 
-Releases publish a `<file>.sig` and `<file>.pem` next to every artifact. The signature ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots.
+Releases from v0.2.0 onward publish a single Sigstore bundle (`<file>.sigstore.json`) next to every artifact. The bundle carries the signature, the ephemeral signing certificate, and the transparency-log proof in one file, and ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots.
 
-The example below uses the same `v0.1.1` placeholder as Step 1 above; substitute whatever release tag you actually downloaded.
+The example below uses a `v0.2.0` placeholder; substitute whatever release tag you actually downloaded.
 
 ```sh
-# Install cosign if you don't have it: brew install cosign
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg.sig
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg.pem
+# Install cosign (v3+) if you don't have it: brew install cosign
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/fleet-edr-v0.2.0.pkg.sigstore.json
 
 cosign verify-blob \
-    --certificate fleet-edr-v0.1.1.pkg.pem \
-    --signature fleet-edr-v0.1.1.pkg.sig \
+    --bundle fleet-edr-v0.2.0.pkg.sigstore.json \
     --certificate-identity-regexp '^https://github\.com/getvictor/fleet-edr/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-    fleet-edr-v0.1.1.pkg
+    fleet-edr-v0.2.0.pkg
 # Expect: "Verified OK"
 ```
 
-On cosign v2.6+ the `--certificate` and `--signature` flags print a deprecation warning; verification still succeeds. v0.1.1 ships the `.sig` / `.pem` pair these flags expect, so the warning is harmless. Migrating signing to the single-bundle format is tracked in [#369](https://github.com/getvictor/fleet-edr/issues/369).
+The `--bundle` flag is the current, non-deprecated path and prints no warnings on cosign v2.6+ or v3. The same `<file>.sigstore.json` bundle covers `SHA256SUMS` and both `.mobileconfig` profiles. If you're verifying the server image instead, use `cosign verify ghcr.io/getvictor/fleet-edr-server:v0.2.0` with the same identity / issuer flags.
 
-The same pattern (`<file>.sig` + `<file>.pem`) covers `SHA256SUMS` and both `.mobileconfig` profiles. If you're verifying the server image instead, use `cosign verify ghcr.io/getvictor/fleet-edr-server:v0.1.1` with the same identity / issuer flags.
+Releases v0.1.1 and earlier predate the bundle format and ship a `<file>.sig` + `<file>.pem` pair instead. To verify those, pass the legacy flags (deprecated on cosign v2.6+ but still functional): `cosign verify-blob --certificate <file>.pem --signature <file>.sig` plus the same `--certificate-identity-regexp` / `--certificate-oidc-issuer` flags shown above.
 
 ## Step 3: write the config file
 
@@ -157,11 +155,11 @@ Each extension feeds its own receiver loop, so until a given extension is activa
 The Endpoint Security extension creates its ES client with `es_new_client`, which requires Full Disk Access. The extension is a separate TCC identity from the host app, so granting FDA to `/Applications/Fleet EDR.app` does NOT cover it. Without its own grant, `es_new_client` returns `ERR_NOT_PERMITTED`, the extension exits and relaunches in a loop, and the agent logs repeated `receiver connect` / `xpc_bridge_connect failed` warnings even though `systemextensionsctl` shows `activated enabled`.
 
 1. Open **System Settings > Privacy & Security > Full Disk Access**.
-2. After Step 5's activation the extension appears in the list as **"extension"** (its bundle display name, not "Fleet EDR"). Toggle **"extension"** ON and authenticate. This is the entry that lets `es_new_client` succeed.
+2. After Step 5's activation the extension appears in the list as **"Fleet EDR Security Extension"** (its bundle display name). Toggle it ON and authenticate. This is the entry that lets `es_new_client` succeed.
 3. Add the agent: click **+**, press Cmd+Shift+G, enter `/usr/local/bin/fleet-edr-agent`, and toggle it ON.
-4. If no **"extension"** entry is listed, reset its TCC state and reboot to force a fresh prompt: `sudo tccutil reset SystemPolicyAllFiles com.fleetdm.edr.securityextension`.
+4. If no **"Fleet EDR Security Extension"** entry is listed, reset its TCC state and reboot to force a fresh prompt: `sudo tccutil reset SystemPolicyAllFiles com.fleetdm.edr.securityextension`.
 
-Granting FDA mid-loop lets the next relaunch succeed within a few seconds; if the warnings don't clear, reboot. You don't need to grant FDA to the Network Extension ("networkextension") or to `/Applications/Fleet EDR.app`.
+Granting FDA mid-loop lets the next relaunch succeed within a few seconds; if the warnings don't clear, reboot. You don't need to grant FDA to the Network Extension ("Fleet EDR Network Extension") or to `/Applications/Fleet EDR.app`.
 
 ## Step 7: verify end-to-end
 
@@ -229,6 +227,6 @@ sudo launchctl kickstart -k system/com.fleetdm.edr.agent
 
 **System extension stays in `activated waiting for user` forever.** Someone disabled Automation + extensions in the OS. Easiest fix: revoke the install, reinstall with the MDM path (which pushes the sysext-allow-list profile so the prompt doesn't appear).
 
-**`receiver connect` / `xpc_bridge_connect failed` warnings repeat while `systemextensionsctl list` shows `activated enabled`.** The Endpoint Security extension is exiting on launch for lack of Full Disk Access. Confirm with `log show --last 10m --predicate 'subsystem == "com.fleetdm.edr.securityextension"' | grep "ES client"`: `Failed to create ES client: 4` is `ERR_NOT_PERMITTED`. Enable the **"extension"** entry in Privacy & Security > Full Disk Access (Step 6). The extension is a different TCC identity from `/Applications/Fleet EDR.app`, so granting the app alone doesn't fix it.
+**`receiver connect` / `xpc_bridge_connect failed` warnings repeat while `systemextensionsctl list` shows `activated enabled`.** The Endpoint Security extension is exiting on launch for lack of Full Disk Access. Confirm with `log show --last 10m --predicate 'subsystem == "com.fleetdm.edr.securityextension"' | grep "ES client"`: `Failed to create ES client: 4` is `ERR_NOT_PERMITTED`. Enable the **"Fleet EDR Security Extension"** entry in Privacy & Security > Full Disk Access (Step 6). The extension is a different TCC identity from `/Applications/Fleet EDR.app`, so granting the app alone doesn't fix it.
 
 **Full Disk Access grant gets wiped after every reboot.** Probably a TCC-database issue after a macOS point upgrade. Re-add the entries in Privacy & Security. If it recurs on a managed Mac, deploy the TCC profile via MDM instead.

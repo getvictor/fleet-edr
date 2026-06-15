@@ -256,6 +256,34 @@ else
         "$STAGE/app-root/Applications/Fleet EDR.app"
 fi
 
+# Guard the extensions' user-facing display names. macOS reads
+# CFBundleDisplayName verbatim for the Login Items & Extensions and Full
+# Disk Access entries; a generic value ("extension" / "networkextension")
+# leaves a manual installer unable to tell which FDA entry is Fleet EDR's,
+# which boot-loops the ES extension on a missing grant (issue #370). Fail
+# the build rather than ship a pkg whose extensions are unrecognizable in
+# System Settings. Runs on both the dry-run and release paths because the
+# name is baked in at xcodebuild time, independent of signing.
+STAGED_APP="$STAGE/app-root/Applications/Fleet EDR.app"
+STAGED_SYSEXT="$STAGED_APP/Contents/Library/SystemExtensions/com.fleetdm.edr.securityextension.systemextension"
+STAGED_NETEXT="$STAGED_APP/Contents/Library/SystemExtensions/com.fleetdm.edr.networkextension.systemextension"
+# spec:release-packaging/system-extensions-present-recognizable-display-names/security-extension-shows-a-recognizable-name
+SYSEXT_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$STAGED_SYSEXT/Contents/Info.plist" 2>/dev/null || true)"
+if [ "$SYSEXT_NAME" != "Fleet EDR Security Extension" ]; then
+    echo "ERROR: Endpoint Security extension CFBundleDisplayName is '$SYSEXT_NAME', expected 'Fleet EDR Security Extension'." >&2
+    echo "       Check INFOPLIST_KEY_CFBundleDisplayName on the securityextension target (issue #370)." >&2
+    exit 10
+fi
+if [ -d "$STAGED_NETEXT" ]; then
+    # spec:release-packaging/system-extensions-present-recognizable-display-names/network-extension-shows-a-recognizable-name
+    NETEXT_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$STAGED_NETEXT/Contents/Info.plist" 2>/dev/null || true)"
+    if [ "$NETEXT_NAME" != "Fleet EDR Network Extension" ]; then
+        echo "ERROR: Network Extension CFBundleDisplayName is '$NETEXT_NAME', expected 'Fleet EDR Network Extension'." >&2
+        echo "       Check INFOPLIST_KEY_CFBundleDisplayName on the networkextension target (issue #370)." >&2
+        exit 11
+    fi
+fi
+
 # spec:release-packaging/installation-activates-the-system-extensions/install-with-a-user-logged-in-activates-immediately
 #
 # Activation LaunchAgent rides in the app component because it launches the

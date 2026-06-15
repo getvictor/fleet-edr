@@ -212,7 +212,7 @@ jobs:
         if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: 'v2.5.3'
+          cosign-release: 'v3.1.1'
 
       - name: Sign release artifacts (cosign keyless)
         if: env.DRY_RUN == '' && startsWith(github.ref, 'refs/tags/v')
@@ -226,15 +226,21 @@ jobs:
           # for non-interactive CI runs - equivalent to passing --yes on
           # every cosign invocation below.
           COSIGN_YES: 'true'
-        # `cosign sign-blob` emits a .sig and a .pem (the ephemeral signing
-        # cert from Fulcio) per artifact. Every shipped file gets the same
+        # `cosign sign-blob --bundle` emits a single Sigstore bundle
+        # (<file>.sigstore.json, media type
+        # application/vnd.dev.sigstore.bundle.v0.3+json) per artifact,
+        # carrying the signature, the ephemeral Fulcio signing cert, AND
+        # the Rekor transparency-log proof in one file. cosign v3 makes
+        # this format the default, so no --new-bundle-format flag is
+        # needed and the legacy --output-signature/--output-certificate
+        # .sig/.pem pair is gone. Every shipped file gets the same
         # treatment - pkg, mobileconfigs, SHA256SUMS, AND both SBOMs - so
-        # a tampered SBOM is just as detectable as a tampered pkg. Both
-        # the .sig and the .pem land on the release; verifiers run
-        # `cosign verify-blob --certificate <file>.pem --signature
-        # <file>.sig --certificate-identity ... --certificate-oidc-issuer
+        # a tampered SBOM is just as detectable as a tampered pkg.
+        # Verifiers run `cosign verify-blob --bundle <file>.sigstore.json
+        # --certificate-identity-regexp ... --certificate-oidc-issuer
         # https://token.actions.githubusercontent.com <file>` without
         # contacting our infrastructure.
+        # spec:release-packaging/release-artifacts-carry-a-verifiable-sigstore-signature/each-released-artifact-verifies-against-its-published-bundle
         run: |
           cd dist
           for f in \
@@ -245,19 +251,16 @@ jobs:
               "fleet-edr-${RELEASE_TAG}-sbom.cdx.json" \
               SHA256SUMS; do
             cosign sign-blob \
-              --output-signature "${f}.sig" \
-              --output-certificate "${f}.pem" \
+              --bundle "${f}.sigstore.json" \
               "$f"
           done
           gh release upload "$RELEASE_TAG" \
-            ./fleet-edr-*.pkg.sig ./fleet-edr-*.pkg.pem \
-            ./edr-system-extension.mobileconfig.sig ./edr-system-extension.mobileconfig.pem \
-            ./edr-tcc-fda.mobileconfig.sig ./edr-tcc-fda.mobileconfig.pem \
-            "./fleet-edr-${RELEASE_TAG}-sbom.spdx.json.sig" \
-            "./fleet-edr-${RELEASE_TAG}-sbom.spdx.json.pem" \
-            "./fleet-edr-${RELEASE_TAG}-sbom.cdx.json.sig" \
-            "./fleet-edr-${RELEASE_TAG}-sbom.cdx.json.pem" \
-            ./SHA256SUMS.sig ./SHA256SUMS.pem
+            ./fleet-edr-*.pkg.sigstore.json \
+            ./edr-system-extension.mobileconfig.sigstore.json \
+            ./edr-tcc-fda.mobileconfig.sigstore.json \
+            "./fleet-edr-${RELEASE_TAG}-sbom.spdx.json.sigstore.json" \
+            "./fleet-edr-${RELEASE_TAG}-sbom.cdx.json.sigstore.json" \
+            ./SHA256SUMS.sigstore.json
 
       # SLSA build provenance for every shipped artifact. The action
       # produces an in-toto v1.0 statement signed by Sigstore (keyless via
@@ -335,11 +338,14 @@ jobs:
       # (not the tag) means a future malicious overwrite of `:RELEASE_TAG`
       # cannot pass `cosign verify` against this signature; verifiers either
       # pull by digest or accept that a tag mutation invalidates the proof.
+      # cosign v3 stores the signature as an OCI 1.1 referring artifact
+      # (not the legacy `sha256-<digest>.sig` tag); `cosign verify` auto-
+      # detects both layouts, so verifiers on cosign v3 are unaffected.
       - name: Install cosign
         if: startsWith(github.ref, 'refs/tags/v')
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: 'v2.5.3'
+          cosign-release: 'v3.1.1'
 
       - name: Sign image (cosign keyless)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -356,7 +362,8 @@ jobs:
       # anchore/sbom-action only produces the file and uploads it as a
       # workflow artifact; the next step is what actually pushes it to
       # the OCI registry as a cosign attestation, which is what makes
-      # `cosign download sbom <ref>` work for downstream verifiers.
+      # `cosign verify-attestation --type spdxjson <ref>` work for
+      # downstream verifiers.
       #
       # upload-release-assets: false is load-bearing - the action's
       # default would race the parallel macos-pkg job for the GitHub
@@ -379,10 +386,13 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         # `cosign attest` wraps the SBOM in an in-toto envelope, signs it
         # via the same Fulcio OIDC identity used for the image signature,
-        # and pushes it to the registry alongside the manifest. Verifiers
-        # then resolve it with `cosign download sbom <ref>` (returns the
-        # raw predicate) or `cosign verify-attestation --type spdxjson
-        # <ref>` (returns + verifies the signed envelope).
+        # and pushes it to the registry alongside the manifest (an OCI 1.1
+        # referring artifact under cosign v3). Verifiers resolve it with
+        # `cosign verify-attestation --type spdxjson <ref>` (returns +
+        # verifies the signed envelope) or `cosign download attestation
+        # <ref>` (returns the raw envelope). Note: `cosign download sbom`
+        # is for `cosign attach sbom` attachments, not attestations, and
+        # is deprecated; it does NOT return this SBOM.
         run: |
           cosign attest \
             --predicate /tmp/fleet-edr-server-sbom.spdx.json \
@@ -443,7 +453,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: 'v2.5.3'
+          cosign-release: 'v3.1.1'
 
       - name: Sign image (cosign keyless)
         if: startsWith(github.ref, 'refs/tags/v')
