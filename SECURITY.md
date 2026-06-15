@@ -8,6 +8,7 @@ We patch the most recent released minor only. Pilot releases (`v0.x.y-rc.*`) are
 
 | Version    | Status         | Security fixes |
 | ---------- | -------------- | -------------- |
+| `0.1.x`    | Supported      | Yes            |
 | `0.1.x-rc` | Pilot / pre-GA | Best-effort    |
 | `< 0.1`    | Unsupported    | None           |
 
