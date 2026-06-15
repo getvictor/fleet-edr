@@ -21,7 +21,8 @@ import {
   type PublicKeyCredentialCreationOptionsJSON,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
-import { attachCsrfHeader } from "./api";
+import { attachCsrfHeader, notifyUnauthorized } from "./api";
+import { HTTP_STATUS_UNAUTHORIZED } from "./constants";
 
 // HTTP status threshold above which the response is an error.
 const HTTP_BAD_REQUEST = 400;
@@ -97,6 +98,13 @@ async function requestJSON<T>(
   });
   if (res.status >= HTTP_BAD_REQUEST) {
     const reason = res.headers.get("X-Edr-Auth-Reason") ?? `http_${String(res.status)}`;
+    // A 401 on the session-protected reauth path (/api/auth/reauth/*) means the operator's session expired mid-reauth, not a bad
+    // break-glass credential (the pre-auth /admin/break-glass/* surface is also 401 on a wrong password). Signal the global handler so
+    // the app flips to anon and routes to /login, matching the fetchJSON 401 behavior; the BreakglassError still throws so the modal's
+    // own teardown runs while the redirect takes over.
+    if (res.status === HTTP_STATUS_UNAUTHORIZED && path.startsWith("/api/auth/reauth")) {
+      notifyUnauthorized();
+    }
     throw new BreakglassError(res.status, reason);
   }
   // Guard against 204 / empty / non-JSON 2xx bodies. Today every

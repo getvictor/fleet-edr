@@ -10,6 +10,7 @@
 - [x] `App.tsx`: import `setUnauthorizedHandler`; register a mount-time handler that flips auth `authed -> anon` (functional update, idempotent), with cleanup on unmount.
 - [x] `App.tsx`: correct the now-stale mount-probe comment that claimed call sites flip auth on background 401s.
 - [x] `App.tsx`: export `AuthedApp` so the redirect behavior can be tested in isolation.
+- [x] `api.ts` + `auth.ts`: extend the 401 signal to the session-protected break-glass reauth path (`/api/auth/reauth/*`). `api.ts` exposes a non-throwing `notifyUnauthorized`; `auth.ts`'s `requestJSON` calls it on a reauth-path 401 (a mid-reauth session expiry) so the app redirects to login, while the pre-auth break-glass login/setup 401 (a bad credential) is left untouched. Covered by the existing "Mid-session expiry returns the operator to login" scenario.
 
 ## 3. Spec
 

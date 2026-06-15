@@ -9,6 +9,7 @@ import {
   reauthBreakglass,
   reauthOIDC,
 } from "./auth";
+import { setUnauthorizedHandler } from "./api";
 
 // The auth.ts surface covers the pre-auth break-glass + OIDC redirect helpers. These tests pin the
 // observable contract of each helper: URL shape, fetch wire shape (method + headers + body + credentials), error mapping
@@ -68,6 +69,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  setUnauthorizedHandler(null);
 });
 
 describe("BreakglassError", () => {
@@ -225,6 +227,18 @@ describe("breakglassFinishLogin", () => {
       reason: "invalid_credentials",
     });
   });
+
+  // spec:web-ui/authenticated-entry-to-the-application/mid-session-expiry-returns-the-operator-to-login
+  it("does NOT fire the global unauthorized handler on a pre-auth break-glass 401", async () => {
+    // The pre-auth /admin/break-glass/* surface returns 401 on a wrong credential, not an expired session, so it must
+    // not trigger the login redirect (the operator is already on the sign-in surface).
+    const fetchSpy = stubFetch({}, 401, "invalid_credentials");
+    vi.stubGlobal("fetch", fetchSpy);
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    await expect(breakglassFinishLogin("o", "p", {})).rejects.toBeInstanceOf(BreakglassError);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
 });
 
 describe("reauthBreakglass", () => {
@@ -270,6 +284,19 @@ describe("reauthBreakglass", () => {
       reason: "rate_limited",
     });
     // Should NOT have run startAuthentication when the challenge call itself rejected.
+    expect(mockedStartAuthentication).not.toHaveBeenCalled();
+  });
+
+  // spec:web-ui/authenticated-entry-to-the-application/mid-session-expiry-returns-the-operator-to-login
+  it("fires the global unauthorized handler on a 401 from the session-protected reauth path", async () => {
+    // A 401 on /api/auth/reauth/challenge means the session expired mid-reauth: signal the redirect-to-login handler
+    // (so the app flips to anon) AND still reject with BreakglassError.
+    const fetchSpy = stubFetch({}, 401, "invalid_session");
+    vi.stubGlobal("fetch", fetchSpy);
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    await expect(reauthBreakglass("pw")).rejects.toBeInstanceOf(BreakglassError);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
     expect(mockedStartAuthentication).not.toHaveBeenCalled();
   });
 });

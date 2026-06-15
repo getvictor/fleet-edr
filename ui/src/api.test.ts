@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { listAlerts, createAppControlRule, setForbiddenHandler, setUnauthorizedHandler, Unauthorized401Error, ReauthRequiredError } from "./api";
+import {
+  listAlerts,
+  createAppControlRule,
+  setForbiddenHandler,
+  setUnauthorizedHandler,
+  Unauthorized401Error,
+  ReauthRequiredError,
+} from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
 // suite mocks api.listAlerts directly via vi.spyOn, so the real

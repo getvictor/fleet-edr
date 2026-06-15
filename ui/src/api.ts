@@ -183,11 +183,13 @@ export function setForbiddenHandler(handler: (() => void) | null): void {
   forbiddenHandler = handler;
 }
 
-// unauthorizedHandler is an optional callback invoked when the server returns 401 on ANY /api/* fetch: the session expired (idle or
-// absolute timeout) or was revoked mid-use. The app registers one (see App.tsx) so a background 401 flips global auth state to anon
-// and routes to the login page, instead of each call site rendering a stale inline "API error: 401" and leaving the operator stranded
-// on a dead page. The mount-time session probe and explicit logout already drive that same anon transition; this closes the gap for a
-// session that lapses while the app is open. The handler MUST be idempotent: a burst of in-flight fetches can all 401 at once.
+// unauthorizedHandler is an optional callback invoked when the server returns 401 on an authenticated request: the session expired
+// (idle or absolute timeout) or was revoked mid-use. The app registers one (see App.tsx) so a background 401 flips global auth state to
+// anon and routes to the login page, instead of a call site rendering a stale inline "API error: 401" and leaving the operator stranded
+// on a dead page. Both fetch chokepoints here (fetchJSON, appControlMutationEndpoint) and the session-protected break-glass reauth path
+// (auth.ts, via notifyUnauthorized) feed it; the PRE-auth break-glass login/setup surface does NOT, since a 401 there is a bad
+// credential, not an expired session. The mount-time session probe and explicit logout drive the same anon transition. The handler
+// MUST be idempotent: a burst of in-flight fetches can all 401 at once.
 let unauthorizedHandler: (() => void) | null = null;
 
 // setUnauthorizedHandler registers (or clears, with null) the 401 callback.
@@ -195,12 +197,18 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
 }
 
-// raiseUnauthorized is the single 401 chokepoint both fetch helpers funnel through. It clears the now-stale CSRF token so it cannot
-// linger into the next login, fires the global 401 signal so the app can redirect to login, then throws the typed error so the calling
-// site still rejects (callers that already catch Unauthorized401Error keep working unchanged).
-function raiseUnauthorized(): never {
+// notifyUnauthorized clears the now-stale CSRF token (so it cannot linger into the next login) and fires the global 401 signal so the
+// app can redirect to login. It does NOT throw, so a call site that raises its own typed error after a session-expiry 401 (the
+// break-glass reauth path in auth.ts) can signal the redirect and still reject with its own error type.
+export function notifyUnauthorized(): void {
   clearCsrfToken();
   unauthorizedHandler?.();
+}
+
+// raiseUnauthorized is the single 401 chokepoint both fetch helpers funnel through: it signals the app (notifyUnauthorized) then throws
+// the typed error so the calling site still rejects (callers that already catch Unauthorized401Error keep working unchanged).
+function raiseUnauthorized(): never {
+  notifyUnauthorized();
   throw new Unauthorized401Error();
 }
 
