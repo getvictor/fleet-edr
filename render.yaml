@@ -33,6 +33,11 @@ services:
         value: '10.0.0.0/8'
       - key: EDR_LOG_FORMAT
         value: json
+      # Event retention window. Events are the dominant store and scale linearly
+      # with this value, so 14 days keeps the bundled-MySQL disk bounded for a
+      # pilot. Raise it if you have the disk (see docs/install-server.md).
+      - key: EDR_RETENTION_DAYS
+        value: '14'
       # Generated once by Render and shown in the dashboard. Copy it into your
       # MDM install script as the agent enroll secret (docs/fleet-deployment.md).
       - key: EDR_ENROLL_SECRET
@@ -82,10 +87,19 @@ services:
     plan: standard
     image:
       url: 'docker.io/library/mysql:8.4.9@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084'
+    # Cap binary logging. This is a single MySQL with no replica, so binlog only
+    # buys point-in-time recovery; at the MySQL 8.4 defaults it retains 30 days
+    # of logs and roughly doubles disk use on the insert-heavy ingest workload.
+    # Keep ~1 day of binlog, 256M per file. The image entrypoint still runs first-
+    # boot init because the command starts with `mysqld`.
+    dockerCommand: mysqld --binlog_expire_logs_seconds=86400 --max-binlog-size=256M
     disk:
       name: mysql
       mountPath: /var/lib/mysql
-      sizeGB: 10
+      # 10G fills in ~a night on a busy host: events are ~1.3KB each (index-heavy)
+      # and accumulate for the full EDR_RETENTION_DAYS window before pruning. 100G
+      # gives a small pilot headroom; Render disks can grow but never shrink.
+      sizeGB: 100
     envVars:
       - key: MYSQL_DATABASE
         value: edr
