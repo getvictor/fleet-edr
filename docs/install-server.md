@@ -245,15 +245,19 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector (SigNoz, Tempo, Datadog OTel
 
 - **Traces** for every HTTP request + DB query.
 - **Logs** via `otelslog` with `service.name=fleet-edr-server`.
-- **Metrics**:
+- **Metrics**. Counters appear in the backend only after their first non-zero sample, so a fresh deploy won't show, for example, the retention or alert series until those events first occur.
 
-  - `edr.events.ingested` (counter, by `host_id`): accepted events.
-  - `edr.alerts.created` (counter, by `rule_id` + `severity`).
-  - `edr.enrolled.hosts` (gauge): current enrolled count.
-  - `edr.offline.hosts` (gauge): hosts unseen >5 min.
-  - `edr.retention.rows_deleted` (counter): rows pruned per run.
-  - `db.sql.latency` (histogram): DB call latency, emitted by the otelsql driver instrumentation.
-  - `edr.agent.queue.dropped` (counter): agent-side drops reported back.
+  - `edr.events.ingested` (counter, by `host_id`): events accepted by `POST /api/events`.
+  - `edr.alerts.created` (counter, by `rule_id` + `severity`): alerts raised by detection.
+  - `edr.enrolled.hosts` (gauge): current non-revoked enrollments.
+  - `edr.offline.hosts` (gauge): hosts unseen longer than the offline threshold (5 min).
+  - `edr.retention.rows_deleted` (counter): event rows pruned per retention run.
+  - `edr.retention.processes.rows_deleted` (counter): process-graph rows pruned per retention run.
+  - `edr.processes.ttl_reconciled` (counter): processes whose exit was synthesized by the freshness-TTL reconciler (missed-exit fallback).
+  - `edr.agent.queue.dropped` (counter): agent-side queue drops reported back.
+  - `edr.audit.write_failures` (counter): audit-row INSERT failures; any non-zero value means the append-only audit contract is broken, so alert on it.
+  - `http.server.request.duration` (histogram, by route + method + status): request volume and latency.
+  - `db.sql.latency` (histogram) and `db.sql.connection.*` (connection-pool stats): DB call latency and pool health, from the otelsql driver instrumentation.
 
   See [operations.md](operations.md#metrics-and-monitoring) for what to alert on.
 
