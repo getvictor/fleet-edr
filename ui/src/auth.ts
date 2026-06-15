@@ -97,12 +97,15 @@ async function requestJSON<T>(
     credentials: "include",
   });
   if (res.status >= HTTP_BAD_REQUEST) {
-    const reason = res.headers.get("X-Edr-Auth-Reason") ?? `http_${String(res.status)}`;
-    // A 401 on the session-protected reauth path (/api/auth/reauth/*) means the operator's session expired mid-reauth, not a bad
-    // break-glass credential (the pre-auth /admin/break-glass/* surface is also 401 on a wrong password). Signal the global handler so
-    // the app flips to anon and routes to /login, matching the fetchJSON 401 behavior; the BreakglassError still throws so the modal's
-    // own teardown runs while the redirect takes over.
-    if (res.status === HTTP_STATUS_UNAUTHORIZED && path.startsWith("/api/auth/reauth")) {
+    const reasonHeader = res.headers.get("X-Edr-Auth-Reason");
+    const reason = reasonHeader ?? `http_${String(res.status)}`;
+    // The session-protected reauth path (/api/auth/reauth/*) returns 401 in two opposite cases that we must NOT conflate: a wrong
+    // password/assertion (the handler's invalid_credentials, session still valid, operator should retry in the modal) vs. the session
+    // lapsing mid-reauth (the Session middleware short-circuits via WriteCookieAuthFailure, which never sets X-Edr-Auth-Reason). Only the
+    // latter should flip the app to anon and route to /login. Discriminate on the header: present (invalid_credentials and friends) means
+    // the handler ran and the session is fine, so leave it to the modal; absent means a middleware session failure, so signal the global
+    // handler. The BreakglassError still throws either way so the modal's own teardown runs.
+    if (res.status === HTTP_STATUS_UNAUTHORIZED && path.startsWith("/api/auth/reauth") && reasonHeader === null) {
       notifyUnauthorized();
     }
     throw new BreakglassError(res.status, reason);

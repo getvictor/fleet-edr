@@ -288,15 +288,33 @@ describe("reauthBreakglass", () => {
   });
 
   // spec:web-ui/authenticated-entry-to-the-application/mid-session-expiry-returns-the-operator-to-login
-  it("fires the global unauthorized handler on a 401 from the session-protected reauth path", async () => {
-    // A 401 on /api/auth/reauth/challenge means the session expired mid-reauth: signal the redirect-to-login handler
-    // (so the app flips to anon) AND still reject with BreakglassError.
-    const fetchSpy = stubFetch({}, 401, "invalid_session");
+  it("fires the global unauthorized handler on a middleware 401 (no X-Edr-Auth-Reason) from the reauth path", async () => {
+    // A session that lapses mid-reauth is rejected by the Session middleware, which short-circuits via WriteCookieAuthFailure
+    // and never sets X-Edr-Auth-Reason. The absent header is the discriminator: signal the redirect-to-login handler (so the app
+    // flips to anon) AND still reject with BreakglassError. stubFetch with no reason models the headerless middleware response.
+    const fetchSpy = stubFetch({}, 401);
     vi.stubGlobal("fetch", fetchSpy);
     const onUnauthorized = vi.fn();
     setUnauthorizedHandler(onUnauthorized);
     await expect(reauthBreakglass("pw")).rejects.toBeInstanceOf(BreakglassError);
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(mockedStartAuthentication).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire the unauthorized handler on a 401 invalid_credentials (wrong password, session still valid)", async () => {
+    // The reauth handler returns 401 with X-Edr-Auth-Reason: invalid_credentials on a wrong password/assertion. The session is
+    // still valid, so the operator must be able to retry in the modal: the present header means do NOT flip to anon / redirect.
+    // It still rejects with BreakglassError so the modal renders its inline "wrong credentials" error.
+    const fetchSpy = stubFetch({}, 401, "invalid_credentials");
+    vi.stubGlobal("fetch", fetchSpy);
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    await expect(reauthBreakglass("pw")).rejects.toMatchObject({
+      name: "BreakglassError",
+      status: 401,
+      reason: "invalid_credentials",
+    });
+    expect(onUnauthorized).not.toHaveBeenCalled();
     expect(mockedStartAuthentication).not.toHaveBeenCalled();
   });
 });
