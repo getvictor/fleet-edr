@@ -49,7 +49,13 @@ The system SHALL expose the following counters with stable names so dashboards a
 
 ### Requirement: DB client metrics via standard driver instrumentation
 
-The system SHALL emit database-client latency and connection-pool metrics through the standard OpenTelemetry SQL driver instrumentation (otelsql), not a bespoke per-call-site metric. The pool is opened through otelsql so every query is timed by the driver as a `db.sql.latency` histogram (with `db.client.connection.*` pool gauges) without any instrumentation code at the call sites. This avoids a hand-maintained operation-name allowlist and gives complete coverage of every query rather than only the few that were manually instrumented. Per-query timing with full request context remains available on the otelsql spans.
+The system SHALL emit database-client latency and connection-pool metrics through the standard OpenTelemetry SQL driver instrumentation (otelsql), not a bespoke per-call-site metric. The pool is opened through otelsql so every query is timed by the driver as a `db.sql.latency` histogram (with `db.sql.connection.*` pool gauges) without any instrumentation code at the call sites. This avoids a hand-maintained operation-name allowlist and gives complete coverage of every query rather than only the few that were manually instrumented. Per-query timing with full request context remains available on the otelsql spans.
+
+#### Scenario: The pool is instrumented by the driver, not the call sites
+
+- **GIVEN** the connection pool is opened through the otelsql driver wrapper
+- **WHEN** the OTel reader collects metrics
+- **THEN** the driver-level connection-pool metrics (`db.sql.connection.*`) are reported without any per-call-site instrumentation code
 
 ### Requirement: HTTP server request duration
 

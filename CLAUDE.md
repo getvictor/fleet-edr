@@ -80,20 +80,14 @@ traceability.
 
 Minimum requirements per PR:
 
-- **Behavior changes update the spec.** Any observable behavior change (bug fix, feature, detection rule, wire/event
-  shape, API, persistence semantics) MUST update `openspec/specs/**` in the same PR, and add an `openspec/changes/`
-  proposal for non-trivial deltas. The `OpenSpec sync` CI gate (`.github/workflows/openspec-sync.yml`) enforces this for
-  the highest-signal paths (`server/rules/internal/catalog/`, `schema/events.json`, `server/detection/migrations/`).
-  The gate fires on path, so a genuine no-behavior touch of those files (comment / refactor / gofmt / dep bump) asserts
-  `no-behavior-change` (label or `[no-behavior-change]` in the title) to clear it. That opt-out is an auditable "this
-  changes no behavior" claim a reviewer verifies; it is NEVER a way to skip the spec for a real behavior change.
+- **Behavior changes ship a change delta, not a hand-edit of the canonical spec.** Any observable behavior change (bug fix, feature, detection rule, wire/event shape, API, persistence semantics) MUST ship an `openspec/changes/<name>/` proposal in the same PR: `proposal.md`, `tasks.md`, and a delta `specs/<capability>/spec.md` written with `## ADDED / MODIFIED / REMOVED Requirements`. Do NOT hand-edit `openspec/specs/**` directly: that canonical tree is updated ONLY by `openspec archive` on completion (see the next bullet). spectrace treats scenario IDs declared in an in-flight delta as valid marker targets, so a test added in the same PR can reference a brand-new scenario before it reaches the canonical spec, no pre-merge needed. Two gates back this: `OpenSpec sync` (`.github/workflows/openspec-sync.yml`) enforces that a behavior-path change touches `openspec/` at all (the delta satisfies it) for the highest-signal paths (`server/rules/internal/catalog/`, `schema/events.json`, `server/detection/migrations/`); `OpenSpec validate` (`.github/workflows/openspec-validate.yml`, `openspec validate --all --strict`) enforces that every spec and delta is structurally well-formed (e.g. every requirement has a scenario). The sync gate fires on path, so a genuine no-behavior touch of those files (comment / refactor / gofmt / dep bump) asserts `no-behavior-change` (label or `[no-behavior-change]` in the title) to clear it. That opt-out is an auditable "this changes no behavior" claim a reviewer verifies; it is NEVER a way to skip the spec for a real behavior change.
+- **After the PR merges, archive the change.** Run `openspec archive <name>` (NO `--skip-specs`): it merges the delta into `openspec/specs/**` and moves the proposal folder to `openspec/changes/archive/`. Use `--skip-specs` ONLY when the canonical spec was already updated by hand (legacy changes predating this rule) or for a tooling/doc-only change with no spec delta. Never move or rename a change folder into `archive/` by hand: that is how the malformed double-date names (`2026-06-09-2026-06-09-...`) got into the archive. Archived deltas are historical; spectrace skips the `archive/` subtree.
 - New wire-format struct or event field: PBT round-trip (`Marshal . Unmarshal == identity`).
 - New detection rule under `server/rules/internal/catalog/`: ship `test/efficacy/corpus/T<MITRE-id>/scenario.yaml`
   plus `expected.yaml`. Add `attack.sh` when system / VM coverage is needed.
 - Agent or extension change touching ESF, XPC, or the event wire format: must be exercised on a live macOS VM
   (the system / VM layer) before RC. Flag in the PR description.
-- New or modified SHALL / MUST scenario in `openspec/specs/`: at least one test must reference the canonical
-  scenario ID. ID scheme and marker forms in `docs/testing-strategy.md`; gated by `tools/spectrace`.
+- New or modified SHALL / MUST scenario (in `openspec/specs/` or an in-flight `openspec/changes/<name>/` delta): at least one test must reference the canonical scenario ID. ID scheme and marker forms in `docs/testing-strategy.md`; gated by `tools/spectrace`.
 
 ## Bounded contexts
 

@@ -45,7 +45,7 @@ For the full picture (the seven-layer test pyramid, the fake-agent / headless-ag
 - Branch off `main`. Keep the diff focused; large refactors should be split into reviewable chunks.
 - Write a PR description that explains the _why_, not just the _what_. Link the issue it closes.
 - A PR is ready to merge when CI is green, the SonarCloud quality gate is green, and at least one maintainer has approved.
-- **Behavior changes update the spec.** A PR touching a detection rule, `schema/events.json`, or the detection DDL must update `openspec/specs/**`; the `OpenSpec sync` CI gate enforces it. A no-behavior touch of those paths (comment, refactor, gofmt, dep bump) asserts `no-behavior-change` (label or `[no-behavior-change]` in the PR title) to clear the gate: an auditable claim a reviewer verifies, never a way to skip the spec for a real behavior change. The label is a one-time repo setup:
+- **Behavior changes ship a spec delta.** A PR touching a detection rule, `schema/events.json`, or the detection DDL must ship an `openspec/changes/<name>/` proposal (`proposal.md`, `tasks.md`, and a delta `specs/<capability>/spec.md` written with `## ADDED / MODIFIED / REMOVED Requirements`). Do **not** hand-edit `openspec/specs/**` directly: that canonical tree is updated only by `openspec archive` after the PR merges. spectrace accepts a test marker that references a scenario declared in the in-flight delta, so you do not pre-merge the canonical spec. Two gates back this: `OpenSpec sync` enforces the PR touches `openspec/` (the delta satisfies it), and `OpenSpec validate` (`openspec validate --all --strict`) enforces every spec and delta is structurally well-formed. A no-behavior touch of those paths (comment, refactor, gofmt, dep bump) asserts `no-behavior-change` (label or `[no-behavior-change]` in the PR title) to clear the sync gate: an auditable claim a reviewer verifies, never a way to skip the spec for a real behavior change. The label is a one-time repo setup:
 
   ```sh
   gh label create no-behavior-change \
@@ -53,6 +53,7 @@ For the full picture (the seven-layer test pyramid, the fake-agent / headless-ag
     --color ededed
   ```
 
+- **After a spec-bearing PR merges, archive its change.** Run `openspec archive <name>` (without `--skip-specs`): it merges the delta into `openspec/specs/**` and moves the proposal to `openspec/changes/archive/`. Use `--skip-specs` only for a legacy change whose canonical spec was already hand-edited or a tooling/doc-only change. Never move or rename a change folder into `archive/` by hand.
 - Do **not** add `Co-Authored-By` lines to commits. AI-assisted code is welcome; the assistant is a tool, not a co-author.
 - Sign your commits if you can (`git commit -S`); we do not require this today, but plan to.
 
