@@ -10,7 +10,7 @@ import { Login } from "./components/Login";
 import { BreakGlassSetup } from "./components/BreakGlassSetup";
 import { BreakGlassLogin } from "./components/BreakGlassLogin";
 import { TopNav } from "./components/ui/TopNav";
-import { currentSession, logout, Unauthorized401Error, SessionInfo, setForbiddenHandler } from "./api";
+import { currentSession, logout, Unauthorized401Error, SessionInfo, setForbiddenHandler, setUnauthorizedHandler } from "./api";
 import { PermissionsProvider, RequirePermission } from "./permissions";
 import { PermissionAction } from "./permissions-core";
 import { createDedupedRunner } from "./dedupe";
@@ -48,7 +48,7 @@ export function App() {
 // probes the session; on 401 it redirects to /ui/login carrying the
 // attempted path as ?next= so a successful sign-in returns the
 // operator to where they were heading.
-function AuthedApp() {
+export function AuthedApp() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
   const location = useLocation();
   const navigate = useNavigate();
@@ -79,11 +79,24 @@ function AuthedApp() {
     })();
     return () => { controller.abort(); };
     // One-shot probe on mount. Background 401s from individual
-    // /api/* fetches already throw Unauthorized401Error and call
-    // sites surface that to flip auth -> 'anon'; re-running on every
-    // route change cost an extra /api/session round-trip per
-    // navigation and made the app flicker back to 'loading'
-    // mid-route.
+    // /api/* fetches are handled by the global unauthorized handler
+    // registered below (setUnauthorizedHandler), which flips auth ->
+    // 'anon'; re-running this probe on every route change cost an
+    // extra /api/session round-trip per navigation and made the app
+    // flicker back to 'loading' mid-route.
+  }, []);
+
+  useEffect(() => {
+    // A 401 on any background /api/* fetch means the session lapsed (idle or absolute timeout)
+    // or was revoked mid-use. Flip to 'anon' so the render below routes to /login carrying the
+    // current path as ?next=. The functional update only fires from an authed state: a 401 during
+    // the initial loading probe is already handled by that probe's own catch, and anon -> anon is a
+    // no-op, so the handler is idempotent under the burst of in-flight fetches that all 401 when a
+    // session lapses.
+    setUnauthorizedHandler(() => {
+      setAuth((prev) => (prev.status === "authed" ? { status: "anon" } : prev));
+    });
+    return () => { setUnauthorizedHandler(null); };
   }, []);
 
   useEffect(() => {

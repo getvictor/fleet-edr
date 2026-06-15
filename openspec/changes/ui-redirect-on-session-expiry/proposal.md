@@ -1,0 +1,16 @@
+# UI redirects to login when a session expires mid-use
+
+## Why
+
+When an operator's session lapses while the app is open, the UI strands them on a dead page instead of returning them to login. The fetch wrapper already detects the server's 401 (`Unauthorized401Error`), but that error is only ever caught in one place: the one-shot session probe in `AuthedApp`'s mount `useEffect` (`ui/src/App.tsx`). That probe runs once on load and never again, so a 401 from a background `/api/*` call made hours later (after the 8h idle / 24h absolute timeout for SSO sessions, or the 15m idle / 1h absolute timeout for break-glass sessions) is caught by the individual component's generic `catch` and rendered as an inline "API error: 401 Unauthorized" message. Auth state never flips, so no redirect happens. A code comment in `App.tsx` even claimed call sites "surface that to flip auth -> 'anon'", but no call site did: a grep for everything that sets `status: "anon"` returned only the mount probe and explicit logout. The 403 authz-denial path already has a global signal (`setForbiddenHandler`); the 401 path had no equivalent.
+
+## What changes
+
+- **A global 401 signal in the API layer.** `api.ts` gains `setUnauthorizedHandler`, mirroring the existing `setForbiddenHandler`. Both 401 throw sites (`fetchJSON` for safe-method reads and `appControlMutationEndpoint` for unsafe-method mutations) now funnel through one `raiseUnauthorized` chokepoint that clears the stale CSRF token, fires the registered handler, and throws `Unauthorized401Error` so existing callers keep working unchanged.
+- **`AuthedApp` registers the handler.** On mount it registers a handler that flips auth state to `anon` (guarded so it only fires from an authed state, idempotent under the burst of in-flight fetches that all 401 when a session lapses). The existing `anon` render path already routes to `/login` carrying the current path as `?next=`, so a successful re-login returns the operator where they were. The stale comment in the mount probe is corrected to describe the real mechanism.
+- **Reconcile the session-lifetime spec to the shipped behavior.** Investigating the redirect surfaced that the canonical `ui-authentication-session` spec still described a flat "Sessions expire 12 hours after issue" model that never matched the implementation (the `#257` drift, already acknowledged in test markers). The implementation bounds each session by a class-specific idle + absolute pair (`sessions.Timeouts`: normal 8h/24h, break-glass 15m/1h) with a sliding idle window and a cookie `Expires`/`Max-Age` pinned to the absolute cap. That requirement is replaced with an accurate one, and the two existing test markers (plus three previously-unmarked tests that already cover idle expiry, sliding extension, and the break-glass pair) are pointed at the new scenarios. This is a documentation reconciliation: no runtime behavior changes.
+
+### Not in this change
+
+- Any change to server-side session lifetimes or the 401 response shape; the server already returns 401 on an expired session.
+- A proactive client-side expiry timer or idle warning. Redirect is reactive: it fires on the first 401 after expiry, which is the moment the operator's next action would have failed anyway.

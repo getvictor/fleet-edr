@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { listAlerts, setForbiddenHandler, ReauthRequiredError } from "./api";
+import {
+  listAlerts,
+  createAppControlRule,
+  setForbiddenHandler,
+  setUnauthorizedHandler,
+  Unauthorized401Error,
+  ReauthRequiredError,
+} from "./api";
 
 // listAlerts URL-composition tests. The AlertList component test
 // suite mocks api.listAlerts directly via vi.spyOn, so the real
@@ -152,5 +159,39 @@ describe("forbidden handler signalling", () => {
     setForbiddenHandler(onForbidden);
     await expect(listAlerts()).rejects.toBeTruthy();
     expect(onForbidden).not.toHaveBeenCalled();
+  });
+});
+
+describe("unauthorized handler signalling", () => {
+  afterEach(() => { setUnauthorizedHandler(null); });
+
+  // spec:web-ui/authenticated-entry-to-the-application/mid-session-expiry-returns-the-operator-to-login
+  it("fires on a 401 from a safe-method fetch so the app can redirect to login", async () => {
+    stubFetch(null, 401);
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    await expect(listAlerts()).rejects.toBeInstanceOf(Unauthorized401Error);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  // spec:web-ui/authenticated-entry-to-the-application/mid-session-expiry-returns-the-operator-to-login
+  it("fires on a 401 from an unsafe-method (mutation) fetch too", async () => {
+    // The app-control mutation endpoint is a second 401 throw site; both funnel through raiseUnauthorized so a
+    // session that lapses mid-mutation redirects exactly like one that lapses on a read.
+    stubFetch(null, 401);
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    await expect(createAppControlRule(1, { rule_type: "team_id", identifier: "ABCDE12345", reason: "test" }))
+      .rejects.toBeInstanceOf(Unauthorized401Error);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire once cleared with null", async () => {
+    stubFetch(null, 401);
+    const onUnauthorized = vi.fn();
+    setUnauthorizedHandler(onUnauthorized);
+    setUnauthorizedHandler(null);
+    await expect(listAlerts()).rejects.toBeInstanceOf(Unauthorized401Error);
+    expect(onUnauthorized).not.toHaveBeenCalled();
   });
 });
