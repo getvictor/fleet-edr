@@ -164,15 +164,19 @@ func TestWriteStateCookie(t *testing.T) {
 }
 
 // spec:ui-authentication-session/session-cookie-is-http-only-and-same-site/cookie-attributes-on-login
+// spec:ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class/cookie-carries-the-absolute-timeout-on-login
+// Transitional marker below: spectrace gates the canonical spec tree, which still carries the pre-reconciliation "12-hours"
+// slug until `openspec archive ui-redirect-on-session-expiry` rewrites the requirement. Drop the 12-hours line on archive
+// (see the change's tasks.md).
 // spec:ui-authentication-session/sessions-expire-12-hours-after-issue/cookie-carries-a-12-hour-expiry-on-login
 //
 // Direct unit test for writeSessionCookie's full attribute set. Mirrors TestWriteStateCookie's shape for the OIDC state cookie.
 // The session-cookie path is "/" (broader than the state cookie's /api/auth/ scope) because every authed admin endpoint reads it;
 // the rest of the attributes (HttpOnly, SameSiteLax, Secure) match the state cookie's hardening. Value is the base64url-encoded
-// session token; MaxAge reflects time-until-ExpiresAt in seconds. The 12-hour-expiry scenario is pinned transitively: the test
-// seeds expires := time.Now().Add(12 * time.Hour), then asserts c.MaxAge is positive and c.Expires is within 1s of the seeded
-// value (line 199-200). A regression that shortened or lengthened the session window would either trip WithinDuration or push
-// MaxAge to zero. Multi-test demonstrator with TestHandleCallback_HappyPath_JITNewUser in callback_integration_test.go (pins
+// session token; MaxAge reflects time-until-ExpiresAt in seconds, and Expires equals the session's absolute expiry. The cookie
+// scenario is pinned by seeding a representative expiry, then asserting c.MaxAge is positive and c.Expires is within 1s of the
+// seeded value (line 199-200). A regression that shortened or lengthened the session window would either trip WithinDuration or
+// push MaxAge to zero. Multi-test demonstrator with TestHandleCallback_HappyPath_JITNewUser in callback_integration_test.go (pins
 // HttpOnly on the assembled OIDC callback response); this test pins the FULL attribute set in isolation.
 func TestWriteSessionCookie(t *testing.T) {
 	t.Parallel()
@@ -185,7 +189,9 @@ func TestWriteSessionCookie(t *testing.T) {
 	for i := range rawID {
 		rawID[i] = byte(i)
 	}
-	expires := time.Now().Add(12 * time.Hour)
+	// A representative absolute expiry (the normal-class 24h cap); writeSessionCookie reads ExpiresAt verbatim, so the exact
+	// value only needs to be a positive future instant the assertions below can match against.
+	expires := time.Now().Add(24 * time.Hour)
 	sess := &sessions.Session{ID: rawID, ExpiresAt: expires}
 
 	h.writeSessionCookie(w, sess)

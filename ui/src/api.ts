@@ -183,6 +183,27 @@ export function setForbiddenHandler(handler: (() => void) | null): void {
   forbiddenHandler = handler;
 }
 
+// unauthorizedHandler is an optional callback invoked when the server returns 401 on ANY /api/* fetch: the session expired (idle or
+// absolute timeout) or was revoked mid-use. The app registers one (see App.tsx) so a background 401 flips global auth state to anon
+// and routes to the login page, instead of each call site rendering a stale inline "API error: 401" and leaving the operator stranded
+// on a dead page. The mount-time session probe and explicit logout already drive that same anon transition; this closes the gap for a
+// session that lapses while the app is open. The handler MUST be idempotent: a burst of in-flight fetches can all 401 at once.
+let unauthorizedHandler: (() => void) | null = null;
+
+// setUnauthorizedHandler registers (or clears, with null) the 401 callback.
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
+// raiseUnauthorized is the single 401 chokepoint both fetch helpers funnel through. It clears the now-stale CSRF token so it cannot
+// linger into the next login, fires the global 401 signal so the app can redirect to login, then throws the typed error so the calling
+// site still rejects (callers that already catch Unauthorized401Error keep working unchanged).
+function raiseUnauthorized(): never {
+  clearCsrfToken();
+  unauthorizedHandler?.();
+  throw new Unauthorized401Error();
+}
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   assertSafeAPIPath(path);
   const headers: Record<string, string> = {
@@ -205,10 +226,8 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "include",
   });
   if (res.status === HTTP_STATUS_UNAUTHORIZED) {
-    // Session expired or never existed. Clear local CSRF so a stale token doesn't
-    // linger and trip us up on the next login.
-    clearCsrfToken();
-    throw new Unauthorized401Error();
+    // Session expired or never existed: clear stale CSRF, signal the app to redirect to login, and throw so the caller still rejects.
+    raiseUnauthorized();
   }
   if (res.status === HTTP_STATUS_FORBIDDEN) {
     // The chokepoint denies destructive actions outside the
@@ -523,8 +542,7 @@ async function appControlMutationEndpoint<T>(
     body: JSON.stringify(body),
   });
   if (res.status === HTTP_STATUS_UNAUTHORIZED) {
-    clearCsrfToken();
-    throw new Unauthorized401Error();
+    raiseUnauthorized();
   }
   if (res.status === HTTP_STATUS_FORBIDDEN) {
     const reauth = await readReauthChallenge(res);
