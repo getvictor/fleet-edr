@@ -179,10 +179,12 @@ type Config struct {
 	// has no equivalent opt-out: TLS cert + key are unconditionally required (issue #140).
 	AuthAllowNoOIDC bool
 
-	// SessionSigningKey is the HMAC key the OIDC state cookie uses to sign + verify per-flow secrets (state, nonce, PKCE verifier).
-	// The same key may be reused for signed session metadata. Populated from EDR_SESSION_SIGNING_KEY (or EDR_SESSION_SIGNING_KEY_FILE
-	// for docker-secret mounts). Required when OIDC is enabled; validated at boot to be at least 32 bytes.
-	SessionSigningKey []byte
+	// SecretKey is the deployment root secret. Every long-lived server-side key is derived from it via HKDF (internal/keyring) under a
+	// versioned domain-separation label: the host-token HMAC pepper and the pre-auth cookie signing key (OIDC state + break-glass
+	// challenge) are both derived, so a deployment provisions one secret rather than one per purpose. Populated from EDR_SECRET_KEY (or
+	// EDR_SECRET_KEY_FILE for docker-secret mounts). Always required; validated at boot to be at least 32 bytes. Changing it invalidates
+	// every existing host token (a breaking, operator-initiated fleet-wide re-enroll).
+	SecretKey []byte
 
 	// Break-glass surface knobs. Empty / zero values fall through to
 	// the per-package defaults documented at each field.
@@ -312,6 +314,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	var errs []error
 
 	loadCoreEnv(&c, getenv, &errs)
+	loadSecretKey(&c, getenv, &errs)
 	loadTLSConfig(&c, &errs)
 	loadRateLimits(&c, getenv, &errs)
 	loadHostTokenConfig(&c, getenv, &errs)
@@ -359,6 +362,27 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	if v := getenv("EDR_TRUSTED_PROXIES"); v != "" {
 		c.TrustedProxies = splitCSV(v)
 	}
+}
+
+// secretKeyMinBytes is the floor for EDR_SECRET_KEY. 32 bytes matches the HKDF-SHA256 output width every derived key uses; a shorter
+// root would cap the entropy of the host-token pepper and the cookie signing key regardless of their requested length.
+const secretKeyMinBytes = 32
+
+// loadSecretKey reads + validates the deployment root secret. Unlike the OIDC signing key it replaces, it is required unconditionally:
+// the host-token HMAC pepper derives from it and host tokens are used by every deployment, OIDC or not. The EDR_SECRET_KEY_FILE
+// docker-secret sibling is honored transparently by the FileBackedGetenv wrapper.
+func loadSecretKey(c *Config, getenv func(string) string, errs *[]error) {
+	v := getenv("EDR_SECRET_KEY")
+	if v == "" {
+		*errs = append(*errs, errors.New(
+			"EDR_SECRET_KEY is required (at least 32 bytes; use EDR_SECRET_KEY_FILE for docker-secret mounts)"))
+		return
+	}
+	if len(v) < secretKeyMinBytes {
+		*errs = append(*errs, fmt.Errorf("EDR_SECRET_KEY must be at least %d bytes, got %d", secretKeyMinBytes, len(v)))
+		return
+	}
+	c.SecretKey = []byte(v)
 }
 
 // loadTLSConfig validates the TLS configuration's cross-field
@@ -472,9 +496,6 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 	parseOIDCOverrides(c, getenv, errs)
 	envparse.PositiveDuration(getenv, "EDR_OIDC_STATE_COOKIE_TTL", &c.OIDCStateCookieTTL, errs)
 	c.AuthAllowNoOIDC = getenv("EDR_AUTH_ALLOW_NO_OIDC") == "1"
-	if v := getenv("EDR_SESSION_SIGNING_KEY"); v != "" {
-		c.SessionSigningKey = []byte(v)
-	}
 	enforceOIDCGate(c, errs)
 }
 
@@ -515,11 +536,6 @@ func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
 // break-glass-only mode. The allow-no-oidc opt-out specifically does NOT excuse partial configuration: if any EDR_OIDC_* knob is set,
 // the operator clearly intends OIDC and a missing companion is a typo, not an opt-out.
 func enforceOIDCGate(c *Config, errs *[]error) {
-	if c.OIDCIssuer != "" && len(c.SessionSigningKey) < oidcSigningKeyMinBytes {
-		*errs = append(*errs, errors.New(
-			"EDR_SESSION_SIGNING_KEY is required when OIDC is enabled; "+
-				"must be at least 32 bytes (use EDR_SESSION_SIGNING_KEY_FILE for docker-secret mounts)"))
-	}
 	partialOIDC := c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != "" || c.OIDCDefaultRole != ""
 	switch {
 	case c.OIDCIssuer == "" && partialOIDC:
@@ -536,10 +552,6 @@ func enforceOIDCGate(c *Config, errs *[]error) {
 		appendIfMissing(c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL is required when EDR_OIDC_ISSUER is set", errs)
 	}
 }
-
-// oidcSigningKeyMinBytes is the wave-1 floor for EDR_SESSION_SIGNING_KEY. 32 bytes matches the HMAC-SHA256 block size used by the
-// state cookie signer; shorter keys silently weaken the signature without an obvious runtime symptom.
-const oidcSigningKeyMinBytes = 32
 
 // appendIfMissing emits msg when v is empty. Tiny helper so the gate switch reads as a list of cross-checks rather than three near-
 // identical branches.

@@ -8,7 +8,7 @@ The server tier is stateless: it holds no in-process state that outlives a reque
 
 ### Multi-replica (high availability): reference
 
-Two or more server replicas behind a load balancer, in front of one MySQL. This is the recommended topology: a replica can be drained and restarted (or rolled to a new version) without a maintenance window, because the load balancer routes around a draining replica and sessions are MySQL-backed, so there are no sticky sessions to strand. Use `packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative that adds active `/readyz` health checks. The setup steps below apply unchanged except that you also generate a shared `session_signing_key` secret (`openssl rand -hex 32 > secrets/session_signing_key`), which every replica must share so a session minted on one validates on another.
+Two or more server replicas behind a load balancer, in front of one MySQL. This is the recommended topology: a replica can be drained and restarted (or rolled to a new version) without a maintenance window, because the load balancer routes around a draining replica and sessions are MySQL-backed, so there are no sticky sessions to strand. Use `packaging/docker-compose-multi-replica.yml` (two replicas + MySQL + an NGINX proxy); `packaging/haproxy/multi-replica.cfg` is a drop-in HAProxy alternative that adds active `/readyz` health checks. The setup steps below apply unchanged except that you also generate a shared `secret_key` secret (`openssl rand -hex 32 > secrets/secret_key`), which every replica must share so the derived keys match (a token hashed or a session minted on one validates on another).
 
 Properties this topology relies on, each pinned by a test in the `server-availability` spec: the processor scales across replicas via `SKIP LOCKED`; sessions and CSRF tokens validate on any replica; the periodic maintenance tasks run on exactly one replica via MySQL advisory locking; and schema migrations are applied under an advisory lock so a rolling upgrade never runs two migration applies against one database at once.
 
@@ -84,11 +84,11 @@ printf '%s' "$ENROLL_SECRET" > secrets/enroll_secret
 chmod 0600 secrets/*
 ```
 
-**For the multi-replica HA topology**, also generate the shared session signing key. Every replica mounts the same key so a session or OIDC state cookie minted on one replica validates on another:
+**For the multi-replica HA topology**, also generate the shared root secret. Every replica mounts the same key so the derived host-token pepper and cookie signing key match across replicas (a token hashed or a session minted on one validates on another):
 
 ```sh
-openssl rand -hex 32 > secrets/session_signing_key
-chmod 0600 secrets/session_signing_key
+openssl rand -hex 32 > secrets/secret_key
+chmod 0600 secrets/secret_key
 ```
 
 The `edr_dsn` file contains the same MySQL password embedded into a Go DSN. The server reads it via the `EDR_DSN_FILE` pattern (see `server/config/file_env.go`) so the password never appears in a compose env block.
@@ -223,7 +223,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_DISABLED_RULES` | no | none | Comma-separated rule IDs to drop from the detection registry at boot. A disabled rule is gone from the engine's active set AND from `GET /api/rules`, so it never evaluates against any batch and never produces alerts until it is re-enabled (requires a server restart). Unknown IDs WARN at boot but don't fail it, so a stale config doesn't take a deployment down. Use the rule IDs printed by `GET /api/rules` (e.g. `suspicious_exec,osascript_network_exec`) |
 | `EDR_LOG_LEVEL` | no | info | `debug` / `info` / `warn` / `error` |
 | `EDR_LOG_FORMAT` | no | json | `json` or `text` |
-| `EDR_SESSION_SIGNING_KEY` / `EDR_SESSION_SIGNING_KEY_FILE` | yes when OIDC or break-glass is configured | none | HMAC secret (≥ 32 bytes) signing the OIDC state cookie + the WebAuthn registration session. Rotating it invalidates every session and in-flight ceremony; see [operations.md](operations.md#edr-session-signing-key) |
+| `EDR_SECRET_KEY` / `EDR_SECRET_KEY_FILE` | yes | none | Deployment root secret (≥ 32 bytes). Every long-lived server-side key derives from it via HKDF: the host-token HMAC pepper and the cookie signing key (OIDC state cookie + WebAuthn registration session). Required on every boot. Rotating it invalidates every host token (fleet-wide re-enroll) plus every session and in-flight ceremony; see [operations.md](operations.md#edr-root-secret) |
 | `EDR_BREAKGLASS_RP_ID` | yes in prod | none | WebAuthn relying-party identifier (registrable host, no scheme, no port). Changing post-deploy invalidates every registered credential. See [breakglass.md](breakglass.md#configuration) |
 | `EDR_BREAKGLASS_RP_ORIGINS` | yes in prod | none | Comma-separated absolute URLs accepted as the WebAuthn origin (e.g. `https://edr.example.com`). See [breakglass.md](breakglass.md#configuration) |
 | `EDR_BREAKGLASS_RP_DISPLAY_NAME` | no | `EDR Break-glass` | Operator-visible name shown during authenticator enrollment |

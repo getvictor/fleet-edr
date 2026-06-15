@@ -19,9 +19,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// validTestSecretKey is a >=32-byte EDR_SECRET_KEY that envMap injects by default so the many positive cases don't each have to set
+// it. A case exercising the missing/short-key validation sets EDR_SECRET_KEY explicitly: an empty string opts out of the default and
+// drives the "required" error, a short string drives the length error.
+const validTestSecretKey = "test-secret-key-0123456789abcdef0123456789"
+
 func envMap(pairs map[string]string) func(string) string {
 	return func(k string) string {
-		return pairs[k]
+		if v, ok := pairs[k]; ok {
+			return v
+		}
+		// EDR_SECRET_KEY is required by every boot; default it so cases that don't care about it still load. Presence in the map
+		// (even as "") opts out, which is how the missing/short-key negative cases are written.
+		if k == "EDR_SECRET_KEY" {
+			return validTestSecretKey
+		}
+		return ""
 	}
 }
 
@@ -105,6 +118,29 @@ func TestLoad(t *testing.T) {
 				"EDR_TLS_KEY_FILE":  keyFile,
 			},
 			wantErr: "EDR_ENROLL_SECRET",
+		},
+		{
+			// spec:server-identity-authentication/pre-auth-cookie-signing-keys-derive-from-the-deployment-root-secret/server-requires-the-root-secret-at-boot
+			name: "missing EDR_SECRET_KEY",
+			env: map[string]string{
+				"EDR_DSN":           "x",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_CERT_FILE": certFile,
+				"EDR_TLS_KEY_FILE":  keyFile,
+				"EDR_SECRET_KEY":    "", // present-but-empty opts out of envMap's default, exercising the required check
+			},
+			wantErr: "EDR_SECRET_KEY is required",
+		},
+		{
+			name: "short EDR_SECRET_KEY",
+			env: map[string]string{
+				"EDR_DSN":           "x",
+				"EDR_ENROLL_SECRET": "s",
+				"EDR_TLS_CERT_FILE": certFile,
+				"EDR_TLS_KEY_FILE":  keyFile,
+				"EDR_SECRET_KEY":    "tooshort",
+			},
+			wantErr: "EDR_SECRET_KEY must be at least 32 bytes",
 		},
 		{
 			// spec:server-availability/tls-may-be-terminated-by-a-front-proxy/mandatory-tls-remains-the-default
@@ -508,34 +544,12 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			wantErr: "EDR_OIDC_REDIRECT_URL is required",
 		},
 		{
-			name: "OIDC enabled without signing key -> per-field error",
+			name: "complete OIDC config -> ok with default scopes",
 			env: withExtra(prodLikeEnv, map[string]string{
 				"EDR_OIDC_ISSUER":        "https://example.okta.com",
 				"EDR_OIDC_CLIENT_ID":     "edr",
 				"EDR_OIDC_CLIENT_SECRET": "shh",
 				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
-			}),
-			wantErr: "EDR_SESSION_SIGNING_KEY is required",
-		},
-		{
-			name: "OIDC enabled with short signing key -> per-field error",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":         "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":      "edr",
-				"EDR_OIDC_CLIENT_SECRET":  "shh",
-				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
-				"EDR_SESSION_SIGNING_KEY": "tooshort",
-			}),
-			wantErr: "EDR_SESSION_SIGNING_KEY is required",
-		},
-		{
-			name: "complete OIDC config -> ok with default scopes",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":         "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":      "edr",
-				"EDR_OIDC_CLIENT_SECRET":  "shh",
-				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
-				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -553,12 +567,11 @@ func TestLoad_OIDCConfig(t *testing.T) {
 		{
 			name: "EDR_OIDC_SCOPES override",
 			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":         "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":      "edr",
-				"EDR_OIDC_CLIENT_SECRET":  "shh",
-				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_SCOPES":         "openid,email",
-				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+				"EDR_OIDC_ISSUER":        "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_SCOPES":        "openid,email",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -573,7 +586,6 @@ func TestLoad_OIDCConfig(t *testing.T) {
 				"EDR_OIDC_CLIENT_SECRET":          "shh",
 				"EDR_OIDC_REDIRECT_URL":           "https://edr.example.com/api/auth/callback",
 				"EDR_OIDC_ALLOW_JIT_PROVISIONING": "0",
-				"EDR_SESSION_SIGNING_KEY":         "0123456789abcdef0123456789abcdef",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -583,12 +595,11 @@ func TestLoad_OIDCConfig(t *testing.T) {
 		{
 			name: "EDR_OIDC_DEFAULT_ROLE override",
 			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":         "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":      "edr",
-				"EDR_OIDC_CLIENT_SECRET":  "shh",
-				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_DEFAULT_ROLE":   "admin",
-				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+				"EDR_OIDC_ISSUER":        "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_DEFAULT_ROLE":  "admin",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -598,12 +609,11 @@ func TestLoad_OIDCConfig(t *testing.T) {
 		{
 			name: "EDR_OIDC_DEFAULT_ROLE is normalized (trim + lowercase)",
 			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":         "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":      "edr",
-				"EDR_OIDC_CLIENT_SECRET":  "shh",
-				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_DEFAULT_ROLE":   "  Senior_Analyst  ",
-				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+				"EDR_OIDC_ISSUER":        "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_DEFAULT_ROLE":  "  Senior_Analyst  ",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -613,12 +623,11 @@ func TestLoad_OIDCConfig(t *testing.T) {
 		{
 			name: "EDR_OIDC_DEFAULT_ROLE unknown role -> error listing allowed values",
 			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":         "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":      "edr",
-				"EDR_OIDC_CLIENT_SECRET":  "shh",
-				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_DEFAULT_ROLE":   "wizard",
-				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+				"EDR_OIDC_ISSUER":        "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_DEFAULT_ROLE":  "wizard",
 			}),
 			wantErr: "EDR_OIDC_DEFAULT_ROLE \"wizard\" is not a known role",
 		},
@@ -638,7 +647,6 @@ func TestLoad_OIDCConfig(t *testing.T) {
 				"EDR_OIDC_CLIENT_SECRET":    "shh",
 				"EDR_OIDC_REDIRECT_URL":     "https://edr.example.com/api/auth/callback",
 				"EDR_OIDC_STATE_COOKIE_TTL": "10m",
-				"EDR_SESSION_SIGNING_KEY":   "0123456789abcdef0123456789abcdef",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
@@ -651,12 +659,11 @@ func TestLoad_OIDCConfig(t *testing.T) {
 			// to debug than a startup error.
 			name: "EDR_OIDC_SCOPES without openid is rejected",
 			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":         "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":      "edr",
-				"EDR_OIDC_CLIENT_SECRET":  "shh",
-				"EDR_OIDC_REDIRECT_URL":   "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_SCOPES":         "email,profile",
-				"EDR_SESSION_SIGNING_KEY": "0123456789abcdef0123456789abcdef",
+				"EDR_OIDC_ISSUER":        "https://example.okta.com",
+				"EDR_OIDC_CLIENT_ID":     "edr",
+				"EDR_OIDC_CLIENT_SECRET": "shh",
+				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
+				"EDR_OIDC_SCOPES":        "email,profile",
 			}),
 			wantErr: "EDR_OIDC_SCOPES must include \"openid\"",
 		},

@@ -53,9 +53,9 @@ After creation, Okta lands on the application's **General** tab. Record three va
 | Client Secret                                                                               | `EDR_OIDC_CLIENT_SECRET` |
 | Okta domain (in the **Sign On** tab as the issuer URL, e.g. `https://your-tenant.okta.com`) | `EDR_OIDC_ISSUER`        |
 
-The client secret is shown once on creation. Store it in the same secret manager that holds `EDR_SESSION_SIGNING_KEY` (Vault, AWS Secrets Manager, docker-compose `secrets:` mount, etc.); the EDR server reads each `EDR_*` value from a `*_FILE` sibling if the bare env var is empty, so a file-backed mount works without exposing the plaintext in the compose env block.
+The client secret is shown once on creation. Store it in the same secret manager that holds `EDR_SECRET_KEY` (Vault, AWS Secrets Manager, docker-compose `secrets:` mount, etc.); the EDR server reads each `EDR_*` value from a `*_FILE` sibling if the bare env var is empty, so a file-backed mount works without exposing the plaintext in the compose env block.
 
-If the client secret leaks, **rotate immediately**: Okta admin console -> Applications -> the EDR app -> **General** -> **Client Credentials** -> **Generate new secret**. Update `EDR_OIDC_CLIENT_SECRET` (or the secret file) on the EDR server and restart. Existing sessions stay valid (sessions are signed with `EDR_SESSION_SIGNING_KEY`, not the client secret); only fresh sign-ins use the new secret.
+If the client secret leaks, **rotate immediately**: Okta admin console -> Applications -> the EDR app -> **General** -> **Client Credentials** -> **Generate new secret**. Update `EDR_OIDC_CLIENT_SECRET` (or the secret file) on the EDR server and restart. Existing sessions stay valid (sessions are signed with a key derived from `EDR_SECRET_KEY`, not the client secret); only fresh sign-ins use the new secret.
 
 ## Configure the EDR server
 
@@ -66,10 +66,10 @@ EDR_OIDC_ISSUER=https://your-tenant.okta.com
 EDR_OIDC_CLIENT_ID=0oaXXXXXXXXXXXXXXXXX
 EDR_OIDC_CLIENT_SECRET=<the secret from above>
 EDR_OIDC_REDIRECT_URL=https://<edr-host>/api/auth/callback
-EDR_SESSION_SIGNING_KEY=<generate with: openssl rand -hex 32>
+EDR_SECRET_KEY=<generate with: openssl rand -hex 32>
 ```
 
-`EDR_SESSION_SIGNING_KEY` is a server-side secret, not an Okta artifact, but OIDC will not complete without it: it signs the state cookie that survives the round-trip to Okta and the session cookie minted on success. Generate it yourself with `openssl rand -hex 32` (any random value of at least 32 bytes works; bootstrap rejects shorter ones) and keep it stable, since rotating it invalidates every active session. See [install-server.md](install-server.md#configuration-reference) and [operations.md](operations.md#edr-session-signing-key) for delivery via the `*_FILE` mount, multi-replica sharing, and rotation.
+`EDR_SECRET_KEY` is the server-side deployment root secret, not an Okta artifact, but OIDC will not complete without it: the cookie signing key derived from it signs the state cookie that survives the round-trip to Okta and the session cookie minted on success. It is required on every boot regardless of OIDC (the host-token pepper also derives from it). Generate it with `openssl rand -hex 32` (any random value of at least 32 bytes works; the config layer rejects shorter ones) and keep it stable, since rotating it invalidates every active session and every host token. See [install-server.md](install-server.md#configuration-reference) and [operations.md](operations.md#edr-root-secret) for delivery via the `*_FILE` mount, multi-replica sharing, and rotation.
 
 Optional knobs (defaults shown):
 

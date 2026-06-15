@@ -654,12 +654,12 @@ tasks:
       EDR_HOST_TOKEN_LIFETIME: 24h
       EDR_HOST_TOKEN_GRACE: 5m
       EDR_UI_LIVE_DIR: server/ui/dist
-      # Dev-only deterministic session HMAC key. Required when break-glass or OIDC is
-      # configured (the server refuses to boot without it). Production deployments
-      # MUST supply a real random secret via EDR_SESSION_SIGNING_KEY_FILE (Docker
-      # secrets convention) - never reuse this placeholder. Length: 49 bytes, well
-      # past the 32-byte minimum the bootstrap validates.
-      EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
+      # Dev-only deterministic root secret. Required on every boot: the host-token HMAC pepper
+      # and the pre-auth cookie signing key both derive from it (internal/keyring). Production
+      # deployments MUST supply a real random secret via EDR_SECRET_KEY_FILE (Docker secrets
+      # convention) - never reuse this placeholder. Length: 49 bytes, well past the 32-byte
+      # minimum the config layer validates.
+      EDR_SECRET_KEY: dev-only-secret-key-do-not-use-in-production-xyz
       # Default dev mode is break-glass-only (no OIDC IdP wired up). For the OIDC-against-dex
       # flow used by Playwright e2e + the QA matrix, use `task dev:server:qa-oidc` instead.
       EDR_AUTH_ALLOW_NO_OIDC: "1"
@@ -715,7 +715,7 @@ tasks:
       Bring up the reference multi-replica HA stack (two server replicas + MySQL +
       NGINX) from packaging/docker-compose-multi-replica.yml for local validation.
       Prerequisites: populate packaging/secrets/ (mysql_root, edr_dsn, enroll_secret,
-      session_signing_key) and packaging/tls/ (fullchain.pem, privkey.pem) per
+      secret_key) and packaging/tls/ (fullchain.pem, privkey.pem) per
       docs/install-server.md, and either pull a released image or build one. Then
       verify through the load balancer: curl -k https://localhost/readyz (or
       https://localhost:$EDR_HTTPS_PORT/readyz if you override the default 443).
@@ -853,7 +853,7 @@ tasks:
       EDR_HOST_TOKEN_LIFETIME: 24h
       EDR_HOST_TOKEN_GRACE: 5m
       EDR_UI_LIVE_DIR: server/ui/dist
-      EDR_SESSION_SIGNING_KEY: dev-only-session-key-do-not-use-in-production-xyz
+      EDR_SECRET_KEY: dev-only-secret-key-do-not-use-in-production-xyz
       EDR_BREAKGLASS_RP_ID: localhost
       EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
       # OIDC: point at the local dex from qa:up. Dex itself runs over plain HTTP

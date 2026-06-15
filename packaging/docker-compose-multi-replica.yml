@@ -33,10 +33,11 @@ x-server: &server
     EDR_DSN: ""
     EDR_DSN_FILE: /run/secrets/edr_dsn
     EDR_ENROLL_SECRET_FILE: /run/secrets/enroll_secret
-    # The session signing key MUST be identical across replicas: a session or
-    # OIDC state cookie minted on one replica is validated on another, so they
-    # have to share the key. The shared secret file guarantees that.
-    EDR_SESSION_SIGNING_KEY_FILE: /run/secrets/session_signing_key
+    # The root secret MUST be identical across replicas: every derived key (the host-token
+    # HMAC pepper, the pre-auth cookie signing key) is a deterministic function of it, so a
+    # token hashed or a cookie minted on one replica must verify on another. The shared
+    # secret file guarantees that.
+    EDR_SECRET_KEY_FILE: /run/secrets/secret_key
     # Each replica terminates TLS on the proxy-to-backend hop (the EDR binary
     # never serves plaintext HTTP; see issue #140). Reuse the public cert or a
     # backend cert from your internal CA.
@@ -55,7 +56,7 @@ x-server: &server
   secrets:
     - enroll_secret
     - edr_dsn
-    - session_signing_key
+    - secret_key
   # No host port: replicas are reachable only through the proxy. The proxy
   # fans out to them by service name on the compose network.
 
@@ -106,7 +107,8 @@ secrets:
     file: ./secrets/enroll_secret
   edr_dsn:
     file: ./secrets/edr_dsn
-  # Shared across every replica so cross-replica session + CSRF validation works.
-  # Generate once: `openssl rand -hex 32 > secrets/session_signing_key`.
-  session_signing_key:
-    file: ./secrets/session_signing_key
+  # Shared across every replica so cross-replica token verification + session/CSRF
+  # validation works (every key derives from this root).
+  # Generate once: `openssl rand -hex 32 > secrets/secret_key`.
+  secret_key:
+    file: ./secrets/secret_key

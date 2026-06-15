@@ -162,33 +162,33 @@ docker compose -f docker-compose.prod.yml --env-file .env up -d --force-recreate
 
 The named volume persists across recreate; no data loss. The server restarts once mysql is ready (Compose healthcheck gates it).
 
-### EDR session signing key
+### EDR root secret
 
-`EDR_SESSION_SIGNING_KEY` is the HMAC secret that signs:
+`EDR_SECRET_KEY` is the deployment root secret. Every long-lived server-side key is derived from it via HKDF-SHA256 under a versioned label (key separation; see `internal/keyring`), so a deployment provisions one secret rather than one per purpose. The derived keys are:
 
-- Every OIDC state cookie (state, nonce, PKCE verifier on the round-trip to the IdP).
-- The WebAuthn registration session cookie used during break-glass redemption and second-key enrollment.
-- Server-minted session metadata cookies.
+- The host-token HMAC pepper that hashes + verifies every agent bearer token.
+- The cookie signing key that signs every OIDC state cookie (state, nonce, PKCE verifier on the round-trip to the IdP), the WebAuthn registration session cookie used during break-glass redemption and second-key enrollment, and server-minted session metadata cookies.
 
-Rotate it yearly, or immediately on any suspicion of host compromise (stolen disk image, leaked secret file, retired operator who had filesystem-level access). The key must be at least 32 bytes; bootstrap rejects shorter values at boot with a focused error.
+It is required on every boot, OIDC or not, because the host-token pepper is always needed. Rotate it yearly, or immediately on any suspicion of host compromise (stolen disk image, leaked secret file, retired operator who had filesystem-level access). The key must be at least 32 bytes; the config layer rejects shorter values at boot with a focused error.
 
-In production deliver it via the docker-secret-style `EDR_SESSION_SIGNING_KEY_FILE` mount (same pattern as `EDR_DSN_FILE` and `EDR_ENROLL_SECRET_FILE`). Never paste plaintext into a compose env block. `docker inspect` reads env, but not bind-mounted secret files.
+In production deliver it via the docker-secret-style `EDR_SECRET_KEY_FILE` mount (same pattern as `EDR_DSN_FILE` and `EDR_ENROLL_SECRET_FILE`). Never paste plaintext into a compose env block. `docker inspect` reads env, but not bind-mounted secret files.
 
 ```sh
 cd /srv/fleet-edr
-NEW_SIGNING_KEY=$(openssl rand -hex 32)
-printf '%s' "$NEW_SIGNING_KEY" > secrets/session_signing_key
-chmod 0600 secrets/session_signing_key
+NEW_SECRET_KEY=$(openssl rand -hex 32)
+printf '%s' "$NEW_SECRET_KEY" > secrets/secret_key
+chmod 0600 secrets/secret_key
 docker compose -f docker-compose.prod.yml --env-file .env restart server
 ```
 
 What the restart invalidates:
 
+- **Every host token.** The derived pepper changes, so every enrolled agent's stored hash stops matching. Agents 401 on their next request and re-enroll automatically via the deployment secret (the re-enrollment-on-revocation path). This is a fleet-wide re-enroll: expect a burst of enroll traffic. Plan the rotation accordingly.
 - **Every active session.** All signed-in operators land back on `/ui/login` and must re-authenticate via OIDC (or the break-glass surface). Coordinate the restart with on-call so nobody is mid-triage.
 - **In-flight OIDC sign-in flows.** Anyone partway through the IdP round-trip will hit the callback with a state cookie the new key can't verify; their browser surfaces an OIDC error and they have to restart from `/ui/login`. The window is typically seconds, but a slow IdP / MFA prompt can stretch it to minutes.
 - **In-flight break-glass WebAuthn registration sessions.** Any operator who has loaded a bootstrap-token redemption page but not yet completed the authenticator ceremony will fail at the final step. Reload the redemption URL to restart the ceremony; the bootstrap token itself is not consumed until the credential write succeeds. See [breakglass.md](breakglass.md#first-boot-redemption) for the redemption flow.
 
-Persisted artefacts (password hashes, registered WebAuthn credentials, audit rows) are NOT affected: rotation only invalidates the signed ephemeral state, not the long-lived database rows.
+Persisted artefacts (password hashes, registered WebAuthn credentials, audit rows) are NOT affected: rotation only invalidates the derived ephemeral state and host-token hashes, not the long-lived database rows.
 
 ## Backup and restore
 

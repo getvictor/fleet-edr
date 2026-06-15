@@ -1,0 +1,54 @@
+// Package keyring derives purpose-specific cryptographic keys from a single high-entropy server root secret using HKDF-SHA256.
+//
+// The pattern is key separation (RFC 5869): one provisioned root secret (EDR_SECRET_KEY) seeds an unbounded number of independent
+// subkeys, each bound to a distinct, versioned domain-separation label. Because HKDF-Expand is a PRF, a derived key reveals nothing
+// about the root or about any sibling key, so a feature that needs a server-side key calls Derive with a new label rather than asking
+// an operator to provision another secret. This is the same model Rails (secret_key_base) and Django (SECRET_KEY) use.
+//
+// Use this only for long-lived server-side keys (HMAC peppers, cookie-signing keys). Per-record random values (nonces, one-time
+// tokens, per-row salts) must be generated with crypto/rand, not derived here.
+package keyring
+
+import (
+	"bytes"
+	"crypto/hkdf"
+	"crypto/sha256"
+	"fmt"
+)
+
+// MinRootKeyLen is the floor for the root secret. 32 bytes matches the HKDF-SHA256 output width: a shorter root would cap the
+// entropy of every derived key regardless of how long the derived output is requested.
+const MinRootKeyLen = 32
+
+// derivedKeyLen is the byte length of every derived key. 32 bytes is a full HMAC-SHA256 key and an ample HMAC/AEAD key budget.
+const derivedKeyLen = 32
+
+// Keyring derives subkeys from a root secret. It holds a private copy of the root, so callers may reuse or zero their input buffer
+// after construction.
+type Keyring struct {
+	root []byte
+}
+
+// New constructs a Keyring from the root secret. It returns an error when the root is shorter than MinRootKeyLen; callers that load
+// the root from validated config (which already enforces the floor) can treat the error as a defensive invariant.
+func New(root []byte) (*Keyring, error) {
+	if len(root) < MinRootKeyLen {
+		return nil, fmt.Errorf("keyring: root key must be at least %d bytes, got %d", MinRootKeyLen, len(root))
+	}
+	return &Keyring{root: bytes.Clone(root)}, nil
+}
+
+// Derive returns the 32-byte key bound to label. The label is the HKDF info string and is the sole domain separator: distinct labels
+// yield independent keys, and a fixed label is stable across calls and process restarts, so a derived key can authenticate data it
+// produced earlier. Labels SHOULD be namespaced and versioned (e.g. "edr/host-token/pepper/v1") so a single purpose can be rotated by
+// bumping its version without disturbing the root or sibling keys.
+func (k *Keyring) Derive(label string) []byte {
+	// HKDF-SHA256 Extract-then-Expand. The root is already high-entropy, so the Extract salt is nil per RFC 5869 guidance; the label
+	// is the Expand info. hkdf.Key only errors when keyLength exceeds 255*HashLen, which derivedKeyLen never does, so a non-nil error
+	// here is an unreachable programming error rather than a runtime condition.
+	key, err := hkdf.Key(sha256.New, k.root, nil, label, derivedKeyLen)
+	if err != nil {
+		panic(fmt.Sprintf("keyring: derive %q: %v", label, err))
+	}
+	return key
+}

@@ -14,7 +14,7 @@ import (
 const (
 	// hostTokenBase64Len is the base64url-no-padding length of a tokenLen-byte token (tokenLen lives in hash.go). For n bytes the encoded
 	// length is ceil(n*4/3), computed as (n*4+2)/3. It is derived from tokenLen rather than hard-coded so a future tokenLen bump stays in
-	// sync without a second edit. Anything else is a malformed presentation; we reject before paying the argon2id cost.
+	// sync without a second edit. Anything else is a malformed presentation; we reject before the DB lookup.
 	hostTokenBase64Len = (tokenLen*4 + 2) / 3
 
 	// tokenIDPrefixBytes is how many leading bytes of a host_token_id we hex-encode for audit metadata (8 hex chars). Long enough to
@@ -22,7 +22,7 @@ const (
 	tokenIDPrefixBytes = 4
 )
 
-// Enrollment mirrors the `enrollments` row shape used by admin listings. The raw token hash and salt are intentionally not exported;
+// Enrollment mirrors the `enrollments` row shape used by admin listings. The raw token hash is intentionally not exported;
 // callers that need to verify a token go through Verify, not direct row access.
 type Enrollment struct {
 	HostID       string     `db:"host_id" json:"host_id"`
@@ -38,14 +38,17 @@ type Enrollment struct {
 }
 
 // Store owns the `enrollments` table. It is backed by *sqlx.DB (the store package already opens one via otelsql.Open); we take a db
-// handle rather than the full *store.Store so this package stays unit-testable with a plain sqlx.DB.
+// handle rather than the full *store.Store so this package stays unit-testable with a plain sqlx.DB. The pepper is the server-held
+// HMAC key (derived from the deployment root secret) every token hash + verify keys on.
 type Store struct {
-	db *sqlx.DB
+	db     *sqlx.DB
+	pepper []byte
 }
 
-// NewStore constructs an enrollment store over an existing sqlx.DB handle.
-func NewStore(db *sqlx.DB) *Store {
-	return &Store{db: db}
+// NewStore constructs an enrollment store over an existing sqlx.DB handle. pepper is the HMAC key used to hash and verify host tokens;
+// it must be non-empty (the endpoint bootstrap derives it from the deployment root key via internal/keyring).
+func NewStore(db *sqlx.DB, pepper []byte) *Store {
+	return &Store{db: db, pepper: pepper}
 }
 
 // RegisterRequest captures the inputs to a successful enrollment. The presented secret has already been validated by the handler;
@@ -75,21 +78,18 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 	if err != nil {
 		return nil, err
 	}
-	hash, salt, err := hashToken(token)
-	if err != nil {
-		return nil, err
-	}
+	hash := hashToken(s.pepper, token)
 	tokID := tokenID(token)
 
 	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
 		REPLACE INTO enrollments (
-			host_id, host_token_id, host_token_hash, host_token_salt,
+			host_id, host_token_id, host_token_hash,
 			hostname, agent_version, os_version, source_ip,
 			enrolled_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		req.HostID, tokID, hash, salt,
+		req.HostID, tokID, hash,
 		req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP,
 		now,
 	); err != nil {
@@ -129,18 +129,14 @@ func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 // revoked enrollment, expired previous-token grace, hash mismatch).
 //
 // Implementation: try the current token first by host_token_id (SHA-256
-// O(1) lookup, then argon2id verify). On miss, fall back to the previous
+// O(1) lookup, then keyed HMAC verify). On miss, fall back to the previous
 // token via previous_host_token_id WHERE previous_token_expires_at >
-// NOW(): this is the grace window the rotation flow opens. Both lookups
-// pay one argon2id evaluation on a hit; a miss against the current path
-// still pays one argon2id on the previous path before declaring
-// mismatch, which is intentional rate-limiting against guessing.
+// NOW(): this is the grace window the rotation flow opens.
 func (s *Store) VerifyWithMeta(ctx context.Context, token string) (VerifyResult, error) {
 	if token == "" {
 		return VerifyResult{}, ErrTokenMismatch
 	}
-	// Bearer tokens have 32 bytes of entropy (43 base64url chars); short-circuit obviously bad
-	// lengths before paying the argon2 price.
+	// Bearer tokens have 32 bytes of entropy (43 base64url chars); short-circuit obviously bad lengths before the DB lookup.
 	if len(token) != hostTokenBase64Len {
 		return VerifyResult{}, ErrTokenMismatch
 	}
@@ -156,17 +152,16 @@ func (s *Store) VerifyWithMeta(ctx context.Context, token string) (VerifyResult,
 
 // verifyAgainstCurrent does the host_token_id lookup. ok=false means the row was not found (caller should fall through to
 // previous-token path); any other error is surfaced as-is. ok=true with err=nil is the happy path; ok=true with ErrTokenMismatch means
-// the row was found but the argon2id verify failed (treat as mismatch, do NOT fall through to previous since that would be redundant
+// the row was found but the HMAC verify failed (treat as mismatch, do NOT fall through to previous since that would be redundant
 // computation against the same host).
 func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []byte) (VerifyResult, bool, error) {
 	var row struct {
 		HostID   string    `db:"host_id"`
 		Hash     []byte    `db:"host_token_hash"`
-		Salt     []byte    `db:"host_token_salt"`
 		IssuedAt time.Time `db:"host_token_issued_at"`
 	}
 	err := s.db.GetContext(ctx, &row, `
-		SELECT host_id, host_token_hash, host_token_salt, host_token_issued_at
+		SELECT host_id, host_token_hash, host_token_issued_at
 		FROM enrollments
 		WHERE host_token_id = ? AND revoked_at IS NULL
 	`, tid)
@@ -176,7 +171,7 @@ func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []by
 	if err != nil {
 		return VerifyResult{}, false, fmt.Errorf("query enrollment by token id: %w", err)
 	}
-	if !verifyToken(token, row.Hash, row.Salt) {
+	if !verifyToken(s.pepper, token, row.Hash) {
 		// Token_id match but hash mismatch would require a SHA-256 collision; treat as mismatch rather than internal error and
 		// do not fall through to previous-token lookup (which is for a different token entirely, by id).
 		return VerifyResult{}, true, ErrTokenMismatch
@@ -195,11 +190,10 @@ func (s *Store) verifyAgainstPrevious(ctx context.Context, token string, tid []b
 	var row struct {
 		HostID   string    `db:"host_id"`
 		Hash     []byte    `db:"previous_host_token_hash"`
-		Salt     []byte    `db:"previous_host_token_salt"`
 		IssuedAt time.Time `db:"host_token_issued_at"`
 	}
 	err := s.db.GetContext(ctx, &row, `
-		SELECT host_id, previous_host_token_hash, previous_host_token_salt, host_token_issued_at
+		SELECT host_id, previous_host_token_hash, host_token_issued_at
 		FROM enrollments
 		WHERE previous_host_token_id = ?
 		  AND revoked_at IS NULL
@@ -212,7 +206,7 @@ func (s *Store) verifyAgainstPrevious(ctx context.Context, token string, tid []b
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("query enrollment by previous token id: %w", err)
 	}
-	if !verifyToken(token, row.Hash, row.Salt) {
+	if !verifyToken(s.pepper, token, row.Hash) {
 		return VerifyResult{}, ErrTokenMismatch
 	}
 	return VerifyResult{
@@ -233,7 +227,7 @@ type RotateResult struct {
 }
 
 // RotateHostToken atomically swaps a host's bearer token: generates a
-// fresh (id, hash, salt), captures the existing values into previous_*,
+// fresh (id, hash), captures the existing values into previous_*,
 // sets previous_token_expires_at = NOW + grace, and updates
 // host_token_issued_at to NOW. The atomic UPDATE is keyed on the
 // currentTokenID the caller asserts (typically the value returned from
@@ -263,10 +257,7 @@ func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentToken
 	if err != nil {
 		return RotateResult{}, err
 	}
-	newHash, newSalt, err := hashToken(newToken)
-	if err != nil {
-		return RotateResult{}, err
-	}
+	newHash := hashToken(s.pepper, newToken)
 	newID := tokenID(newToken)
 	expiresAt := time.Now().UTC().Add(grace)
 
@@ -274,14 +265,12 @@ func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentToken
 		UPDATE enrollments
 		SET previous_host_token_id    = host_token_id,
 		    previous_host_token_hash  = host_token_hash,
-		    previous_host_token_salt  = host_token_salt,
 		    previous_token_expires_at = ?,
 		    host_token_id             = ?,
 		    host_token_hash           = ?,
-		    host_token_salt           = ?,
 		    host_token_issued_at      = CURRENT_TIMESTAMP(6)
 		WHERE host_id = ? AND host_token_id = ? AND revoked_at IS NULL
-	`, expiresAt, newID, newHash, newSalt, hostID, currentTokenID)
+	`, expiresAt, newID, newHash, hostID, currentTokenID)
 	if err != nil {
 		return RotateResult{}, fmt.Errorf("rotate host token: %w", err)
 	}
@@ -329,10 +318,7 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 	if err != nil {
 		return RotateResult{}, err
 	}
-	newHash, newSalt, err := hashToken(newToken)
-	if err != nil {
-		return RotateResult{}, err
-	}
+	newHash := hashToken(s.pepper, newToken)
 	newID := tokenID(newToken)
 	expiresAt := time.Now().UTC().Add(grace)
 
@@ -364,14 +350,12 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 		UPDATE enrollments
 		SET previous_host_token_id    = host_token_id,
 		    previous_host_token_hash  = host_token_hash,
-		    previous_host_token_salt  = host_token_salt,
 		    previous_token_expires_at = ?,
 		    host_token_id             = ?,
 		    host_token_hash           = ?,
-		    host_token_salt           = ?,
 		    host_token_issued_at      = CURRENT_TIMESTAMP(6)
 		WHERE host_id = ? AND revoked_at IS NULL
-	`, expiresAt, newID, newHash, newSalt, hostID); err != nil {
+	`, expiresAt, newID, newHash, hostID); err != nil {
 		return RotateResult{}, fmt.Errorf("rotate force update: %w", err)
 	}
 
@@ -413,8 +397,8 @@ func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// List returns every enrollment row, active + revoked, for the admin UI. The token hash/salt
-// columns are intentionally omitted.
+// List returns every enrollment row, active + revoked, for the admin UI. The token hash
+// column is intentionally omitted.
 func (s *Store) List(ctx context.Context) ([]Enrollment, error) {
 	var rows []Enrollment
 	err := s.db.SelectContext(ctx, &rows, `

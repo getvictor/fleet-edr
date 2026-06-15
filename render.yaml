@@ -42,10 +42,12 @@ services:
       # MDM install script as the agent enroll secret (docs/fleet-deployment.md).
       - key: EDR_ENROLL_SECRET
         generateValue: true
-      # Identity bootstrap requires a session signing key whenever break-glass is
-      # configured (which it is here, via EDR_AUTH_ALLOW_NO_OIDC). Without it the
-      # server exits on first boot. Render generates and persists it.
-      - key: EDR_SESSION_SIGNING_KEY
+      # The deployment root secret. Required on every boot: the host-token HMAC pepper and
+      # the pre-auth cookie signing key (OIDC state + break-glass challenge) both derive
+      # from it via HKDF (internal/keyring). Without it the server exits on first boot.
+      # Render generates and persists it. Note: changing it invalidates every existing host
+      # token, forcing a fleet-wide agent re-enroll.
+      - key: EDR_SECRET_KEY
         generateValue: true
       # The server composes EDR_DSN from these parts (Render can't interpolate
       # one env var into another, so we wire the host:port + generated password

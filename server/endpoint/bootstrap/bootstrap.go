@@ -32,6 +32,10 @@ type Deps struct {
 	Logger              *slog.Logger
 	EnrollSecret        string
 	EnrollRatePerMinute int
+	// HostTokenPepper is the server-held HMAC key the enrollment store uses to hash + verify host tokens. Required, at least 32 bytes.
+	// cmd/main derives it from the deployment root secret (EDR_SECRET_KEY) via internal/keyring; changing the root invalidates every
+	// existing host token (a breaking, operator-initiated fleet-wide re-enroll).
+	HostTokenPepper []byte
 	// CommandInserter inserts commands the endpoint context emits (today: only rotate_token). Optional: when nil, rotate_token commits the
 	// new bearer to the DB but the agent will not receive a command: it re-enrolls once the grace window expires.
 	CommandInserter CommandInserter
@@ -72,6 +76,9 @@ func New(deps Deps) (*Endpoint, error) {
 	if deps.EnrollSecret == "" {
 		return nil, errors.New("endpoint bootstrap: EnrollSecret is required")
 	}
+	if len(deps.HostTokenPepper) < 32 {
+		return nil, errors.New("endpoint bootstrap: HostTokenPepper is required (at least 32 bytes)")
+	}
 	if deps.AuthZ == nil {
 		return nil, errors.New("endpoint bootstrap: AuthZ is required")
 	}
@@ -80,7 +87,7 @@ func New(deps Deps) (*Endpoint, error) {
 		logger = slog.Default()
 	}
 
-	store := mysql.NewStore(deps.DB)
+	store := mysql.NewStore(deps.DB, deps.HostTokenPepper)
 	svc := service.New(service.Options{
 		Store:    store,
 		Secret:   deps.EnrollSecret,

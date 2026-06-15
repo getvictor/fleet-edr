@@ -156,11 +156,11 @@ EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL=1h
 
 `EDR_BREAKGLASS_RP_ID` and `EDR_BREAKGLASS_RP_ORIGINS` are distinct values with different shapes: `RP_ID` is the bare registrable host (no scheme, no port); `RP_ORIGINS` is the absolute URL the browser sees in the authenticator's origin attestation. They MUST agree at the host level: a browser visiting `https://edr.example.com` whose `RP_ID` is configured as `edr.example.com` is valid; configuring `RP_ID=otheredr.example.com` makes every assertion fail with a generic ceremony error.
 
-The break-glass surface also depends on `EDR_SESSION_SIGNING_KEY` (the HMAC secret that signs the WebAuthn registration session cookie and the OIDC state cookie). See [`install-server.md`](install-server.md) for the full env-var table and [`operations.md`](operations.md) for rotation impact: rotating that key invalidates every in-flight break-glass redemption ceremony and forces the operator to restart the redemption flow.
+The break-glass surface also depends on `EDR_SECRET_KEY` (the deployment root secret; the cookie signing key that signs the WebAuthn registration session cookie and the OIDC state cookie derives from it). See [`install-server.md`](install-server.md) for the full env-var table and [`operations.md`](operations.md) for rotation impact: rotating the root secret invalidates every in-flight break-glass redemption ceremony and forces the operator to restart the redemption flow.
 
 ## Related docs
 
 - [`authz.md`](authz.md): the role matrix the break-glass admin lands in (super_admin) and the SQL pattern for binding other roles.
 - [`install-server.md`](install-server.md): the env vars (`EDR_BREAKGLASS_*`) the server reads at boot.
-- [`operations.md`](operations.md): the `EDR_SESSION_SIGNING_KEY` rotation runbook and what break-glass artefacts a rotation invalidates.
+- [`operations.md`](operations.md): the `EDR_SECRET_KEY` rotation runbook and what break-glass artefacts a rotation invalidates.
 - [`threat-model.md`](threat-model.md): the threat coverage the WebAuthn-mandatory break-glass control closes.
