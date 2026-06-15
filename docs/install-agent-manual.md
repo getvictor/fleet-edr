@@ -150,7 +150,7 @@ systemextensionsctl list | grep fleetdm
 #   ... com.fleetdm.edr.networkextension  ... [activated enabled]
 ```
 
-Until both extensions are activated, the agent runs but sees no events. The agent log repeats `receiver connect` warnings while it waits for the extensions' XPC service to come up. That's expected (if the warnings persist after activation, see Step 6).
+Each extension feeds its own receiver loop, so until a given extension is activated the agent simply misses that extension's events; a partially-approved install is partial coverage, not a full outage. The agent logs a `receiver connect` warning per unavailable service, and the `service` field says which one: `FDG8Q7N4CC.com.fleetdm.edr.securityextension.xpc` is the Endpoint Security extension (process and file events), `group.com.fleetdm.edr.networkextension` is the Network Extension (network and DNS events). That's expected before activation. A warning for the Endpoint Security service that persists after activation is the Full Disk Access boot-loop in Step 6; a persistent Network Extension warning means that extension still needs approval in Step 5.
 
 ## Step 6: grant Full Disk Access
 

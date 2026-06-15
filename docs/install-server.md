@@ -22,7 +22,7 @@ One server replica + MySQL, from the root `docker-compose.prod.yml`. Simplest to
 
 The control-plane availability target for the multi-replica topology is **99.9%** (the management, query, ingest, and alerting plane: the UI, the API, and `/api/events` ingestion). The full architecture rationale is in [ADR-0011](adr/0011-ha-architecture.md).
 
-How it reaches that: a replica can crash, drain, or roll to a new version without taking the control plane down, because the load balancer routes around any replica not reporting `/readyz` ready and MySQL-backed sessions let any replica serve any request. A [rolling upgrade](operations.md#rolling-upgrade-multi-replica) is therefore not a maintenance window.
+How it reaches that: a replica can crash, drain, or roll to a new version without taking the control plane down, because MySQL-backed sessions let any replica serve any request and the load balancer pulls a draining replica from rotation. With the HAProxy config (or NGINX Plus) that pull is active, driven by `/readyz` polling, so a replica is removed before a request fails; the default open-source NGINX has only passive failover (it marks a replica down after failed forwards). A [rolling upgrade](operations.md#rolling-upgrade-multi-replica) is therefore not a maintenance window.
 
 **Endpoint protection does not depend on control-plane availability:**
 
