@@ -39,6 +39,16 @@ func TestHashRoundTrip(t *testing.T) {
 	assert.False(t, verifyToken(testPepper(t), tok, hash), "a token hashed under a different pepper must not verify")
 }
 
+// TestNewStore_pepperGuard pins the fail-fast invariant: a sub-32-byte pepper is a fatal wiring bug (it would leave host-token hashing
+// effectively unkeyed), so NewStore panics rather than constructing a weakly-keyed store. The length check precedes any DB use, so a
+// nil handle is fine for the assertion.
+func TestNewStore_pepperGuard(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { NewStore(nil, []byte("too-short")) }, "a short pepper must panic")
+	assert.Panics(t, func() { NewStore(nil, nil) }, "an empty pepper must panic")
+	assert.NotPanics(t, func() { NewStore(nil, make([]byte, minPepperLen)) }, "a 32-byte pepper must be accepted")
+}
+
 // TestVerifyTokenProperty pins the HMAC verifier's invariants over a wide input space: the hash a (pepper, token) pair produces always
 // verifies under that same pair, and neither a different token nor a different pepper verifies it (collisions are negligible).
 func TestVerifyTokenProperty(t *testing.T) {

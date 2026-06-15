@@ -21,6 +21,10 @@ const (
 	// tokenIDPrefixBytes is how many leading bytes of a host_token_id we hex-encode for audit metadata (8 hex chars). Long enough to
 	// disambiguate in operator UIs, short enough that the prefix stays a credential-free identifier.
 	tokenIDPrefixBytes = 4
+
+	// minPepperLen is the floor for the HMAC pepper, matching the HKDF-SHA256 output width the keyring derives. A shorter pepper would
+	// make host-token hashing effectively unkeyed, so NewStore treats it as a fatal wiring bug.
+	minPepperLen = 32
 )
 
 // Enrollment mirrors the `enrollments` row shape used by admin listings. The raw token hash is intentionally not exported;
@@ -46,10 +50,15 @@ type Store struct {
 	pepper []byte
 }
 
-// NewStore constructs an enrollment store over an existing sqlx.DB handle. pepper is the HMAC key used to hash and verify host tokens;
-// the endpoint bootstrap enforces the >=32-byte minimum and derives it from the deployment root key via internal/keyring. The pepper
-// is cloned so a later mutation of the caller's slice cannot change the store's key material out from under in-flight verifications.
+// NewStore constructs an enrollment store over an existing sqlx.DB handle. pepper is the HMAC key used to hash and verify host tokens
+// (the endpoint bootstrap derives it from the deployment root key via internal/keyring). NewStore enforces the minPepperLen minimum
+// with a panic: a short pepper would make host-token hashing effectively unkeyed, which is a fatal wiring bug, not a recoverable
+// runtime condition (the only callers are bootstrap, which validates first, and tests). The pepper is cloned so a later mutation of
+// the caller's slice cannot change the store's key material out from under in-flight verifications.
 func NewStore(db *sqlx.DB, pepper []byte) *Store {
+	if len(pepper) < minPepperLen {
+		panic(fmt.Sprintf("mysql.NewStore: host-token pepper must be at least %d bytes, got %d", minPepperLen, len(pepper)))
+	}
 	return &Store{db: db, pepper: bytes.Clone(pepper)}
 }
 
