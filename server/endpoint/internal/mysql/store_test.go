@@ -56,7 +56,7 @@ func TestRegister_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testUUID, hostID)
 
-	// An obviously-wrong token is rejected fast (length check short-circuits the hash).
+	// An obviously-wrong token is rejected fast: the length check runs before any DB lookup or HMAC verify.
 	_, err = s.Verify(ctx, "nope")
 	assert.ErrorIs(t, err, mysql.ErrTokenMismatch)
 }

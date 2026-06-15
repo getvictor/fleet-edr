@@ -67,7 +67,7 @@ const (
 	// hostTokenPepperLabel and sessionSigningKeyLabel are the HKDF domain-separation labels for the keys derived from EDR_SECRET_KEY
 	// (internal/keyring). Each is versioned so a single purpose can be rotated by bumping its suffix without disturbing the root secret
 	// or any sibling key.
-	hostTokenPepperLabel   = "edr/host-token/pepper/v1"
+	hostTokenPepperLabel   = "edr/host-token/pepper/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
 	sessionSigningKeyLabel = "edr/session/signing/v1"
 
 	// HTTP server timeouts. Read 10s covers a slow agent upload; write 30s and idle 60s bound how long a stuck client holds a connection.
@@ -201,6 +201,9 @@ func openContexts(
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("build keyring: %w", err)
 	}
+	// keyring.New holds its own copy of the root, and cfg.SecretKey is not read past this point, so zero the config's copy to
+	// minimize how long the raw root secret lives in memory (heap dumps, core files).
+	clear(cfg.SecretKey)
 
 	release, err := coord.Lock(ctx, migrationLockName)
 	if err != nil {

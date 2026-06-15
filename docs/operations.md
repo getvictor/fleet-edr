@@ -188,7 +188,7 @@ What the restart invalidates:
 - **In-flight OIDC sign-in flows.** Anyone partway through the IdP round-trip will hit the callback with a state cookie the new key can't verify; their browser surfaces an OIDC error and they have to restart from `/ui/login`. The window is typically seconds, but a slow IdP / MFA prompt can stretch it to minutes.
 - **In-flight break-glass WebAuthn registration sessions.** Any operator who has loaded a bootstrap-token redemption page but not yet completed the authenticator ceremony will fail at the final step. Reload the redemption URL to restart the ceremony; the bootstrap token itself is not consumed until the credential write succeeds. See [breakglass.md](breakglass.md#first-boot-redemption) for the redemption flow.
 
-Persisted artefacts (password hashes, registered WebAuthn credentials, audit rows) are NOT affected: rotation only invalidates the derived ephemeral state and host-token hashes, not the long-lived database rows.
+Unrelated persisted records (password hashes, registered WebAuthn credentials, audit rows) are NOT touched: rotation neither deletes nor modifies them. The host-token hashes in the `enrollments` table are persisted too, but rotating the root secret makes them stop matching, which is exactly what forces the fleet-wide re-enroll noted above. So the only durable state a rotation effectively invalidates is the host-token hashes; everything else is either ephemeral signed state or left intact.
 
 ## Backup and restore
 

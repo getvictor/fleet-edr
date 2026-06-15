@@ -657,7 +657,7 @@ tasks:
       # Dev-only deterministic root secret. Required on every boot: the host-token HMAC pepper
       # and the pre-auth cookie signing key both derive from it (internal/keyring). Production
       # deployments MUST supply a real random secret via EDR_SECRET_KEY_FILE (Docker secrets
-      # convention) - never reuse this placeholder. Length: 49 bytes, well past the 32-byte
+      # convention): never reuse this placeholder. Length: 49 bytes, well past the 32-byte
       # minimum the config layer validates.
       EDR_SECRET_KEY: dev-only-secret-key-do-not-use-in-production-xyz
       # Default dev mode is break-glass-only (no OIDC IdP wired up). For the OIDC-against-dex

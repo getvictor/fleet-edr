@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/hex"
@@ -46,9 +47,10 @@ type Store struct {
 }
 
 // NewStore constructs an enrollment store over an existing sqlx.DB handle. pepper is the HMAC key used to hash and verify host tokens;
-// it must be non-empty (the endpoint bootstrap derives it from the deployment root key via internal/keyring).
+// the endpoint bootstrap enforces the >=32-byte minimum and derives it from the deployment root key via internal/keyring. The pepper
+// is cloned so a later mutation of the caller's slice cannot change the store's key material out from under in-flight verifications.
 func NewStore(db *sqlx.DB, pepper []byte) *Store {
-	return &Store{db: db, pepper: pepper}
+	return &Store{db: db, pepper: bytes.Clone(pepper)}
 }
 
 // RegisterRequest captures the inputs to a successful enrollment. The presented secret has already been validated by the handler;
@@ -81,17 +83,20 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 	hash := hashToken(s.pepper, token)
 	tokID := tokenID(token)
 
+	// One app-clock timestamp for both enrolled_at and host_token_issued_at: on enroll they denote the same instant (the schema
+	// comment relies on that equality), and the verify path's rotation-age check reads host_token_issued_at against the app clock,
+	// so sourcing it from the app clock rather than the DB default keeps a single clock per write.
 	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
 		REPLACE INTO enrollments (
 			host_id, host_token_id, host_token_hash,
 			hostname, agent_version, os_version, source_ip,
-			enrolled_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			enrolled_at, host_token_issued_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		req.HostID, tokID, hash,
 		req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP,
-		now,
+		now, now,
 	); err != nil {
 		return nil, fmt.Errorf("insert enrollment: %w", err)
 	}
@@ -259,7 +264,10 @@ func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentToken
 	}
 	newHash := hashToken(s.pepper, newToken)
 	newID := tokenID(newToken)
-	expiresAt := time.Now().UTC().Add(grace)
+	// Single app-clock timestamp: previous_token_expires_at and host_token_issued_at are both derived from it so the grace expiry
+	// and the new token's issue time share one clock (the verify path also reads both against the app clock).
+	now := time.Now().UTC()
+	expiresAt := now.Add(grace)
 
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE enrollments
@@ -268,9 +276,9 @@ func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentToken
 		    previous_token_expires_at = ?,
 		    host_token_id             = ?,
 		    host_token_hash           = ?,
-		    host_token_issued_at      = CURRENT_TIMESTAMP(6)
+		    host_token_issued_at      = ?
 		WHERE host_id = ? AND host_token_id = ? AND revoked_at IS NULL
-	`, expiresAt, newID, newHash, hostID, currentTokenID)
+	`, expiresAt, newID, newHash, now, hostID, currentTokenID)
 	if err != nil {
 		return RotateResult{}, fmt.Errorf("rotate host token: %w", err)
 	}
@@ -320,7 +328,9 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 	}
 	newHash := hashToken(s.pepper, newToken)
 	newID := tokenID(newToken)
-	expiresAt := time.Now().UTC().Add(grace)
+	// Single app-clock timestamp for the grace expiry and the new token's issue time (see RotateHostToken).
+	now := time.Now().UTC()
+	expiresAt := now.Add(grace)
 
 	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -353,9 +363,9 @@ func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace t
 		    previous_token_expires_at = ?,
 		    host_token_id             = ?,
 		    host_token_hash           = ?,
-		    host_token_issued_at      = CURRENT_TIMESTAMP(6)
+		    host_token_issued_at      = ?
 		WHERE host_id = ? AND revoked_at IS NULL
-	`, expiresAt, newID, newHash, hostID); err != nil {
+	`, expiresAt, newID, newHash, now, hostID); err != nil {
 		return RotateResult{}, fmt.Errorf("rotate force update: %w", err)
 	}
 
