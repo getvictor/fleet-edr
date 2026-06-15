@@ -5,7 +5,25 @@
   "tags": ["edr", "http", "red"],
   "uploadedGrafana": false,
   "panelMap": {},
-  "variables": {},
+  "variables": {
+    "environment": {
+      "id": "environment",
+      "name": "environment",
+      "description": "Deployment environment to view, auto-discovered from the deployment.environment resource attribute. The fleet-edr server always emits deployment.environment (default value 'default', overridable via OTEL_RESOURCE_ATTRIBUTES) so this key exists in every SigNoz instance it reports to, which makes the dynamic lookup safe. Defaults to ALL so all environments show.",
+      "type": "DYNAMIC",
+      "dynamicVariablesAttribute": "deployment.environment",
+      "dynamicVariablesSource": "Metrics",
+      "customValue": "",
+      "queryValue": "",
+      "textboxValue": "",
+      "multiSelect": true,
+      "showALLOption": true,
+      "sort": "ASC",
+      "selectedValue": "__all__",
+      "allSelected": true,
+      "order": 0
+    }
+  },
   "layout": [
     { "i": "req-rate-route", "x": 0, "y": 0, "w": 6, "h": 4, "moved": false, "static": false },
     { "i": "err-rate-5xx", "x": 6, "y": 0, "w": 6, "h": 4, "moved": false, "static": false },
@@ -46,7 +64,7 @@
                   "spaceAggregation": "sum"
                 }
               ],
-              "filter": { "expression": "service.name = 'fleet-edr-server'" },
+              "filter": { "expression": "service.name = 'fleet-edr-server' AND deployment.environment IN $environment" },
               "groupBy": [{ "key": "http.route", "dataType": "string", "type": "tag" }],
               "legend": "{{http.route}}",
               "functions": [],
@@ -89,7 +107,7 @@
                   "spaceAggregation": "sum"
                 }
               ],
-              "filter": { "expression": "service.name = 'fleet-edr-server' AND http.response.status_code >= 500" },
+              "filter": { "expression": "service.name = 'fleet-edr-server' AND http.response.status_code >= 500 AND deployment.environment IN $environment" },
               "groupBy": [{ "key": "http.route", "dataType": "string", "type": "tag" }],
               "legend": "{{http.route}}",
               "functions": [],
@@ -132,7 +150,7 @@
                   "spaceAggregation": "p95"
                 }
               ],
-              "filter": { "expression": "service.name = 'fleet-edr-server'" },
+              "filter": { "expression": "service.name = 'fleet-edr-server' AND deployment.environment IN $environment" },
               "groupBy": [{ "key": "http.route", "dataType": "string", "type": "tag" }],
               "legend": "{{http.route}}",
               "functions": [],
@@ -175,7 +193,7 @@
                   "spaceAggregation": "p99"
                 }
               ],
-              "filter": { "expression": "service.name = 'fleet-edr-server'" },
+              "filter": { "expression": "service.name = 'fleet-edr-server' AND deployment.environment IN $environment" },
               "groupBy": [{ "key": "http.route", "dataType": "string", "type": "tag" }],
               "legend": "{{http.route}}",
               "functions": [],
@@ -218,7 +236,7 @@
                   "spaceAggregation": "sum"
                 }
               ],
-              "filter": { "expression": "service.name = 'fleet-edr-server'" },
+              "filter": { "expression": "service.name = 'fleet-edr-server' AND deployment.environment IN $environment" },
               "groupBy": [{ "key": "http.response.status_code", "dataType": "string", "type": "tag" }],
               "legend": "{{http.response.status_code}}",
               "functions": [],
@@ -261,7 +279,7 @@
                   "spaceAggregation": "sum"
                 }
               ],
-              "filter": { "expression": "service.name = 'fleet-edr-server'" },
+              "filter": { "expression": "service.name = 'fleet-edr-server' AND deployment.environment IN $environment" },
               "groupBy": [{ "key": "http.request.method", "dataType": "string", "type": "tag" }],
               "legend": "{{http.request.method}}",
               "functions": [],
