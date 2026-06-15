@@ -234,7 +234,7 @@ jobs:
         # this format the default, so no --new-bundle-format flag is
         # needed and the legacy --output-signature/--output-certificate
         # .sig/.pem pair is gone. Every shipped file gets the same
-        # treatment - pkg, mobileconfigs, SHA256SUMS, AND both SBOMs - so
+        # treatment (pkg, mobileconfigs, SHA256SUMS, AND both SBOMs), so
         # a tampered SBOM is just as detectable as a tampered pkg.
         # Verifiers run `cosign verify-blob --bundle <file>.sigstore.json
         # --certificate-identity-regexp ... --certificate-oidc-issuer

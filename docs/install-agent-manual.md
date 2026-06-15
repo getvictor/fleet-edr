@@ -59,7 +59,7 @@ If any of these fail, STOP. Don't install. File an issue at https://github.com/g
 
 Releases from v0.2.0 onward publish a single Sigstore bundle (`<file>.sigstore.json`) next to every artifact. The bundle carries the signature, the ephemeral signing certificate, and the transparency-log proof in one file, and ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots.
 
-The example below uses a `v0.2.0` placeholder; substitute whatever release tag you actually downloaded.
+Substitute the release tag you downloaded in Step 1 for the `v0.2.0` placeholder below; the bundle and the `.pkg` must come from the same release. Bundles ship only on v0.2.0 and later, so if you downloaded v0.1.1 or earlier, use the legacy `.sig`/`.pem` command at the end of this section instead.
 
 ```sh
 # Install cosign (v3+) if you don't have it: brew install cosign

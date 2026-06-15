@@ -264,9 +264,21 @@ fi
 # the build rather than ship a pkg whose extensions are unrecognizable in
 # System Settings. Runs on both the dry-run and release paths because the
 # name is baked in at xcodebuild time, independent of signing.
+#
+# Both extensions are part of the shipped product (Fleet EDR is two system
+# extensions: Endpoint Security + Network), so a staged bundle that is
+# missing entirely is a hard build failure with its own exit code, not a
+# silently skipped check. Asserting the Info.plist exists before querying
+# it also keeps the display-name error from misfiring (a missing plist
+# would otherwise yield an empty name and a misleading "wrong name" error).
 STAGED_APP="$STAGE/app-root/Applications/Fleet EDR.app"
 STAGED_SYSEXT="$STAGED_APP/Contents/Library/SystemExtensions/com.fleetdm.edr.securityextension.systemextension"
 STAGED_NETEXT="$STAGED_APP/Contents/Library/SystemExtensions/com.fleetdm.edr.networkextension.systemextension"
+if [ ! -f "$STAGED_SYSEXT/Contents/Info.plist" ]; then
+    echo "ERROR: expected Endpoint Security extension at $STAGED_SYSEXT but its Info.plist is missing." >&2
+    echo "       The extension was not built or staged correctly (issue #370)." >&2
+    exit 12
+fi
 # spec:release-packaging/system-extensions-present-recognizable-display-names/security-extension-shows-a-recognizable-name
 SYSEXT_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$STAGED_SYSEXT/Contents/Info.plist" 2>/dev/null || true)"
 if [ "$SYSEXT_NAME" != "Fleet EDR Security Extension" ]; then
@@ -274,14 +286,17 @@ if [ "$SYSEXT_NAME" != "Fleet EDR Security Extension" ]; then
     echo "       Check INFOPLIST_KEY_CFBundleDisplayName on the securityextension target (issue #370)." >&2
     exit 10
 fi
-if [ -d "$STAGED_NETEXT" ]; then
-    # spec:release-packaging/system-extensions-present-recognizable-display-names/network-extension-shows-a-recognizable-name
-    NETEXT_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$STAGED_NETEXT/Contents/Info.plist" 2>/dev/null || true)"
-    if [ "$NETEXT_NAME" != "Fleet EDR Network Extension" ]; then
-        echo "ERROR: Network Extension CFBundleDisplayName is '$NETEXT_NAME', expected 'Fleet EDR Network Extension'." >&2
-        echo "       Check INFOPLIST_KEY_CFBundleDisplayName on the networkextension target (issue #370)." >&2
-        exit 11
-    fi
+if [ ! -f "$STAGED_NETEXT/Contents/Info.plist" ]; then
+    echo "ERROR: expected Network Extension at $STAGED_NETEXT but its Info.plist is missing." >&2
+    echo "       A pkg without it ships single-extension coverage (no network/DNS events); issue #370." >&2
+    exit 13
+fi
+# spec:release-packaging/system-extensions-present-recognizable-display-names/network-extension-shows-a-recognizable-name
+NETEXT_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$STAGED_NETEXT/Contents/Info.plist" 2>/dev/null || true)"
+if [ "$NETEXT_NAME" != "Fleet EDR Network Extension" ]; then
+    echo "ERROR: Network Extension CFBundleDisplayName is '$NETEXT_NAME', expected 'Fleet EDR Network Extension'." >&2
+    echo "       Check INFOPLIST_KEY_CFBundleDisplayName on the networkextension target (issue #370)." >&2
+    exit 11
 fi
 
 # spec:release-packaging/installation-activates-the-system-extensions/install-with-a-user-logged-in-activates-immediately
