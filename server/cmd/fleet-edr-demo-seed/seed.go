@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,8 +14,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/test/fakeagent"
 )
 
@@ -75,7 +78,8 @@ func newHTTPClient(caCertPath string) (*http.Client, error) {
 	return &http.Client{Timeout: httpClientTimeout, Transport: tr}, nil
 }
 
-// run executes the full seed. It is safe to re-run: replay is skipped when demo data is already present unless cfg.force is set.
+// run executes the full seed. It is safe to re-run: replay is skipped when demo data is already present unless cfg.force is set,
+// and on that skip path the existing timestamps are slid forward so the graph still reads as recent activity (refreshTimestamps).
 func (s *seeder) run(ctx context.Context) error {
 	if err := s.waitReady(ctx); err != nil {
 		return fmt.Errorf("server did not become ready: %w", err)
@@ -87,7 +91,13 @@ func (s *seeder) run(ctx context.Context) error {
 			return fmt.Errorf("check already-seeded: %w", err)
 		}
 		if seeded {
-			s.logger.InfoContext(ctx, "demo data already present, skipping replay (pass --force to re-seed)")
+			// Don't re-replay, but slide the existing rows forward so the graph still reads as recent activity. The persisted
+			// demo volume survives restarts, so without this the timestamps stay frozen at the first seed and age out of the UI's
+			// last-hour process-tree window, leaving the host view empty after a day or a restart.
+			if err := s.refreshTimestamps(ctx); err != nil {
+				return fmt.Errorf("refresh demo timestamps: %w", err)
+			}
+			s.logger.InfoContext(ctx, "demo data already present, refreshed timestamps to recent (pass --force to re-seed)")
 			return s.seedUserIfConfigured(ctx)
 		}
 	}
@@ -251,6 +261,102 @@ func (s *seeder) alreadySeeded(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// refreshTimestamps slides every replayed nanosecond timestamp (and the alert "fired at" times stamped from the same wall clock)
+// forward so the newest one lands recentTailOffset before now. The replay's shiftEnvelopesToRecent only runs on a fresh seed; on a
+// restart against the persisted demo volume the rows keep their original timestamps, which age out of the UI's last-hour
+// process-tree window and leave the host view empty. Re-deriving one delta and adding it to every column preserves all relative
+// timing (and the device-vs-ingest and event-vs-alert ordering the detail/correlation views depend on), so the demo reads as
+// recent activity after every `up` without re-replaying. No-op when no replayed event/process rows exist yet.
+func (s *seeder) refreshTimestamps(ctx context.Context) error {
+	// Scope every read and write below to the demo's own hosts. The seeder takes an operator-supplied DSN and alreadySeeded keys
+	// on a real rule id (credential_keychain_dump), so an unscoped refresh pointed at a live DB would rewrite real timelines. The
+	// IN clause bounds the blast radius to the embedded corpus's host UUIDs, which a real deployment will never contain.
+	hostIDs, err := demoHostIDs()
+	if err != nil {
+		return err
+	}
+	if len(hostIDs) == 0 {
+		return nil
+	}
+	inClause := "host_id IN (" + strings.Repeat("?,", len(hostIDs)-1) + "?)"
+	hostArgs := make([]any, len(hostIDs))
+	for i, id := range hostIDs {
+		hostArgs[i] = id
+	}
+
+	var newestNs sql.NullInt64
+	// Anchor the delta on the device-clock tail only: fork/exec/event timestamps and their ingest stamps. The exit columns are
+	// deliberately excluded because the process-TTL reconciler (pipeline.ProcessTTLRunner) force-exits long-running processes at
+	// fork + maxAge, so a stale demo's synthesized exit_time_ns sits ~maxAge PAST the real tail. Anchoring on it would shrink the
+	// delta by maxAge and leave every fork that-much stale, which is exactly the empty-1h-window symptom this guards against.
+	newestQuery := `
+		SELECT GREATEST(
+			COALESCE((SELECT MAX(timestamp_ns) FROM events WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(ingested_at_ns) FROM events WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(fork_time_ns) FROM processes WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(fork_ingested_at_ns) FROM processes WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(exec_time_ns) FROM processes WHERE ` + inClause + `), 0)
+		)`
+	anchorArgs := make([]any, 0, len(hostArgs)*5) // newestQuery references inClause five times
+	for range 5 {
+		anchorArgs = append(anchorArgs, hostArgs...)
+	}
+	if err := s.db.QueryRowContext(ctx, newestQuery, anchorArgs...).Scan(&newestNs); err != nil {
+		return fmt.Errorf("read newest demo timestamp: %w", err)
+	}
+	if !newestNs.Valid || newestNs.Int64 == 0 {
+		return nil // no replayed rows yet; nothing to slide
+	}
+	deltaNs := time.Now().Add(-recentTailOffset).UnixNano() - newestNs.Int64
+	// alerts carry SQL TIMESTAMP(6) columns; we slide them at whole-second granularity (the alert -> process-tree window the UI
+	// anchors on created_at spans minutes, so sub-second precision is irrelevant). deltaSec <= 0 means the data is already at or
+	// newer than the target (a quick restart after a fresh seed, or clock skew): nothing to slide, and a backward shift would only
+	// un-recent the graph, so skip the redundant writes.
+	deltaSec := deltaNs / int64(time.Second)
+	if deltaSec <= 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin refresh tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds
+
+	// NULL + delta stays NULL, so still-running processes keep their open exit columns. Every statement carries the host scope.
+	updates := []struct {
+		query string
+		args  []any
+	}{
+		{`UPDATE events SET timestamp_ns = timestamp_ns + ?, ingested_at_ns = ingested_at_ns + ? WHERE ` + inClause,
+			append([]any{deltaNs, deltaNs}, hostArgs...)},
+		{`UPDATE processes SET fork_time_ns = fork_time_ns + ?, fork_ingested_at_ns = fork_ingested_at_ns + ?,
+			exec_time_ns = exec_time_ns + ?, exit_time_ns = exit_time_ns + ?, exit_ingested_at_ns = exit_ingested_at_ns + ?,
+			last_seen_ns = last_seen_ns + ? WHERE ` + inClause,
+			append([]any{deltaNs, deltaNs, deltaNs, deltaNs, deltaNs, deltaNs}, hostArgs...)},
+		// Drop the synthesized force-exits: anchoring on the fork tail slides them maxAge into the future, and for a just-refreshed
+		// demo the honest reading is "still running" (the forks are now minutes old). The reconciler re-creates them after maxAge,
+		// long after anyone is looking at this `up`. Real captured exits (any other reason) keep their shifted, in-the-past values.
+		{`UPDATE processes SET exit_time_ns = NULL, exit_ingested_at_ns = NULL, exit_reason = NULL WHERE exit_reason = ? AND ` + inClause,
+			append([]any{api.ExitReasonTTLReconciliation}, hostArgs...)},
+		{`UPDATE hosts SET last_seen_ns = last_seen_ns + ? WHERE ` + inClause, append([]any{deltaNs}, hostArgs...)},
+		{`UPDATE alerts SET created_at = DATE_ADD(created_at, INTERVAL ? SECOND),
+			updated_at = DATE_ADD(updated_at, INTERVAL ? SECOND),
+			resolved_at = DATE_ADD(resolved_at, INTERVAL ? SECOND) WHERE ` + inClause,
+			append([]any{deltaSec, deltaSec, deltaSec}, hostArgs...)},
+	}
+	for _, u := range updates {
+		if _, err := tx.ExecContext(ctx, u.query, u.args...); err != nil {
+			return fmt.Errorf("slide demo timestamps: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit timestamp refresh: %w", err)
+	}
+	s.logger.InfoContext(ctx, "refreshed demo timestamps to recent", "delta_ns", deltaNs)
+	return nil
 }
 
 // waitForProcess polls until at least one process row exists for the host/pid, or verifyTimeout elapses.
