@@ -8,7 +8,7 @@ This document is Fleet EDR's threat model. It exists for three audiences:
 
 Format is STRIDE per component, with each cell either citing the existing mitigation or flagging a `GAP` with severity (high / medium / low) reflecting pilot-deployment impact, not theoretical worst-case.
 
-Scope is the system as it ships in the v0.1.0-rc.\* line: Go agent + Swift system extension + Swift network extension on macOS endpoints, Go server with MySQL backend, embedded React UI, MDM-driven deployment. Out of scope is everything in the closing section.
+Scope is the system as it ships in the v0.2.0 line: Go agent + Swift system extension + Swift network extension on macOS endpoints, Go server with MySQL backend, embedded React UI, MDM-driven deployment. Out of scope is everything in the closing section.
 
 ## Trust boundaries
 
@@ -88,10 +88,10 @@ Trust assumptions:
 
 | Category | Threat | Mitigation |
 | --- | --- | --- |
-| Spoofing | Attacker enrolls a fake host or impersonates an enrolled one. | Enrollment requires the shared `EDR_ENROLL_SECRET` plus a hardware UUID; subsequent requests carry an opaque per-host bearer token (Argon2id-hashed at rest, deterministic token-id index for fast lookup). Tokens are scoped: events with `host_id ≠ token's host_id` are rejected. |
+| Spoofing | Attacker enrolls a fake host or impersonates an enrolled one. | Enrollment requires the shared `EDR_ENROLL_SECRET` plus a hardware UUID; subsequent requests carry an opaque, high-entropy per-host bearer token. The server verifies it as `HMAC-SHA256(pepper, token)` with a constant-time `hmac.Equal`; the raw token is never stored and the pepper is held only in the server (derived from the deployment root secret `EDR_SECRET_KEY` via `internal/keyring`), so a DB-only leak cannot verify or forge a token. A deterministic token-id index gives O(1) lookup. Tokens are scoped: events with `host_id ≠ token's host_id` are rejected. |
 | Tampering | Attacker modifies events or admin actions in flight. | TLS 1.3 by default; TLS 1.2 only with explicit opt-in for legacy pilots, with restricted AEAD cipher suites. |
 | Repudiation | Admin action goes unaudited. | Every admin endpoint emits a WARN-level slog line plus span attributes (`edr.admin.action`, `edr.admin.actor`, `edr.admin.reason`). Logs flow via OTLP to an external sink, so an in-server tamper cannot retroactively erase the trace export. |
-| Information disclosure | Database or backup leak exposes credentials. | Passwords + host tokens Argon2id-hashed; DSN + enroll secret loaded via `_FILE` paths (Docker-secrets style) so they are never in env-listing output; TLS 1.3 over the wire; `subtle.ConstantTimeCompare` for CSRF token comparison. **GAP, medium**: encryption at rest for the events table is documented as a deployment requirement, not enforced in code. |
+| Information disclosure | Database or backup leak exposes credentials. | Passwords Argon2id-hashed; host tokens stored as `HMAC-SHA256(pepper, token)` keyed by a server-held pepper (a DB-only leak cannot verify or forge a token without the pepper, which lives only in the server); DSN + enroll secret loaded via `_FILE` paths (Docker-secrets style) so they are never in env-listing output; TLS 1.3 over the wire; `subtle.ConstantTimeCompare` for CSRF token comparison. **GAP, medium**: encryption at rest for the events table is documented as a deployment requirement, not enforced in code. |
 | Denial of service | Login or enroll endpoint flooded. | Per-IP rate limiting on the break-glass surface (per-IP and per-email caps return `429 Too Many Requests` with `Retry-After`); per-IP rate limiting on enroll (`EDR_ENROLL_RATE_PER_MIN` default 30). The OIDC login path is gated by the IdP's own brute-force defences. Event ingestion is per-token, gated by enrollment. **GAP, low**: no per-host rate limit beyond the per-route caps. |
 | Elevation of privilege | Browser-based attacker uses an admin session. | HttpOnly + Secure + SameSite=Lax session cookies; per-session CSRF token on every unsafe method; HSTS with `includeSubDomains`, two-year max-age; session secret is sanitized to a 256-char base64url charset on read/write. Day-to-day login goes through OIDC, so MFA is delegated to the IdP (Okta, etc.) and is enforced upstream of the EDR. The break-glass surface at `/admin/break-glass` requires WebAuthn (no password-only fallback): see [`breakglass.md`](breakglass.md). Authorisation is enforced at the OPA-backed chokepoint (`api.HTTPGate`) with role tiers (`super_admin`, `admin`, `senior_analyst`, `analyst`, `auditor`); the chokepoint also requires a fresh re-auth (default 30m, `EDR_REAUTH_WINDOW`) for destructive actions (`host.isolate`, `host.kill_process`, `host.run_script`, `alert.resolve` when severity=critical). |
 
@@ -113,7 +113,7 @@ Trust assumptions:
 | Spoofing | Captured DSN reused. | DSN provided via Docker secret file (`EDR_DSN_FILE`); MySQL not exposed outside the Compose network. **GAP, medium**: server connects as MySQL root; should be a least-privilege user with grants only on the EDR schema. |
 | Tampering | Direct DB writes that modify alerts or enrollments. | Only the server has the credentials; the server's writes are auditable. |
 | Repudiation | Audit rows removed from `commands` / `enrollments`. | Server audit also emits to `slog` → OTLP → external sink, so a DB tamper does not erase the trace export. |
-| Information disclosure | DB compromise exposes events / passwords. | Argon2id for passwords + host tokens. **GAP, medium**: no application-level encryption of event payloads at rest; relies on storage-layer encryption (InnoDB tablespace encryption, host filesystem encryption) which is a deployment-time choice. |
+| Information disclosure | DB compromise exposes events / passwords. | Argon2id for passwords; `HMAC-SHA256` with a server-held pepper for host tokens (the pepper is not in the DB, so a DB-only leak cannot verify or forge tokens). **GAP, medium**: no application-level encryption of event payloads at rest; relies on storage-layer encryption (InnoDB tablespace encryption, host filesystem encryption) which is a deployment-time choice. |
 | Denial of service | Disk fills with events. | Retention runner (`EDR_RETENTION_DAYS`, default 30); per-batch DELETE with `LIMIT` keeps InnoDB lock footprint bounded; `edr.retention.rows_deleted` counter for the operator alert. |
 | Elevation of privilege | SQL injection. | Parameterized queries throughout (no `fmt.Sprintf` into queries); golangci-lint `sqlclosecheck` and `noctx` rules; integration tests against a real MySQL 8.4 instance in CI. |
 
@@ -173,7 +173,7 @@ Copied from the per-component tables for at-a-glance triage. Severity reflects p
 
 **High**: block multi-seat pilots:
 
-- (None remaining for v0.1 ship. The current OIDC + WebAuthn break-glass + chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping inside a single deployment is a follow-on feature, not a v0.1 gap.)
+- (None remaining for v0.2.0 ship. The current OIDC + WebAuthn break-glass + chokepoint roles closed the prior MFA and RBAC gaps; per-team scoping inside a single deployment is a follow-on feature, not a v0.2.0 gap.)
 
 **Medium**: block a security-mature pilot's procurement:
 
@@ -206,4 +206,4 @@ Update this document when:
 - A gap above is closed: move the bullet from "gap" to a citation in the per-component table.
 - A new STRIDE category becomes relevant for an existing component (e.g., shipping RBAC opens new spoofing + elevation surfaces that need entries).
 
-Last reviewed against the v0.1.0-rc.\* release line on 2026-05-06, covering the current auth + authz model (OIDC, WebAuthn break-glass, chokepoint roles, reauth window).
+Last reviewed against the v0.2.0 release line on 2026-06-16, re-verifying the auth + authz model (OIDC, WebAuthn break-glass, chokepoint roles, reauth window) against the code, and covering the v0.2.0 host-token change: bearer tokens are now verified as HMAC-SHA256 keyed by a server-held pepper derived from the deployment root secret (`internal/keyring`), replacing the prior Argon2id-at-rest scheme. The change suits the high-entropy token (no offline brute-force concern) and removes the per-request Argon2id cost on the ingestion hot path while adding DB-leak resistance (the pepper is never stored). No new trust boundary or component was introduced.

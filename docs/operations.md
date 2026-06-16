@@ -36,7 +36,7 @@ curl -s https://<server>/readyz | jq .
 
 This is the single-replica path: the server container restarts in place, MySQL keeps running, and you accept ~2s of HTTP 503 while the new server boots (agents retry automatically). For a zero-downtime upgrade, run the multi-replica topology and follow [Rolling upgrade](#rolling-upgrade-multi-replica) below instead.
 
-Schema changes ship as versioned, forward-only goose migrations (see [ADR-0009](adr/0009-migrations-via-goose.md)) that the server applies at boot, not as in-process DDL. On upgrade the new server applies any pending migrations against the running MySQL as it starts; an already-applied corpus is a no-op. Migrations within the v0.1.x line follow the expand-contract pattern, so the old and new server versions tolerate the same schema during the swap.
+Schema changes ship as versioned, forward-only goose migrations (see [ADR-0009](adr/0009-migrations-via-goose.md)) that the server applies at boot, not as in-process DDL. On upgrade the new server applies any pending migrations against the running MySQL as it starts; an already-applied corpus is a no-op. Migrations follow the expand-contract pattern, so the old and new server versions tolerate the same schema during the swap.
 
 ## Rolling upgrade (multi-replica)
 
@@ -77,25 +77,25 @@ docker compose -f docker-compose-multi-replica.yml logs --tail=20 server-b
 curl -fsS https://<server>/readyz | jq -r .version
 ```
 
-Because two binary versions read and write the same MySQL between step 2's two commands, every schema change in the v0.1.x line is expand-contract: a migration only adds columns/tables (or widens) so the older version keeps working against the newer schema. A change that would drop or narrow a column ships across two releases (expand in release N, contract in N+1) so no single rolling upgrade ever has both versions disagreeing on a column's existence.
+Because two binary versions read and write the same MySQL between step 2's two commands, every schema change is expand-contract: a migration only adds columns/tables (or widens) so the older version keeps working against the newer schema. A change that would drop or narrow a column ships across two releases (expand in release N, contract in N+1) so no single rolling upgrade ever has both versions disagreeing on a column's existence.
 
 If a new replica fails to come up (bad image tag), the old replicas stay in rotation: the proxy never routes to a container whose `/readyz` is not green, so the control plane is unaffected. Fix `.env` and re-run. A failed migration is different: MySQL commits DDL implicitly, so a migration that fails partway can leave the schema partially advanced (goose records the version only on full success). Recovery is forward-only per [ADR-0009](adr/0009-migrations-via-goose.md): fix the migration and re-apply, or restore from backup; do not hand-edit the schema.
 
 ## Multi-replica trade-offs
 
-The stateless tier ([ADR-0010](adr/0010-stateless-server.md)) accepts two bounded per-replica behaviours rather than adding a second coordination dependency in v0.1.0. Both are operational knobs, not bugs.
+The stateless tier ([ADR-0010](adr/0010-stateless-server.md)) accepts two bounded per-replica behaviours rather than adding a second coordination dependency. Both are operational knobs, not bugs.
 
 ### Per-IP rate limiting is per replica
 
 The per-source-IP rate limiter (`server/httpserver/iplimiter.go`, in front of the public enroll + login + break-glass routes) keeps its token buckets in process memory, so each replica counts independently. Behind N replicas a single source IP can therefore burst up to N times the per-replica limit before any one replica throttles it, because the LB spreads its requests across the fleet.
 
-Size the per-replica limit with that in mind: divide the fleet-wide budget you want by the replica count. The fragmentation is bounded (it never exceeds N times the limit) and the limiter is a coarse abuse-control measure, not a billing-grade quota, so v0.1.0 accepts it rather than centralising the buckets in MySQL or Redis. A shared limiter is a v0.1.x follow-up.
+Size the per-replica limit with that in mind: divide the fleet-wide budget you want by the replica count. The fragmentation is bounded (it never exceeds N times the limit) and the limiter is a coarse abuse-control measure, not a billing-grade quota, so the current release accepts it rather than centralising the buckets in MySQL or Redis. A shared limiter is a possible follow-up.
 
 ### Audit-event durability under crash
 
 The audit log dual-emits: every event is written to MySQL AND to slog (the secondary durable sink). Writes, denials, and auth events take the synchronous path and are durable before the request returns. Only sampled read-audit events ride an in-memory async queue (`EDR_AUDIT_ASYNC_QUEUE_CAP`, default 8192) so the read hot path does not wait on an INSERT.
 
-On a graceful shutdown that queue is drained (bounded by a 30s deadline). On a hard kill (SIGKILL, OOM) the in-flight queue is lost, but those same events were already emitted to slog, so they survive in your OTel/log backend. The append-only MySQL audit table can therefore miss sampled read rows after a hard crash; the slog stream is the recovery source. v0.1.0 accepts this rather than shipping a write-ahead audit outbox (a v0.1.x follow-up). Alert on the `audit dropped` / `audit async record failed` WARN logs (see [Auth + authz dashboard](#auth--authz-dashboard)) to catch sustained drops.
+On a graceful shutdown that queue is drained (bounded by a 30s deadline). On a hard kill (SIGKILL, OOM) the in-flight queue is lost, but those same events were already emitted to slog, so they survive in your OTel/log backend. The append-only MySQL audit table can therefore miss sampled read rows after a hard crash; the slog stream is the recovery source. The current release accepts this rather than shipping a write-ahead audit outbox (a possible follow-up). Alert on the `audit dropped` / `audit async record failed` WARN logs (see [Auth + authz dashboard](#auth--authz-dashboard)) to catch sustained drops.
 
 ## Upgrade agents
 
@@ -223,7 +223,7 @@ Test your restore path quarterly. An untested backup is a hope, not a backup.
 
 ### Volume snapshots
 
-If your host filesystem is ZFS / Btrfs / LVM-thin, volume snapshots are faster than logical backups. Point-in-time recovery via binlog replay is not supported in v0.1 because the server doesn't emit binlogs by default; rely on logical backups + snapshots for now.
+If your host filesystem is ZFS / Btrfs / LVM-thin, volume snapshots are faster than logical backups. Point-in-time recovery via binlog replay is not supported because the server doesn't emit binlogs by default; rely on logical backups + snapshots for now.
 
 ## Retention tuning
 
@@ -316,7 +316,7 @@ Two unconditional carve-outs run before any rule:
 
 ### BINARY rules and the deadline-fallback posture
 
-A BINARY rule matches the file's SHA-256. The hash is computed synchronously on the AUTH_EXEC callback thread, with the budget bounded by the kernel-supplied `es_message_t.deadline` minus a 500 ms safety margin for the post-hash work. v0.1.0 closes the pre-RC bypass primitive where the first exec of any binary slipped past BINARY rules while the cache filled asynchronously (#208).
+A BINARY rule matches the file's SHA-256. The hash is computed synchronously on the AUTH_EXEC callback thread, with the budget bounded by the kernel-supplied `es_message_t.deadline` minus a 500 ms safety margin for the post-hash work. The agent closes the pre-RC bypass primitive where the first exec of any binary slipped past BINARY rules while the cache filled asynchronously (#208).
 
 If the hash cannot finish in time (large binary, slow disk, or the file is unreadable due to a TOCTOU replace between AUTH and read), the snapshot's `deadline_fallback` field drives the verdict:
 
@@ -328,7 +328,7 @@ If the hash cannot finish in time (large binary, slow disk, or the file is unrea
 
 On `deadline-exceeded` or `read-failed` outcomes the SHA-256 cache is NOT populated, so subsequent execs of the same binary retry the hash computation. Repeated `application_control_undecided` events for the same `path` therefore indicate either a binary that consistently blows the 500 ms safety margin (size + disk-read combination) or a TOCTOU race the agent is hitting deterministically; the path + `file_size_bytes` fields are the disambiguator.
 
-v0.1.0 wires the posture through the snapshot payload but does NOT yet persist a per-policy value in the database; every snapshot ships with `fail-closed`. The v0.1.x follow-up adds a DB column and the REST surface to set it per policy.
+The agent wires the posture through the snapshot payload but does NOT yet persist a per-policy value in the database; every snapshot ships with `fail-closed`. A planned follow-up adds a DB column and the REST surface to set it per policy.
 
 ### Legacy endpoints
 
