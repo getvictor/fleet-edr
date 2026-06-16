@@ -31,5 +31,5 @@
 - [x] Local cosign v3 blob bundle round-trip (`sign-blob --bundle` -> `verify-blob --bundle` -> "Verified OK"; media type `application/vnd.dev.sigstore.bundle.v0.3+json`).
 - [x] `xcodebuild` the extensions and confirm the built bundles' `CFBundleDisplayName` reads "Fleet EDR Security Extension" / "Fleet EDR Network Extension".
 - [x] `actionlint .github/workflows/release.yml`; `shellcheck packaging/pkg/build.sh`; `openspec validate modernize-release-signing-and-extension-names --strict`; spectrace.
-- [ ] Cut an RC tag to verify the keyless bundle signing + OCI 1.1 image signing/attestation paths end-to-end (CI-only; cannot run locally).
-- [ ] Install the RC pkg on edr-qa and confirm System Settings lists "Fleet EDR Security Extension" / "Fleet EDR Network Extension".
+- [x] Cut an RC tag (v0.2.0-rc.1) to verify the keyless bundle signing + OCI 1.1 image signing/attestation paths end-to-end: `cosign verify-blob --bundle` OK for all artifacts (no deprecation warnings); `cosign verify` + `cosign verify-attestation --type spdxjson` OK for server + demo-seed images.
+- [x] Installed the RC pkg on edr-qa (SIP on, macOS 26.4.1): `systemextensionsctl list` shows the extensions as "Fleet EDR Security Extension" / "Fleet EDR Network Extension" (was "extension" / "networkextension"), both activated enabled, ES extension healthy.
