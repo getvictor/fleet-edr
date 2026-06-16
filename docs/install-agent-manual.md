@@ -198,6 +198,8 @@ sudo installer -pkg fleet-edr-v0.2.0.pkg -target /
 
 The preinstall script stops the old daemon, the postinstall script starts the new one. The persisted host token at `/var/db/fleet-edr/enrolled.plist` survives, so the agent keeps its existing enrollment; no re-approval needed.
 
+**Reboot to finish the upgrade.** When the pkg replaces a system extension with a newer version, macOS does not remove the old version immediately: `systemextensionsctl list` shows the previous version as `terminated waiting to uninstall on reboot` alongside the new `activated enabled` one. Until you reboot, the Network Extension's XPC service (`group.com.fleetdm.edr.networkextension`, registered by `nesessionmanager`) stays bound to the old, terminated extension, so the agent cannot reach the live one. The symptom is a repeating `receiver connect` / `xpc_bridge_connect failed for group.com.fleetdm.edr.networkextension` warning and no network or DNS events (process and file events from the Endpoint Security extension are unaffected, because it re-registers its own Mach service on activation). Reboot to complete the cutover; afterward `systemextensionsctl list | grep fleetdm` shows only the new version and the warnings stop. A fresh (first-time) install does not need this reboot.
+
 ## Uninstall
 
 ```sh
