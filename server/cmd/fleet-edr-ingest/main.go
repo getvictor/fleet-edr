@@ -6,10 +6,12 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/fleetdm/edr/internal/keyring"
 	"github.com/fleetdm/edr/server/bootstrap"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
@@ -62,7 +64,23 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{DB: db, Logger: logger})
+	// One root secret seeds every long-lived server-side key, same as fleet-edr-server. Deriving here (rather than skipping the keyring)
+	// is mandatory: identity + endpoint bootstrap require the derived keys, and the labels MUST match fleet-edr-server's so a host token
+	// or session cookie minted by one binary validates under the other.
+	kr, err := keyring.New(cfg.SecretKey)
+	if err != nil {
+		logger.ErrorContext(ctx, "build keyring", "err", err)
+		return fmt.Errorf("build keyring: %w", err)
+	}
+	// keyring.New holds its own copy of the root and cfg.SecretKey is not read past this point, so zero the config's copy to minimize how
+	// long the raw root secret lives in memory (heap dumps, core files).
+	clear(cfg.SecretKey)
+
+	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
+		DB:                db,
+		Logger:            logger,
+		SessionSigningKey: kr.Derive(keyring.SessionSigningKeyLabel),
+	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open identity", "err", err)
 		return err
@@ -96,6 +114,11 @@ func run() error {
 		Logger:              logger,
 		EnrollSecret:        cfg.EnrollSecret,
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
+		Audit:               identityCtx.AuditRecorder(),
+		AuthZ:               identityCtx.AuthZ(),
+		HostTokenLifetime:   cfg.HostTokenLifetime,
+		HostTokenGrace:      cfg.HostTokenGrace,
+		HostTokenPepper:     kr.Derive(keyring.HostTokenPepperLabel),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)

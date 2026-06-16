@@ -64,12 +64,6 @@ const (
 	// means no two replicas run goose Up at once. It joins the other coordination lock names (edr_retention, edr_process_ttl).
 	migrationLockName = "edr_migrations"
 
-	// hostTokenPepperLabel and sessionSigningKeyLabel are the HKDF domain-separation labels for the keys derived from EDR_SECRET_KEY
-	// (internal/keyring). Each is versioned so a single purpose can be rotated by bumping its suffix without disturbing the root secret
-	// or any sibling key.
-	hostTokenPepperLabel   = "edr/host-token/pepper/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
-	sessionSigningKeyLabel = "edr/session/signing/v1"
-
 	// HTTP server timeouts. Read 10s covers a slow agent upload; write 30s and idle 60s bound how long a stuck client holds a connection.
 	// Same values as fleet-edr-ingest.
 	httpWriteTimeout = 30 * time.Second
@@ -211,7 +205,7 @@ func openContexts(
 	}
 	defer release()
 
-	if identityCtx, err = openIdentity(ctx, logger, db, cfg, kr.Derive(sessionSigningKeyLabel)); err != nil {
+	if identityCtx, err = openIdentity(ctx, logger, db, cfg, kr.Derive(keyring.SessionSigningKeyLabel)); err != nil {
 		return
 	}
 	if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord); err != nil {
@@ -224,7 +218,7 @@ func openContexts(
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx, kr.Derive(hostTokenPepperLabel))
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx, kr.Derive(keyring.HostTokenPepperLabel))
 	return
 }
 

@@ -20,6 +20,15 @@ import (
 // entropy of every derived key regardless of how long the derived output is requested.
 const MinRootKeyLen = 32
 
+// Domain-separation labels for the long-lived keys derived from the deployment root secret. They live here, not in a single cmd, so
+// every server binary derives from the identical label: a host token minted (or session cookie signed) by one binary must validate
+// under another running the same root secret, which only holds if they pass the same Derive label. Each is versioned so a single
+// purpose can be rotated by bumping its suffix without disturbing the root or any sibling key.
+const (
+	HostTokenPepperLabel   = "edr/host-token/pepper/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
+	SessionSigningKeyLabel = "edr/session/signing/v1"
+)
+
 // derivedKeyLen is the byte length of every derived key. 32 bytes is a full HMAC-SHA256 key and an ample HMAC/AEAD key budget.
 const derivedKeyLen = 32
 

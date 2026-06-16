@@ -43,6 +43,15 @@ func TestNew_rejectsShortRoot(t *testing.T) {
 	}
 }
 
+// TestLabelConstants_arePinned guards the exported domain-separation labels against an accidental rename or version bump. The bytes
+// they derive are baked into every persisted host-token hash and signed session cookie, and both server binaries derive from these
+// exact strings, so changing a value here silently invalidates every issued token and breaks cross-binary validation. Treat a failure
+// as "this is a deliberate key rotation" and update the literal only with that intent.
+func TestLabelConstants_arePinned(t *testing.T) {
+	assert.Equal(t, "edr/host-token/pepper/v1", keyring.HostTokenPepperLabel)
+	assert.Equal(t, "edr/session/signing/v1", keyring.SessionSigningKeyLabel)
+}
+
 func TestDerive_isDeterministicPerLabel(t *testing.T) {
 	root := newRoot(t)
 	kr, err := keyring.New(root)
