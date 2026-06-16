@@ -144,8 +144,9 @@ func (s *Store) Verify(ctx context.Context, token string) (string, error) {
 //
 // Implementation: try the current token first by host_token_id (SHA-256
 // O(1) lookup, then keyed HMAC verify). On miss, fall back to the previous
-// token via previous_host_token_id WHERE previous_token_expires_at >
-// NOW(): this is the grace window the rotation flow opens.
+// token via previous_host_token_id WHERE previous_token_expires_at is still
+// ahead of the app clock (bound as a query parameter, not DB NOW()): this is
+// the grace window the rotation flow opens.
 func (s *Store) VerifyWithMeta(ctx context.Context, token string) (VerifyResult, error) {
 	if token == "" {
 		return VerifyResult{}, ErrTokenMismatch
@@ -197,7 +198,8 @@ func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []by
 	}, true, nil
 }
 
-// verifyAgainstPrevious does the previous_host_token_id lookup, gated on previous_token_expires_at > NOW. Returns the same
+// verifyAgainstPrevious does the previous_host_token_id lookup, gated on previous_token_expires_at being ahead of the app clock (bound
+// as a query parameter, not DB NOW()). Returns the same
 // VerifyResult shape with MatchedPrevious=true so the service layer skips the rotation trigger (rotation is already in flight; another
 // would be wasteful).
 func (s *Store) verifyAgainstPrevious(ctx context.Context, token string, tid []byte) (VerifyResult, error) {
@@ -242,8 +244,10 @@ type RotateResult struct {
 
 // RotateHostToken atomically swaps a host's bearer token: generates a
 // fresh (id, hash), captures the existing values into previous_*,
-// sets previous_token_expires_at = NOW + grace, and updates
-// host_token_issued_at to NOW. The atomic UPDATE is keyed on the
+// sets previous_token_expires_at = now + grace, and updates
+// host_token_issued_at to now, where now is a single app-clock
+// time.Now().UTC() bound as a parameter (not DB-side NOW(); see the
+// inline comment at the UPDATE). The atomic UPDATE is keyed on the
 // currentTokenID the caller asserts (typically the value returned from
 // a recent VerifyWithMeta), so two concurrent rotations serialise:
 // only the one whose currentTokenID matches the row's host_token_id
