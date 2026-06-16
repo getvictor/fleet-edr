@@ -23,10 +23,8 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
 	prev := logger.Load()
 	t.Cleanup(func() { logger.Store(prev) })
 
-	// Reset the shared drop reporter so a prior test's drops on the same service name don't suppress this test's warning.
-	prevDrops := drops
-	drops = newDropReporter()
-	t.Cleanup(func() { drops = prevDrops })
+	// A fresh per-receiver reporter keeps this test isolated without touching any shared global.
+	dr := newDropReporter()
 
 	// Capture warn-level output to assert on the log line. A bytes.Buffer + mutex is enough since the test drives tryDeliverEvent
 	// synchronously from a single goroutine; the lock is defensive against a future test that runs the helper concurrently.
@@ -42,13 +40,13 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
 	first := Event{Data: []byte("first")}
 	dropped := Event{Data: []byte("dropped")}
 
-	tryDeliverEvent(ch, first, "svc-xpc")
+	tryDeliverEvent(ch, first, "svc-xpc", dr)
 	// Channel now full. The next call MUST drop without blocking. If the implementation regressed to a blocking send, the test
 	// would otherwise deadlock until go test's package-level timeout (default 10m). Use a tight time.After timeout so a regression
 	// fails the test in a second instead of hanging the suite.
 	done := make(chan struct{})
 	go func() {
-		tryDeliverEvent(ch, dropped, "svc-xpc")
+		tryDeliverEvent(ch, dropped, "svc-xpc", dr)
 		close(done)
 	}()
 	select {
@@ -73,7 +71,7 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
 
 	// The receiver continues reading: a fresh send (after the test drained `first`) succeeds.
 	next := Event{Data: []byte("next")}
-	tryDeliverEvent(ch, next, "svc-xpc")
+	tryDeliverEvent(ch, next, "svc-xpc", dr)
 	got = <-ch
 	assert.Equal(t, "next", string(got.Data), "after a drop, the receiver MUST keep accepting subsequent events")
 }
@@ -90,9 +88,10 @@ func TestTryDeliverEvent_DeliversWhenChannelHasSpace(t *testing.T) {
 	)
 	SetLogger(slog.New(slog.NewTextHandler(&mutexWriter{w: &buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
+	dr := newDropReporter()
 	ch := make(chan Event, 4)
 	for _, b := range [][]byte{[]byte("a"), []byte("b"), []byte("c")} {
-		tryDeliverEvent(ch, Event{Data: b}, "svc-xpc")
+		tryDeliverEvent(ch, Event{Data: b}, "svc-xpc", dr)
 	}
 	require.Len(t, ch, 3, "three sends MUST land when the channel has room")
 
@@ -113,27 +112,30 @@ func TestDropReporter_CoalescesSustainedDrops(t *testing.T) {
 	r := newDropReporter()
 	r.now = func() time.Time { return now }
 
-	// First drop for the service: emits immediately, accounting for exactly one event.
-	count, emit := r.record("svc-xpc")
+	// First drop: emits immediately, accounting for exactly one event.
+	count, emit := r.record()
 	require.True(t, emit, "the first drop after a quiet period MUST warn immediately so operators see the onset")
 	assert.Equal(t, int64(1), count, "the first warning accounts for the single drop seen so far")
 
 	// A burst of further drops inside the interval is suppressed, not logged one-per-event.
 	for range 999 {
-		count, emit = r.record("svc-xpc")
+		count, emit = r.record()
 		assert.False(t, emit, "drops within dropWarnInterval MUST be suppressed to avoid flooding the log")
 		assert.Zero(t, count, "a suppressed drop reports no count")
 	}
 
 	// Crossing the interval boundary emits a single summary carrying every suppressed drop plus the boundary drop.
 	now = now.Add(dropWarnInterval)
-	count, emit = r.record("svc-xpc")
+	count, emit = r.record()
 	require.True(t, emit, "the first drop after the interval MUST emit an aggregated summary")
 	assert.Equal(t, int64(1000), count, "the summary MUST account for all drops suppressed since the previous warning")
 
-	// A different service tracks its own window: its first drop warns independently of svc-xpc's throttle.
-	count, emit = r.record("svc-net")
-	require.True(t, emit, "a distinct service MUST warn on its own first drop, not share another service's throttle")
+	// Each receiver owns its own reporter, so a second reporter's window is independent: its first drop warns even while r is
+	// mid-throttle. This is what gives the two receiver loops (system + network extension) independent drop accounting.
+	other := newDropReporter()
+	other.now = func() time.Time { return now }
+	count, emit = other.record()
+	require.True(t, emit, "a separate reporter MUST warn on its own first drop, not share another receiver's throttle")
 	assert.Equal(t, int64(1), count)
 }
 

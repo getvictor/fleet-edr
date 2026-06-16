@@ -256,11 +256,15 @@ Edit `/Library/LaunchDaemons/com.fleetdm.edr.agent.plist` and add these keys ins
 <string>debug</string>
 ```
 
-Then reload the daemon so it picks up the new environment:
+The `OTEL_EXPORTER_OTLP_HEADERS` value embeds a bearer token, so treat the plist as a secret at rest the same way `/etc/fleet-edr.conf` is locked down above. The plist is loaded by root, so restrict it to root and reload:
 
 ```sh
+sudo chown root:wheel /Library/LaunchDaemons/com.fleetdm.edr.agent.plist
+sudo chmod 600 /Library/LaunchDaemons/com.fleetdm.edr.agent.plist
 sudo launchctl kickstart -k system/com.fleetdm.edr.agent
 ```
+
+Prefer a short-lived, narrowly-scoped collector token for dev/debug, and rotate it after use. To avoid putting the token on disk at all, you can instead set the `OTEL_*` variables in the shell and run the agent binary directly in the foreground for the duration of the debugging session.
 
 Notes:
 
