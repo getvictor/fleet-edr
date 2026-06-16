@@ -184,19 +184,23 @@ else
 
     PROFILE_NET="$ROOT/packaging/provisioning/networkextension.provisionprofile"
     NETEXT="$STAGE/app-root/Applications/Fleet EDR.app/Contents/Library/SystemExtensions/com.fleetdm.edr.networkextension.systemextension"
-    # Whenever the NE bundle is present we re-sign it below with restricted
-    # entitlements. Without an embedded provisioning profile that re-sign
-    # produces a NE that fails activation on SIP-on hosts - the exact bug
-    # the entitlements re-sign exists to fix on the sysext side. Fail-fast
-    # rather than silently shipping the same broken shape.
-    if [ -d "$NETEXT" ]; then
-        if [ ! -f "$PROFILE_NET" ]; then
-            echo "ERROR: NE bundle present at $NETEXT but $PROFILE_NET is missing." >&2
-            echo "       A NE re-signed without an embedded profile fails activation on SIP-on hosts." >&2
-            exit 8
-        fi
-        cp "$PROFILE_NET" "$NETEXT/Contents/embedded.provisionprofile"
+    # The Network Extension is a mandatory part of the shipped product (the
+    # `edr` scheme embeds both extensions), so a missing NE bundle is a hard
+    # failure, same as the sysext above. Distinct exit code for CI triage.
+    if [ ! -d "$NETEXT" ]; then
+        echo "ERROR: expected NE bundle at $NETEXT but it does not exist." >&2
+        echo "       Check the Xcode project's embedded-targets settings." >&2
+        exit 14
     fi
+    # Without an embedded provisioning profile the restricted-entitlement
+    # re-sign below produces a NE that fails activation on SIP-on hosts: the
+    # exact bug the entitlements re-sign exists to fix on the sysext side.
+    if [ ! -f "$PROFILE_NET" ]; then
+        echo "ERROR: $PROFILE_NET is missing." >&2
+        echo "       A NE re-signed without an embedded profile fails activation on SIP-on hosts." >&2
+        exit 8
+    fi
+    cp "$PROFILE_NET" "$NETEXT/Contents/embedded.provisionprofile"
 
     # Host app needs its own embedded profile because
     # `com.apple.developer.system-extension.install` is a restricted entitlement.
@@ -232,24 +236,18 @@ else
     SYSEXT_ENTITLEMENTS="$ROOT/extension/edr/extension/extension.entitlements"
     NETEXT_ENTITLEMENTS="$ROOT/extension/edr/networkextension/networkextension.entitlements"
     APP_ENTITLEMENTS="$ROOT/extension/edr/edr/edr.entitlements"
-    for f in "$SYSEXT_ENTITLEMENTS" "$APP_ENTITLEMENTS"; do
+    # All three bundles are mandatory, so all three entitlement plists are
+    # required (the NE bundle's presence is asserted above).
+    for f in "$SYSEXT_ENTITLEMENTS" "$NETEXT_ENTITLEMENTS" "$APP_ENTITLEMENTS"; do
         [ -f "$f" ] || { echo "missing entitlements file: $f" >&2; exit 6; }
     done
-    # NETEXT entitlements only required when the NE bundle is present.
-    # Distinct exit code so CI triage can tell which precondition failed.
-    if [ -d "$NETEXT" ] && [ ! -f "$NETEXT_ENTITLEMENTS" ]; then
-        echo "missing entitlements file: $NETEXT_ENTITLEMENTS" >&2
-        exit 7
-    fi
 
     # shellcheck disable=SC2086
     codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
         --entitlements "$SYSEXT_ENTITLEMENTS" "$SYSEXT"
-    if [ -d "$NETEXT" ]; then
-        # shellcheck disable=SC2086
-        codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
-            --entitlements "$NETEXT_ENTITLEMENTS" "$NETEXT"
-    fi
+    # shellcheck disable=SC2086
+    codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+        --entitlements "$NETEXT_ENTITLEMENTS" "$NETEXT"
     # shellcheck disable=SC2086
     codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
         --entitlements "$APP_ENTITLEMENTS" \
