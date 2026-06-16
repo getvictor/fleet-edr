@@ -96,7 +96,7 @@ services:
       EDR_TLS_CERT_FILE: /tls/dev.crt
       EDR_TLS_KEY_FILE: /tls/dev.key
       EDR_LOG_FORMAT: json
-      EDR_SESSION_SIGNING_KEY: demo-only-session-signing-key-do-not-use-in-prod
+      EDR_SECRET_KEY: demo-only-secret-key-do-not-use-in-prod-0123456789
       # SSO against the bundled dex. EDR_OIDC_DEFAULT_ROLE lands the single demo
       # user at `admin` on first sign-in so every affordance is visible.
       EDR_OIDC_ISSUER: http://dex.demo.localhost:5556/dex

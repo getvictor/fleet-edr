@@ -26,6 +26,10 @@ const (
 	testSecret = "test-enroll-secret"
 )
 
+// testPepper is the fixed 32-byte HMAC pepper the rotation tests construct their store with. Constant so a token hashed at enroll
+// verifies on a later rotate within the same test.
+var testPepper = []byte("test-host-token-pepper-0123456789abcdef")
+
 // fakeRecorder captures audit events for assertion. Goroutine-safe so future moves of the verify-time auto-rotate trigger to a
 // background scheduler do not silently introduce data races; today the path is synchronous, but the contract is the safer side of the
 // change. Tests read events via Snapshot so the slice copy is taken under the same mutex.
@@ -76,7 +80,7 @@ func newServiceForTest(t *testing.T, lifetime, grace time.Duration) (svc api.Ser
 	t.Helper()
 	db = testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	store = mysql.NewStore(db)
+	store = mysql.NewStore(db, testPepper)
 	audit = &fakeRecorder{}
 	cmds = &commandCapture{}
 	svc = service.New(service.Options{
@@ -234,7 +238,7 @@ func TestRotateToken_NilDepsOK(t *testing.T) {
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	svc := service.New(service.Options{
-		Store:    mysql.NewStore(db),
+		Store:    mysql.NewStore(db, testPepper),
 		Secret:   testSecret,
 		Lifetime: 24 * time.Hour,
 		Grace:    time.Minute,
@@ -268,7 +272,7 @@ func TestRotateToken_AuditRecordErrorIsSwallowed(t *testing.T) {
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	cmds := &commandCapture{}
 	svc := service.New(service.Options{
-		Store:    mysql.NewStore(db),
+		Store:    mysql.NewStore(db, testPepper),
 		Secret:   testSecret,
 		Audit:    erroringRecorder{},
 		Commands: cmds.Insert,
@@ -303,7 +307,7 @@ func TestRotateToken_CommandsEnqueueErrorIsSwallowed(t *testing.T) {
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
 	audit := &fakeRecorder{}
 	svc := service.New(service.Options{
-		Store:    mysql.NewStore(db),
+		Store:    mysql.NewStore(db, testPepper),
 		Secret:   testSecret,
 		Audit:    audit,
 		Commands: erroringInserter,

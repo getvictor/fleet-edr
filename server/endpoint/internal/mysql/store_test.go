@@ -26,14 +26,19 @@ func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	return mysql.NewStore(db)
+	return mysql.NewStore(db, testHostTokenPepper)
 }
+
+// testHostTokenPepper is a fixed 32-byte HMAC pepper for the DB-backed store tests. A constant (not random) value keeps a token
+// hashed in one test step verifiable in a later step within the same test.
+var testHostTokenPepper = []byte("test-host-token-pepper-0123456789abcdef")
 
 func TestRegister_HappyPath(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
+	// spec:agent-enrollment/host-tokens-are-stored-and-verified-with-a-fast-keyed-hash/issued-token-is-stored-as-a-keyed-hash
 	res, err := s.Register(ctx, mysql.RegisterRequest{
 		HostID:       testUUID,
 		Hostname:     "qa-host",
@@ -51,7 +56,7 @@ func TestRegister_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testUUID, hostID)
 
-	// An obviously-wrong token is rejected fast (length check short-circuits argon2).
+	// An obviously-wrong token is rejected fast: the length check runs before any DB lookup or HMAC verify.
 	_, err = s.Verify(ctx, "nope")
 	assert.ErrorIs(t, err, mysql.ErrTokenMismatch)
 }

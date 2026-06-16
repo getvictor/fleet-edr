@@ -1,50 +1,22 @@
-// This file holds the cryptographic primitives that back agent host-token authentication: token generation, argon2id hashing,
-// constant-time verification, and the SHA-256 token-id lookup key. See doc.go for the package contract.
+// This file holds the cryptographic primitives that back agent host-token authentication: token generation, keyed HMAC-SHA256
+// hashing, constant-time verification, and the SHA-256 token-id lookup key. See doc.go for the package contract.
 
 package mysql
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"testing"
-
-	"golang.org/x/crypto/argon2"
-)
-
-// argon2id parameters chosen per OWASP Password Storage Cheat Sheet 2024 for a modern server running interactive hashing. ~30 ms per
-// hash on an M-series Mac. Every other request on the hot path is a constant-time compare against the stored hash, not a fresh hash,
-// so steady-state auth is microseconds.
-//
-// These are package-level vars (not consts) so the init() below can lower them under `go test`. Tests do many verify/rotate cycles
-// per case and at production cost they dominated CI wall clock (see issue #170). The pattern mirrors what golang.org/x/crypto/bcrypt
-// codifies with MinCost vs DefaultCost; argon2 has no library constant for it, so we follow the convention of RFC 9106's minimum
-// (t=1, m=8 MiB, p=1) for the test build only. Production binaries (anything not built by `go test`) keep the OWASP-2024 cost.
-var (
-	argonTime    uint32 = 3
-	argonMemory  uint32 = 64 * 1024 // 64 MiB
-	argonThreads uint8  = 4
 )
 
 const (
-	argonKeyLen  uint32 = 32
-	argonSaltLen int    = 16
-
 	// tokenLen is the size of the random bearer token we issue on successful enroll. 32 bytes
 	// → 43 base64url characters, ample for an HMAC-equivalent entropy budget.
 	tokenLen int = 32
 )
-
-func init() {
-	if testing.Testing() {
-		argonTime = 1
-		argonMemory = 8 * 1024 // 8 MiB, RFC 9106 minimum
-		argonThreads = 1
-	}
-}
 
 // generateToken returns a fresh random bearer token, base64url (no padding), 43 chars.
 func generateToken() (string, error) {
@@ -55,34 +27,33 @@ func generateToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// tokenID returns the SHA-256 of `token`. This is stored alongside the argon2id hash/salt as a deterministic lookup key so Verify can
-// fetch a single candidate row by indexed equality rather than scan every active enrollment. SHA-256 of a 32-byte random token has
-// the same entropy as the token and is one-way, so leaking the column does not let an attacker recover the token; the argon2id hash is
-// still the authenticator.
+// tokenID returns the SHA-256 of `token`. This is stored alongside the HMAC hash as a deterministic lookup key so Verify can fetch a
+// single candidate row by indexed equality rather than scan every active enrollment. SHA-256 of a 32-byte random token has the same
+// entropy as the token and is one-way, so leaking the column does not let an attacker recover the token; the keyed HMAC hash is still
+// the authenticator.
 func tokenID(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
 }
 
-// hashToken returns (hash, salt) for a bearer token. The raw token is never stored; subsequent
-// verification calls hashToken with the stored salt and compares constant-time.
-func hashToken(token string) (hash, salt []byte, err error) {
-	salt = make([]byte, argonSaltLen)
-	if _, err = rand.Read(salt); err != nil {
-		return nil, nil, fmt.Errorf("generate salt: %w", err)
-	}
-	hash = argon2.IDKey([]byte(token), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	return hash, salt, nil
+// hashToken returns the authenticator for a bearer token: HMAC-SHA256(pepper, token). The raw token is never stored. The token is a
+// 32-byte random secret, not a human-chosen password, so a high-entropy keyed hash gives the same practical resistance to offline
+// recovery as a memory-hard KDF while keeping verification sub-microsecond on the authenticated agent hot path. The pepper is a
+// server-held secret derived from the deployment root key (see internal/keyring): a read-only database leak yields neither the token
+// (the stored value is one-way) nor the ability to forge one (the attacker lacks the pepper).
+func hashToken(pepper []byte, token string) []byte {
+	mac := hmac.New(sha256.New, pepper)
+	mac.Write([]byte(token))
+	return mac.Sum(nil)
 }
 
-// verifyToken returns true when `token` hashes to `wantHash` under `salt`. Uses subtle.ConstantTimeCompare
-// to prevent the hash-compare step from leaking timing info.
-func verifyToken(token string, wantHash, salt []byte) bool {
-	if len(wantHash) == 0 || len(salt) == 0 {
+// verifyToken reports whether `token` hashes to `want` under `pepper`. Uses hmac.Equal (a constant-time compare) so the hash-compare
+// step does not leak timing information.
+func verifyToken(pepper []byte, token string, want []byte) bool {
+	if len(want) == 0 {
 		return false
 	}
-	got := argon2.IDKey([]byte(token), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	return subtle.ConstantTimeCompare(got, wantHash) == 1
+	return hmac.Equal(hashToken(pepper, token), want)
 }
 
 // ErrTokenMismatch is returned when a presented token does not match any enrolled host.

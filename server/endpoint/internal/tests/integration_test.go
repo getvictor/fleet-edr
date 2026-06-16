@@ -42,6 +42,9 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 const (
 	testEnrollSecret = "endpoint-integration-secret"
 	testHardwareUUID = "12345678-1234-1234-1234-123456789012"
+	// testHostTokenPepper is the fixed >=32-byte HMAC pepper the endpoint bootstrap requires. A constant keeps a token hashed at enroll
+	// verifiable on a later rotate/verify within the same test.
+	testHostTokenPepper = "endpoint-integration-host-token-pepper-0123"
 )
 
 // recordingCommandInserter captures every CommandInserter call so tests can assert on the host_id targeting and the command type.
@@ -94,6 +97,7 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
 		AuthZ:               allowAllAuthZ{},
+		HostTokenPepper:     []byte(testHostTokenPepper),
 	}
 	for _, opt := range opts {
 		opt(&deps)

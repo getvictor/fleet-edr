@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/internal/keyring"
 	"github.com/fleetdm/edr/server/apidocs"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
@@ -187,13 +189,23 @@ func openContexts(
 	endpointCtx *endpointbootstrap.Endpoint,
 	err error,
 ) {
+	// One root secret seeds every long-lived server-side key. Build the keyring before acquiring the migration lock so a malformed
+	// EDR_SECRET_KEY fails boot fast (config already enforces the >=32-byte floor, so New errors only as a defensive invariant).
+	kr, err := keyring.New(cfg.SecretKey)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("build keyring: %w", err)
+	}
+	// keyring.New holds its own copy of the root, and cfg.SecretKey is not read past this point, so zero the config's copy to
+	// minimize how long the raw root secret lives in memory (heap dumps, core files).
+	clear(cfg.SecretKey)
+
 	release, err := coord.Lock(ctx, migrationLockName)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 	defer release()
 
-	if identityCtx, err = openIdentity(ctx, logger, db, cfg); err != nil {
+	if identityCtx, err = openIdentity(ctx, logger, db, cfg, kr.Derive(keyring.SessionSigningKeyLabel)); err != nil {
 		return
 	}
 	if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord); err != nil {
@@ -206,7 +218,7 @@ func openContexts(
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx)
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx, kr.Derive(keyring.HostTokenPepperLabel))
 	return
 }
 
@@ -215,6 +227,7 @@ func openIdentity(
 	logger *slog.Logger,
 	db *sqlx.DB,
 	cfg *config.Config,
+	sessionSigningKey []byte,
 ) (*identitybootstrap.Identity, error) {
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:                 db,
@@ -222,7 +235,7 @@ func openIdentity(
 		CookieSecure:       cfg.ExternalTLS(),
 		AuditReadSampling:  cfg.AuditReadSampling,
 		AuditAsyncQueueCap: cfg.AuditAsyncQueueCap,
-		SessionSigningKey:  cfg.SessionSigningKey,
+		SessionSigningKey:  sessionSigningKey,
 		OIDC: identitybootstrap.OIDCDeps{
 			Issuer:               cfg.OIDCIssuer,
 			ClientID:             cfg.OIDCClientID,
@@ -382,6 +395,7 @@ func openEndpoint(
 	cfg *config.Config,
 	cmdInserter endpointbootstrap.CommandInserter,
 	identityCtx *identitybootstrap.Identity,
+	hostTokenPepper []byte,
 ) (*endpointbootstrap.Endpoint, error) {
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,
@@ -393,6 +407,7 @@ func openEndpoint(
 		AuthZ:               identityCtx.AuthZ(),
 		HostTokenLifetime:   cfg.HostTokenLifetime,
 		HostTokenGrace:      cfg.HostTokenGrace,
+		HostTokenPepper:     hostTokenPepper,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)
