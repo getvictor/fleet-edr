@@ -2,6 +2,39 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
+## [0.2.0] (unreleased)
+
+Incremental release on top of 0.1.1. Highlights: release signing modernized to the cosign v3 Sigstore bundle format, a detection-pipeline stall fixed, and the macOS system extensions now show recognizable names during a manual install.
+
+### Added
+
+- **Recognizable system-extension names.** The Endpoint Security and Network extensions now appear in macOS System Settings (Login Items & Extensions, Full Disk Access) as "Fleet EDR Security Extension" and "Fleet EDR Network Extension" instead of the generic "extension" / "networkextension", so an operator doing a manual (non-MDM) install can tell which Full Disk Access entry belongs to Fleet EDR.
+- **Process-graph retention pruning.** The server prunes the process table on the configured retention window, bounding storage growth on long-running deployments.
+
+### Changed
+
+- **Modernized release signing (cosign v3).** Release artifacts are now signed as a single Sigstore bundle (`<file>.sigstore.json`) per file, and the server and demo-seed container images store their signatures and SBOM attestations as OCI 1.1 referring artifacts. Verify a download with `cosign verify-blob --bundle <file>.sigstore.json --certificate-identity-regexp ... --certificate-oidc-issuer https://token.actions.githubusercontent.com <file>`.
+- **Pinned MySQL to 8.4.9** in the reference deployment stack.
+- Updated UI build dependencies (esbuild, Vite, `@vitejs/plugin-react`).
+
+### Fixed
+
+- **Detection-pipeline stall on out-of-range UID/GID.** The process `uid`/`gid` columns are now `INT UNSIGNED`, so the macOS `nobody` account and the `KAUTH_UID_NONE` sentinel no longer overflow on insert; a single unpersistable event is isolated rather than wedging the whole detection pipeline.
+- **Session-expiry handling.** The web UI redirects cleanly when a session expires instead of rendering affordances that then fail with 403.
+- **OpenTelemetry noise.** Trimmed spurious telemetry output and tightened span/log scoping.
+
+### Security
+
+- **Hardened host enrollment tokens.** Host tokens are now verified with a keyed HMAC derived from a root secret.
+
+### Observability
+
+- Emit a `deployment.environment` resource attribute and scope the bundled SigNoz dashboards to it; added a dashboard filter plus render and metrics tuning.
+
+### Documentation
+
+- Tightened the install-server, MDM, and manual-agent deployment guides; led the README with deployment; documented the supported-version policy.
+
 ## [0.1.1] (2026-06-13)
 
 First stable release. The product ships as two components, released together for now: the **macOS agent** (Apple Silicon, macOS 26+) and the **server** (a Linux container that runs anywhere containers do, cloud or on-prem). Core capabilities:
@@ -22,4 +55,5 @@ First stable release. The product ships as two components, released together for
 - **Flexible deployment.** The server is a standard Linux container image, so it runs on any container host (a Docker VM, Kubernetes, AWS ECS/EKS, GCP, Azure, or on-prem), with a one-click Render blueprint for the fastest start. Agents reach Macs through any MDM (Fleet, Jamf, Kandji, Intune, mosyle).
 - **Supply-chain-hardened releases.** Every release ships a Developer ID-signed, Apple-notarized package alongside SBOMs, cosign signatures, and build provenance attestations.
 
+[0.2.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.0
 [0.1.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.1.1

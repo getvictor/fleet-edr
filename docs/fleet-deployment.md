@@ -160,7 +160,7 @@ Open `https://<your-edr-server>/ui/`. The Macs that finished the Fleet-driven in
 **Via fleetctl:** bump the `url` and `hash_sha256` in the Step 2 spec to the new release and re-apply. Fleet replaces the software package in-place; the install script doesn't change.
 
 ```yaml
-- url: https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg
+- url: https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/fleet-edr-v0.2.0.pkg
   hash_sha256: <sha256 of the new pkg>
   install_script:
     path: ./fleet-edr-install.sh
