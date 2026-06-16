@@ -18,7 +18,7 @@
 
 ## 4. Docs
 
-- [x] `docs/install-agent-manual.md`: rewrite the "verify the Sigstore signature" section to the `--bundle` recipe (v0.2.0 example), with a legacy `.sig`/`.pem` note for v0.1.1 and earlier.
+- [x] `docs/install-agent-manual.md`: rewrite the "verify the Sigstore signature" section to a v3-only `--bundle` recipe (v0.2.0 example for both the artifact and the image, no legacy `.sig`/`.pem` notes); bump the Step 1-4 example tag to v0.2.0 so the whole doc is consistent.
 - [x] `docs/install-agent-manual.md` Step 6 + troubleshooting: name the new "Fleet EDR Security Extension" / "Fleet EDR Network Extension" entries.
 - [x] `docs/best-practices.md`: update the supply-chain bullet to cosign v3 bundles + OCI 1.1 image storage (was "tracked as a drop-in pin upgrade").
 

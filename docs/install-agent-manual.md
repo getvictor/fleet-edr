@@ -17,21 +17,21 @@ For production deployments of more than a handful of Macs, use [mdm-deployment.m
 
 ## Step 1: download the pkg
 
-Pick a release from https://github.com/getvictor/fleet-edr/releases and download the `.pkg` to the target Mac. Example for v0.1.1:
+Pick a release from https://github.com/getvictor/fleet-edr/releases and download the `.pkg` to the target Mac. Example for v0.2.0:
 
 ```sh
 cd ~/Downloads
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/fleet-edr-v0.1.1.pkg
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/fleet-edr-v0.2.0.pkg
 ```
 
 Verify the download against the published SHA256SUMS:
 
 ```sh
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.1.1/SHA256SUMS
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
-Expect: `fleet-edr-v0.1.1.pkg: OK`.
+Expect: `fleet-edr-v0.2.0.pkg: OK`.
 
 ## Step 2: verify the signature
 
@@ -39,17 +39,17 @@ Before you run an installer you didn't build, confirm Gatekeeper trusts it. Thes
 
 ```sh
 # Signed by us + notarized by Apple
-pkgutil --check-signature fleet-edr-v0.1.1.pkg
+pkgutil --check-signature fleet-edr-v0.2.0.pkg
 # Expect:
 #   Status: signed by a developer certificate issued by Apple for distribution
 #   Notarization: trusted by the Apple notary service
 
 # Stapled ticket embedded (works offline)
-xcrun stapler validate fleet-edr-v0.1.1.pkg
+xcrun stapler validate fleet-edr-v0.2.0.pkg
 # Expect: "The validate action worked!"
 
 # Gatekeeper's install assessment
-spctl -a -v --type install fleet-edr-v0.1.1.pkg
+spctl -a -v --type install fleet-edr-v0.2.0.pkg
 # Expect: "accepted / source=Notarized Developer ID"
 ```
 
@@ -57,9 +57,9 @@ If any of these fail, STOP. Don't install. File an issue at https://github.com/g
 
 ### Optional: verify the Sigstore signature
 
-Releases from v0.2.0 onward publish a single Sigstore bundle (`<file>.sigstore.json`) next to every artifact. The bundle carries the signature, the ephemeral signing certificate, and the transparency-log proof in one file, and ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots.
+Releases publish a single Sigstore bundle (`<file>.sigstore.json`) next to every artifact. The bundle carries the signature, the ephemeral signing certificate, and the transparency-log proof in one file, and ties the artifact to the exact GitHub Actions workflow run that produced it, which catches the rare attack where a Developer ID cert is stolen but the attacker can't push to our GitHub repo. Skip this step if you don't have `cosign` installed; the Apple-signature checks above are sufficient for most pilots.
 
-Substitute the release tag you downloaded in Step 1 for the `v0.2.0` placeholder below; the bundle and the `.pkg` must come from the same release. Bundles ship only on v0.2.0 and later, so if you downloaded v0.1.1 or earlier, use the legacy `.sig`/`.pem` command at the end of this section instead.
+Use the same release tag you downloaded in Step 1 in place of the `v0.2.0` placeholder below; the bundle and the `.pkg` must come from the same release.
 
 ```sh
 # Install cosign (v3+) if you don't have it: brew install cosign
@@ -73,9 +73,13 @@ cosign verify-blob \
 # Expect: "Verified OK"
 ```
 
-The `--bundle` flag is the current, non-deprecated path and prints no warnings on cosign v2.6+ or v3. The same `<file>.sigstore.json` bundle covers `SHA256SUMS` and both `.mobileconfig` profiles. If you're verifying the server image instead, use `cosign verify ghcr.io/getvictor/fleet-edr-server:v0.2.0` with the same identity / issuer flags.
+The same `<file>.sigstore.json` bundle covers `SHA256SUMS` and both `.mobileconfig` profiles. To verify the server image instead, pass the same keyless identity and issuer constraints:
 
-Releases v0.1.1 and earlier predate the bundle format and ship a `<file>.sig` + `<file>.pem` pair instead. To verify those, pass the legacy flags (deprecated on cosign v2.6+ but still functional): `cosign verify-blob --certificate <file>.pem --signature <file>.sig` plus the same `--certificate-identity-regexp` / `--certificate-oidc-issuer` flags shown above.
+```sh
+cosign verify ghcr.io/getvictor/fleet-edr-server:v0.2.0 \
+    --certificate-identity-regexp '^https://github\.com/getvictor/fleet-edr/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
 
 ## Step 3: write the config file
 
@@ -100,7 +104,7 @@ Replace `https://edr.example.com` with your server URL and `paste-the-enroll-sec
 ## Step 4: install the pkg
 
 ```sh
-sudo installer -pkg ~/Downloads/fleet-edr-v0.1.1.pkg -target /
+sudo installer -pkg ~/Downloads/fleet-edr-v0.2.0.pkg -target /
 ```
 
 Expect:
