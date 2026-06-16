@@ -68,7 +68,7 @@ Today the agent is macOS-only on Apple Silicon. Best-in-class EDRs (CrowdStrike 
 ## 3. Security: AuthN, AuthZ, cryptography
 
 - [x] Argon2id password hashing for users (with random per-user salt)
-- [x] Argon2id host-token hashing for enrollment (with deterministic token-id index for fast lookup)
+- [x] HMAC-SHA256 host-token verification for enrollment, keyed by a server-held pepper derived from the deployment root secret (with deterministic token-id index for fast lookup)
 - [x] Constant-time comparison for secrets (`subtle.ConstantTimeCompare` for CSRF tokens)
 - [x] HTTP-only, Secure, SameSite session cookies (`server/identity/internal/{login,middleware,sessions}/`)
 - [x] CSRF protection on unsafe methods (per-session token in header)
