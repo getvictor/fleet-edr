@@ -109,7 +109,7 @@ spec:
     name: EDR pilot
     software:
       packages:
-        - url: https://github.com/getvictor/fleet-edr/releases/download/v0.1.0/fleet-edr-v0.1.0.pkg
+        - url: https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/fleet-edr-v0.2.0.pkg
           hash_sha256: <sha256 of the pkg, from SHA256SUMS>
           install_script:
             path: ./fleet-edr-install.sh
@@ -121,7 +121,7 @@ EOF
 **Via the Fleet UI** (this path accepts a local pkg file instead of a URL):
 
 1. **Software > Add software > Custom package**, with the "EDR pilot" fleet selected in the scope picker.
-2. **Choose file** and select `fleet-edr-v0.1.0.pkg`.
+2. **Choose file** and select `fleet-edr-v0.2.0.pkg`.
 3. Expand **Advanced options** and replace the default install script with the contents of `fleet-edr-install.sh`; paste `fleet-edr-uninstall.sh` into the uninstall script field.
 4. **Add software**.
 

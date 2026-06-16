@@ -193,7 +193,7 @@ In the admin UI (https://edr.example.com/ui/):
 Download the newer `.pkg` and run `installer -pkg` again. The installer detects the existing receipts and performs an upgrade:
 
 ```sh
-sudo installer -pkg fleet-edr-v0.1.2.pkg -target /
+sudo installer -pkg fleet-edr-v0.2.0.pkg -target /
 ```
 
 The preinstall script stops the old daemon, the postinstall script starts the new one. The persisted host token at `/var/db/fleet-edr/enrolled.plist` survives, so the agent keeps its existing enrollment; no re-approval needed.

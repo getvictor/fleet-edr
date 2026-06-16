@@ -2,7 +2,7 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
-## [0.2.0] (unreleased)
+## [0.2.0] (2026-06-16)
 
 Incremental release on top of 0.1.1. Highlights: release signing modernized to the cosign v3 Sigstore bundle format, a detection-pipeline stall fixed, and the macOS system extensions now show recognizable names during a manual install.
 

@@ -83,7 +83,7 @@ If a new replica fails to come up (bad image tag), the old replicas stay in rota
 
 ## Multi-replica trade-offs
 
-The stateless tier ([ADR-0010](adr/0010-stateless-server.md)) accepts two bounded per-replica behaviours rather than adding a second coordination dependency in v0.1.0. Both are operational knobs, not bugs.
+The stateless tier ([ADR-0010](adr/0010-stateless-server.md)) accepts two bounded per-replica behaviours rather than adding a second coordination dependency. Both are operational knobs, not bugs.
 
 ### Per-IP rate limiting is per replica
 
@@ -316,7 +316,7 @@ Two unconditional carve-outs run before any rule:
 
 ### BINARY rules and the deadline-fallback posture
 
-A BINARY rule matches the file's SHA-256. The hash is computed synchronously on the AUTH_EXEC callback thread, with the budget bounded by the kernel-supplied `es_message_t.deadline` minus a 500 ms safety margin for the post-hash work. v0.1.0 closes the pre-RC bypass primitive where the first exec of any binary slipped past BINARY rules while the cache filled asynchronously (#208).
+A BINARY rule matches the file's SHA-256. The hash is computed synchronously on the AUTH_EXEC callback thread, with the budget bounded by the kernel-supplied `es_message_t.deadline` minus a 500 ms safety margin for the post-hash work. The agent closes the pre-RC bypass primitive where the first exec of any binary slipped past BINARY rules while the cache filled asynchronously (#208).
 
 If the hash cannot finish in time (large binary, slow disk, or the file is unreadable due to a TOCTOU replace between AUTH and read), the snapshot's `deadline_fallback` field drives the verdict:
 
@@ -328,7 +328,7 @@ If the hash cannot finish in time (large binary, slow disk, or the file is unrea
 
 On `deadline-exceeded` or `read-failed` outcomes the SHA-256 cache is NOT populated, so subsequent execs of the same binary retry the hash computation. Repeated `application_control_undecided` events for the same `path` therefore indicate either a binary that consistently blows the 500 ms safety margin (size + disk-read combination) or a TOCTOU race the agent is hitting deterministically; the path + `file_size_bytes` fields are the disambiguator.
 
-v0.1.0 wires the posture through the snapshot payload but does NOT yet persist a per-policy value in the database; every snapshot ships with `fail-closed`. The v0.1.x follow-up adds a DB column and the REST surface to set it per policy.
+The agent wires the posture through the snapshot payload but does NOT yet persist a per-policy value in the database; every snapshot ships with `fail-closed`. A planned follow-up adds a DB column and the REST surface to set it per policy.
 
 ### Legacy endpoints
 
