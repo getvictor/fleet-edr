@@ -120,6 +120,22 @@ func decodeHostEnvelopes(raw []byte, file string) ([]fakeagent.Envelope, string,
 	return envs, hostID, nil
 }
 
+// demoHostIDs returns the captured host UUID of every manifest host. refreshTimestamps scopes its UPDATEs to these so a
+// mis-pointed DSN can only ever shift the demo's own rows: the seeder takes an operator-supplied DSN and the already-seeded check
+// keys on a real production rule id (credential_keychain_dump), so without this scope the refresh could rewrite a real
+// deployment's timelines.
+func demoHostIDs() ([]string, error) {
+	ids := make([]string, 0, len(hostManifest))
+	for _, h := range hostManifest {
+		_, hostID, err := loadHostEnvelopes(h.File)
+		if err != nil {
+			return nil, fmt.Errorf("load host ids %s: %w", h.File, err)
+		}
+		ids = append(ids, hostID)
+	}
+	return ids, nil
+}
+
 // shiftEnvelopesToRecent rewrites every envelope's timestamp so the latest event lands recentTailOffset before now, preserving the
 // inter-event deltas of the original capture. This makes the replayed graph read as recent activity without compressing the
 // timeline, so the UI's time structure and the per-process event ordering stay faithful to the real capture. Returns the input
@@ -186,11 +202,13 @@ var interactiveShellExecs = map[string]bool{
 	"/bin/sh":   true,
 }
 
-// pickAttackAnchorPID returns the pid of the last interactive-shell exec in a captured host stream, to use as the parent of the
-// attacks woven onto that host (see reparentAttackToHost). "Last" so the anchor is the most recent shell in the timeline, the one
-// an operator reads as the current session. Returns 0 when the capture has no shell, leaving the attacks rooted at launchd.
+// pickAttackAnchorPID returns the pid of the most recent interactive-shell exec in a captured host stream, to use as the parent of
+// the attacks woven onto that host (see reparentAttackToHost). Selection is by the event's TimestampNs, not file order: the scrubbed
+// captures are not stored time-sorted, so the last line is not necessarily the latest event. Sentinel pids (<= 1) are never chosen.
+// Returns 0 when the capture has no shell, leaving the attacks rooted at launchd.
 func pickAttackAnchorPID(envs []fakeagent.Envelope) int {
 	anchor := 0
+	var anchorTS int64
 	for i := range envs {
 		if envs[i].EventType != "exec" {
 			continue
@@ -202,8 +220,9 @@ func pickAttackAnchorPID(envs []fakeagent.Envelope) int {
 		if err := json.Unmarshal(envs[i].Payload, &p); err != nil {
 			continue
 		}
-		if interactiveShellExecs[p.Path] {
-			anchor = p.PID
+		// >= keeps the later-in-file entry on a timestamp tie, a deterministic tiebreak against the fixed embedded corpus.
+		if interactiveShellExecs[p.Path] && p.PID > 1 && (anchor == 0 || envs[i].TimestampNs >= anchorTS) {
+			anchor, anchorTS = p.PID, envs[i].TimestampNs
 		}
 	}
 	return anchor

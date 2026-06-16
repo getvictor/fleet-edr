@@ -202,6 +202,7 @@ func TestRefreshTimestamps(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
+	hostID := firstDemoHostID(t) // refresh is scoped to the demo's own host_ids, so seed under a real one.
 
 	// Two processes 30s apart, both stamped ~6 days ago, one still running (NULL exit). last_seen mirrors fork here.
 	const sixDaysNs = int64(6*24*60*60) * int64(time.Second)
@@ -210,10 +211,16 @@ func TestRefreshTimestamps(t *testing.T) {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns, fork_ingested_at_ns, last_seen_ns, exit_time_ns)
 		 VALUES (?, ?, 1, '/bin/older', ?, ?, ?, ?), (?, ?, 1, '/bin/newest', ?, ?, ?, NULL)`,
-		"HOST-R", 100, staleOlder, staleOlder, staleOlder, staleOlder+int64(time.Second),
-		"HOST-R", 200, staleNewest, staleNewest, staleNewest)
+		hostID, 100, staleOlder, staleOlder, staleOlder, staleOlder+int64(time.Second),
+		hostID, 200, staleNewest, staleNewest, staleNewest)
 	require.NoError(t, err)
-	insertAlert(t, db, "HOST-R", "sudoers_tamper", "detection", "high")
+	// Seed the alert ~6 days stale so the test actually exercises the alert shift (a NOW()-stamped alert would pass even if the
+	// refresh ignored alerts, and could be shifted into the future undetected).
+	insertAlert(t, db, hostID, "sudoers_tamper", "detection", "high")
+	_, err = db.ExecContext(ctx,
+		`UPDATE alerts SET created_at = DATE_SUB(NOW(), INTERVAL 6 DAY), updated_at = DATE_SUB(NOW(), INTERVAL 6 DAY)
+		 WHERE host_id = ?`, hostID)
+	require.NoError(t, err)
 
 	require.NoError(t, s.refreshTimestamps(ctx))
 
@@ -221,10 +228,10 @@ func TestRefreshTimestamps(t *testing.T) {
 	var olderExit sql.NullInt64
 	var newestExit sql.NullInt64
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT fork_time_ns, last_seen_ns, exit_time_ns FROM processes WHERE host_id = 'HOST-R' AND pid = 200`).
+		`SELECT fork_time_ns, last_seen_ns, exit_time_ns FROM processes WHERE host_id = ? AND pid = 200`, hostID).
 		Scan(&newestFork, &lastSeen, &newestExit))
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT fork_time_ns, exit_time_ns FROM processes WHERE host_id = 'HOST-R' AND pid = 100`).Scan(&olderFork, &olderExit))
+		`SELECT fork_time_ns, exit_time_ns FROM processes WHERE host_id = ? AND pid = 100`, hostID).Scan(&olderFork, &olderExit))
 
 	// Newest fork now lands ~recentTailOffset before now (allow a generous slop for test wall-clock drift).
 	wantNewest := time.Now().Add(-recentTailOffset).UnixNano()
@@ -236,10 +243,12 @@ func TestRefreshTimestamps(t *testing.T) {
 	require.True(t, olderExit.Valid)
 	assert.Equal(t, olderFork+int64(time.Second), olderExit.Int64, "exited process keeps its 1s lifetime")
 
-	// The alert's created_at slid into the recent past (was ~6 days stale).
+	// The alert's created_at slid into the recent past: recent AND not future-dated (a future created_at yields a negative
+	// TIMESTAMPDIFF, which the upper-bound check alone would not catch).
 	var alertAgeSec int64
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) FROM alerts WHERE host_id = 'HOST-R'`).Scan(&alertAgeSec))
+		`SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) FROM alerts WHERE host_id = ?`, hostID).Scan(&alertAgeSec))
+	assert.GreaterOrEqual(t, alertAgeSec, int64(0), "alert fired-at must not be in the future")
 	assert.Less(t, alertAgeSec, int64(10*time.Minute/time.Second), "alert fired-at is recent after refresh")
 }
 
@@ -251,6 +260,7 @@ func TestRefreshTimestampsIgnoresSynthesizedExit(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
+	hostID := firstDemoHostID(t)
 
 	// Fork ~6h stale; the TTL reconciler synthesized an exit at fork + 6h maxAge (past the device tail). A second, genuinely
 	// exited process keeps its real (small-lifetime) captured exit.
@@ -259,8 +269,8 @@ func TestRefreshTimestampsIgnoresSynthesizedExit(t *testing.T) {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns, exec_time_ns, exit_time_ns, exit_reason)
 		 VALUES (?, ?, 1, '/bin/ttl', ?, ?, ?, ?), (?, ?, 1, '/bin/real', ?, ?, ?, 'exited')`,
-		"HOST-T", 300, staleFork, staleFork, staleFork+sixHoursNs, "ttl_reconciliation",
-		"HOST-T", 400, staleFork, staleFork, staleFork+int64(2*time.Second))
+		hostID, 300, staleFork, staleFork, staleFork+sixHoursNs, "ttl_reconciliation",
+		hostID, 400, staleFork, staleFork, staleFork+int64(2*time.Second))
 	require.NoError(t, err)
 
 	require.NoError(t, s.refreshTimestamps(ctx))
@@ -268,7 +278,7 @@ func TestRefreshTimestampsIgnoresSynthesizedExit(t *testing.T) {
 	var ttlFork int64
 	var ttlExit, ttlReason sql.NullString
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT fork_time_ns, exit_time_ns, exit_reason FROM processes WHERE host_id='HOST-T' AND pid=300`).
+		`SELECT fork_time_ns, exit_time_ns, exit_reason FROM processes WHERE host_id=? AND pid=300`, hostID).
 		Scan(&ttlFork, &ttlExit, &ttlReason))
 	// Anchor ignored the synthesized exit, so the fork slid all the way to ~now-offset (within the 1h window), not 6h stale.
 	wantFork := time.Now().Add(-recentTailOffset).UnixNano()
@@ -279,18 +289,39 @@ func TestRefreshTimestampsIgnoresSynthesizedExit(t *testing.T) {
 	// The genuinely-exited process keeps a real exit that slid into the recent past with its fork.
 	var realFork, realExit int64
 	require.NoError(t, db.QueryRowContext(ctx,
-		`SELECT fork_time_ns, exit_time_ns FROM processes WHERE host_id='HOST-T' AND pid=400`).Scan(&realFork, &realExit))
+		`SELECT fork_time_ns, exit_time_ns FROM processes WHERE host_id=? AND pid=400`, hostID).Scan(&realFork, &realExit))
 	assert.Equal(t, realFork+int64(2*time.Second), realExit, "real captured exit kept its 2s lifetime")
 	assert.Less(t, realExit, time.Now().UnixNano(), "real exit stayed in the past")
 }
 
-// TestRefreshTimestampsNoRows is a no-op when no replayed event/process rows exist (an alert alone must not trigger a shift).
+// TestRefreshTimestampsNoRows is a no-op when no replayed event/process rows exist (an alert alone must not trigger a shift). The
+// before/after compare pins the no-op: the assertion would catch a refresh that shifted alert-only data.
 func TestRefreshTimestampsNoRows(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
-	insertAlert(t, db, "HOST-EMPTY", "sudoers_tamper", "detection", "high")
+	hostID := firstDemoHostID(t)
+	insertAlert(t, db, hostID, "sudoers_tamper", "detection", "high")
+
+	var before time.Time
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT created_at FROM alerts WHERE host_id = ?`, hostID).Scan(&before))
+
 	require.NoError(t, s.refreshTimestamps(ctx))
+
+	var after time.Time
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT created_at FROM alerts WHERE host_id = ?`, hostID).Scan(&after))
+	assert.Equal(t, before, after, "alert-only data must not be shifted when no replayed rows exist")
+}
+
+// firstDemoHostID returns a captured demo host UUID, the scope refreshTimestamps applies its shift to.
+func firstDemoHostID(t *testing.T) string {
+	t.Helper()
+	ids, err := demoHostIDs()
+	require.NoError(t, err)
+	require.NotEmpty(t, ids)
+	return ids[0]
 }
 
 func TestRunSkipsWhenAlreadySeeded(t *testing.T) {

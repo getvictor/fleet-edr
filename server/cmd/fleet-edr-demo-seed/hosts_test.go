@@ -95,16 +95,38 @@ func TestPickAttackAnchorPID(t *testing.T) {
 		require.NoError(t, err)
 		return fakeagent.Envelope{EventType: "exec", Payload: payload}
 	}
+	execAt := func(pid int, path string, ts int64) fakeagent.Envelope {
+		e := exec(pid, path)
+		e.TimestampNs = ts
+		return e
+	}
 
-	t.Run("last shell exec wins", func(t *testing.T) {
+	t.Run("latest shell exec by timestamp wins", func(t *testing.T) {
 		t.Parallel()
 		envs := []fakeagent.Envelope{
-			exec(100, "/usr/sbin/sshd"),
-			exec(200, "/bin/zsh"),
-			exec(300, "/usr/bin/security"), // not a shell, must not win
-			exec(400, "/bin/bash"),         // latest shell
+			execAt(100, "/usr/sbin/sshd", 10),
+			execAt(200, "/bin/zsh", 20),
+			execAt(300, "/usr/bin/security", 30), // not a shell, must not win
+			execAt(400, "/bin/bash", 40),         // latest shell by timestamp
 		}
 		assert.Equal(t, 400, pickAttackAnchorPID(envs))
+	})
+
+	t.Run("most recent by timestamp wins, not file order", func(t *testing.T) {
+		t.Parallel()
+		// The scrubbed captures are not stored time-sorted: a later line can carry an earlier timestamp. Selection must follow
+		// the timestamp, not the file position.
+		envs := []fakeagent.Envelope{
+			execAt(200, "/bin/zsh", 500),  // later event, earlier in file
+			execAt(400, "/bin/bash", 100), // earlier event, later in file
+		}
+		assert.Equal(t, 200, pickAttackAnchorPID(envs))
+	})
+
+	t.Run("sentinel pid is never anchored", func(t *testing.T) {
+		t.Parallel()
+		envs := []fakeagent.Envelope{exec(1, "/bin/zsh"), exec(0, "/bin/bash")}
+		assert.Zero(t, pickAttackAnchorPID(envs))
 	})
 
 	t.Run("non-exec events ignored", func(t *testing.T) {

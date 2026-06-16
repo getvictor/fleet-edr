@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -269,32 +270,54 @@ func (s *seeder) alreadySeeded(ctx context.Context) (bool, error) {
 // timing (and the device-vs-ingest and event-vs-alert ordering the detail/correlation views depend on), so the demo reads as
 // recent activity after every `up` without re-replaying. No-op when no replayed event/process rows exist yet.
 func (s *seeder) refreshTimestamps(ctx context.Context) error {
+	// Scope every read and write below to the demo's own hosts. The seeder takes an operator-supplied DSN and alreadySeeded keys
+	// on a real rule id (credential_keychain_dump), so an unscoped refresh pointed at a live DB would rewrite real timelines. The
+	// IN clause bounds the blast radius to the embedded corpus's host UUIDs, which a real deployment will never contain.
+	hostIDs, err := demoHostIDs()
+	if err != nil {
+		return err
+	}
+	if len(hostIDs) == 0 {
+		return nil
+	}
+	inClause := "host_id IN (" + strings.Repeat("?,", len(hostIDs)-1) + "?)"
+	hostArgs := make([]any, len(hostIDs))
+	for i, id := range hostIDs {
+		hostArgs[i] = id
+	}
+
 	var newestNs sql.NullInt64
 	// Anchor the delta on the device-clock tail only: fork/exec/event timestamps and their ingest stamps. The exit columns are
 	// deliberately excluded because the process-TTL reconciler (pipeline.ProcessTTLRunner) force-exits long-running processes at
 	// fork + maxAge, so a stale demo's synthesized exit_time_ns sits ~maxAge PAST the real tail. Anchoring on it would shrink the
 	// delta by maxAge and leave every fork that-much stale, which is exactly the empty-1h-window symptom this guards against.
-	const newestQuery = `
+	newestQuery := `
 		SELECT GREATEST(
-			COALESCE((SELECT MAX(timestamp_ns) FROM events), 0),
-			COALESCE((SELECT MAX(ingested_at_ns) FROM events), 0),
-			COALESCE((SELECT MAX(fork_time_ns) FROM processes), 0),
-			COALESCE((SELECT MAX(fork_ingested_at_ns) FROM processes), 0),
-			COALESCE((SELECT MAX(exec_time_ns) FROM processes), 0)
+			COALESCE((SELECT MAX(timestamp_ns) FROM events WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(ingested_at_ns) FROM events WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(fork_time_ns) FROM processes WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(fork_ingested_at_ns) FROM processes WHERE ` + inClause + `), 0),
+			COALESCE((SELECT MAX(exec_time_ns) FROM processes WHERE ` + inClause + `), 0)
 		)`
-	if err := s.db.QueryRowContext(ctx, newestQuery).Scan(&newestNs); err != nil {
+	anchorArgs := make([]any, 0, len(hostArgs)*5) // newestQuery references inClause five times
+	for range 5 {
+		anchorArgs = append(anchorArgs, hostArgs...)
+	}
+	if err := s.db.QueryRowContext(ctx, newestQuery, anchorArgs...).Scan(&newestNs); err != nil {
 		return fmt.Errorf("read newest demo timestamp: %w", err)
 	}
 	if !newestNs.Valid || newestNs.Int64 == 0 {
 		return nil // no replayed rows yet; nothing to slide
 	}
 	deltaNs := time.Now().Add(-recentTailOffset).UnixNano() - newestNs.Int64
-	if deltaNs == 0 {
+	// alerts carry SQL TIMESTAMP(6) columns; we slide them at whole-second granularity (the alert -> process-tree window the UI
+	// anchors on created_at spans minutes, so sub-second precision is irrelevant). deltaSec <= 0 means the data is already at or
+	// newer than the target (a quick restart after a fresh seed, or clock skew): nothing to slide, and a backward shift would only
+	// un-recent the graph, so skip the redundant writes.
+	deltaSec := deltaNs / int64(time.Second)
+	if deltaSec <= 0 {
 		return nil
 	}
-	// alerts carry SQL TIMESTAMPs (second resolution); the UI anchors the alert -> process-tree window on created_at, so they must
-	// slide with the events or that pivot breaks. Whole-second granularity is ample against the multi-minute window.
-	deltaSec := deltaNs / int64(time.Second)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -302,24 +325,27 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }() // no-op once Commit succeeds
 
-	// NULL + delta stays NULL, so still-running processes keep their open exit columns.
+	// NULL + delta stays NULL, so still-running processes keep their open exit columns. Every statement carries the host scope.
 	updates := []struct {
 		query string
 		args  []any
 	}{
-		{`UPDATE events SET timestamp_ns = timestamp_ns + ?, ingested_at_ns = ingested_at_ns + ?`, []any{deltaNs, deltaNs}},
+		{`UPDATE events SET timestamp_ns = timestamp_ns + ?, ingested_at_ns = ingested_at_ns + ? WHERE ` + inClause,
+			append([]any{deltaNs, deltaNs}, hostArgs...)},
 		{`UPDATE processes SET fork_time_ns = fork_time_ns + ?, fork_ingested_at_ns = fork_ingested_at_ns + ?,
 			exec_time_ns = exec_time_ns + ?, exit_time_ns = exit_time_ns + ?, exit_ingested_at_ns = exit_ingested_at_ns + ?,
-			last_seen_ns = last_seen_ns + ?`, []any{deltaNs, deltaNs, deltaNs, deltaNs, deltaNs, deltaNs}},
+			last_seen_ns = last_seen_ns + ? WHERE ` + inClause,
+			append([]any{deltaNs, deltaNs, deltaNs, deltaNs, deltaNs, deltaNs}, hostArgs...)},
 		// Drop the synthesized force-exits: anchoring on the fork tail slides them maxAge into the future, and for a just-refreshed
 		// demo the honest reading is "still running" (the forks are now minutes old). The reconciler re-creates them after maxAge,
 		// long after anyone is looking at this `up`. Real captured exits (any other reason) keep their shifted, in-the-past values.
-		{`UPDATE processes SET exit_time_ns = NULL, exit_ingested_at_ns = NULL, exit_reason = NULL WHERE exit_reason = ?`,
-			[]any{api.ExitReasonTTLReconciliation}},
-		{`UPDATE hosts SET last_seen_ns = last_seen_ns + ?`, []any{deltaNs}},
+		{`UPDATE processes SET exit_time_ns = NULL, exit_ingested_at_ns = NULL, exit_reason = NULL WHERE exit_reason = ? AND ` + inClause,
+			append([]any{api.ExitReasonTTLReconciliation}, hostArgs...)},
+		{`UPDATE hosts SET last_seen_ns = last_seen_ns + ? WHERE ` + inClause, append([]any{deltaNs}, hostArgs...)},
 		{`UPDATE alerts SET created_at = DATE_ADD(created_at, INTERVAL ? SECOND),
 			updated_at = DATE_ADD(updated_at, INTERVAL ? SECOND),
-			resolved_at = DATE_ADD(resolved_at, INTERVAL ? SECOND)`, []any{deltaSec, deltaSec, deltaSec}},
+			resolved_at = DATE_ADD(resolved_at, INTERVAL ? SECOND) WHERE ` + inClause,
+			append([]any{deltaSec, deltaSec, deltaSec}, hostArgs...)},
 	}
 	for _, u := range updates {
 		if _, err := tx.ExecContext(ctx, u.query, u.args...); err != nil {
