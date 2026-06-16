@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -82,4 +83,96 @@ func TestOffsetScenarioPIDs(t *testing.T) {
 	assert.Equal(t, 5_000_050, sc.Timeline[1].InstigatorPID, "instigator pid is offset too")
 	assert.Equal(t, 1, sc.Timeline[2].PID, "pid <= 1 preserved")
 	assert.Equal(t, 1, sc.Timeline[2].PPID)
+}
+
+// TestPickAttackAnchorPID confirms the anchor is the last interactive shell in the capture, that non-shell execs and non-exec
+// events are ignored, and that a shell-less capture yields 0 (so the attack falls back to its launchd root).
+func TestPickAttackAnchorPID(t *testing.T) {
+	t.Parallel()
+
+	exec := func(pid int, path string) fakeagent.Envelope {
+		payload, err := json.Marshal(map[string]any{"pid": pid, "path": path})
+		require.NoError(t, err)
+		return fakeagent.Envelope{EventType: "exec", Payload: payload}
+	}
+
+	t.Run("last shell exec wins", func(t *testing.T) {
+		t.Parallel()
+		envs := []fakeagent.Envelope{
+			exec(100, "/usr/sbin/sshd"),
+			exec(200, "/bin/zsh"),
+			exec(300, "/usr/bin/security"), // not a shell, must not win
+			exec(400, "/bin/bash"),         // latest shell
+		}
+		assert.Equal(t, 400, pickAttackAnchorPID(envs))
+	})
+
+	t.Run("non-exec events ignored", func(t *testing.T) {
+		t.Parallel()
+		envs := []fakeagent.Envelope{
+			{EventType: "dns_query", Payload: []byte(`{"pid":999}`)},
+			exec(200, "/bin/zsh"),
+			{EventType: "network_connect", Payload: []byte(`{"pid":888}`)},
+		}
+		assert.Equal(t, 200, pickAttackAnchorPID(envs))
+	})
+
+	t.Run("no shell yields zero", func(t *testing.T) {
+		t.Parallel()
+		envs := []fakeagent.Envelope{exec(100, "/usr/sbin/sshd"), exec(300, "/usr/bin/security")}
+		assert.Zero(t, pickAttackAnchorPID(envs))
+	})
+
+	t.Run("malformed payload skipped", func(t *testing.T) {
+		t.Parallel()
+		envs := []fakeagent.Envelope{{EventType: "exec", Payload: []byte("not json")}, exec(200, "/bin/zsh")}
+		assert.Equal(t, 200, pickAttackAnchorPID(envs))
+	})
+}
+
+// TestReparentAttackToHost confirms the launchd-rooted top of an offset attack subtree is re-pointed at the captured anchor pid,
+// while deeper (already-offset) parent links and a missing anchor (<= 1) are left alone.
+func TestReparentAttackToHost(t *testing.T) {
+	t.Parallel()
+
+	t.Run("launchd-rooted top is re-pointed at the anchor", func(t *testing.T) {
+		t.Parallel()
+		// Mirrors a scenario after offsetScenarioPIDs: the root fork/exec still reference the pid-1 sentinel; a deeper child keeps
+		// its offset parent.
+		sc := &fakeagent.Scenario{Timeline: []fakeagent.Event{
+			{Type: "fork", ChildPID: 5004555, ParentPID: 1},
+			{Type: "exec", PID: 5004555, PPID: 1},
+			{Type: "fork", ChildPID: 5004600, ParentPID: 5004555}, // grandchild: parent is the attack root, not launchd
+		}}
+		reparentAttackToHost(sc, 11439)
+
+		assert.Equal(t, 11439, sc.Timeline[0].ParentPID, "root fork now parented to the captured shell")
+		assert.Equal(t, 11439, sc.Timeline[1].PPID, "root exec ppid now the captured shell")
+		assert.Equal(t, 5004555, sc.Timeline[2].ParentPID, "deeper parent link untouched")
+	})
+
+	t.Run("missing anchor keeps the launchd root", func(t *testing.T) {
+		t.Parallel()
+		sc := &fakeagent.Scenario{Timeline: []fakeagent.Event{{Type: "exec", PID: 5004555, PPID: 1}}}
+		reparentAttackToHost(sc, 0)
+		assert.Equal(t, 1, sc.Timeline[0].PPID, "no anchor: attack stays rooted at launchd")
+	})
+}
+
+// TestManifestCapturesHaveAttackAnchor guards the demo promise that woven attacks nest in a real session: every captured host that
+// carries attacks must expose an interactive-shell pid for them to hang off, else they would silently fall back to a lone
+// launchd-rooted subtree.
+func TestManifestCapturesHaveAttackAnchor(t *testing.T) {
+	t.Parallel()
+	for _, host := range hostManifest {
+		if len(host.Attacks) == 0 {
+			continue
+		}
+		t.Run(host.File, func(t *testing.T) {
+			t.Parallel()
+			envs, _, err := loadHostEnvelopes(host.File)
+			require.NoError(t, err)
+			assert.Positive(t, pickAttackAnchorPID(envs), "capture must carry a shell for woven attacks to nest under")
+		})
+	}
 }

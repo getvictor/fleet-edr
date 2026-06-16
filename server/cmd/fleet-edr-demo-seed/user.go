@@ -11,6 +11,9 @@ import (
 type dbExecQuerier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	// BeginTx lets refreshTimestamps slide every replayed column atomically: a partial shift would desync the
+	// device-vs-ingest and event-vs-alert ordering the detail/correlation views depend on.
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 }
 
 // seedDemoUser idempotently provisions the SSO demo user so first login lands at a full-capability role instead of the OIDC JIT

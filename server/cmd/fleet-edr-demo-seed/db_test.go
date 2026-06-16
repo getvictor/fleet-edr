@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -192,6 +193,104 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM users WHERE email = 'demo@fleet-edr.local'`).Scan(&userCount))
 	assert.Equal(t, 1, userCount, "SSO demo user provisioned")
+}
+
+// TestRefreshTimestamps confirms the already-seeded restart path slides every replayed timestamp forward by one delta: the newest
+// process row lands ~recentTailOffset before now, relative offsets are preserved, NULL exit columns stay NULL, and the alert
+// "fired at" slides with the events so the UI's alert -> tree pivot keeps working.
+func TestRefreshTimestamps(t *testing.T) {
+	db := full.Open(t)
+	ctx := t.Context()
+	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
+
+	// Two processes 30s apart, both stamped ~6 days ago, one still running (NULL exit). last_seen mirrors fork here.
+	const sixDaysNs = int64(6*24*60*60) * int64(time.Second)
+	staleNewest := time.Now().UnixNano() - sixDaysNs
+	staleOlder := staleNewest - int64(30*time.Second)
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns, fork_ingested_at_ns, last_seen_ns, exit_time_ns)
+		 VALUES (?, ?, 1, '/bin/older', ?, ?, ?, ?), (?, ?, 1, '/bin/newest', ?, ?, ?, NULL)`,
+		"HOST-R", 100, staleOlder, staleOlder, staleOlder, staleOlder+int64(time.Second),
+		"HOST-R", 200, staleNewest, staleNewest, staleNewest)
+	require.NoError(t, err)
+	insertAlert(t, db, "HOST-R", "sudoers_tamper", "detection", "high")
+
+	require.NoError(t, s.refreshTimestamps(ctx))
+
+	var newestFork, olderFork, lastSeen int64
+	var olderExit sql.NullInt64
+	var newestExit sql.NullInt64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT fork_time_ns, last_seen_ns, exit_time_ns FROM processes WHERE host_id = 'HOST-R' AND pid = 200`).
+		Scan(&newestFork, &lastSeen, &newestExit))
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT fork_time_ns, exit_time_ns FROM processes WHERE host_id = 'HOST-R' AND pid = 100`).Scan(&olderFork, &olderExit))
+
+	// Newest fork now lands ~recentTailOffset before now (allow a generous slop for test wall-clock drift).
+	wantNewest := time.Now().Add(-recentTailOffset).UnixNano()
+	assert.InDelta(t, wantNewest, newestFork, float64(2*time.Minute), "newest fork slid to ~now-offset")
+	assert.Equal(t, newestFork, lastSeen, "last_seen slid by the same delta as fork")
+	assert.False(t, newestExit.Valid, "running process keeps NULL exit after the shift")
+	// Relative spacing is preserved: the older fork stays 30s behind the newest.
+	assert.Equal(t, int64(30*time.Second), newestFork-olderFork, "30s gap preserved")
+	require.True(t, olderExit.Valid)
+	assert.Equal(t, olderFork+int64(time.Second), olderExit.Int64, "exited process keeps its 1s lifetime")
+
+	// The alert's created_at slid into the recent past (was ~6 days stale).
+	var alertAgeSec int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) FROM alerts WHERE host_id = 'HOST-R'`).Scan(&alertAgeSec))
+	assert.Less(t, alertAgeSec, int64(10*time.Minute/time.Second), "alert fired-at is recent after refresh")
+}
+
+// TestRefreshTimestampsIgnoresSynthesizedExit is the regression for the empty-1h-window bug: the process-TTL reconciler
+// force-exits stale processes at fork + maxAge, so a long-stale demo carries an exit_time_ns ~maxAge PAST the real device tail.
+// The anchor must ignore the exit columns (else the delta shrinks by maxAge and every fork stays stale), and the synthesized exit
+// must be cleared so the refreshed process reads as still-running rather than landing a future-dated exit.
+func TestRefreshTimestampsIgnoresSynthesizedExit(t *testing.T) {
+	db := full.Open(t)
+	ctx := t.Context()
+	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
+
+	// Fork ~6h stale; the TTL reconciler synthesized an exit at fork + 6h maxAge (past the device tail). A second, genuinely
+	// exited process keeps its real (small-lifetime) captured exit.
+	const sixHoursNs = int64(6*60*60) * int64(time.Second)
+	staleFork := time.Now().UnixNano() - sixHoursNs
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns, exec_time_ns, exit_time_ns, exit_reason)
+		 VALUES (?, ?, 1, '/bin/ttl', ?, ?, ?, ?), (?, ?, 1, '/bin/real', ?, ?, ?, 'exited')`,
+		"HOST-T", 300, staleFork, staleFork, staleFork+sixHoursNs, "ttl_reconciliation",
+		"HOST-T", 400, staleFork, staleFork, staleFork+int64(2*time.Second))
+	require.NoError(t, err)
+
+	require.NoError(t, s.refreshTimestamps(ctx))
+
+	var ttlFork int64
+	var ttlExit, ttlReason sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT fork_time_ns, exit_time_ns, exit_reason FROM processes WHERE host_id='HOST-T' AND pid=300`).
+		Scan(&ttlFork, &ttlExit, &ttlReason))
+	// Anchor ignored the synthesized exit, so the fork slid all the way to ~now-offset (within the 1h window), not 6h stale.
+	wantFork := time.Now().Add(-recentTailOffset).UnixNano()
+	assert.InDelta(t, wantFork, ttlFork, float64(2*time.Minute), "fork slid recent despite the future-dated TTL exit")
+	assert.False(t, ttlExit.Valid, "synthesized TTL exit cleared to NULL (process reads as still-running)")
+	assert.False(t, ttlReason.Valid, "synthesized TTL exit_reason cleared")
+
+	// The genuinely-exited process keeps a real exit that slid into the recent past with its fork.
+	var realFork, realExit int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT fork_time_ns, exit_time_ns FROM processes WHERE host_id='HOST-T' AND pid=400`).Scan(&realFork, &realExit))
+	assert.Equal(t, realFork+int64(2*time.Second), realExit, "real captured exit kept its 2s lifetime")
+	assert.Less(t, realExit, time.Now().UnixNano(), "real exit stayed in the past")
+}
+
+// TestRefreshTimestampsNoRows is a no-op when no replayed event/process rows exist (an alert alone must not trigger a shift).
+func TestRefreshTimestampsNoRows(t *testing.T) {
+	db := full.Open(t)
+	ctx := t.Context()
+	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
+	insertAlert(t, db, "HOST-EMPTY", "sudoers_tamper", "detection", "high")
+	require.NoError(t, s.refreshTimestamps(ctx))
 }
 
 func TestRunSkipsWhenAlreadySeeded(t *testing.T) {

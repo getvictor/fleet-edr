@@ -152,6 +152,11 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 	if err != nil {
 		return err
 	}
+	// Anchor woven attacks under a real process from this capture (a shell) so their alerts read as commands run in a session
+	// nested in the host's genuine tree, not lone processes hanging off launchd. Derived from the captured pids, so it survives a
+	// corpus re-scrub; 0 when the capture has no shell, in which case the attacks keep their launchd root.
+	anchorPID := pickAttackAnchorPID(envs)
+
 	// One clock read for the whole host: the ambient tail and every woven attack are placed relative to this same now, so
 	// per-batch network latency cannot drift the attacks forward relative to the ambient events (deterministic relative timing).
 	now := time.Now()
@@ -163,26 +168,79 @@ func (s *seeder) replayHost(ctx context.Context, host demoHost) error {
 		}
 	}
 	s.logger.InfoContext(ctx, "replayed captured host",
-		"file", host.File, "host_id", hostID, "hostname", host.Hostname, "events", len(envs))
+		"file", host.File, "host_id", hostID, "hostname", host.Hostname, "events", len(envs), "attack_anchor_pid", anchorPID)
 
 	for i, atk := range host.Attacks {
-		if err := s.weaveAttack(ctx, hostID, token, atk, i, now); err != nil {
+		if err := s.weaveAttack(ctx, hostID, token, atk, i, now, anchorPID); err != nil {
 			return fmt.Errorf("weave %s onto %s: %w", atk.File, host.File, err)
 		}
 	}
 	return nil
 }
 
+// interactiveShellExecs are the captured exec paths a woven attack is re-parented under, so its alert reads as "commands run in a
+// shell" instead of a lone process hanging off launchd. Matched against the captured host stream, never the attack scenario.
+var interactiveShellExecs = map[string]bool{
+	"/bin/zsh":  true,
+	"/bin/bash": true,
+	"/bin/sh":   true,
+}
+
+// pickAttackAnchorPID returns the pid of the last interactive-shell exec in a captured host stream, to use as the parent of the
+// attacks woven onto that host (see reparentAttackToHost). "Last" so the anchor is the most recent shell in the timeline, the one
+// an operator reads as the current session. Returns 0 when the capture has no shell, leaving the attacks rooted at launchd.
+func pickAttackAnchorPID(envs []fakeagent.Envelope) int {
+	anchor := 0
+	for i := range envs {
+		if envs[i].EventType != "exec" {
+			continue
+		}
+		var p struct {
+			PID  int    `json:"pid"`
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(envs[i].Payload, &p); err != nil {
+			continue
+		}
+		if interactiveShellExecs[p.Path] {
+			anchor = p.PID
+		}
+	}
+	return anchor
+}
+
+// reparentAttackToHost re-points the woven attack's launchd-rooted top (the events still referencing the pid-1 sentinel after
+// offsetScenarioPIDs) at a real captured process, so the attack hangs off the host's genuine process tree instead of floating as a
+// lone subtree under launchd. anchorPID is a captured pid (a shell, see pickAttackAnchorPID); a value <= 1 means no anchor was
+// found and the attack keeps its launchd root. The catalog rules these attacks trip match on exec path/args, never on ppid, so the
+// re-parent changes the tree shape the analyst sees without affecting whether the detection fires.
+func reparentAttackToHost(sc *fakeagent.Scenario, anchorPID int) {
+	if anchorPID <= 1 {
+		return
+	}
+	for i := range sc.Timeline {
+		ev := &sc.Timeline[i]
+		if ev.PPID == 1 {
+			ev.PPID = anchorPID
+		}
+		if ev.ParentPID == 1 {
+			ev.ParentPID = anchorPID
+		}
+	}
+}
+
 // weaveAttack re-hosts an attack scenario onto a captured host: it offsets the scenario's pids (so they can't collide with the
-// captured stream or another woven attack), overrides the host_id to the captured host, and posts the events at a recent,
-// per-attack-staggered time. For an app-control scenario it then posts the fabricated block event against the offset pid (after
-// the process materialises), exactly as the standalone path used to.
-func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wovenAttack, idx int, now time.Time) error {
+// captured stream or another woven attack), re-parents the attack's root onto a real captured process (anchorPID, a shell) so it
+// nests in the host's genuine tree instead of rooting at launchd, overrides the host_id to the captured host, and posts the events
+// at a recent, per-attack-staggered time. For an app-control scenario it then posts the fabricated block event against the offset
+// pid (after the process materialises), exactly as the standalone path used to.
+func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wovenAttack, idx int, now time.Time, anchorPID int) error {
 	sc, err := loadAttackScenario(atk.File)
 	if err != nil {
 		return err
 	}
 	offsetScenarioPIDs(sc, attackPIDOffsetBase+idx*attackPIDOffsetStride)
+	reparentAttackToHost(sc, anchorPID)
 
 	// Place the attack just before the captured tail, staggered per attack, so it reads as recent activity on the host. now is
 	// the caller's single clock read (see replayHost) so the attack's offset from the ambient tail stays stable across replays.
