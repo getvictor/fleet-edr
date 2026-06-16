@@ -223,7 +223,7 @@ jobs:
           # ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN, which the runner exposes
           # automatically because the job declares `id-token: write`.
           # COSIGN_YES skips the interactive "are you sure?" confirmation
-          # for non-interactive CI runs - equivalent to passing --yes on
+          # for non-interactive CI runs: equivalent to passing --yes on
           # every cosign invocation below.
           COSIGN_YES: 'true'
         # `cosign sign-blob --bundle` emits a single Sigstore bundle
@@ -365,7 +365,7 @@ jobs:
       # `cosign verify-attestation --type spdxjson <ref>` work for
       # downstream verifiers.
       #
-      # upload-release-assets: false is load-bearing - the action's
+      # upload-release-assets: false is load-bearing: the action's
       # default would race the parallel macos-pkg job for the GitHub
       # Release that owns the source-tree SBOMs. The image SBOM lives
       # in the registry, not in the Release.
