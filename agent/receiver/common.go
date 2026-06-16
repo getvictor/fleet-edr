@@ -82,6 +82,12 @@ func newDropReporter() *dropReporter {
 // suppressed. Suppressed drops stay in pending and are reported by the next warning that crosses the interval, so the only
 // undercount is a trailing partial window after drops stop entirely, at which point the condition has already been logged.
 func (r *dropReporter) record() (int64, bool) {
+	// Nil-receiver guard: a Receiver always builds its reporter in New, so production never passes nil, but a future refactor or
+	// partial init might. Degrade safely by surfacing every drop (count 1, emit) rather than panicking on the kernel-adjacent
+	// drop path or silently swallowing the loss. Calling a method on a nil pointer is legal in Go as long as we don't deref it.
+	if r == nil {
+		return 1, true
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pending++

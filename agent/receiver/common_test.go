@@ -139,6 +139,15 @@ func TestDropReporter_CoalescesSustainedDrops(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
+// A nil reporter must not panic on the drop path. The Receiver always builds one, but the helper is defensive against a future
+// refactor passing nil: record degrades to "surface every drop" (count 1, emit) rather than crashing the receiver callback.
+func TestDropReporter_NilReporterDoesNotPanic(t *testing.T) {
+	var r *dropReporter
+	count, emit := r.record()
+	require.True(t, emit, "a nil reporter MUST surface the drop rather than swallow it")
+	assert.Equal(t, int64(1), count, "a nil reporter accounts for the single drop")
+}
+
 // mutexWriter serialises Write calls so the slog text handler doesn't interleave records when multiple goroutines log into the same
 // buffer. Used by the drop test to keep the captured log deterministic across the helper's non-blocking send + the test's drain.
 type mutexWriter struct {

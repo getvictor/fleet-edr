@@ -256,13 +256,16 @@ Edit `/Library/LaunchDaemons/com.fleetdm.edr.agent.plist` and add these keys ins
 <string>debug</string>
 ```
 
-The `OTEL_EXPORTER_OTLP_HEADERS` value embeds a bearer token, so treat the plist as a secret at rest the same way `/etc/fleet-edr.conf` is locked down above. The plist is loaded by root, so restrict it to root and reload:
+The `OTEL_EXPORTER_OTLP_HEADERS` value embeds a bearer token, so treat the plist as a secret at rest the same way `/etc/fleet-edr.conf` is locked down above. The plist is loaded by root, so restrict it to root, then reload the job so launchd re-reads the edited plist:
 
 ```sh
 sudo chown root:wheel /Library/LaunchDaemons/com.fleetdm.edr.agent.plist
 sudo chmod 600 /Library/LaunchDaemons/com.fleetdm.edr.agent.plist
-sudo launchctl kickstart -k system/com.fleetdm.edr.agent
+sudo launchctl bootout system /Library/LaunchDaemons/com.fleetdm.edr.agent.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.fleetdm.edr.agent.plist
 ```
+
+Use `bootout` + `bootstrap` (or a reboot), NOT `launchctl kickstart -k`. `kickstart -k` only restarts the process under the job definition launchd already has in memory, so it does not pick up edits to the plist's `EnvironmentVariables`: the agent would respawn still missing the `OTEL_*` keys, the SDK would stay on the no-op path, and nothing would reach the collector. (`kickstart -k` is fine for `/etc/fleet-edr.conf` changes, because the agent re-reads that file itself on startup; it is the plist env specifically that needs a full reload.)
 
 Prefer a short-lived, narrowly-scoped collector token for dev/debug, and rotate it after use. To avoid putting the token on disk at all, you can instead set the `OTEL_*` variables in the shell and run the agent binary directly in the foreground for the duration of the debugging session.
 
@@ -271,6 +274,6 @@ Notes:
 - The agent always uses the gRPC OTLP exporter, so `OTEL_EXPORTER_OTLP_ENDPOINT` must point at a gRPC OTLP target and you do not need `OTEL_EXPORTER_OTLP_PROTOCOL` (it is ignored). `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_COMPRESSION` are honored.
 - `OTEL_RESOURCE_ATTRIBUTES` sets the `deployment.environment` so a shared backend can tell this host's telemetry apart from other deployments. Pick a per-host or per-pilot value rather than reusing `dev-local` across machines.
 - `EDR_LOG_LEVEL=debug` raises verbosity on both stderr (`/var/log/fleet-edr-agent.log`) and the OTLP log pipeline. Valid values are `debug`, `info`, `warn`, `error`.
-- To turn it back off, remove the `OTEL_EXPORTER_OTLP_ENDPOINT` key and kickstart again; with no endpoint the agent returns to the no-op path and stops exporting.
+- To turn it back off, remove the `OTEL_EXPORTER_OTLP_ENDPOINT` key and reload the job again (`bootout` + `bootstrap`); with no endpoint the agent returns to the no-op path and stops exporting.
 
 **Full Disk Access grant gets wiped after every reboot.** Probably a TCC-database issue after a macOS point upgrade. Re-add the entries in Privacy & Security. If it recurs on a managed Mac, deploy the TCC profile via MDM instead.
