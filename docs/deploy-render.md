@@ -9,7 +9,7 @@ For a self-hosted server with your own TLS certificates instead, see the product
 The [`render.yaml`](../render.yaml) blueprint provisions two services:
 
 - **`fleet-edr-server`** (web): the `ghcr.io/getvictor/fleet-edr-server` image behind Render's TLS-terminating edge. It listens plaintext HTTP inside Render's network (`EDR_TLS_TERMINATED_BY_PROXY=1`) while agents reach it over Render's publicly-trusted `https://…onrender.com` URL, so the data plane is encrypted end to edge with zero certificate management. Schema migrations apply automatically on boot.
-- **`fleet-edr-mysql`** (private service): a MySQL 8.4 instance (the official image, matching the version the rest of the stack builds and tests against) with a 10 GB disk, reachable only from the server. Good for pilots; swap to a managed database later by setting `EDR_DSN` on the server and removing this service.
+- **`fleet-edr-mysql`** (private service): a MySQL 8.4 instance (the official image, matching the version the rest of the stack builds and tests against) with a 100 GB disk, reachable only from the server. Good for pilots; swap to a managed database later by setting `EDR_DSN` on the server and removing this service.
 
 No Redis is needed: the server is stateless (ADR-0010) and keeps all durable state in MySQL.
 

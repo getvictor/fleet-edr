@@ -89,12 +89,25 @@ services:
     plan: standard
     image:
       url: 'docker.io/library/mysql:8.4.9@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084'
-    # Cap binary logging. This is a single MySQL with no replica, so binlog only
-    # buys point-in-time recovery; at the MySQL 8.4 defaults it retains 30 days
-    # of logs and roughly doubles disk use on the insert-heavy ingest workload.
-    # Keep ~1 day of binlog, 256M per file. The image entrypoint still runs first-
-    # boot init because the command starts with `mysqld`.
-    dockerCommand: mysqld --binlog_expire_logs_seconds=86400 --max-binlog-size=256M
+    # Invoke the image's docker-entrypoint.sh EXPLICITLY. On Render a
+    # dockerCommand replaces the image ENTRYPOINT, so a bare `mysqld ...` skips
+    # the first-boot init AND the datadir chown + privilege-drop the entrypoint
+    # performs; mysqld then drops to the mysql user and cannot write the
+    # root-owned disk (errno 13 on binlog.index, the symptom we hit). Prepending
+    # docker-entrypoint.sh restores that startup; it is harmless if Render ever
+    # keeps the entrypoint, because the script's final `exec "$@"` re-execs it.
+    #
+    # --datadir is a SUBDIRECTORY of the mounted disk, not its root. Render
+    # formats the disk ext4, so the mount root contains a `lost+found`; MySQL 8
+    # `mysqld --initialize` refuses a non-empty datadir (the 5.x ignore-db-dir
+    # knob is gone), so initializing into an empty subdir is the standard fix.
+    # Data + binlog both live under it, on the persistent disk.
+    #
+    # Cap binary logging: single MySQL, no replica, so binlog only buys
+    # point-in-time recovery; the 8.4 default retains 30 days uncapped and
+    # roughly doubles disk use on the insert-heavy ingest workload. Keep ~1 day
+    # of binlog, 256M per file.
+    dockerCommand: docker-entrypoint.sh mysqld --datadir=/var/lib/mysql/data --binlog_expire_logs_seconds=86400 --max-binlog-size=256M
     disk:
       name: mysql
       mountPath: /var/lib/mysql
