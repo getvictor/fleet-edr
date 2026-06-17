@@ -43,3 +43,11 @@ Package.resolved
 /test/e2e/coverage-raw/
 # Taskfile.dev temp cache
 .task/
+
+# Single-VM quickstart / prod compose runtime artifacts, created by bootstrap.sh
+# (or by hand per docker-compose.prod.README.md) next to the compose files. These
+# hold deployment secrets (DB password, deployment secret key, enroll secret) and
+# per-deployment config; never commit them.
+/.env
+/secrets/
+/tls/

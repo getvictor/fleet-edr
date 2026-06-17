@@ -70,6 +70,48 @@ A full data disk stops MySQL writes (ingest returns 5xx and the server logs the 
 
 6. Deploy the agent. The bootstrap output prints your enroll secret and server URL. Put them on each Mac (`EDR_SERVER_URL` and `EDR_ENROLL_SECRET` in `/etc/fleet-edr.conf`); see [install-agent-manual.md](install-agent-manual.md) for a single Mac or [mdm-deployment.md](mdm-deployment.md) to deploy through your MDM. To keep telemetry volume down on this disk-bounded pilot, also set `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf` (default is 60s): it cuts the agent's per-process liveness heartbeats roughly fivefold with no detection impact. This is an interim setting pending the storage rework in [getvictor/fleet-edr#408](https://github.com/getvictor/fleet-edr/issues/408); revert to the default once that lands.
 
+## Set server configuration
+
+The server is configured entirely through environment variables (full reference: [install-server.md](install-server.md)). This stack passes `.env` through to the server container, so to change any server setting, add it to `.env` and recreate the server:
+
+```sh
+echo 'EDR_SESSION_IDLE_TIMEOUT=4h' >> .env
+docker compose -f docker-compose.quickstart.yml --env-file .env up -d server
+```
+
+The security-critical wiring in `docker-compose.quickstart.yml` (proxy-terminated TLS, trusted proxies, the secret `*_FILE` paths) is set in the Compose file and takes precedence over `.env`, so you cannot break it from `.env` by accident.
+
+For a sensitive value, do not put it in `.env` in plaintext (it is world-readable and shows in `docker inspect`). Use the `*_FILE` variant backed by a Docker secret, the same way the database and enroll secrets work: write the value to `secrets/<name>`, add a matching entry under both the top-level `secrets:` and the `server` service's `secrets:` in the Compose file, then set `EDR_<NAME>_FILE=/run/secrets/<name>` in `.env`. Every string setting accepts this `_FILE` form.
+
+To see what the running server actually loaded (the image is distroless, so there is no shell to `exec` into), inspect the container's environment:
+
+```sh
+docker inspect "$(docker compose -f docker-compose.quickstart.yml ps -q server)" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^EDR_'
+```
+
+### Single sign-on (OIDC)
+
+The quickstart boots with break-glass sign-in only (`EDR_AUTH_ALLOW_NO_OIDC=1`). To add your identity provider, set the OIDC variables together (the server rejects a partial config) and switch off break-glass-only mode, keeping the client secret in a Docker secret rather than `.env`:
+
+```sh
+# 1. Client secret as a file secret (secrets/ is 0700; the file is 0644 so the nonroot server container can read it).
+printf '%s' 'YOUR_OIDC_CLIENT_SECRET' > secrets/oidc_client_secret
+chmod 0644 secrets/oidc_client_secret
+```
+
+Add an `oidc_client_secret` entry under both the top-level `secrets:` and the `server` service's `secrets:` in `docker-compose.quickstart.yml` (pointing at `./secrets/oidc_client_secret`), then in `.env`:
+
+```sh
+EDR_OIDC_ISSUER=https://your-idp.example.com
+EDR_OIDC_CLIENT_ID=your-client-id
+EDR_OIDC_REDIRECT_URL=https://edr.example.com/api/auth/callback
+EDR_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
+EDR_AUTH_ALLOW_NO_OIDC=0
+```
+
+Recreate the server (`docker compose -f docker-compose.quickstart.yml --env-file .env up -d server`). The redirect URL must exactly match what your IdP has on file. See [okta-setup.md](okta-setup.md) for the IdP-side steps and the optional knobs (`EDR_OIDC_DEFAULT_ROLE`, `EDR_OIDC_ALLOW_JIT_PROVISIONING`, `EDR_OIDC_SCOPES`).
+
 ## Operations
 
 - **Upgrade.** Edit `EDR_VERSION` in `.env`, then pull and recreate:
@@ -83,7 +125,7 @@ A full data disk stops MySQL writes (ingest returns 5xx and the server logs the 
 
 - **Rotate the enroll secret.** Overwrite `secrets/enroll_secret` and `docker compose -f docker-compose.quickstart.yml restart server`. Existing host tokens are unaffected (they were derived at enroll time).
 
-- **Configure OIDC.** The quickstart boots with break-glass sign-in only (`EDR_AUTH_ALLOW_NO_OIDC=1`). To add your IdP for ongoing access, set the `EDR_OIDC_*` variables and remove that flag; see [install-server.md](install-server.md).
+- **Add single sign-on, change other settings.** See [Set server configuration](#set-server-configuration) above for the env-var mechanism and the OIDC walkthrough.
 
 ## Send telemetry to a collector
 
