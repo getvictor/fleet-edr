@@ -84,7 +84,7 @@ fi
 rm -f "$tmp_env"
 printf 'wrote .env\n'
 
-docker compose -f "$COMPOSE_FILE" --env-file .env up -d
+docker compose -f "$COMPOSE_FILE" up -d
 
 cat <<EOF
 

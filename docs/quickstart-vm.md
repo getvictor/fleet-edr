@@ -76,7 +76,7 @@ The server is configured entirely through environment variables (full reference:
 
 ```sh
 echo 'EDR_SESSION_IDLE_TIMEOUT=4h' >> .env
-docker compose -f docker-compose.quickstart.yml --env-file .env up -d server
+docker compose -f docker-compose.quickstart.yml up -d server
 ```
 
 The security-critical wiring in `docker-compose.quickstart.yml` (proxy-terminated TLS, trusted proxies, the secret `*_FILE` paths) is set in the Compose file and takes precedence over `.env`, so you cannot break it from `.env` by accident.
@@ -110,15 +110,15 @@ EDR_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
 EDR_AUTH_ALLOW_NO_OIDC=0
 ```
 
-Recreate the server (`docker compose -f docker-compose.quickstart.yml --env-file .env up -d server`). The redirect URL must exactly match what your IdP has on file. See [okta-setup.md](okta-setup.md) for the IdP-side steps and the optional knobs (`EDR_OIDC_DEFAULT_ROLE`, `EDR_OIDC_ALLOW_JIT_PROVISIONING`, `EDR_OIDC_SCOPES`).
+Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). The redirect URL must exactly match what your IdP has on file. See [okta-setup.md](okta-setup.md) for the IdP-side steps and the optional knobs (`EDR_OIDC_DEFAULT_ROLE`, `EDR_OIDC_ALLOW_JIT_PROVISIONING`, `EDR_OIDC_SCOPES`).
 
 ## Operations
 
 - **Upgrade.** Edit `EDR_VERSION` in `.env`, then pull and recreate:
 
   ```sh
-  docker compose -f docker-compose.quickstart.yml --env-file .env pull server
-  docker compose -f docker-compose.quickstart.yml --env-file .env up -d
+  docker compose -f docker-compose.quickstart.yml pull server
+  docker compose -f docker-compose.quickstart.yml up -d
   ```
 
 - **Where state lives.** Durable data is in the `edr-mysql-data` Docker volume; issued certificates are in the `caddy-data` volume. Both sit under Docker's data root (`/var/lib/docker`), so they live on whatever disk backs it: mount a [dedicated data disk](#put-mysql-data-on-a-dedicated-disk) there to keep MySQL off the OS root. Back both up (a `mysqldump` schedule plus a volume snapshot). The `secrets/` directory holds the enroll secret, the deployment secret key, and the database credentials; keep a copy somewhere safe, because the secret key cannot be regenerated without invalidating every enrolled host.
@@ -133,7 +133,7 @@ The server exports OpenTelemetry traces, metrics, and logs over OTLP/gRPC. It is
 
 ```sh
 echo 'OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.us.signoz.cloud:443' >> .env
-docker compose -f docker-compose.quickstart.yml --env-file .env up -d server
+docker compose -f docker-compose.quickstart.yml up -d server
 ```
 
 The URL scheme picks the transport: `http://host:4317` is plaintext (a collector on the same VM or private network), `https://host:443` uses TLS (a hosted backend). The quickstart compose forwards three OTel variables from `.env`, all optional:
