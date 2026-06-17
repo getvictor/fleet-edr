@@ -75,6 +75,7 @@ services:
     secrets:
       - enroll_secret
       - edr_dsn
+      - secret_key
     ports:
       - "${EDR_LISTEN:-8088}:8088"
     # No server-side HEALTHCHECK: the distroless/static base has no shell

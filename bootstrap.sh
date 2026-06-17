@@ -15,27 +15,33 @@ set -euo pipefail
 
 COMPOSE_FILE="docker-compose.quickstart.yml"
 
-die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+die() { local msg="$1"; printf 'error: %s\n' "$msg" >&2; exit 1; }
 
 command -v docker >/dev/null 2>&1 || die "docker is not installed"
 docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
 command -v openssl >/dev/null 2>&1 || die "openssl is not installed"
 
 DOMAIN="${EDR_DOMAIN:-${1:-}}"
-[ -n "$DOMAIN" ] || die "set EDR_DOMAIN, e.g. EDR_DOMAIN=edr.example.com ./bootstrap.sh"
+[[ -n "$DOMAIN" ]] || die "set EDR_DOMAIN, e.g. EDR_DOMAIN=edr.example.com ./bootstrap.sh"
 
 VERSION="${EDR_VERSION:-latest}"
-[ "$VERSION" = "latest" ] && \
+[[ "$VERSION" == "latest" ]] && \
   printf 'warning: EDR_VERSION=latest; pin a release tag for production (EDR_VERSION=vX.Y.Z)\n' >&2
 
 mkdir -p secrets
+# 0700 on the directory keeps the world-readable (0644) secret files below it
+# unreadable to other local users: a 0700 dir blocks non-owners from traversing
+# in, while the Docker daemon (root) still reads the files to bind-mount them.
+# The files stay 0644 because the nonroot server container must read them once
+# mounted (a host-owned 0600 file is unreadable inside the container).
+chmod 0700 secrets
 
 # gen_secret <file> <generator-command...>: write only if the file is absent or
 # empty. Command substitution strips the generator's trailing newline so the
 # secret file has no stray bytes.
 gen_secret() {
 	local f="$1"; shift
-	if [ -s "$f" ]; then
+	if [[ -s "$f" ]]; then
 		printf 'keeping existing %s\n' "$f"
 		return
 	fi
@@ -49,7 +55,7 @@ gen_secret secrets/enroll_secret openssl rand -base64 32
 
 # edr_dsn embeds the MySQL root password and must stay in sync with it, so it is
 # derived from mysql_root rather than generated independently.
-if [ ! -s secrets/edr_dsn ]; then
+if [[ ! -s secrets/edr_dsn ]]; then
 	printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$(cat secrets/mysql_root)" > secrets/edr_dsn
 	printf 'generated secrets/edr_dsn\n'
 fi
@@ -62,10 +68,20 @@ fi
 # `docker inspect`, the process environment, or an image layer.
 chmod 0644 secrets/*
 
-cat > .env <<EOF
-EDR_DOMAIN=$DOMAIN
-EDR_VERSION=$VERSION
-EOF
+# Rewrite only EDR_DOMAIN and EDR_VERSION, preserving any operator-added settings
+# (OTEL_* export config, EDR_RETENTION_DAYS overrides, etc.) so a rerun does not
+# silently wipe them. This keeps the "safe to re-run" promise for .env, not just
+# for the secret files.
+tmp_env="$(mktemp)"
+if [[ -f .env ]]; then
+	grep -Ev '^(EDR_DOMAIN|EDR_VERSION)=' .env > "$tmp_env" || true
+fi
+{
+	printf 'EDR_DOMAIN=%s\n' "$DOMAIN"
+	printf 'EDR_VERSION=%s\n' "$VERSION"
+	cat "$tmp_env"
+} > .env
+rm -f "$tmp_env"
 printf 'wrote .env\n'
 
 docker compose -f "$COMPOSE_FILE" --env-file .env up -d

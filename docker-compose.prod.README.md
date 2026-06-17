@@ -18,6 +18,10 @@ echo 'OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317' >> .env
 #    other long-lived keys from it and refuses to boot without it. Changing it
 #    later invalidates every enrolled host, so back it up.
 mkdir -p secrets tls
+# 0700 on the directory keeps the world-readable (0644) secret files below it
+# unreadable to other local users: a 0700 dir blocks non-owners from traversing
+# in, while the Docker daemon (root) still reads the files to bind-mount them.
+chmod 0700 secrets
 MYSQL_PASS=$(openssl rand -hex 24)
 printf '%s' "$MYSQL_PASS" > secrets/mysql_root
 printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > secrets/edr_dsn
