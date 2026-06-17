@@ -12,6 +12,14 @@ services:
   mysql:
     image: mysql:8.4.9@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
     restart: unless-stopped
+    # Single MySQL instance: no replica and no point-in-time recovery, so the
+    # binary log is pure overhead. Disabling it drops a per-commit fsync and
+    # roughly halves write volume, which directly relieves the disk-bound event
+    # store. Further ingest tuning (commit durability, buffer pool, flush pacing)
+    # is disk-specific, so it is not defaulted here; see "Tuning MySQL for ingest
+    # throughput" in docs/quickstart-vm.md.
+    command:
+      - --skip-log-bin
     environment:
       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root
       MYSQL_DATABASE: edr
