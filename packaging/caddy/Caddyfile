@@ -1,0 +1,11 @@
+# Public HTTPS for the EDR server, used by docker-compose.quickstart.yml.
+#
+# Caddy obtains and renews a Let's Encrypt certificate for $EDR_DOMAIN
+# automatically (ACME HTTP-01 / TLS-ALPN over ports 80 and 443, which must be
+# reachable from the internet), then reverse-proxies every request to the server
+# on the private Docker network. It is a plain reverse proxy: no content
+# inspection, no managed WAF, so security telemetry uploads are never flagged as
+# attacks. The server enforces its own request-body cap, so none is set here.
+{$EDR_DOMAIN} {
+	reverse_proxy http://server:8088
+}

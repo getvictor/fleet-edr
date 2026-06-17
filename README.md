@@ -28,7 +28,13 @@ Two steps. Stand up a server, then push the agent to your Macs.
 
 **1. Stand up the server.**
 
-- **One-click on Render (fastest).** The blueprint provisions the server and a MySQL database behind Render's TLS edge, so there are no certificates to manage. Full walkthrough: [docs/deploy-render.md](docs/deploy-render.md).
+- **Single VM with your own domain (recommended).** One Linux VM, one script: Caddy gets a Let's Encrypt certificate automatically and reverse-proxies to the server, so you manage no certificates and no content-inspecting edge WAF flags your agents' telemetry as attacks. Full walkthrough: [docs/quickstart-vm.md](docs/quickstart-vm.md).
+
+  ```sh
+  EDR_DOMAIN=edr.example.com EDR_VERSION=v0.2.1 ./bootstrap.sh
+  ```
+
+- **One-click on Render (fastest to click, but read the caveat).** The blueprint provisions the server and a MySQL database behind Render's TLS edge, so there are no certificates to manage. Render's edge WAF blocks agent telemetry by default and you cannot disable it yourself, so this path needs a support-ticket workaround; see the warning in [docs/deploy-render.md](docs/deploy-render.md).
 
   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/getvictor/fleet-edr)
 
@@ -92,6 +98,7 @@ Operator and reference docs live in [`docs/`](docs/):
 
 | Topic                                                    | Doc                                                                   |
 | -------------------------------------------------------- | --------------------------------------------------------------------- |
+| Deploy on a single VM with your own domain (recommended) | [`quickstart-vm.md`](docs/quickstart-vm.md)                           |
 | Deploy the server on Render                              | [`deploy-render.md`](docs/deploy-render.md)                           |
 | Self-host the server stack                               | [`install-server.md`](docs/install-server.md)                         |
 | Deploy the agent via any MDM                             | [`mdm-deployment.md`](docs/mdm-deployment.md)                         |

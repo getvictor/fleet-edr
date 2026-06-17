@@ -1,5 +1,9 @@
 # Deploy the EDR server on Render
 
+> [!WARNING]
+>
+> **Render's edge WAF blocks agent telemetry by default, and you cannot turn it off yourself.** The agent uploads security telemetry (captured command lines, file paths, malware and C2 activity) that legitimately contains attack signatures. Render's managed edge WAF flags those uploads as attacks and returns `403` before they ever reach the server, so no events arrive and the agent logs `uploader upload failed ... server returned 403` in a loop. Render does not expose a customer-configurable WAF on any plan, so the only fixes are: (1) open a Render support ticket asking them to exempt the agent routes (`POST /api/events`, `PUT /api/commands/*`, `GET /api/commands`, `POST /api/enroll`) from WAF inspection, or (2) deploy somewhere the edge is yours to control. For a deployment with no WAF in the path and zero certificate management, use the single-VM quickstart instead: [quickstart-vm.md](quickstart-vm.md). That is the recommended getting-started path; Render is convenient for a throwaway evaluation but carries this footgun.
+
 This is the fastest way to stand up a Fleet EDR server for an evaluation or pilot: Render hosts the server and a bundled MySQL, and terminates TLS at its edge so there are no certificates to manage. Once the server is up, deploy the agent to your Macs through your MDM (see [fleet-deployment.md](fleet-deployment.md) for the Fleet recipe, or [mdm-deployment.md](mdm-deployment.md) for the vendor-neutral contract).
 
 For a self-hosted server with your own TLS certificates instead, see the production docker-compose stack (`docker-compose.prod.yml`).

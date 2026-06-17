@@ -10,16 +10,30 @@ This stack runs the fleet-edr-server + MySQL on a single host. It's the simplest
 echo 'EDR_VERSION=v0.1.0' > .env
 echo 'OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317' >> .env
 
-# 2. Generate two secret files. The MySQL root password + the full DSN that
+# 2. Generate the secret files. The MySQL root password + the full DSN that
 #    embeds it must stay in sync. This is the one awkward edge of using
 #    distroless (no shell in the server image, so we cannot derive the DSN
-#    at runtime from the root-password secret).
+#    at runtime from the root-password secret). secret_key is the deployment
+#    root secret (>=32 bytes); the server derives the host-token HMAC pepper and
+#    other long-lived keys from it and refuses to boot without it. Changing it
+#    later invalidates every enrolled host, so back it up.
 mkdir -p secrets tls
+# 0700 on the directory keeps the world-readable (0644) secret files below it
+# unreadable to other local users: a 0700 dir blocks non-owners from traversing
+# in, while the Docker daemon (root) still reads the files to bind-mount them.
+chmod 0700 secrets
 MYSQL_PASS=$(openssl rand -hex 24)
 printf '%s' "$MYSQL_PASS" > secrets/mysql_root
 printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > secrets/edr_dsn
+printf '%s' "$(openssl rand -hex 32)" > secrets/secret_key
 printf 'pilot-enroll-secret-rotate-me' > secrets/enroll_secret
-chmod 0600 secrets/*
+# 0644, not 0600: Compose bind-mounts a file secret with the host file's owner
+# and mode (the uid/gid/mode long-syntax options are Swarm only), and the server
+# image runs as nonroot, so a 0600 file owned by your shell user is unreadable
+# inside the container and the server crash-loops on "permission denied". The
+# value still never lands in `docker inspect`, the process environment, or an
+# image layer, which is the point of using a file secret.
+chmod 0644 secrets/*
 
 # 3. TLS. Put fullchain.pem + privkey.pem under ./tls (Let's Encrypt output via
 #    certbot works directly). TLS is unconditionally required (issue #140
@@ -61,6 +75,8 @@ docker compose -f docker-compose.prod.yml --env-file .env restart server
 Existing per-host tokens are not affected by enroll-secret rotation because they were derived at enroll time, not re-verified against the secret on every auth. SIGHUP is NOT wired for secret reload; only TLS cert reload responds to it.
 
 **MySQL root password**. Overwrite both `secrets/mysql_root` and `secrets/edr_dsn` with the new password, then `docker compose up -d --force-recreate mysql server`. The volume data persists across recreates.
+
+**Deployment secret key** (`secrets/secret_key`). Treat this as un-rotatable in normal operation: every host token derives from it, so overwriting it invalidates every enrolled host and forces a fleet-wide re-enroll. Back it up rather than rotating it.
 
 **TLS cert**. Drop new `tls/fullchain.pem` + `tls/privkey.pem`. The server watches SIGHUP for TLS reload; `docker compose kill -s HUP server` swaps the cert without dropping active connections.
 
