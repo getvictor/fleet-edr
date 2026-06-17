@@ -78,11 +78,11 @@ Key files:
 
 ### Network extension (`extension/edr/networkextension/`)
 
-A Swift system extension implementing `NEFilterDataProvider` for network connection monitoring. Captures outbound TCP/UDP socket flows with process attribution via audit tokens.
+A Swift system extension implementing `NEFilterDataProvider` for network connection monitoring. Captures outbound TCP/UDP socket flows with process attribution via audit tokens: the PID plus the kernel PID generation (`pidversion`), so the server can correlate a flow to the exact process generation by identity rather than a time window, immune to PID reuse (issue #403).
 
 Events produced:
 
-- `network_connect` -- remote address/port, local address/port, protocol, direction, hostname (from SNI), process path and PID
+- `network_connect` -- remote address/port, local address/port, protocol, direction, hostname (from SNI), process path, PID, and `pidversion` (kernel PID generation, when the flow carried an audit token)
 
 Also contains a `NEDNSProxyProvider` for DNS query capture (disabled by default). When enabled, it intercepts DNS queries, extracts query name/type, forwards to the upstream resolver, and emits `dns_query` events with response addresses.
 
@@ -183,13 +183,13 @@ type Rule interface {
 
 Each bounded context owns its own tables in the shared database; there are no cross-context foreign keys (ADR-0004). The data plane (`detection`) owns:
 
-| Table          | Purpose                                                                |
-| -------------- | ---------------------------------------------------------------------- |
-| `events`       | Raw event storage with processed flag for the claim/process/mark cycle |
-| `processes`    | Materialized process state (PID, path, args, fork/exec/exit times)     |
-| `alerts`       | Detection findings with deduplication (host_id, rule_id, process_id)   |
-| `alert_events` | Links alerts to triggering events                                      |
-| `hosts`        | Enrolled-host roster with last-seen / online status                    |
+| Table          | Purpose                                                                          |
+| -------------- | -------------------------------------------------------------------------------- |
+| `events`       | Raw event storage with processed flag for the claim/process/mark cycle           |
+| `processes`    | Materialized process state (PID, `pidversion`, path, args, fork/exec/exit times) |
+| `alerts`       | Detection findings with deduplication (host_id, rule_id, process_id)             |
+| `alert_events` | Links alerts to triggering events                                                |
+| `hosts`        | Enrolled-host roster with last-seen / online status                              |
 
 `commands` lives in `response`; `enrollments` in `endpoint`; the `app_control_*` policy tables in `rules`; `users`, `sessions`, `roles`, and `audit_events` in `identity`.
 

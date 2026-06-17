@@ -84,6 +84,26 @@ pre-commit:
         fi
       stage_fixed: true
 
+    dash-lint:
+      # Mirror the CI "No em dashes" gate (.github/workflows/no-emdash.yml) at commit time, scoped to staged files like
+      # every other hook here. tools/lint-no-emdash.sh bans em/en dashes (U+2014 / U+2013); tools/dash-lint bans the
+      # spaced ASCII hyphen ' - ' in Markdown prose and in code comments + string literals. This closes the gap that let
+      # PR #414's tasks.md em-dashes reach CI: `task lint:dashes` scans `git ls-files`, so the then-untracked new files
+      # were invisible to a manual run, and no pre-commit hook covered the rule. {staged_files} expands to every staged
+      # path regardless of glob; both tools filter internally (grep -I binary-skip / type-aware), so the raw list is safe.
+      # `go run ./tools/dash-lint` compiles once and is cached, so steady-state cost is ~1s alongside the markdown hooks.
+      # Capture each check's status into rc rather than relying on the block's last-command exit: lefthook takes the run
+      # script's final exit code, so a chained `lint-no-emdash.sh` (em-dash) failure would otherwise be masked by a
+      # passing `dash-lint` (spaced-hyphen) on the next line. Running both unconditionally also surfaces every violation
+      # in one pass instead of stopping at the first.
+      run: |
+        files=$(printf '%s\n' {staged_files})
+        if [ -z "$files" ]; then exit 0; fi
+        rc=0
+        printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 bash tools/lint-no-emdash.sh || rc=1
+        printf '%s\n' "$files" | tr '\n' '\0' | go run ./tools/dash-lint || rc=1
+        exit $rc
+
     # Catch secrets before they land. `git secrets` or `trufflehog` could
     # fit here later. For now, a minimal regex guard against the obvious
     # patterns that shouldn't be in source.

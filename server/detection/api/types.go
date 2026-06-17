@@ -59,7 +59,12 @@ type Process struct {
 	// CDHash is the 40-hex code-directory hash (sha1 of the CDDirectory blob) the agent extracts on Hardened-Runtime processes
 	// (issue #68 / PR #185). NULL for non-HR binaries since the ESF target tuple lacks a meaningful cdhash for them. Persisted
 	// alongside sha256 so incident response can correlate by either hash and so app-control's CDHASH rule matches replay nicely.
-	CDHash           *string `db:"cdhash" json:"cdhash,omitempty"`
+	CDHash *string `db:"cdhash" json:"cdhash,omitempty"`
+	// PIDVersion is the kernel PID generation (audit_token_to_pidversion) of this process, when the originating exec/fork event
+	// carried it. It pins process identity across PID reuse: a flow tagged with (host, pid, pidversion) correlates to the exact
+	// generation regardless of fork/exit timing. NULL for legacy-agent rows and for rows whose audit token was unavailable; a
+	// present 0 is a legitimate generation, so absence is NULL rather than a 0 sentinel (issue #403).
+	PIDVersion       *uint32 `db:"pidversion" json:"pidversion,omitempty"`
 	ForkTimeNs       int64   `db:"fork_time_ns" json:"fork_time_ns"`
 	ForkIngestedAtNs *int64  `db:"fork_ingested_at_ns" json:"fork_ingested_at_ns,omitempty"`
 	ExecTimeNs       *int64  `db:"exec_time_ns" json:"exec_time_ns,omitempty"`

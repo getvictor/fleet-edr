@@ -84,6 +84,11 @@
         "gid": { "type": "integer" },
         "code_signing": { "$ref": "#/definitions/code_signing" },
         "sha256": { "type": "string" },
+        "pidversion": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional. Kernel PID generation (audit_token_to_pidversion) of the exec'd process, read from its audit token. Lets the server correlate flows to the exact process generation independently of PID reuse. Absent on agents that predate this field."
+        },
         "cdhash": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$",
@@ -100,7 +105,12 @@
       "required": ["child_pid", "parent_pid"],
       "properties": {
         "child_pid": { "type": "integer" },
-        "parent_pid": { "type": "integer" }
+        "parent_pid": { "type": "integer" },
+        "pidversion": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional. Kernel PID generation (audit_token_to_pidversion) of the CHILD process, read from its audit token. Stored on the new process generation so flows can correlate by exact identity. Absent on agents that predate this field."
+        }
       }
     },
     "exit_payload": {
@@ -138,7 +148,12 @@
         "local_port": { "type": "integer" },
         "remote_address": { "type": "string" },
         "remote_port": { "type": "integer" },
-        "remote_hostname": { "type": "string" }
+        "remote_hostname": { "type": "string" },
+        "pidversion": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional. Kernel PID generation (audit_token_to_pidversion) of the source process, read from the flow's audit token. Lets the server correlate the flow to the exact process generation independently of PID reuse. Absent on agents that predate this field or when the flow carried no usable audit token."
+        }
       }
     },
     "dns_query_payload": {
@@ -154,7 +169,12 @@
           "type": "array",
           "items": { "type": "string" }
         },
-        "protocol": { "type": "string", "enum": ["udp", "tcp"] }
+        "protocol": { "type": "string", "enum": ["udp", "tcp"] },
+        "pidversion": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional. Kernel PID generation (audit_token_to_pidversion) of the querying process, read from the flow's audit token. Lets the server correlate the query to the exact process generation independently of PID reuse. Absent on agents that predate this field or when the flow carried no usable audit token."
+        }
       }
     },
     "snapshot_heartbeat_payload": {
