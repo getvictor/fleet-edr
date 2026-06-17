@@ -46,7 +46,7 @@ This is the recommended way to stand up a Fleet EDR server for a pilot. You run 
 
    Open that URL in a browser within its TTL and register a passkey to become admin. Then open the console at `https://edr.example.com/ui/`.
 
-6. Deploy the agent. The bootstrap output prints your enroll secret and server URL. Put them on each Mac (`EDR_SERVER_URL` and `EDR_ENROLL_SECRET` in `/etc/fleet-edr.conf`); see [install-agent-manual.md](install-agent-manual.md) for a single Mac or [mdm-deployment.md](mdm-deployment.md) to deploy through your MDM.
+6. Deploy the agent. The bootstrap output prints your enroll secret and server URL. Put them on each Mac (`EDR_SERVER_URL` and `EDR_ENROLL_SECRET` in `/etc/fleet-edr.conf`); see [install-agent-manual.md](install-agent-manual.md) for a single Mac or [mdm-deployment.md](mdm-deployment.md) to deploy through your MDM. To keep telemetry volume down on this disk-bounded pilot, also set `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf` (default is 60s): it cuts the agent's per-process liveness heartbeats roughly fivefold with no detection impact. This is an interim setting pending the storage rework in [getvictor/fleet-edr#408](https://github.com/getvictor/fleet-edr/issues/408); revert to the default once that lands.
 
 ## Operations
 

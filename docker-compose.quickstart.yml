@@ -58,6 +58,13 @@ services:
       EDR_AUTH_ALLOW_NO_OIDC: "1"
       EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
       EDR_LOG_FORMAT: "json"
+      # Event retention window. 7 days (not the 30-day server default) keeps the
+      # MySQL disk bounded: events are the dominant store and grow ~8-10 GB per
+      # day per busy host (index-heavy rows). Interim value pending the storage
+      # rework in getvictor/fleet-edr#408; raise it once that lands and disk per
+      # event drops. Alerts are never pruned by retention, so this only bounds
+      # raw-event lookback. Override in .env if you have the disk for more.
+      EDR_RETENTION_DAYS: ${EDR_RETENTION_DAYS:-7}
       # OTel export (optional). Set OTEL_EXPORTER_OTLP_ENDPOINT in .env to an
       # OTLP/gRPC collector to turn on traces, metrics, and logs; leave it unset
       # to keep telemetry off. The URL scheme picks the transport: http:// is
