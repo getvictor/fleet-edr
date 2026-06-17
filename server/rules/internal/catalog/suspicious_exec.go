@@ -350,9 +350,11 @@ func (r *SuspiciousExec) evalNetwork(
 		return nil, 0, nil
 	}
 
-	// Resolve the connecting process so the finding links there rather than
-	// at the shell. That's what an analyst clicking the alert wants to land on.
-	conn, err := s.GetProcessByPID(ctx, evt.HostID, c.PID, evt.TimestampNs)
+	// Resolve the connecting process so the finding links there rather than at the shell. That's what an analyst clicking the
+	// alert wants to land on. Prefer exact (host, pid, pidversion) identity when the flow carried a pidversion so the finding
+	// attributes to the right generation across PID reuse, falling back to the event-time window otherwise (issue #403). The
+	// ancestor walk above still uses the window for shell/parent generations; making parent edges identity-aware is out of scope.
+	conn, err := resolveFlowProcess(ctx, s, evt.HostID, c.PID, c.PIDVersion, evt.TimestampNs)
 	if err != nil {
 		return nil, 0, fmt.Errorf("get conn pid %d: %w", c.PID, err)
 	}

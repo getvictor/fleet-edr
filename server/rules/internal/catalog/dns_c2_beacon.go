@@ -201,10 +201,6 @@ func (r *DNSC2Beacon) evalEvent(
 	}, conn.PID, nil
 }
 
-// lookupProcessSkewTolerant resolves the process for (hostID, pid) at the connection's timestamp, retrying a short interval forward if
-// the exact-time lookup misses. The connection carries the network-extension clock while the process row carries the Endpoint Security
-// clock; the two drift (issue #7), so a connect timestamp can land just before the ES fork/exec timestamp and bracket to no row. The
-// exact lookup is tried first (so a reused pid resolves to the right generation in the common case); the forward retry only runs on a miss.
 // resolveFlowProcess resolves the process a network/DNS flow belongs to. When the flow carried a kernel PID generation
 // (pidversion) it prefers an exact (host, pid, pidversion) identity match: that is immune to PID reuse and needs no clock-drift
 // padding, because the generation is pinned directly rather than inferred from the connect timestamp. On an identity miss (the
@@ -226,6 +222,10 @@ func resolveFlowProcess(
 	return lookupProcessSkewTolerant(ctx, s, hostID, pid, atNs)
 }
 
+// lookupProcessSkewTolerant resolves the process for (hostID, pid) at the connection's timestamp, retrying a short interval forward if
+// the exact-time lookup misses. The connection carries the network-extension clock while the process row carries the Endpoint Security
+// clock; the two drift (issue #7), so a connect timestamp can land just before the ES fork/exec timestamp and bracket to no row. The
+// exact lookup is tried first (so a reused pid resolves to the right generation in the common case); the forward retry only runs on a miss.
 func lookupProcessSkewTolerant(ctx context.Context, s api.GraphReader, hostID string, pid int, atNs int64) (*api.Process, error) {
 	proc, err := s.GetProcessByPID(ctx, hostID, pid, atNs)
 	if err != nil {

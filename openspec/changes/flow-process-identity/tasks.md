@@ -20,8 +20,8 @@ Sequencing decision: server-first. PR 1 (this branch, `flow-process-identity`) l
 ## 4. Server: correlation precedence
 
 - [x] `server/rules/internal/catalog/dns_c2_beacon.go`: `resolveFlowProcess` prefers `GetProcessByPIDVersion` when the `network_connect` carries `pidversion` (no skew pad), else falls back to `lookupProcessSkewTolerant`. Wired into `evalEvent`.
-- [x] `server/rules/internal/catalog/suspicious_exec.go`: `pidversion` added to the shared `networkConnectPayload`.
-- [ ] DEFERRED to a follow-up: thread identity into `suspicious_exec`'s ancestor-walk entry lookup. The walk resolves parents by bare `ppid` (parent-edge identity / `ppidversion` is out of scope here), so the entry-lookup refactor is separable and lower value than the canonical `dns_c2_beacon` path. Tracked in proposal "Not in this change".
+- [x] `server/rules/internal/catalog/suspicious_exec.go`: `pidversion` added to the shared `networkConnectPayload`; the network arm now resolves the connecting process via `resolveFlowProcess` (identity-first) for finding attribution.
+- [ ] DEFERRED to a follow-up: the ancestor walk (`findShellWithNonShellAncestor`) still resolves the shell and its parent by bare `ppid` + time window. Making parent edges identity-aware (`ppidversion`) is out of scope (proposal "Not in this change").
 - [x] `GetProcessDetail` (`graph/query.go`) intentionally unchanged: its per-process network/DNS scan stays on `payload_pid` + ingest window (the `payload_pidversion` events generated column is explicitly deferred). This is the spec's documented window fallback; the UI does not yet pass `pidversion`.
 
 ## 7. Tests (with spectrace markers)
@@ -36,18 +36,18 @@ Sequencing decision: server-first. PR 1 (this branch, `flow-process-identity`) l
 
 - [x] `docs/architecture.md`: network-extension capture, `network_connect` fields, and the `processes` table now note `pidversion` + identity correlation.
 
-## 5. Extension: Endpoint Security (exec/fork) — PR 2
+## 5. Extension: Endpoint Security (exec/fork): PR 2
 
 - [ ] `ESFSubscriber.swift`: `audit_token_to_pidversion` on exec target + fork child, threaded into payloads.
 - [ ] `EventSerializer.swift`: optional `pidVersion` (`encodeIfPresent`, CodingKey `pidversion`) on `ExecPayload` + `ForkPayload`.
 
-## 6. Extension: Network Extension (network_connect/dns_query) — PR 2
+## 6. Extension: Network Extension (network_connect/dns_query): PR 2
 
 - [ ] `ProcessInfo.swift`: `extractProcessInfo` returns `pidversion`; investigate `sourceProcessAuditToken` on the macOS 26 SDK (design.md item 1).
 - [ ] `NetworkFilter.swift` + `DNSProxyProvider.swift`: pass pidversion through.
 - [ ] `NetworkEventSerializer.swift`: optional `pidVersion` on `NetworkConnectPayload` + `DNSQueryPayload`.
 
-## 9. Manual testing + telemetry verification — PR 2 (needs the emitting extension)
+## 9. Manual testing + telemetry verification: PR 2 (needs the emitting extension)
 
 - [ ] Build + deploy the updated extension to `edr-dev`; run real traffic (DNS C2 beacon trigger + ordinary activity).
 - [ ] Confirm `pidversion` populated on exec/fork/network_connect/dns_query at the dev server (DB + rows).
