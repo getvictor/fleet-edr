@@ -31,8 +31,12 @@ opt_in_rules:
 # parameters mean a literal usually only shows up when it really is a
 # tunable; expanding the allow-list eagerly defeats the rule.
 no_magic_numbers:
+  # test_parent_classes keys on the IMMEDIATE superclass name, so a shared test base class must be listed explicitly or its
+  # subclasses lose the test-literal exemption. AppControlStoreTestCase (AppControlStoreTestSupport.swift) is the base for the
+  # ApplicationControlStore suites; without it here, every version/epoch literal in those tests would re-flag.
   test_parent_classes:
     - XCTestCase
+    - AppControlStoreTestCase
 
 analyzer_rules:
   - unused_import
