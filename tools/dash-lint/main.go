@@ -160,9 +160,9 @@ func checkGo(path string, data []byte) []string {
 	return findings
 }
 
-// goTokenEmDashFinding inspects a single lexed token and returns a finding when the token is a prose-bearing token
-// (comment, string literal, or char literal) whose value contains em-dash use. Bare code is never inspected, where " - "
-// is subtraction. The (string, false) zero value signals "no finding" so the caller appends only on a real hit.
+// goTokenEmDashFinding inspects a single lexed token and returns a finding when the token is a prose-bearing token (comment, string or
+// char literal) whose value contains em-dash use. Tokens that are bare code are never inspected. The (string, false) zero value signals
+// "no finding" so the caller appends only on a real hit.
 func goTokenEmDashFinding(path string, fset *token.FileSet, pos token.Pos, tok token.Token, lit string) (string, bool) {
 	if tok != token.COMMENT && tok != token.STRING && tok != token.CHAR {
 		return "", false
