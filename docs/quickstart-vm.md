@@ -146,6 +146,39 @@ The full list of exported metrics and what to alert on is in [install-server.md]
 
 If you run the collector as a fourth container in this stack, reach it by its Compose service name (for example `http://collector:4317`) rather than `localhost`, because each container has its own loopback.
 
+## Tuning MySQL for ingest throughput
+
+If event ingest feels slow (the server logs `http request (slow)` on `POST /api/events`, or the agent's upload queue grows), the bottleneck is almost always MySQL commit latency on the data disk: each event batch is one InnoDB transaction, and commit cost is dominated by disk fsync. The stack already runs `--skip-log-bin` (no binary log) by default. The remaining knobs are disk- and RAM-specific, so they are not defaulted; add them as `command:` entries on the `mysql` service in `docker-compose.quickstart.yml`, then recreate MySQL with `docker compose -f docker-compose.quickstart.yml up -d mysql`.
+
+Measure your disk's synchronous-write speed first, because the right `io_capacity` depends on it:
+
+```sh
+sudo dd if=/dev/zero of=/var/lib/docker/.fsynctest bs=4k count=2000 oflag=dsync; sudo rm -f /var/lib/docker/.fsynctest
+```
+
+Divide the reported throughput by 4 KiB to get the disk's sustained sync IOPS (for example 771 kB/s is ~190 IOPS, a slow network volume; 50+ MB/s is local SSD).
+
+The knobs, in order of impact:
+
+- **`--innodb-flush-log-at-trx-commit=2`**: fsync the redo log about once a second instead of on every commit. The biggest single win on a slow disk. Tradeoff: a host crash can lose up to ~1 second of acknowledged events. That is acceptable here because the agent keeps a local queue and re-uploads, but it is a durability change, so it is opt-in.
+- **`--innodb-io-capacity=<IOPS>` and `--innodb-io-capacity-max=<2x IOPS>`**: set these to your measured disk IOPS. The default is far too high for a network volume, which makes InnoDB hoard dirty pages and then flush them in bursts that stall commits for seconds (a large latency tail). Matching the real disk speed makes flushing steady.
+- **`--innodb-buffer-pool-size=<bytes>`**: keep the index-heavy `events` working set in RAM. Size it to roughly half to three-quarters of the VM's RAM. Raise it together with `io_capacity`, not alone: a larger pool holds more dirty pages, so without matching flush pacing it can make the latency tail worse on a slow disk.
+- **`--innodb-max-dirty-pages-pct=10`**: on a slow disk, keep the dirty set small so InnoDB flushes continuously rather than in storms.
+
+Example for a slow ~190 IOPS network volume on an 8 GB box:
+
+```yaml
+command:
+  - --skip-log-bin
+  - --innodb-flush-log-at-trx-commit=2
+  - --innodb-buffer-pool-size=2147483648
+  - --innodb-io-capacity=200
+  - --innodb-io-capacity-max=400
+  - --innodb-max-dirty-pages-pct=10
+```
+
+On that hardware this took `POST /api/events` p99 from ~1 s to ~430 ms and the median to under 10 ms. The structural ceiling is still the disk: a local-NVMe data volume is the durable fix if ingest latency stays high after tuning.
+
 ## Why no WAF here
 
 Agent telemetry legitimately contains attack signatures (captured command lines, file paths, malware and C2 activity), which a content-inspecting WAF flags as attacks and blocks. Caddy in this stack is a plain reverse proxy with no managed ruleset, so uploads to `POST /api/events` are never inspected for signatures. The authenticated agent channel is protected by its bearer token, which is the right control for machine-to-machine traffic. If you deploy behind a managed edge that does run a WAF (for example Render), you must exempt the agent routes from inspection; see [deploy-render.md](deploy-render.md).
