@@ -17,6 +17,10 @@ struct NetworkConnectPayload: Codable, Sendable {
     let remoteAddress: String
     let remotePort: UInt16
     let remoteHostname: String
+    /// Kernel PID generation (audit_token_to_pidversion) of the source process, when the flow carried an audit token. Lets the
+    /// server correlate the flow to the exact process generation independently of PID reuse (issue #403). The synthesized
+    /// encoder omits the key when nil, keeping the wire shape compact and backwards-tolerant for legacy agents.
+    let pidVersion: UInt32?
 
     enum CodingKeys: String, CodingKey {
         case pid, path, uid
@@ -27,6 +31,7 @@ struct NetworkConnectPayload: Codable, Sendable {
         case remoteAddress = "remote_address"
         case remotePort = "remote_port"
         case remoteHostname = "remote_hostname"
+        case pidVersion = "pidversion"
     }
 }
 
@@ -38,6 +43,10 @@ struct DNSQueryPayload: Codable, Sendable {
     let queryType: String
     let responseAddresses: [String]?
     let proto: String
+    /// Kernel PID generation of the querying process, when the flow carried an audit token (issue #403). The DNS proxy only
+    /// has sourceAppAuditToken (NEFlowMetaData exposes no per-process token), so this is the app token's pidversion. Omitted
+    /// from the wire when nil by the synthesized encoder.
+    let pidVersion: UInt32?
 
     enum CodingKeys: String, CodingKey {
         case pid, path, uid
@@ -45,6 +54,7 @@ struct DNSQueryPayload: Codable, Sendable {
         case queryType = "query_type"
         case responseAddresses = "response_addresses"
         case proto = "protocol"
+        case pidVersion = "pidversion"
     }
 }
 

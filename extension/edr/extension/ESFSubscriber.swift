@@ -297,6 +297,9 @@ final class ESFSubscriber: Sendable {
         let target = exec.target.pointee
         let pid = audit_token_to_pid(target.audit_token)
         let ppid = audit_token_to_pid(process.parent_audit_token)
+        // Kernel PID generation of the exec'd process, so the server can correlate flows to this exact generation across PID
+        // reuse rather than by a time window (issue #403). bitPattern avoids a trap on a theoretical negative.
+        let pidVersion = UInt32(bitPattern: audit_token_to_pidversion(target.audit_token))
         let path = String(cString: target.executable.pointee.path.data)
         let args = extractArgs(from: &exec)
         let uid = audit_token_to_euid(target.audit_token)
@@ -326,7 +329,8 @@ final class ESFSubscriber: Sendable {
             gid: gid,
             codeSigning: codeSigning,
             sha256: sha256,
-            cdhash: cdhash
+            cdhash: cdhash,
+            pidVersion: pidVersion
         )
 
         if let data = serializer.serialize(eventType: "exec", payload: payload) {
@@ -338,8 +342,10 @@ final class ESFSubscriber: Sendable {
     private func handleFork(_ msg: es_message_t) {
         let childPid = audit_token_to_pid(msg.event.fork.child.pointee.audit_token)
         let parentPid = audit_token_to_pid(msg.process.pointee.audit_token)
+        // Child's kernel PID generation, stored on the new generation for identity-based flow correlation (issue #403).
+        let childPidVersion = UInt32(bitPattern: audit_token_to_pidversion(msg.event.fork.child.pointee.audit_token))
 
-        let payload = ForkPayload(childPid: childPid, parentPid: parentPid)
+        let payload = ForkPayload(childPid: childPid, parentPid: parentPid, pidVersion: childPidVersion)
 
         if let data = serializer.serialize(eventType: "fork", payload: payload) {
             logger.debug("fork parent=\(parentPid) child=\(childPid)")

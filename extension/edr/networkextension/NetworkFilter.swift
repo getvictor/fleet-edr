@@ -43,8 +43,12 @@ final class NetworkFilter: NEFilterDataProvider {
             return .allow()
         }
 
-        // Extract process info from audit token.
-        let (pid, uid) = extractProcessInfo(from: flow.sourceAppAuditToken)
+        // Extract process info from the audit token. Prefer sourceProcessAuditToken (macOS 13+): the audit token of the
+        // process that actually created the flow, so its (pid, pidversion) matches the socket-owning process Endpoint
+        // Security observed. For a process that makes its own connection it is identical to sourceAppAuditToken; it differs
+        // only for a flow a system process created on behalf of an app, which is the deferred proxied-flow case. Fall back to
+        // sourceAppAuditToken when the process token is nil (issue #403).
+        let (pid, uid, pidversion) = extractProcessInfo(from: flow.sourceProcessAuditToken ?? flow.sourceAppAuditToken)
 
         let path = processPath(for: pid)
 
@@ -74,7 +78,8 @@ final class NetworkFilter: NEFilterDataProvider {
             localPort: localPort,
             remoteAddress: remoteHost,
             remotePort: remotePort,
-            remoteHostname: hostname
+            remoteHostname: hostname,
+            pidVersion: pidversion
         )
 
         if let data = serializer.serialize(eventType: "network_connect", payload: payload) {

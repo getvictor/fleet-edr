@@ -84,7 +84,6 @@ let package = Package(
                 "networkextension/DNSProxyProvider.swift",
                 "networkextension/NetworkEventSerializer.swift",
                 "networkextension/NetworkFilter.swift",
-                "networkextension/ProcessInfo.swift",
                 "networkextension/XPCServer.swift",
                 "com.fleetdm.edr.notify.plist"
             ],
@@ -97,12 +96,20 @@ let package = Package(
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",
                 "networkextension/DNSParser.swift",
+                // ProcessInfo.swift is pure Darwin (audit-token extraction + proc_pidpath), no NetworkExtension import, so it
+                // compiles in this logic library and its extractProcessInfo pidversion parsing is unit-testable (issue #403).
+                "networkextension/ProcessInfo.swift",
                 // The XPC server is now shared by both extensions (shared/XPCEventServer.swift): the listener, hello-ack
                 // handshake, pending buffer, peer code-signing, and the dispatchInbound decision. The per-extension
                 // XPCServer.swift wrappers (thin XPCEventServer instantiations) stay out of this logic module; the
                 // shared file carries every unit-tested symbol.
                 "shared/XPCEventServer.swift"
-            ]
+            ],
+            // ProcessInfo.swift calls the libbsm audit-token accessors (audit_token_to_pid / _euid / _pidversion). The SDK
+            // declares them as functions (not macros), so they need an explicit link. The Xcode extension target already
+            // links bsm (the -lbsm flag); mirror that here so `swift test` resolves the symbols. Package.swift only drives
+            // SwiftPM, not the Xcode build, so this affects the unit-test link only.
+            linkerSettings: [.linkedLibrary("bsm")]
         ),
         .testTarget(
             name: "EDRExtensionLogicTests",
