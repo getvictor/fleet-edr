@@ -4,7 +4,7 @@
 
 ## Why this matters
 
-`.coderabbit.yaml` (and any future bot configs such as Copilot custom instructions, Gemini Code Assist style guides, Qodo policy files) sit in the same gap as [`CLAUDE.md`](../../../CLAUDE.md): they actively shape every PR review but no compiler or CI gate catches drift. A path glob that no longer matches the tree, a tool key the vendor renamed, a docstring threshold that made sense before test/e2e/ existed: each silently degrades review quality. Nobody notices until a real finding gets buried under noise or a regression slips through because the path_instruction for that directory was pointing at a dead path.
+`.coderabbit.yaml` (and any future bot configs such as Copilot custom instructions, Qodo policy files) sit in the same gap as [`CLAUDE.md`](../../../CLAUDE.md): they actively shape every PR review but no compiler or CI gate catches drift. A path glob that no longer matches the tree, a tool key the vendor renamed, a docstring threshold that made sense before test/e2e/ existed: each silently degrades review quality. Nobody notices until a real finding gets buried under noise or a regression slips through because the path_instruction for that directory was pointing at a dead path.
 
 This task is the periodic re-grounding. It is deliberately small (30 min) because most quarters the answer is "no change needed" and the value is in _verifying_ that, not in finding work.
 
@@ -12,7 +12,7 @@ This task is the periodic re-grounding. It is deliberately small (30 min) becaus
 
 Primary: `.coderabbit.yaml`.
 
-Secondary (when they appear): any future PR-review-bot config files committed to the repo, such as [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), `.gemini/styleguide.md`, `.qodo/config.yaml`, etc. Treat this audit as the catch-all for the class.
+Secondary (when they appear): any future PR-review-bot config files committed to the repo, such as [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md), `.qodo/config.yaml`, etc. Treat this audit as the catch-all for the class.
 
 Out of scope: per-maintainer Claude config (covered by `claude-config-audit`), CodeRabbit's organization-level / dashboard-only settings (those drift separately and the bot's own UI surfaces them).
 

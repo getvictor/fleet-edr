@@ -24,19 +24,19 @@ These tasks were chosen with the following deltas in mind, not just generic "rev
 
 These have automation that runs on every PR or every push, so a periodic human-triggered sweep is wasted effort:
 
-| Concern                  | Already handled by                                                          |
-| ------------------------ | --------------------------------------------------------------------------- |
-| Dependency upgrades      | Dependabot (`.github/dependabot.yml`)                                       |
-| Go CVEs                  | `go-vulncheck.yml`                                                          |
-| Multi-ecosystem CVEs     | `osv-scanner.yml`                                                           |
-| Static security analysis | `codeql.yml`                                                                |
-| OSS health posture       | `scorecard.yml`                                                             |
-| Workflow security        | `zizmor.yml`                                                                |
-| Architecture imports     | `arch-go.yml`                                                               |
-| Go nil safety            | `go-nilaway.yml`                                                            |
-| Coverage gates           | Codecov + SonarCloud (≥80% on new code)                                     |
-| Code formatting / lint   | `lefthook.yml` (pre-commit) + per-language CI lints                         |
-| AI review of PRs         | Copilot, CodeRabbit, Gemini, SonarCloud (handled by `/ai-review-fixes-edr`) |
+| Concern                  | Already handled by                                                  |
+| ------------------------ | ------------------------------------------------------------------- |
+| Dependency upgrades      | Dependabot (`.github/dependabot.yml`)                               |
+| Go CVEs                  | `go-vulncheck.yml`                                                  |
+| Multi-ecosystem CVEs     | `osv-scanner.yml`                                                   |
+| Static security analysis | `codeql.yml`                                                        |
+| OSS health posture       | `scorecard.yml`                                                     |
+| Workflow security        | `zizmor.yml`                                                        |
+| Architecture imports     | `arch-go.yml`                                                       |
+| Go nil safety            | `go-nilaway.yml`                                                    |
+| Coverage gates           | Codecov + SonarCloud (≥80% on new code)                             |
+| Code formatting / lint   | `lefthook.yml` (pre-commit) + per-language CI lints                 |
+| AI review of PRs         | Copilot, CodeRabbit, SonarCloud (handled by `/ai-review-fixes-edr`) |
 
 If a finding from a scheduled task could be moved into one of those automated gates, do it. The schedule should shrink over time as automation absorbs more of it.
 
@@ -87,7 +87,7 @@ Use any existing task file as a template. Update the cadence calendar above and 
 
 - [`claude-config-audit`](tasks/claude-config-audit.md): `.claude/settings*.json`, hooks, slash commands, skills
 - [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md): `~/.claude/projects/.../MEMORY.md` + [`CLAUDE.md`](../../CLAUDE.md) accuracy
-- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md): `.coderabbit.yaml` + future Copilot/Gemini/Qodo configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
+- [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md): `.coderabbit.yaml` + future Copilot/Qodo configs: path-glob validity, tools roster, pre-merge thresholds, multi-platform glob coverage
 
 ### Product / cross-cutting
 
