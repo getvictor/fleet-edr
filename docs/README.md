@@ -6,7 +6,8 @@ Operator-facing documentation for Fleet EDR. For developer setup see the repo-ro
 
 | You are                                                                   | Start here                                           |
 | ------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Standing up the server for the first time                                 | [`install-server.md`](install-server.md)             |
+| Standing up the server for the first time (recommended path)              | [`quickstart-vm.md`](quickstart-vm.md)               |
+| Standing up the server with your own TLS-terminating ingress              | [`install-server.md`](install-server.md)             |
 | Evaluating the agent on a handful of Macs without MDM                     | [`install-agent-manual.md`](install-agent-manual.md) |
 | Deploying to a fleet via any MDM (Jamf, Kandji, Intune, mosyle, Fleet)    | [`mdm-deployment.md`](mdm-deployment.md)             |
 | Deploying specifically via Fleet MDM                                      | [`fleet-deployment.md`](fleet-deployment.md)         |
@@ -19,7 +20,7 @@ Operator-facing documentation for Fleet EDR. For developer setup see the repo-ro
 
 ## Getting started
 
-The fastest path to an evaluation: deploy the server on Render (one click, TLS and MySQL handled for you), then push the agent to your Macs through Fleet MDM. See [deploy-render.md](deploy-render.md) for the server and [fleet-deployment.md](fleet-deployment.md) for the agents.
+The recommended path: stand up the server on a single Linux VM with your own domain (one script, automatic Let's Encrypt certificate, no edge WAF to block agent telemetry), then push the agent to your Macs through Fleet MDM. See [quickstart-vm.md](quickstart-vm.md) for the server and [fleet-deployment.md](fleet-deployment.md) for the agents. Render is a one-click alternative for a throwaway evaluation, but its edge WAF blocks agent telemetry by default and needs a support-ticket workaround; see the caveat in [deploy-render.md](deploy-render.md).
 
 ## Shape of a Fleet EDR deployment
 

@@ -1,0 +1,105 @@
+# Single-VM getting-started stack: MySQL + the EDR server + Caddy.
+#
+# Caddy terminates public HTTPS with automatic Let's Encrypt certificates and
+# reverse-proxies to the server over the private Docker network, so the operator
+# manages zero certificates and there is NO content-inspecting WAF in the path
+# (unlike a managed PaaS edge). Bring it up with ./bootstrap.sh, which generates
+# the secret files and .env this stack expects. Full walkthrough:
+# docs/quickstart-vm.md. For high availability, use
+# packaging/docker-compose-multi-replica.yml instead.
+
+services:
+  mysql:
+    image: mysql:8.4.9@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root
+      MYSQL_DATABASE: edr
+    volumes:
+      - edr-mysql-data:/var/lib/mysql
+    secrets:
+      - mysql_root
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping --silent 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  server:
+    # Pin EDR_VERSION in .env to a release tag for production; bootstrap.sh warns
+    # when it defaults to `latest`.
+    image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      # DSN + secrets are read from files (docker secrets) so no password lands
+      # in `docker inspect`. EDR_DSN is blank so the *_FILE path wins.
+      EDR_DSN: ""
+      EDR_DSN_FILE: /run/secrets/edr_dsn
+      EDR_ENROLL_SECRET_FILE: /run/secrets/enroll_secret
+      EDR_SECRET_KEY_FILE: /run/secrets/secret_key
+      # Caddy terminates TLS in front; the server listens plaintext on the
+      # private Docker network only. It is never published to the host, so the
+      # only way in is through Caddy.
+      EDR_LISTEN_ADDR: "0.0.0.0:8088"
+      EDR_TLS_TERMINATED_BY_PROXY: "1"
+      # Trust X-Forwarded-For only from the Docker bridge network (Caddy). The
+      # default Compose address pool lives inside 172.16.0.0/12.
+      EDR_TRUSTED_PROXIES: "172.16.0.0/12"
+      # Break-glass WebAuthn binds credentials to the public host, so both must
+      # equal your domain.
+      EDR_BREAKGLASS_RP_ID: ${EDR_DOMAIN}
+      EDR_BREAKGLASS_RP_ORIGINS: https://${EDR_DOMAIN}
+      # Boot with break-glass only so you can redeem the first admin. Configure
+      # OIDC afterwards (see docs/install-server.md) and remove this.
+      EDR_AUTH_ALLOW_NO_OIDC: "1"
+      EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
+      EDR_LOG_FORMAT: "json"
+      # OTel export (optional). Set OTEL_EXPORTER_OTLP_ENDPOINT in .env to an
+      # OTLP/gRPC collector to turn on traces, metrics, and logs; leave it unset
+      # to keep telemetry off. The URL scheme picks the transport: http:// is
+      # plaintext, https:// uses TLS. OTEL_EXPORTER_OTLP_HEADERS carries an
+      # auth/ingestion token (e.g. SigNoz Cloud); OTEL_RESOURCE_ATTRIBUTES sets
+      # deployment.environment and any other resource tags. See
+      # docs/quickstart-vm.md ("Send telemetry to a collector").
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
+      OTEL_SERVICE_NAME: fleet-edr-server
+    secrets:
+      - enroll_secret
+      - edr_dsn
+      - secret_key
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      EDR_DOMAIN: ${EDR_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./packaging/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  edr-mysql-data:
+  caddy-data:
+  caddy-config:
+
+secrets:
+  mysql_root:
+    file: ./secrets/mysql_root
+  enroll_secret:
+    file: ./secrets/enroll_secret
+  edr_dsn:
+    file: ./secrets/edr_dsn
+  secret_key:
+    file: ./secrets/secret_key

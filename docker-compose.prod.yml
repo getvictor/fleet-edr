@@ -52,6 +52,12 @@ services:
       EDR_DSN: ""
       EDR_DSN_FILE: /run/secrets/edr_dsn
       EDR_ENROLL_SECRET_FILE: /run/secrets/enroll_secret
+      # Deployment root secret (>=32 bytes). Required unconditionally: the
+      # host-token HMAC pepper and other long-lived keys derive from it via HKDF
+      # (server/config/config.go loadSecretKey), so the server refuses to boot
+      # without it. Read from a docker-secret file so it never lands in
+      # `docker inspect`. Changing it invalidates every enrolled host.
+      EDR_SECRET_KEY_FILE: /run/secrets/secret_key
       # TLS cert paths are unconditionally required (issue #140 removed the
       # EDR_ALLOW_INSECURE_HTTP opt-out). Mount fullchain.pem + privkey.pem
       # under ./tls/ (or override EDR_TLS_DIR to point at your cert store).
@@ -91,3 +97,5 @@ secrets:
   # compose-secret hack: the operator writes it once. See README.
   edr_dsn:
     file: ./secrets/edr_dsn
+  secret_key:
+    file: ./secrets/secret_key
