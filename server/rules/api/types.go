@@ -623,6 +623,12 @@ const CommandTypeSetApplicationControl = "set_application_control"
 type SetApplicationControlPayload struct {
 	PolicyID      int64 `json:"policy_id"`
 	PolicyVersion int64 `json:"policy_version"`
+	// PolicyEpoch is the policy's server-assigned updated_at in Unix microseconds (0 when the policy carries no timestamp). It is the
+	// restore-surviving companion to PolicyVersion: the extension accepts a snapshot when EITHER axis advances, so a server DB
+	// restore that regresses PolicyVersion still re-syncs hosts because the operator's next mutation stamps a fresh updated_at that
+	// is strictly greater than any pre-restore epoch (wall-clock only moves forward). A pre-fix server leaves this 0 on every push,
+	// which the extension treats as "epoch never advances", falling back to the historical version-only gate. See #322.
+	PolicyEpoch int64 `json:"policy_epoch"`
 	// DeadlineFallback governs the extension's verdict when AUTH_EXEC cannot compute a BINARY rule SHA-256 within the kernel
 	// deadline budget. Always populated by MarshalSetApplicationControlPayload (DefaultFallbackPosture when the upstream policy
 	// did not set one) so the extension's snapshot never has to fall back to its own internal default. Pre-v0.1.0 agents that
@@ -698,9 +704,17 @@ func MarshalSetApplicationControlPayload(p ApplicationControlPolicy, rules []App
 	if !IsValidFallbackPosture(posture) {
 		posture = DefaultFallbackPosture
 	}
+	// policy_epoch is the policy's updated_at in Unix microseconds. A zero UpdatedAt (the v0.1.0 norm in unit tests, and any
+	// caller that hasn't populated the field) marshals to 0 rather than UnixMicro()'s large negative value for the zero time, so
+	// the wire keeps a clean "unknown epoch" sentinel the extension reads as "never advances".
+	var epoch int64
+	if !p.UpdatedAt.IsZero() {
+		epoch = p.UpdatedAt.UnixMicro()
+	}
 	return json.Marshal(SetApplicationControlPayload{
 		PolicyID:         p.ID,
 		PolicyVersion:    p.Version,
+		PolicyEpoch:      epoch,
 		DeadlineFallback: posture,
 		Rules:            entries,
 	})

@@ -18,6 +18,11 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 struct ApplicationControlSnapshot {
     let policyID: Int64
     let policyVersion: Int64
+    // policyEpoch is the policy's server-assigned updated_at in Unix microseconds (0 when the payload omits it: a pre-fix
+    // server, or a snapshot persisted before this field existed). It is the restore-surviving companion to policyVersion: a
+    // server DB restore regresses policyVersion but the next mutation stamps a wall-clock updated_at that is strictly greater
+    // than any pre-restore epoch, so the gate re-syncs on this axis instead of freezing. See apply(rawJSON:) and #322.
+    let policyEpoch: Int64
     let deadlineFallback: FallbackPosture
     let binaryRules: [String: ApplicationControlRule]      // identifier (file SHA-256) -> rule
     let cdhashRules: [String: ApplicationControlRule]      // 40 hex
@@ -29,6 +34,7 @@ struct ApplicationControlSnapshot {
     static let empty = ApplicationControlSnapshot(
         policyID: 0,
         policyVersion: 0,
+        policyEpoch: 0,
         deadlineFallback: .defaultPosture,
         binaryRules: [:],
         cdhashRules: [:],
@@ -80,12 +86,17 @@ struct ApplicationControlRule: Codable, Equatable {
 struct ApplicationControlDocument: Codable {
     let policyID: Int64
     let policyVersion: Int64
+    // policyEpoch is Optional because the field was added in the #322 fix; older fan-out callers and any snapshot persisted
+    // before this change will not carry it. makeSnapshot substitutes 0 when nil, which the gate reads as "epoch never
+    // advances" so a pre-fix server falls back to the historical version-only behaviour.
+    let policyEpoch: Int64?
     let deadlineFallback: FallbackPosture?
     let rules: [ApplicationControlRule]
 
     enum CodingKeys: String, CodingKey {
         case policyID = "policy_id"
         case policyVersion = "policy_version"
+        case policyEpoch = "policy_epoch"
         case deadlineFallback = "deadline_fallback"
         case rules
     }
@@ -144,6 +155,12 @@ final class ApplicationControlStore {
     private let persistQueue = DispatchQueue(label: "com.fleetdm.edr.appcontrol.persist", qos: .utility)
     private let storagePath: String
 
+    /// resyncReporter is invoked when apply() accepts a snapshot whose policy_version regressed below the active snapshot's
+    /// but whose policy_epoch advanced (the server-DB-restore signature, #322). main.swift wires this to the event serializer
+    /// so the regression surfaces as an `application_control_resync` event instead of only a host log line. Optional so tests
+    /// and any non-production embedding that doesn't emit events leave it nil; the gate behaviour does not depend on it.
+    var resyncReporter: ((ApplicationControlResyncPayload) -> Void)?
+
     /// defaultStoragePath is the on-disk policy file the production singleton uses. Extracted from the init's default
     /// argument so Sonar S1075 (hardcoded URI in source) lands on the named constant rather than the function signature;
     /// the constant is still in one place and the doc-comment on `.shared` continues to discourage production callers
@@ -195,11 +212,20 @@ final class ApplicationControlStore {
     }
 
     /// apply decodes the raw JSON from an `application_control.update` XPC
-    /// message, validates version monotonicity (the server bumps version on
-    /// every mutation; an equal or smaller version is either a duplicate
-    /// delivery or an out-of-order replay and must not regress the active
-    /// snapshot), atomically swaps the in-memory state, and persists the
-    /// new snapshot to disk.
+    /// message, gates it for recency, atomically swaps the in-memory state,
+    /// and persists the new snapshot to disk.
+    ///
+    /// Recency gate (#322): for the same policy_id the snapshot is accepted
+    /// when EITHER policy_version advanced OR policy_epoch advanced, and
+    /// rejected (no-op) only when both are <= the active snapshot's. version
+    /// is monotonic within a single server DB lifetime; epoch (the policy's
+    /// updated_at in microseconds) survives a DB restore that regresses
+    /// version, because the next mutation stamps a fresh wall-clock. Rejecting
+    /// only when both axes are older keeps protection against duplicate and
+    /// out-of-order replays (older on both) while letting a post-restore push
+    /// re-sync (newer epoch). A version regression accepted via the epoch axis
+    /// is the restore signature: it is logged above Info and reported as an
+    /// `application_control_resync` event.
     func apply(rawJSON data: Data) {
         guard let document = decodeDocument(data) else {
             logger.error("application_control.update missing or malformed; ignoring")
@@ -207,30 +233,62 @@ final class ApplicationControlStore {
         }
         let snapshot = makeSnapshot(from: document)
 
-        var applied = false
-        lock.withLock { current in
-            // Monotonic-version gate. A duplicate delivery (same version) is
-            // not an error (the agent retries on its next poll if the
-            // previous cycle's ack failed), but we still skip the swap so
-            // the disk write doesn't fire for a no-op.
-            if snapshot.policyID == current.policyID && snapshot.policyVersion <= current.policyVersion {
-                return
+        // The closure returns the prior snapshot it replaced on acceptance, or nil when the gate rejects, so we never mutate
+        // a captured var across the lock (which Swift 6 flags on the Sendable closure). The whole struct is small and copied
+        // by value, so currentSnapshot() never observes a half-applied state.
+        let prior: ApplicationControlSnapshot? = lock.withLock { current in
+            let samePolicy = snapshot.policyID == current.policyID
+            let versionAdvanced = snapshot.policyVersion > current.policyVersion
+            let epochAdvanced = snapshot.policyEpoch > current.policyEpoch
+            // Stale / duplicate / out-of-order: same policy and neither axis advanced. Skip the swap so a replayed older
+            // snapshot can't regress the active ruleset and the disk write doesn't fire for a no-op. A different policy_id
+            // always falls through to acceptance (the host was retargeted to another policy).
+            if samePolicy && !versionAdvanced && !epochAdvanced {
+                return nil
             }
+            let replaced = current
             current = snapshot
-            applied = true
+            return replaced
         }
-        if !applied {
-            logger.info("application_control.update version \(snapshot.policyVersion, privacy: .public) <= current; ignoring")
+        guard let prior else {
+            let skip = "application_control.update policy=\(snapshot.policyID) version=\(snapshot.policyVersion) " +
+                "epoch=\(snapshot.policyEpoch) not newer than current; ignoring"
+            logger.info("\(skip, privacy: .public)")
             return
         }
+        reportResyncIfRegressed(snapshot: snapshot, prior: prior)
         // Same OSLogMessage / line_length pattern as in loadFromDisk above:
         // build the message as a plain String, then interpolate once.
         let summary = "applied app control snapshot: " +
-            "policy=\(snapshot.policyID) version=\(snapshot.policyVersion) rules=\(document.rules.count)"
+            "policy=\(snapshot.policyID) version=\(snapshot.policyVersion) epoch=\(snapshot.policyEpoch) rules=\(document.rules.count)"
         logger.info("\(summary, privacy: .public)")
         persistQueue.async { [data] in
             self.persist(rawJSON: data)
         }
+    }
+
+    /// reportResyncIfRegressed fires the resync log + event when an accepted snapshot's version regressed below the prior
+    /// snapshot's (same policy) while its epoch advanced. That pairing only happens after a server DB restore/reset, where the
+    /// version restarts low but the operator's next mutation stamps a fresh updated_at. A normal forward apply (version
+    /// advancing) never satisfies the regression predicate, so it stays silent. Called outside the lock so the optional event
+    /// dispatch never extends the critical section.
+    private func reportResyncIfRegressed(snapshot: ApplicationControlSnapshot, prior: ApplicationControlSnapshot) {
+        guard prior.policyID == snapshot.policyID,
+              snapshot.policyVersion < prior.policyVersion,
+              snapshot.policyEpoch > prior.policyEpoch else {
+            return
+        }
+        let warning = "application_control.update version regressed (\(prior.policyVersion) -> \(snapshot.policyVersion)) but " +
+            "epoch advanced (\(prior.policyEpoch) -> \(snapshot.policyEpoch)); re-syncing (likely server DB restore)"
+        logger.error("\(warning, privacy: .public)")
+        resyncReporter?(ApplicationControlResyncPayload(
+            policyID: snapshot.policyID,
+            previousVersion: prior.policyVersion,
+            newVersion: snapshot.policyVersion,
+            previousEpoch: prior.policyEpoch,
+            newEpoch: snapshot.policyEpoch,
+            reason: "version_regression"
+        ))
     }
 
     private func decodeDocument(_ data: Data) -> ApplicationControlDocument? {
@@ -270,6 +328,7 @@ final class ApplicationControlStore {
         return ApplicationControlSnapshot(
             policyID: document.policyID,
             policyVersion: document.policyVersion,
+            policyEpoch: document.policyEpoch ?? 0,
             deadlineFallback: document.deadlineFallback ?? .defaultPosture,
             binaryRules: binary,
             cdhashRules: cdhash,

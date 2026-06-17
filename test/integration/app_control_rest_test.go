@@ -152,6 +152,111 @@ func TestAppControlREST_CreateRule_AnalystForbidden(t *testing.T) {
 	assert.Equal(t, identityapi.ReasonNoMatchingRule, resp.Header.Get(identityapi.AuthzReasonHeader))
 }
 
+// TestAppControlREST_VersionRegression_EpochStillAdvances is the server-side half of the #322 fix: after a DB
+// restore-from-backup regresses a policy's monotonic version below what hosts have persisted, the next rule mutation MUST
+// still fan out a payload whose policy_epoch advanced, because the extension re-syncs on the epoch axis. This exercises the
+// REAL DB path (the updated_at ON UPDATE trigger + buildSnapshotPayload's post-bump policy read), complementing the
+// marshal-level unit test in server/rules/api/app_control_wire_test.go.
+//
+// The "restore" is simulated by directly regressing version and pinning updated_at to a past instant, the state a
+// restored-from-backup row carries. The subsequent admin rule-create is the operator's first post-restore mutation; its
+// fan-out is what the freeze bug used to drop on every host.
+func TestAppControlREST_VersionRegression_EpochStillAdvances(t *testing.T) {
+	t.Parallel()
+	stack := Setup(t)
+	ctx := t.Context()
+
+	const hostID = "EEEE1111-2222-3333-4444-555566667777"
+	hostToken := stepEnroll(t, stack, hostID)
+	postEvents(t, stack, hostToken, []detectionapi.Event{{
+		EventID: "ac-regress-fork", HostID: hostID, TimestampNs: time.Now().UnixNano(),
+		EventType: "fork", Payload: json.RawMessage(`{"child_pid":8484,"parent_pid":1}`),
+	}})
+	require.Eventually(t, func() bool {
+		hosts, err := stack.DetectionService().ListHosts(ctx)
+		if err != nil {
+			return false
+		}
+		for _, h := range hosts {
+			if h.HostID == hostID {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "host must be visible to ListHosts before the fan-out runs")
+
+	admin := testkit.SeedJITUser(t, stack.DB, "admin@appcontrol-regress.test", "admin")
+	policy := lookupDefaultPolicy(t, ctx, stack)
+
+	// Inflate the version so a post-restore regression is unambiguous (the seeded Default policy starts at version 1, where a
+	// "regression" wouldn't have room below it). This stands in for a deployment whose policy has churned to a high version.
+	_, err := stack.DB.ExecContext(ctx, `UPDATE app_control_policies SET version = 25 WHERE id = ?`, policy.ID)
+	require.NoError(t, err)
+
+	createAppControlRule(t, ctx, stack, admin, policy.ID,
+		"1111111111111111111111111111111111111111111111111111111111111111")
+	preRestore := latestAppControlPayload(t, ctx, stack, hostID)
+	require.Greater(t, preRestore.PolicyVersion, int64(25), "version bumped past the inflated baseline on create")
+	require.Positive(t, preRestore.PolicyEpoch, "epoch is the policy updated_at in micros, set by the create")
+
+	// Simulate a restore-from-backup: version regresses far below what the host persisted, and updated_at carries the
+	// backup's (past) timestamp. Setting updated_at explicitly suppresses the ON UPDATE trigger for this synthetic write.
+	_, err = stack.DB.ExecContext(ctx,
+		`UPDATE app_control_policies SET version = 2, updated_at = '2020-01-01 00:00:00.000000' WHERE id = ?`, policy.ID)
+	require.NoError(t, err)
+
+	// The operator's first post-restore mutation. The version bump lands at 3 (still far below the host's persisted 26), but
+	// the ON UPDATE trigger stamps a fresh wall-clock updated_at, so the epoch leaps forward.
+	createAppControlRule(t, ctx, stack, admin, policy.ID,
+		"2222222222222222222222222222222222222222222222222222222222222222")
+	postRestore := latestAppControlPayload(t, ctx, stack, hostID)
+
+	assert.Less(t, postRestore.PolicyVersion, preRestore.PolicyVersion,
+		"post-restore version regressed below the host's persisted version (the freeze trigger)")
+	assert.Greater(t, postRestore.PolicyEpoch, preRestore.PolicyEpoch,
+		"post-restore epoch still advanced, so the extension re-syncs on the epoch axis instead of freezing")
+}
+
+// createAppControlRule POSTs a BINARY rule under the policy as the given admin and requires a 201. Factored so the
+// regression test can author two rules without duplicating the request boilerplate.
+func createAppControlRule(t *testing.T, ctx context.Context, stack *Stack, admin testkit.SeededUser, policyID int64, identifier string) {
+	t.Helper()
+	body := mustJSON(t, map[string]any{
+		"rule_type":  rulesapi.RuleTypeBinary,
+		"identifier": identifier,
+		"severity":   rulesapi.SeverityRuleHigh,
+		"reason":     "version-regression regression test",
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		stack.Server.URL+"/api/v1/app-control/policies/"+strconv.FormatInt(policyID, 10)+"/rules",
+		bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(identityapi.CSRFHeaderName, admin.CSRFToken)
+	req.AddCookie(&http.Cookie{Name: identityapi.SessionCookieName, Value: admin.SessionCookie})
+	resp, err := stack.Server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+}
+
+// latestAppControlPayload decodes the newest set_application_control command queued for the host. ListForHost orders newest
+// first, so the first matching command is the most recent fan-out.
+func latestAppControlPayload(t *testing.T, ctx context.Context, stack *Stack, hostID string) rulesapi.SetApplicationControlPayload {
+	t.Helper()
+	commands, err := stack.ResponseService().ListForHost(ctx, hostID, "")
+	require.NoError(t, err)
+	for i := range commands {
+		if commands[i].CommandType == rulesapi.CommandTypeSetApplicationControl {
+			var p rulesapi.SetApplicationControlPayload
+			require.NoError(t, json.Unmarshal(commands[i].Payload, &p))
+			return p
+		}
+	}
+	t.Fatal("no set_application_control command queued for host")
+	return rulesapi.SetApplicationControlPayload{}
+}
+
 // lookupDefaultPolicy returns the seeded Default policy via the rules-context store. Tests rely on it to grab the id without
 // re-running the seed query themselves.
 func lookupDefaultPolicy(t *testing.T, ctx context.Context, stack *Stack) rulesapi.ApplicationControlPolicy {

@@ -1,0 +1,20 @@
+# Re-sync application control after a server policy-version regression
+
+## Why
+
+The system extension gates incoming app-control snapshots on a monotonic per-policy `policy_version` and persists the last-applied snapshot to disk. The gate equates "stale" with "lower `policy_version`", but `policy_version` lives entirely in the server DB and regresses whenever the DB is restored from backup (the documented rollback path, ADR-0009) or reset. After such a regression the server's version restarts low while every enrolled host retains its higher persisted version, so the extension silently ignores every subsequent app-control update for that policy: new rules do not enforce, removed rules keep blocking, and the only signal is an `Info` log on the host. App control is frozen on the stale ruleset until the server's version organically climbs back above each host's persisted value, which for a low-churn policy can be a long time or never. This was observed live on edr-qa (2026-06-03): a host persisted `policy_version=25`, the DB was reset, and a fresh BLOCK rule fanned out at `version=2` enforced nothing. See #322.
+
+The gate is doing its job (rejecting out-of-order and replayed snapshots); the defect is that it cannot distinguish a replay from a legitimate authoritative regression.
+
+## What changes
+
+- **The snapshot carries a restore-surviving epoch alongside the version.** The server already stamps `app_control_policies.updated_at` (server wall-clock, `ON UPDATE CURRENT_TIMESTAMP(6)`) on every mutation. The fan-out payload gains `policy_epoch`, the policy's `updated_at` in Unix microseconds. Unlike `policy_version`, the epoch survives a DB restore: the operator's next mutation post-restore stamps `NOW()`, which is strictly greater than any pre-restore timestamp a host persisted, because wall-clock only moves forward.
+- **The extension gate accepts on EITHER axis advancing.** For the same `policy_id`, the extension applies an incoming snapshot when `policy_version` advanced OR `policy_epoch` advanced, and rejects (no-op) only when both are `<=` the active snapshot's. This re-syncs after a restore (epoch advances even though version regressed) while preserving replay protection: an out-of-order or duplicate older snapshot is older on both axes and is still rejected, and a newest-first command batch still converges on the highest version because a lower-version-lower-epoch entry is dropped.
+- **A version regression that re-syncs is observable.** When the extension accepts a snapshot whose `policy_version` regressed but whose `policy_epoch` advanced (the restore signature), it logs at `error` and emits an `application_control_resync` host event carrying the previous/new version and epoch, so an operator sees the regression instead of only an `Info` line. The event flows through the existing `POST /api/events` channel and lands in the `events` table.
+- **Already-frozen hosts self-heal on upgrade.** A host persisted before this change has `policy_epoch=0` (the field decodes absent -> 0). The first post-upgrade command from a fixed server carries a real epoch `> 0`, so the epoch axis advances and the host re-syncs even without a version bump. A pre-fix server (no `policy_epoch` on the wire) leaves the epoch at 0 on every push, so the gate falls back to the existing version-only behavior: the change is safe in either direction and only takes effect once both ends ship.
+
+### Not in this change
+
+- A server-side metric or alert that fires on `application_control_resync` ingestion. The host event is the observable signal this change adds; wiring a SigNoz alert-as-code on top is tracked separately with the rest of the alerts-as-code work in #348.
+- Any change to the at-most-once command delivery contract, the fan-out path, or the `commands` table. The fix is confined to the wire field, the extension gate, and the new event.
+- A dedicated server-side `epoch` counter column. The existing `updated_at` is already the monotonic, restore-surviving signal; adding a column would itself regress on restore and solve nothing.

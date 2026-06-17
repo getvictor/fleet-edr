@@ -43,6 +43,7 @@ func makeSnapshot(
     return ApplicationControlSnapshot(
         policyID: 1,
         policyVersion: 1,
+        policyEpoch: 0,
         deadlineFallback: deadlineFallback,
         binaryRules: binaryRules,
         cdhashRules: cdhashRules,

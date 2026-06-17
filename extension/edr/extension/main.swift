@@ -22,6 +22,14 @@ let serializer = EventSerializer()
 subscriber.onEvent = { data in server.send(data: data) }
 subscriber.start()
 
+// Surface an application-control re-sync (a snapshot accepted despite a regressed policy_version because its epoch advanced,
+// the server-DB-restore signature) as an `application_control_resync` event so the regression is operator-visible rather than
+// only a host log line. The store calls this on the apply path; serialize + send through the same XPC pipeline as ESF events.
+ApplicationControlStore.shared.resyncReporter = { payload in
+    guard let data = serializer.serialize(eventType: "application_control_resync", payload: payload) else { return }
+    server.send(data: data)
+}
+
 // Dedicated, target-muted file-tamper client (#301, ADR-0008). It watches /etc/sudoers* for CREATE/WRITE via
 // inverted target-path muting and lives on its own ES client (separate from `subscriber` above) so the client-global
 // target-path inversion never filters the primary client's AUTH_EXEC (whose target is the executable). Its events flow into
