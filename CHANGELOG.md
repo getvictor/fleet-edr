@@ -2,6 +2,12 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
+## [Unreleased]
+
+### Removed
+
+- **Render deployment support.** The one-click Render blueprint (`render.yaml`) and its guide are removed. Render's managed edge runs a content-inspecting WAF that blocks agent telemetry by default and cannot be disabled by the customer, so events silently fail to upload. The supported getting-started path is the single-VM quickstart ([docs/quickstart-vm.md](docs/quickstart-vm.md)), where you control the edge.
+
 ## [0.2.1] (2026-06-16)
 
 Patch release on top of 0.2.0. Fixes the Mac-free Docker demo (`docker-compose.demo.yml`) so it presents correctly to evaluators. No agent or server runtime behavior changes; the fixes are confined to the demo seeder.
@@ -64,6 +70,7 @@ First stable release. The product ships as two components, released together for
 - **Flexible deployment.** The server is a standard Linux container image, so it runs on any container host (a Docker VM, Kubernetes, AWS ECS/EKS, GCP, Azure, or on-prem), with a one-click Render blueprint for the fastest start. Agents reach Macs through any MDM (Fleet, Jamf, Kandji, Intune, mosyle).
 - **Supply-chain-hardened releases.** Every release ships a Developer ID-signed, Apple-notarized package alongside SBOMs, cosign signatures, and build provenance attestations.
 
+[Unreleased]: https://github.com/getvictor/fleet-edr/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.1
 [0.2.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.0
 [0.1.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.1.1

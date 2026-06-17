@@ -61,11 +61,11 @@ type Config struct {
 	TLSCertFile  string
 	TLSKeyFile   string
 	AllowTLS12   bool
-	// TLSTerminatedByProxy lets the server listen plaintext HTTP when a TLS-terminating proxy (a PaaS edge like Render, or an
-	// ALB / nginx / Cloudflare) sits in front. It is the gated exception to the mandatory-TLS default (issue #140): the default
-	// still refuses to boot without certs, but an operator who sets EDR_TLS_TERMINATED_BY_PROXY=1 asserts that something in front
-	// terminates TLS, so the data plane is still encrypted end-to-edge. Setting it together with cert files is rejected as
-	// ambiguous. This is the same posture Fleet ships (FLEET_SERVER_TLS=false behind Render/ALB).
+	// TLSTerminatedByProxy lets the server listen plaintext HTTP when a TLS-terminating proxy (a PaaS edge, an ALB, nginx, or
+	// Cloudflare) sits in front. It is the gated exception to the mandatory-TLS default (issue #140): the default still refuses
+	// to boot without certs, but an operator who sets EDR_TLS_TERMINATED_BY_PROXY=1 asserts that something in front terminates
+	// TLS, so the data plane is still encrypted end-to-edge. Setting it together with cert files is rejected as ambiguous. This
+	// is the same posture Fleet ships (FLEET_SERVER_TLS=false behind an ALB).
 	TLSTerminatedByProxy bool
 	// ShutdownDrain is how long RunAndShutdown keeps serving after SIGTERM (with /readyz reporting 503) before closing the
 	// listener, so a load balancer drains this replica first. Default 30s; 0 disables the drain wait. From EDR_SHUTDOWN_DRAIN.
@@ -335,9 +335,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 // their cross-field validation runs in loadTLSConfig once both sides are known.
 func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	// EDR_DSN is the canonical single-string DSN. When it is empty, compose one from discrete parts
-	// (EDR_MYSQL_ADDRESS/USERNAME/PASSWORD/DATABASE). PaaS blueprints (Render's fromService, and the same shape on Fly / ECS) hand
-	// the DB host:port and a generated password to separate env vars and cannot interpolate them into one DSN string, so the
-	// compose-from-parts path is what makes a one-click blueprint work. An explicit EDR_DSN always wins.
+	// (EDR_MYSQL_ADDRESS/USERNAME/PASSWORD/DATABASE). Some PaaS blueprints (Fly, ECS, and similar) hand the DB host:port and a
+	// generated password to separate env vars and cannot interpolate them into one DSN string, so the compose-from-parts path is
+	// what makes a one-click blueprint work. An explicit EDR_DSN always wins.
 	optionalStr(&c.DSN, "EDR_DSN", getenv)
 	if c.DSN == "" {
 		c.DSN = composeDSN(getenv)

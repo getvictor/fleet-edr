@@ -116,7 +116,7 @@ EDR_TLS_CERT_FILE=/tls/fullchain.pem
 EDR_TLS_KEY_FILE=/tls/privkey.pem
 ```
 
-**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint. By default the proxy-to-EDR hop also runs over TLS (issue #140 makes the server terminate TLS itself): issue the proxy-to-backend cert from your internal CA or reuse the public cert, mount it under `./tls/`, and the env-var shape is identical to Option A. If your platform cannot present a backend certificate (most PaaS edges, including Render, proxy plaintext to the service), set `EDR_TLS_TERMINATED_BY_PROXY=1` instead and omit the cert files: the server then listens plaintext HTTP on the assumption that the proxy terminates TLS in front of it. The flag and cert files are mutually exclusive. For the Render one-click path see [deploy-render.md](deploy-render.md).
+**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint. By default the proxy-to-EDR hop also runs over TLS (issue #140 makes the server terminate TLS itself): issue the proxy-to-backend cert from your internal CA or reuse the public cert, mount it under `./tls/`, and the env-var shape is identical to Option A. If your platform cannot present a backend certificate (most PaaS edges proxy plaintext to the service), set `EDR_TLS_TERMINATED_BY_PROXY=1` instead and omit the cert files: the server then listens plaintext HTTP on the assumption that the proxy terminates TLS in front of it. The flag and cert files are mutually exclusive.
 
 ### 5. Pin a version in .env
 
