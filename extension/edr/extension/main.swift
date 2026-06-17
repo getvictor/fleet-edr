@@ -15,20 +15,27 @@ let server = XPCEventServer(
     logger: Logger(subsystem: "com.fleetdm.edr.securityextension", category: "XPCServer"),
     onApplicationControl: { data in ApplicationControlStore.shared.apply(rawJSON: data) }
 )
+// Per-producer EventSerializer instances. EventSerializer wraps a JSONEncoder that must not be shared across concurrent
+// producers, so each independent emit path owns one (matching ESFSubscriber / FileTamperSubscriber, which each construct their
+// own): `serializer` drives the background process-snapshot enumerator below; `resyncSerializer` drives the resync path.
+let serializer = EventSerializer()
+let resyncSerializer = EventSerializer()
+
+// Wire the re-sync reporter BEFORE server.start(): the XPC listener can deliver an application_control.update the instant it
+// opens, and apply() invokes this reporter on the regression path. Installing it first closes the startup window where an
+// early regression push would be applied (and logged) with no reporter attached, silently dropping the
+// application_control_resync event. The reporter surfaces a snapshot accepted despite a regressed policy_version (because its
+// epoch advanced, the server-DB-restore signature) so the regression is operator-visible, not just a host log line. (#322)
+ApplicationControlStore.shared.resyncReporter = { payload in
+    guard let data = resyncSerializer.serialize(eventType: "application_control_resync", payload: payload) else { return }
+    server.send(data: data)
+}
+
 server.start()
 
 let subscriber = ESFSubscriber()
-let serializer = EventSerializer()
 subscriber.onEvent = { data in server.send(data: data) }
 subscriber.start()
-
-// Surface an application-control re-sync (a snapshot accepted despite a regressed policy_version because its epoch advanced,
-// the server-DB-restore signature) as an `application_control_resync` event so the regression is operator-visible rather than
-// only a host log line. The store calls this on the apply path; serialize + send through the same XPC pipeline as ESF events.
-ApplicationControlStore.shared.resyncReporter = { payload in
-    guard let data = serializer.serialize(eventType: "application_control_resync", payload: payload) else { return }
-    server.send(data: data)
-}
 
 // Dedicated, target-muted file-tamper client (#301, ADR-0008). It watches /etc/sudoers* for CREATE/WRITE via
 // inverted target-path muting and lives on its own ES client (separate from `subscriber` above) so the client-global
