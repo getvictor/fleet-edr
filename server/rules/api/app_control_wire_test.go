@@ -125,7 +125,7 @@ func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
-	for _, key := range []string{"policy_id", "policy_version", "rules"} {
+	for _, key := range []string{"policy_id", "policy_version", "policy_epoch", "rules"} {
 		assert.Contains(t, got, key, "top-level key %q missing", key)
 	}
 	rulesAny, _ := got["rules"].([]any)
@@ -134,6 +134,51 @@ func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
 	for _, key := range []string{"rule_id", "rule_type", "identifier", "action", "enforcement", "severity", "custom_msg"} {
 		assert.Contains(t, rule, key, "rule key %q missing", key)
 	}
+}
+
+// TestMarshalSetApplicationControlPayload_PolicyEpoch pins the restore-surviving epoch the extension's gate reads alongside
+// policy_version (#322). A non-zero UpdatedAt marshals to its Unix-microsecond value; the zero time marshals to 0, the
+// "unknown epoch" sentinel a pre-fix caller leaks and the extension treats as "never advances". A later mutation's larger
+// updated_at MUST produce a larger epoch even when policy_version is lower, which is exactly the post-DB-restore case.
+func TestMarshalSetApplicationControlPayload_PolicyEpoch(t *testing.T) {
+	t.Run("non-zero updated_at marshals to UnixMicro", func(t *testing.T) {
+		updated := time.Date(2026, 6, 16, 12, 0, 0, 123456000, time.UTC)
+		raw, err := api.MarshalSetApplicationControlPayload(
+			api.ApplicationControlPolicy{ID: 1, Version: 7, UpdatedAt: updated}, nil, time.Time{},
+		)
+		require.NoError(t, err)
+		var decoded api.SetApplicationControlPayload
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		assert.Equal(t, updated.UnixMicro(), decoded.PolicyEpoch)
+	})
+
+	t.Run("zero updated_at marshals to 0 sentinel", func(t *testing.T) {
+		raw, err := api.MarshalSetApplicationControlPayload(
+			api.ApplicationControlPolicy{ID: 1, Version: 1}, nil, time.Time{},
+		)
+		require.NoError(t, err)
+		var decoded api.SetApplicationControlPayload
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		assert.Equal(t, int64(0), decoded.PolicyEpoch)
+	})
+
+	t.Run("regressed version with advanced updated_at yields a larger epoch", func(t *testing.T) {
+		// Pre-restore: high version, earlier updated_at. Post-restore: low version, but a later wall-clock updated_at.
+		preRestore := api.ApplicationControlPolicy{ID: 1, Version: 25, UpdatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
+		postRestore := api.ApplicationControlPolicy{ID: 1, Version: 2, UpdatedAt: time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC)}
+
+		rawPre, err := api.MarshalSetApplicationControlPayload(preRestore, nil, time.Time{})
+		require.NoError(t, err)
+		rawPost, err := api.MarshalSetApplicationControlPayload(postRestore, nil, time.Time{})
+		require.NoError(t, err)
+
+		var pre, post api.SetApplicationControlPayload
+		require.NoError(t, json.Unmarshal(rawPre, &pre))
+		require.NoError(t, json.Unmarshal(rawPost, &post))
+
+		assert.Less(t, post.PolicyVersion, pre.PolicyVersion, "post-restore version regressed")
+		assert.Greater(t, post.PolicyEpoch, pre.PolicyEpoch, "post-restore epoch still advanced; the extension re-syncs on this axis")
+	})
 }
 
 // ruleTypes is the universe of RuleType values the wire payload can carry. The marshal helper does not gate on rule_type (the server's
@@ -227,6 +272,12 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 		policyVersion := rapid.Int64Range(1, 1_000_000).Draw(t, "policy_version")
 		nRules := rapid.IntRange(0, 20).Draw(t, "n_rules")
 		posture := rapid.SampledFrom(fallbackPostures).Draw(t, "deadline_fallback")
+		// updated_at is either the zero time (epoch sentinel 0) or a random instant within a wide window; either way the
+		// marshalled policy_epoch must round-trip exactly.
+		var updatedAt time.Time
+		if rapid.Bool().Draw(t, "has_updated_at") {
+			updatedAt = time.Unix(rapid.Int64Range(0, 4_102_444_800).Draw(t, "updated_at_unix"), 0).UTC()
+		}
 
 		rules := make([]api.ApplicationControlRule, 0, nRules)
 		for i := range nRules {
@@ -240,7 +291,7 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 			now = time.Unix(0, 0).UTC()
 		}
 
-		policy := api.ApplicationControlPolicy{ID: policyID, Version: policyVersion, DeadlineFallback: posture}
+		policy := api.ApplicationControlPolicy{ID: policyID, Version: policyVersion, DeadlineFallback: posture, UpdatedAt: updatedAt}
 		raw, err := api.MarshalSetApplicationControlPayload(policy, rules, now)
 		require.NoError(t, err)
 
@@ -248,6 +299,13 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &decoded))
 		assert.Equal(t, policyID, decoded.PolicyID)
 		assert.Equal(t, policyVersion, decoded.PolicyVersion)
+
+		// policy_epoch round-trips: zero updated_at -> 0 sentinel, else the UnixMicro value.
+		var expectedEpoch int64
+		if !updatedAt.IsZero() {
+			expectedEpoch = updatedAt.UnixMicro()
+		}
+		assert.Equal(t, expectedEpoch, decoded.PolicyEpoch)
 
 		// Posture invariant: the marshal substitutes DefaultFallbackPosture when the upstream policy has no value set
 		// (empty string today, or any future value the validator does not recognise). Validator-accepted values flow

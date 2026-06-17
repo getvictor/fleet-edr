@@ -198,6 +198,30 @@ struct ApplicationControlBlockPayload: Codable, Sendable {
     }
 }
 
+/// ApplicationControlResyncPayload is the wire shape of the event the extension emits when it accepts a snapshot whose
+/// policy_version regressed below the active snapshot's but whose policy_epoch advanced (#322). That pairing is the signature
+/// of a server database restore-from-backup or reset: policy_version restarts low while the host retains a higher persisted
+/// version, so the version-only gate would freeze enforcement. The extension re-syncs on the epoch axis and emits this event
+/// so an operator sees the regression instead of only a host log line. Field names match `application_control_resync_payload`
+/// in `schema/events.json`.
+struct ApplicationControlResyncPayload: Codable, Sendable {
+    let policyID: Int64
+    let previousVersion: Int64
+    let newVersion: Int64
+    let previousEpoch: Int64
+    let newEpoch: Int64
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case policyID = "policy_id"
+        case previousVersion = "previous_version"
+        case newVersion = "new_version"
+        case previousEpoch = "previous_epoch"
+        case newEpoch = "new_epoch"
+        case reason
+    }
+}
+
 struct BtmLaunchItemAddPayload: Codable, Sendable {
     let itemType: String
     let itemPath: String

@@ -21,75 +21,9 @@ import Foundation
 @testable import EDRExtensionLogic
 import XCTest
 
-final class ApplicationControlStoreTests: XCTestCase {
-    // MARK: Helpers
-
-    /// RuleSpec is a named record for the document() helper's `rules` argument.
-    /// A 3-tuple would trip SwiftLint's large_tuple rule (max 2 members); a struct
-    /// also reads better at the call sites and lets us name the field at use.
-    private struct RuleSpec {
-        let type: String
-        let identifier: String
-        let ruleID: String
-    }
-
-    /// makeStore returns a fresh ApplicationControlStore with a temp on-disk
-    /// policy path. The path is unique per call so concurrent / parallelized
-    /// test runs cannot stomp each other's persist files. The teardown block
-    /// removes the file (and any parent directory the persist code created).
-    private func makeStore() -> ApplicationControlStore {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AppControlTests-\(UUID().uuidString)", isDirectory: true)
-            .appendingPathComponent("application-control.json")
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
-        }
-        return ApplicationControlStore(storagePath: url.path)
-    }
-
-    /// waitForFile polls for the file at `path` to exist within `deadline`. The
-    /// store's persistQueue is private, so we cannot synchronize on it directly;
-    /// the file-exists predicate is what the apply→persist→load round-trip test
-    /// needs to gate on before loading the snapshot back from disk. 2s is the
-    /// same budget testStartLazyFillPopulatesCacheEventually uses for the same
-    /// pattern.
-    @discardableResult
-    private func waitForFile(at path: String, deadline: TimeInterval = 2) -> Bool {
-        let stop = Date().addingTimeInterval(deadline)
-        while Date() < stop {
-            if FileManager.default.fileExists(atPath: path) {
-                return true
-            }
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        return FileManager.default.fileExists(atPath: path)
-    }
-
-    /// document builds an ApplicationControlDocument as on-the-wire JSON bytes.
-    private func document(policyID: Int64, version: Int64, rules: [RuleSpec]) -> Data {
-        let ruleObjects = rules.map { rule in
-            """
-            {
-              "rule_id": "\(rule.ruleID)",
-              "rule_type": "\(rule.type)",
-              "identifier": "\(rule.identifier)",
-              "action": "BLOCK",
-              "enforcement": "PROTECT",
-              "severity": "high"
-            }
-            """
-        }
-        let joined = ruleObjects.joined(separator: ",")
-        let json = """
-        {
-          "policy_id": \(policyID),
-          "policy_version": \(version),
-          "rules": [\(joined)]
-        }
-        """
-        return Data(json.utf8)
-    }
-
+// Gate-behaviour + persistence tests for ApplicationControlStore. Shared fixtures (makeStore / document / RuleSpec) live on
+// AppControlStoreTestCase; the #322 epoch / re-sync tests live in ApplicationControlStoreResyncTests.
+final class ApplicationControlStoreTests: AppControlStoreTestCase {
     // MARK: ApplicationControlDocument decoder
 
     func testDocumentDecodesValidJSON() throws {

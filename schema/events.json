@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "snapshot_heartbeat", "btm_launch_item_add"],
+      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add"],
       "description": "Type of endpoint security event"
     },
     "payload": {
@@ -32,6 +32,7 @@
         { "$ref": "#/definitions/dns_query_payload" },
         { "$ref": "#/definitions/application_control_block_payload" },
         { "$ref": "#/definitions/application_control_undecided_payload" },
+        { "$ref": "#/definitions/application_control_resync_payload" },
         { "$ref": "#/definitions/snapshot_heartbeat_payload" },
         { "$ref": "#/definitions/btm_launch_item_add_payload" }
       ]
@@ -192,6 +193,19 @@
         "file_size_bytes": { "type": "integer", "description": "Size of the executable being authorised. Pairs with reason=\"deadline\" to identify large-binary workloads where the deadline budget is the bottleneck." },
         "policy_id": { "type": "integer" },
         "policy_version": { "type": "integer" }
+      }
+    },
+    "application_control_resync_payload": {
+      "type": "object",
+      "description": "Emitted when the extension accepts an application-control snapshot whose policy_version regressed below the active snapshot's but whose policy_epoch (the policy's server-assigned updated_at in microseconds) advanced. That pairing is the signature of a server database restore-from-backup or reset: policy_version restarts low while the host retains a higher persisted version, so the version-only gate would freeze enforcement. The extension re-syncs on the epoch axis and emits this event so the regression is operator-visible instead of being a host-only log line (#322).",
+      "required": ["policy_id", "previous_version", "new_version", "previous_epoch", "new_epoch", "reason"],
+      "properties": {
+        "policy_id": { "type": "integer" },
+        "previous_version": { "type": "integer", "description": "The policy_version the host held before accepting the regressed snapshot." },
+        "new_version": { "type": "integer", "description": "The lower policy_version the host re-synced to." },
+        "previous_epoch": { "type": "integer", "description": "The policy_epoch (updated_at microseconds) the host held before the re-sync." },
+        "new_epoch": { "type": "integer", "description": "The advanced policy_epoch that drove acceptance despite the version regression." },
+        "reason": { "type": "string", "enum": ["version_regression"], "description": "Why the re-sync fired. \"version_regression\" is the only cause today: a lower version accepted because the epoch advanced." }
       }
     }
   }

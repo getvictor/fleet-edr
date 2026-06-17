@@ -257,7 +257,7 @@ final class FileHashCacheTests: XCTestCase {
 
     private func binaryOnlySnapshot(rule: ApplicationControlRule) -> ApplicationControlSnapshot {
         ApplicationControlSnapshot(
-            policyID: 1, policyVersion: 1, deadlineFallback: .failClosed,
+            policyID: 1, policyVersion: 1, policyEpoch: 0, deadlineFallback: .failClosed,
             binaryRules: [rule.identifier: rule],
             cdhashRules: [:], signingIDRules: [:], certificateRules: [:], teamIDRules: [:], pathRules: [:]
         )
