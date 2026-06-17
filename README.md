@@ -42,10 +42,6 @@ Two steps. Stand up a server, then push the agent to your Macs.
   EDR_DOMAIN=edr.example.com EDR_VERSION=v0.2.1 ./bootstrap.sh
   ```
 
-- **One-click on Render (fastest to click, but read the caveat).** The blueprint provisions the server and a MySQL database behind Render's TLS edge, so there are no certificates to manage. Render's edge WAF blocks agent telemetry by default and you cannot disable it yourself, so this path needs a support-ticket workaround; see the warning in [docs/deploy-render.md](docs/deploy-render.md).
-
-  [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/getvictor/fleet-edr)
-
 - **Or self-host the container** on any container host (Docker, Kubernetes, AWS ECS/EKS, GCP, Azure, or your own VM). The server is a standard multi-arch Linux image. Setup, secrets, and TLS: [docs/install-server.md](docs/install-server.md).
 
 **2. Deploy the agent to your Macs** (Apple Silicon, macOS 26+). The agent ships as a Developer ID-signed, notarized `.pkg` plus two `.mobileconfig` profiles, delivered by your MDM.
@@ -107,7 +103,6 @@ Operator and reference docs live in [`docs/`](docs/):
 | Topic                                                    | Doc                                                                   |
 | -------------------------------------------------------- | --------------------------------------------------------------------- |
 | Deploy on a single VM with your own domain (recommended) | [`quickstart-vm.md`](docs/quickstart-vm.md)                           |
-| Deploy the server on Render                              | [`deploy-render.md`](docs/deploy-render.md)                           |
 | Self-host the server stack                               | [`install-server.md`](docs/install-server.md)                         |
 | Deploy the agent via any MDM                             | [`mdm-deployment.md`](docs/mdm-deployment.md)                         |
 | Fleet MDM recipe                                         | [`fleet-deployment.md`](docs/fleet-deployment.md)                     |

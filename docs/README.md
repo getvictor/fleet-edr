@@ -20,11 +20,11 @@ Operator-facing documentation for Fleet EDR. For developer setup see the repo-ro
 
 ## Getting started
 
-The recommended path: stand up the server on a single Linux VM with your own domain (one script, automatic Let's Encrypt certificate, no edge WAF to block agent telemetry), then push the agent to your Macs through Fleet MDM. See [quickstart-vm.md](quickstart-vm.md) for the server and [fleet-deployment.md](fleet-deployment.md) for the agents. Render is a one-click alternative for a throwaway evaluation, but its edge WAF blocks agent telemetry by default and needs a support-ticket workaround; see the caveat in [deploy-render.md](deploy-render.md).
+The recommended path: stand up the server on a single Linux VM with your own domain (one script, automatic Let's Encrypt certificate, no edge WAF to block agent telemetry), then push the agent to your Macs through Fleet MDM. See [quickstart-vm.md](quickstart-vm.md) for the server and [fleet-deployment.md](fleet-deployment.md) for the agents.
 
 ## Shape of a Fleet EDR deployment
 
-- **Server**: container image `ghcr.io/getvictor/fleet-edr-server` running behind your TLS-terminating ingress (or [Render](deploy-render.md), which provides the ingress), backed by MySQL 8.4. Serves the agent ingestion API, the admin web UI, and the OTel metric pipeline.
+- **Server**: container image `ghcr.io/getvictor/fleet-edr-server` running behind your TLS-terminating ingress, backed by MySQL 8.4. Serves the agent ingestion API, the admin web UI, and the OTel metric pipeline.
 - **Agent**: signed + notarized `.pkg` installed on each macOS endpoint. Runs as a LaunchDaemon, receives events from an embedded system extension over XPC, queues them in SQLite, uploads to the server.
 - **MDM profiles**: two unsigned `.mobileconfig` files that pre-approve the system extension and grant Full Disk Access. Delivered by whichever MDM the customer uses; the MDM signs them at delivery time.
 - **Install script**: a one-line Bash snippet your MDM runs before the `.pkg` installer to drop the enroll secret into `/etc/fleet-edr.conf`.
