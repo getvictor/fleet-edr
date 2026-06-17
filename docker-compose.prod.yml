@@ -3,7 +3,7 @@
 # secret-file generation documented in docker-compose.prod.README.md.
 # Boot shortcut:
 #
-#   docker compose -f docker-compose.prod.yml --env-file .env up -d
+#   docker compose -f docker-compose.prod.yml up -d
 #
 # The server image is pulled from ghcr.io/getvictor/fleet-edr-server; a local
 # build uses the docker-compose.prod.build.yml override for smoke tests and

@@ -34,6 +34,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    # Pass .env through to the server so any server variable (OIDC/SSO, session
+    # timeouts, JIT provisioning, etc.) can be set there without editing this
+    # file. The explicit `environment:` keys below take precedence over .env, so
+    # the security-critical wiring (proxy-terminated TLS, trusted proxies, the
+    # secret *_FILE paths) cannot be overridden by accident. See
+    # docs/quickstart-vm.md ("Set server configuration").
+    env_file:
+      - .env
     environment:
       # DSN + secrets are read from files (docker secrets) so no password lands
       # in `docker inspect`. EDR_DSN is blank so the *_FILE path wins.
@@ -53,9 +61,10 @@ services:
       # equal your domain.
       EDR_BREAKGLASS_RP_ID: ${EDR_DOMAIN}
       EDR_BREAKGLASS_RP_ORIGINS: https://${EDR_DOMAIN}
-      # Boot with break-glass only so you can redeem the first admin. Configure
-      # OIDC afterwards (see docs/install-server.md) and remove this.
-      EDR_AUTH_ALLOW_NO_OIDC: "1"
+      # Boot with break-glass only so you can redeem the first admin. Once OIDC
+      # is configured, set EDR_AUTH_ALLOW_NO_OIDC=0 in .env to require SSO. See
+      # docs/quickstart-vm.md ("Single sign-on (OIDC)").
+      EDR_AUTH_ALLOW_NO_OIDC: ${EDR_AUTH_ALLOW_NO_OIDC:-1}
       EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
       EDR_LOG_FORMAT: "json"
       # Event retention window. 7 days (not the 30-day server default) keeps the
