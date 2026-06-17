@@ -18,6 +18,14 @@
 
 Fleet EDR is an open-source endpoint detection and response (EDR) system for macOS fleets. It gives security teams real-time visibility into process, network, and DNS activity on Apple Silicon Macs, runs behavioral detection rules against a materialized process graph, and can block execution or kill a process on the endpoint. It is fully self-hosted: your own server, your own data, no SaaS dependency.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=3pPhDc-AIOQ">
+    <img src="https://img.youtube.com/vi/3pPhDc-AIOQ/maxresdefault.jpg" alt="Fleet EDR demo video" width="640">
+  </a>
+  <br />
+  <a href="https://www.youtube.com/watch?v=3pPhDc-AIOQ"><strong>▶ Watch the demo</strong></a>
+</p>
+
 ## Get started
 
 Either deploy it and enroll real Macs, or try it first with the Mac-free demo.
