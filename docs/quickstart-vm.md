@@ -12,6 +12,28 @@ This is the recommended way to stand up a Fleet EDR server for a pilot. You run 
 - A domain you control (for example `edr.example.com`).
 - Ports 80 and 443 open to the internet on the VM. Caddy needs both for the ACME certificate challenge and for serving traffic.
 - A DNS `A` (and optional `AAAA`) record for your domain pointing at the VM's public IP, created before you run the script so the certificate can be issued.
+- Optional but recommended beyond a short evaluation: a separate data disk for MySQL. Event telemetry dominates storage and a busy host can add many GB per day, so a dedicated disk keeps the OS root from filling. Set it up before you run the bootstrap: see [Put MySQL data on a dedicated disk](#put-mysql-data-on-a-dedicated-disk).
+
+## Put MySQL data on a dedicated disk
+
+Skip this for a quick evaluation. For anything longer, give MySQL its own disk rather than sharing the OS root, because event telemetry is the dominant store and a busy host can add many GB per day (tune the window with `EDR_RETENTION_DAYS`; see retention tuning in [operations.md](operations.md#retention-tuning)). The simplest approach with no Compose changes is to mount the data disk at Docker's data root (`/var/lib/docker`) before you install Docker, so the `edr-mysql-data` volume lands on it automatically.
+
+On a fresh VM whose extra disk is still raw (confirm the device name with `lsblk`; below it is `/dev/sdb`, a 100 GB disk):
+
+```sh
+sudo mkfs.ext4 -L edr-data /dev/sdb
+UUID=$(sudo blkid -s UUID -o value /dev/sdb)
+sudo mkdir -p /var/lib/docker
+# nofail so a detached data disk never blocks boot.
+echo "UUID=$UUID  /var/lib/docker  ext4  defaults,discard,nofail  0 2" | sudo tee -a /etc/fstab
+sudo mount /var/lib/docker
+```
+
+Then install Docker. Everything Docker stores, including the MySQL data volume, now lives on the dedicated disk. Confirm with `docker info --format '{{.DockerRootDir}}'` (expect `/var/lib/docker`) and `findmnt /var/lib/docker` (expect your data disk).
+
+If Docker is already installed and running, stop it and migrate the existing data root first: `sudo systemctl stop docker`, copy the data aside with `sudo rsync -aP /var/lib/docker/ /var/lib/docker.bak/`, mount the disk as above, restore with `sudo rsync -aP /var/lib/docker.bak/ /var/lib/docker/`, then `sudo systemctl start docker`.
+
+A full data disk stops MySQL writes (ingest returns 5xx and the server logs the error) and, because Docker's data root sits on it, affects the rest of Docker too, so keep `EDR_RETENTION_DAYS` sized to the disk and alert on disk usage.
 
 ## Steps
 
@@ -57,7 +79,7 @@ This is the recommended way to stand up a Fleet EDR server for a pilot. You run 
   docker compose -f docker-compose.quickstart.yml --env-file .env up -d
   ```
 
-- **Where state lives.** Durable data is in the `edr-mysql-data` Docker volume; issued certificates are in the `caddy-data` volume. Back both up (a `mysqldump` schedule plus a volume snapshot). The `secrets/` directory holds the enroll secret, the deployment secret key, and the database credentials; keep a copy somewhere safe, because the secret key cannot be regenerated without invalidating every enrolled host.
+- **Where state lives.** Durable data is in the `edr-mysql-data` Docker volume; issued certificates are in the `caddy-data` volume. Both sit under Docker's data root (`/var/lib/docker`), so they live on whatever disk backs it: mount a [dedicated data disk](#put-mysql-data-on-a-dedicated-disk) there to keep MySQL off the OS root. Back both up (a `mysqldump` schedule plus a volume snapshot). The `secrets/` directory holds the enroll secret, the deployment secret key, and the database credentials; keep a copy somewhere safe, because the secret key cannot be regenerated without invalidating every enrolled host.
 
 - **Rotate the enroll secret.** Overwrite `secrets/enroll_secret` and `docker compose -f docker-compose.quickstart.yml restart server`. Existing host tokens are unaffected (they were derived at enroll time).
 
