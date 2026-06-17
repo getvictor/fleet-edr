@@ -18,20 +18,36 @@ PATTERN="${EM_DASH}|${EN_DASH}"
 # binary files. This script is skipped explicitly (defensive; it is ASCII-only, but never scan the scanner). NUL-delimited
 # (ls-files -z + read -d '') so filenames with spaces, quotes, or non-ASCII bytes are read verbatim, not Git-quoted.
 found=0
-while IFS= read -r -d '' f; do
-  case "$f" in
-    # Never scan the scanner (defensive; it is ASCII-only). .claude/** is AI-tool-installed config we do not author
-    # (markdownlint ignores it for the same reason), so it is out of scope for this gate.
-    tools/lint-no-emdash.sh | .claude/*) continue ;;
+
+# scan_file greps one file, setting found=1 on a hit. Skips the scanner itself (defensive; it is ASCII-only) and
+# .claude/** (AI-tool-installed config we do not author; markdownlint ignores it for the same reason). grep -I drops
+# binary files so a staged PNG passed by the pre-commit hook is a no-op rather than a false match.
+scan_file() {
+  case "$1" in
+    tools/lint-no-emdash.sh | .claude/*) return 0 ;;
   esac
-  if grep -HInE "$PATTERN" -- "$f" 2>/dev/null; then
+  if grep -HInE "$PATTERN" -- "$1" 2>/dev/null; then
     found=1
   fi
-done < <(git ls-files -z)
+}
+
+# With file arguments, scan exactly those: the lefthook pre-commit hook passes the staged file list so a commit is gated
+# without rescanning the whole tree. With no arguments, scan every tracked text file: the behaviour the CI gate and
+# `task lint:dashes` rely on. NUL-delimited read of git ls-files so filenames with spaces are handled verbatim.
+if [ "$#" -gt 0 ]; then
+  for f in "$@"; do
+    [ -f "$f" ] || continue # staged deletions / non-regular paths
+    scan_file "$f"
+  done
+else
+  while IFS= read -r -d '' f; do
+    scan_file "$f"
+  done < <(git ls-files -z)
+fi
 
 if [ "$found" -ne 0 ]; then
   echo "::error::Em dash (U+2014) or en dash (U+2013) found above. Reword the sentence (prefer shorter sentences) or use ':'. The spaced hyphen ' - ' is also banned (see tools/dash-lint)." >&2
   exit 1
 fi
 
-echo "no em/en dashes in tracked files"
+echo "no em/en dashes found"
