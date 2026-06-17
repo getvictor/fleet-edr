@@ -165,10 +165,6 @@ func TestWriteStateCookie(t *testing.T) {
 
 // spec:ui-authentication-session/session-cookie-is-http-only-and-same-site/cookie-attributes-on-login
 // spec:ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class/cookie-carries-the-absolute-timeout-on-login
-// Transitional marker below: spectrace gates the canonical spec tree, which still carries the pre-reconciliation "12-hours"
-// slug until `openspec archive ui-redirect-on-session-expiry` rewrites the requirement. Drop the 12-hours line on archive
-// (see the change's tasks.md).
-// spec:ui-authentication-session/sessions-expire-12-hours-after-issue/cookie-carries-a-12-hour-expiry-on-login
 //
 // Direct unit test for writeSessionCookie's full attribute set. Mirrors TestWriteStateCookie's shape for the OIDC state cookie.
 // The session-cookie path is "/" (broader than the state cookie's /api/auth/ scope) because every authed admin endpoint reads it;

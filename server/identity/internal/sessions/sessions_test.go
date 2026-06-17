@@ -147,10 +147,6 @@ func TestGet_UnknownIDReturnsNotFound(t *testing.T) {
 }
 
 // spec:ui-authentication-session/sessions-expire-on-idle-and-absolute-timeouts-per-class/a-request-after-the-absolute-cap-is-rejected
-// Transitional second marker below: spectrace gates the canonical spec tree, which still carries the pre-reconciliation
-// "12-hours" slug until `openspec archive ui-redirect-on-session-expiry` rewrites the requirement. Keep both markers green
-// across the merge; drop the 12-hours line as part of archiving (see the change's tasks.md).
-// spec:ui-authentication-session/sessions-expire-12-hours-after-issue/a-request-after-the-12-hour-window-is-rejected
 //
 // Pins the expired-session-rejection clause: a session whose absolute cap has elapsed returns
 // ErrNotFound from Get, which the Session middleware translates into 401 on the wire (covered by
