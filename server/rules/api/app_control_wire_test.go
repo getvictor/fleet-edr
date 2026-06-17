@@ -136,6 +136,8 @@ func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
 	}
 }
 
+// spec:server-application-control/command-fan-out-on-policy-mutation/the-payload-carries-the-policy-epoch
+//
 // TestMarshalSetApplicationControlPayload_PolicyEpoch pins the restore-surviving epoch the extension's gate reads alongside
 // policy_version (#322). A non-zero UpdatedAt marshals to its Unix-microsecond value; the zero time marshals to 0, the
 // "unknown epoch" sentinel a pre-fix caller leaks and the extension treats as "never advances". A later mutation's larger

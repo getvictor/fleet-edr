@@ -198,24 +198,6 @@ The system MUST rate limit login attempts per source IP and MUST emit an audit l
 - **THEN** an audit log line is emitted including the source IP, the presented email, and a typed reason
 - **AND** the audit line does not include the presented password
 
-### Requirement: Sessions expire 12 hours after issue
-
-The system SHALL set the session lifetime to exactly 12 hours from the moment the session row is created. The cookie's `Expires` and `Max-Age` attributes MUST reflect that 12-hour window so the browser stops sending the cookie after it elapses, and the server-side row MUST be treated as expired once 12 hours have passed even if the browser does send the cookie. After expiry the operator must re-authenticate; expired sessions are not silently extended on use.
-
-#### Scenario: Cookie carries a 12-hour expiry on login
-
-- **GIVEN** the operator logs in successfully
-- **WHEN** the response sets the session cookie
-- **THEN** the cookie's `Expires` attribute is exactly 12 hours after the issue time
-- **AND** the cookie's `Max-Age` attribute reflects the same 12-hour window in seconds
-
-#### Scenario: A request after the 12-hour window is rejected
-
-- **GIVEN** a session cookie that was issued more than 12 hours ago
-- **WHEN** the client uses that cookie on any session-required endpoint
-- **THEN** the server treats the session as expired and returns 401
-- **AND** the request is not authenticated as the original operator
-
 ### Requirement: Session cookie is HTTP-only and same-site
 
 The system SHALL set the session cookie with HttpOnly and SameSite=Lax so JavaScript on any origin cannot read the session identifier and a cross-site form submission cannot silently authenticate as the operator.
@@ -227,3 +209,40 @@ The system SHALL set the session cookie with HttpOnly and SameSite=Lax so JavaSc
 - **THEN** the cookie carries HttpOnly
 - **AND** the cookie carries SameSite=Lax
 - **AND** the cookie carries Secure when the server is configured for TLS
+
+### Requirement: Sessions expire on idle and absolute timeouts per class
+
+The system SHALL bound every session by two timeouts: an idle timeout measured from the last activity and an absolute timeout measured from session creation. The pair is chosen by session class. Normal (SSO/OIDC) sessions use the lenient pair: idle 8 hours, absolute 24 hours. Break-glass (local-password) sessions use the strict pair: idle 15 minutes, absolute 1 hour, so a stolen recovery cookie expires before the end of an incident shift. The absolute cap SHALL be pinned at mint time (stored on the session row) so a later configuration change does not retroactively extend or shorten existing sessions. The session cookie's `Expires` and `Max-Age` attributes SHALL reflect the absolute cap so the browser stops sending the cookie once it elapses. The idle timeout SHALL slide on use: activity within the idle window extends the session, but never past the absolute cap. A request whose session has crossed either timeout MUST be treated as expired and rejected with 401; a session past its absolute cap is never extended on use.
+
+#### Scenario: Cookie carries the absolute timeout on login
+
+- **GIVEN** the operator logs in successfully
+- **WHEN** the response sets the session cookie
+- **THEN** the cookie's `Expires` attribute equals the session's absolute expiry (creation time plus the class's absolute timeout)
+- **AND** the cookie's `Max-Age` attribute is the number of seconds remaining until that expiry
+
+#### Scenario: A request after the absolute cap is rejected
+
+- **GIVEN** a session whose absolute cap has elapsed
+- **WHEN** the client uses that session cookie on any session-required endpoint
+- **THEN** the server treats the session as expired and returns 401
+- **AND** the request is not authenticated as the original operator
+
+#### Scenario: A request after the idle window is rejected
+
+- **GIVEN** a session that is still within its absolute cap but whose last activity is older than the class's idle timeout
+- **WHEN** the client uses that session cookie on any session-required endpoint
+- **THEN** the server treats the session as expired and returns 401
+
+#### Scenario: Activity within the idle window slides the session
+
+- **GIVEN** a session whose operator keeps interacting within the idle window
+- **WHEN** each request advances the session's last-activity time
+- **THEN** the session stays valid past what would otherwise be the idle-timeout cutoff
+- **AND** the session is still rejected once the absolute cap elapses, regardless of activity
+
+#### Scenario: Break-glass sessions use the strict timeout pair
+
+- **GIVEN** a session minted through the break-glass surface (`auth_method='local_password'`)
+- **WHEN** its idle gate is evaluated
+- **THEN** the strict break-glass pair applies (15-minute idle, 1-hour absolute), not the normal pair
