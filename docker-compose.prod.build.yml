@@ -3,7 +3,6 @@
 #
 #   docker compose -f docker-compose.prod.yml \
 #                  -f docker-compose.prod.build.yml \
-#                  --env-file .env \
 #                  up -d --build
 
 services:

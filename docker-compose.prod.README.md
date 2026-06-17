@@ -40,7 +40,7 @@ chmod 0644 secrets/*
 #    removed the plaintext-HTTP opt-out); the server refuses to boot when
 #    either cert path is unreadable.
 
-docker compose -f docker-compose.prod.yml --env-file .env up -d
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ## Verify
@@ -52,14 +52,14 @@ curl -sk https://localhost:8088/readyz | jq .
 
 `-k` bypasses cert verification for the local self-signed probe; production automation against a real Let's Encrypt-issued cert should drop it.
 
-The first-boot break-glass redemption URL prints to stderr until the admin redeems it; capture with `docker compose -f docker-compose.prod.yml --env-file .env logs server | grep -B 1 -A 4 BREAK-GLASS`. Open the URL in a browser within the TTL (default 1h) to set a password and register a WebAuthn credential. See [`docs/install-server.md`](docs/install-server.md) for the full first-boot flow.
+The first-boot break-glass redemption URL prints to stderr until the admin redeems it; capture with `docker compose -f docker-compose.prod.yml logs server | grep -B 1 -A 4 BREAK-GLASS`. Open the URL in a browser within the TTL (default 1h) to set a password and register a WebAuthn credential. See [`docs/install-server.md`](docs/install-server.md) for the full first-boot flow.
 
 ## Upgrade
 
 ```sh
 # Edit .env to set the new EDR_VERSION.
-docker compose -f docker-compose.prod.yml --env-file .env pull server
-docker compose -f docker-compose.prod.yml --env-file .env up -d
+docker compose -f docker-compose.prod.yml pull server
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 No DB migration needed within the v0.1.x series; schema is `CREATE TABLE IF NOT EXISTS` throughout.
@@ -69,7 +69,7 @@ No DB migration needed within the v0.1.x series; schema is `CREATE TABLE IF NOT 
 **Enroll secret**. Overwrite `secrets/enroll_secret` with the new value and restart the server so it re-reads the secret file:
 
 ```sh
-docker compose -f docker-compose.prod.yml --env-file .env restart server
+docker compose -f docker-compose.prod.yml restart server
 ```
 
 Existing per-host tokens are not affected by enroll-secret rotation because they were derived at enroll time, not re-verified against the secret on every auth. SIGHUP is NOT wired for secret reload; only TLS cert reload responds to it.
