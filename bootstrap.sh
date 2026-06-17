@@ -23,8 +23,15 @@ command -v openssl >/dev/null 2>&1 || die "openssl is not installed"
 
 DOMAIN="${EDR_DOMAIN:-${1:-}}"
 [[ -n "$DOMAIN" ]] || die "set EDR_DOMAIN, e.g. EDR_DOMAIN=edr.example.com ./bootstrap.sh"
+# Constrain to a plain hostname. Rejects newlines and other control characters so a
+# crafted value cannot inject extra keys into .env (which Compose loads into the
+# server via env_file), and catches typos before Caddy fails the ACME challenge.
+[[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "EDR_DOMAIN must be a hostname (letters, digits, '.', '-'): got '$DOMAIN'"
 
 VERSION="${EDR_VERSION:-latest}"
+# Same reasoning: a tag is letters, digits, '.', '_', '-'; reject anything that
+# could smuggle a newline (and thus an extra key) into .env.
+[[ "$VERSION" =~ ^[A-Za-z0-9._-]+$ ]] || die "EDR_VERSION must be an image tag (letters, digits, '.', '_', '-'): got '$VERSION'"
 [[ "$VERSION" == "latest" ]] && \
   printf 'warning: EDR_VERSION=latest; pin a release tag for production (EDR_VERSION=vX.Y.Z)\n' >&2
 
@@ -49,13 +56,20 @@ gen_secret() {
 	printf 'generated %s\n' "$f"
 }
 
+# edr_dsn embeds the mysql_root password, so it must be rederived whenever
+# mysql_root is (re)generated. Record whether mysql_root existed before this run:
+# if it gets generated now while a stale edr_dsn lingers, the server would read an
+# old password and fail to connect.
+mysql_root_existed=0
+[[ -s secrets/mysql_root ]] && mysql_root_existed=1
+
 gen_secret secrets/mysql_root openssl rand -hex 24
 gen_secret secrets/secret_key openssl rand -hex 32
 gen_secret secrets/enroll_secret openssl rand -base64 32
 
-# edr_dsn embeds the MySQL root password and must stay in sync with it, so it is
-# derived from mysql_root rather than generated independently.
-if [[ ! -s secrets/edr_dsn ]]; then
+# (Re)derive edr_dsn from the current mysql_root when edr_dsn is missing OR
+# mysql_root was just generated, so the DSN password never drifts out of sync.
+if [[ ! -s secrets/edr_dsn || "$mysql_root_existed" == "0" ]]; then
 	printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$(cat secrets/mysql_root)" > secrets/edr_dsn
 	printf 'generated secrets/edr_dsn\n'
 fi
