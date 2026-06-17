@@ -13,6 +13,15 @@ import (
 
 var testKey = []byte("0123456789abcdef0123456789abcdef") // 32 bytes
 
+// spec:server-identity-authentication/pre-auth-cookie-signing-keys-derive-from-the-deployment-root-secret/oidc-state-cookie-is-signed-with-the-derived-key
+// spec:server-identity-authentication/pre-auth-cookie-signing-keys-derive-from-the-deployment-root-secret/replicas-sharing-the-root-secret-verify-each-other-s-pre-auth-cookies
+// Unit-level proof of both pre-auth-cookie scenarios at the state-cookie codec: a cookie signed with a key verifies with that
+// SAME key. In production the key is the session-signing key derived from EDR_SECRET_KEY (wired in cmd/main via the handler's
+// injected SigningKey; the boot gate is pinned by config_test.go), so signing-and-verifying with one key is exactly what a
+// single replica does, and two replicas sharing the root secret derive the same key and therefore cross-verify. The negative
+// (a different secret -> different key -> verification fails) is pinned by TestStateCookie_WrongKey. A dedicated
+// derivation/cross-replica integration test is a worthwhile follow-up (these scenarios shipped without one in
+// host-token-fast-hash); this codec round-trip is the honest unit-level demonstration.
 // Round-trip: encode then decode returns identical fields.
 func TestStateCookie_RoundTrip(t *testing.T) {
 	t.Parallel()

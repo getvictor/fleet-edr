@@ -12,8 +12,6 @@ This specification fixes the user-observable behaviour of each page: what an ana
 
 The UI SHALL probe the server's session endpoint on application load and SHALL render the login page when the probe indicates no active session. A successful login MUST establish a session and route the user to the application's home view; an invalid login MUST surface a generic error without revealing whether the email or the password was wrong. When the session lapses while the app is already open (an idle or absolute timeout, or a server-side revocation) and any subsequent request to the server is rejected as unauthenticated, the UI MUST return the operator to the login page rather than leaving them on a page that renders a raw transport error such as `API error: 401`. The redirect SHALL preserve the operator's current location so a successful re-login returns them to where they were.
 
-The change from the prior requirement is the addition of the mid-session expiry behavior: redirect-to-login is no longer limited to the load-time probe; a 401 on any later request also returns the operator to login.
-
 #### Scenario: Anonymous user lands on the login page
 
 - **GIVEN** a browser with no active session cookie
