@@ -1,0 +1,60 @@
+# Correlate network/DNS flows to processes by audit-token identity: tasks
+
+Sequencing decision: server-first. PR 1 (this branch, `flow-process-identity`) lands the wire field handling, schema, migration, store, builder, correlation precedence, and tests, all dev-DB testable and a no-op for current agents (they emit no pidversion). PR 2 adds the Swift ES + NE emission and the live VM + SigNoz + Chrome verification.
+
+## 1. Wire format
+
+- [x] `schema/events.json`: optional `pidversion` (`integer`, `minimum: 0`) added to `exec`, `fork`, `network_connect`, `dns_query` payloads. Not `required`.
+
+## 2. Server: model, migration, store
+
+- [x] `server/detection/migrations/00004_processes_pidversion.sql`: `ADD COLUMN pidversion INT UNSIGNED NULL` + `CREATE INDEX idx_processes_host_pid_pidversion (host_id, pid, pidversion)`. Forward-only Down.
+- [x] `server/detection/api/types.go`: `Process.PIDVersion *uint32` (`db:"pidversion"`, `omitempty`).
+- [x] `server/detection/internal/mysql/processes.go`: pidversion threaded through `InsertProcess`, `ReExec` insert, `UpdateProcessExec` (via `COALESCE(?, pidversion)` so a fork-set value is never clobbered to NULL), and all process SELECT column lists. New `GetProcessByPIDVersion(host, pid, pidversion)` exact lookup; `GetProcessByPID` unchanged.
+- [x] `server/detection/api/service.go`: `GetProcessByPIDVersion` added to the `GraphReader` interface; test stubs updated.
+
+## 3. Server: graph builder
+
+- [x] `server/detection/internal/graph/builder.go`: `pidversion` parsed from `forkPayload` (child generation) and `execPayload`; stored on fork, exec-without-fork, and re-exec rows. `pickPIDVersion` inherits the prior generation's value on re-exec (execve keeps the kernel generation). NULL preserved for legacy events.
+
+## 4. Server: correlation precedence
+
+- [x] `server/rules/internal/catalog/dns_c2_beacon.go`: `resolveFlowProcess` prefers `GetProcessByPIDVersion` when the `network_connect` carries `pidversion` (no skew pad), else falls back to `lookupProcessSkewTolerant`. Wired into `evalEvent`.
+- [x] `server/rules/internal/catalog/suspicious_exec.go`: `pidversion` added to the shared `networkConnectPayload`.
+- [ ] DEFERRED to a follow-up: thread identity into `suspicious_exec`'s ancestor-walk entry lookup. The walk resolves parents by bare `ppid` (parent-edge identity / `ppidversion` is out of scope here), so the entry-lookup refactor is separable and lower value than the canonical `dns_c2_beacon` path. Tracked in proposal "Not in this change".
+- [x] `GetProcessDetail` (`graph/query.go`) intentionally unchanged: its per-process network/DNS scan stays on `payload_pid` + ingest window (the `payload_pidversion` events generated column is explicitly deferred). This is the spec's documented window fallback; the UI does not yet pass `pidversion`.
+
+## 7. Tests (with spectrace markers)
+
+- [x] PBT round-trip for the wire field, present + absent: `networkConnectPayload` (`flow_identity_test.go`), `execPayload` / `forkPayload` (`builder_pidversion_test.go`). Absent key decodes to nil; present 0 preserved.
+- [x] Unit test: identity-vs-window precedence in `resolveFlowProcess` (`flow_identity_test.go`), markers on the two correlation scenarios.
+- [x] Integration test (real MySQL): `TestGetProcessByPIDVersion` (`processes_pidversion_test.go`) covers PID reuse (distinct pidversion per lifetime), NULL-pidversion non-match + window reachability, no-match nil, and re-exec-chain current-generation selection. Markers on the storage + correlation scenarios.
+- [x] `go test ./server/detection/... ./server/rules/...` green; `task lint:go` (custom binary) clean; `openspec validate flow-process-identity --strict` passes.
+- [ ] PR 2: Swift unit tests for `extractProcessInfo` pidversion + encoder present/omitted.
+
+## 8. Docs
+
+- [x] `docs/architecture.md`: network-extension capture, `network_connect` fields, and the `processes` table now note `pidversion` + identity correlation.
+
+## 5. Extension: Endpoint Security (exec/fork) — PR 2
+
+- [ ] `ESFSubscriber.swift`: `audit_token_to_pidversion` on exec target + fork child, threaded into payloads.
+- [ ] `EventSerializer.swift`: optional `pidVersion` (`encodeIfPresent`, CodingKey `pidversion`) on `ExecPayload` + `ForkPayload`.
+
+## 6. Extension: Network Extension (network_connect/dns_query) — PR 2
+
+- [ ] `ProcessInfo.swift`: `extractProcessInfo` returns `pidversion`; investigate `sourceProcessAuditToken` on the macOS 26 SDK (design.md item 1).
+- [ ] `NetworkFilter.swift` + `DNSProxyProvider.swift`: pass pidversion through.
+- [ ] `NetworkEventSerializer.swift`: optional `pidVersion` on `NetworkConnectPayload` + `DNSQueryPayload`.
+
+## 9. Manual testing + telemetry verification — PR 2 (needs the emitting extension)
+
+- [ ] Build + deploy the updated extension to `edr-dev`; run real traffic (DNS C2 beacon trigger + ordinary activity).
+- [ ] Confirm `pidversion` populated on exec/fork/network_connect/dns_query at the dev server (DB + rows).
+- [ ] Force PID reuse; confirm a flow correlates to the correct generation by identity.
+- [ ] SigNoz MCP: no new ingest/parse errors; `dns_c2_beacon` still fires end to end.
+- [ ] Chrome MCP: host process graph + a DNS C2 beacon alert render with the new field present.
+
+## 10. Archive (after BOTH PRs merge)
+
+- [ ] `openspec archive flow-process-identity` (no `--skip-specs`).

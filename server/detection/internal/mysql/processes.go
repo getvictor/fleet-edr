@@ -15,13 +15,13 @@ import (
 func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO processes
-			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
+			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			 exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 			 is_snapshot, last_seen_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
-		p.CodeSigning, p.SHA256, p.CDHash, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
+		p.CodeSigning, p.SHA256, p.CDHash, p.PIDVersion, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
 		p.ExitIngestedAtNs, p.ExitReason, p.ExitCode, p.PreviousExecID,
 		p.IsSnapshot, p.LastSeenNs,
 	)
@@ -62,16 +62,22 @@ type ProcessExecUpdate struct {
 	CodeSigning api.NullRawJSON
 	SHA256      *string
 	CDHash      *string
+	// PIDVersion is the kernel PID generation from the exec event, when present. A re-exec keeps the same generation as the
+	// forked process, so this normally equals what the fork already stored; the UPDATE fills it via COALESCE so a fork that
+	// arrived without pidversion (or a missed fork) still gets the identity from the exec, without a present value clobbering
+	// an existing one to NULL.
+	PIDVersion *uint32
 }
 
 // UpdateProcessExec updates an existing process record with exec-time
 // metadata.
 func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, cdhash = ?, exec_time_ns = ?
+		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, cdhash = ?, exec_time_ns = ?,
+		                    pidversion = COALESCE(?, pidversion)
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC LIMIT 1`,
-		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.CDHash, u.ExecTimeNs,
+		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.CDHash, u.ExecTimeNs, u.PIDVersion,
 		u.HostID, u.PID,
 	)
 	return err
@@ -195,12 +201,12 @@ func (s *Store) ReExec(
 
 	ins, err := tx.ExecContext(ctx, `
 		INSERT INTO processes
-			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
+			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			 exit_ingested_at_ns, exit_code, previous_exec_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		newRow.HostID, newRow.PID, newRow.PPID, newRow.Path, newRow.Args, newRow.UID, newRow.GID,
-		newRow.CodeSigning, newRow.SHA256, newRow.CDHash, newRow.ForkTimeNs, newRow.ForkIngestedAtNs,
+		newRow.CodeSigning, newRow.SHA256, newRow.CDHash, newRow.PIDVersion, newRow.ForkTimeNs, newRow.ForkIngestedAtNs,
 		newRow.ExecTimeNs, newRow.ExitTimeNs, newRow.ExitIngestedAtNs, newRow.ExitCode,
 		newRow.PreviousExecID,
 	)
@@ -244,7 +250,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 	var chain []api.Process
 	err := s.db.SelectContext(ctx, &chain, `
 		WITH RECURSIVE chain AS (
-			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
+			SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 			       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 			       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 			       is_snapshot, last_seen_ns,
@@ -253,7 +259,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 			WHERE id = ? AND host_id = ?
 			UNION ALL
 			SELECT p.id, p.host_id, p.pid, p.ppid, p.path, p.args, p.uid, p.gid,
-			       p.code_signing, p.sha256, p.cdhash, p.fork_time_ns, p.fork_ingested_at_ns,
+			       p.code_signing, p.sha256, p.cdhash, p.pidversion, p.fork_time_ns, p.fork_ingested_at_ns,
 			       p.exec_time_ns, p.exit_time_ns, p.exit_ingested_at_ns,
 			       p.exit_reason, p.exit_code, p.previous_exec_id,
 			       p.is_snapshot, p.last_seen_ns,
@@ -262,7 +268,7 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 			JOIN chain c ON p.id = c.previous_exec_id AND p.host_id = c.host_id
 			WHERE c.depth < ?
 		)
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns
@@ -309,7 +315,7 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.Process, error) {
 	var procs []api.Process
 	err := s.db.SelectContext(ctx, &procs, `
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns
@@ -335,7 +341,7 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
 	var proc api.Process
 	err := s.db.GetContext(ctx, &proc, `
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns
@@ -355,12 +361,44 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	return &proc, nil
 }
 
+// GetProcessByPIDVersion returns the single process generation matching the exact (host_id, pid, pidversion) identity, or nil
+// when none exists. Unlike GetProcessByPID it takes no time anchor: the kernel PID generation pins the process directly, so the
+// result is immune to PID reuse (a recycled PID gets a higher pidversion) and needs no clock-drift padding. Backed by
+// idx_processes_host_pid_pidversion. Rows whose pidversion is NULL (legacy agents, or a row whose audit token was unavailable)
+// never match here, so correlation falls back to GetProcessByPID for events that carry no pidversion (issue #403).
+//
+// A same-PID re-exec chain (issue #10) shares one pidversion across its generations, so more than one row can match. That is
+// the only multi-row case: distinct lifetimes of a reused PID carry distinct pidversions. The ORDER BY returns the current
+// generation of the chain (the live row, else the most recently inserted), matching what GetProcessByPID resolves for a live
+// process: alive rows first, then highest id.
+func (s *Store) GetProcessByPIDVersion(ctx context.Context, hostID string, pid int, pidversion uint32) (*api.Process, error) {
+	var proc api.Process
+	err := s.db.GetContext(ctx, &proc, `
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
+		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+		       is_snapshot, last_seen_ns
+		FROM processes
+		WHERE host_id = ? AND pid = ? AND pidversion = ?
+		ORDER BY (exit_time_ns IS NULL) DESC, id DESC
+		LIMIT 1`,
+		hostID, pid, pidversion,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query process by pidversion: %w", err)
+	}
+	return &proc, nil
+}
+
 // GetChildProcesses returns processes whose PPID matches the given PID and were forked within the given time range. Satisfies
 // api.GraphReader.
 func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, tr api.TimeRange) ([]api.Process, error) {
 	var procs []api.Process
 	err := s.db.SelectContext(ctx, &procs, `
-		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash,
+		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns

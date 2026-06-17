@@ -55,6 +55,12 @@ type GraphReader interface {
 	// NULL).
 	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*Process, error)
 
+	// GetProcessByPIDVersion returns the single row matching the exact (host, pid, pidversion) identity, or nil when none exists.
+	// Unlike GetProcessByPID it takes no time anchor: the kernel PID generation pins the generation directly, so the lookup is
+	// immune to PID reuse and needs no clock-drift padding. Correlation rules prefer this when a flow event carries a pidversion and
+	// fall back to GetProcessByPID otherwise (issue #403).
+	GetProcessByPIDVersion(ctx context.Context, hostID string, pid int, pidversion uint32) (*Process, error)
+
 	// GetChildProcesses returns all rows whose ppid matches the given
 	// parent PID and whose fork_time_ns falls inside the time range.
 	GetChildProcesses(ctx context.Context, hostID string, ppid int, tr TimeRange) ([]Process, error)

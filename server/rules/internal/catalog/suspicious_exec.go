@@ -141,6 +141,10 @@ type networkConnectPayload struct {
 	Direction     string `json:"direction"`
 	RemoteAddress string `json:"remote_address"`
 	RemotePort    int    `json:"remote_port"`
+	// PIDVersion is the source process's kernel PID generation (audit_token_to_pidversion), when the agent provided it. Lets a
+	// correlation rule resolve the connecting process by exact (host, pid, pidversion) identity instead of a time window. Nil for
+	// legacy agents or flows whose audit token was unavailable (issue #403).
+	PIDVersion *uint32 `json:"pidversion"`
 }
 
 func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {

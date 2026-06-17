@@ -153,7 +153,7 @@ func (r *DNSC2Beacon) evalEvent(
 		return nil, 0, nil
 	}
 
-	proc, err := lookupProcessSkewTolerant(ctx, s, evt.HostID, conn.PID, evt.TimestampNs)
+	proc, err := resolveFlowProcess(ctx, s, evt.HostID, conn.PID, conn.PIDVersion, evt.TimestampNs)
 	if err != nil {
 		return nil, 0, fmt.Errorf("get pid %d: %w", conn.PID, err)
 	}
@@ -205,6 +205,27 @@ func (r *DNSC2Beacon) evalEvent(
 // the exact-time lookup misses. The connection carries the network-extension clock while the process row carries the Endpoint Security
 // clock; the two drift (issue #7), so a connect timestamp can land just before the ES fork/exec timestamp and bracket to no row. The
 // exact lookup is tried first (so a reused pid resolves to the right generation in the common case); the forward retry only runs on a miss.
+// resolveFlowProcess resolves the process a network/DNS flow belongs to. When the flow carried a kernel PID generation
+// (pidversion) it prefers an exact (host, pid, pidversion) identity match: that is immune to PID reuse and needs no clock-drift
+// padding, because the generation is pinned directly rather than inferred from the connect timestamp. On an identity miss (the
+// exec/fork that carries this pidversion has not materialised yet) or when the flow carried no pidversion (a legacy agent, or a
+// flow whose audit token was unavailable), it falls back to the skew-tolerant event-time window lookup, unchanged from the
+// pre-pidversion behaviour. See issue #403.
+func resolveFlowProcess(
+	ctx context.Context, s api.GraphReader, hostID string, pid int, pidversion *uint32, atNs int64,
+) (*api.Process, error) {
+	if pidversion != nil {
+		proc, err := s.GetProcessByPIDVersion(ctx, hostID, pid, *pidversion)
+		if err != nil {
+			return nil, err
+		}
+		if proc != nil {
+			return proc, nil
+		}
+	}
+	return lookupProcessSkewTolerant(ctx, s, hostID, pid, atNs)
+}
+
 func lookupProcessSkewTolerant(ctx context.Context, s api.GraphReader, hostID string, pid int, atNs int64) (*api.Process, error) {
 	proc, err := s.GetProcessByPID(ctx, hostID, pid, atNs)
 	if err != nil {

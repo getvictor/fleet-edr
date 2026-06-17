@@ -188,6 +188,10 @@ func (b *Builder) handleSnapshotHeartbeat(ctx context.Context, evt api.Event) er
 type forkPayload struct {
 	ChildPID  int `json:"child_pid"`
 	ParentPID int `json:"parent_pid"`
+	// PIDVersion is the CHILD process's kernel PID generation (audit_token_to_pidversion), when the agent provided it. Stored on
+	// the new generation so network/DNS flows correlate to it by exact identity rather than a fork-to-exit window. Nil for
+	// agents that predate this field (issue #403).
+	PIDVersion *uint32 `json:"pidversion"`
 }
 
 func (b *Builder) handleFork(ctx context.Context, evt api.Event) error {
@@ -213,6 +217,7 @@ func (b *Builder) handleFork(ctx context.Context, evt api.Event) error {
 		PID:              p.ChildPID,
 		PPID:             p.ParentPID,
 		Path:             parentPath,
+		PIDVersion:       p.PIDVersion,
 		ForkTimeNs:       evt.TimestampNs,
 		ForkIngestedAtNs: &forkIngested,
 	})
@@ -231,6 +236,10 @@ type execPayload struct {
 	// CDHash is the 40-hex code-directory hash; agent emits it only for Hardened-Runtime binaries (issue #68 / PR #185). Decoder
 	// tolerates absence: non-HR rows + pre-cdhash agents simply leave the field nil and the persisted column stays NULL.
 	CDHash *string `json:"cdhash"`
+	// PIDVersion is the exec'd process's kernel PID generation (audit_token_to_pidversion), when the agent provided it. Stored on
+	// the process record so flows correlate by exact identity. A re-exec keeps the same generation, so this matches the value the
+	// fork stored. Nil for agents that predate this field (issue #403).
+	PIDVersion *uint32 `json:"pidversion"`
 	// Snapshot is true for synthetic exec events emitted by the ESF startup baseline pass (issue #11). The graph builder uses this
 	// to avoid clobbering a richer live-event row with a sparse synthetic one when the snapshot pass and an early-startup live exec
 	// both arrive for the same PID.
@@ -271,6 +280,7 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 			Path: p.Path, Args: p.Args,
 			UID: p.UID, GID: p.GID,
 			CodeSigning: p.CodeSigning, SHA256: p.SHA256, CDHash: p.CDHash,
+			PIDVersion: p.PIDVersion,
 		})
 	}
 	return b.insertReExec(ctx, evt, p, current)
@@ -295,6 +305,7 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p ex
 		CodeSigning:      p.CodeSigning,
 		SHA256:           p.SHA256,
 		CDHash:           p.CDHash,
+		PIDVersion:       p.PIDVersion,
 		ForkTimeNs:       evt.TimestampNs,
 		ForkIngestedAtNs: &forkIngested,
 		ExecTimeNs:       &evt.TimestampNs,
@@ -344,14 +355,17 @@ func (b *Builder) insertReExec(ctx context.Context, evt api.Event, p execPayload
 		PID:    p.PID,
 		// Preserve the parent linkage from the original fork: a re-exec doesn't change PPID on macOS. Falls back to whatever
 		// the exec event carries if the prior row somehow has ppid=0.
-		PPID:             pickPPID(prior.PPID, p.PPID),
-		Path:             p.Path,
-		Args:             p.Args,
-		UID:              p.UID,
-		GID:              p.GID,
-		CodeSigning:      p.CodeSigning,
-		SHA256:           p.SHA256,
-		CDHash:           p.CDHash,
+		PPID:        pickPPID(prior.PPID, p.PPID),
+		Path:        p.Path,
+		Args:        p.Args,
+		UID:         p.UID,
+		GID:         p.GID,
+		CodeSigning: p.CodeSigning,
+		SHA256:      p.SHA256,
+		CDHash:      p.CDHash,
+		// A re-exec (execve without an intervening fork) keeps the same kernel generation, so the chain shares one pidversion.
+		// Prefer the prior row's value (the established identity); fall back to the event's when the prior row predates capture.
+		PIDVersion:       pickPIDVersion(prior.PIDVersion, p.PIDVersion),
 		ForkTimeNs:       prior.ForkTimeNs, // chain preserves the original fork time
 		ForkIngestedAtNs: prior.ForkIngestedAtNs,
 		ExecTimeNs:       &evt.TimestampNs,
@@ -372,6 +386,16 @@ func (b *Builder) insertReExec(ctx context.Context, evt api.Event, p execPayload
 // same pid, but staying defensive: if prior has it and the event doesn't, use prior.
 func pickPPID(prior, fromEvent int) int {
 	if prior != 0 {
+		return prior
+	}
+	return fromEvent
+}
+
+// pickPIDVersion prefers the prior generation's pidversion for a re-exec: execve does not change the kernel PID generation, so a
+// same-PID re-exec chain shares one pidversion. Falls back to the exec event's value when the prior row predates pidversion
+// capture (a fork ingested before this field existed). Both nil yields nil, which leaves the row's pidversion unset.
+func pickPIDVersion(prior, fromEvent *uint32) *uint32 {
+	if prior != nil {
 		return prior
 	}
 	return fromEvent

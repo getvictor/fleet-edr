@@ -214,6 +214,16 @@ func (s *stubBlockGraphReader) GetProcessByPID(_ context.Context, _ string, _ in
 	return &api.Process{ID: s.procID}, nil
 }
 
+func (s *stubBlockGraphReader) GetProcessByPIDVersion(_ context.Context, _ string, _ int, _ uint32) (*api.Process, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if !s.exists {
+		return nil, nil
+	}
+	return &api.Process{ID: s.procID}, nil
+}
+
 func (s *stubBlockGraphReader) GetChildProcesses(_ context.Context, _ string, _ int, _ api.TimeRange) ([]api.Process, error) {
 	return nil, nil
 }
