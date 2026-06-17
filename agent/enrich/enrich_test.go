@@ -13,18 +13,22 @@ func fakeEval(result *codesign.Result, ok bool) Evaluator {
 	return func(_ string) (*codesign.Result, bool) { return result, ok }
 }
 
+// btmSigningCase is one TestBtmExecutableSigning table row, named so runBtmSigningCase can carry the per-case assertion
+// logic out of the test body (keeping TestBtmExecutableSigning's cognitive complexity in bounds).
+type btmSigningCase struct {
+	name string
+	in   string
+	eval Evaluator
+	// wantSigning is the executable_code_signing object expected in the output, or "" to assert the field is absent.
+	wantSigning string
+	// wantUnchanged asserts the bytes are returned verbatim (no re-marshal).
+	wantUnchanged bool
+}
+
 func TestBtmExecutableSigning(t *testing.T) {
 	signed := &codesign.Result{TeamID: "ABCDE12345", SigningID: "com.evil.dropper", IsPlatformBinary: false}
 
-	tests := []struct {
-		name string
-		in   string
-		eval Evaluator
-		// wantSigning is the executable_code_signing object expected in the output, or "" to assert the field is absent.
-		wantSigning string
-		// wantUnchanged asserts the bytes are returned verbatim (no re-marshal).
-		wantUnchanged bool
-	}{
+	tests := []btmSigningCase{
 		{
 			name:        "fills missing signing from a readable executable",
 			in:          `{"event_type":"btm_launch_item_add","payload":{"item_type":"daemon","executable_path":"/tmp/d"}}`,
@@ -83,32 +87,39 @@ func TestBtmExecutableSigning(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := BtmExecutableSigning([]byte(tc.in), tc.eval)
-
-			if tc.wantUnchanged {
-				if string(got) != tc.in {
-					t.Fatalf("expected unchanged bytes\n got: %s\nwant: %s", got, tc.in)
-				}
-				return
-			}
-
-			var env struct {
-				EventType string          `json:"event_type"`
-				Payload   json.RawMessage `json:"payload"`
-			}
-			if err := json.Unmarshal(got, &env); err != nil {
-				t.Fatalf("output is not valid JSON: %v (%s)", err, got)
-			}
-			var payload struct {
-				Signing json.RawMessage `json:"executable_code_signing"`
-			}
-			if err := json.Unmarshal(env.Payload, &payload); err != nil {
-				t.Fatalf("output payload is not valid JSON: %v", err)
-			}
-			if string(payload.Signing) != tc.wantSigning {
-				t.Errorf("executable_code_signing\n got: %s\nwant: %s", payload.Signing, tc.wantSigning)
-			}
+			runBtmSigningCase(t, tc)
 		})
+	}
+}
+
+// runBtmSigningCase exercises BtmExecutableSigning for one table row and asserts either the verbatim-passthrough property
+// (wantUnchanged) or that the enriched output carries the expected executable_code_signing object.
+func runBtmSigningCase(t *testing.T, tc btmSigningCase) {
+	t.Helper()
+	got := BtmExecutableSigning([]byte(tc.in), tc.eval)
+
+	if tc.wantUnchanged {
+		if string(got) != tc.in {
+			t.Fatalf("expected unchanged bytes\n got: %s\nwant: %s", got, tc.in)
+		}
+		return
+	}
+
+	var env struct {
+		EventType string          `json:"event_type"`
+		Payload   json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(got, &env); err != nil {
+		t.Fatalf("output is not valid JSON: %v (%s)", err, got)
+	}
+	var payload struct {
+		Signing json.RawMessage `json:"executable_code_signing"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		t.Fatalf("output payload is not valid JSON: %v", err)
+	}
+	if string(payload.Signing) != tc.wantSigning {
+		t.Errorf("executable_code_signing\n got: %s\nwant: %s", payload.Signing, tc.wantSigning)
 	}
 }
 

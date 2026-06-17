@@ -67,23 +67,32 @@ func computeNewCodeScenarioIDs(ctx context.Context, specsDir, baseRef string) (m
 		if filepath.Base(file) != "spec.md" {
 			continue
 		}
-		hunks, err := gitDiffNewLineRanges(ctx, repoRoot, mergeBase, file)
-		if err != nil {
-			return nil, fmt.Errorf("git diff %s: %w", file, err)
-		}
-		// gitChangedFiles returns paths relative to the repo root; open from that root so spectrace works whether invoked
-		// from the repo top-level (CI shape) or a subdirectory (a contributor in their package).
-		ranges, err := parseSpecScenarioRanges(filepath.Join(repoRoot, file))
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", file, err)
-		}
-		for _, sr := range ranges {
-			if anyOverlap(sr.Start, sr.End, hunks) {
-				out[sr.ID] = struct{}{}
-			}
+		if err := addTouchedScenarioIDs(ctx, out, repoRoot, mergeBase, file); err != nil {
+			return nil, err
 		}
 	}
 	return out, nil
+}
+
+// addTouchedScenarioIDs adds to out the canonical ID of every scenario in `file` whose line range overlaps a new-side diff
+// hunk against mergeBase. file is repo-root-relative as returned by gitChangedFiles; repoRoot anchors both the git diff and
+// the spec.md open so spectrace works whether invoked from the repo top-level (CI shape) or a subdirectory (a contributor
+// in their package).
+func addTouchedScenarioIDs(ctx context.Context, out map[string]struct{}, repoRoot, mergeBase, file string) error {
+	hunks, err := gitDiffNewLineRanges(ctx, repoRoot, mergeBase, file)
+	if err != nil {
+		return fmt.Errorf("git diff %s: %w", file, err)
+	}
+	ranges, err := parseSpecScenarioRanges(filepath.Join(repoRoot, file))
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", file, err)
+	}
+	for _, sr := range ranges {
+		if anyOverlap(sr.Start, sr.End, hunks) {
+			out[sr.ID] = struct{}{}
+		}
+	}
+	return nil
 }
 
 // validateBaseRef rejects revisions that git would interpret as command-line options instead of a commit-ish reference.
@@ -105,9 +114,15 @@ func gitTopLevel(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel") //nolint:gosec // args are literal
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		return "", wrapGitErr(err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// wrapGitErr attaches the trimmed combined output of a failed git subprocess to err so the caller surfaces the actionable
+// git message (missing remote, shallow clone, unknown ref) instead of a bare `exit status 1`.
+func wrapGitErr(err error, out []byte) error {
+	return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 }
 
 // lineRange is a closed-closed range of new-side file lines (1-based).
@@ -134,7 +149,7 @@ func gitMergeBase(ctx context.Context, repoRoot, baseRef string) (string, error)
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		return "", wrapGitErr(err, out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -148,7 +163,7 @@ func gitChangedFiles(ctx context.Context, repoRoot, mergeBase, specsDir string) 
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		return nil, wrapGitErr(err, out)
 	}
 	var files []string
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
@@ -170,7 +185,7 @@ func gitDiffNewLineRanges(ctx context.Context, repoRoot, mergeBase, file string)
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		return nil, wrapGitErr(err, out)
 	}
 	return parseUnifiedDiffNewRanges(string(out)), nil
 }

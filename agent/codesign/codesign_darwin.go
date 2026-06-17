@@ -79,7 +79,10 @@ static edr_signing_t edr_evaluate_signing(const char *path) {
 */
 import "C"
 
-import "unsafe"
+// `import "C"` must stay on its own immediately after the cgo preamble; all other imports use the factored block form.
+import (
+	"unsafe"
+)
 
 // Evaluate reads the on-disk code signing of the binary (or bundle) at path
 // via SecStaticCode, network-free. It returns (nil, false) when the path is
