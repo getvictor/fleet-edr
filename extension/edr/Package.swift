@@ -99,6 +99,9 @@ let package = Package(
                 // ProcessInfo.swift is pure Darwin (audit-token extraction + proc_pidpath), no NetworkExtension import, so it
                 // compiles in this logic library and its extractProcessInfo pidversion parsing is unit-testable (issue #403).
                 "networkextension/ProcessInfo.swift",
+                // NetworkPayloads.swift holds the NetworkConnect/DNSQuery Codable structs (no NetworkExtension import, no
+                // EventEnvelope) so their pidversion wire shape is unit-testable here (issue #403, Copilot review).
+                "networkextension/NetworkPayloads.swift",
                 // The XPC server is now shared by both extensions (shared/XPCEventServer.swift): the listener, hello-ack
                 // handshake, pending buffer, peer code-signing, and the dispatchInbound decision. The per-extension
                 // XPCServer.swift wrappers (thin XPCEventServer instantiations) stay out of this logic module; the

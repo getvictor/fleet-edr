@@ -67,8 +67,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     // MARK: UDP flow handling
 
     private func handleUDPFlow(_ flow: NEAppProxyUDPFlow) {
-        let (pid, uid, pidversion) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let ctx = FlowContext(pid: pid, uid: uid, path: processPath(for: pid), pidVersion: pidversion)
+        let info = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
+        let ctx = FlowContext(pid: info.pid, uid: info.uid, path: processPath(for: info.pid), pidVersion: info.pidversion)
 
         flow.open(withLocalFlowEndpoint: nil) { [weak self] error in
             if let error {
@@ -171,8 +171,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     // MARK: TCP flow handling
 
     private func handleTCPFlow(_ flow: NEAppProxyTCPFlow) {
-        let (pid, uid, pidversion) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let ctx = FlowContext(pid: pid, uid: uid, path: processPath(for: pid), pidVersion: pidversion)
+        let info = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
+        let ctx = FlowContext(pid: info.pid, uid: info.uid, path: processPath(for: info.pid), pidVersion: info.pidversion)
         let upstreamEndpoint = flow.remoteFlowEndpoint
 
         flow.open(withLocalFlowEndpoint: nil) { [weak self] error in

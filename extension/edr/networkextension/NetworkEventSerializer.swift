@@ -4,59 +4,8 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "Serializer")
 
-// MARK: Payload types
-
-struct NetworkConnectPayload: Codable, Sendable {
-    let pid: pid_t
-    let path: String
-    let uid: uid_t
-    let proto: String
-    let direction: String
-    let localAddress: String
-    let localPort: UInt16
-    let remoteAddress: String
-    let remotePort: UInt16
-    let remoteHostname: String
-    /// Kernel PID generation (audit_token_to_pidversion) of the source process, when the flow carried an audit token. Lets the
-    /// server correlate the flow to the exact process generation independently of PID reuse (issue #403). The synthesized
-    /// encoder omits the key when nil, keeping the wire shape compact and backwards-tolerant for legacy agents.
-    let pidVersion: UInt32?
-
-    enum CodingKeys: String, CodingKey {
-        case pid, path, uid
-        case proto = "protocol"
-        case direction
-        case localAddress = "local_address"
-        case localPort = "local_port"
-        case remoteAddress = "remote_address"
-        case remotePort = "remote_port"
-        case remoteHostname = "remote_hostname"
-        case pidVersion = "pidversion"
-    }
-}
-
-struct DNSQueryPayload: Codable, Sendable {
-    let pid: pid_t
-    let path: String
-    let uid: uid_t
-    let queryName: String
-    let queryType: String
-    let responseAddresses: [String]?
-    let proto: String
-    /// Kernel PID generation of the querying process, when the flow carried an audit token (issue #403). The DNS proxy only
-    /// has sourceAppAuditToken (NEFlowMetaData exposes no per-process token), so this is the app token's pidversion. Omitted
-    /// from the wire when nil by the synthesized encoder.
-    let pidVersion: UInt32?
-
-    enum CodingKeys: String, CodingKey {
-        case pid, path, uid
-        case queryName = "query_name"
-        case queryType = "query_type"
-        case responseAddresses = "response_addresses"
-        case proto = "protocol"
-        case pidVersion = "pidversion"
-    }
-}
+// NetworkConnectPayload / DNSQueryPayload moved to NetworkPayloads.swift so their Codable wire shape is unit-testable via the
+// SwiftPM logic module without dragging this file's EventEnvelope (which collides with the ESF serializer's copy).
 
 // MARK: Event envelope (same as ESF extension)
 

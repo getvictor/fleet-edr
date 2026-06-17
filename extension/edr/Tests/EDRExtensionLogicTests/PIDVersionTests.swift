@@ -66,7 +66,7 @@ final class PIDVersionTests: XCTestCase {
             codeSigning: nil, sha256: nil, cdhash: nil, pidVersion: 99
         )
         let encoded = try encoder.encode(payload)
-        let json = String(decoding: encoded, as: UTF8.self)
+        let json = String(data: encoded, encoding: .utf8) ?? ""
         XCTAssertTrue(json.contains("\"pidversion\":99"), "exec payload must emit pidversion when set; got \(json)")
         let decoded = try decoder.decode(ExecPayload.self, from: encoded)
         XCTAssertEqual(decoded.pidVersion, 99)
@@ -79,7 +79,7 @@ final class PIDVersionTests: XCTestCase {
             pid: 4242, ppid: 1, path: "/bin/bash", args: ["bash"], cwd: "", uid: 501, gid: 20,
             codeSigning: nil, sha256: nil, cdhash: nil, pidVersion: nil
         )
-        let json = String(decoding: try encoder.encode(payload), as: UTF8.self)
+        let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
         XCTAssertFalse(json.contains("pidversion"), "exec payload must omit pidversion when nil; got \(json)")
     }
 
@@ -90,11 +90,54 @@ final class PIDVersionTests: XCTestCase {
     // A fork carries the child's pidversion under the snake_case wire key; nil omits it.
     func testForkPayloadPidVersionPresentAndOmitted() throws {
         let withVersion = try encoder.encode(ForkPayload(childPid: 10, parentPid: 1, pidVersion: 7))
-        let withJSON = String(decoding: withVersion, as: UTF8.self)
+        let withJSON = String(data: withVersion, encoding: .utf8) ?? ""
         XCTAssertTrue(withJSON.contains("\"pidversion\":7"), "fork payload must emit child pidversion; got \(withJSON)")
         XCTAssertEqual(try decoder.decode(ForkPayload.self, from: withVersion).pidVersion, 7)
 
-        let withoutJSON = String(decoding: try encoder.encode(ForkPayload(childPid: 10, parentPid: 1, pidVersion: nil)), as: UTF8.self)
+        let withoutJSON = String(data: try encoder.encode(ForkPayload(childPid: 10, parentPid: 1, pidVersion: nil)), encoding: .utf8) ?? ""
         XCTAssertFalse(withoutJSON.contains("pidversion"), "fork payload must omit pidversion when nil; got \(withoutJSON)")
+    }
+
+    // MARK: NetworkConnectPayload / DNSQueryPayload (NetworkExtension surface)
+
+    // spec:endpoint-event-collection/outbound-socket-flow-capture/a-process-opens-an-outbound-tcp-connection
+    //
+    // network_connect emits the snake_case `pidversion` wire key when the flow carried an audit token, and omits it when nil
+    // (the NetworkExtension surface is produced separately from the ES payloads, so it gets its own regression guard).
+    func testNetworkConnectPayloadPidVersionPresentAndOmitted() throws {
+        let present = NetworkConnectPayload(
+            pid: 1, path: "/usr/bin/curl", uid: 0, proto: "tcp", direction: "outbound",
+            localAddress: "0.0.0.0", localPort: 0, remoteAddress: "1.1.1.1", remotePort: 443,
+            remoteHostname: "", pidVersion: 77
+        )
+        let presentJSON = String(data: try encoder.encode(present), encoding: .utf8) ?? ""
+        XCTAssertTrue(presentJSON.contains("\"pidversion\":77"), "network_connect must emit pidversion when set; got \(presentJSON)")
+
+        let absent = NetworkConnectPayload(
+            pid: 1, path: "/usr/bin/curl", uid: 0, proto: "tcp", direction: "outbound",
+            localAddress: "0.0.0.0", localPort: 0, remoteAddress: "1.1.1.1", remotePort: 443,
+            remoteHostname: "", pidVersion: nil
+        )
+        let absentJSON = String(data: try encoder.encode(absent), encoding: .utf8) ?? ""
+        XCTAssertFalse(absentJSON.contains("pidversion"), "network_connect must omit pidversion when nil; got \(absentJSON)")
+    }
+
+    // spec:endpoint-event-collection/dns-query-capture/an-application-resolves-a-hostname-over-udp
+    //
+    // dns_query emits the `pidversion` wire key when set and omits it when nil.
+    func testDNSQueryPayloadPidVersionPresentAndOmitted() throws {
+        let present = DNSQueryPayload(
+            pid: 1, path: "/usr/bin/curl", uid: 0, queryName: "a.example.com", queryType: "A",
+            responseAddresses: ["1.1.1.1"], proto: "udp", pidVersion: 88
+        )
+        let presentJSON = String(data: try encoder.encode(present), encoding: .utf8) ?? ""
+        XCTAssertTrue(presentJSON.contains("\"pidversion\":88"), "dns_query must emit pidversion when set; got \(presentJSON)")
+
+        let absent = DNSQueryPayload(
+            pid: 1, path: "/usr/bin/curl", uid: 0, queryName: "a.example.com", queryType: "A",
+            responseAddresses: nil, proto: "udp", pidVersion: nil
+        )
+        let absentJSON = String(data: try encoder.encode(absent), encoding: .utf8) ?? ""
+        XCTAssertFalse(absentJSON.contains("pidversion"), "dns_query must omit pidversion when nil; got \(absentJSON)")
     }
 }
