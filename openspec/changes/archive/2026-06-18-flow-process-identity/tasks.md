@@ -49,11 +49,11 @@ Sequencing decision: server-first. PR 1 (this branch, `flow-process-identity`) l
 
 ## 9. Manual testing + telemetry verification: PR 2 (needs the emitting extension)
 
-- [ ] Build + deploy the updated extension to `edr-dev`; run real traffic (DNS C2 beacon trigger + ordinary activity).
-- [ ] Confirm `pidversion` populated on exec/fork/network_connect/dns_query at the dev server (DB + rows).
-- [ ] Force PID reuse; confirm a flow correlates to the correct generation by identity.
-- [ ] SigNoz MCP: no new ingest/parse errors; `dns_c2_beacon` still fires end to end.
-- [ ] Chrome MCP: host process graph + a DNS C2 beacon alert render with the new field present.
+- [x] Build + deploy the updated extension to `edr-dev`; run real traffic (DNS C2 beacon trigger + ordinary activity). Verified 2026-06-18: ad-hoc `f6ed40e4` NE captured the beacon, agent XPC bridge forwarding.
+- [x] Confirm `pidversion` populated on exec/fork/network_connect/dns_query at the dev server (DB + rows). Verified: beacon `dns_query` carried `pidversion=28893`, `processes.pidversion` populated.
+- [x] Force PID reuse; confirm a flow correlates to the correct generation by identity. Verified: wrapped the kernel PID counter so pid 10749 was captured across three generations (pidversion 28893 `/private/tmp/beacon`, 426514 + 824077 `/usr/bin/true`); the flow carries 28893 and the server resolves `(10749, 28893)` to `/private/tmp/beacon`, excluding the reuse generations. A pid-only join would conflate all three.
+- [x] SigNoz MCP: no new ingest/parse errors; `dns_c2_beacon` still fires end to end. Verified under `deployment.environment=dev-local`: only ERRORs were pre-verification startup DB-connection retries; no pidversion parse/ingest errors; `dns_c2_beacon` alert fired (named the beacon process).
+- [x] N/A: `pidversion` is an internal server-side correlation key, not a user-facing field; no UI change ships in this PR. The UI surfaces the correlation result (alert + `re_exec_chain` same-PID generations), not the raw `pidversion`.
 
 ## 10. Archive (after BOTH PRs merge)
 
