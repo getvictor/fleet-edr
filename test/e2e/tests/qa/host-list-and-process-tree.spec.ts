@@ -93,8 +93,10 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
       .poll(() => p.locator("tbody tr").count(), { timeout: 10_000, message: "host list never reached expected row count" })
       .toBe(BATCH_SIZE);
 
-    // Spot-check one enrolled host_id appears in a cell. This proves we're rendering THESE rows, not a leftover from a prior run.
-    await expect(p.getByRole("cell", { name: hosts[0].hostId, exact: true })).toBeVisible();
+    // Spot-check one enrolled host_id appears, proving we're rendering THESE rows, not a leftover from a prior run. The Host cell now
+    // stacks the enrollment hostname over the full hardware UUID (two lines), so the UUID is no longer the cell's whole accessible
+    // name; match the UUID text directly instead of an exact cell-name match.
+    await expect(p.getByText(hosts[0].hostId, { exact: true })).toBeVisible();
   });
 
   test("event count: hosts.event_count column shows the per-scenario timeline length", async ({ agent }) => {

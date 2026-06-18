@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listHosts } from "../api";
 import type { HostSummary } from "../types";
@@ -35,12 +35,15 @@ export function HostList() {
       });
   }, []);
 
-  // Fleet-overview counts. isOnline calls Date.now(), so memoise the whole
-  // tally per hosts change rather than re-walking the array on every render.
-  const { online, offline, total } = useMemo(() => {
-    const onlineCount = hosts.filter((h) => isOnline(h.last_seen_ns)).length;
-    return { online: onlineCount, offline: hosts.length - onlineCount, total: hosts.length };
-  }, [hosts]);
+  // Fleet-overview counts, derived inline on every render rather than memoised on `hosts`.
+  // isOnline() reads Date.now(), and each row re-evaluates it per render for its pill; a
+  // useMemo keyed on `hosts` alone would let the summary cards show a stale online/offline
+  // split (after the 5-min threshold elapses with no refetch) while the row pills had already
+  // flipped. Recomputing inline keeps the cards and the rows derived from one classification
+  // pass. The host list is small, so the re-walk is negligible.
+  const online = hosts.filter((h) => isOnline(h.last_seen_ns)).length;
+  const offline = hosts.length - online;
+  const total = hosts.length;
 
   return (
     <>

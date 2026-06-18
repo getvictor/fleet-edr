@@ -15,6 +15,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	"github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/testdb"
+	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // newTestStore wraps testdb.Open with detection's ApplySchema and
@@ -33,6 +34,17 @@ func newTestStore(tb testing.TB) *mysql.Store {
 	require.NoError(tb, testkit.ApplySchema(ctx, db))
 	s, err := mysql.New(db)
 	require.NoError(tb, err)
+	return s
+}
+
+// newFullSchemaStore is newTestStore's cross-context sibling for the handful of store tests that exercise ListHosts, which LEFT JOINs
+// the endpoint context's enrollments table. The detection-only schema newTestStore applies lacks that table, so those tests open a
+// full-schema fixture (every bounded context's DDL) via testdb/full instead. testdb/full is the sanctioned cross-context schema surface
+// (arch-go allows **.testdb here); it takes *testing.T, so this helper is test-only (no benchmark variant needed).
+func newFullSchemaStore(t *testing.T) *mysql.Store {
+	t.Helper()
+	s, err := mysql.New(full.Open(t))
+	require.NoError(t, err)
 	return s
 }
 

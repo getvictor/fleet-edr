@@ -1387,10 +1387,14 @@ func TestListHosts_DecoratesWithEnrollment(t *testing.T) {
 
 	hosts, err := d.Service().ListHosts(ctx)
 	require.NoError(t, err)
+	// Exactly the two seeded hosts, no more: a LEFT JOIN regression (e.g. a duplicate enrollment row or a bad join predicate fanning
+	// out rows) would inflate the count, which the byID map below would otherwise silently collapse.
+	require.Len(t, hosts, 2, "one row per host; the LEFT JOIN must not fan out duplicates")
 	byID := make(map[string]api.HostSummary, len(hosts))
 	for _, h := range hosts {
 		byID[h.HostID] = h
 	}
+	require.Len(t, byID, 2, "host_ids are unique across the returned rows")
 
 	require.Contains(t, byID, enrolledHost)
 	assert.Equal(t, "eng-lopez-mbp.local", byID[enrolledHost].Hostname, "enrolled host carries its enrollment hostname")

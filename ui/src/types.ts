@@ -1,10 +1,11 @@
 export interface HostSummary {
   host_id: string;
   // hostname + os_version come from the endpoint enrollment row joined into the
-  // hosts summary; both are empty for a host that has sent events but never
-  // enrolled, so the UI falls back to host_id / a placeholder dash.
-  hostname?: string;
-  os_version?: string;
+  // hosts summary. The server always sends them (COALESCE to ""), so they are
+  // required, not optional: an un-enrolled host carries empty strings, and the
+  // UI falls back to host_id / a placeholder dash on the empty value.
+  hostname: string;
+  os_version: string;
   event_count: number;
   last_seen_ns: number;
 }
