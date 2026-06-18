@@ -136,7 +136,7 @@ final class EventSerializerTests: XCTestCase {
 
     func testExecPayloadOmitsOptionalSigningAndHashes() throws {
         // Unsigned binaries lack code_signing / sha256 / cdhash. Verify the JSON
-        // omits the keys entirely rather than emitting nulls -- the server's
+        // omits the keys entirely rather than emitting nulls; the server's
         // decoders rely on absence, not null.
         let payload = ExecPayload(
             pid: 1, ppid: 0, path: "/tmp/unsigned", args: [], cwd: "/", uid: 0, gid: 0,
@@ -223,7 +223,7 @@ final class EventSerializerTests: XCTestCase {
         )
         let encoded = try encoder.encode(payload)
         let json = String(data: encoded, encoding: .utf8) ?? ""
-        // Spot-check snake_case wire keys land in the JSON -- the Go decoder reads
+        // Spot-check snake_case wire keys land in the JSON; the Go decoder reads
         // these literal names from server/rules/internal/catalog/application_control_block.go.
         XCTAssertTrue(json.contains("\"rule_id\":\"app_control:42\""), "missing rule_id, got: \(json)")
         XCTAssertTrue(json.contains("\"rule_type\":\"BINARY\""))

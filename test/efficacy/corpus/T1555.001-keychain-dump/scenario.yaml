@@ -4,7 +4,7 @@
 # Mirrors the positive_bare_dump fixture under server/rules/internal/catalog/fixtures/.
 # The credential_keychain_dump rule walks the process graph on every `exec` event,
 # matches `path == /usr/bin/security` + `args[1] == dump-keychain`, fires a high
-# severity alert -- expected within ~1s of POST.
+# severity alert, expected within ~1s of POST.
 name: "T1555.001 credential dump via /usr/bin/security dump-keychain"
 host:
   id: AAAA1555-0001-0000-0000-000000000001

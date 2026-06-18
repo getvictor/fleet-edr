@@ -308,7 +308,7 @@ func TestAppControlREST_CreateRule_FanOutDedupsAcrossOverlappingAssignments(t *t
 	// Insert a second "all"-criteria host group + a second assignment to the Default policy. Phase A's REST surface gates
 	// non-all-hosts host_group mutations behind 405 (the policy-spec keeps editable groups in Phase B), so we go through
 	// the raw DB. The fan-out walker reads both rows, resolves each to the same host set via allHostsCache, and unions the
-	// results into a single seen-map -- N hosts must enqueue N commands, not 2N.
+	// results into a single seen-map: N hosts must enqueue N commands, not 2N.
 	res, err := r.db.ExecContext(t.Context(),
 		`INSERT INTO host_groups (name, description, criteria) VALUES (?, ?, ?)`,
 		"secondary-all-hosts", "test overlap with all-hosts", `{"type":"all"}`)

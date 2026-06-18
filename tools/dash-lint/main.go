@@ -1,14 +1,20 @@
-// Command dash-lint fails when a spaced ASCII hyphen is used as an em dash (" - ", a hyphen with a space on both sides) in
-// prose or in a comment / user-facing string. The repo style forbids the em-dash character (U+2014/U+2013, caught by
-// tools/lint-no-emdash.sh) AND its spaced-hyphen stand-in: reword the sentence (prefer shorter sentences) or use ":".
+// Command dash-lint fails when a spaced ASCII hyphen is used as an em dash (" - " or " -- ", a hyphen / double-hyphen with a
+// space on both sides) in prose or in a comment / user-facing string. The repo style forbids the em-dash character
+// (U+2014/U+2013, caught by tools/lint-no-emdash.sh) AND its spaced-hyphen stand-in: reword the sentence (prefer shorter
+// sentences) or use ":".
 //
 // Scope (decided with the maintainer): Markdown prose plus code comments and string literals. It deliberately does NOT flag
 // bare code expressions, where " - " is subtraction (`n - 1`): per file type it only inspects the parts that are prose.
 //   - .md / .markdown: every line outside a fenced code block, with inline `code spans` stripped first. List-item markers and
 //     table separator rows do not match the pattern and so are never flagged.
 //   - .go: COMMENT and STRING/CHAR tokens only, via go/scanner (exact). Doc() rule descriptions and other user-facing string
-//     literals are in scope; arithmetic in code is not.
-//   - .swift / .ts / .tsx / .js / .jsx / .c / .h / .m / .mm: // line comments and /* block comments */ only.
+//     literals are in scope; arithmetic in code is not. Inline `code spans` inside comments are stripped first.
+//   - .swift / .ts / .tsx / .js / .jsx / .c / .h / .m / .mm: // line comments and /* block comments */ only, code spans stripped.
+//   - .yml / .yaml / .sh: the #-comment portion of each line only, code spans stripped (workflow / compose / config / script prose).
+//
+// A legitimate " -- " (a GNU end-of-options separator in a CLI example, e.g. `task uat:l5 -- attack-runbook`) wrapped in `code
+// span` backticks is exempt because code spans are stripped before scanning. For the rare case a backtick wrap is not suitable,
+// a line containing the literal "dash-lint:ignore" directive is skipped entirely; see ignoreDirective.
 //
 // Run via `task lint:dashes`; CI gate is .github/workflows/no-emdash.yml. With file arguments it lints those paths; with none
 // it reads a NUL-delimited file list from stdin (the Taskfile and CI pipe `git ls-files -z` into it, keeping git out of this
@@ -36,13 +42,25 @@ const maxLineBytes = 4 * 1024 * 1024
 // findingFmt is the "file:line: snippet" shape every finding is reported in.
 const findingFmt = "%s:%d: %s"
 
-// emDashUse matches a hyphen with a space on both sides, preceded by a non-space, non-hyphen character: the "word - clause"
-// shape. The leading [^\s-] is what keeps list markers ("  - item") and "---" rules / separators from matching.
-var emDashUse = regexp.MustCompile(`[^\s-] - `)
+// emDashUse matches one or two hyphens with a space on both sides, preceded by a non-space, non-hyphen character: the
+// "word - clause" / "word -- clause" shape. The leading [^\s-] is what keeps list markers ("  - item") and "---" rules /
+// separators from matching, and -{1,2} (not -+) is what keeps a "---" horizontal rule ("a --- b") from matching: the third
+// hyphen leaves no trailing space for the pattern to consume.
+var emDashUse = regexp.MustCompile(`[^\s-] -{1,2} `)
+
+// ignoreDirective, when present anywhere on a line, suppresses every finding on that line. It is the explicit escape hatch for
+// a real " -- " that is neither prose nor a backtick-wrappable code span (e.g. an ASCII diagram). Wrapping a CLI example in
+// `code span` backticks is the preferred fix; reach for this only when that does not fit.
+const ignoreDirective = "dash-lint:ignore"
 
 // inlineCodeSpan matches a Markdown inline code span so it can be blanked before scanning (a span may legitimately contain
 // " - ", e.g. a CLI example or a subtraction).
 var inlineCodeSpan = regexp.MustCompile("`[^`]*`")
+
+// lintDirectiveDescSep matches the " -- " that ESLint and gosec require to separate a suppression directive from its human
+// description (`eslint-disable-next-line rule -- why`, `#nosec G101 -- why`). That double-hyphen is mandated tool syntax, not
+// an em-dash stand-in, so it is blanked before scanning; any em dash in the description text after it is still caught.
+var lintDirectiveDescSep = regexp.MustCompile(`((?:eslint-(?:disable|enable)\S*|#nosec)\b.*?) -- `)
 
 // fenceLine matches the opening or closing line of a fenced code block (``` or ~~~, optionally indented, with an info string).
 var fenceLine = regexp.MustCompile("^\\s*(```|~~~)")
@@ -67,14 +85,7 @@ func main() {
 		if err != nil {
 			continue // deleted-from-index path handed in by a hook, etc.
 		}
-		switch strings.ToLower(filepath.Ext(path)) {
-		case ".md", ".markdown":
-			findings = append(findings, checkMarkdown(path, data)...)
-		case ".go":
-			findings = append(findings, checkGo(path, data)...)
-		case ".swift", ".ts", ".tsx", ".js", ".jsx", ".c", ".h", ".m", ".mm":
-			findings = append(findings, checkCStyleComments(path, data)...)
-		}
+		findings = append(findings, checkFile(path, data)...)
 	}
 
 	if len(findings) > 0 {
@@ -88,14 +99,32 @@ func main() {
 	}
 }
 
+// checkFile dispatches one file to the checker for its extension, isolating the prose-bearing parts per file type. An
+// unrecognized extension yields no findings (the file is not prose this gate understands).
+func checkFile(path string, data []byte) []string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".markdown":
+		return checkMarkdown(path, data)
+	case ".go":
+		return checkGo(path, data)
+	case ".swift", ".ts", ".tsx", ".js", ".jsx", ".c", ".h", ".m", ".mm":
+		return checkCStyleComments(path, data)
+	case ".yml", ".yaml", ".sh":
+		return checkHashComments(path, data)
+	}
+	return nil
+}
+
 // isExcluded mirrors the ignore set of the other prose gates (.markdownlint-cli2.yaml, .prettierignore): AI-tool config we do
-// not author, the immutable archived OpenSpec change proposals (format owned upstream, an audit trail we do not rewrite), and
-// the free-form maintenance journal. docs/detection-rules.md is intentionally NOT excluded: it is generated from rule Doc()
-// strings (which this gate does cover), so `task docs:rules` keeps it clean.
+// not author, the immutable archived OpenSpec change proposals (format owned upstream, an audit trail we do not rewrite), the
+// free-form maintenance journal, and the vendored / generated API-docs embed assets (the minified ReDoc bundle and generated
+// OpenAPI spec, none of which is hand-authored prose). docs/detection-rules.md is intentionally NOT excluded: it is generated
+// from rule Doc() strings (which this gate does cover), so `task docs:rules` keeps it clean.
 func isExcluded(p string) bool {
 	return strings.HasPrefix(p, ".claude/") ||
 		strings.HasPrefix(p, "openspec/changes/") ||
 		strings.HasPrefix(p, "tools/dash-lint/") || // never scan the scanner: its doc comments and test fixtures hold the pattern by design
+		strings.HasPrefix(p, "server/apidocs/embed/") || // vendored ReDoc bundle + generated OpenAPI/asset files, not authored prose
 		p == "docs/maintenance/log.md"
 }
 
@@ -116,10 +145,14 @@ func readPathsFromStdin() ([]string, error) {
 	return files, nil
 }
 
-// checkMarkdown flags em-dash use in Markdown prose: every line outside a fenced code block, with inline code spans removed.
+// checkMarkdown flags em-dash use in Markdown prose: every line outside a code block, with inline code spans removed. Both
+// fenced (``` / ~~~) and indented (CommonMark 4-space / tab) code blocks are skipped, since a CLI example with a legitimate
+// " -- " (e.g. a `task ... -- scenario` end-of-options separator) commonly lives in one.
 func checkMarkdown(path string, data []byte) []string {
 	var findings []string
 	inFence := false
+	inIndentCode := false
+	prevBlank := true // start of document is set off like a blank line, so a leading indented block counts as code
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	lineNo := 0
@@ -128,9 +161,31 @@ func checkMarkdown(path string, data []byte) []string {
 		raw := sc.Text()
 		if fenceLine.MatchString(raw) {
 			inFence = !inFence
+			inIndentCode = false
+			prevBlank = false
 			continue
 		}
 		if inFence {
+			continue
+		}
+		if strings.TrimSpace(raw) == "" {
+			prevBlank = true // a blank line does not close an indented block; interior blanks belong to it
+			continue
+		}
+		indented := strings.HasPrefix(raw, "    ") || strings.HasPrefix(raw, "\t")
+		if inIndentCode {
+			if indented {
+				prevBlank = false
+				continue // still inside the indented code block
+			}
+			inIndentCode = false // a dedented line ends the block; fall through and scan this line as prose
+		} else if prevBlank && indented {
+			inIndentCode = true // a blank line then a 4-space/tab indent opens an indented code block
+			prevBlank = false
+			continue
+		}
+		prevBlank = false
+		if strings.Contains(raw, ignoreDirective) {
 			continue
 		}
 		stripped := inlineCodeSpan.ReplaceAllString(raw, " ")
@@ -144,6 +199,7 @@ func checkMarkdown(path string, data []byte) []string {
 // checkGo lexes the file and flags em-dash use inside comment, string, and char tokens only (never bare code).
 func checkGo(path string, data []byte) []string {
 	var findings []string
+	ignored := ignoredLines(data)
 	fset := token.NewFileSet()
 	file := fset.AddFile(path, fset.Base(), len(data))
 	var s scanner.Scanner
@@ -153,33 +209,48 @@ func checkGo(path string, data []byte) []string {
 		if tok == token.EOF {
 			break
 		}
-		if finding, ok := goTokenEmDashFinding(path, fset, pos, tok, lit); ok {
-			findings = append(findings, finding)
-		}
+		findings = append(findings, goTokenFindings(path, fset.Position(pos).Line, tok, lit, ignored)...)
 	}
 	return findings
 }
 
-// goTokenEmDashFinding inspects a single lexed token and returns a finding when the token is a prose-bearing token (comment, string or
-// char literal) whose value contains em-dash use. Tokens that are bare code are never inspected. The (string, false) zero value signals
-// "no finding" so the caller appends only on a real hit.
-func goTokenEmDashFinding(path string, fset *token.FileSet, pos token.Pos, tok token.Token, lit string) (string, bool) {
-	if tok != token.COMMENT && tok != token.STRING && tok != token.CHAR {
-		return "", false
-	}
-	// Match on the unquoted value for string/char literals so an escape like "\n - x" (an embedded newline before a
-	// list-ish " - ") is not misread as an em dash; the raw literal would show `n - ` and false-positive.
-	val := lit
+// goTokenFindings inspects one lexed token and returns a finding per prose line that contains em-dash use. Only comment,
+// string, and char tokens are prose-bearing; bare code is never inspected. A multi-line COMMENT token (a /* ... */ block) is
+// scanned line by line so the per-line `dash-lint:ignore` directive and the reported line number match the line-based scanners
+// exactly: a directive on line N suppresses only line N, and a violation on a later line is still reported at that line.
+func goTokenFindings(path string, startLine int, tok token.Token, lit string, ignored map[int]bool) []string {
+	// An if-ladder, not a switch on tok: token.Token has ~80 members and the exhaustive linter (configured here so a default
+	// case does not satisfy it) would demand every one be listed.
 	if tok == token.STRING || tok == token.CHAR {
+		if ignored[startLine] {
+			return nil
+		}
+		// Match on the unquoted value so an escape like "\n - x" (an embedded newline before a list-ish " - ") is not
+		// misread as an em dash; the raw literal would show `n - ` and false-positive. A multi-line raw string is reported
+		// at its start line.
+		val := lit
 		if unquoted, err := strconv.Unquote(lit); err == nil {
 			val = unquoted
 		}
+		if emDashUse.MatchString(val) {
+			return []string{fmt.Sprintf(findingFmt, path, startLine, strings.TrimSpace(firstLine(lit)))}
+		}
+		return nil
 	}
-	if !emDashUse.MatchString(val) {
-		return "", false
+	if tok == token.COMMENT {
+		var out []string
+		for offset, line := range strings.Split(lit, "\n") {
+			lineNo := startLine + offset
+			if ignored[lineNo] {
+				continue
+			}
+			if emDashUse.MatchString(commentProse(line)) {
+				out = append(out, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(line)))
+			}
+		}
+		return out
 	}
-	p := fset.Position(pos)
-	return fmt.Sprintf(findingFmt, path, p.Line, strings.TrimSpace(firstLine(lit))), true
+	return nil
 }
 
 // checkCStyleComments flags em-dash use inside // line comments and /* block comments */, ignoring code and string literals.
@@ -194,6 +265,10 @@ func checkCStyleComments(path string, data []byte) []string {
 		raw := sc.Text()
 		var commentText string
 		commentText, inBlock = cStyleCommentText(raw, inBlock)
+		if strings.Contains(raw, ignoreDirective) {
+			continue
+		}
+		commentText = commentProse(commentText)
 		if commentText != "" && emDashUse.MatchString(commentText) {
 			findings = append(findings, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(raw)))
 		}
@@ -210,14 +285,20 @@ func cStyleCommentText(raw string, inBlock bool) (comment string, stillInBlock b
 		}
 		return raw, true
 	}
-	if _, afterOpen, found := strings.Cut(raw, "/*"); found {
+	lineIdx := lineCommentStart(raw)
+	blockIdx := strings.Index(raw, "/*")
+	// A // line comment that starts before any /* swallows the rest of the line, so a "/*" sitting inside it (e.g. a
+	// "/*.json" glob written in comment prose) is NOT a block-comment open. Without this ordering check the scanner would
+	// treat the unterminated "/*" as opening a block and mis-scan the rest of the file as comment text.
+	if lineIdx >= 0 && (blockIdx < 0 || lineIdx < blockIdx) {
+		return raw[lineIdx:], false
+	}
+	if blockIdx >= 0 {
+		afterOpen := raw[blockIdx+2:]
 		if inner, _, closed := strings.Cut(afterOpen, "*/"); closed {
 			return inner, false
 		}
 		return afterOpen, true
-	}
-	if idx := lineCommentStart(raw); idx >= 0 {
-		return raw[idx:], false
 	}
 	return "", false
 }
@@ -234,6 +315,92 @@ func lineCommentStart(line string) int {
 		}
 	}
 	return -1
+}
+
+// commentProse reduces comment text to the prose that should be scanned: inline `code spans` are blanked (a CLI example with a
+// legitimate " -- " can live in one), and the ESLint / gosec directive-to-description " -- " separator is blanked (required
+// tool syntax, not an em-dash stand-in). Prose after either is preserved, so a real em dash there is still caught.
+func commentProse(text string) string {
+	text = inlineCodeSpan.ReplaceAllString(text, " ")
+	return lintDirectiveDescSep.ReplaceAllString(text, "$1   ")
+}
+
+// checkHashComments flags em-dash use inside the #-comment portion of each line (.yml / .yaml / .sh). YAML and shell both use
+// #-prefixed comments; only the comment text is scanned, so " - " in a flow sequence value or a shell subtraction is left alone.
+func checkHashComments(path string, data []byte) []string {
+	var findings []string
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	lineNo := 0
+	for sc.Scan() {
+		lineNo++
+		raw := sc.Text()
+		if strings.Contains(raw, ignoreDirective) {
+			continue
+		}
+		commentText := commentProse(hashCommentText(raw))
+		if commentText != "" && emDashUse.MatchString(commentText) {
+			findings = append(findings, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(raw)))
+		}
+	}
+	return findings
+}
+
+// hashCommentText returns the comment portion of one line: everything from the first '#' that begins a comment, or "" when
+// there is none. A '#' begins a comment only at the start of the (trimmed) line or when preceded by whitespace, which is the
+// YAML inline-comment rule and also skips shell constructs where '#' is glued to a prior token ("${#arr}", "x#frag" in a URL,
+// "$#"). A shebang ("#!/bin/sh") starts a comment but carries no prose " - ", so flagging it is harmless.
+//
+// A hash inside a quoted scalar or string is NOT a comment (e.g. a double-quoted value containing a hash, or a
+// single-quoted shell word), so a minimal single-line quote tracker skips single- and double-quoted regions. The YAML
+// doubled-single-quote escape is handled by toggling (close then reopen leaves the region effectively still quoted), as is
+// a backslash escape inside double quotes. It does not parse full YAML/shell quoting (block scalars, ANSI-C quoting, nested
+// heredocs); those are out of scope for a line-oriented prose gate.
+func hashCommentText(raw string) string {
+	inSingle, inDouble, escaped := false, false, false
+	for i := range len(raw) {
+		c := raw[i]
+		switch {
+		case escaped:
+			escaped = false
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+		case inDouble:
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inDouble = false
+			}
+		case c == '\'':
+			inSingle = true
+		case c == '"':
+			inDouble = true
+		case c == '#':
+			if i == 0 || raw[i-1] == ' ' || raw[i-1] == '\t' {
+				return raw[i:]
+			}
+		}
+	}
+	return ""
+}
+
+// ignoredLines returns the 1-based line numbers that carry the ignoreDirective, so a token-based checker (checkGo) can suppress
+// findings on them the same way the line-based checkers do with a direct strings.Contains on the raw line.
+func ignoredLines(data []byte) map[int]bool {
+	ignored := make(map[int]bool)
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	lineNo := 0
+	for sc.Scan() {
+		lineNo++
+		if strings.Contains(sc.Text(), ignoreDirective) {
+			ignored[lineNo] = true
+		}
+	}
+	return ignored
 }
 
 func firstLine(s string) string {

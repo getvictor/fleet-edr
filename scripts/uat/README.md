@@ -15,7 +15,7 @@ This is the L5 layer of the testing pyramid (per [`testing-strategy.md`](../../d
 | PKG install  | Manual prereq                     | Driver handles install + activation wait               |
 | Relationship | Originals                         | Wrap and assert around the originals                   |
 
-`scripts/qa/*.sh` files are NOT deleted or modified by this harness -- the scenario wrappers SCP and exec the existing scripts, surfacing their exit codes. A contributor iterating on the dogfood demo edits the qa script; M9's assertion layer picks the change up automatically.
+`scripts/qa/*.sh` files are NOT deleted or modified by this harness: the scenario wrappers SCP and exec the existing scripts, surfacing their exit codes. A contributor iterating on the dogfood demo edits the qa script; M9's assertion layer picks the change up automatically.
 
 ## Directory layout
 
@@ -34,7 +34,7 @@ This is the L5 layer of the testing pyramid (per [`testing-strategy.md`](../../d
           attack.sh
           expected.yaml
 
-A blocklist policy-roundtrip scenario used to live here; it was dropped when the `/api/policy` endpoint gave way to the per-policy app-control admin surface at `/api/v1/app-control/*`. Its replacement is the `app-control-block` scenario below, which posts a BINARY BLOCK rule over the new API, confirms the extension denies the matching exec on the VM, and asserts the `application_control_block` alert -- L5 coverage for Application Control active blocking.
+A blocklist policy-roundtrip scenario used to live here; it was dropped when the `/api/policy` endpoint gave way to the per-policy app-control admin surface at `/api/v1/app-control/*`. Its replacement is the `app-control-block` scenario below, which posts a BINARY BLOCK rule over the new API, confirms the extension denies the matching exec on the VM, and asserts the `application_control_block` alert: L5 coverage for Application Control active blocking.
 
 ## Quick start (local execution)
 
@@ -91,7 +91,7 @@ Options:
 
 ## Why edr-qa and not edr-dev
 
-`edr-qa` (192.168.64.7) runs with SIP enabled + Gatekeeper enabled + auto-update disabled, all six toggles flipped off so the macOS version does not drift between snapshot revert and test. That matches what a pilot customer's MDM-deployed Mac actually looks like -- which is what L5 must validate against.
+`edr-qa` (192.168.64.7) runs with SIP enabled + Gatekeeper enabled + auto-update disabled, all six toggles flipped off so the macOS version does not drift between snapshot revert and test. That matches what a pilot customer's MDM-deployed Mac actually looks like, which is what L5 must validate against.
 
 `edr-dev` (192.168.64.5) runs with SIP disabled for fast iteration. Running L5 there would catch nothing extra over L0/L4 and would contaminate `edr-qa`'s "clean-pre-install" snapshot if we cross-wired them. The VM environment requirements (SIP enabled, Gatekeeper enabled, snapshot-restored per run, no Xcode / Homebrew) are spelled out in the L5 section of [`testing-strategy.md`](../../docs/testing-strategy.md).
 
@@ -120,7 +120,7 @@ Options:
 
 ## CI integration
 
-Per-PR: NOT integrated. L5 wall-time is too high for per-PR throughput, and the GitHub-hosted macOS runner pool can't expose the ESF entitlement or run nested virtualisation -- L5 needs a real Mac with a SIP-enabled guest. Per-PR drift in extension wire shapes is caught by L0 unit (M7) plus L0 corpus replay (M8); per-PR drift in catalog rules is caught by L6 detection efficacy (M10) on the nightly cadence.
+Per-PR: NOT integrated. L5 wall-time is too high for per-PR throughput, and the GitHub-hosted macOS runner pool can't expose the ESF entitlement or run nested virtualisation: L5 needs a real Mac with a SIP-enabled guest. Per-PR drift in extension wire shapes is caught by L0 unit (M7) plus L0 corpus replay (M8); per-PR drift in catalog rules is caught by L6 detection efficacy (M10) on the nightly cadence.
 
 Today: M11 ships the local-execution flavour (`task uat:l5 -- attack-runbook ...`). The harness runs manually on the developer's machine; the asserted-scenario shape means a manual run still produces a clear pass/fail signal suitable for a release-candidate checklist.
 

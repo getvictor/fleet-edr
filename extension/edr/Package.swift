@@ -31,7 +31,7 @@ let package = Package(
     targets: [
         // Files explicitly listed via `sources:` so SwiftPM does NOT auto-walk extension/ or
         // networkextension/ and pull in main.swift, ESFClient.swift, networkextension/XPCServer.swift,
-        // etc. -- those import EndpointSecurity / NetworkExtension which only link inside their
+        // etc. Those import EndpointSecurity / NetworkExtension which only link inside their
         // respective Xcode targets. The system extension's XPCServer.swift IS in the source list
         // (it only depends on Foundation + libxpc, both available to SwiftPM) so the
         // extension-xpc-server unit tests can drive it. Adding a new pure-logic file is a one-line
@@ -41,7 +41,7 @@ let package = Package(
             // `exclude:` silences the SwiftPM "unhandled file" warning by telling the build
             // graph that the Xcode project tree (host app, entitlements, Info.plist, build
             // artifacts) is intentionally not part of this package. The explicit `sources:`
-            // list still defines what compiles -- exclude only suppresses scan noise.
+            // list still defines what compiles; exclude only suppresses scan noise.
             path: ".",
             exclude: [
                 "build",

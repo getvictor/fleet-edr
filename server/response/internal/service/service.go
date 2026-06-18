@@ -132,7 +132,7 @@ func validTargetStatus(s api.Status) bool {
 //	acked   -> completed          (agent applied successfully)
 //	acked   -> failed             (agent applied with errors)
 //
-// Every other transition is illegal -- terminal states (completed,
+// Every other transition is illegal: terminal states (completed,
 // failed) are immutable; transitioning back to pending is never
 // permitted.
 func canTransition(from, to api.Status) bool {

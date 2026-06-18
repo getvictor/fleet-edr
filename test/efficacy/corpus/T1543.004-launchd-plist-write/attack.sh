@@ -4,7 +4,7 @@
 #
 # Detection target: catalog rule privilege_launchd_plist_write.
 #
-# What the real VM equivalent looks like: build a tiny Go writer (must be non-platform-binary) and have it write /Library/LaunchDaemons/com.synth.persistence.plist -- see scripts/qa/attack-runbook.sh step 'privilege_launchd_plist_write'.
+# What the real VM equivalent looks like: build a tiny Go writer (must be non-platform-binary) and have it write /Library/LaunchDaemons/com.synth.persistence.plist. See scripts/qa/attack-runbook.sh step 'privilege_launchd_plist_write'.
 #
 # When the M11 self-hosted runner lands, this script will be invoked by
 # scripts/uat/system-test.sh against the edr-qa VM. Until then it exists

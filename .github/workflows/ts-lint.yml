@@ -2,10 +2,10 @@ name: TypeScript lint
 
 # See go-lint.yml for the gate-then-analyze pattern rationale.
 #
-# Test execution lives in test.yml's `ui-test` job, not here -- one place
-# runs vitest with coverage and uploads the artifact that sonarcloud +
-# codecov consume. This workflow is the lint gate; the test gate is
-# `UI tests` in test.yml.
+# Test execution lives in test.yml's `ui-test` job, not here. One place runs
+# vitest with coverage and uploads the artifact that sonarcloud + codecov
+# consume. This workflow is the lint gate; the test gate is `UI tests` in
+# test.yml.
 
 on:
   push:

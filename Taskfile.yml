@@ -3,11 +3,11 @@
 # scripts, so newcomers (human or AI) can discover what's runnable.
 #
 # Conventions:
-# - Tasks are grouped by verb (build:*, test:*, lint:*, dev:*, db:*, qa:*).
-# - Tasks that need a real DB or an MDM-signed artifact document the
-#   prerequisite in `desc:` rather than failing silently.
-# - No task here should mutate production-ish state (the explicit carve-out
-#   is db:reset, which requires confirmation).
+#   - Tasks are grouped by verb (build:*, test:*, lint:*, dev:*, db:*, qa:*).
+#   - Tasks that need a real DB or an MDM-signed artifact document the
+#     prerequisite in `desc:` rather than failing silently.
+#   - No task here should mutate production-ish state (the explicit carve-out
+#     is db:reset, which requires confirmation).
 
 version: "3"
 
@@ -578,7 +578,7 @@ tasks:
   dev:certs:
     desc: |
       Generate a localhost TLS cert + key at tmp/dev.crt and tmp/dev.key so dev:server
-      can boot in the same TLS-required posture as production (issue #140 - "dev mirrors
+      can boot in the same TLS-required posture as production (issue #140, "dev mirrors
       prod"). Prefers mkcert (https://github.com/FiloSottile/mkcert), which installs a
       local CA into the system trust store and issues certs every browser accepts
       without warnings; falls back to openssl self-signed when mkcert is absent (e.g.
@@ -618,7 +618,7 @@ tasks:
 
   dev:server:
     desc: |
-      Run the server against local MySQL at https://localhost:8088 (issue #140 - dev
+      Run the server against local MySQL at https://localhost:8088 (issue #140, dev
       mirrors prod). TLS uses the cert pair from `task dev:certs`. Binds 0.0.0.0:8088
       so a UTM/QEMU VM agent on the bridge interface (typically 192.168.64.1 from inside
       the VM) can reach it; the cert SAN covers localhost + 127.0.0.1 + ::1 only - a
@@ -668,7 +668,7 @@ tasks:
       # browser-observed origin and any RP_ORIGINS entry rejects the WebAuthn ceremony
       # with a generic "Setup failed" in the UI. CookieSecure flips on automatically
       # via cfg.TLSEnabled() in cmd/main, so session + reauth cookies now carry the
-      # Secure attribute - same shape as prod.
+      # Secure attribute, same shape as prod.
       EDR_BREAKGLASS_RP_ID: localhost
       EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
       OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
@@ -839,7 +839,7 @@ tasks:
       sign-in JIT-provisions the user as `analyst`; promote via SQL
       per docs/authz.md to test the role matrix.
 
-      HTTPS-only since issue #140 - depends on dev:certs and binds the
+      HTTPS-only since issue #140. Depends on dev:certs and binds the
       dex redirect URL to https://localhost:8088/api/auth/callback;
       config/dex/dev-config.yaml's redirectURIs list mirrors that.
     deps: [dev:certs]
@@ -857,7 +857,7 @@ tasks:
       EDR_BREAKGLASS_RP_ID: localhost
       EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
       # OIDC: point at the local dex from qa:up. Dex itself runs over plain HTTP
-      # on :5556 - that's the dex container's listener, not the EDR's, and the
+      # on :5556, which is the dex container's listener, not the EDR's, and the
       # OIDC client lib speaks HTTP to the issuer just fine. The redirect URL
       # MUST match config/dex/dev-config.yaml's redirectURIs entry exactly,
       # both sides on https://localhost:8088 (issue #140).

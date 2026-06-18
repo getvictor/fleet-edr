@@ -2,7 +2,7 @@
 #
 # `proseWrap: never` collapses every hard-wrapped paragraph and list item back to a single line (the repo's no-hard-wrap convention; see
 # CLAUDE.md "Code style"), and Prettier aligns table columns by padding cells. markdownlint still owns the structural rules (untagged
-# fences, heading levels, list spacing) in .markdownlint-cli2.yaml; the two tools are scoped not to overlap - MD013 (line length) is
+# fences, heading levels, list spacing) in .markdownlint-cli2.yaml; the two tools are scoped not to overlap. MD013 (line length) is
 # disabled there because no-wrap intentionally produces long single-line paragraphs.
 #
 # Scope: Markdown only (the override below). Our gates always invoke Prettier with a `**/*.md` glob, so it never touches Go/TS/YAML/JSON.

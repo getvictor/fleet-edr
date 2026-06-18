@@ -1,4 +1,4 @@
-# scripts/uat/lib/common.sh -- shared helpers for the L5 system-test driver.
+# scripts/uat/lib/common.sh: shared helpers for the L5 system-test driver.
 #
 # Sourced (not executed) by scripts/uat/system-test.sh and by scenario attack.sh
 # files when they need server REST access. Defines uat_* functions; sets
@@ -53,7 +53,7 @@ uat_fail() {
 
 # uat_ssh_args: populate the UAT_SSH_ARGS array with the ssh option flags we
 # use everywhere. An ARRAY is used (not a string) so callers can expand
-# `"${UAT_SSH_ARGS[@]}"` with proper quoting -- the previous string-returning
+# `"${UAT_SSH_ARGS[@]}"` with proper quoting. The previous string-returning
 # shape forced unquoted `ssh $(uat_ssh_args)` word-splitting, which broke if
 # UAT_KNOWN_HOSTS contained whitespace.
 #
@@ -96,7 +96,7 @@ uat_curl_args() {
 # uat_ssh <target> <cmd...>: run cmd over ssh on target. Honors $UAT_DRY_RUN.
 # Args are joined into a single remote command string, which ssh runs through
 # the remote login shell. Callers pass already-quoted command strings (or
-# argv elements safe to expand) -- we deliberately don't shell-escape here
+# argv elements safe to expand): we deliberately don't shell-escape here
 # because every callsite is in this repo and reviewed; doing the escape would
 # break the common pattern `uat_ssh "$vm" 'sudo systemextensionsctl list'`.
 uat_ssh() {
@@ -134,7 +134,7 @@ uat_scp() {
 # UAT_CSRF_TOKEN. Idempotent: a second call overwrites both.
 #
 # Why a pre-minted cookie rather than POST /api/session login: the server has
-# NO password-based POST /api/session route -- login is OIDC (browser redirect
+# NO password-based POST /api/session route: login is OIDC (browser redirect
 # to dex/IdP) or break-glass WebAuthn ceremony (passkey, browser-only). Neither
 # is shell-scriptable. The realistic L5 flow is: operator does ONE browser
 # login, copies the `edr_session` cookie from devtools, exports it as
@@ -151,7 +151,7 @@ uat_server_warmup() {
     return 0
   fi
   # Explicit checks rather than `${VAR:?msg}` so callers under `set -e` + EXIT
-  # trap see a clean exit code -- bash's `:?` resets $? to 0 at trap entry.
+  # trap see a clean exit code: bash's `:?` resets $? to 0 at trap entry.
   if [[ -z "${EDR_SERVER_URL:-}" ]]; then
     uat_log driver "missing required env EDR_SERVER_URL"
     return 1
@@ -166,7 +166,7 @@ uat_server_warmup() {
 
   # GET /api/session is session-protected; a successful response confirms the
   # cookie is valid AND returns the CSRF token in the body. A 401 here means
-  # the cookie expired -- the operator does another browser login and updates
+  # the cookie expired: the operator does another browser login and updates
   # EDR_SESSION_COOKIE.
   local body
   body="${UAT_TMPDIR:-/tmp}/session-body"
@@ -215,14 +215,14 @@ uat_server_get() {
 # pair created at-or-after since_unix. Returns 0 on first match, 1 if the
 # deadline expires.
 #
-# Server-side filter is host_id only -- /api/alerts's AlertFilter
+# Server-side filter is host_id only: /api/alerts's AlertFilter
 # (server/detection/api/types.go) accepts host_id, status, severity, source,
 # process_id, limit. There is no rule_id filter, no `since` filter. We push
 # the host_id filter to the server (cheap to evaluate, narrows the response)
 # and filter client-side by rule_id + created_at via jq.
 #
 # Response shape: the handler writes []api.Alert directly to the body, so it
-# is a TOP-LEVEL JSON array -- NOT wrapped in `{alerts: [...]}`. jq must
+# is a TOP-LEVEL JSON array, NOT wrapped in `{alerts: [...]}`. jq must
 # iterate `.[]?` at the root. The Alert struct's CreatedAt is a Go time.Time
 # (json:"created_at") which serializes as an RFC3339 string; we compare via
 # `date -j -f %Y-%m-%dT%H:%M:%S` to a unix epoch on macOS.
@@ -305,7 +305,7 @@ uat_wait_for_extension() {
 # Response shape: /api/hosts writes []api.HostSummary directly to the body
 # (per server/detection/internal/operator/handler.go handleListHosts), so
 # the JSON root is a TOP-LEVEL array, NOT `{hosts: [...]}`. api.HostSummary is
-# {host_id, event_count, last_seen_ns} -- there is NO hostname field, so the
+# {host_id, event_count, last_seen_ns}: there is NO hostname field, so the
 # match is on host_id. jq iterates `.[]?` at the root.
 uat_wait_for_host_enrolment() {
   local want_host_id="$1" within="$2"

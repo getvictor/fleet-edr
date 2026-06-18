@@ -24,7 +24,7 @@ The constraints we're optimising for, in priority order:
 
 Observation: `go build` tree-shakes per binary. A package that exists in the module but isn't imported by `cmd/fleet-edr-agent/main.go` is not linked into the agent binary. Verified: with MySQL in the shared module's `go.sum`, the agent binary contains zero strings from `go-sql-driver/mysql`, and `go list -deps ./agent/cmd/fleet-edr-agent/...` returns no `mysql` package. This means the "dep isolation" constraint is satisfied by import hygiene, not by module boundaries.
 
-Observation: every mature Go monorepo of comparable scope uses layout (2). Kubernetes, Docker, Consul, Vault, Nomad, Terraform, CockroachDB, Prometheus, Fleet itself -- all ship one module with many `cmd/*` targets and shared packages under `internal/` or similar. Splitting modules is almost always driven by external-publishing needs (e.g. `k8s.io/api` as a consumable sub-module) which don't apply here.
+Observation: every mature Go monorepo of comparable scope uses layout (2). Kubernetes, Docker, Consul, Vault, Nomad, Terraform, CockroachDB, Prometheus, and Fleet itself all ship one module with many `cmd/*` targets and shared packages under `internal/` or similar. Splitting modules is almost always driven by external-publishing needs (e.g. `k8s.io/api` as a consumable sub-module) which don't apply here.
 
 ## Decision
 

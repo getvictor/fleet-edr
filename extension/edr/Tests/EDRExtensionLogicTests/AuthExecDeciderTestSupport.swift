@@ -1,7 +1,7 @@
 // Shared test fixtures for the AuthExecDecider test suites. These free functions are referenced by
 // AuthExecDeciderTests (no-match / CDHASH / BINARY / posture matrix), AuthExecDeciderPhaseBTests (CERTIFICATE / PATH),
-// and AuthExecDeciderSigningTests (SIGNINGID / TEAMID). They live in their own file -- rather than file-private inside
-// one suite -- so all three suites share a single definition without duplication and without making any one test file
+// and AuthExecDeciderSigningTests (SIGNINGID / TEAMID). They live in their own file (rather than file-private inside
+// one suite) so all three suites share a single definition without duplication and without making any one test file
 // breach SwiftLint's file_length cap. Symbols are internal (target-scoped), which is the narrowest visibility that lets
 // sibling test files in the EDRExtensionLogicTests target reach them.
 

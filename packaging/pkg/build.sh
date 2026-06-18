@@ -227,7 +227,7 @@ else
     # `--entitlements` is load-bearing: a bare `codesign --sign` strips
     # whatever entitlements the Xcode build embedded, leaving the binaries
     # signed but with an empty entitlements blob. On SIP-disabled dev
-    # Macs that's fine - entitlements aren't enforced - but on a SIP-on
+    # Macs that's fine (entitlements aren't enforced), but on a SIP-on
     # pilot Mac OSSystemExtensionRequest fails before sysextd can stage
     # the extension, with the user-visible symptom being "I never got the
     # System Settings approval prompt." The entitlement plists below are

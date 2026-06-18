@@ -7,7 +7,7 @@
 # A reproducible synthetic-attacker script that fires every shipped detection
 # rule exactly once. Run on a host with the EDR agent installed + enrolled,
 # then check the EDR admin UI for one alert per step. The script is
-# explicitly NOT malicious - every step generates a benign artifact under
+# explicitly NOT malicious: every step generates a benign artifact under
 # /tmp or removes itself; nothing persists, nothing exfiltrates real data.
 #
 # Why each step looks like it does
@@ -25,7 +25,7 @@
 #   ssh victor@192.168.64.5 'bash /tmp/attack-runbook.sh'
 #
 # Then watch alerts in the admin UI at <your-edr-url>/ui/alerts
-# (whatever URL your server is reachable on - TLS for prod, plain HTTP
+# (whatever URL your server is reachable on: TLS for prod, plain HTTP
 # is fine for the lab VM behind a closed network). Expected alert count
 # is printed at the end.
 #
@@ -43,7 +43,7 @@
 #  - A penetration test. It does not chain steps to escalate privileges.
 #  - A reliability harness. It is not idempotent in the sense that running
 #    it twice in 60s might dedupe alerts via the engine's
-#    (rule_id, host_id, process_id) uniqueness - that's normal. Wait a
+#    (rule_id, host_id, process_id) uniqueness. That's normal. Wait a
 #    minute between runs if you want fresh alerts.
 #  - A fuzzer. The synthetic events are exact rule triggers.
 
@@ -58,7 +58,7 @@ trap 'rc=$?; echo "[runbook] step at line $LINENO exited $rc - continuing"' ERR
 
 # Pin WORKDIR to /tmp/ rather than $TMPDIR. As an unprivileged user $TMPDIR
 # resolves to /var/folders/<gibberish>/T/, which is NOT in the suspicious_exec
-# rule's prefix list - using it would silently render the synthetic_payload
+# rule's prefix list: using it would silently render the synthetic_payload
 # step a no-op against the rule. /tmp/ is what real droppers target on macOS
 # and what the rule expects.
 WORKDIR="/tmp/edr-attack-runbook"
@@ -138,9 +138,10 @@ step_persistence_launchagent() {
   step_header "LaunchAgent persistence drop + launchctl load" "persistence_launchagent"
   # Rule trigger: exec of `launchctl load <plist>` where plist matches
   # ~/Library/LaunchAgents/<name>.plist or /Library/LaunchAgents/<name>.plist.
-  # We DO NOT actually persist anything - the plist is a syntactic
-  # placeholder; launchctl will fail to load it (missing executable). The
-  # rule fires on the EXEC of launchctl load, not on activation success.
+  # We DO NOT actually persist anything: the plist is a best-effort
+  # placeholder (RunAtLoad is false and it is unloaded and removed right
+  # after), so nothing keeps running. The rule fires on the EXEC of
+  # launchctl load, not on activation success.
   local plist_dir="$HOME/Library/LaunchAgents"
   local plist_path="$plist_dir/com.synthetic.edr-runbook.plist"
   mkdir -p "$plist_dir"
@@ -167,7 +168,7 @@ step_dyld_insert() {
   # `DYLD_INSERT_LIBRARIES=` (or `DYLD_LIBRARY_PATH=`) assignment in a
   # position the rule treats as exec-time env (dyld_insert.go:matchDyldArg).
   # The rule's "VAR=val target" branch only sees the assignment when ESF
-  # captures it in the exec's argv - and ESF only captures argv, NOT envp.
+  # captures it in the exec's argv, and ESF only captures argv, NOT envp.
   # Shell prefix syntax (`DYLD_…=… /usr/bin/true`) puts the assignment in
   # envp, which the rule never sees, so the runbook MUST go through
   # `/usr/bin/env` to get the assignment into argv as a literal token.
@@ -181,7 +182,7 @@ step_osascript_network_exec() {
   # Rule trigger: osascript spawns a process tree containing both a
   # curl/wget descendant AND a downstream exec whose path is under /tmp/
   # within 30s. The rule keys on the EXEC event for the /tmp/* binary,
-  # not on the curl response - so we MUST actually run a binary that
+  # not on the curl response, so we MUST actually run a binary that
   # lives in /tmp (curl writing to /tmp is not enough; the file has to
   # be exec'd). Pre-create a benign stage2 binary so the chain has the
   # /tmp/* exec the rule needs, then have osascript invoke both curl

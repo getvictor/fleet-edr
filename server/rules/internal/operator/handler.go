@@ -58,7 +58,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 // engine's registration order so the response is deterministic and
 // snapshot-testable.
 //
-// Stable wire shape -- the UI's RuleDetail.tsx and the generator
+// Stable wire shape: the UI's RuleDetail.tsx and the generator
 // both depend on this; field renames here ripple through both. Add
 // new fields, don't remove or rename existing ones.
 func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,6 @@
 // Captured ESF event-envelope corpus replay.
 //
-// `extension/edr/Tests/corpus/<macOS-version>/<scenario>/*.json` holds wire-shape goldens for the
+// The `.json` files under `extension/edr/Tests/corpus/<macOS-version>/<scenario>/` hold wire-shape goldens for the
 // envelopes the system extension emits via EventSerializer. This harness walks every golden file,
 // peeks at its `event_type`, decodes it via the matching typed `EventEnvelope<P>`, re-encodes via
 // the production `.sortedKeys` JSONEncoder, and asserts the bytes are byte-stable. The harness is
@@ -107,7 +107,7 @@ final class CorpusReplayTests: XCTestCase {
 
         if regenerate {
             // Clean slate for the baseline scenario so a removed seeder leaves no stale golden.
-            // Only the baseline dir is wiped -- sibling scenario dirs holding real captures are
+            // Only the baseline dir is wiped. Sibling scenario dirs holding real captures are
             // untouched.
             try? fileManager.removeItem(at: baselineDir)
             try fileManager.createDirectory(at: baselineDir, withIntermediateDirectories: true)
@@ -204,7 +204,7 @@ final class CorpusReplayTests: XCTestCase {
     /// from `.../Tests/EDRExtensionLogicTests/CorpusReplayTests.swift` to `.../Tests/`, then we
     /// append `corpus/`. Works in both local dev (`$REPO/extension/edr/...`) and CI
     /// (`/Users/runner/work/fleet-edr/fleet-edr/extension/edr/...`) because #filePath is baked at
-    /// compile time and CI compiles from a checkout of the same source tree -- the SwiftPM
+    /// compile time and CI compiles from a checkout of the same source tree. The SwiftPM
     /// resources/bundle path would not work here because Tests/corpus/ sits OUTSIDE the test
     /// target's source root.
     private static func corpusDirectory() -> URL {
@@ -231,7 +231,7 @@ final class CorpusReplayTests: XCTestCase {
         return try canonicalEncoder.encode(envelope)
     }
 
-    /// Live exec of an unsigned shell -- no code_signing, no sha256, no cdhash. Snapshot key
+    /// Live exec of an unsigned shell: no code_signing, no sha256, no cdhash. Snapshot key
     /// MUST be absent on the wire (the encoder omits snapshot=false for live execs); covers the
     /// "minimal payload, optional fields all nil" shape.
     private static func encodeExecLive() throws -> Data {
@@ -278,7 +278,7 @@ final class CorpusReplayTests: XCTestCase {
     }
 
     /// Startup-snapshot exec. The encoder emits `"snapshot":true` only when the field is true so
-    /// this golden pins the difference from the live-exec wire shape -- the server's detection
+    /// this golden pins the difference from the live-exec wire shape: the server's detection
     /// engine relies on the `bytes.Contains(`"snapshot":true`)` gate to skip pre-existing processes.
     private static func encodeExecSnapshot() throws -> Data {
         let payload = ExecPayload(

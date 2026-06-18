@@ -56,7 +56,7 @@ pre-commit:
       # Lint staged markdown via markdownlint-cli2 (config in .markdownlint-cli2.yaml).
       # Uses --fix for the safe rules; what cannot be auto-fixed (MD040 language tags)
       # still surfaces and blocks the commit. Prose wrapping + table style are NOT
-      # markdownlint's job here - the prettier-md hook below owns those.
+      # markdownlint's job here; the prettier-md hook below owns those.
       #
       # npx caches the package after the first download, so steady-state cost is ~1s.
       glob: "**/*.md"
@@ -87,7 +87,7 @@ pre-commit:
     dash-lint:
       # Mirror the CI "No em dashes" gate (.github/workflows/no-emdash.yml) at commit time, scoped to staged files like
       # every other hook here. tools/lint-no-emdash.sh bans em/en dashes (U+2014 / U+2013); tools/dash-lint bans the
-      # spaced ASCII hyphen ' - ' in Markdown prose and in code comments + string literals. This closes the gap that let
+      # spaced ASCII hyphen `' - '` in Markdown prose and in code comments + string literals. This closes the gap that let
       # PR #414's tasks.md em-dashes reach CI: `task lint:dashes` scans `git ls-files`, so the then-untracked new files
       # were invisible to a manual run, and no pre-commit hook covered the rule. {staged_files} expands to every staged
       # path regardless of glob; both tools filter internally (grep -I binary-skip / type-aware), so the raw list is safe.
@@ -130,7 +130,7 @@ pre-commit:
         exit $matched
 
     # audit_events is append-only. Block any production Go file that
-    # stages an UPDATE or DELETE against the table - the audit trail's
+    # stages an UPDATE or DELETE against the table; the audit trail's
     # integrity is the whole point of the schema, and accidental
     # tampering is the regression this hook exists to catch.
     # The Go test at server/identity/internal/audit/append_only_lint_test.go

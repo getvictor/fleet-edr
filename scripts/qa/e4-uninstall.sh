@@ -20,7 +20,7 @@
 #     (default last_seen threshold is 5 min).
 #  5. Optionally: re-run `installer -pkg` and verify the agent picks
 #     up the preserved config without prompting for a new
-#     enroll_secret. Off by default - pass --reinstall to opt in.
+#     enroll_secret. Off by default; pass --reinstall to opt in.
 #
 # Usage from this workstation:
 #   EDR_SERVER_URL=https://edr.local:8088 \
@@ -53,7 +53,7 @@ require_env() {
 require_env EDR_SERVER_URL EDR_SESSION_COOKIE VM_SSH_TARGET
 
 # Constant for the SSH stdin-driver argument used on every remote-bash
-# block below - Sonar S1192 flags `'bash -s'` four times; one constant
+# block below: Sonar S1192 flags `'bash -s'` four times; one constant
 # satisfies it without changing behaviour.
 BASH_S='bash -s'
 

@@ -401,7 +401,7 @@ func TestAppControl_CreateRule_SameIdentifierDifferentTypeCoexist(t *testing.T) 
 // spec:server-admin-surface/persist-and-fan-out-application-control-rules/unsupported-rule-type-is-rejected-without-persisting
 //
 // TestAppControl_CreateRule_RejectsUnknownRuleType pins the rule_type gate for tokens that are not on the wire enum. After the
-// Phase B close-out (PR for #210) every named enum value -- BINARY, CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH -- is wired,
+// Phase B close-out (PR for #210) every named enum value (BINARY, CDHASH, SIGNINGID, CERTIFICATE, TEAMID, PATH) is wired,
 // so the only way to fall through to the gate is to submit a token the validator does not recognise. The store must reject
 // without persisting and surface ErrAppControlInvalidRuleType (not the retired ErrAppControlUnsupportedRuleType, which is reserved
 // for the future case where a value is added to the enum before the extension supports it).

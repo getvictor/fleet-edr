@@ -1,9 +1,9 @@
 # Release workflow. Fires when a tag matching v* pushes. Produces:
 #
-# - Signed + notarized macOS .pkg (darwin/arm64) attached to the GitHub Release
-# - Two unsigned .mobileconfig profiles (System Extensions + TCC FDA); MDM channels sign them at delivery
-# - SHA256SUMS for all uploaded artifacts
-# - ghcr.io/getvictor/fleet-edr-server:{tag,latest} for linux/amd64 + arm64
+#   - Signed + notarized macOS .pkg (darwin/arm64) attached to the GitHub Release
+#   - Two unsigned .mobileconfig profiles (System Extensions + TCC FDA); MDM channels sign them at delivery
+#   - SHA256SUMS for all uploaded artifacts
+#   - ghcr.io/getvictor/fleet-edr-server:{tag,latest} for linux/amd64 + arm64
 #
 # The macos-pkg job is gated on the `release-signing` environment so the
 # Developer ID certs + notarytool credentials only decrypt when this workflow

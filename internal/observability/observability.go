@@ -150,7 +150,7 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 		sdkmetric.WithResource(res),
 	)
 
-	// Atomic publish -- the code below is infallible.
+	// Atomic publish: the code below is infallible.
 	otel.SetTracerProvider(tp)
 	global.SetLoggerProvider(lp)
 	otel.SetMeterProvider(mp)

@@ -256,7 +256,7 @@ func (c *Commander) executeSetApplicationControl(ctx context.Context, cmd comman
 // executeRotateToken applies the server-issued new bearer to the agent's persisted state, then acks the command. Ordering is
 // load-bearing: the ack PUT must happen AFTER the rotate succeeds, because the ack itself is bearer-authenticated and the server has
 // already pre-flipped its active token to the new value (the old token only verifies during the grace window). Acking with the old
-// token still works for ~5 minutes; acking with the new token works indefinitely. So the natural order -- rotate first, ack second --
+// token still works for ~5 minutes; acking with the new token works indefinitely. So the natural order (rotate first, ack second)
 // is correct.
 func (c *Commander) executeRotateToken(ctx context.Context, cmd command) {
 	var payload rotateTokenPayload

@@ -77,7 +77,7 @@ func TestValidateIdentifier_Binary(t *testing.T) {
 // spec:server-application-control/identifier-validation-per-rule-type/a-platform-signingid-is-accepted
 //
 // TestValidateIdentifier_AcceptedTypes pins identifier format checks for every wired rule type. CERTIFICATE + PATH joined the
-// accepted set in this PR (#210); the format checks themselves are unchanged from before -- the only delta is that a well-formed
+// accepted set in this PR (#210); the format checks themselves are unchanged from before; the only delta is that a well-formed
 // identifier no longer triggers ErrAppControlUnsupportedRuleType. The "team id 9 chars rejected" subtest pins the spec scenario
 // "a TeamID with the wrong length is rejected" (typed ErrAppControlInvalidIdentifier); the "signing id platform:bundle accepted"
 // subtest pins "a platform SigningID is accepted".

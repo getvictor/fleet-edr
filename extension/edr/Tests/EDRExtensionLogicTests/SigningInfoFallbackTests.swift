@@ -16,7 +16,7 @@ import XCTest
 
 final class SigningInfoFallbackTests: XCTestCase {
     /// makeUnsignedTempFile writes a plain (unsigned, non-Mach-O) file and returns its path + live stat. SecCode
-    /// rejects it (no signature), so the leaf-cert + team-id lookups must return nil -- the cold-cache "absent"
+    /// rejects it (no signature), so the leaf-cert + team-id lookups must return nil: the cold-cache "absent"
     /// outcome the target tuple records as a missing leaf_cert_sha256.
     private func makeUnsignedTempFile() throws -> (path: String, stat: stat) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("EDRSigningInfoTests", isDirectory: true)
@@ -41,7 +41,7 @@ final class SigningInfoFallbackTests: XCTestCase {
         XCTAssertNil(leaf, "an unsigned target must yield an absent leaf_cert_sha256")
 
         // A path that does not exist (the most extreme "unreadable" case) also returns nil deterministically, never
-        // throwing or hanging -- the AUTH callback that consumes this must not be delayed by an unresolved lookup.
+        // throwing or hanging; the AUTH callback that consumes this must not be delayed by an unresolved lookup.
         var missingStat = stat()
         missingStat.st_dev = 1
         missingStat.st_ino = 424_242

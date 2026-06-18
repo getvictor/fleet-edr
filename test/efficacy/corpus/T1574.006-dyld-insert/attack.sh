@@ -4,7 +4,7 @@
 #
 # Detection target: catalog rule dyld_insert.
 #
-# What the real VM equivalent looks like: env DYLD_INSERT_LIBRARIES=/tmp/payload.dylib /usr/bin/true -- see scripts/qa/attack-runbook.sh step 'dyld_insert'.
+# What the real VM equivalent looks like: env DYLD_INSERT_LIBRARIES=/tmp/payload.dylib /usr/bin/true. See scripts/qa/attack-runbook.sh step 'dyld_insert'.
 #
 # When the M11 self-hosted runner lands, this script will be invoked by
 # scripts/uat/system-test.sh against the edr-qa VM. Until then it exists

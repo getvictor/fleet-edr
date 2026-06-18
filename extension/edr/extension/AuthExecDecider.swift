@@ -27,7 +27,7 @@ enum FallbackPosture: String, Codable, Sendable {
 
 /// HashOutcome carries the result of the AUTH_EXEC sync SHA-256 attempt to the decision walker. The decider does NOT compute the
 /// hash itself: FileHashCache.computeSHA256WithDeadline lives on the wire side because it touches Darwin (mach_absolute_time) and
-/// the on-disk handle. The decider is pure -- it consumes the outcome and returns a decision.
+/// the on-disk handle. The decider is pure: it consumes the outcome and returns a decision.
 enum HashOutcome: Equatable, Sendable {
     /// Hex SHA-256 is available (cache hit, or sync compute completed within budget). Drives the BINARY map lookup.
     case computed(String)
@@ -69,7 +69,7 @@ struct AuthTuple: Equatable, Sendable {
     /// 10-char Apple Developer Team ID. nil when ESF redacts team_id (ad-hoc-signed extension on edr-dev) and
     /// SigningInfoFallback also cannot recover a real value.
     let teamID: String?
-    /// Canonical absolute path of the exec target -- filepath.Clean equivalent, /tmp + /var + /etc rewritten to /private.
+    /// Canonical absolute path of the exec target (filepath.Clean equivalent), with /tmp + /var + /etc rewritten to /private.
     /// nil when the wire path is empty, relative, or contains a `..` segment (defensive; ESF reports an absolute path under
     /// normal conditions). PATH rules compare against this verbatim, so the canonicalisation MUST match the server-side
     /// CanonicalizePath rules exactly or rules created against the operator's canonical form will never match.
@@ -102,7 +102,7 @@ enum AuthDecision: Equatable, Sendable {
 ///   CDHASH > BINARY > CERTIFICATE > SIGNINGID > TEAMID > PATH
 ///
 /// Each layer returns on first match. The BINARY layer is gated on hashOutcome: if .computed, walk the BINARY map; if
-/// .deadlineExceeded or .readFailed the walk CONTINUES through every lower-precedence layer first -- a definitive
+/// .deadlineExceeded or .readFailed the walk CONTINUES through every lower-precedence layer first, because a definitive
 /// lower-precedence DENY dominates the BINARY layer's "could-have-fired" uncertainty (the operator's snapshot tells us the
 /// binary identifies as cert X / signing-id Y / team Z / path P; a block rule on any of those is a real verdict the kernel
 /// can act on). Only after every layer below BINARY produces no match does the snapshot's deadlineFallback posture apply to
@@ -113,7 +113,7 @@ enum AuthDecision: Equatable, Sendable {
 /// preserving content but changing the path string), so a deny higher in the ladder always wins. Santa places PATH last for
 /// the same reason; documenting this here so a future precedence reorder is a deliberate decision, not an accident.
 ///
-/// Posture flows from snapshot.deadlineFallback directly -- this function does not take a separate posture parameter, so a
+/// Posture flows from snapshot.deadlineFallback directly: this function does not take a separate posture parameter, so a
 /// caller cannot accidentally evaluate one snapshot's rule maps under a different fallback. (Previous signatures took the
 /// parameter explicitly; the round-trip through snapshot already pins the posture, so the parameter was a footgun.)
 func decideAuthExec(
@@ -137,7 +137,7 @@ func decideAuthExec(
 }
 
 /// matchBinaryLayer consults the BINARY map only when the hash is .computed; the .deadlineExceeded / .readFailed branches
-/// do NOT return here -- they keep the walk going so a definitive lower-precedence DENY can dominate the BINARY layer's
+/// do NOT return here: they keep the walk going so a definitive lower-precedence DENY can dominate the BINARY layer's
 /// uncertainty. .notNeeded skips BINARY entirely and falls through to the lower layers without ever surfacing a posture.
 /// Returns nil when no BINARY rule matches (the walker continues); returns an AuthDecision only on a positive match.
 private func matchBinaryLayer(snapshot: ApplicationControlSnapshot, hashOutcome: HashOutcome) -> AuthDecision? {
@@ -197,7 +197,7 @@ private let privatePrefix = "/private"
 /// `server/rules/internal/appcontrol/CanonicalizePath` rules verbatim: rejects empty / relative / `..`-containing paths,
 /// collapses redundant slashes (filepath.Clean equivalent), and rewrites the /tmp, /var, /etc symlinks into their
 /// /private/... forms. Returns nil for any rejection case so the caller treats the rule as not-applicable rather than
-/// generating a falsely-canonicalised match. The Swift and Go implementations MUST stay in lockstep -- a rule created
+/// generating a falsely-canonicalised match. The Swift and Go implementations MUST stay in lockstep: a rule created
 /// against `/tmp/foo` is persisted as `/private/tmp/foo`; AUTH_EXEC must canonicalise the exec target the same way or the
 /// rule never matches. Tested in AuthExecDeciderTests so a divergence surfaces at L0.
 func canonicalizePath(_ path: String) -> String? {

@@ -4,7 +4,7 @@
 #
 # Detection target: catalog rule suspicious_exec.
 #
-# What the real VM equivalent looks like: python3 -c on /tmp dropper then exec /bin/sh /tmp/payload -- see scripts/qa/attack-runbook.sh step 'suspicious_exec'.
+# What the real VM equivalent looks like: python3 -c on /tmp dropper then exec /bin/sh /tmp/payload. See scripts/qa/attack-runbook.sh step 'suspicious_exec'.
 #
 # When the M11 self-hosted runner lands, this script will be invoked by
 # scripts/uat/system-test.sh against the edr-qa VM. Until then it exists

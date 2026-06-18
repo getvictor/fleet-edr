@@ -29,7 +29,7 @@ macOS doesn't auto-remove extensions when you change bundle IDs. If you rename f
 
 ### stagedCdhashes must be real in db.plist
 
-When manually editing `/Library/SystemExtensions/db.plist` (SIP-disabled dev), setting `stagedCdhashes` to `$null` causes `nesessionmanager` to fail with "Cannot create launchd job...the extension does not have the required additional launchd job entries." Compute real cdhashes with `codesign -dvvv <bundle>`. Even so, manual db.plist editing is fragile -- prefer `OSSystemExtensionRequest` from a GUI session.
+When manually editing `/Library/SystemExtensions/db.plist` (SIP-disabled dev), setting `stagedCdhashes` to `$null` causes `nesessionmanager` to fail with "Cannot create launchd job...the extension does not have the required additional launchd job entries." Compute real cdhashes with `codesign -dvvv <bundle>`. Even so, manual db.plist editing is fragile: prefer `OSSystemExtensionRequest` from a GUI session.
 
 ## XPC communication
 

@@ -17,7 +17,7 @@ const wrapFmt = "%w: %s"
 
 // ValidateRuleType reports whether rt is a recognized rule type. v0.1.0 accepts the full enum: BINARY, CDHASH, SIGNINGID, TEAMID
 // (Phase A close-out, PR #289), plus CERTIFICATE and PATH (Phase B close-out, this PR). CERTIFICATE matches against the SHA-256
-// of the leaf X.509 signing certificate -- the surgical level for compromised-Developer-ID incident response. PATH matches against
+// of the leaf X.509 signing certificate: the surgical level for compromised-Developer-ID incident response. PATH matches against
 // the canonical absolute path of the exec target; the validator's canonicalizePath is the single canonical-form authority and the
 // extension applies the same rules on the AUTH callback. ErrAppControlUnsupportedRuleType is retired: every wire-enum value is now
 // either accepted or invalid; an unknown token returns ErrAppControlInvalidRuleType.

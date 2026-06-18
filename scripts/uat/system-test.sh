@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# scripts/uat/system-test.sh -- UAT plan M9 driver (L5 layer).
+# scripts/uat/system-test.sh: UAT plan M9 driver (L5 layer).
 #
 # Runs one scenario from scripts/uat/scenarios/<name>/ against the edr-qa VM,
 # polls the server's REST API for the expected detections, and asserts pass /
@@ -29,7 +29,7 @@
 #                           here. Reused across many scenario runs until the
 #                           session expires.
 #   VM_SSH_TARGET           defaults to victor@192.168.64.7 (edr-qa)
-#                           NOT edr-dev (192.168.64.5) -- L5 contract is
+#                           NOT edr-dev (192.168.64.5); L5 contract is
 #                           SIP-on + Gatekeeper-on, which only edr-qa
 #                           provides. Running against edr-dev contaminates
 #                           the snapshot for release validation.
@@ -122,7 +122,7 @@ VM_SSH_TARGET="${VM_SSH_TARGET:-victor@192.168.64.7}"
 
 # Soft-required: dry-run only needs the scenario to load. Explicit `[[ -z ]]`
 # checks + `exit 1` (rather than `${VAR:?msg}`) so the failure mode propagates
-# cleanly through the EXIT trap's $? capture -- bash's `:?` substitution exits
+# cleanly through the EXIT trap's $? capture: bash's `:?` substitution exits
 # the shell but resets $? to 0 at trap entry, masking the failure.
 if [[ "$UAT_DRY_RUN" != "1" ]]; then
   if [[ -z "${EDR_SERVER_URL:-}" ]]; then
@@ -199,7 +199,7 @@ fi
 
 # Read scenario metadata. We use a minimal-dependency yq alternative: each
 # expected.yaml has its `scenario_id`, `within_seconds`, and (optional)
-# `rules:` block parseable via plain awk -- the schema is documented in
+# `rules:` block parseable via plain awk; the schema is documented in
 # scripts/uat/README.md and each scenario's README.
 #
 # Inline-comment handling: `sub(/[[:space:]]*#.*$/, "", $2)` strips any

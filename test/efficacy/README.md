@@ -5,7 +5,7 @@ Walks an in-tree attack-scenario corpus + an ambient-noise corpus through the re
 - Detection rate >= 95% across all attack scenarios.
 - False-positive rate <= 1% across all noise scenarios.
 
-A run is one `go test -tags integration ./test/efficacy/...` invocation. Single Stack, real MySQL, real detection engine. No agent in the loop -- each scenario POSTs its event timeline directly to `/api/events` via the M3 fakeagent's `PostDirect` helper. The L3 layer (M4) already covers the queue + uploader path; L6's signal is specifically about rule firings.
+A run is one `go test -tags integration ./test/efficacy/...` invocation. Single Stack, real MySQL, real detection engine. No agent in the loop: each scenario POSTs its event timeline directly to `/api/events` via the M3 fakeagent's `PostDirect` helper. The L3 layer (M4) already covers the queue + uploader path; L6's signal is specifically about rule firings.
 
 ## Directory layout
 
@@ -50,7 +50,7 @@ For noise scenarios `rules:` is `[]` -- the runner asserts no alerts fire on the
 
 1. Add a `noise/<descriptive>.yaml` -- standard fakeagent Scenario shape.
 2. Use a unique host_id (different from the corpus host ids; the `BBBB*` prefix is reserved for noise).
-3. Run the suite; the scenario should produce zero alerts. A FP here is a sign that one of the catalog rules has gotten greedy and is matching legitimate user activity -- file an issue against the offending rule.
+3. Run the suite; the scenario should produce zero alerts. A FP here is a sign that one of the catalog rules has gotten greedy and is matching legitimate user activity. File an issue against the offending rule.
 
 ## CI
 
@@ -58,4 +58,4 @@ For noise scenarios `rules:` is `[]` -- the runner asserts no alerts fire on the
 
 ## Why no VM here
 
-The L5 layer (M9 driver + M11 self-hosted runner) covers the real-VM flavour: same `attack.sh` files, same `expected.yaml`, but driven against a SIP-on macOS host. L6 is the synthetic-events lane that proves the catalog rules behave correctly given the canonical event sequences -- it runs in seconds, not the 30 minutes the L5 lane takes per scenario, and it runs nightly rather than on RC tags. Same corpus, two delivery mechanisms.
+The L5 layer (M9 driver + M11 self-hosted runner) covers the real-VM flavour: same `attack.sh` files, same `expected.yaml`, but driven against a SIP-on macOS host. L6 is the synthetic-events lane that proves the catalog rules behave correctly given the canonical event sequences. It runs in seconds, not the 30 minutes the L5 lane takes per scenario, and it runs nightly rather than on RC tags. Same corpus, two delivery mechanisms.

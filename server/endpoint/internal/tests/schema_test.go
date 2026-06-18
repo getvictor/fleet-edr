@@ -29,5 +29,5 @@ func TestSchema_NoTenantIDOnEnrollments(t *testing.T) {
 	assert.Zero(t, n, "tenant_id must not be re-introduced on enrollments; the product is single-instance")
 
 	require.NoError(t, bootstrap.ApplySchema(t.Context(), db),
-		"second ApplySchema must succeed -- migrations are not idempotent")
+		"second ApplySchema must succeed: migrations are not idempotent")
 }

@@ -28,7 +28,7 @@ reviews:
   # gets the harder push CodeRabbit otherwise saves for senior teams.
   profile: assertive
 
-  # Cosmetic noise off - saves walkthrough lines on every PR.
+  # Cosmetic noise off: saves walkthrough lines on every PR.
   poem: false
   in_progress_fortune: false
 
@@ -151,7 +151,7 @@ reviews:
         hit the real component.
 
   # ---- pre-merge checks ----------------------------------------------------
-  # All advisory (mode: warning) - branch protection + the CI workflow
+  # All advisory (mode: warning): branch protection + the CI workflow
   # checks own the actual merge decision.
   pre_merge_checks:
     docstrings:
@@ -159,7 +159,7 @@ reviews:
       # scripts/** carry many small, self-documenting helpers
       # (coverageEnabled, startCoverage, etc.) that don't rate a
       # formal docstring. Source-tree Go follows "exported types +
-      # non-obvious functions" - not every helper warrants a doc.
+      # non-obvious functions": not every helper warrants a doc.
       mode: warning
       threshold: 50
     title:
@@ -190,7 +190,7 @@ reviews:
   review_status: false
 
   # ---- tools ---------------------------------------------------------------
-  # CodeRabbit auto-detects file types - there's no need to disable
+  # CodeRabbit auto-detects file types, so there's no need to disable
   # tools whose target language isn't in the repo (they simply don't
   # fire). Only specify deviations:
   #   1. Disable tools whose findings already flow through CI (so
@@ -198,14 +198,14 @@ reviews:
   #   2. Enable tools (default-on, listed for visibility) whose
   #      findings would NOT otherwise reach a reviewer.
   tools:
-    # Disabled - duplicated by CI workflows that already block merge.
+    # Disabled: duplicated by CI workflows that already block merge.
     golangci-lint: { enabled: false }   # .github/workflows/go-lint.yml
     eslint:        { enabled: false }   # .github/workflows/ts-lint.yml
     swiftlint:     { enabled: false }   # .github/workflows/swift-lint.yml
     actionlint:    { enabled: false }   # .github/workflows/actionlint.yml
     osvScanner:    { enabled: false }   # .github/workflows/osv-scanner.yml
 
-    # Security/secrets - explicitly named for visibility. These are
+    # Security/secrets: explicitly named for visibility. These are
     # NOT in CI today and provide the highest signal for an EDR.
     gitleaks:    { enabled: true }
     trufflehog:  { enabled: true }

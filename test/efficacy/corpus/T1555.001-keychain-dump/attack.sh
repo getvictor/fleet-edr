@@ -4,7 +4,7 @@
 #
 # Detection target: catalog rule credential_keychain_dump.
 #
-# What the real VM equivalent looks like: sudo security dump-keychain -- see scripts/qa/attack-runbook.sh step 'credential_keychain_dump'.
+# What the real VM equivalent looks like: sudo security dump-keychain. See scripts/qa/attack-runbook.sh step 'credential_keychain_dump'.
 #
 # When the M11 self-hosted runner lands, this script will be invoked by
 # scripts/uat/system-test.sh against the edr-qa VM. Until then it exists

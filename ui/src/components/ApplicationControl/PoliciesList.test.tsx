@@ -140,7 +140,7 @@ describe("PoliciesList", () => {
     });
     // The Phase A "always 1" seed case renders as "1 host group". The plural form switches at 2+; the zero state renders
     // "no host groups" (an admin posture, not a wire-shape error). The previous hardcoded "all hosts" placeholder must
-    // not appear anywhere -- if it does, the wiring regressed back to the demo-cut shape.
+    // not appear anywhere. If it does, the wiring regressed back to the demo-cut shape.
     expect(screen.getByText("1 host group")).toBeInTheDocument();
     expect(screen.getByText("3 host groups")).toBeInTheDocument();
     expect(screen.getByText("no host groups")).toBeInTheDocument();

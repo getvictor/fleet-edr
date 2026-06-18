@@ -10,6 +10,6 @@
 // All six are wrapped in identity.Session + identity.CSRF middleware
 // by cmd/main. PUT /api/alerts/{id} additionally calls
 // identity.api.Service.UserExists via the UserExists closure to
-// validate the actor before persisting -- this replaces the
+// validate the actor before persisting. This replaces the
 // fk_alerts_updated_by FK that the bounded-context split dropped.
 package operator

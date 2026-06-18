@@ -6,14 +6,14 @@
 // storagePath under FileManager.default.temporaryDirectory. That gives every
 // test method:
 //
-//   1. A fresh ApplicationControlSnapshot.empty starting state -- no cross-test
+//   1. A fresh ApplicationControlSnapshot.empty starting state, with no cross-test
 //      contamination via the process-global .shared singleton.
 //   2. An isolated on-disk policy file that addTeardownBlock removes when the
 //      test finishes, so the async persist no longer writes against (or fails
 //      against) /var/db/com.fleetdm.edr/application-control.json.
 //
 // The unique-policy-id-per-test gymnastics the previous revision needed are
-// gone. Policy IDs can be 1, 2, 3 -- whatever reads cleanly -- because each
+// gone. Policy IDs can be 1, 2, 3 (whatever reads cleanly) because each
 // store starts empty. ApplicationControlStore.shared is NOT touched by any of
 // these tests.
 
@@ -243,7 +243,7 @@ final class ApplicationControlStoreTests: AppControlStoreTestCase {
     // MARK: apply: cross-policy regression accepted
 
     func testApplyAcceptsDifferentPolicyEvenAtLowerVersion() {
-        // The monotonic gate is keyed on policyID -- a different policy can land at any version
+        // The monotonic gate is keyed on policyID, so a different policy can land at any version
         // because it is, by construction, a fresh policy stream. Pin this so a future
         // tightening of the gate (e.g. comparing version globally) doesn't accidentally start
         // rejecting legitimate policy swaps.
@@ -364,7 +364,7 @@ final class ApplicationControlStoreTests: AppControlStoreTestCase {
     func testLoadFromDiskWithMalformedFileLeavesSnapshotEmpty() {
         // Corruption path: the persisted JSON is unparseable (truncated write, manual edit, etc).
         // The store fails open with the empty snapshot rather than crashing or carrying stale
-        // bytes -- the agent will push a fresh snapshot on the next poll cycle.
+        // bytes; the agent will push a fresh snapshot on the next poll cycle.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AppControlCorrupt-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("application-control.json")

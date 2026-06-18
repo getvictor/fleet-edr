@@ -1,7 +1,7 @@
 // DNSParser tests: hand-rolled RFC 1035 packets exercise queryName, queryType, and
 // responseAddresses against the wire shapes the network extension actually emits via
 // NEDNSProxyProvider. The on-wire bytes are tiny and the parser is pure-Foundation, so
-// PBT isn't a fit -- example-based tests pin the exact bytes the production code must
+// PBT isn't a fit: example-based tests pin the exact bytes the production code must
 // accept, which is also what regressions look like in this layer.
 
 import Foundation
@@ -49,7 +49,7 @@ final class DNSParserTests: XCTestCase {
 
     /// answerRecord encodes a single resource record. NAME is a 2-byte compression
     /// pointer to offset 0x0C (the question section), matching what every real DNS
-    /// resolver emits -- this exercises the parser's skipName compression-pointer
+    /// resolver emits. This exercises the parser's skipName compression-pointer
     /// branch end-to-end.
     private func answerRecord(rrType: UInt16, rdata: Data) -> Data {
         var bytes = Data()
@@ -96,8 +96,8 @@ final class DNSParserTests: XCTestCase {
     // class of malformed packets the parser is required to tolerate.
     func testQueryNameReturnsNilForCompressionPointerInQname() {
         // QNAME starts with a compression-pointer byte (0xC0). The parser refuses to
-        // resolve pointers in the query section -- they would not occur in real
-        // queries -- and returns nil rather than chasing the pointer.
+        // resolve pointers in the query section (they would not occur in real
+        // queries) and returns nil rather than chasing the pointer.
         var packet = header(id: 0x1234, qdcount: 1, ancount: 0)
         packet.append(0xC0) // illegal first byte
         packet.append(0x0C)

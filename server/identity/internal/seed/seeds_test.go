@@ -33,5 +33,5 @@ func TestBuiltinRoles_StableShape(t *testing.T) {
 		assert.NotEmpty(t, r.DisplayName, "role %q must have a non-empty display name", r.ID)
 		assert.NotEmpty(t, r.Description, "role %q must have a non-empty description", r.ID)
 	}
-	assert.Equal(t, wantIDs, gotIDs, "BuiltinRoles order/ids changed -- this is a wire-format break")
+	assert.Equal(t, wantIDs, gotIDs, "BuiltinRoles order/ids changed: this is a wire-format break")
 }

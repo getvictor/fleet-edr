@@ -264,7 +264,7 @@ final class ESFSubscriber: Sendable {
             )
         case .deny(let rule, let matchedIdentifier):
             // matchedIdentifier is .private to honor the "no PII in log statements" coding guideline. For BINARY/CDHASH/
-            // CERTIFICATE this is a hex digest -- not PII but uniform privacy keeps the log policy simple; for PATH (added
+            // CERTIFICATE this is a hex digest (not PII, but uniform privacy keeps the log policy simple); for PATH (added
             // in PR #290 for #210) it's an absolute filesystem path that IS PII and MUST stay out of the public log. The
             // full identifier still flows to the server in the application_control_block event payload (where the project
             // guideline explicitly permits file paths). CodeRabbit MAJOR on PR #290.

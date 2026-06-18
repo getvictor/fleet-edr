@@ -136,7 +136,7 @@ The agent runs two parallel receiver loops (ESF + Network), each with exponentia
 
 ## Server components
 
-The server is a modular monolith split into five bounded contexts under `server/`: `identity`, `endpoint`, `rules`, `response`, and `detection` (ADR-0004). Each context owns an `api/` package -- the only surface other contexts may import -- a Go-compiler-enforced `internal/` tree, and its own `migrations/` schema (ADR-0009). The event data plane lives almost entirely in the `detection` context; the subsections below trace a batch through it.
+The server is a modular monolith split into five bounded contexts under `server/`: `identity`, `endpoint`, `rules`, `response`, and `detection` (ADR-0004). Each context owns an `api/` package (the only surface other contexts may import), a Go-compiler-enforced `internal/` tree, and its own `migrations/` schema (ADR-0009). The event data plane lives almost entirely in the `detection` context; the subsections below trace a batch through it.
 
 ### Ingest handler (`server/detection/internal/intake/`)
 
@@ -219,11 +219,11 @@ In dev, `task dev:server` sets `EDR_UI_LIVE_DIR=server/ui/dist` so the server re
 
 Pages:
 
-- **Login** -- OIDC sign-in plus break-glass admin redemption (session cookie + CSRF token)
-- **Host list** -- table of enrolled hosts with event counts
-- **Process tree** -- D3 hierarchical tree with click-to-select, alert badges
-- **Process detail** -- side panel with metadata, network connections, DNS queries, kill button, alert status management
-- **Alert list** -- filterable table with severity badges, status transitions
+- **Login**: OIDC sign-in plus break-glass admin redemption (session cookie + CSRF token)
+- **Host list**: table of enrolled hosts with event counts
+- **Process tree**: D3 hierarchical tree with click-to-select, alert badges
+- **Process detail**: side panel with metadata, network connections, DNS queries, kill button, alert status management
+- **Alert list**: filterable table with severity badges, status transitions
 
 ## Data flow
 

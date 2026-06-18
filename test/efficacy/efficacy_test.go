@@ -19,7 +19,7 @@
 // One in-process Stack (test/integration.Setup) shared across scenarios.
 // Each scenario enrols a unique host via POST /api/enroll, gets a host
 // token, POSTs its event timeline directly to /api/events via the M3
-// fakeagent's PostDirect (no headless agent in the loop -- the queue +
+// fakeagent's PostDirect (no headless agent in the loop: the queue +
 // uploader path is already L3-covered by M4, and L6 cares specifically
 // about rule firings). The runner polls the detection service's ListAlerts
 // for the expected rule_id; for noise scenarios it asserts the host's
@@ -35,7 +35,7 @@
 //	                              `Detection efficacy` workflow
 //	                              (.github/workflows/efficacy.yml). The
 //	                              per-PR server-test job does NOT pick this
-//	                              up -- L6 runs on the nightly cadence, not
+//	                              up. L6 runs on the nightly cadence, not
 //	                              every PR.
 package efficacy_test
 
@@ -137,7 +137,7 @@ func TestL6_DetectionEfficacy(t *testing.T) {
 
 	// Aggregate gates. Computed AFTER every subtest so a per-scenario
 	// failure shows up in the test report at its own line AND in the
-	// aggregate line below -- the operator can distinguish "one
+	// aggregate line below, so the operator can distinguish "one
 	// scenario regressed" from "the whole layer is broken."
 	var attackTotal, attackPassed, noiseTotal, noiseFalse int
 	for _, r := range results {
@@ -272,7 +272,7 @@ func runAttack(t *testing.T, stack *integration.Stack, entry scenarioEntry) resu
 
 	if len(entry.Expected.Rules) == 0 {
 		// An attack scenario with no rules in expected.yaml is a config
-		// error -- the harness can't evaluate it.
+		// error: the harness can't evaluate it.
 		t.Errorf("attack scenario %s has no rules in expected.yaml", entry.Name)
 		res.Reason = "expected.yaml has no rules"
 		return res
@@ -356,7 +356,7 @@ func runNoise(t *testing.T, stack *integration.Stack, entry scenarioEntry) resul
 		res.Passed = true
 		return res
 	}
-	// At least one alert fired -- that's a false positive. Surface the
+	// At least one alert fired, which is a false positive. Surface the
 	// rule_id list so the operator knows which rule got greedy.
 	ruleIDs := make([]string, 0, len(alerts))
 	for _, a := range alerts {
@@ -401,7 +401,7 @@ func waitForAlert(ctx context.Context, stack *integration.Stack, hostID, ruleID,
 // those call t.FailNow internally, which aborts the subtest goroutine
 // BEFORE the parent's appendResultM runs, leaving the scenario missing
 // from the aggregate denominator. A missing scenario inflates the
-// detection rate by reducing the denominator -- the harness would silently
+// detection rate by reducing the denominator, so the harness would silently
 // claim "100% detection" even when half the scenarios failed to enrol.
 func enroll(ctx context.Context, stack *integration.Stack, hostID, scenarioName string) (string, error) {
 	body, err := json.Marshal(map[string]string{

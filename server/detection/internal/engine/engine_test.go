@@ -71,7 +71,7 @@ func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
 // otel.SetTracerProvider, which Copilot flagged as racy under parallel package tests), calls Engine.Evaluate, then walks the
 // recorder's captured spans for one with rule_id == stub's id and asserts the alert_count attr is also present. stubRule returns
 // zero findings so persistFinding is never reached (avoids needing a live mysql.Store); the test pins attribute presence and value,
-// not non-zero counts -- the alert-count contract is "the attr exists and is countable", and 0 is a valid count.
+// not non-zero counts: the alert-count contract is "the attr exists and is countable", and 0 is a valid count.
 func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))

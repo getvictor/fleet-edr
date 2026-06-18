@@ -1,6 +1,6 @@
 # Ambient noise: a developer's workstation morning. Boot a terminal, list
 # files, run a Go build. None of these touch the catalog rules' triggering
-# shapes -- expected zero alerts. A FP here is a signal that one of the
+# shapes, expecting zero alerts. A FP here is a signal that one of the
 # rules has gotten greedy (e.g. broadened its path / args matchers).
 name: "noise: developer workstation -- terminal + ls + go build"
 host:

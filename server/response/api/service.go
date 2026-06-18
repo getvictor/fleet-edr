@@ -23,13 +23,13 @@ type Service interface {
 	// ErrInvalidInsertRequest.
 	Insert(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
 
-	// Get returns a single command by id. Operator-only path -- agents should use ListForHost. Returns ErrCommandNotFound for an unknown
+	// Get returns a single command by id. Operator-only path: agents should use ListForHost. Returns ErrCommandNotFound for an unknown
 	// id.
 	Get(ctx context.Context, id int64) (Command, error)
 
 	// ListForHost returns commands for the pinned host_id, optionally
 	// filtered by status (empty string returns every status). Agent
-	// hot path -- called every 5s per host.
+	// hot path: called every 5s per host.
 	//
 	// Side effect: calls the Heartbeat closure (wired by cmd/main) so
 	// the host's last-seen-ns advances on every poll. The closure

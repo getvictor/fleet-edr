@@ -7,7 +7,7 @@ name: Markdown lint
 #     fenced code blocks), MD031/MD032/MD022/MD009/MD012 (whitespace hygiene),
 #     MD041 (first-line heading).
 #   - Prettier (.prettierrc.yaml, proseWrap: never) owns prose wrapping + table
-#     column alignment - the repo's no-hard-wrap convention.
+#     column alignment, matching the repo's no-hard-wrap convention.
 
 on:
   push:
