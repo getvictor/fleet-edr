@@ -15,7 +15,7 @@ import (
 // `/Library/LaunchAgents/`, the canonical macOS persistence mechanism. Operators can
 // silence expected plists via `EDR_LAUNCHAGENT_ALLOWLIST` (comma-separated absolute paths).
 //
-// MITRE ATT&CK: T1547.011 (Boot or Logon Autostart Execution: Launch Agent)
+// MITRE ATT&CK: T1543.001 (Create or Modify System Process: Launch Agent)
 type PersistenceLaunchAgent struct {
 	// AllowedPlists is the set of plist paths the operator has pre-blessed. The rule
 	// skips findings whose target plist matches any entry (exact string match).
