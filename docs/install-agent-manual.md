@@ -245,7 +245,7 @@ Edit `/Library/LaunchDaemons/com.fleetdm.edr.agent.plist` and add these keys ins
 
 ```xml
 <key>OTEL_EXPORTER_OTLP_ENDPOINT</key>
-<string>https://otel.fleetdm.site:443</string>
+<string>https://otel.example.com:443</string>
 <key>OTEL_EXPORTER_OTLP_COMPRESSION</key>
 <string>gzip</string>
 <key>OTEL_EXPORTER_OTLP_HEADERS</key>
