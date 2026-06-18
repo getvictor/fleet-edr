@@ -485,7 +485,7 @@ jobs:
           name: coverage-ui-e2e
           path: test/e2e/coverage
 
-      - uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+      - uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
@@ -574,7 +574,7 @@ jobs:
       # was uploaded next. Be explicit; don't trust auto-discovery.
       - name: Upload agent coverage
         if: needs.agent-test.result == 'success'
-        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: coverage-agent.out
           flags: agent
@@ -585,7 +585,7 @@ jobs:
 
       - name: Upload server coverage
         if: needs.server-test.result == 'success'
-        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: coverage-server.out
           flags: server
@@ -601,7 +601,7 @@ jobs:
       # upload to the same flag and the union still holds.
       - name: Upload server E2E coverage
         if: needs.e2e-test.result == 'success'
-        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: coverage-server-e2e.out
           flags: server
@@ -612,7 +612,7 @@ jobs:
 
       - name: Upload UI E2E coverage
         if: needs.e2e-test.result == 'success'
-        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: test/e2e/coverage/lcov-e2e.info
           flags: ui
@@ -627,7 +627,7 @@ jobs:
       # patch coverage despite the vitest tests exercising 91%+ of its statements).
       - name: Upload UI vitest coverage
         if: needs.ui-test.result == 'success'
-        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: ui/coverage/lcov.info
           flags: ui
