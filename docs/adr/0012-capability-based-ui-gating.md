@@ -1,6 +1,6 @@
 # 0012. Capability-based UI gating from a server-provided permission set
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-01
 - Deciders: getvictor
 

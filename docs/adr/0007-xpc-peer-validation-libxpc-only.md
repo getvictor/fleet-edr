@@ -16,7 +16,7 @@ macOS exposes two generations of API for verifying the code-signing identity of 
 
 Reality on the ground in this codebase, before this ADR is written:
 
-- `extension/edr/extension/XPCServer.swift` line 187 calls `xpc_connection_set_peer_code_signing_requirement(event, peerCodeSigningRequirement)` inside `handleListenerEvent`, before the `xpc_connection_set_event_handler` registration. The requirement string is the production string (Apple anchor + the FDM team ID `FDG8Q7N4CC`) in release builds, OR the production string OR a pinned ad-hoc cdhash in `#if DEBUG` builds for SIP-disabled dev VMs.
+- `extension/edr/shared/XPCEventServer.swift` line 301 calls `xpc_connection_set_peer_code_signing_requirement(event, peerCodeSigningRequirement)` inside `handleListenerEvent`, before the `xpc_connection_set_event_handler` registration. The requirement string is the production string (Apple anchor + the FDM team ID `FDG8Q7N4CC`) in release builds, OR the production string OR a pinned ad-hoc cdhash in `#if DEBUG` builds for SIP-disabled dev VMs.
 - There is no `audit_token_t`-based fallback validation in user code. There is no `SecCodeCheckValidity` call anywhere in the extension target.
 - The project targets macOS 13+ exclusively (`extension/edr/Package.swift` declares `platforms: [.macOS(.v13)]`; ADR-0002 commits the MVP to Apple Silicon + macOS 13+).
 - The `extension-xpc-server` spec requires "the extensions SHALL reject any inbound XPC connection whose peer does not satisfy a code-signing requirement chained to the Apple anchor and the Fleet Device Management team identifier" (`openspec/specs/extension-xpc-server/spec.md`). The spec is agnostic about which API enforces that requirement, which is what this ADR pins down.
@@ -100,8 +100,8 @@ When the agent's production signing-identifier story is locked down, narrow the 
 
 ## References
 
-- `extension/edr/extension/XPCServer.swift` lines 17-44 (the `PeerCodeSigningRequirement` enum + the active `peerCodeSigningRequirement` constant chosen via `#if DEBUG`).
-- `extension/edr/extension/XPCServer.swift` line 187 (the single call site of `xpc_connection_set_peer_code_signing_requirement`).
+- `extension/edr/shared/XPCEventServer.swift` lines 16-42 (the `PeerCodeSigningRequirement` enum + the active `peerCodeSigningRequirement` constant chosen via `#if DEBUG`).
+- `extension/edr/shared/XPCEventServer.swift` line 301 (the single call site of `xpc_connection_set_peer_code_signing_requirement`).
 - `extension/edr/Package.swift` (`platforms: [.macOS(.v13)]`).
 - `openspec/specs/extension-xpc-server/spec.md` - Requirement "Peer code-signing validation" and the four scenarios that pin the contract from the spec side.
 - `extension/edr/Tests/EDRExtensionLogicTests/XPCServerLogicTests.swift`
