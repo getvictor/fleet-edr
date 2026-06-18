@@ -225,7 +225,9 @@ func (e *entry) marshal() ([]byte, error) {
 	payload["coalesced_count"] = countJSON
 	lastJSON, _ := json.Marshal(e.lastTSNs)
 	payload["last_timestamp_ns"] = lastJSON
-	if e.dnsAddrs != nil {
+	// Only rewrite response_addresses when the merged events actually carried addresses. If none did (e.g. a repeated query with no
+	// captured response), leave the first event's payload untouched rather than injecting an empty `[]` the original never had.
+	if len(e.dnsAddrs) > 0 {
 		addrs := make([]string, 0, len(e.dnsAddrs))
 		for a := range e.dnsAddrs {
 			addrs = append(addrs, a)

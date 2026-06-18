@@ -157,6 +157,27 @@ func TestCoalescer_DNSQueryAndResponseMerge(t *testing.T) {
 	assert.Equal(t, []string{"8.8.8.8", "9.9.9.9"}, addrs, "union is sorted for determinism")
 }
 
+// TestCoalescer_DNSNoAnswersOmitsResponseAddresses pins that coalescing a repeated DNS query that never carried answers does NOT
+// inject an empty `response_addresses: []` the original event lacked (Gemini review on PR #432).
+func TestCoalescer_DNSNoAnswersOmitsResponseAddresses(t *testing.T) {
+	t.Parallel()
+	s := &sink{}
+	c := New(time.Minute, s.enqueue, nil)
+	// Two identical query-only events (no response_addresses) for the same key => merged (count 2), so the representative is
+	// rewritten rather than passed through byte-for-byte.
+	require.NoError(t, c.Handle(context.Background(), mkDNS(t, "q1", 10, 42, "noanswer.example", "A", nil)))
+	require.NoError(t, c.Handle(context.Background(), mkDNS(t, "q2", 11, 42, "noanswer.example", "A", nil)))
+	c.Flush(context.Background())
+
+	got := s.events()
+	require.Len(t, got, 1)
+	p := decode(t, got[0])
+	count, _ := intField(t, p, "coalesced_count")
+	assert.Equal(t, int64(2), count, "the two query-only events must have merged")
+	_, present := p.Payload["response_addresses"]
+	assert.False(t, present, "no answers were ever observed, so response_addresses must not be injected")
+}
+
 func TestCoalescer_SingletonIsByteIdentical(t *testing.T) {
 	t.Parallel()
 	s := &sink{}

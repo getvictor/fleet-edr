@@ -38,7 +38,6 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
       expect(result.eventsPosted).toBe(expectedTotal);
       expect(result.hostToken).not.toBe("");
 
-      const db = await openDB();
       // snapshot_heartbeat is accepted by ingest (counted in eventsPosted, above) but is NOT persisted as an events row: the server
       // applies its freshness side effect at ingest and drops it (issue #408). So the DB-side assertion is over the PERSISTED
       // subset: everything the scenario posts except snapshot_heartbeat.
