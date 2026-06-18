@@ -369,9 +369,11 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 //
 // A same-PID re-exec chain (issue #10) shares one pidversion across its generations (execve keeps the kernel generation), so the
 // identity can match more than one row. When it does, atNs disambiguates: the ORDER BY prefers the generation that was the
-// running image at atNs, bracketing on COALESCE(exec_time_ns, fork_time_ns) <= atNs < exit_time_ns. A re-exec chain preserves the
-// original fork_time_ns on every generation, so fork_time_ns cannot order them; exec_time_ns (the image-replacement instant) is
-// the running-image boundary, and COALESCE falls back to fork_time_ns for a pre-exec (pure fork) generation. When the identity
+// running image at atNs, bracketing on COALESCE(exec_time_ns, fork_time_ns) <= atNs and (exit_time_ns IS NULL OR atNs <=
+// exit_time_ns). The exit bound is inclusive, matching GetProcessByPID; at the exact re-exec instant the newer generation still
+// wins because its exec_time_ns equals that instant and the COALESCE tiebreak prefers it. A re-exec chain preserves the original
+// fork_time_ns on every generation, so fork_time_ns cannot order them; exec_time_ns (the image-replacement instant) is the
+// running-image boundary, and COALESCE falls back to fork_time_ns for a pre-exec (pure fork) generation. When the identity
 // matches a single row (the PID-reuse case) that row is returned regardless of atNs, so identity still beats clock skew; when no
 // generation brackets atNs the lookup falls back to the live, then newest-image, generation within the set.
 func (s *Store) GetProcessByPIDVersion(ctx context.Context, hostID string, pid int, pidversion uint32, atNs int64) (*api.Process, error) {
