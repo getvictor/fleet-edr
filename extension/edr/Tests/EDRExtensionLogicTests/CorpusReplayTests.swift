@@ -296,7 +296,7 @@ final class CorpusReplayTests: XCTestCase {
     }
 
     private static func encodeFork() throws -> Data {
-        let payload = ForkPayload(childPid: 5000, parentPid: 4242)
+        let payload = ForkPayload(childPid: 5000, parentPid: 4242, pidVersion: nil)
         return try encodeEnvelope(
             eventID: "44444444-4444-4444-4444-444444444444",
             eventType: "fork",

@@ -30,7 +30,7 @@ Sequencing decision: server-first. PR 1 (this branch, `flow-process-identity`) l
 - [x] Unit test: identity-vs-window precedence in `resolveFlowProcess` (`flow_identity_test.go`), markers on the two correlation scenarios.
 - [x] Integration test (real MySQL): `TestGetProcessByPIDVersion` (`processes_pidversion_test.go`) covers PID reuse (distinct pidversion per lifetime), NULL-pidversion non-match + window reachability, no-match nil, and re-exec-chain current-generation selection. Markers on the storage + correlation scenarios.
 - [x] `go test ./server/detection/... ./server/rules/...` green; `task lint:go` (custom binary) clean; `openspec validate flow-process-identity --strict` passes.
-- [ ] PR 2: Swift unit tests for `extractProcessInfo` pidversion + encoder present/omitted.
+- [x] PR 2: Swift unit tests (`PIDVersionTests.swift`): `extractProcessInfo` returns pidversion from a token (nil for absent/short), and `ExecPayload`/`ForkPayload` emit `pidversion` when set + omit when nil. `ProcessInfo.swift` moved into the SwiftPM logic target (pure Darwin) with a `bsm` link so `swift test` resolves the audit-token accessors. Full suite: 148 tests pass.
 
 ## 8. Docs
 
@@ -38,14 +38,14 @@ Sequencing decision: server-first. PR 1 (this branch, `flow-process-identity`) l
 
 ## 5. Extension: Endpoint Security (exec/fork): PR 2
 
-- [ ] `ESFSubscriber.swift`: `audit_token_to_pidversion` on exec target + fork child, threaded into payloads.
-- [ ] `EventSerializer.swift`: optional `pidVersion` (`encodeIfPresent`, CodingKey `pidversion`) on `ExecPayload` + `ForkPayload`.
+- [x] `ESFSubscriber.swift`: `audit_token_to_pidversion(target.audit_token)` on exec, `audit_token_to_pidversion(child)` on fork, threaded into the payloads.
+- [x] `EventSerializer.swift`: optional `pidVersion` (CodingKey `pidversion`) on `ExecPayload` (explicit `encodeIfPresent` in its custom encoder) + `ForkPayload` (synthesized encoder auto-omits nil).
 
 ## 6. Extension: Network Extension (network_connect/dns_query): PR 2
 
-- [ ] `ProcessInfo.swift`: `extractProcessInfo` returns `pidversion`; investigate `sourceProcessAuditToken` on the macOS 26 SDK (design.md item 1).
-- [ ] `NetworkFilter.swift` + `DNSProxyProvider.swift`: pass pidversion through.
-- [ ] `NetworkEventSerializer.swift`: optional `pidVersion` on `NetworkConnectPayload` + `DNSQueryPayload`.
+- [x] `ProcessInfo.swift`: `extractProcessInfo` returns `(pid, uid, pidversion)`; pidversion nil when the token is absent. `sourceProcessAuditToken` investigation RESOLVED (design.md item 1): exists on `NEFilterFlow` only.
+- [x] `NetworkFilter.swift`: prefers `sourceProcessAuditToken ?? sourceAppAuditToken` (the flow-creating process); `DNSProxyProvider.swift`: `sourceAppAuditToken` (only token on `NEFlowMetaData`). Both thread pidversion through.
+- [x] `NetworkEventSerializer.swift`: optional `pidVersion` (CodingKey `pidversion`, synthesized encoder omits nil) on `NetworkConnectPayload` + `DNSQueryPayload`.
 
 ## 9. Manual testing + telemetry verification: PR 2 (needs the emitting extension)
 

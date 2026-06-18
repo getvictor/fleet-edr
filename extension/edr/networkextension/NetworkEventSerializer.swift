@@ -4,49 +4,8 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "Serializer")
 
-// MARK: Payload types
-
-struct NetworkConnectPayload: Codable, Sendable {
-    let pid: pid_t
-    let path: String
-    let uid: uid_t
-    let proto: String
-    let direction: String
-    let localAddress: String
-    let localPort: UInt16
-    let remoteAddress: String
-    let remotePort: UInt16
-    let remoteHostname: String
-
-    enum CodingKeys: String, CodingKey {
-        case pid, path, uid
-        case proto = "protocol"
-        case direction
-        case localAddress = "local_address"
-        case localPort = "local_port"
-        case remoteAddress = "remote_address"
-        case remotePort = "remote_port"
-        case remoteHostname = "remote_hostname"
-    }
-}
-
-struct DNSQueryPayload: Codable, Sendable {
-    let pid: pid_t
-    let path: String
-    let uid: uid_t
-    let queryName: String
-    let queryType: String
-    let responseAddresses: [String]?
-    let proto: String
-
-    enum CodingKeys: String, CodingKey {
-        case pid, path, uid
-        case queryName = "query_name"
-        case queryType = "query_type"
-        case responseAddresses = "response_addresses"
-        case proto = "protocol"
-    }
-}
+// NetworkConnectPayload / DNSQueryPayload moved to NetworkPayloads.swift so their Codable wire shape is unit-testable via the
+// SwiftPM logic module without dragging this file's EventEnvelope (which collides with the ESF serializer's copy).
 
 // MARK: Event envelope (same as ESF extension)
 

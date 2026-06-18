@@ -23,6 +23,8 @@ private struct FlowContext {
     let pid: pid_t
     let uid: uid_t
     let path: String
+    /// Kernel PID generation of the querying process when the flow carried an audit token; nil otherwise (issue #403).
+    let pidVersion: UInt32?
 }
 
 /// DNSProxyProvider intercepts DNS queries, captures metadata for EDR telemetry,
@@ -65,8 +67,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     // MARK: UDP flow handling
 
     private func handleUDPFlow(_ flow: NEAppProxyUDPFlow) {
-        let (pid, uid) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let ctx = FlowContext(pid: pid, uid: uid, path: processPath(for: pid))
+        let info = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
+        let ctx = FlowContext(pid: info.pid, uid: info.uid, path: processPath(for: info.pid), pidVersion: info.pidversion)
 
         flow.open(withLocalFlowEndpoint: nil) { [weak self] error in
             if let error {
@@ -169,8 +171,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     // MARK: TCP flow handling
 
     private func handleTCPFlow(_ flow: NEAppProxyTCPFlow) {
-        let (pid, uid) = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let ctx = FlowContext(pid: pid, uid: uid, path: processPath(for: pid))
+        let info = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
+        let ctx = FlowContext(pid: info.pid, uid: info.uid, path: processPath(for: info.pid), pidVersion: info.pidversion)
         let upstreamEndpoint = flow.remoteFlowEndpoint
 
         flow.open(withLocalFlowEndpoint: nil) { [weak self] error in
@@ -293,7 +295,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             pid: ctx.pid, path: ctx.path, uid: ctx.uid,
             queryName: queryName, queryType: queryType,
             responseAddresses: nil,
-            proto: proto
+            proto: proto,
+            pidVersion: ctx.pidVersion
         )
 
         if let data = serializer.serialize(eventType: "dns_query", payload: payload) {
@@ -312,7 +315,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             pid: ctx.pid, path: ctx.path, uid: ctx.uid,
             queryName: queryName, queryType: queryType,
             responseAddresses: responseAddrs,
-            proto: proto
+            proto: proto,
+            pidVersion: ctx.pidVersion
         )
 
         if let data = serializer.serialize(eventType: "dns_query", payload: payload) {

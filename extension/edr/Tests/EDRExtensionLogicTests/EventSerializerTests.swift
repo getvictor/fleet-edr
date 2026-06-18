@@ -170,7 +170,7 @@ final class EventSerializerTests: XCTestCase {
     // on field naming, omitting a key, or adding an unexpected one would surface here as the
     // assertion comparing against a literal byte string.
     func testForkPayloadWireKeys() throws {
-        let payload = ForkPayload(childPid: 5, parentPid: 4)
+        let payload = ForkPayload(childPid: 5, parentPid: 4, pidVersion: nil)
         let json = String(data: try encoder.encode(payload), encoding: .utf8) ?? ""
         // Wire keys are snake_case, not Swift property names.
         XCTAssertEqual(json, #"{"child_pid":5,"parent_pid":4}"#)
@@ -257,7 +257,7 @@ final class EventSerializerTests: XCTestCase {
     // as a sub-object; a full byte-level comparison would also be valid given .sortedKeys but the
     // substring form is more diagnostic when one key changes name.
     func testEventEnvelopeWireKeysAndNesting() throws {
-        let payload = ForkPayload(childPid: 11, parentPid: 10)
+        let payload = ForkPayload(childPid: 11, parentPid: 10, pidVersion: nil)
         let envelope = EventEnvelope(
             eventID: "11111111-1111-1111-1111-111111111111",
             hostID: "AAAA0001-0000-0000-0000-000000000001",

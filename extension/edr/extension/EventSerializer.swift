@@ -34,6 +34,10 @@ struct ExecPayload: Codable, Sendable {
     /// Hardened Runtime (per Phase A close-out spec). Absent for unsigned binaries and signed-but-not-hardened binaries; the
     /// encoder below omits the key entirely in those cases so the wire shape stays compact and backwards-tolerant.
     let cdhash: String?
+    /// Kernel PID generation (audit_token_to_pidversion) of the exec'd process. Present for live execs (ESF carries the
+    /// target's audit token); lets the server pin process identity across PID reuse (issue #403). The encoder omits the key
+    /// when nil (e.g. a snapshot row constructed without a token) so the legacy wire shape is unchanged.
+    let pidVersion: UInt32?
     /// True only for synthetic exec events emitted by the ESF startup snapshot pass
     /// (issue #11). The custom encoder below OMITS the key entirely when false, so
     /// the wire shape for live execs stays byte-identical to the pre-#11 format.
@@ -47,6 +51,7 @@ struct ExecPayload: Codable, Sendable {
         case codeSigning = "code_signing"
         case sha256
         case cdhash
+        case pidVersion = "pidversion"
         case snapshot
     }
 
@@ -54,6 +59,7 @@ struct ExecPayload: Codable, Sendable {
         pid: pid_t, ppid: pid_t, path: String, args: [String], cwd: String,
         uid: uid_t, gid: gid_t, codeSigning: CodeSigning?, sha256: String?,
         cdhash: String? = nil,
+        pidVersion: UInt32? = nil,
         snapshot: Bool = false
     ) {
         self.pid = pid
@@ -66,6 +72,7 @@ struct ExecPayload: Codable, Sendable {
         self.codeSigning = codeSigning
         self.sha256 = sha256
         self.cdhash = cdhash
+        self.pidVersion = pidVersion
         self.snapshot = snapshot
     }
 
@@ -84,6 +91,7 @@ struct ExecPayload: Codable, Sendable {
         codeSigning = try container.decodeIfPresent(CodeSigning.self, forKey: .codeSigning)
         sha256 = try container.decodeIfPresent(String.self, forKey: .sha256)
         cdhash = try container.decodeIfPresent(String.self, forKey: .cdhash)
+        pidVersion = try container.decodeIfPresent(UInt32.self, forKey: .pidVersion)
         snapshot = try container.decodeIfPresent(Bool.self, forKey: .snapshot) ?? false
     }
 
@@ -99,6 +107,7 @@ struct ExecPayload: Codable, Sendable {
         try container.encodeIfPresent(codeSigning, forKey: .codeSigning)
         try container.encodeIfPresent(sha256, forKey: .sha256)
         try container.encodeIfPresent(cdhash, forKey: .cdhash)
+        try container.encodeIfPresent(pidVersion, forKey: .pidVersion)
         // Only emit snapshot when true: keeps the live-exec wire shape stable
         // and avoids tripping the server detection-engine bytes.Contains gate
         // on a `"snapshot":false` payload (false events would correctly be
@@ -112,10 +121,14 @@ struct ExecPayload: Codable, Sendable {
 struct ForkPayload: Codable, Sendable {
     let childPid: pid_t
     let parentPid: pid_t
+    /// Kernel PID generation (audit_token_to_pidversion) of the CHILD process, stored on the new generation so flows
+    /// correlate to it by exact identity (issue #403). The synthesized encoder omits the key when nil.
+    let pidVersion: UInt32?
 
     enum CodingKeys: String, CodingKey {
         case childPid = "child_pid"
         case parentPid = "parent_pid"
+        case pidVersion = "pidversion"
     }
 }
 
