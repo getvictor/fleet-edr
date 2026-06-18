@@ -26,7 +26,7 @@ func (r *recordingGraphReader) GetProcessByPID(_ context.Context, _ string, _ in
 	return r.byPID, nil
 }
 
-func (r *recordingGraphReader) GetProcessByPIDVersion(_ context.Context, _ string, _ int, _ uint32) (*api.Process, error) {
+func (r *recordingGraphReader) GetProcessByPIDVersion(_ context.Context, _ string, _ int, _ uint32, _ int64) (*api.Process, error) {
 	r.calledByVersion = true
 	return r.byPIDVersion, nil
 }

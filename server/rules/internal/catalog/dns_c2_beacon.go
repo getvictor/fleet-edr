@@ -211,7 +211,7 @@ func resolveFlowProcess(
 	ctx context.Context, s api.GraphReader, hostID string, pid int, pidversion *uint32, atNs int64,
 ) (*api.Process, error) {
 	if pidversion != nil {
-		proc, err := s.GetProcessByPIDVersion(ctx, hostID, pid, *pidversion)
+		proc, err := s.GetProcessByPIDVersion(ctx, hostID, pid, *pidversion, atNs)
 		if err != nil {
 			return nil, err
 		}
