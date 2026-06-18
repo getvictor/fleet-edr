@@ -72,7 +72,7 @@ describe("HostList rendering", () => {
 });
 
 describe("HostList summary strip", () => {
-  // spec:web-ui/host-list-is-the-home-view/host-list-shows-hostname-platform-and-a-fleet-summary
+  // spec:web-ui/host-list-is-the-home-view/host-list-shows-hostname-and-a-fleet-summary
   it("counts online, offline and total hosts", async () => {
     mockHosts([
       makeHost({ host_id: "a", last_seen_ns: minutesAgoNs(1) }), // online
