@@ -237,6 +237,14 @@ Three common scenarios:
 
 Alerts are NOT deleted by retention. They stay until you delete them via the admin UI. A resolved alert pointing at an event that retention has purged will still render, with the event references 404ing.
 
+### Curbing event volume at the source
+
+Retention bounds how long events live; two levers reduce how many are written in the first place (issue #408):
+
+- **`snapshot_heartbeat` events are no longer persisted.** The server applies their freshness side effect (the `processes.last_seen_ns` bump that exempts a live snapshot row from the 6h TTL force-exit) at ingest and drops them, so they never occupy an `events` row. Watch `edr.ingest.heartbeats_dropped` to see the row-count savings.
+- **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats no longer cost an `events` row, but they still cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under `EDR_STALE_PROCESS_TTL` (default 6h) so a live snapshot row is always re-freshened before the TTL would force-exit it.
+- **`EDR_NETWORK_COALESCE_WINDOW` coalesces repetitive network/DNS telemetry** (agent-side, default `10s`, `0` disables). Within each window the agent collapses repeated identical connection 5-tuples and repeated DNS lookups into one representative event plus a `coalesced_count`, preserving the earliest timestamp and (for DNS) the union of resolved addresses. Raise it to coalesce more aggressively, but keep it well under the 30s DNS-to-connect beacon-correlation window so coalescing can never push a representative outside it.
+
 ## Process-tree freshness (issue #6)
 
 ESF is best-effort and exit events go missing under kernel back-pressure, sysext crashes, and agent restarts. Two reconcilers cooperate to keep the process tree from filling with forever-green ghost rows.

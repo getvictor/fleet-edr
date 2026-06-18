@@ -14,6 +14,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/fleetdm/edr/agent/coalesce"
 	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/commander"
 	"github.com/fleetdm/edr/agent/config"
@@ -161,10 +162,15 @@ func run() error {
 	// dispatcher; OnDisconnected clears it so commands issued during a reconnect window fail fast.
 	esfDispatcher := receiver.NewDispatcher()
 
+	// coalescer collapses repetitive network_connect / dns_query telemetry within a window before enqueue (issue #408). A zero
+	// window disables it (Handle is a direct passthrough, Run just waits on ctx), so it can be wired unconditionally.
+	coalescer := coalesce.New(cfg.NetworkCoalesceWindow, q.Enqueue, logger)
+	go coalescer.Run(ctx)
+
 	pidTable := proctable.New()
-	go startReceiverLoop(ctx, logger, cfg.XPCService, q, pidTable, true, esfDispatcher)
+	go startReceiverLoop(ctx, logger, cfg.XPCService, coalescer.Handle, pidTable, true, esfDispatcher)
 	if cfg.NetXPCService != "" {
-		go startReceiverLoop(ctx, logger, cfg.NetXPCService, q, pidTable, false, nil)
+		go startReceiverLoop(ctx, logger, cfg.NetXPCService, coalescer.Handle, pidTable, false, nil)
 	}
 	go runUploader(ctx, up, logger)
 
@@ -173,6 +179,9 @@ func run() error {
 	startProcessReconciler(ctx, cfg, pidTable, q, tokenProvider, logger)
 
 	<-ctx.Done()
+	// Drain buffered network/DNS representatives into the queue before the uploader drains the queue and the queue closes, so a
+	// clean shutdown loses no coalesced telemetry. No-op when coalescing is disabled.
+	coalescer.Flush(context.WithoutCancel(ctx))
 	drainAndReport(up, q, logger)
 	return nil
 }
@@ -353,13 +362,15 @@ func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logg
 }
 
 // startReceiverLoop builds the per-service receiver.Loop and runs it. The Loop owns the connect / reconnect / backoff / heartbeat
-// machinery; this function only wires the agent's queue + proctable into OnEvent and (for the ESF service) the application_control
-// Dispatcher into OnConnected / OnDisconnected. dispatcher may be nil for non-ESF services that do not receive outbound pushes.
+// machinery; this function only wires the agent's enqueue sink + proctable into OnEvent and (for the ESF service) the
+// application_control Dispatcher into OnConnected / OnDisconnected. dispatcher may be nil for non-ESF services that do not receive
+// outbound pushes. enqueue is the coalescer's Handle: network_connect / dns_query are coalesced before reaching the queue, every
+// other event passes straight through.
 func startReceiverLoop(
 	ctx context.Context,
 	logger *slog.Logger,
 	xpcService string,
-	q *queue.Queue,
+	enqueue func(context.Context, []byte) error,
 	pt *proctable.Table,
 	updateTable bool,
 	dispatcher *receiver.Dispatcher,
@@ -376,7 +387,7 @@ func startReceiverLoop(
 			if updateTable {
 				updateProcTable(pt, data)
 			}
-			if err := q.Enqueue(ctx, data); err != nil {
+			if err := enqueue(ctx, data); err != nil {
 				logger.WarnContext(ctx, "enqueue", "err", err)
 			}
 		},

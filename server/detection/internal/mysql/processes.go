@@ -49,6 +49,42 @@ func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pi
 	return err
 }
 
+// SnapshotHeartbeat is one heartbeat's freshness signal: the PID it pings and the event timestamp to record as last_seen_ns.
+type SnapshotHeartbeat struct {
+	PID         int
+	TimestampNs int64
+}
+
+// BumpSnapshotLastSeenBatch applies the live-snapshot freshness bump for a batch of heartbeats in one transaction. Each entry runs
+// the identical scoped UPDATE as UpdateLastSeenForSnapshot (live, snapshot-originated row for (host_id, pid) only), so the freshness
+// semantics and no-op cases are exactly those of the single-row path; this just relocates the bump to ingest time so the heartbeat
+// never has to be persisted as a retained event row (issue #408). A heartbeat that matches no row is a no-op, as before. All
+// heartbeats in a request share one host_id (host-identity pinning guarantees it), so the caller passes hostID once.
+func (s *Store) BumpSnapshotLastSeenBatch(ctx context.Context, hostID string, beats []SnapshotHeartbeat) error {
+	if len(beats) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx for heartbeat bump: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
+	for _, b := range beats {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE processes SET last_seen_ns = ?
+			WHERE host_id = ? AND pid = ? AND is_snapshot = TRUE AND exit_time_ns IS NULL
+			ORDER BY fork_time_ns DESC LIMIT 1`,
+			b.TimestampNs, hostID, b.PID,
+		); err != nil {
+			return fmt.Errorf("bump snapshot last_seen host=%s pid=%d: %w", hostID, b.PID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit heartbeat bump: %w", err)
+	}
+	return nil
+}
+
 // ProcessExecUpdate carries the exec-time metadata patched onto an existing process row. Grouped as a struct so callers don't pass a
 // 10-parameter positional list.
 type ProcessExecUpdate struct {

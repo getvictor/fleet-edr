@@ -191,16 +191,33 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.InsertEvents(ctx, events); err != nil {
+	// Liveness-only events (snapshot_heartbeat) are processed for their freshness side effect and dropped instead of persisted as
+	// retained event rows (issue #408): they are ~22% of rows for zero forensic value, and the engine already filters them before
+	// rule evaluation. Everything else is persisted exactly as before.
+	toStore, heartbeats := partitionHeartbeats(events)
+
+	if err := h.store.InsertEvents(ctx, toStore); err != nil {
 		h.logger.ErrorContext(ctx, "insert error", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 
 	if h.metrics != nil {
-		h.metrics.EventsIngested(ctx, pinnedHostID, len(events))
+		h.metrics.EventsIngested(ctx, pinnedHostID, len(toStore))
+		h.metrics.EventsHeartbeatDropped(ctx, pinnedHostID, len(heartbeats))
 	}
 
+	// Apply the heartbeat freshness bump (the heartbeat's only server-side effect: bump processes.last_seen_ns so the TTL reconciler
+	// exempts a live snapshot row). Best-effort like UpsertHosts: a heartbeat lands every reconcile interval, so a transient failure
+	// here is re-applied by the next one, well within the 6h TTL. Never fail the batch over a liveness bump.
+	if len(heartbeats) > 0 {
+		if err := h.store.BumpSnapshotLastSeenBatch(ctx, pinnedHostID, heartbeats); err != nil {
+			h.logger.ErrorContext(ctx, "heartbeat freshness bump", "err", err)
+		}
+	}
+
+	// UpsertHosts sees the full batch (heartbeats included) so per-host last_seen / event_count advance for a near-idle host whose
+	// only traffic is heartbeats, exactly as before this change.
 	if err := h.store.UpsertHosts(ctx, events); err != nil {
 		h.logger.ErrorContext(ctx, "upsert hosts", "err", err)
 	}
@@ -209,6 +226,43 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]int{"accepted": len(events)}); err != nil {
 		h.logger.ErrorContext(ctx, "encode response", "err", err)
 	}
+}
+
+// heartbeatEventType is the liveness-ping event type that is processed for its freshness side effect at ingest and dropped rather
+// than persisted as a retained event row (issue #408).
+const heartbeatEventType = "snapshot_heartbeat"
+
+// partitionHeartbeats splits a validated batch into the events to persist (everything but snapshot_heartbeat) and the freshness
+// bumps to apply for the heartbeats. A heartbeat whose payload cannot be decoded or carries no PID is dropped without a bump and
+// without failing the batch (the agent emits one per live snapshot PID every reconcile interval, so a malformed one is harmless).
+// Preserves order and avoids allocating the toStore slice in the common no-heartbeat batch.
+func partitionHeartbeats(events []api.Event) (toStore []api.Event, heartbeats []mysql.SnapshotHeartbeat) {
+	firstHeartbeat := -1
+	for i := range events {
+		if events[i].EventType == heartbeatEventType {
+			firstHeartbeat = i
+			break
+		}
+	}
+	if firstHeartbeat == -1 {
+		return events, nil
+	}
+	toStore = make([]api.Event, 0, len(events)-1)
+	toStore = append(toStore, events[:firstHeartbeat]...)
+	for i := firstHeartbeat; i < len(events); i++ {
+		if events[i].EventType != heartbeatEventType {
+			toStore = append(toStore, events[i])
+			continue
+		}
+		var p struct {
+			PID int `json:"pid"`
+		}
+		if err := json.Unmarshal(events[i].Payload, &p); err != nil || p.PID == 0 {
+			continue
+		}
+		heartbeats = append(heartbeats, mysql.SnapshotHeartbeat{PID: p.PID, TimestampNs: events[i].TimestampNs})
+	}
+	return toStore, heartbeats
 }
 
 // readBodyWithCap enforces the per-request body cap in two stages and writes the appropriate error response if either

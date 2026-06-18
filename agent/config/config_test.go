@@ -35,7 +35,35 @@ func TestLoad(t *testing.T) {
 				assert.Equal(t, time.Second, c.UploadInterval)
 				assert.Equal(t, "/var/db/fleet-edr/events.db", c.QueueDBPath)
 				assert.Equal(t, "json", c.LogFormat)
+				assert.Equal(t, 10*time.Second, c.NetworkCoalesceWindow, "default network coalesce window")
 			},
+		},
+		{
+			name: "network coalesce window override",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_NETWORK_COALESCE_WINDOW": "30s",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, 30*time.Second, c.NetworkCoalesceWindow)
+			},
+		},
+		{
+			name: "network coalesce window zero disables",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_NETWORK_COALESCE_WINDOW": "0",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, time.Duration(0), c.NetworkCoalesceWindow)
+			},
+		},
+		{
+			name: "bad network coalesce window rejected",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_NETWORK_COALESCE_WINDOW": "soon",
+			}),
+			wantErr: "EDR_NETWORK_COALESCE_WINDOW",
 		},
 		{
 			name:    "missing server url",

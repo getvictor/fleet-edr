@@ -38,6 +38,12 @@ const (
 	// queue (500 MiB). Operators set EDR_AGENT_QUEUE_MAX_BYTES=0 to disable.
 	defaultQueueMaxBytes = 500 * 1024 * 1024
 
+	// defaultNetworkCoalesceWindow is the default for EDR_NETWORK_COALESCE_WINDOW: the window over which the agent collapses
+	// repetitive network_connect / dns_query telemetry into one representative event before enqueue (issue #408). 10s cuts most
+	// repetitive chatter while staying well under the 30s DNS-to-connect beacon-correlation window so a representative can never be
+	// pushed outside it. 0 disables coalescing.
+	defaultNetworkCoalesceWindow = 10 * time.Second
+
 	// defaultBatchSize is the default upload batch size.
 	defaultBatchSize = 100
 )
@@ -57,6 +63,7 @@ type Config struct {
 	UploadInterval           time.Duration
 	PruneAge                 time.Duration
 	ProcessReconcileInterval time.Duration // EDR_PROCESS_RECONCILE_INTERVAL; default 60s, 0 disables.
+	NetworkCoalesceWindow    time.Duration // EDR_NETWORK_COALESCE_WINDOW; default 10s, 0 disables.
 	LogLevel                 string
 	LogFormat                string
 	AllowInsecure            bool
@@ -96,6 +103,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 		UploadInterval:           time.Second,
 		PruneAge:                 defaultPruneAge,
 		ProcessReconcileInterval: defaultProcessReconcileInterval,
+		NetworkCoalesceWindow:    defaultNetworkCoalesceWindow,
 		LogLevel:                 "info",
 		LogFormat:                "json",
 	}
@@ -129,6 +137,8 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	// 0 disables the agent-side process-tree reconciliation loop entirely (issue #6 client half): useful for narrow QA where synthetic
 	// exits would distort what a clean ESF feed looks like. Negative values are rejected.
 	envparse.NonNegativeDuration(getenv, "EDR_PROCESS_RECONCILE_INTERVAL", &c.ProcessReconcileInterval, &errs)
+	// EDR_NETWORK_COALESCE_WINDOW: non-negative; 0 disables coalescing. Default set above.
+	envparse.NonNegativeDuration(getenv, "EDR_NETWORK_COALESCE_WINDOW", &c.NetworkCoalesceWindow, &errs)
 	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB is set above and applies when the env var is unset;
 	// setting it explicitly to 0 restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.
 	envparse.NonNegativeInt64(getenv, "EDR_AGENT_QUEUE_MAX_BYTES", &c.QueueMaxBytes, &errs)

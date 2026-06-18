@@ -52,6 +52,7 @@ type GaugeSource interface {
 // (methods short-circuit) so call sites don't need defensive `if r != nil` blocks.
 type Recorder struct {
 	eventsIngested              metric.Int64Counter
+	heartbeatsDropped           metric.Int64Counter
 	alertsCreated               metric.Int64Counter
 	retentionRowsDeleted        metric.Int64Counter
 	processRetentionRowsDeleted metric.Int64Counter
@@ -93,7 +94,12 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// paths below no-op, so a Recorder from New is always usable.
 	r.eventsIngested, _ = meter.Int64Counter(
 		"edr.events.ingested",
-		metric.WithDescription("Events accepted by POST /api/events, by host_id."),
+		metric.WithDescription("Events persisted by POST /api/events (excludes dropped liveness heartbeats, counted by edr.ingest.heartbeats_dropped), by host_id."),
+		metric.WithUnit("{event}"),
+	)
+	r.heartbeatsDropped, _ = meter.Int64Counter(
+		"edr.ingest.heartbeats_dropped",
+		metric.WithDescription("snapshot_heartbeat events processed for their freshness side effect and dropped instead of persisted as event rows, by host_id."),
 		metric.WithUnit("{event}"),
 	)
 	r.alertsCreated, _ = meter.Int64Counter(
@@ -177,6 +183,16 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 		return
 	}
 	r.eventsIngested.Add(ctx, int64(n), metric.WithAttributes(attribute.String("host_id", hostID)))
+}
+
+// EventsHeartbeatDropped increments the heartbeat-dropped counter by n for a host. Called per-batch by the ingest handler with the
+// number of snapshot_heartbeat events that were processed for their freshness side effect and then dropped instead of persisted
+// (issue #408). The freshness bump still happens; this counts the event rows the table no longer carries.
+func (r *Recorder) EventsHeartbeatDropped(ctx context.Context, hostID string, n int) {
+	if r == nil || r.heartbeatsDropped == nil || n <= 0 {
+		return
+	}
+	r.heartbeatsDropped.Add(ctx, int64(n), metric.WithAttributes(attribute.String("host_id", hostID)))
 }
 
 // AlertCreated increments the alert counter. Called by the detection engine ONLY on
