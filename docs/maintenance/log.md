@@ -28,4 +28,6 @@ or change the cadence - running tasks with no record is the same as not running 
 2026-05-28  doc-accuracy-sweep  done  branch `stale-impl-refs-sweep-2026-05-28` (atop #293)  fixed auth-refactor doc rot (OIDC/break-glass), `EDR_*` env drift, dead paths (`agent/wire`, `server/admin`); aspirational `[ ]` items left
 2026-06-09  doc-accuracy-sweep  done  branches `doc-accuracy-{broken,renamed}-2026-06-09` + issue #340  fixed `testing-strategy.md` baseline path + ADR-0007 `XPCServer`->`shared/XPCEventServer` rename; rewrote `architecture.md` pre-ADR-0004 layout
 2026-06-18  memory-and-claudemd-audit  done  branch `claude-md-audit-2026-06-18`  CLAUDE.md: `uat:e2e`->`test:e2e`, dev server is HTTPS on `0.0.0.0:8088` since #140. MEMORY.md (uncommitted): rewrote decayed #408 dev-DB entry (now merged to main). All other claims/refs verified clean
+2026-06-18  todo-fixme-sweep  done  no findings  only marker is upstream's in vendored `server/apidocs/embed/redoc.standalone.js`; `.build/` hits are untracked. Repo clean
+2026-06-18  observability-review  done  no code changes; gap tracked by #348  OTel route coverage complete (shared middleware records route-templated `http.server.request.duration`); prometheus policy clean; 2 EDR dashboards healthy (auth dash env default pinned to `prod-render`, minor); 0 alert rules, telemetry-loss/MTTD alerting already in #348
 
