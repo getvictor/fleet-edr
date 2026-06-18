@@ -47,7 +47,7 @@ jobs:
     permissions:
       contents: read
     # The harness is bounded by the per-scenario SLA (30s default) times
-    # ~10 scenarios -- ~5 min wall. 15 is a generous ceiling that catches
+    # ~10 scenarios, so ~5 min wall. 15 is a generous ceiling that catches
     # a wedged MySQL service container without burning runner minutes.
     timeout-minutes: 15
     env:

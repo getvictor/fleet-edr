@@ -57,7 +57,7 @@ config:
   # List-marker spacing. OFF because Prettier owns list formatting: when an
   # ordered-list item contains an indented code block, Prettier writes two spaces
   # after the marker (`3.  text`) to align the continuation, which MD030 flags
-  # (it wants exactly one). Same call as MD060 - Prettier is the single source of
+  # (it wants exactly one). Same call as MD060: Prettier is the single source of
   # truth for list/table layout, so a competing markdownlint opinion only creates
   # an unwinnable disagreement.
   MD030: false

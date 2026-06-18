@@ -2,7 +2,7 @@
 # Domain Generation Algorithms). Synthetic C2 beacon: a payload staged to /tmp
 # resolves a high-entropy (DGA-like) domain and then opens an outbound TCP
 # connection to the resolved address. The dns_c2_beacon rule correlates all
-# three streams -- the temp-path exec, the dns_query, and the network_connect --
+# three streams (the temp-path exec, the dns_query, and the network_connect)
 # and fires on the connection (the last link). The remote IP is in the
 # TEST-NET-3 documentation block (RFC 5737) so the scenario is unambiguously
 # synthetic.

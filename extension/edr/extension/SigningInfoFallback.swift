@@ -14,13 +14,13 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.securityextension", cate
 /// per-binary CS_PLATFORM_BINARY classification: the redaction hits every exec, including unambiguously third-party Developer-ID
 /// signed binaries (issue #187 quantified 393/393 exec events redacted on edr-dev). The edr-dev VM ships the extension ad-hoc-
 /// signed (`codesign -d` reports `adhoc, linker-signed`), which trips the redaction; AUTH_EXEC's TEAMID rule branch then has
-/// nothing to match against -- it cannot block a binary by `8VBZ3948LU` if ESF says team_id="". On notarized release hosts ESF
+/// nothing to match against: it cannot block a binary by `8VBZ3948LU` if ESF says team_id="". On notarized release hosts ESF
 /// reports the real team_id and this fallback is a no-op for the TEAM ID path. The proper long-term fix is to notarize the
 /// extension (tracked separately); this fallback keeps the dev VM usable for end-to-end QA of TEAMID + SIGNINGID rule flows
 /// in the meantime.
 ///
 /// CERTIFICATE context (PR for #210): ESF does NOT surface the leaf X.509 signing certificate hash at all. SecCode is the only
-/// path the extension has to derive it. Operators set CERTIFICATE rules with the SHA-256 of the leaf cert -- the value Santa
+/// path the extension has to derive it. Operators set CERTIFICATE rules with the SHA-256 of the leaf cert: the value Santa
 /// admins type, and the same hash `openssl x509 -fingerprint -sha256` would compute over the DER-encoded leaf. Every AUTH_EXEC
 /// on a signed binary pays one SecCode walk on first exec, then cache hits.
 ///
@@ -41,7 +41,7 @@ final class SigningInfoFallback {
 
     /// CacheKey pins a cached signing-info entry to a specific (device, inode, mtime) tuple so a binary
     /// swap that preserves the path but changes the contents is observed as a cache miss. `device` is
-    /// required because (inode, mtime) is only unique within a filesystem -- two binaries on different
+    /// required because (inode, mtime) is only unique within a filesystem: two binaries on different
     /// volumes can share an inode number and collide their SigningInfo, misapplying CERTIFICATE / TEAMID /
     /// SIGNINGID rules. CodeRabbit MAJOR on PR #290. Shape mirrors FileHashCache.swift's Key for parity.
     struct CacheKey: Hashable {
@@ -68,7 +68,7 @@ final class SigningInfoFallback {
     }
 
     /// leafCertSHA256 returns the 64-character lowercase hex SHA-256 of the binary's leaf signing certificate. The "leaf"
-    /// is the cert at index 0 of kSecCodeInfoCertificates -- the cert the binary was directly signed with, NOT an
+    /// is the cert at index 0 of kSecCodeInfoCertificates: the cert the binary was directly signed with, NOT an
     /// intermediate or the root. Returns nil for unsigned binaries, ad-hoc-signed binaries, or any path SecCode rejects.
     /// CERTIFICATE rules created against the operator-provided 64-hex identifier compare against this value verbatim.
     func leafCertSHA256(forPath path: String, fileStat: stat) -> String? {
@@ -96,7 +96,7 @@ final class SigningInfoFallback {
     /// resolveSigningInfo is the uncached SecCode read. One SecStaticCodeCreateWithPath + one SecCodeCopySigningInformation
     /// produces both the TeamIdentifier and the leaf certificate, even though the call sites may consume them at different
     /// times. Errors from either step return an empty SigningInfo (both fields nil) so the cache write still pins the
-    /// outcome -- otherwise every AUTH_EXEC for an unreadable / unsigned binary would re-walk SecCode pointlessly.
+    /// outcome; otherwise every AUTH_EXEC for an unreadable / unsigned binary would re-walk SecCode pointlessly.
     private func resolveSigningInfo(forPath path: String) -> SigningInfo {
         let url = URL(fileURLWithPath: path) as CFURL
         var staticCode: SecStaticCode?
@@ -107,7 +107,7 @@ final class SigningInfoFallback {
         }
         var infoDict: CFDictionary?
         // kSecCSSigningInformation (rawValue=2) is the flag that asks SecCodeCopySigningInformation to populate the signing-info
-        // keys -- including kSecCodeInfoTeamIdentifier AND kSecCodeInfoCertificates. Without it the returned dict is missing both
+        // keys, including kSecCodeInfoTeamIdentifier AND kSecCodeInfoCertificates. Without it the returned dict is missing both
         // entries and this method silently returns the all-nil shape (the bug that masked TEAMID enforcement on SIP-off VMs end-
         // to-end before the explicit flag was added). The constant is the canonical Sec framework flag; using the literal
         // rawValue keeps the binding stable across SDK versions where the symbol's import name has drifted.

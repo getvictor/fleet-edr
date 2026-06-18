@@ -108,7 +108,7 @@ func TestSession_UnknownCookieReturns401(t *testing.T) {
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/", nil)
 	require.NoError(t, err)
-	// 32 zero bytes, base64url -- never matches a real session.
+	// 32 zero bytes, base64url: never matches a real session.
 	req.AddCookie(&http.Cookie{Name: api.SessionCookieName, Value: api.EncodeToken(make([]byte, sessions.IDLen))})
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)

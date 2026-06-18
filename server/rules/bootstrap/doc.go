@@ -1,8 +1,8 @@
 // Package bootstrap wires the rules bounded context. cmd/* binaries call
 // rulesbootstrap.New(deps) once at startup, then ApplySchema, then
 // RegisterAuthedRoutes. The returned *Rules handle exposes three
-// accessor methods -- ContentService(), Catalog(), and
-// ApplicationControlStore() -- that return api.RuleProvider, api.Lister,
+// accessor methods (ContentService(), Catalog(), and
+// ApplicationControlStore()) that return api.RuleProvider, api.Lister,
 // and api.ApplicationControlStore respectively. The accessor names stay
 // descriptive (caller-facing) while the interface names follow Effective
 // Go's "method-name + er" convention internally.

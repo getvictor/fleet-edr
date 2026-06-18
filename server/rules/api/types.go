@@ -67,7 +67,7 @@ type Rule interface {
 	Techniques() []string
 	// Doc returns the operator-facing documentation for the rule. Surfaces in /docs/detection-rules.md and the UI's per-rule detail page;
 	// tools/gen-rule-docs reads it directly. Required (not optional) so a new rule cannot ship without a description and a severity
-	// attestation -- the compile error is the gate.
+	// attestation: the compile error is the gate.
 	Doc() Documentation
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
 	// mutate state. Returning an error skips the rule for this batch (logged at WARN); returning nil findings is the common case.
@@ -101,7 +101,7 @@ type Documentation struct {
 	// EventTypes lists the agent event types the rule consumes (e.g. "exec", "open_write"). Helps operators decide which ESF/NE
 	// subscriptions a minimal deployment must keep enabled.
 	EventTypes []string `json:"event_types"`
-	// FalsePositives names well-known legitimate sources that can trip the rule. Each entry is one short sentence -- UI renders as a
+	// FalsePositives names well-known legitimate sources that can trip the rule. Each entry is one short sentence; UI renders as a
 	// bullet list.
 	FalsePositives []string `json:"false_positives,omitempty"`
 	// Limitations names known coverage gaps so an operator knows what the rule does NOT catch (atomic renames, env-inherited DYLD vars,
@@ -138,7 +138,7 @@ type RegistryOptions struct {
 	// DisabledRuleIDs is the boot-time disable list. catalog.New drops any rule whose ID() appears in this slice, so a
 	// disabled rule is gone from the engine's active set AND from Engine.Catalog()'s output: tools/gen-rule-docs no
 	// longer documents it, the GET /api/rules surface does not list it, and the engine never evaluates it against a
-	// batch. Populated from EDR_DISABLED_RULES (comma-separated). Boot-time only -- the spec scenario this satisfies
+	// batch. Populated from EDR_DISABLED_RULES (comma-separated). Boot-time only: the spec scenario this satisfies
 	// (server-detection-rules-engine/operator-toggling-of-individual-rules) calls for a restart-gated disable; hot
 	// reload is a separate change. Unknown IDs in the list (typos, IDs of rules that have been removed) WARN at boot
 	// via deps.Logger but never fail the boot, so a stale operator config doesn't take a deployment down.

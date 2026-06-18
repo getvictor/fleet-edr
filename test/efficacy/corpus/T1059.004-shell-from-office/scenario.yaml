@@ -28,7 +28,7 @@ timeline:
     uid: 501
     gid: 20
 
-  # Word shells out -- the rule fires on this exec.
+  # Word shells out: the rule fires on this exec.
   - at: 50ms
     type: fork
     child_pid: 7002

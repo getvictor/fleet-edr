@@ -1,6 +1,6 @@
 // FileHashCache tests: write a real file under FileManager.default.temporaryDirectory,
 // stat it to obtain the live (dev, inode, mtime) tuple FileHashCache keys on, then
-// drive lookup / lookupOrCompute / startLazyFill. The cache is a singleton -- tests
+// drive lookup / lookupOrCompute / startLazyFill. The cache is a singleton, so tests
 // use uniquely-generated file paths so cache entries from one test never collide
 // with another's. The shared cache still grows across tests; that's intentional --
 // it mirrors how the AUTH_EXEC handler hits the cache in production.
@@ -59,14 +59,14 @@ final class FileHashCacheTests: XCTestCase {
         XCTAssertEqual(FileHashCache.shared.lookup(stat: file.stat), expected)
 
         // Calling lookupOrCompute a second time returns the same value (cache hit
-        // path -- file is still on disk, but the implementation should not need
+        // path: file is still on disk, but the implementation should not need
         // to re-read it).
         let secondHash = FileHashCache.shared.lookupOrCompute(path: file.path, stat: file.stat)
         XCTAssertEqual(secondHash, expected)
     }
 
     func testLookupOrComputeReturnsNilForMissingFile() {
-        // No file at this path -- FileHandle(forReadingFrom:) throws, the function
+        // No file at this path: FileHandle(forReadingFrom:) throws, the function
         // logs a warning and returns nil rather than crashing.
         var fakeStat = stat()
         fakeStat.st_dev = 1
@@ -88,7 +88,7 @@ final class FileHashCacheTests: XCTestCase {
         // AUTH and read." Real value is whatever fstat would return; we offset.
         bogus.st_ino = file.stat.st_ino &+ 9999
         XCTAssertNil(FileHashCache.shared.lookupOrCompute(path: file.path, stat: bogus))
-        // A failed compute must NOT cache anything under the forged key -- if it did, the next
+        // A failed compute must NOT cache anything under the forged key; if it did, the next
         // AUTH_EXEC presenting that bogus (dev, ino, mtime) tuple would happily get served a wrong
         // hash via a plain `lookup()`. Pin the negative so a future regression that quietly stores
         // nil-or-stale-hash entries fails loudly.
@@ -142,7 +142,7 @@ final class FileHashCacheTests: XCTestCase {
 
     func testStartLazyFillIsNoOpWhenAlreadyCached() throws {
         // After lookupOrCompute primes the cache, a follow-up startLazyFill must
-        // be a no-op -- the alreadyCached branch returns before dispatching. We
+        // be a no-op: the alreadyCached branch returns before dispatching. We
         // can't directly observe the no-dispatch, but we can confirm the cached
         // value is unchanged after the call.
         let payload = Data("already-cached".utf8)
@@ -217,7 +217,7 @@ final class FileHashCacheTests: XCTestCase {
     }
 
     func testLookupOrComputeWithDeadlineReturnsReadFailedOnMissingFile() {
-        // No file at this path -- the open-for-reading FileHandle path errors and we return .readFailed (distinct
+        // No file at this path: the open-for-reading FileHandle path errors and we return .readFailed (distinct
         // from .deadlineExceeded so the audit event carries the right `reason` tag).
         var fakeStat = stat()
         fakeStat.st_dev = 1

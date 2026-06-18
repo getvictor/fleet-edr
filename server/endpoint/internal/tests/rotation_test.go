@@ -101,7 +101,7 @@ func TestRotation_AutoTriggerOnStaleToken(t *testing.T) {
 	assert.Contains(t, string(calls[0].Payload), "new_token")
 
 	// The OLD token still verifies during grace AND must NOT trigger
-	// another rotation -- the in-flight rotation is the source of truth.
+	// another rotation: the in-flight rotation is the source of truth.
 	_, err = ep.Service().VerifyToken(ctx, oldToken)
 	require.NoError(t, err)
 	assert.Len(t, audit.snapshot(), 1, "grace verify must not emit another audit row")

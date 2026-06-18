@@ -24,12 +24,12 @@ extension ESFSubscriber {
         // ad-hoc-signed or unsigned targets even there and correctly returns nil. On the edr-dev VM the
         // extension itself is ad-hoc-signed (`codesign -d` reports `adhoc, linker-signed`); ESF responds
         // by redacting target.team_id="" and forcing target.is_platform_binary=true for EVERY exec the
-        // client sees -- a per-client policy on ESF clients whose host extension is not Developer-ID-signed
+        // client sees: a per-client policy on ESF clients whose host extension is not Developer-ID-signed
         // + notarized, not a per-binary CS_PLATFORM_BINARY classification. Quantified on a fresh queue:
         // 393/393 exec events redacted (see issue #187). Without a fallback every TEAMID rule on edr-dev
         // is effectively dead and every SIGNINGID rule degrades to the `platform:<bundle.id>` shape
         // regardless of who actually signed the binary. SigningInfoFallback reads the binary via
-        // SecCodeCopySigningInformation -- the same path `codesign -dvv` walks -- and caches the result
+        // SecCodeCopySigningInformation (the same path `codesign -dvv` walks) and caches the result
         // per (inode, mtime). The fix on a real release host is to notarize the extension; until then the
         // fallback keeps edr-dev usable for end-to-end QA.
         let teamID: String
@@ -39,7 +39,7 @@ extension ESFSubscriber {
             teamID = SigningInfoFallback.shared.teamID(forPath: path, fileStat: fileStat) ?? ""
         }
 
-        // Leaf certificate SHA-256 always comes from SigningInfoFallback -- ESF does not surface a cert hash directly, so
+        // Leaf certificate SHA-256 always comes from SigningInfoFallback because ESF does not surface a cert hash directly, so
         // there is no "ESF first, fallback on empty" pattern here. The cache key is shared with the TeamID lookup above so
         // both fields cost one SecCode walk per (inode, mtime). Returns nil for unsigned / ad-hoc-signed binaries and any
         // path SecCode rejects; the decider's optional binding skips the CERTIFICATE layer cleanly in those cases.
@@ -61,7 +61,7 @@ extension ESFSubscriber {
 
         // Canonical path: filepath.Clean equivalent + /tmp + /var + /etc rewritten to /private. MUST match the server-side
         // CanonicalizePath rules exactly or rules persisted in canonical form never match what the AUTH callback computes.
-        // Nil result (empty / relative / `..`-containing -- all defensive against malformed ESF input) skips the PATH layer.
+        // Nil result (empty / relative / `..`-containing, all defensive against malformed ESF input) skips the PATH layer.
         let canonicalPath = canonicalizePath(path)
 
         return AuthTuple(

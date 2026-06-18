@@ -2,8 +2,8 @@
 # Execs /opt/homebrew/bin/brew (the user-facing symlink for the Ruby script
 # under /opt/homebrew/Library), then brew shells out to /opt/homebrew/bin/git
 # to refresh formula taps and /usr/bin/curl to fetch a bottle. Only /usr/bin/curl
-# is a stock platform binary here -- /opt/homebrew/bin/git is Homebrew's own
-# git, NOT a platform binary -- but the access shapes (no /tmp exec, no
+# is a stock platform binary here: /opt/homebrew/bin/git is Homebrew's own
+# git, NOT a platform binary, but the access shapes (no /tmp exec, no
 # sudoers / LaunchDaemons / keychain target, no Office parent) do not match
 # any catalog rule. Expected zero alerts.
 name: "noise: brew update + brew upgrade"

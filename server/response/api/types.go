@@ -43,7 +43,7 @@ const (
 const CommandTypeKillProcess = "kill_process"
 
 // InsertRequest groups the fields the operator + agent handlers decode off the wire when issuing a command. Service.Insert takes
-// the fields directly (hostID, commandType, payload) rather than this struct -- the struct is exported as a convenience for non-HTTP
+// the fields directly (hostID, commandType, payload) rather than this struct. The struct is exported as a convenience for non-HTTP
 // callers (admin issuance via automation, future job runners) that prefer to construct one value and forward its fields.
 type InsertRequest struct {
 	HostID      string
@@ -73,7 +73,7 @@ type UpdateStatusRequest struct {
 // Errors returned across the api boundary. Callers compare with
 // errors.Is.
 var (
-	// ErrCommandNotFound is returned by Get / UpdateStatus when the id doesn't exist OR -- on UpdateStatus -- the row exists but belongs
+	// ErrCommandNotFound is returned by Get / UpdateStatus when the id doesn't exist OR (on UpdateStatus) the row exists but belongs
 	// to a different host than the pinned host_id. The two cases are intentionally collapsed so a malicious agent can't probe other hosts'
 	// command_ids.
 	ErrCommandNotFound = errors.New("response: command not found")

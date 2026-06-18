@@ -90,7 +90,7 @@ func TestCatalog_ListShape(t *testing.T) {
 // TestCatalog_DisabledRuleIDsHonoredEndToEnd proves the boot-time disable mechanism propagates through every consumer of the
 // catalog: Engine.Catalog() (the operator-facing GET /api/rules surface) AND ContentService().ActiveRules() (the engine's
 // evaluation set) both omit the disabled rule. By construction this satisfies the spec scenario's "MUST NOT evaluate against
-// any batch and MUST NOT produce alerts until it is re-enabled" -- a rule absent from ActiveRules cannot fire on any batch
+// any batch and MUST NOT produce alerts until it is re-enabled": a rule absent from ActiveRules cannot fire on any batch
 // the engine evaluates.
 //
 // Pairs with the catalog-level unit tests in server/rules/internal/catalog/registry_test.go that pin the filter at the API

@@ -167,7 +167,7 @@ final class ApplicationControlStore {
     /// from bypassing the singleton.
     static let defaultStoragePath = "/var/db/com.fleetdm.edr/application-control.json"
 
-    /// The `storagePath` argument exists for XCTest isolation -- production code uses `.shared`
+    /// The `storagePath` argument exists for XCTest isolation; production code uses `.shared`
     /// which initializes via the default value (the real on-disk policy file under /var/db).
     /// The init is internal (not private) because @testable code in the SwiftPM Tests target
     /// needs to call it; the doc comment on `.shared` discourages new production callers from

@@ -199,7 +199,7 @@ final class FileHashCache {
 
     /// computeSHA256WithDeadline streams the file at path through SHA-256 in 64-KiB chunks, checking the remaining mach
     /// absolute-time budget between chunks and aborting if the remaining budget would not cover safetyMarginNs of post-hash
-    /// work. Same TOCTOU re-stat guard as computeSHA256 -- a replace-between-AUTH-and-read returns .readFailed so the caller
+    /// work. Same TOCTOU re-stat guard as computeSHA256: a replace-between-AUTH-and-read returns .readFailed so the caller
     /// does NOT poison the cache with a hash of the wrong file. The hashReadChunkBytes (64 KiB) chunk size is fine-grained
     /// enough that even a multi-gigabyte binary yields multiple deadline checks per second of compute time; smaller chunks
     /// would only increase syscall overhead without measurably tightening the abort window.

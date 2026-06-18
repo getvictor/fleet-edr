@@ -120,13 +120,13 @@ func (s *Store) Get(ctx context.Context, id int64) (api.Command, error) {
 // UpdateStatus transitions a command's status atomically. Both the
 // host_id AND the expected current status are part of the WHERE
 // clause, so a concurrent request that already advanced the row
-// produces zero rows affected here -- the lifecycle matrix is
+// produces zero rows affected here: the lifecycle matrix is
 // enforced at the DB level, not just at the service layer.
 //
 // Returns:
 //   - nil on a successful transition.
 //   - api.ErrCommandNotFound when (id, hostID) doesn't match a row
-//     (unknown id or wrong host -- collapsed so a malicious agent
+//     (unknown id or wrong host, collapsed so a malicious agent
 //     can't probe other hosts' command_ids).
 //   - api.ErrInvalidStatusTransition when (id, hostID) match but the
 //     current status no longer equals expectedFrom (race: a
@@ -136,7 +136,7 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 		res sql.Result
 		err error
 	)
-	switch status { //nolint:exhaustive // pending is intentionally rejected as a target -- caller can only move FORWARD.
+	switch status { //nolint:exhaustive // pending is intentionally rejected as a target: caller can only move FORWARD.
 	case api.StatusAcked:
 		res, err = s.db.ExecContext(ctx,
 			"UPDATE commands SET status = ?, acked_at = NOW(6) WHERE id = ? AND host_id = ? AND status = ?",

@@ -77,7 +77,7 @@ echo "Imported identities:"
 # it. Values written to $GITHUB_ENV are NOT automatically masked; emit an
 # ::add-mask:: directive first so any later step that echoes env (`env`,
 # `set -x`, debug dumps) does not splash the keychain password into the
-# log. Defense in depth - the keychain itself is ephemeral and torn down
+# log. Defense in depth: the keychain itself is ephemeral and torn down
 # at job end.
 if [ -n "${GITHUB_ENV:-}" ]; then
     echo "::add-mask::$KC_PW"

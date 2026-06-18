@@ -39,7 +39,7 @@ timeline:
     uid: 501
     gid: 20
 
-  # The chain's payload exec -- the rule fires here.
+  # The chain's payload exec: the rule fires here.
   - at: 100ms
     type: fork
     child_pid: 6003

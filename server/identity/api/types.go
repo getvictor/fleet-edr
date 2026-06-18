@@ -122,7 +122,7 @@ func WithSessionForTest(ctx context.Context, s *Session) context.Context {
 // wire it up without churning api/.
 
 // Role is the operator-visible RBAC role. Five rows are seeded as builtin (super_admin, admin, senior_analyst, analyst, auditor);
-// the admin API refuses to delete any row whose IsBuiltin is true. The permissions a role grants are NOT persisted on this row -- they
+// the admin API refuses to delete any row whose IsBuiltin is true. The permissions a role grants are NOT persisted on this row; they
 // live in the OPA / Rego policy bundle the AuthZ engine evaluates against.
 type Role struct {
 	ID          string    `json:"id"`

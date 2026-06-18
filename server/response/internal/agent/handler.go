@@ -54,7 +54,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The pinned host_id is authoritative -- any ?host_id= query param is informational only so a valid token for host A cannot read
+	// The pinned host_id is authoritative: any ?host_id= query param is informational only so a valid token for host A cannot read
 	// host B's commands. Status filter defaults to pending so a no-filter call doesn't leak terminal rows (completed / failed) back to
 	// the agent: the agent's commander only knows how to dispatch new work, and re-delivering an already-handled command would either
 	// double-execute or produce a confused log line.

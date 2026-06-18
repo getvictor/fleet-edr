@@ -1,5 +1,5 @@
 // AuthExecDecider tests: exhaustively cover the (posture × hashOutcome × precedence) matrix
-// that the decider walks. Pure-logic tests -- no ESF, no Darwin time calls. The decider is the
+// that the decider walks. Pure-logic tests: no ESF, no Darwin time calls. The decider is the
 // only piece of AUTH_EXEC logic that the SwiftPM target can exercise (ESFSubscriber.swift is
 // excluded because it imports EndpointSecurity), so coverage here pins the v0.1.0 close-out of
 // #205 (platform-binary semantics deferred to ESFSubscriber wire) and #208 (BINARY sync hash
@@ -77,7 +77,7 @@ final class AuthExecDeciderTests: XCTestCase {
 
     func testCDHashTakesPrecedenceOverBinaryEvenOnDeadlineExceeded() {
         // CDHASH layer runs before the BINARY layer's hashOutcome is consulted. If CDHASH matches,
-        // the deadlineExceeded path is never reached -- the deny precedes any fallback verdict.
+        // the deadlineExceeded path is never reached: the deny precedes any fallback verdict.
         let cdhashRule = makeRule(ruleType: ApplicationControlRuleType.cdhash, identifier: "cdhashvalue")
         let binaryRule = makeRule(ruleType: ApplicationControlRuleType.binary, identifier: "shaRaceCondition")
         let tuple = makeTuple(cdhash: "cdhashvalue", signingIDPrefixed: nil, teamID: nil)
@@ -253,7 +253,7 @@ final class AuthExecDeciderPhaseBTests: XCTestCase {
 
     // A cold leaf-cert cache (leafCertSHA256 == nil) silently misses the CERTIFICATE layer and the exec is allowed; once the
     // cache warms (leafCertSHA256 present) the same CERTIFICATE rule matches and the decider returns deny. The two halves
-    // model the cold-miss-then-warm-hit lazy-fetch contract at the decider boundary -- the SecCode-backed cache fill itself
+    // model the cold-miss-then-warm-hit lazy-fetch contract at the decider boundary; the SecCode-backed cache fill itself
     // (SigningInfoFallback) is environment-coupled and exercised at the system / VM layer, but the decider's optional-binding
     // behaviour on the leaf-cert tuple field is the pure, deterministic half pinned here.
     // swiftlint:disable:next line_length
@@ -269,7 +269,7 @@ final class AuthExecDeciderPhaseBTests: XCTestCase {
     }
 
     /// Under fail-open with .deadlineExceeded, the walk still continues through CERTIFICATE before the posture fires.
-    /// A CERTIFICATE block must enforce regardless of the BINARY uncertainty -- same property the SIGNINGID / TEAMID
+    /// A CERTIFICATE block must enforce regardless of the BINARY uncertainty: same property the SIGNINGID / TEAMID
     /// rows already pin, extended to CERTIFICATE.
     func testDeadlineExceededFailOpenStillEnforcesCertificateBlock() {
         let certRule = makeRule(ruleType: ApplicationControlRuleType.certificate, identifier: "leafhashvalue")
@@ -334,7 +334,7 @@ final class AuthExecDeciderPhaseBTests: XCTestCase {
     }
 
     /// Under .deadlineExceeded with fail-closed posture, a PATH block in the snapshot must still dominate the
-    /// posture verdict -- the walk continues past unresolved BINARY through every lower layer including PATH before
+    /// posture verdict: the walk continues past unresolved BINARY through every lower layer including PATH before
     /// applying the fallback. Pins the "lower-precedence deny dominates BINARY uncertainty" property at the lowest layer.
     func testDeadlineExceededFailClosedStillEnforcesPathBlock() {
         let pathRule = makeRule(ruleType: ApplicationControlRuleType.path, identifier: "/Applications/Foo.app/Contents/MacOS/Foo")

@@ -6,7 +6,7 @@
 # to the target VM, executes it once, surfaces the exit code. The system-test
 # driver then polls the server REST API for each rule_id in expected.yaml.
 #
-# This is intentionally a THIN wrapper -- scripts/qa/attack-runbook.sh keeps
+# This is intentionally a THIN wrapper: scripts/qa/attack-runbook.sh keeps
 # its full interactive-demo shape (per-step pacing, ascii separators, human-
 # readable EXPECTED_ALERTS summary) so a developer can still ssh into the VM
 # and run it directly. M9 just adds an asserted automation layer around it.

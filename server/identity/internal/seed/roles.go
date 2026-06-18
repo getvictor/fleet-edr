@@ -26,15 +26,15 @@ type BuiltinRole struct {
 // every permission below; the break-glass account binds to this role
 // at the deployment-wide (global) scope.
 //
-// admin: day-to-day administration -- user invitations, policy
+// admin: day-to-day administration: user invitations, policy
 // authoring, every host action, every alert action. Cannot reach
 // deployment / SSO config.
 //
-// senior_analyst: investigate and take destructive action --
+// senior_analyst: investigate and take destructive action:
 // host.isolate, host.kill_process, host.run_script, the full alert
 // lifecycle. Can read but not author policy.
 //
-// analyst: investigate, comment, escalate -- host.read, process.read,
+// analyst: investigate, comment, escalate: host.read, process.read,
 // alert.read, alert.comment. Default for SSO-provisioned users; the
 // system MUST NOT auto-elevate from any SSO claim.
 //

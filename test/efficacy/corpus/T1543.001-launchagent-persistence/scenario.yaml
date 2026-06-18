@@ -3,7 +3,7 @@
 # Synthetic attacker invokes /bin/launchctl load against a plist path. The
 # persistence_launchagent rule matches `path == /bin/launchctl` plus the
 # `load` subcommand argument, fires a high severity alert. Mirrors the rule's
-# positive shape with a single fork+exec pair -- no upstream chain required.
+# positive shape with a single fork+exec pair: no upstream chain required.
 name: "T1543.001 persistence via launchctl load <plist>"
 host:
   id: AAAA1543-0001-0000-0000-000000000001

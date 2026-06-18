@@ -19,7 +19,7 @@ func TestSlugify(t *testing.T) {
 		{"plain", "Authenticated batch event submission", "authenticated-batch-event-submission"},
 		{"trailing punctuation", "A valid agent posts a batch.", "a-valid-agent-posts-a-batch"},
 		{"runs of non-alnum collapse", "Foo  --  bar", "foo-bar"},
-		{"leading and trailing dashes stripped", "  -- Hello -- ", "hello"},
+		{"leading and trailing dashes stripped", "  -- Hello -- ", "hello"}, // dash-lint:ignore test input pins the dash-stripping slug rule
 		{"digits are preserved", "Server returns 200 or 204", "server-returns-200-or-204"},
 		{"apostrophe becomes dash", "Operator's view", "operator-s-view"},
 		{"slashes within title become dashes", "GET/POST round trip", "get-post-round-trip"},

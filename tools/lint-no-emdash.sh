@@ -2,7 +2,7 @@
 # Fail if any tracked text file contains an em dash (U+2014) or en dash (U+2013).
 #
 # Why: the repo's style forbids em dashes in prose, comments, and user-facing strings (see CLAUDE.md). Reword the sentence
-# (prefer shorter sentences) or use a colon instead; the spaced ASCII hyphen " - " is also banned (tools/dash-lint catches
+# (prefer shorter sentences) or use a colon instead; a spaced ASCII hyphen stand-in for an em dash is also banned (tools/dash-lint catches
 # that one). This gate keeps the dash characters from creeping back into docs, Go/Swift/TS source, rule Doc() strings (which
 # render on the UI rule pages and in docs/detection-rules.md), and CI/workflow prose.
 #

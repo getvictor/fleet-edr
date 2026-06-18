@@ -79,7 +79,7 @@ func TestIPLimiter_AllowAtCapacity_EvictsOldestWhenAllLive(t *testing.T) {
 }
 
 func TestIPLimiter_KnownIPDoesNotEvict(t *testing.T) {
-	// A repeat call from a known IP must not trigger eviction logic even if the map is at capacity -- the existing bucket is hit and
+	// A repeat call from a known IP must not trigger eviction logic even if the map is at capacity: the existing bucket is hit and
 	// updated in place.
 	l := NewIPLimiter(rate.Limit(10), 10)
 	now := time.Now()

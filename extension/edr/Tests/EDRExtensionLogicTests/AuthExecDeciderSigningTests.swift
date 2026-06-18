@@ -7,7 +7,7 @@
 // The marker function names carry the canonical spec scenario id verbatim (slashes and dashes mapped to
 // underscores), which spectrace matches as the coverage marker. Those names are unavoidably longer than the
 // 150-char cap, so each carries a targeted single-line, single-rule line-length exception scoped to exactly the one
-// declaration line that cannot be wrapped (a Swift function name has no legal line break) -- never a blanket file disable.
+// declaration line that cannot be wrapped (a Swift function name has no legal line break), never a blanket file disable.
 
 @testable import EDRExtensionLogic
 import XCTest

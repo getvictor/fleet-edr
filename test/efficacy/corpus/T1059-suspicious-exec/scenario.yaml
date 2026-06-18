@@ -42,7 +42,7 @@ timeline:
     uid: 501
     gid: 20
 
-  # Step 3: /bin/sh execs a binary from /tmp -- the trigger event.
+  # Step 3: /bin/sh execs a binary from /tmp, the trigger event.
   - at: 100ms
     type: fork
     child_pid: 5003

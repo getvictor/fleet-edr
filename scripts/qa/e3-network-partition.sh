@@ -7,7 +7,7 @@
 # calls for "no duplicates after restore"; the queue itself does NOT
 # enforce uniqueness (its schema is `events(id INTEGER PRIMARY KEY
 # AUTOINCREMENT, event_json, created_at, uploaded)` per
-# agent/queue/queue.go - no event_id column, no UNIQUE constraint), so
+# agent/queue/queue.go: no event_id column, no UNIQUE constraint), so
 # that guarantee currently rests on the server's `INSERT IGNORE` on
 # `events` (see server/store/store.go) when flushed. A precise
 # duplicate check is out of scope for a script that drives only public
@@ -24,7 +24,7 @@
 #  4. Confirm the queue depth grew relative to the baseline while the
 #     partition is in effect (≥ baseline + 60 events: 30 forks + 30
 #     execs).
-#  5. Remove the pf anchor - partition heals.
+#  5. Remove the pf anchor: partition heals.
 #  6. Wait up to 90s for the queue to drain back to baseline.
 #  7. Surface the post-recovery alert count for the host. (No precise
 #     server-side "no duplicates" assertion today; the v0.1 admin API
@@ -45,7 +45,7 @@
 # until the session expires.
 #
 # EDR_SERVER_IP is the IP the agent on the VM uses to reach the
-# server - typically the host's bridge address. We block at the IP
+# server, typically the host's bridge address. We block at the IP
 # layer rather than tearing the VM's NIC down so SSH from the
 # workstation keeps working. Pass --short for a 60-second partition
 # instead of 10 minutes; useful for development of the script itself.

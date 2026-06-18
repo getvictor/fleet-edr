@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Orchestrate the full E2E coverage pipeline. Builds an instrumented
-# server binary once, then drives it through SEVERAL phases - each
-# with its own env - restarting the binary between phases so the
+# server binary once, then drives it through SEVERAL phases, each
+# with its own env, restarting the binary between phases so the
 # in-memory rate-limit buckets reset cleanly and each phase tests its
 # specific env in isolation. All phases share GOCOVERDIR; the cover
 # runtime writes per-process covcounters.<PID>.* files into one
@@ -161,7 +161,7 @@ stop_server
 echo "$END_GROUP"
 
 # --- phase 2: qa default-env suite ---------------------------------------
-# Includes the M5 wire smoke (agent-events-flow.spec.ts) and M6 UI specs (host-list-and-process-tree.spec.ts) - both consume the
+# Includes the M5 wire smoke (agent-events-flow.spec.ts) and M6 UI specs (host-list-and-process-tree.spec.ts); both consume the
 # break-glass setup endpoint, so they share this phase's 5/min token budget with reauth-modal-retry. The set is intentionally short
 # enough that the bucket doesn't overflow within the phase.
 echo "::group::Phase 2 - qa default-env (RBAC, reauth, audit, reauth-modal, break-glass login failures, agent wire + UI)"

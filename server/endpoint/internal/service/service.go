@@ -152,7 +152,7 @@ func (s *service) VerifyToken(ctx context.Context, token string) (string, error)
 
 // maybeAutoRotate is the verify-time auto-rotation path. Optimistic-locked on currentTokenID so concurrent verifies for the same host
 // don't double-rotate: only the verify whose currentTokenID still matches the row's host_token_id commits, the rest race-lose with
-// ErrRotateRaced (silently swallowed -- the other verify already did the work).
+// ErrRotateRaced (silently swallowed because the other verify already did the work).
 func (s *service) maybeAutoRotate(ctx context.Context, hostID string, currentTokenID []byte) {
 	rot, err := s.store.RotateHostToken(ctx, hostID, currentTokenID, s.grace)
 	if errors.Is(err, mysql.ErrRotateRaced) {
@@ -298,7 +298,7 @@ func (s *service) ActiveHostIDs(ctx context.Context) ([]string, error) {
 }
 
 // toAPIEnrollment is a struct-to-struct copy. Field shapes match exactly today (the api.Enrollment was lifted from the mysql row),
-// so this is a pure relocation -- but the conversion stays explicit so a future field drift between the storage layer and the public
+// so this is a pure relocation, but the conversion stays explicit so a future field drift between the storage layer and the public
 // api surface forces a review here rather than slipping through.
 func toAPIEnrollment(r mysql.Enrollment) api.Enrollment {
 	return api.Enrollment{

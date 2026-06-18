@@ -9,7 +9,7 @@
 # EDR_OIDC_* env vars to point at this dex.
 #
 # See config/dex/dev-config.yaml for credentials + scope set. Both the
-# config and these credentials are dev-only - they are checked into the
+# config and these credentials are dev-only: they are checked into the
 # repo by design. Production OIDC config lives in env vars loaded from
 # a real secrets manager per docs/okta-setup.md.
 #

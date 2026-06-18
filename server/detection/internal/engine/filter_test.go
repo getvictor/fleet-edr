@@ -108,7 +108,7 @@ func TestFilterSnapshotEvents_NoSnapshotsReturnsInputVerbatim(t *testing.T) {
 //   - exec with snapshot:false (keep)
 //   - exec with malformed payload + snapshot in path (keep; the bytes.Contains fast-path
 //     misses and the JSON probe fails)
-//   - snapshot_heartbeat event (drop -- pure liveness plumbing)
+//   - snapshot_heartbeat event (drop; pure liveness plumbing)
 func eventForFilterGen() *rapid.Generator[api.Event] {
 	return rapid.Custom(func(t *rapid.T) api.Event {
 		shape := rapid.IntRange(0, 5).Draw(t, "shape")
@@ -148,7 +148,7 @@ func eventForFilterGen() *rapid.Generator[api.Event] {
 //  2. The kept events appear in the same order as in the input.
 //
 // PBT here is the natural fit because the input space is "any permutation of any subset
-// of events of the six shapes above" -- far larger than a table-driven test reasonably
+// of events of the six shapes above", far larger than a table-driven test reasonably
 // covers, and shrinking gives a minimal counter-example on failure. Predicate matches
 // the filter's `isPlumbingEvent` rather than the narrower `isSnapshotExec` so the
 // expected output reflects both kinds of drops.

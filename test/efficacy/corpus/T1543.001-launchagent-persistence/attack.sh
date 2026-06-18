@@ -4,7 +4,7 @@
 #
 # Detection target: catalog rule persistence_launchagent.
 #
-# What the real VM equivalent looks like: launchctl load ~/Library/LaunchAgents/com.synth.persist.plist -- see scripts/qa/attack-runbook.sh step 'persistence_launchagent'.
+# What the real VM equivalent looks like: launchctl load ~/Library/LaunchAgents/com.synth.persist.plist. See scripts/qa/attack-runbook.sh step 'persistence_launchagent'.
 #
 # When the M11 self-hosted runner lands, this script will be invoked by
 # scripts/uat/system-test.sh against the edr-qa VM. Until then it exists

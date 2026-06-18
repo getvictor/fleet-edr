@@ -66,7 +66,7 @@ func setupServer(t *testing.T) (*httptest.Server, *users.Store, *sessions.Store)
 	return srv, us, ss
 }
 
-// sessionCookie creates a user and a session row via the underlying stores and returns a cookie pointing at it -- the
+// sessionCookie creates a user and a session row via the underlying stores and returns a cookie pointing at it. It is the
 // test-only mint path that stands in for the production OIDC callback / break-glass FinishLogin entry points.
 func sessionCookie(t *testing.T, us *users.Store, ss *sessions.Store) *http.Cookie {
 	t.Helper()

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Minimal RFC 1035 DNS packet parser for extracting query name, type, and response addresses.
-/// All parsing is best-effort -- malformed packets return nil/empty rather than crashing.
+/// All parsing is best-effort: malformed packets return nil/empty rather than crashing.
 enum DNSParser {
     /// RFC 1035 + RFC 3596 wire-format constants. Names follow the field names in the RFCs
     /// so the parser reads next to the spec without an extra translation layer.
@@ -49,7 +49,7 @@ enum DNSParser {
             offset += 1
 
             if length == 0 { break } // end of name
-            if length >= Wire.compressionPointerMarker { return nil } // pointer -- we don't resolve it
+            if length >= Wire.compressionPointerMarker { return nil } // pointer: we don't resolve it
             guard offset + length <= data.count else { return nil }
 
             let label = String(data: data[offset..<offset + length], encoding: .utf8) ?? ""

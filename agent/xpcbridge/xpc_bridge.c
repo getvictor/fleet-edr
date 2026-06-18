@@ -44,7 +44,7 @@ static pthread_mutex_t g_slots_mutex = PTHREAD_MUTEX_INITIALIZER;
 // so the block holds a non-owning copy. To guarantee the semaphore outlives
 // every possible event-handler invocation, we hand the connection its own
 // retained reference here and let libxpc drop it via this finalizer once the
-// connection is fully torn down -- by that point the event handler can no
+// connection is fully torn down. By that point the event handler can no
 // longer fire, so the semaphore is safe to free. Mirrors the disconnect-side
 // slot teardown but is decoupled from it so a late hello-ack arriving after
 // xpc_bridge_disconnect cannot UAF the semaphore.
@@ -107,7 +107,7 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
     // than as a silent one-way channel.
     //
     // Ownership: three logical references to this object exist at steady
-    // state -- the local stack variable here, the slot's ref (assigned at
+    // state: the local stack variable here, the slot's ref (assigned at
     // success below), and the connection's finalizer ref (set just below).
     // The block captures the pointer but in plain C does NOT retain it, so
     // we hand the connection an explicit retained ref via
@@ -126,7 +126,7 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
         return -1;
     }
     // Retain once for the finalizer ownership, then register it. The retain
-    // must precede set_finalizer_f -- if libxpc tears the connection down
+    // must precede set_finalizer_f. If libxpc tears the connection down
     // between create and set_finalizer_f (it won't on the create path, but
     // belt-and-braces), the finalizer would otherwise drop a ref we hadn't
     // taken yet.
@@ -202,7 +202,7 @@ int xpc_bridge_connect(const char *service_name, const void *context, xpc_bridge
         // per attempt. The release_sem_finalizer registered above holds the
         // OTHER semaphore reference, so even if libxpc has a late hello-ack
         // queued at the moment we call dispatch_release here, the semaphore
-        // stays alive until the connection finishes cancellation -- at which
+        // stays alive until the connection finishes cancellation, at which
         // point the event handler can no longer fire.
         xpc_connection_cancel(conn);
         xpc_release(conn);
@@ -338,7 +338,7 @@ void xpc_bridge_disconnect(int handle) {
         // Drop the slot's reference to the semaphore. The release_sem_finalizer
         // registered on the connection at connect time holds the other reference
         // and will be invoked by libxpc only after the connection is fully torn
-        // down -- so a late hello-ack arriving between xpc_connection_cancel and
+        // down, so a late hello-ack arriving between xpc_connection_cancel and
         // the finalizer cannot UAF the semaphore. Concurrent pings already
         // observed in_use=0 above and bailed out before touching the slot.
         dispatch_release(sem);

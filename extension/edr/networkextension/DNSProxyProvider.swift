@@ -34,7 +34,7 @@ private struct FlowContext {
 /// Uses the modern `Network.NWEndpoint`-based NEAppProxyFlow APIs (macOS 15+);
 /// the legacy `NWHostEndpoint` surface is deprecated and emits build warnings.
 ///
-/// Safety: The proxy forwards all datagrams unchanged -- parsing is best-effort
+/// Safety: The proxy forwards all datagrams unchanged. Parsing is best-effort
 /// and only used for telemetry. If parsing fails, forwarding still succeeds.
 /// The system excludes this extension's own outbound connections from the proxy
 /// chain, so there's no infinite loop.

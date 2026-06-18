@@ -785,7 +785,7 @@ func TestIngest_RightAtCapAccepted(t *testing.T) {
 // and the rule's MITRE technique list. The previous version of this test only asserted RuleID + Severity; expanded
 // here to pin every field the spec enumerates. The stubRule (top of file) emits findings with HostID derived from
 // the trigger event, ProcessID=1 (matches the first inserted process row), Title="Triggered", Description="stub rule
-// fired", and propagates Techniques=[T9999] from its own configured list -- so every assertion below points at a
+// fired", and propagates Techniques=[T9999] from its own configured list, so every assertion below points at a
 // stub-controlled value that a regression on the engine's alert-write path would visibly perturb.
 func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	t.Parallel()
@@ -875,7 +875,7 @@ func TestEngine_OneRuleMultipleFindings(t *testing.T) {
 		// payload.process_id (the DB row id from mustInsertProcess) steers the stub's emitted ProcessID; the two
 		// triggers below carry different DB ids so the resulting findings have different dedup keys and persist
 		// as two alert rows. Field name is "process_id" (not "pid") to make it obvious this is a DB-row identifier,
-		// not an OS PID -- see the multiPIDStub docstring for the prior FK-violation bug this rename prevents.
+		// not an OS PID. See the multiPIDStub docstring for the prior FK-violation bug this rename prevents.
 		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger",
 			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procA, 10) + `}`)},
 		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 2100, EventType: "trigger",
@@ -1059,7 +1059,7 @@ func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
 // spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/one-rule-errors-during-evaluation
 //
 // LoadActive with two rules: errorStub returns an error on Evaluate; stubRule fires normally. The engine's per-rule
-// loop logs the error and continues to the next rule. After the batch settles, exactly one alert exists -- the one
+// loop logs the error and continues to the next rule. After the batch settles, exactly one alert exists: the one
 // from the working rule.
 func TestEngine_OneRuleErrorsRestContinue(t *testing.T) {
 	t.Parallel()
@@ -1090,11 +1090,11 @@ func TestEngine_OneRuleErrorsRestContinue(t *testing.T) {
 
 // spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/an-alert-persistence-write-fails
 //
-// Force the alert-write path to fail by using a stub that emits Finding.ProcessID = 999999999 -- a value that doesn't
+// Force the alert-write path to fail by using a stub that emits Finding.ProcessID = 999999999, a value that doesn't
 // match any row in the processes table, so InsertAlert's fk_alerts_process FK constraint blocks the row. The engine's
 // persistFinding returns the wrapped error; Evaluate propagates it to the processor; the processor logs
 // "detection failure, will retry batch" and leaves the events as unprocessed so a future cycle can retry. The DB stays
-// usable throughout so we can actually ASSERT the outcome -- the prior shape closed the DB pool and could only check
+// usable throughout so we can actually ASSERT the outcome: the prior shape closed the DB pool and could only check
 // "didn't panic," which CodeRabbit + Copilot + Gemini all flagged as unpinned.
 //
 // Pins the spec's two clauses: (1) the engine signals the failure (no alert is acknowledged), (2) the failed finding is
@@ -1984,8 +1984,8 @@ func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 // Two scenarios share this test. The graph-builder spec scenario covers the WRITE path (the builder closes the prior
 // generation and links the new one via previous_exec_id). The REST API spec scenario covers the READ path (the
 // ProcessDetail handler returns a non-empty ReExecChain). The test's assertion on `len(p.ReExecChain) >= 1`
-// demonstrates both clauses against one fixture; if a regression broke either side -- writer linking OR reader join
-// -- the same assertion fires.
+// demonstrates both clauses against one fixture; if a regression broke either side (writer linking OR reader join),
+// the same assertion fires.
 func TestGraph_SamePIDReExec(t *testing.T) {
 	t.Parallel()
 	// Issue #10: shell exec-optimization. python -> sh -c "<binary>" re-execs the binary on the SAME pid without forking. The builder must
@@ -2141,7 +2141,7 @@ func TestGraph_PIDReuseCreatesNewGeneration(t *testing.T) {
 // The lifetime constraint is the load-bearing piece: an event whose timestamp falls AFTER the process's exit MUST NOT
 // be linked to it; conversely, an event whose timestamp falls BEFORE the process's fork MUST NOT be linked either.
 //
-// This test exercises the happy path -- all events inside the lifetime -- and asserts ProcessDetail surfaces them.
+// This test exercises the happy path (all events inside the lifetime) and asserts ProcessDetail surfaces them.
 // A future enhancement could add negative cases (network event before fork / after exit) but the lifetime predicate
 // is the same SQL clause in both directions; the positive case is sufficient to pin the marker.
 func TestGraph_NetworkAndDNSLinkedAtEventTime(t *testing.T) {
@@ -2203,8 +2203,8 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 		execPayload string
 		exitPayload string // empty when the row should remain alive at heartbeat time
 	}
-	// Both subtests use the same assertion shape -- snapshot last_seen_ns before + after the heartbeat, assert
-	// equality -- so the cases slice only differs by the row's setup (snapshot+exited vs organic+alive). An earlier
+	// Both subtests use the same assertion shape (snapshot last_seen_ns before + after the heartbeat, assert
+	// equality), so the cases slice only differs by the row's setup (snapshot+exited vs organic+alive). An earlier
 	// version of this struct had an `initialLastSeenStillFreshAtForkTime` flag, but no subtest branched on it; the
 	// field was dead code per Gemini's PR #239 review.
 	cases := []struct {
@@ -2310,7 +2310,7 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 //
 // Two scenarios share this test: list-enrolled-hosts is the obvious one (the test asserts the hosts dashboard payload
 // shape); the JSON-response-shape scenario is satisfied incidentally because this happy-path 200 returns a JSON body
-// matching the documented schema -- if a regression switched the response Content-Type or removed the JSON wrapper,
+// matching the documented schema. If a regression switched the response Content-Type or removed the JSON wrapper,
 // this test's json.Decode call would fail.
 func TestOperatorHTTP_ListHosts(t *testing.T) {
 	t.Parallel()
@@ -2609,8 +2609,8 @@ func TestOperatorHTTP_ProcessTree_HappyPath(t *testing.T) {
 
 // TestOperatorHTTP_ProcessTree_LimitClamping pins the three branches in the handler's limit handling so a regression in the parse
 // helper or the processTreeDefaultLimit / processTreeMaxLimit constants does not silently slip through. Each subtest only asserts a
-// 200 status: the clamp happens before the underlying query runs, so the observable contract is "every limit value -- absent, zero,
-// negative, oversized -- yields a successful response".
+// 200 status: the clamp happens before the underlying query runs, so the observable contract is "every limit value (absent, zero,
+// negative, oversized) yields a successful response".
 func TestOperatorHTTP_ProcessTree_LimitClamping(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -2735,7 +2735,7 @@ func insertEventsViaIngest(ctx context.Context, t *testing.T, d *bootstrap.Detec
 // surface so the helper doesn't reach into detection/internal/mysql from outside detection/. The EventID embeds the pid so a test
 // that needs processes with DISTINCT pids on the same host can call this helper repeatedly: (host-a, pid=100) and
 // (host-a, pid=200) produce different event_ids and both fork events land. Calling the helper twice with the SAME (host, pid)
-// tuple is idempotent by design -- the second event_id collides with the first and INSERT IGNORE drops the duplicate; the
+// tuple is idempotent by design: the second event_id collides with the first and INSERT IGNORE drops the duplicate; the
 // helper still returns the procID materialised by the first call.
 func mustInsertProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection, hostID string, pid int) int64 {
 	t.Helper()

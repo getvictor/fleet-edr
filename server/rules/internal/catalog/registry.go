@@ -4,14 +4,14 @@ import "github.com/fleetdm/edr/server/rules/api"
 
 // New returns every detection rule the server registers with the engine, in the canonical registration order, minus any rule
 // whose ID() appears in opts.DisabledRuleIDs. Single source of truth for the docs generator (tools/gen-rule-docs), the
-// all_rules_integration_test harness, and the production server's main.go -- keeping them in sync prevents docs/runtime drift.
+// all_rules_integration_test harness, and the production server's main.go: keeping them in sync prevents docs/runtime drift.
 //
 // Pass the zero value of api.RegistryOptions for non-production callers (docs generator, tests). Production main.go threads
 // the operator-configured allowlists + DisabledRuleIDs through.
 //
 // DisabledRuleIDs filtering happens here (not in bootstrap or in the engine) so the same disable applies to every consumer
 // of catalog.New: a rule the operator disabled is also absent from the GET /api/rules surface (operator visibility) AND from
-// tools/gen-rule-docs (markdown drift). Boot-time only -- callers that want to disable + re-enable at runtime must rebuild
+// tools/gen-rule-docs (markdown drift). Boot-time only: callers that want to disable + re-enable at runtime must rebuild
 // catalog.New with new opts and reload via Engine.LoadActive, which is exactly what restart does.
 func New(opts api.RegistryOptions) []api.Rule {
 	all := []api.Rule{

@@ -173,7 +173,7 @@ func TestListForHost_TriggersHeartbeat(t *testing.T) {
 }
 
 // TestListForHost_HeartbeatErrorIsNonFatal uses a closure that always returns an error and confirms ListForHost still returns the
-// (empty) command slice. The poll must NOT fail because the hosts table hiccupped -- the agent already got its commands.
+// (empty) command slice. The poll must NOT fail because the hosts table hiccupped: the agent already got its commands.
 func TestListForHost_HeartbeatErrorIsNonFatal(t *testing.T) {
 	t.Parallel()
 	r := newResponseWithHeartbeat(t, func(context.Context, string, time.Time) error {
@@ -289,7 +289,7 @@ func TestUpdateStatus_ForeignHostRejected(t *testing.T) {
 }
 
 // TestAgentRoutes_HostTokenScoped wires the agent handler behind a fake host-token middleware and confirms a token for host-a sees
-// only host-a's commands -- ?host_id=host-b query spoofing is ignored. Inherits the phase-1 TestHostScopedCommandAccess regression
+// only host-a's commands: ?host_id=host-b query spoofing is ignored. Inherits the phase-1 TestHostScopedCommandAccess regression
 // coverage.
 func TestAgentRoutes_HostTokenScoped(t *testing.T) {
 	t.Parallel()
@@ -338,7 +338,7 @@ func TestAgentRoutes_HostTokenScoped(t *testing.T) {
 	})
 }
 
-// TestOperatorRoutes_PostAndGet covers the session-gated surface. Tests don't wrap in real session+CSRF middleware -- those are owned
+// TestOperatorRoutes_PostAndGet covers the session-gated surface. Tests don't wrap in real session+CSRF middleware: those are owned
 // by identity and tested there. Here we just confirm the routes are wired and the bodies + audit payloads match.
 func TestOperatorRoutes_PostAndGet(t *testing.T) {
 	t.Parallel()

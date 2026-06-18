@@ -63,7 +63,7 @@ func summarize(r *archapi.Result) string {
 // arch-go's Verification type lives in an internal package, so the
 // nested writeRuleFailure / writeVerificationFailure helpers below take
 // primitives (description, package name, details slice) instead of the
-// typed value -- crossing the typed boundary into primitives once at
+// typed value, crossing the typed boundary into primitives once at
 // the loop site, then the helpers don't pull arch-go internals in.
 func summarizeDependencies(b *strings.Builder, r *archapi.Result) {
 	if r.DependenciesRuleResult == nil || r.DependenciesRuleResult.Passes {
