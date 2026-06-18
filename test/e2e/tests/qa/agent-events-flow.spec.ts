@@ -39,6 +39,12 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
       expect(result.hostToken).not.toBe("");
 
       const db = await openDB();
+      // snapshot_heartbeat is accepted by ingest (counted in eventsPosted, above) but is NOT persisted as an events row: the server
+      // applies its freshness side effect at ingest and drops it (issue #408). So the DB-side assertion is over the PERSISTED
+      // subset: everything the scenario posts except snapshot_heartbeat.
+      const persistedCounts = Object.fromEntries(Object.entries(sc.expectedCounts).filter(([t]) => t !== "snapshot_heartbeat"));
+
+      const db = await openDB();
       try {
         const [rows] = (await db.query(
           `SELECT event_type, COUNT(*) AS n
@@ -48,15 +54,15 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
           [hostId],
         )) as [Array<{ event_type: string; n: number | string }>, unknown];
 
-        // Exact-set assertion: the event_types in the DB must equal exactly what the scenario declared, with no missing types and no
-        // surprises (extra inserts would suggest the fixture leaked through to a wrong host, or the server's ingest accepted a
-        // mistyped event_type).
+        // Exact-set assertion: the persisted event_types in the DB must equal exactly the scenario's non-heartbeat types, with no
+        // missing types and no surprises (extra inserts would suggest the fixture leaked to a wrong host, or that a heartbeat was
+        // persisted when it should have been dropped).
         const dbTypes = rows.map((r) => r.event_type).sort((a, b) => a.localeCompare(b, "en"));
-        expect(dbTypes).toEqual(Object.keys(sc.expectedCounts).sort((a, b) => a.localeCompare(b, "en")));
+        expect(dbTypes).toEqual(Object.keys(persistedCounts).sort((a, b) => a.localeCompare(b, "en")));
 
         // Exact-count per event_type: catches partial-ingest cases the presence-only check used to miss.
         for (const row of rows) {
-          expect(Number(row.n), `count for ${row.event_type} in ${sc.file}`).toBe(sc.expectedCounts[row.event_type]);
+          expect(Number(row.n), `count for ${row.event_type} in ${sc.file}`).toBe(persistedCounts[row.event_type]);
         }
       } finally {
         await db.end();
@@ -66,9 +72,10 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
 
   test("hostIdOverride wins over scenario host.id", async ({ agent }) => {
     // The fixture promises a per-call host_id override so a single test can vary host_id without editing YAML. This case proves
-    // the override path actually changes which row the event lands under (vs. silently using the scenario's host.id). Asserts
-    // exact event count too: quiet-host.yaml has 1 snapshot_heartbeat, so any other count would mean either the override missed
-    // some envelopes (some went to the scenario's hard-coded host.id) or the assertion is reading the wrong host_id's rows.
+    // the override path actually changes which host the events are attributed to (vs. silently using the scenario's host.id).
+    // quiet-host.yaml posts a single snapshot_heartbeat, which issue #408 no longer persists as an events row but which still
+    // counts toward host liveness (the ingest handler upserts the hosts row for every accepted event, heartbeats included). So we
+    // assert the override via the hosts table (event_count == 1 under overrideId) AND that no events row was persisted for it.
     const overrideId = crypto.randomUUID();
     const result = await agent.runScenario("quiet-host.yaml", { hostIdOverride: overrideId });
     expect(result.hostId).toBe(overrideId);
@@ -76,13 +83,18 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
 
     const db = await openDB();
     try {
-      const [rows] = (await db.query(
-        "SELECT event_type, COUNT(*) AS n FROM events WHERE host_id = ? GROUP BY event_type",
+      const [hostRows] = (await db.query(
+        "SELECT event_count AS n FROM hosts WHERE host_id = ?",
         [overrideId],
-      )) as [Array<{ event_type: string; n: number | string }>, unknown];
-      expect(rows).toHaveLength(1);
-      expect(rows[0].event_type).toBe("snapshot_heartbeat");
-      expect(Number(rows[0].n)).toBe(1);
+      )) as [Array<{ n: number | string }>, unknown];
+      expect(hostRows, "the heartbeat must be attributed to the override host_id").toHaveLength(1);
+      expect(Number(hostRows[0].n), "event_count counts the accepted heartbeat for the override host").toBe(1);
+
+      const [eventRows] = (await db.query(
+        "SELECT COUNT(*) AS n FROM events WHERE host_id = ?",
+        [overrideId],
+      )) as [Array<{ n: number | string }>, unknown];
+      expect(Number(eventRows[0].n), "snapshot_heartbeat is not persisted as an events row (issue #408)").toBe(0);
     } finally {
       await db.end();
     }

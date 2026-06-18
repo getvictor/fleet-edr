@@ -94,12 +94,12 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// paths below no-op, so a Recorder from New is always usable.
 	r.eventsIngested, _ = meter.Int64Counter(
 		"edr.events.ingested",
-		metric.WithDescription("Events persisted by POST /api/events (excludes dropped liveness heartbeats, counted by edr.ingest.heartbeats_dropped), by host_id."),
+		metric.WithDescription("Events accepted by POST /api/events, by host_id."),
 		metric.WithUnit("{event}"),
 	)
 	r.heartbeatsDropped, _ = meter.Int64Counter(
 		"edr.ingest.heartbeats_dropped",
-		metric.WithDescription("snapshot_heartbeat events processed for their freshness side effect and dropped instead of persisted as event rows, by host_id."),
+		metric.WithDescription("snapshot_heartbeat events accepted but not persisted as event rows (their freshness side effect is applied at ingest), by host_id."),
 		metric.WithUnit("{event}"),
 	)
 	r.alertsCreated, _ = meter.Int64Counter(
@@ -186,8 +186,9 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 }
 
 // EventsHeartbeatDropped increments the heartbeat-dropped counter by n for a host. Called per-batch by the ingest handler with the
-// number of snapshot_heartbeat events that were processed for their freshness side effect and then dropped instead of persisted
-// (issue #408). The freshness bump still happens; this counts the event rows the table no longer carries.
+// number of snapshot_heartbeat events accepted but not persisted as event rows (issue #408): every heartbeat in the batch, whether
+// or not it produced a freshness bump (a malformed or zero-pid heartbeat is still dropped, not persisted). edr.events.ingested
+// still counts the full accepted batch (heartbeats included) per the stable-counter contract; this is the not-persisted subset.
 func (r *Recorder) EventsHeartbeatDropped(ctx context.Context, hostID string, n int) {
 	if r == nil || r.heartbeatsDropped == nil || n <= 0 {
 		return

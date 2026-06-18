@@ -580,11 +580,12 @@ func TestIngest_DuplicateEventIDIsIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), count, "duplicate event_id must not produce a duplicate row in the events table")
 }
 
-// spec:server-event-ingestion/event-storage-keeps-secondary-indexes-compact/a-duplicate-event-is-still-rejected-with-a-compact-key-layout
+// spec:server-event-ingestion/event-storage-drops-redundant-indexes/a-duplicate-event-is-still-rejected-after-the-index-diet
 //
-// TestEvents_SchemaDiet pins the issue #408 index/PK diet on the live migrated schema: the two redundant secondary indexes are
-// gone, the physical primary key is the compact surrogate `id`, and event_id is retained as a UNIQUE key. A future migration that
-// re-adds a subsumed index or reverts the surrogate PK trips this test rather than silently regrowing the index footprint.
+// TestEvents_SchemaDiet pins the issue #408 index diet on the live migrated schema: the two redundant secondary indexes are gone
+// while every index a query relies on remains. A future migration that re-adds a subsumed index trips this test rather than
+// silently regrowing the index footprint. (The surrogate-PK swap that was originally part of #408 was dropped: it regressed the
+// multi-replica FOR UPDATE SKIP LOCKED claim into deterministic deadlocks; event_id stays the primary key.)
 func TestEvents_SchemaDiet(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -604,14 +605,16 @@ func TestEvents_SchemaDiet(t *testing.T) {
 
 	assert.False(t, indexNames["idx_events_host_id"], "idx_events_host_id is subsumed by idx_events_host_type_ingested and must be dropped")
 	assert.False(t, indexNames["idx_events_type"], "idx_events_type serves no query and must be dropped")
-	assert.True(t, indexNames["uk_events_event_id"], "event_id must be retained as a UNIQUE key for dedup + the alert_events FK")
-	assert.True(t, indexNames["PRIMARY"], "events must keep a primary key")
+	// Indexes that queries depend on must survive the diet.
+	assert.True(t, indexNames["idx_events_processed"], "idx_events_processed backs the FetchUnprocessed SKIP LOCKED claim")
+	assert.True(t, indexNames["idx_events_host_type_pid_ingested"], "idx_events_host_type_pid_ingested backs the network-event correlation query")
+	assert.True(t, indexNames["PRIMARY"], "events must keep its primary key")
 
-	// The PRIMARY key must be the compact surrogate column `id`, not the UUID event_id.
+	// event_id remains the primary key (the surrogate-PK swap was dropped, see the doc comment).
 	var pkColumn string
 	require.NoError(t, d.Store().DB().GetContext(ctx, &pkColumn,
 		"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'events' AND INDEX_NAME = 'PRIMARY' AND SEQ_IN_INDEX = 1"))
-	assert.Equal(t, "id", pkColumn, "the physical primary key must be the compact surrogate, not the UUID event_id")
+	assert.Equal(t, "event_id", pkColumn, "event_id remains the primary key")
 }
 
 // spec:server-application-control/application-control-block-event-contract/a-block-event-for-a-now-deleted-rule-is-accepted

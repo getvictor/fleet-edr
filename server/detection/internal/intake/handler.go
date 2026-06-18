@@ -203,8 +203,11 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.metrics != nil {
-		h.metrics.EventsIngested(ctx, pinnedHostID, len(toStore))
-		h.metrics.EventsHeartbeatDropped(ctx, pinnedHostID, len(heartbeats))
+		// edr.events.ingested counts the full accepted batch (heartbeats included) to honor its stable-counter contract
+		// ("incremented by the size of the batch", observability-instrumentation spec). heartbeats_dropped is the not-persisted
+		// subset: every heartbeat in the batch (len(events)-len(toStore)), including malformed/zero-pid ones that produced no bump.
+		h.metrics.EventsIngested(ctx, pinnedHostID, len(events))
+		h.metrics.EventsHeartbeatDropped(ctx, pinnedHostID, len(events)-len(toStore))
 	}
 
 	// Apply the heartbeat freshness bump (the heartbeat's only server-side effect: bump processes.last_seen_ns so the TTL reconciler
@@ -237,6 +240,12 @@ const heartbeatEventType = "snapshot_heartbeat"
 // without failing the batch (the agent emits one per live snapshot PID every reconcile interval, so a malformed one is harmless).
 // Preserves order and avoids allocating the toStore slice in the common no-heartbeat batch.
 func partitionHeartbeats(events []api.Event) (toStore []api.Event, heartbeats []mysql.SnapshotHeartbeat) {
+	// Guard the empty/nil batch explicitly: it is a no-op partition, and it lets the nil-flow analyzer (nilaway) see that `events`
+	// is non-nil on every path below that slices into it, since ParseAndValidateIngestBody returns a nil slice on its error paths
+	// (the caller returns before reaching here, but the analyzer does not track that status-code correlation).
+	if len(events) == 0 {
+		return nil, nil
+	}
 	firstHeartbeat := -1
 	for i := range events {
 		if events[i].EventType == heartbeatEventType {

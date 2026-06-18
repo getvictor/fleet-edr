@@ -269,6 +269,42 @@ func TestCoalescer_PropertyDNSAddressUnion(t *testing.T) {
 	})
 }
 
+// TestCoalescer_BufferCapEarlyFlush pins the bounded-buffer guard: when distinct identity keys reach the cap, the buffer is flushed
+// early (lossless) instead of growing without bound, so a host touching many distinct destinations in one window can't balloon
+// agent memory. Uses a long window so only the cap, never the ticker, can trigger emission.
+func TestCoalescer_BufferCapEarlyFlush(t *testing.T) {
+	t.Parallel()
+	s := &sink{}
+	c := New(time.Hour, s.enqueue, nil)
+	c.maxEntries = 2 // white-box: shrink the cap so the test doesn't have to push 10k keys
+
+	// Three distinct 5-tuples (different ports) => three identity keys. The third trips the cap and flushes the first two.
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "a", 1, 42, "tcp", "outbound", "1.2.3.4", 1, nil)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "b", 2, 42, "tcp", "outbound", "1.2.3.4", 2, nil)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "c", 3, 42, "tcp", "outbound", "1.2.3.4", 3, nil)))
+	assert.Len(t, s.events(), 2, "reaching the cap flushes the buffered representatives early")
+
+	c.Flush(context.Background())
+	assert.Len(t, s.events(), 3, "the remaining representative flushes normally; nothing is lost")
+}
+
+// FuzzCoalescer_Handle drives arbitrary/hostile bytes through Handle's event-JSON parse path. The invariant is that no input ever
+// panics and the buffer always drains cleanly (untrusted-input parsing, per the project testing guidelines).
+func FuzzCoalescer_Handle(f *testing.F) {
+	f.Add([]byte(`{"event_id":"e","host_id":"h","timestamp_ns":1,"event_type":"exec","payload":{"pid":1}}`))
+	f.Add([]byte(`{"event_id":"e","host_id":"h","timestamp_ns":1,"event_type":"network_connect","payload":{"pid":1,"remote_port":443}}`))
+	f.Add([]byte(`{"event_id":"e","host_id":"h","timestamp_ns":1,"event_type":"dns_query","payload":{"pid":1,"query_name":"x","response_addresses":["1.1.1.1"]}}`))
+	f.Add([]byte(`{"event_type":"dns_query","payload":null}`))
+	f.Add([]byte(`{"event_type":"network_connect","payload":"not-an-object"}`))
+	f.Add([]byte(`not json`))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		s := &sink{}
+		c := New(time.Second, s.enqueue, nil)
+		_ = c.Handle(context.Background(), b) // invariant: never panics
+		c.Flush(context.Background())
+	})
+}
+
 func mkConnect(t require.TestingT, id string, ts int64, pid int, proto, dir, remote string, port int, pidversion *int) []byte {
 	payload := map[string]any{
 		"pid": pid, "protocol": proto, "direction": dir, "remote_address": remote, "remote_port": port,

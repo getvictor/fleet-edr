@@ -30,13 +30,20 @@ const (
 // concurrent Handle calls. A window of zero disables buffering entirely (every event passes straight through), restoring the
 // pre-#408 per-occurrence behaviour.
 type Coalescer struct {
-	window  time.Duration
-	enqueue EnqueueFunc
-	logger  *slog.Logger
+	window     time.Duration
+	maxEntries int
+	enqueue    EnqueueFunc
+	logger     *slog.Logger
 
 	mu  sync.Mutex
 	buf map[string]*entry
 }
+
+// defaultMaxEntries bounds the number of distinct identity keys buffered within one window. A host that touches many distinct
+// destinations in a single window (a port scan, a crawler) would otherwise grow the buffer without bound between flushes; on reaching
+// the cap the buffer is flushed early (lossless: every representative is enqueued, just sooner) rather than dropped. Mirrors the
+// extension's pendingSendCap and the agent queue cap. 10k entries at a few hundred bytes each caps the buffer near a few MB.
+const defaultMaxEntries = 10_000
 
 // entry is one accumulating representative, keyed by identity. raw is the first-arriving event's exact bytes, returned verbatim
 // when the entry never coalesced (count == 1) so a singleton is byte-identical to the un-coalesced path.
@@ -59,10 +66,11 @@ func New(window time.Duration, enqueue EnqueueFunc, logger *slog.Logger) *Coales
 		logger = slog.Default()
 	}
 	return &Coalescer{
-		window:  window,
-		enqueue: enqueue,
-		logger:  logger,
-		buf:     make(map[string]*entry),
+		window:     window,
+		maxEntries: defaultMaxEntries,
+		enqueue:    enqueue,
+		logger:     logger,
+		buf:        make(map[string]*entry),
 	}
 }
 
@@ -77,12 +85,15 @@ func (c *Coalescer) Handle(ctx context.Context, data []byte) error {
 	if !c.Enabled() {
 		return c.enqueue(ctx, data)
 	}
+	// Decode only the envelope headers first, keeping payload as raw bytes: a non-target event (exec/fork/exit/heartbeat/...) is
+	// passed straight through without ever parsing its payload, so coalescing adds no decode cost to the events that dominate the
+	// stream.
 	var hdr struct {
-		EventID     string                     `json:"event_id"`
-		HostID      string                     `json:"host_id"`
-		TimestampNs int64                      `json:"timestamp_ns"`
-		EventType   string                     `json:"event_type"`
-		Payload     map[string]json.RawMessage `json:"payload"`
+		EventID     string          `json:"event_id"`
+		HostID      string          `json:"host_id"`
+		TimestampNs int64           `json:"timestamp_ns"`
+		EventType   string          `json:"event_type"`
+		Payload     json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &hdr); err != nil {
 		// Unparseable here means malformed upstream; let the normal path handle it rather than swallow it in the buffer.
@@ -91,22 +102,32 @@ func (c *Coalescer) Handle(ctx context.Context, data []byte) error {
 	if hdr.EventType != typeNetworkConnect && hdr.EventType != typeDNSQuery {
 		return c.enqueue(ctx, data)
 	}
+	// Only the two coalescable types reach here, so the payload-map decode runs only when its fields are actually needed.
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(hdr.Payload, &payload); err != nil {
+		return c.enqueue(ctx, data) // malformed target payload: pass through unchanged rather than buffer it
+	}
 
-	key := identityKey(hdr.EventType, hdr.Payload)
-	raw := append([]byte(nil), data...) // copy: the caller may reuse the slice
+	key := identityKey(hdr.EventType, payload)
 
+	var overflow map[string]*entry
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	e, ok := c.buf[key]
 	if !ok {
+		// New identity key. Bound the buffer: if it is already at the cap, flush what we have first (lossless early flush) so a
+		// host touching many distinct destinations in one window can't grow it without bound. The drained batch is enqueued after
+		// the lock is released, since enqueue does I/O.
+		if len(c.buf) >= c.maxEntries {
+			overflow = c.drainLocked()
+		}
 		e = &entry{
-			raw:       raw,
+			raw:       append([]byte(nil), data...), // copy only on first occurrence; the caller may reuse the slice
 			eventID:   hdr.EventID,
 			hostID:    hdr.HostID,
 			eventType: hdr.EventType,
 			firstTSNs: hdr.TimestampNs,
 			lastTSNs:  hdr.TimestampNs,
-			payload:   hdr.Payload,
+			payload:   payload,
 		}
 		if hdr.EventType == typeDNSQuery {
 			e.dnsAddrs = make(map[string]struct{})
@@ -121,10 +142,13 @@ func (c *Coalescer) Handle(ctx context.Context, data []byte) error {
 		e.lastTSNs = hdr.TimestampNs
 	}
 	if e.dnsAddrs != nil {
-		for _, a := range responseAddresses(hdr.Payload) {
+		for _, a := range responseAddresses(payload) {
 			e.dnsAddrs[a] = struct{}{}
 		}
 	}
+	c.mu.Unlock()
+
+	c.emit(ctx, overflow)
 	return nil
 }
 
@@ -156,14 +180,24 @@ func (c *Coalescer) Run(ctx context.Context) {
 // concurrently with Run's own flushes (the lock-swap guarantees each buffered entry is emitted at most once).
 func (c *Coalescer) Flush(ctx context.Context) {
 	c.mu.Lock()
+	batch := c.drainLocked()
+	c.mu.Unlock()
+	c.emit(ctx, batch)
+}
+
+// drainLocked swaps out the current buffer and returns it, leaving a fresh empty buffer behind. The caller MUST hold c.mu. Shared
+// by Flush and the cap-overflow path in Handle so the buffer is reset under the same lock that guards it.
+func (c *Coalescer) drainLocked() map[string]*entry {
 	if len(c.buf) == 0 {
-		c.mu.Unlock()
-		return
+		return nil
 	}
 	batch := c.buf
 	c.buf = make(map[string]*entry)
-	c.mu.Unlock()
+	return batch
+}
 
+// emit marshals each representative and enqueues it, outside any lock (enqueue does I/O). A nil/empty batch is a no-op.
+func (c *Coalescer) emit(ctx context.Context, batch map[string]*entry) {
 	for _, e := range batch {
 		data, err := e.marshal()
 		if err != nil {
