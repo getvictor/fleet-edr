@@ -55,7 +55,7 @@
               "queryName": "A",
               "dataSource": "metrics",
               "expression": "A",
-              "stepInterval": 60,
+              "stepInterval": 0,
               "aggregations": [
                 {
                   "metricName": "http.server.request.duration.count",
@@ -98,7 +98,7 @@
               "queryName": "A",
               "dataSource": "metrics",
               "expression": "A",
-              "stepInterval": 60,
+              "stepInterval": 0,
               "aggregations": [
                 {
                   "metricName": "http.server.request.duration.count",
@@ -141,7 +141,7 @@
               "queryName": "A",
               "dataSource": "metrics",
               "expression": "A",
-              "stepInterval": 60,
+              "stepInterval": 0,
               "aggregations": [
                 {
                   "metricName": "http.server.request.duration.bucket",
@@ -184,7 +184,7 @@
               "queryName": "A",
               "dataSource": "metrics",
               "expression": "A",
-              "stepInterval": 60,
+              "stepInterval": 0,
               "aggregations": [
                 {
                   "metricName": "http.server.request.duration.bucket",
@@ -227,7 +227,7 @@
               "queryName": "A",
               "dataSource": "metrics",
               "expression": "A",
-              "stepInterval": 60,
+              "stepInterval": 0,
               "aggregations": [
                 {
                   "metricName": "http.server.request.duration.count",
@@ -270,7 +270,7 @@
               "queryName": "A",
               "dataSource": "metrics",
               "expression": "A",
-              "stepInterval": 60,
+              "stepInterval": 0,
               "aggregations": [
                 {
                   "metricName": "http.server.request.duration.count",
