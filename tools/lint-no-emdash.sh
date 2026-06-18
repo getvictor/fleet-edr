@@ -23,10 +23,12 @@ found=0
 # .claude/** (AI-tool-installed config we do not author; markdownlint ignores it for the same reason). grep -I drops
 # binary files so a staged PNG passed by the pre-commit hook is a no-op rather than a false match.
 scan_file() {
-  case "$1" in
+  local file="$1"
+  case "$file" in
     tools/lint-no-emdash.sh | .claude/*) return 0 ;;
+    *) ;; # every other path is scanned below
   esac
-  if grep -HInE "$PATTERN" -- "$1" 2>/dev/null; then
+  if grep -HInE "$PATTERN" -- "$file" 2>/dev/null; then
     found=1
   fi
 }
@@ -34,9 +36,9 @@ scan_file() {
 # With file arguments, scan exactly those: the lefthook pre-commit hook passes the staged file list so a commit is gated
 # without rescanning the whole tree. With no arguments, scan every tracked text file: the behaviour the CI gate and
 # `task lint:dashes` rely on. NUL-delimited read of git ls-files so filenames with spaces are handled verbatim.
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
   for f in "$@"; do
-    [ -f "$f" ] || continue # staged deletions / non-regular paths
+    [[ -f "$f" ]] || continue # staged deletions / non-regular paths
     scan_file "$f"
   done
 else
@@ -45,7 +47,7 @@ else
   done < <(git ls-files -z)
 fi
 
-if [ "$found" -ne 0 ]; then
+if [[ "$found" -ne 0 ]]; then
   echo "::error::Em dash (U+2014) or en dash (U+2013) found above. Reword the sentence (prefer shorter sentences) or use ':'. The spaced hyphen ' - ' is also banned (see tools/dash-lint)." >&2
   exit 1
 fi

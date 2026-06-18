@@ -37,6 +37,9 @@ const (
 	// reference a not-yet-archived scenario ID without spectrace flagging a dangling reference. They are not added to
 	// the gated coverage set: a proposal imposes no coverage obligation until it is archived into openspec/specs.
 	defaultChangesDir = "openspec/changes"
+	// specsDirFlagName is the --specs-dir flag name, shared by the check and list-ids subcommands so the flag-set
+	// registration and the userSetFlagNames lookup stay in sync.
+	specsDirFlagName = "specs-dir"
 )
 
 func main() {
@@ -99,7 +102,7 @@ See docs/testing-strategy.md for the marker syntax and rollout plan.
 // per-layer coverage profile per scenario so contributors can see which test rung is missing.
 func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
-	specsDir := fs.String("specs-dir", defaultSpecsDir, "root of the openspec/specs tree")
+	specsDir := fs.String(specsDirFlagName, defaultSpecsDir, "root of the openspec/specs tree")
 	changesDir := fs.String("changes-dir", defaultChangesDir, "openspec/changes tree; in-flight proposal scenarios are valid marker targets")
 	rootDir := fs.String("root", defaultRootDir, "root of the source tree to scan for markers")
 	strict := fs.Bool("strict", false, "exit non-zero if any SHALL/MUST scenario is uncovered")
@@ -114,7 +117,7 @@ func runCheck(args []string) int {
 	// top-level (CI shape) or a nested package (Copilot's PR #281 concern). Defaults bind to the repo root unconditionally
 	// because their literal cwd-relative meaning is rarely the intent; explicit values keep cwd-first semantics.
 	setFlags := userSetFlagNames(fs)
-	*specsDir = resolvePathFlag(*specsDir, setFlags["specs-dir"])
+	*specsDir = resolvePathFlag(*specsDir, setFlags[specsDirFlagName])
 	*changesDir = resolvePathFlag(*changesDir, setFlags["changes-dir"])
 	*rootDir = resolvePathFlag(*rootDir, setFlags["root"])
 
@@ -285,12 +288,12 @@ func percent(num, denom int) float64 {
 // whose parent requirement has a SHALL/MUST in its body; that's the set the gate is concerned with.
 func runListIDs(args []string) int {
 	fs := flag.NewFlagSet("list-ids", flag.ContinueOnError)
-	specsDir := fs.String("specs-dir", defaultSpecsDir, "root of the openspec/specs tree")
+	specsDir := fs.String(specsDirFlagName, defaultSpecsDir, "root of the openspec/specs tree")
 	normativeOnly := fs.Bool("normative-only", false, "restrict output to scenarios under SHALL/MUST requirements")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	*specsDir = resolvePathFlag(*specsDir, userSetFlagNames(fs)["specs-dir"])
+	*specsDir = resolvePathFlag(*specsDir, userSetFlagNames(fs)[specsDirFlagName])
 	scenarios, err := ParseAllSpecs(*specsDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "spectrace: parse specs:", err)

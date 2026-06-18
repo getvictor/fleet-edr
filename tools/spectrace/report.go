@@ -156,7 +156,8 @@ func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
 // stderr at cleanup time because the report renderer has already returned by then.
 func openReportWriter(path string) (io.Writer, func(), error) {
 	if path == "" {
-		return os.Stdout, func() {}, nil
+		// No-op cleanup: stdout is owned by the process and must not be closed by the report renderer.
+		return os.Stdout, func() { /* stdout is not ours to close */ }, nil
 	}
 	f, err := os.Create(path) //nolint:gosec // path comes from a --output flag the operator supplies
 	if err != nil {

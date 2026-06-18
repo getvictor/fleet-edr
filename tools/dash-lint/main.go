@@ -153,24 +153,33 @@ func checkGo(path string, data []byte) []string {
 		if tok == token.EOF {
 			break
 		}
-		// Only prose-bearing tokens: comments, string literals (Doc() descriptions, UI text), and char literals. Never bare
-		// code, where " - " is subtraction.
-		if tok == token.COMMENT || tok == token.STRING || tok == token.CHAR {
-			// Match on the unquoted value for string/char literals so an escape like "\n - x" (an embedded newline before a
-			// list-ish " - ") is not misread as an em dash; the raw literal would show `n - ` and false-positive.
-			val := lit
-			if tok == token.STRING || tok == token.CHAR {
-				if unquoted, err := strconv.Unquote(lit); err == nil {
-					val = unquoted
-				}
-			}
-			if emDashUse.MatchString(val) {
-				p := fset.Position(pos)
-				findings = append(findings, fmt.Sprintf(findingFmt, path, p.Line, strings.TrimSpace(firstLine(lit))))
-			}
+		if finding, ok := goTokenEmDashFinding(path, fset, pos, tok, lit); ok {
+			findings = append(findings, finding)
 		}
 	}
 	return findings
+}
+
+// goTokenEmDashFinding inspects a single lexed token and returns a finding when the token is a prose-bearing token (comment, string or
+// char literal) whose value contains em-dash use. Tokens that are bare code are never inspected. The (string, false) zero value signals
+// "no finding" so the caller appends only on a real hit.
+func goTokenEmDashFinding(path string, fset *token.FileSet, pos token.Pos, tok token.Token, lit string) (string, bool) {
+	if tok != token.COMMENT && tok != token.STRING && tok != token.CHAR {
+		return "", false
+	}
+	// Match on the unquoted value for string/char literals so an escape like "\n - x" (an embedded newline before a
+	// list-ish " - ") is not misread as an em dash; the raw literal would show `n - ` and false-positive.
+	val := lit
+	if tok == token.STRING || tok == token.CHAR {
+		if unquoted, err := strconv.Unquote(lit); err == nil {
+			val = unquoted
+		}
+	}
+	if !emDashUse.MatchString(val) {
+		return "", false
+	}
+	p := fset.Position(pos)
+	return fmt.Sprintf(findingFmt, path, p.Line, strings.TrimSpace(firstLine(lit))), true
 }
 
 // checkCStyleComments flags em-dash use inside // line comments and /* block comments */, ignoring code and string literals.

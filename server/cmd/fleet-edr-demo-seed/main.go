@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	// Registers the "mysql" driver with database/sql so sql.Open("mysql", dsn) resolves; imported for its init side effect.
 	_ "github.com/go-sql-driver/mysql"
 )
 
