@@ -68,6 +68,11 @@ func TestCheckGo(t *testing.T) {
 		{"gosec justification separator not flagged", "package p\n// #nosec G101 -- test fixture: not a real credential\nvar x = 1\n", 0},
 		{"prose after gosec separator still flagged", "package p\n// #nosec G101 -- a token -- not real\nvar x = 1\n", 1},
 		{"ignore directive skips line", "package p\n// the order -- rotate then ack dash-lint:ignore\nvar x = 1\n", 0},
+		// Block-comment directive granularity: the ignore directive on a later line of a /* */ block suppresses only that
+		// line; a violation on a different line of the same block is still reported (at its own line).
+		{"block comment ignore is per-line", "package p\n/*\n the order -- rotate then ack dash-lint:ignore\n*/\nvar x = 1\n", 0},
+		{"block comment reports per-line", "package p\n/* clean opener\n the order -- rotate then ack\n*/\nvar x = 1\n", 1},
+		{"block comment violation despite directive on other line", "package p\n/* the order -- rotate dash-lint:ignore\n the ack -- second\n*/\nvar x = 1\n", 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,6 +154,13 @@ func TestCheckHashComments(t *testing.T) {
 		{"backtick code span in comment not flagged", "# run `task uat:l5 -- attack-runbook` to start\necho hi\n", 0},
 		{"list-like comment marker not flagged", "#   - first bullet item in a comment\n", 0},
 		{"ignore directive skips line", "key: value # the order -- rotate dash-lint:ignore\n", 0},
+		// Quote-awareness: a '#' inside a quoted scalar/string is not a comment, so its content must not be scanned.
+		{"hash inside double-quoted scalar not a comment", "key: \"a # b - c\"\n", 0},
+		{"hash inside single-quoted scalar not a comment", "cmd: 'echo # x - y'\n", 0},
+		{"real comment after quoted scalar still scanned", "key: \"a # b\" # real - comment\n", 1},
+		{"em dash inside a quoted segment of a real comment flagged", "key: v # note \"x - y\" here\n", 1},
+		{"escaped quote keeps double-quote region open", "key: \"a \\\" # b - c\"\n", 0},
+		{"doubled single-quote escape stays quoted", "key: 'a '' # b - c'\n", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

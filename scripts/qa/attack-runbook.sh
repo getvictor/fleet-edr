@@ -138,9 +138,10 @@ step_persistence_launchagent() {
   step_header "LaunchAgent persistence drop + launchctl load" "persistence_launchagent"
   # Rule trigger: exec of `launchctl load <plist>` where plist matches
   # ~/Library/LaunchAgents/<name>.plist or /Library/LaunchAgents/<name>.plist.
-  # We DO NOT actually persist anything: the plist is a syntactic
-  # placeholder; launchctl will fail to load it (missing executable). The
-  # rule fires on the EXEC of launchctl load, not on activation success.
+  # We DO NOT actually persist anything: the plist is a best-effort
+  # placeholder (RunAtLoad is false and it is unloaded and removed right
+  # after), so nothing keeps running. The rule fires on the EXEC of
+  # launchctl load, not on activation success.
   local plist_dir="$HOME/Library/LaunchAgents"
   local plist_path="$plist_dir/com.synthetic.edr-runbook.plist"
   mkdir -p "$plist_dir"

@@ -209,39 +209,48 @@ func checkGo(path string, data []byte) []string {
 		if tok == token.EOF {
 			break
 		}
-		if ignored[fset.Position(pos).Line] {
-			continue
-		}
-		if finding, ok := goTokenEmDashFinding(path, fset, pos, tok, lit); ok {
-			findings = append(findings, finding)
-		}
+		findings = append(findings, goTokenFindings(path, fset.Position(pos).Line, tok, lit, ignored)...)
 	}
 	return findings
 }
 
-// goTokenEmDashFinding inspects a single lexed token and returns a finding when the token is a prose-bearing token (comment, string or
-// char literal) whose value contains em-dash use. Tokens that are bare code are never inspected. The (string, false) zero value signals
-// "no finding" so the caller appends only on a real hit.
-func goTokenEmDashFinding(path string, fset *token.FileSet, pos token.Pos, tok token.Token, lit string) (string, bool) {
-	if tok != token.COMMENT && tok != token.STRING && tok != token.CHAR {
-		return "", false
-	}
-	// Match on the unquoted value for string/char literals so an escape like "\n - x" (an embedded newline before a
-	// list-ish " - ") is not misread as an em dash; the raw literal would show `n - ` and false-positive.
-	val := lit
+// goTokenFindings inspects one lexed token and returns a finding per prose line that contains em-dash use. Only comment,
+// string, and char tokens are prose-bearing; bare code is never inspected. A multi-line COMMENT token (a /* ... */ block) is
+// scanned line by line so the per-line `dash-lint:ignore` directive and the reported line number match the line-based scanners
+// exactly: a directive on line N suppresses only line N, and a violation on a later line is still reported at that line.
+func goTokenFindings(path string, startLine int, tok token.Token, lit string, ignored map[int]bool) []string {
+	// An if-ladder, not a switch on tok: token.Token has ~80 members and the exhaustive linter (configured here so a default
+	// case does not satisfy it) would demand every one be listed.
 	if tok == token.STRING || tok == token.CHAR {
+		if ignored[startLine] {
+			return nil
+		}
+		// Match on the unquoted value so an escape like "\n - x" (an embedded newline before a list-ish " - ") is not
+		// misread as an em dash; the raw literal would show `n - ` and false-positive. A multi-line raw string is reported
+		// at its start line.
+		val := lit
 		if unquoted, err := strconv.Unquote(lit); err == nil {
 			val = unquoted
 		}
+		if emDashUse.MatchString(val) {
+			return []string{fmt.Sprintf(findingFmt, path, startLine, strings.TrimSpace(firstLine(lit)))}
+		}
+		return nil
 	}
 	if tok == token.COMMENT {
-		val = commentProse(val)
+		var out []string
+		for offset, line := range strings.Split(lit, "\n") {
+			lineNo := startLine + offset
+			if ignored[lineNo] {
+				continue
+			}
+			if emDashUse.MatchString(commentProse(line)) {
+				out = append(out, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(line)))
+			}
+		}
+		return out
 	}
-	if !emDashUse.MatchString(val) {
-		return "", false
-	}
-	p := fset.Position(pos)
-	return fmt.Sprintf(findingFmt, path, p.Line, strings.TrimSpace(firstLine(lit))), true
+	return nil
 }
 
 // checkCStyleComments flags em-dash use inside // line comments and /* block comments */, ignoring code and string literals.
@@ -341,13 +350,38 @@ func checkHashComments(path string, data []byte) []string {
 // there is none. A '#' begins a comment only at the start of the (trimmed) line or when preceded by whitespace, which is the
 // YAML inline-comment rule and also skips shell constructs where '#' is glued to a prior token ("${#arr}", "x#frag" in a URL,
 // "$#"). A shebang ("#!/bin/sh") starts a comment but carries no prose " - ", so flagging it is harmless.
+//
+// A hash inside a quoted scalar or string is NOT a comment (e.g. a double-quoted value containing a hash, or a
+// single-quoted shell word), so a minimal single-line quote tracker skips single- and double-quoted regions. The YAML
+// doubled-single-quote escape is handled by toggling (close then reopen leaves the region effectively still quoted), as is
+// a backslash escape inside double quotes. It does not parse full YAML/shell quoting (block scalars, ANSI-C quoting, nested
+// heredocs); those are out of scope for a line-oriented prose gate.
 func hashCommentText(raw string) string {
+	inSingle, inDouble, escaped := false, false, false
 	for i := range len(raw) {
-		if raw[i] != '#' {
-			continue
-		}
-		if i == 0 || raw[i-1] == ' ' || raw[i-1] == '\t' {
-			return raw[i:]
+		c := raw[i]
+		switch {
+		case escaped:
+			escaped = false
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+		case inDouble:
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inDouble = false
+			}
+		case c == '\'':
+			inSingle = true
+		case c == '"':
+			inDouble = true
+		case c == '#':
+			if i == 0 || raw[i-1] == ' ' || raw[i-1] == '\t' {
+				return raw[i:]
+			}
 		}
 	}
 	return ""
