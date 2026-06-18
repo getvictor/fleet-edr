@@ -109,6 +109,19 @@ func TestPartitionHeartbeats(t *testing.T) {
 		assert.Len(t, toStore, 2)
 	})
 
+	t.Run("an all-heartbeat batch persists nothing and yields a bump per heartbeat", func(t *testing.T) {
+		t.Parallel()
+		events := []api.Event{
+			mk("hb1", heartbeatEventType, 1, `{"pid":11}`),
+			mk("hb2", heartbeatEventType, 2, `{"pid":22}`),
+		}
+		toStore, beats := partitionHeartbeats(events)
+		assert.Empty(t, toStore, "an all-heartbeat batch persists nothing (and allocates no toStore slice)")
+		require.Len(t, beats, 2)
+		assert.Equal(t, 11, beats[0].PID)
+		assert.Equal(t, 22, beats[1].PID)
+	})
+
 	t.Run("malformed or zero-pid heartbeats are dropped without a bump", func(t *testing.T) {
 		t.Parallel()
 		events := []api.Event{

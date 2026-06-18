@@ -256,8 +256,13 @@ func partitionHeartbeats(events []api.Event) (toStore []api.Event, heartbeats []
 	if firstHeartbeat == -1 {
 		return events, nil
 	}
-	toStore = make([]api.Event, 0, len(events)-1)
-	toStore = append(toStore, events[:firstHeartbeat]...)
+	// Allocate toStore eagerly only when there is a non-heartbeat prefix to carry (firstHeartbeat > 0). A batch that begins with a
+	// heartbeat (including the common near-idle all-heartbeat batch) defers allocation to the first non-heartbeat append below, so
+	// an all-heartbeat request allocates nothing (append to a nil slice grows on demand).
+	if firstHeartbeat > 0 {
+		toStore = make([]api.Event, 0, len(events)-1)
+		toStore = append(toStore, events[:firstHeartbeat]...)
+	}
 	for i := firstHeartbeat; i < len(events); i++ {
 		if events[i].EventType != heartbeatEventType {
 			toStore = append(toStore, events[i])

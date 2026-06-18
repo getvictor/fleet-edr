@@ -61,11 +61,13 @@ type SnapshotHeartbeat struct {
 	TimestampNs int64
 }
 
-// BumpSnapshotLastSeenBatch applies the live-snapshot freshness bump for a batch of heartbeats in one transaction. Each entry runs
-// the identical scoped UPDATE as UpdateLastSeenForSnapshot (live, snapshot-originated row for (host_id, pid) only), so the freshness
-// semantics and no-op cases are exactly those of the single-row path; this just relocates the bump to ingest time so the heartbeat
-// never has to be persisted as a retained event row (issue #408). A heartbeat that matches no row is a no-op, as before. All
-// heartbeats in a request share one host_id (host-identity pinning guarantees it), so the caller passes hostID once.
+// BumpSnapshotLastSeenBatch applies the live-snapshot freshness bump for a batch of heartbeats using set-based, chunked UPDATEs
+// (one statement per chunk of distinct PIDs, not one per heartbeat). The scoping matches UpdateLastSeenForSnapshot (live,
+// snapshot-originated rows for the host only), so the freshness semantics and no-op cases are those of the single-row path; this
+// just relocates the bump to ingest time so the heartbeat never has to be persisted as a retained event row (issue #408). A
+// heartbeat that matches no row is a no-op, as before. The chunks are independent best-effort bumps, not wrapped in a transaction:
+// a partial failure simply leaves some PIDs to be re-bumped by the next heartbeat, well within the TTL window. All heartbeats in a
+// request share one host_id (host-identity pinning guarantees it), so the caller passes hostID once.
 func (s *Store) BumpSnapshotLastSeenBatch(ctx context.Context, hostID string, beats []SnapshotHeartbeat) error {
 	if len(beats) == 0 {
 		return nil

@@ -1925,6 +1925,69 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	assert.Zero(t, heartbeatRows, "heartbeat must not be persisted as an events row")
 }
 
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-live-snapshot-row-bumps-freshness
+//
+// TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs covers the set-based batched bump path (BumpSnapshotLastSeenBatch ->
+// bumpSnapshotLastSeenChunk, issue #408 AI-review fix): a single ingest batch carrying heartbeats for several distinct PIDs bumps
+// every matching live snapshot row in one CASE-based UPDATE, while a heartbeat for an unknown PID is a no-op.
+func TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs(t *testing.T) {
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	const host = "h-snap-multi"
+	forkTime := time.Now().UnixNano()
+	pids := []int{5551, 5552, 5553}
+
+	var snapExecs []api.Event
+	for i, pid := range pids {
+		snapExecs = append(snapExecs, api.Event{
+			EventID: fmt.Sprintf("exec-snap-%d", pid), HostID: host, TimestampNs: forkTime + int64(i), EventType: "exec",
+			Payload: json.RawMessage(fmt.Sprintf(`{"pid":%d,"ppid":1,"path":"/usr/libexec/snap","args":[],"snapshot":true}`, pid)),
+		})
+	}
+	insertEventsViaIngest(ctx, t, d, host, snapExecs)
+
+	// Wait for all snapshot rows to materialise.
+	require.Eventually(t, func() bool {
+		for _, pid := range pids {
+			p, err := d.Service().GetProcessDetail(ctx, host, pid, forkTime+10)
+			if err != nil || p == nil || !p.Process.IsSnapshot {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 50*time.Millisecond, "all snapshot rows must materialise")
+
+	// One batch: a heartbeat per live PID plus one for an unknown PID (must no-op).
+	hbTime := forkTime + int64(time.Hour)
+	var beats []api.Event
+	for _, pid := range append(append([]int{}, pids...), 9999) {
+		beats = append(beats, api.Event{
+			EventID: fmt.Sprintf("hb-%d", pid), HostID: host, TimestampNs: hbTime, EventType: "snapshot_heartbeat",
+			Payload: json.RawMessage(fmt.Sprintf(`{"pid":%d}`, pid)),
+		})
+	}
+	insertEventsViaIngest(ctx, t, d, host, beats)
+
+	require.Eventually(t, func() bool {
+		for _, pid := range pids {
+			p, err := d.Service().GetProcessDetail(ctx, host, pid, hbTime+1)
+			if err != nil || p == nil || p.Process.LastSeenNs == nil || *p.Process.LastSeenNs != hbTime {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 50*time.Millisecond, "the batched CASE update must bump every live snapshot PID")
+
+	// The unknown-PID heartbeat created no process row, and no heartbeat was persisted as an events row.
+	unknown, err := d.Service().GetProcessDetail(ctx, host, 9999, hbTime+1)
+	require.NoError(t, err)
+	assert.Nil(t, unknown, "a heartbeat for an unknown PID must not create a row")
+	var heartbeatRows int
+	require.NoError(t, d.Store().DB().GetContext(ctx, &heartbeatRows,
+		"SELECT COUNT(*) FROM events WHERE host_id = ? AND event_type = 'snapshot_heartbeat'", host))
+	assert.Zero(t, heartbeatRows, "heartbeats must not be persisted as events rows")
+}
+
 // spec:server-process-graph-builder/snapshot-exec-events-are-stitched-but-not-treated-as-new-activity/extension-restarts-and-replays-the-live-process-set
 //
 // This test asserts the seed of last_seen_ns at fork-time when a snapshot exec lands; combined with

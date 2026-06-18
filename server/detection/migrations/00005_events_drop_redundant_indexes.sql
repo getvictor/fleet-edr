@@ -6,14 +6,15 @@
 --   - idx_events_type (event_type) is matched by no query: every event-type predicate in the codebase is anchored by a leading
 --     host_id (GetNetworkEventsForProcess, the FetchUnprocessed/retention paths key on processed/timestamp), so the composites cover
 --     them and a standalone event_type index is never chosen by the planner.
--- Both drops are online (ALGORITHM=INPLACE) and do not rebuild the table.
+-- Both drops are folded into one ALTER with explicit ALGORITHM=INPLACE, LOCK=NONE so the operation is a single online DDL pass: the
+-- explicit clauses make MySQL fail loudly rather than silently fall back to a table-copy/locking plan, and one ALTER avoids two
+-- separate metadata changes. Dropping a secondary index on InnoDB is metadata-only, so INPLACE/LOCK=NONE is always satisfiable here.
 
 -- +goose StatementBegin
-DROP INDEX idx_events_host_id ON events;
--- +goose StatementEnd
-
--- +goose StatementBegin
-DROP INDEX idx_events_type ON events;
+ALTER TABLE events
+	DROP INDEX idx_events_host_id,
+	DROP INDEX idx_events_type,
+	ALGORITHM=INPLACE, LOCK=NONE;
 -- +goose StatementEnd
 
 -- +goose Down
