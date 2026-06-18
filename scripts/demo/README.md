@@ -22,4 +22,4 @@ Simulates the classic "malware phones home" chain: a payload staged to `/tmp` re
 ./trigger-dns-c2.sh high       # high:     ordinary short domain        -> T1071.004
 ```
 
-Within a few seconds a **DNS C2 beacon** alert should appear in the EDR UI, attributed to the `/tmp/beacon` process, citing both the DNS lookup and the outbound connection. The script copies `/usr/bin/curl` to `/tmp/beacon` and re-signs it ad-hoc (a plain copy of an Apple platform binary is SIGKILLed when run from `/tmp`, so it would emit no telemetry), then removes it on exit.
+Within a few seconds a **DNS C2 beacon** alert should appear in the EDR UI, attributed to the staged `/tmp/beacon.*` process, citing both the DNS lookup and the outbound connection. The script copies `/usr/bin/curl` to a unique `mktemp` path under `/tmp` and re-signs it ad-hoc (a plain copy of an Apple platform binary is SIGKILLed when run from `/tmp`, so it would emit no telemetry), then removes it on exit.
