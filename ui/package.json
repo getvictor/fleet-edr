@@ -18,7 +18,7 @@
     "d3": "^7.9.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-router-dom": "^7.16.0",
+    "react-router-dom": "^7.17.0",
     "sass": "^1.100.0"
   },
   "overrides": {
@@ -29,7 +29,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/d3": "^7.4.3",
-    "@types/react": "^19.2.16",
+    "@types/react": "^19.2.17",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.8",
