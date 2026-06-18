@@ -36,7 +36,7 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 
 ## Output
 
-A PR (or set of PRs) with a body section "Doc accuracy sweep: `<YYYY-MM-DD>`" listing every reference touched. Every run appends a dated entry to [`docs/maintenance/log.md`](../log.md) so the cadence is auditable whether or not findings landed.
+A PR (or set of PRs) with a body section "Doc accuracy sweep: `<YYYY-MM-DD>`" listing every reference touched. Every run appends a dated entry to [`docs/maintenance/log.md`](../log.md) so the cadence is auditable whether or not findings landed. The per-reference detail lives in the PR body; the log entry is one tight line per the format at the top of that file.
 
 ## Prompt template
 

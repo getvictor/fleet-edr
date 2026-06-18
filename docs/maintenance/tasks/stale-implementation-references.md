@@ -58,7 +58,7 @@ Excludes everything in `.gitignore` (today: `ai/` topic-plan tree, `tmp/`, build
 
 ## Output
 
-A PR when there are findings; on every run, append a dated entry to [`docs/maintenance/log.md`](../log.md) following the format documented at the top of that file (`YYYY-MM-DD  stale-implementation-references   <done|partial|skipped>  [PR #N | no findings]  [notes]`). The log entry is mandatory whether the run had findings or not. It is the audit trail proving the cadence is being honoured.
+A PR when there are findings; on every run, append a dated entry to [`docs/maintenance/log.md`](../log.md) following the format documented at the top of that file (`YYYY-MM-DD  stale-implementation-references   <done|partial|skipped>  [PR #N | no findings]  [notes]`). Keep `[notes]` to one tight line: the headline outcome plus the branch, not a file-by-file narration. The log entry is mandatory whether the run had findings or not. It is the audit trail proving the cadence is being honoured.
 
 ## Prompt template
 
