@@ -90,7 +90,8 @@ latency / error metrics.
 Step 5 - grep for new prometheus / /metrics introductions; flag any.
 
 Open one PR for code-level fixes; SigNoz changes go directly with a written-up summary in the PR
-body or in docs/maintenance/log.md. Time budget 60 minutes.
+body. The docs/maintenance/log.md entry stays one tight line per the format at the top of that
+file. Time budget 60 minutes.
 ```
 
 ## Definition of done

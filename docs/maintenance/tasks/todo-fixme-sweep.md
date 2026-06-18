@@ -41,7 +41,7 @@ Excludes: `ai/`, `tmp/`, `node_modules/`, vendored dirs, generated code (e.g. an
 
 ## Output
 
-A PR titled `TODO sweep YYYY-MM-DD` when there are findings. Body lists each hit and the verdict applied. Every run appends a dated entry to [`docs/maintenance/log.md`](../log.md) so the cadence is auditable, whether findings landed or not.
+A PR titled `TODO sweep YYYY-MM-DD` when there are findings. Body lists each hit and the verdict applied. Every run appends a dated entry to [`docs/maintenance/log.md`](../log.md) so the cadence is auditable, whether findings landed or not. The per-hit detail lives in the PR body; the log entry is one tight line per the format at the top of that file.
 
 ## Prompt template
 

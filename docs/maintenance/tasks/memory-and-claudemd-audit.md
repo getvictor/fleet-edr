@@ -47,7 +47,7 @@ If MEMORY.md says X and CLAUDE.md says Y on the same topic, one of them is wrong
 
 - A PR for any `CLAUDE.md` changes (it's committed).
 - Direct edits to MEMORY.md (it's per-user, not committed).
-- A dated entry in [`docs/maintenance/log.md`](../log.md) on every run, whether the audit found changes or not. The log is the audit trail proving the cadence is being honoured.
+- A dated entry in [`docs/maintenance/log.md`](../log.md) on every run, whether the audit found changes or not. The log is the audit trail proving the cadence is being honoured. Keep it to one tight line per the format at the top of that file: headline outcome plus the PR / branch reference, not a narration of the run.
 
 ## Prompt template
 
@@ -67,8 +67,8 @@ truth). MEMORY.md keeps only context that benefits future sessions and isn't der
 
 Step 4 - trim MEMORY.md index entries to one line each. The first 200 lines is the budget.
 
-CLAUDE.md changes go in a PR. MEMORY.md edits are direct (per-user, not committed). Log both in
-docs/maintenance/log.md.
+CLAUDE.md changes go in a PR. MEMORY.md edits are direct (per-user, not committed). Log the run as
+one tight line in docs/maintenance/log.md (headline outcome + PR/branch ref, not a run narration).
 
 Time budget 45 minutes. Do NOT add new rules in this sweep - additions go through normal review.
 ```

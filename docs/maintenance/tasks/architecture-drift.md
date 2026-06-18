@@ -66,7 +66,7 @@ If a single struct in any context's `api/` is referenced by all four other conte
 - One PR per refactor that's small enough to land safely.
 - Issues filed for each refactor that's not.
 - A short note in the audit summary on whether ADR-0004 still describes intent or needs amending.
-- A dated entry in [`docs/maintenance/log.md`](../log.md) on every run, whether findings landed or not. The "no findings" outcome is itself signal that arch-go and the test layout are doing their job.
+- A dated entry in [`docs/maintenance/log.md`](../log.md) on every run, whether findings landed or not. The "no findings" outcome is itself signal that arch-go and the test layout are doing their job. Keep it to one tight line per the format at the top of that file.
 
 ## Prompt template
 
