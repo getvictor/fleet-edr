@@ -19,7 +19,8 @@ import (
 // --- #91: bulk hosts upsert ------------------------------------------------
 
 func TestUpsertHosts_BatchAcrossManyHosts(t *testing.T) {
-	s := newTestStore(t)
+	// Full-schema fixture: this test calls ListHosts, which LEFT JOINs the endpoint enrollments table.
+	s := newFullSchemaStore(t)
 	ctx := t.Context()
 
 	const n = 32
@@ -61,7 +62,8 @@ func TestUpsertHosts_BatchAcrossManyHosts(t *testing.T) {
 }
 
 func TestUpsertHosts_EmptyBatchNoOp(t *testing.T) {
-	s := newTestStore(t)
+	// Full-schema fixture: this test calls ListHosts, which LEFT JOINs the endpoint enrollments table.
+	s := newFullSchemaStore(t)
 	require.NoError(t, s.UpsertHosts(t.Context(), nil))
 	require.NoError(t, s.UpsertHosts(t.Context(), []api.Event{}))
 	hosts, err := s.ListHosts(t.Context())

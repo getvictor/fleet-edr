@@ -1,0 +1,33 @@
+@use "../styles/var/colors" as *;
+@use "../styles/var/fonts" as *;
+
+$font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+.host-list {
+  // Host cell: enrollment hostname over the full hardware UUID, both monospace.
+  &__hostname {
+    font-family: $font-mono;
+    font-weight: $bold;
+    color: $core-fleet-black;
+  }
+
+  &__uuid {
+    font-family: $font-mono;
+    font-size: $xx-small;
+    color: $ui-fleet-black-50;
+    margin-top: 1px;
+  }
+
+  &__platform {
+    color: $ui-fleet-black-75;
+  }
+}
+
+// Events is a count: right-align header + cell and use tabular figures so the
+// digits line up column-wise. Scoped under the table class so the selector
+// outranks Table.scss's `.table th` / `.table td` left-align (which is more
+// specific than a bare class).
+.host-list__table .host-list__events-col {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

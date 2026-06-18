@@ -1361,6 +1361,50 @@ func TestRecordHostSeen_AdvancesLastSeen(t *testing.T) {
 	assert.Equal(t, later.UnixNano(), hosts[0].LastSeenNs, "earlier RecordHostSeen must not regress")
 }
 
+// spec:server-rest-api/list-enrolled-hosts/host-list-rows-carry-enrollment-hostname-and-os-version
+//
+// ListHosts LEFT JOINs the endpoint context's enrollments table to decorate each row with the enrollment hostname + OS version. A
+// host that has been seen but never enrolled still returns, with both fields empty. Pins the cross-context decoration the refined
+// hosts page renders (hostname over UUID, Platform column) and the LEFT-not-INNER join semantics that keep bare hosts visible.
+func TestListHosts_DecoratesWithEnrollment(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const enrolledHost = "ENROLLED-UUID-0001"
+	const bareHost = "BARE-UUID-0002"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, enrolledHost, time.Now()))
+	require.NoError(t, d.Service().RecordHostSeen(ctx, bareHost, time.Now().Add(-time.Minute)))
+
+	// Seed an enrollment row directly (the endpoint enroll handler is out of scope for this detection-side test). Only the NOT NULL
+	// columns without a default need values; host_token_issued_at / enrolled_at default to CURRENT_TIMESTAMP.
+	_, err := d.Store().DB().ExecContext(ctx, `
+		INSERT INTO enrollments (host_id, host_token_id, host_token_hash, hostname, agent_version, os_version, source_ip)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		enrolledHost, []byte("token-id-0001"), []byte("token-hash"),
+		"eng-lopez-mbp.local", "1.2.3", "macOS 26.0", "203.0.113.7")
+	require.NoError(t, err)
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err)
+	// Exactly the two seeded hosts, no more: a LEFT JOIN regression (e.g. a duplicate enrollment row or a bad join predicate fanning
+	// out rows) would inflate the count, which the byID map below would otherwise silently collapse.
+	require.Len(t, hosts, 2, "one row per host; the LEFT JOIN must not fan out duplicates")
+	byID := make(map[string]api.HostSummary, len(hosts))
+	for _, h := range hosts {
+		byID[h.HostID] = h
+	}
+	require.Len(t, byID, 2, "host_ids are unique across the returned rows")
+
+	require.Contains(t, byID, enrolledHost)
+	assert.Equal(t, "eng-lopez-mbp.local", byID[enrolledHost].Hostname, "enrolled host carries its enrollment hostname")
+	assert.Equal(t, "macOS 26.0", byID[enrolledHost].OSVersion, "enrolled host carries its enrollment OS version")
+
+	require.Contains(t, byID, bareHost, "a host with events but no enrollment row must still appear (LEFT JOIN, not INNER)")
+	assert.Empty(t, byID[bareHost].Hostname, "un-enrolled host has an empty hostname")
+	assert.Empty(t, byID[bareHost].OSVersion, "un-enrolled host has an empty OS version")
+}
+
 func TestService_CountOfflineHosts(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})

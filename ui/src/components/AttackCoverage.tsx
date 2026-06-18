@@ -4,6 +4,7 @@ import { fetchAttackNavigatorLayer, type AttackNavigatorLayer } from "../api";
 import { Table, EmptyState } from "./ui/Table";
 import { PageHeader } from "./ui/PageHeader";
 import { Button } from "./ui/Button";
+import { StatCard, SummaryStrip } from "./ui/StatCard";
 import { TECHNIQUE_CATALOG, type TechniqueMeta } from "./attack-techniques";
 import "./AttackCoverage.scss";
 
@@ -110,20 +111,11 @@ export function AttackCoverage() {
 
       {!loading && layer && (
         <>
-          <div className="attack-coverage__summary">
-            <div className="attack-coverage__metric">
-              <span className="attack-coverage__metric-num">{totalCovered}</span>
-              <span className="attack-coverage__metric-label">techniques covered</span>
-            </div>
-            <div className="attack-coverage__metric">
-              <span className="attack-coverage__metric-num">{distinctRules.size}</span>
-              <span className="attack-coverage__metric-label">detection rules</span>
-            </div>
-            <div className="attack-coverage__metric">
-              <span className="attack-coverage__metric-num">{groups.length}</span>
-              <span className="attack-coverage__metric-label">tactics with coverage</span>
-            </div>
-          </div>
+          <SummaryStrip>
+            <StatCard accent="green" value={totalCovered} label="techniques covered" />
+            <StatCard accent="green" value={distinctRules.size} label="detection rules" />
+            <StatCard accent="green" value={groups.length} label="tactics with coverage" />
+          </SummaryStrip>
 
           {groups.length === 0
             ? <EmptyState>No coverage data yet.</EmptyState>
