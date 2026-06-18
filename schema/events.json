@@ -153,6 +153,15 @@
           "type": "integer",
           "minimum": 0,
           "description": "Optional. Kernel PID generation (audit_token_to_pidversion) of the source process, read from the flow's audit token. Lets the server correlate the flow to the exact process generation independently of PID reuse. Absent on agents that predate this field or when the flow carried no usable audit token."
+        },
+        "coalesced_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional. Number of occurrences this representative event stands for after agent-side coalescing (issue #408). The agent collapses repeated identical 5-tuples (pid, pidversion, protocol, direction, remote_address, remote_port) seen within EDR_NETWORK_COALESCE_WINDOW into one event. Absent or 1 means a single occurrence. The envelope timestamp_ns is the earliest occurrence."
+        },
+        "last_timestamp_ns": {
+          "type": "integer",
+          "description": "Optional. Timestamp (ns since Unix epoch) of the latest occurrence in a coalesced series; the envelope timestamp_ns is the earliest. Present only when coalesced_count is greater than 1. Lets a consumer recover the span of the coalesced window."
         }
       }
     },
@@ -167,13 +176,23 @@
         "query_type": { "type": "string" },
         "response_addresses": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "type": "string" },
+          "description": "Resolved addresses. After agent-side coalescing (issue #408) this is the union of every address observed across the merged queries for the same (pid, pidversion, query_name, query_type) within EDR_NETWORK_COALESCE_WINDOW, so a later connection to any resolved address still correlates."
         },
         "protocol": { "type": "string", "enum": ["udp", "tcp"] },
         "pidversion": {
           "type": "integer",
           "minimum": 0,
           "description": "Optional. Kernel PID generation (audit_token_to_pidversion) of the querying process, read from the flow's audit token. Lets the server correlate the query to the exact process generation independently of PID reuse. Absent on agents that predate this field or when the flow carried no usable audit token."
+        },
+        "coalesced_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional. Number of occurrences this representative event stands for after agent-side coalescing (issue #408). The agent collapses repeated lookups for the same (pid, pidversion, query_name, query_type) seen within EDR_NETWORK_COALESCE_WINDOW into one event, merging a query with its follow-on response. Absent or 1 means a single occurrence. The envelope timestamp_ns is the earliest occurrence."
+        },
+        "last_timestamp_ns": {
+          "type": "integer",
+          "description": "Optional. Timestamp (ns since Unix epoch) of the latest occurrence in a coalesced series; the envelope timestamp_ns is the earliest. Present only when coalesced_count is greater than 1."
         }
       }
     },

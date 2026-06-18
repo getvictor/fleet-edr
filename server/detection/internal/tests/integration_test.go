@@ -235,6 +235,7 @@ func (r *execFiringStub) Evaluate(_ context.Context, events []api.Event, _ rules
 type recordingMetrics struct {
 	mu                  sync.Mutex
 	eventsIngested      int
+	heartbeatsDropped   int
 	alertsCreated       int
 	processesReconciled int64
 	rowsDeleted         int64
@@ -245,6 +246,11 @@ func (m *recordingMetrics) EventsIngested(_ context.Context, _ string, n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.eventsIngested += n
+}
+func (m *recordingMetrics) EventsHeartbeatDropped(_ context.Context, _ string, n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.heartbeatsDropped += n
 }
 func (m *recordingMetrics) AlertCreated(_ context.Context, _, _ string) {
 	m.mu.Lock()
@@ -572,6 +578,43 @@ func TestIngest_DuplicateEventIDIsIdempotent(t *testing.T) {
 	count, err := d.Store().CountEvents(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count, "duplicate event_id must not produce a duplicate row in the events table")
+}
+
+// spec:server-event-ingestion/event-storage-drops-redundant-indexes/a-duplicate-event-is-still-rejected-after-the-index-diet
+//
+// TestEvents_SchemaDiet pins the issue #408 index diet on the live migrated schema: the two redundant secondary indexes are gone
+// while every index a query relies on remains. A future migration that re-adds a subsumed index trips this test rather than
+// silently regrowing the index footprint. (The surrogate-PK swap that was originally part of #408 was dropped: it regressed the
+// multi-replica FOR UPDATE SKIP LOCKED claim into deterministic deadlocks; event_id stays the primary key.)
+func TestEvents_SchemaDiet(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	indexNames := map[string]bool{}
+	rows, err := d.Store().DB().QueryxContext(ctx,
+		"SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'events'")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		indexNames[name] = true
+	}
+	require.NoError(t, rows.Err())
+
+	assert.False(t, indexNames["idx_events_host_id"], "idx_events_host_id is subsumed by idx_events_host_type_ingested and must be dropped")
+	assert.False(t, indexNames["idx_events_type"], "idx_events_type serves no query and must be dropped")
+	// Indexes that queries depend on must survive the diet.
+	assert.True(t, indexNames["idx_events_processed"], "idx_events_processed backs the FetchUnprocessed SKIP LOCKED claim")
+	assert.True(t, indexNames["idx_events_host_type_pid_ingested"], "idx_events_host_type_pid_ingested backs the network-event correlation query")
+	assert.True(t, indexNames["PRIMARY"], "events must keep its primary key")
+
+	// event_id remains the primary key (the surrogate-PK swap was dropped, see the doc comment).
+	var pkColumn string
+	require.NoError(t, d.Store().DB().GetContext(ctx, &pkColumn,
+		"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'events' AND INDEX_NAME = 'PRIMARY' AND SEQ_IN_INDEX = 1"))
+	assert.Equal(t, "event_id", pkColumn, "event_id remains the primary key")
 }
 
 // spec:server-application-control/application-control-block-event-contract/a-block-event-for-a-now-deleted-rule-is-accepted
@@ -1837,6 +1880,11 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	// processes.last_seen_ns. Subsequent TTL reconciliation reads
 	// COALESCE(last_seen_ns, fork_time_ns), so a fresh heartbeat keeps the row alive
 	// past the 6h cutoff.
+	//
+	// Issue #408: heartbeats are no longer persisted as event rows; the freshness bump is applied synchronously at ingest. So the
+	// GIVEN of this scenario (a live snapshot row) must be established first, exactly as it is in production where a heartbeat
+	// arrives a reconcile interval after the snapshot row was materialised. We ingest the snapshot exec, wait for the row to
+	// appear, then ingest the heartbeat in a later request and assert the bump lands.
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
@@ -1845,6 +1893,15 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	insertEventsViaIngest(ctx, t, d, "h-snap-heartbeat", []api.Event{
 		{EventID: "exec-snap", HostID: "h-snap-heartbeat", TimestampNs: forkTime, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":4242,"ppid":1,"path":"/usr/libexec/snap","args":[],"snapshot":true}`)},
+	})
+
+	// Wait for the async processor to materialise the live snapshot row (last_seen_ns seeded at fork time).
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-heartbeat", 4242, forkTime+1)
+		return err == nil && p != nil && p.Process.IsSnapshot && p.Process.LastSeenNs != nil && *p.Process.LastSeenNs == forkTime
+	}, 5*time.Second, 50*time.Millisecond, "snapshot row must materialise before the heartbeat arrives")
+
+	insertEventsViaIngest(ctx, t, d, "h-snap-heartbeat", []api.Event{
 		{EventID: "hb-snap", HostID: "h-snap-heartbeat", TimestampNs: heartbeatTime, EventType: "snapshot_heartbeat",
 			Payload: json.RawMessage(`{"pid":4242}`)},
 	})
@@ -1860,6 +1917,75 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 		// last_seen_ns must have advanced from fork_time_ns to heartbeat_time_ns.
 		return p.Process.LastSeenNs != nil && *p.Process.LastSeenNs == heartbeatTime
 	}, 5*time.Second, 50*time.Millisecond, "heartbeat must bump last_seen_ns")
+
+	// And no events row was created for the heartbeat (issue #408): only the snapshot exec is persisted.
+	var heartbeatRows int
+	require.NoError(t, d.Store().DB().GetContext(ctx, &heartbeatRows,
+		"SELECT COUNT(*) FROM events WHERE host_id = ? AND event_type = 'snapshot_heartbeat'", "h-snap-heartbeat"))
+	assert.Zero(t, heartbeatRows, "heartbeat must not be persisted as an events row")
+}
+
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-live-snapshot-row-bumps-freshness
+//
+// TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs covers the set-based batched bump path (BumpSnapshotLastSeenBatch ->
+// bumpSnapshotLastSeenChunk, issue #408 AI-review fix): a single ingest batch carrying heartbeats for several distinct PIDs bumps
+// every matching live snapshot row in one CASE-based UPDATE, while a heartbeat for an unknown PID is a no-op.
+func TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs(t *testing.T) {
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+	const host = "h-snap-multi"
+	forkTime := time.Now().UnixNano()
+	pids := []int{5551, 5552, 5553}
+
+	var snapExecs []api.Event
+	for i, pid := range pids {
+		snapExecs = append(snapExecs, api.Event{
+			EventID: fmt.Sprintf("exec-snap-%d", pid), HostID: host, TimestampNs: forkTime + int64(i), EventType: "exec",
+			Payload: json.RawMessage(fmt.Sprintf(`{"pid":%d,"ppid":1,"path":"/usr/libexec/snap","args":[],"snapshot":true}`, pid)),
+		})
+	}
+	insertEventsViaIngest(ctx, t, d, host, snapExecs)
+
+	// Wait for all snapshot rows to materialise.
+	require.Eventually(t, func() bool {
+		for _, pid := range pids {
+			p, err := d.Service().GetProcessDetail(ctx, host, pid, forkTime+10)
+			if err != nil || p == nil || !p.Process.IsSnapshot {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 50*time.Millisecond, "all snapshot rows must materialise")
+
+	// One batch: a heartbeat per live PID plus one for an unknown PID (must no-op).
+	hbTime := forkTime + int64(time.Hour)
+	var beats []api.Event
+	for _, pid := range append(append([]int{}, pids...), 9999) {
+		beats = append(beats, api.Event{
+			EventID: fmt.Sprintf("hb-%d", pid), HostID: host, TimestampNs: hbTime, EventType: "snapshot_heartbeat",
+			Payload: json.RawMessage(fmt.Sprintf(`{"pid":%d}`, pid)),
+		})
+	}
+	insertEventsViaIngest(ctx, t, d, host, beats)
+
+	require.Eventually(t, func() bool {
+		for _, pid := range pids {
+			p, err := d.Service().GetProcessDetail(ctx, host, pid, hbTime+1)
+			if err != nil || p == nil || p.Process.LastSeenNs == nil || *p.Process.LastSeenNs != hbTime {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 50*time.Millisecond, "the batched CASE update must bump every live snapshot PID")
+
+	// The unknown-PID heartbeat created no process row, and no heartbeat was persisted as an events row.
+	unknown, err := d.Service().GetProcessDetail(ctx, host, 9999, hbTime+1)
+	require.NoError(t, err)
+	assert.Nil(t, unknown, "a heartbeat for an unknown PID must not create a row")
+	var heartbeatRows int
+	require.NoError(t, d.Store().DB().GetContext(ctx, &heartbeatRows,
+		"SELECT COUNT(*) FROM events WHERE host_id = ? AND event_type = 'snapshot_heartbeat'", host))
+	assert.Zero(t, heartbeatRows, "heartbeats must not be persisted as events rows")
 }
 
 // spec:server-process-graph-builder/snapshot-exec-events-are-stitched-but-not-treated-as-new-activity/extension-restarts-and-replays-the-live-process-set

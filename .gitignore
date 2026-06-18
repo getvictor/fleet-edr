@@ -51,3 +51,7 @@ Package.resolved
 /.env
 /secrets/
 /tls/
+
+# pgregory.net/rapid writes a failing-case reproduction file under testdata/rapid/ only when a property test fails locally; it is a
+# transient debugging artifact, not a fixture, so it should never be committed.
+**/testdata/rapid/

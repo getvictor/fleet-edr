@@ -52,6 +52,7 @@ type GaugeSource interface {
 // (methods short-circuit) so call sites don't need defensive `if r != nil` blocks.
 type Recorder struct {
 	eventsIngested              metric.Int64Counter
+	heartbeatsDropped           metric.Int64Counter
 	alertsCreated               metric.Int64Counter
 	retentionRowsDeleted        metric.Int64Counter
 	processRetentionRowsDeleted metric.Int64Counter
@@ -94,6 +95,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.eventsIngested, _ = meter.Int64Counter(
 		"edr.events.ingested",
 		metric.WithDescription("Events accepted by POST /api/events, by host_id."),
+		metric.WithUnit("{event}"),
+	)
+	r.heartbeatsDropped, _ = meter.Int64Counter(
+		"edr.ingest.heartbeats_dropped",
+		metric.WithDescription("snapshot_heartbeat events accepted but not persisted as event rows (their freshness side effect is applied at ingest), by host_id."),
 		metric.WithUnit("{event}"),
 	)
 	r.alertsCreated, _ = meter.Int64Counter(
@@ -177,6 +183,17 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 		return
 	}
 	r.eventsIngested.Add(ctx, int64(n), metric.WithAttributes(attribute.String("host_id", hostID)))
+}
+
+// EventsHeartbeatDropped increments the heartbeat-dropped counter by n for a host. Called per-batch by the ingest handler with the
+// number of snapshot_heartbeat events accepted but not persisted as event rows (issue #408): every heartbeat in the batch, whether
+// or not it produced a freshness bump (a malformed or zero-pid heartbeat is still dropped, not persisted). edr.events.ingested
+// still counts the full accepted batch (heartbeats included) per the stable-counter contract; this is the not-persisted subset.
+func (r *Recorder) EventsHeartbeatDropped(ctx context.Context, hostID string, n int) {
+	if r == nil || r.heartbeatsDropped == nil || n <= 0 {
+		return
+	}
+	r.heartbeatsDropped.Add(ctx, int64(n), metric.WithAttributes(attribute.String("host_id", hostID)))
 }
 
 // AlertCreated increments the alert counter. Called by the detection engine ONLY on

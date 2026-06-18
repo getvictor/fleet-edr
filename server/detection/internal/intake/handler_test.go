@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,6 +68,73 @@ func TestParseAndValidateIngestBody_ContentNeutral(t *testing.T) {
 				assert.Contains(t, []int{http.StatusOK, http.StatusBadRequest, http.StatusRequestEntityTooLarge}, status)
 			})
 		}
+	})
+}
+
+// TestPartitionHeartbeats pins the ingest-time split that keeps snapshot_heartbeat events out of the persisted set while still
+// surfacing their freshness bump (issue #408): the events to store exclude every heartbeat, and the returned bumps carry the PID +
+// timestamp of each well-formed heartbeat. A heartbeat with an unparseable payload or a zero PID is dropped without a bump and
+// without disturbing the batch.
+func TestPartitionHeartbeats(t *testing.T) {
+	t.Parallel()
+
+	mk := func(id, typ string, ts int64, payload string) api.Event {
+		return api.Event{EventID: id, HostID: "host-a", TimestampNs: ts, EventType: typ, Payload: json.RawMessage(payload)}
+	}
+
+	t.Run("spec:server-event-ingestion/liveness-heartbeats-are-processed-but-not-persisted/a-batch-mixing-heartbeats-and-real-events-persists-only-the-real-events", func(t *testing.T) {
+		t.Parallel()
+		events := []api.Event{
+			mk("e1", "exec", 1000, `{"pid":42}`),
+			mk("hb1", heartbeatEventType, 1001, `{"pid":100}`),
+			mk("e2", "network_connect", 1002, `{"pid":42}`),
+			mk("hb2", heartbeatEventType, 1003, `{"pid":200}`),
+		}
+		toStore, beats := partitionHeartbeats(events)
+		require.Len(t, toStore, 2, "only the non-heartbeat events are persisted")
+		assert.Equal(t, "e1", toStore[0].EventID)
+		assert.Equal(t, "e2", toStore[1].EventID)
+		require.Len(t, beats, 2, "each well-formed heartbeat yields one freshness bump")
+		assert.Equal(t, 100, beats[0].PID)
+		assert.Equal(t, int64(1001), beats[0].TimestampNs)
+		assert.Equal(t, 200, beats[1].PID)
+		assert.Equal(t, int64(1003), beats[1].TimestampNs)
+	})
+
+	t.Run("no heartbeats returns the input verbatim", func(t *testing.T) {
+		t.Parallel()
+		events := []api.Event{mk("e1", "exec", 1, `{"pid":1}`), mk("e2", "fork", 2, `{"child_pid":2}`)}
+		toStore, beats := partitionHeartbeats(events)
+		assert.Nil(t, beats)
+		assert.Len(t, toStore, 2)
+	})
+
+	t.Run("an all-heartbeat batch persists nothing and yields a bump per heartbeat", func(t *testing.T) {
+		t.Parallel()
+		events := []api.Event{
+			mk("hb1", heartbeatEventType, 1, `{"pid":11}`),
+			mk("hb2", heartbeatEventType, 2, `{"pid":22}`),
+		}
+		toStore, beats := partitionHeartbeats(events)
+		assert.Empty(t, toStore, "an all-heartbeat batch persists nothing (and allocates no toStore slice)")
+		require.Len(t, beats, 2)
+		assert.Equal(t, 11, beats[0].PID)
+		assert.Equal(t, 22, beats[1].PID)
+	})
+
+	t.Run("malformed or zero-pid heartbeats are dropped without a bump", func(t *testing.T) {
+		t.Parallel()
+		events := []api.Event{
+			mk("e1", "exec", 1, `{"pid":1}`),
+			mk("hb-bad", heartbeatEventType, 2, `not json`),
+			mk("hb-zero", heartbeatEventType, 3, `{"pid":0}`),
+			mk("hb-ok", heartbeatEventType, 4, `{"pid":7}`),
+		}
+		toStore, beats := partitionHeartbeats(events)
+		require.Len(t, toStore, 1, "no heartbeat is ever persisted, even a malformed one")
+		assert.Equal(t, "e1", toStore[0].EventID)
+		require.Len(t, beats, 1, "only the well-formed heartbeat produces a bump")
+		assert.Equal(t, 7, beats[0].PID)
 	})
 }
 

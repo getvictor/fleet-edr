@@ -82,6 +82,9 @@ type GraphReader interface {
 // metrics.Recorder; tests pass nil.
 type MetricsRecorder interface {
 	EventsIngested(ctx context.Context, hostID string, n int)
+	// EventsHeartbeatDropped is called per-batch by the ingest handler with the number of snapshot_heartbeat events that were
+	// processed for their freshness side effect and then dropped instead of persisted as retained event rows (issue #408).
+	EventsHeartbeatDropped(ctx context.Context, hostID string, n int)
 	AlertCreated(ctx context.Context, ruleID, severity string)
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.

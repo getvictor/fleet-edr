@@ -5,9 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fleetdm/edr/server/detection/api"
 )
+
+// snapshotBumpChunkPIDs caps the distinct PIDs folded into one set-based heartbeat UPDATE. Keeps the placeholder count well under
+// MySQL's limit (3 per pid: two in the CASE, one in the IN list) while collapsing a heartbeat-heavy ingest batch into a handful of
+// statements rather than one UPDATE per heartbeat.
+const snapshotBumpChunkPIDs = 500
 
 // InsertProcess inserts a new process record (typically from a fork event). The caller is expected to pass the ingest timestamp of
 // the originating fork event in ForkIngestedAtNs so cross-source correlation queries can anchor against a server-controlled clock;
@@ -47,6 +53,76 @@ func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pi
 		lastSeenNs, hostID, pid,
 	)
 	return err
+}
+
+// SnapshotHeartbeat is one heartbeat's freshness signal: the PID it pings and the event timestamp to record as last_seen_ns.
+type SnapshotHeartbeat struct {
+	PID         int
+	TimestampNs int64
+}
+
+// BumpSnapshotLastSeenBatch applies the live-snapshot freshness bump for a batch of heartbeats using set-based, chunked UPDATEs
+// (one statement per chunk of distinct PIDs, not one per heartbeat). The scoping matches UpdateLastSeenForSnapshot (live,
+// snapshot-originated rows for the host only), so the freshness semantics and no-op cases are those of the single-row path; this
+// just relocates the bump to ingest time so the heartbeat never has to be persisted as a retained event row (issue #408). A
+// heartbeat that matches no row is a no-op, as before. The chunks are independent best-effort bumps, not wrapped in a transaction:
+// a partial failure simply leaves some PIDs to be re-bumped by the next heartbeat, well within the TTL window. All heartbeats in a
+// request share one host_id (host-identity pinning guarantees it), so the caller passes hostID once.
+func (s *Store) BumpSnapshotLastSeenBatch(ctx context.Context, hostID string, beats []SnapshotHeartbeat) error {
+	if len(beats) == 0 {
+		return nil
+	}
+	// Dedupe by PID, keeping the latest timestamp. A batch rarely repeats a PID, but if it does we want the freshest last_seen and a
+	// single CASE arm per PID. `order` preserves first-seen PID order so the chunking is deterministic.
+	latest := make(map[int]int64, len(beats))
+	order := make([]int, 0, len(beats))
+	for _, b := range beats {
+		ts, ok := latest[b.PID]
+		if !ok {
+			order = append(order, b.PID)
+		}
+		if !ok || b.TimestampNs > ts {
+			latest[b.PID] = b.TimestampNs
+		}
+	}
+	// One set-based UPDATE per chunk (a CASE maps each PID to its timestamp) instead of one UPDATE per heartbeat, so the statement
+	// count on the ingest hot path scales with distinct-PID chunks, not heartbeat volume. The per-PID `ORDER BY fork_time_ns DESC
+	// LIMIT 1` of the single-row path is dropped: there is at most one live snapshot row per (host_id, pid) in normal operation, so
+	// the scoped WHERE matches the same row; in the anomalous duplicate case all live snapshot rows for the PID are bumped to the
+	// same fresh timestamp, which is harmless (they stay exempt from the TTL reconciler, the intended effect).
+	for start := 0; start < len(order); start += snapshotBumpChunkPIDs {
+		end := min(start+snapshotBumpChunkPIDs, len(order))
+		if err := s.bumpSnapshotLastSeenChunk(ctx, hostID, order[start:end], latest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// bumpSnapshotLastSeenChunk applies one set-based heartbeat UPDATE for up to snapshotBumpChunkPIDs distinct PIDs: a CASE maps each
+// PID to its latest timestamp, scoped to live snapshot rows for the host.
+func (s *Store) bumpSnapshotLastSeenChunk(ctx context.Context, hostID string, pids []int, latest map[int]int64) error {
+	var sb strings.Builder
+	sb.WriteString("UPDATE processes SET last_seen_ns = CASE pid")
+	args := make([]any, 0, len(pids)*3+1)
+	for _, pid := range pids {
+		sb.WriteString(" WHEN ? THEN ?")
+		args = append(args, pid, latest[pid])
+	}
+	sb.WriteString(" END WHERE host_id = ? AND is_snapshot = TRUE AND exit_time_ns IS NULL AND pid IN (")
+	args = append(args, hostID)
+	for i, pid := range pids {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("?")
+		args = append(args, pid)
+	}
+	sb.WriteString(")")
+	if _, err := s.db.ExecContext(ctx, sb.String(), args...); err != nil {
+		return fmt.Errorf("bump snapshot last_seen chunk (host=%s, %d pids): %w", hostID, len(pids), err)
+	}
+	return nil
 }
 
 // ProcessExecUpdate carries the exec-time metadata patched onto an existing process row. Grouped as a struct so callers don't pass a
