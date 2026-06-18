@@ -35,7 +35,7 @@ type stubGraphReader struct{}
 func (stubGraphReader) GetProcessByPID(context.Context, string, int, int64) (*api.Process, error) {
 	return nil, nil
 }
-func (stubGraphReader) GetProcessByPIDVersion(context.Context, string, int, uint32) (*api.Process, error) {
+func (stubGraphReader) GetProcessByPIDVersion(context.Context, string, int, uint32, int64) (*api.Process, error) {
 	return nil, nil
 }
 func (stubGraphReader) GetChildProcesses(context.Context, string, int, api.TimeRange) ([]api.Process, error) {

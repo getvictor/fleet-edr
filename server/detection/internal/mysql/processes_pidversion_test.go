@@ -37,29 +37,31 @@ func TestGetProcessByPIDVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("spec:server-process-graph-builder/network-and-dns-events-are-linked-to-the-process-at-event-time/a-flow-with-pidversion-correlates-to-the-exact-generation-across-pid-reuse", func(t *testing.T) {
-		// Identity pins each generation exactly, with no time anchor: v7 -> the exited gen1, v8 -> the alive gen2.
-		g1, err := s.GetProcessByPIDVersion(ctx, host, pid, 7)
+		// Distinct pidversions mean each identity matches a single generation, so the event time must not change the result: v7
+		// resolves to the exited gen1 even at a time long after it exited, and v8 resolves to the alive gen2 even at a time that
+		// falls inside gen1's window (identity beats clock skew).
+		g1, err := s.GetProcessByPIDVersion(ctx, host, pid, 7, 100_000)
 		require.NoError(t, err)
 		require.NotNil(t, g1)
-		assert.Equal(t, gen1, g1.ID, "pidversion 7 must resolve to gen1")
+		assert.Equal(t, gen1, g1.ID, "pidversion 7 must resolve to gen1 regardless of the event time")
 		require.NotNil(t, g1.PIDVersion)
 		assert.Equal(t, uint32(7), *g1.PIDVersion)
 
-		g2, err := s.GetProcessByPIDVersion(ctx, host, pid, 8)
+		g2, err := s.GetProcessByPIDVersion(ctx, host, pid, 8, 150)
 		require.NoError(t, err)
 		require.NotNil(t, g2)
-		assert.Equal(t, gen2, g2.ID, "pidversion 8 must resolve to gen2 even though gen1 shares the pid")
+		assert.Equal(t, gen2, g2.ID, "pidversion 8 must resolve to gen2 even at a time inside gen1's window: identity beats timestamp")
 	})
 
 	t.Run("no matching pidversion returns nil", func(t *testing.T) {
-		got, err := s.GetProcessByPIDVersion(ctx, host, pid, 999)
+		got, err := s.GetProcessByPIDVersion(ctx, host, pid, 999, 150)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
 
 	t.Run("legacy NULL-pidversion row never matches identity but is reachable by window", func(t *testing.T) {
 		// A present 0 must not collide with a NULL row.
-		got, err := s.GetProcessByPIDVersion(ctx, host, legacyPID, 0)
+		got, err := s.GetProcessByPIDVersion(ctx, host, legacyPID, 0, 150)
 		require.NoError(t, err)
 		assert.Nil(t, got, "a NULL pidversion must not match an identity lookup, including for pidversion 0")
 
@@ -71,20 +73,39 @@ func TestGetProcessByPIDVersion(t *testing.T) {
 		assert.Nil(t, win.PIDVersion, "legacy row stores NULL pidversion")
 	})
 
-	t.Run("re-exec chain sharing one pidversion resolves to the current generation", func(t *testing.T) {
-		// A same-PID re-exec chain shares one pidversion across generations. The lookup returns the current generation: the
-		// live row (exit_time_ns NULL), else the most recently inserted.
+	t.Run("spec:server-process-graph-builder/network-and-dns-events-are-linked-to-the-process-at-event-time/a-flow-within-a-re-exec-chain-links-to-the-generation-running-at-the-event-time", func(t *testing.T) {
+		// A same-PID re-exec chain shares one pidversion across generations (execve keeps the kernel generation), so the identity
+		// matches more than one row. The chain preserves the original fork_time_ns on every generation and records the
+		// image-replacement instant in exec_time_ns, so exec_time_ns is the boundary that orders them. The earlier image ran
+		// [400, 500); the current image execs at 500 and is still alive. A flow's event time must pick the generation that was the
+		// running image then, NOT the live/newest one.
 		const chainPID = 6000
-		chainExit := int64(500)
-		_, err := s.InsertProcess(ctx, api.Process{HostID: host, PID: chainPID, Path: "/old", PIDVersion: new(uint32(42)), ForkTimeNs: 400, ExitTimeNs: &chainExit})
+		execOld := int64(400)
+		reExec := int64(500)
+		oldGen, err := s.InsertProcess(ctx, api.Process{
+			HostID: host, PID: chainPID, Path: "/old", PIDVersion: new(uint32(42)),
+			ForkTimeNs: 400, ExecTimeNs: &execOld, ExitTimeNs: &reExec,
+		})
 		require.NoError(t, err)
-		alive, err := s.InsertProcess(ctx, api.Process{HostID: host, PID: chainPID, Path: "/current", PIDVersion: new(uint32(42)), ForkTimeNs: 400})
+		currentGen, err := s.InsertProcess(ctx, api.Process{
+			HostID: host, PID: chainPID, Path: "/current", PIDVersion: new(uint32(42)),
+			ForkTimeNs: 400, ExecTimeNs: &reExec, // chain preserves fork_time_ns; exec_time_ns is the re-exec instant
+		})
 		require.NoError(t, err)
 
-		got, err := s.GetProcessByPIDVersion(ctx, host, chainPID, 42)
+		// A flow during the earlier image's window resolves to that generation, even though a later/live generation shares the pid
+		// and pidversion. This is the regression the pre-fix lookup had: it returned the live/newest row by id.
+		duringOld, err := s.GetProcessByPIDVersion(ctx, host, chainPID, 42, 450)
 		require.NoError(t, err)
-		require.NotNil(t, got)
-		assert.Equal(t, alive, got.ID, "the live generation of the chain must win")
-		assert.Equal(t, "/current", got.Path)
+		require.NotNil(t, duringOld)
+		assert.Equal(t, oldGen, duringOld.ID, "a flow at 450 ran during the earlier image; it must link to that generation")
+		assert.Equal(t, "/old", duringOld.Path)
+
+		// A flow after the re-exec resolves to the current image.
+		duringCurrent, err := s.GetProcessByPIDVersion(ctx, host, chainPID, 42, 600)
+		require.NoError(t, err)
+		require.NotNil(t, duringCurrent)
+		assert.Equal(t, currentGen, duringCurrent.ID, "a flow at 600 ran during the current image")
+		assert.Equal(t, "/current", duringCurrent.Path)
 	})
 }

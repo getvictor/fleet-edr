@@ -361,17 +361,22 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 	return &proc, nil
 }
 
-// GetProcessByPIDVersion returns the single process generation matching the exact (host_id, pid, pidversion) identity, or nil
-// when none exists. Unlike GetProcessByPID it takes no time anchor: the kernel PID generation pins the process directly, so the
-// result is immune to PID reuse (a recycled PID gets a higher pidversion) and needs no clock-drift padding. Backed by
-// idx_processes_host_pid_pidversion. Rows whose pidversion is NULL (legacy agents, or a row whose audit token was unavailable)
-// never match here, so correlation falls back to GetProcessByPID for events that carry no pidversion (issue #403).
+// GetProcessByPIDVersion returns the process generation matching the exact (host_id, pid, pidversion) identity at the event time
+// atNs, or nil when none matches. The kernel PID generation pins the lifetime directly, so the result is immune to PID reuse (a
+// recycled PID gets a higher pidversion) without clock-drift padding. Backed by idx_processes_host_pid_pidversion. Rows whose
+// pidversion is NULL (legacy agents, or a row whose audit token was unavailable) never match here, so correlation falls back to
+// GetProcessByPID for events that carry no pidversion (issue #403).
 //
-// A same-PID re-exec chain (issue #10) shares one pidversion across its generations, so more than one row can match. That is
-// the only multi-row case: distinct lifetimes of a reused PID carry distinct pidversions. The ORDER BY returns the current
-// generation of the chain (the live row, else the most recently inserted), matching what GetProcessByPID resolves for a live
-// process: alive rows first, then highest id.
-func (s *Store) GetProcessByPIDVersion(ctx context.Context, hostID string, pid int, pidversion uint32) (*api.Process, error) {
+// A same-PID re-exec chain (issue #10) shares one pidversion across its generations (execve keeps the kernel generation), so the
+// identity can match more than one row. When it does, atNs disambiguates: the ORDER BY prefers the generation that was the
+// running image at atNs, bracketing on COALESCE(exec_time_ns, fork_time_ns) <= atNs and (exit_time_ns IS NULL OR atNs <=
+// exit_time_ns). The exit bound is inclusive, matching GetProcessByPID; at the exact re-exec instant the newer generation still
+// wins because its exec_time_ns equals that instant and the COALESCE tiebreak prefers it. A re-exec chain preserves the original
+// fork_time_ns on every generation, so fork_time_ns cannot order them; exec_time_ns (the image-replacement instant) is the
+// running-image boundary, and COALESCE falls back to fork_time_ns for a pre-exec (pure fork) generation. When the identity
+// matches a single row (the PID-reuse case) that row is returned regardless of atNs, so identity still beats clock skew; when no
+// generation brackets atNs the lookup falls back to the live, then newest-image, generation within the set.
+func (s *Store) GetProcessByPIDVersion(ctx context.Context, hostID string, pid int, pidversion uint32, atNs int64) (*api.Process, error) {
 	var proc api.Process
 	err := s.db.GetContext(ctx, &proc, `
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
@@ -380,9 +385,12 @@ func (s *Store) GetProcessByPIDVersion(ctx context.Context, hostID string, pid i
 		       is_snapshot, last_seen_ns
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND pidversion = ?
-		ORDER BY (exit_time_ns IS NULL) DESC, id DESC
+		ORDER BY (COALESCE(exec_time_ns, fork_time_ns) <= ? AND (exit_time_ns IS NULL OR exit_time_ns >= ?)) DESC,
+		         (exit_time_ns IS NULL) DESC,
+		         COALESCE(exec_time_ns, fork_time_ns) DESC,
+		         id DESC
 		LIMIT 1`,
-		hostID, pid, pidversion,
+		hostID, pid, pidversion, atNs, atNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
