@@ -93,9 +93,12 @@ const (
 )
 
 // HostSummary is the lightweight per-host activity row the operator list endpoint returns. Distinct from Host so future extensions
-// (alert counts, status pill) can land without touching Host's wire shape.
+// (alert counts, status pill) can land without touching Host's wire shape. Hostname and OSVersion are sourced from the endpoint
+// context's enrollments table (LEFT JOIN in ListHosts) and are empty for a host that has sent events but carries no enrollment row.
 type HostSummary struct {
 	HostID     string `db:"host_id" json:"host_id"`
+	Hostname   string `db:"hostname" json:"hostname"`
+	OSVersion  string `db:"os_version" json:"os_version"`
 	EventCount int64  `db:"event_count" json:"event_count"`
 	LastSeenNs int64  `db:"last_seen_ns" json:"last_seen_ns"`
 }

@@ -3,39 +3,6 @@
 @use "../styles/var/padding" as *;
 
 .attack-coverage {
-  &__summary {
-    display: flex;
-    gap: $pad-large;
-    margin: $pad-medium 0 $pad-large;
-    flex-wrap: wrap;
-  }
-
-  &__metric {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: $pad-xxsmall;
-    padding: $pad-medium $pad-large;
-    background: $ui-fleet-black-5;
-    border-left: 4px solid $core-fleet-green;
-    border-radius: 4px;
-    min-width: 180px;
-  }
-
-  &__metric-num {
-    font-size: 2rem;
-    font-weight: $bold;
-    color: $core-fleet-black;
-    line-height: 1;
-  }
-
-  &__metric-label {
-    font-size: 0.85rem;
-    color: $ui-fleet-black-50;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
   // Single-table layout. table-layout:fixed makes the colgroup widths
   // authoritative so every section's columns line up - without it, each
   // tactic group inside the table would still default-size from its widest

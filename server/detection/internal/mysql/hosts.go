@@ -9,13 +9,18 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// ListHosts returns a summary of all hosts that have sent events.
+// ListHosts returns a summary of all hosts that have sent events. The LEFT JOIN reaches into the endpoint context's `enrollments`
+// table (same MySQL database, keyed on the shared host_id) to decorate each row with the enrollment hostname and OS version. LEFT so
+// a host that has sent events but never enrolled still returns; COALESCE folds the outer-join NULL into "" so the scan targets stay
+// plain strings.
 func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	var hosts []api.HostSummary
 	err := s.db.SelectContext(ctx, &hosts, `
-		SELECT host_id, event_count, last_seen_ns
-		FROM hosts
-		ORDER BY last_seen_ns DESC`)
+		SELECT h.host_id, COALESCE(e.hostname, '') AS hostname, COALESCE(e.os_version, '') AS os_version,
+		       h.event_count, h.last_seen_ns
+		FROM hosts h
+		LEFT JOIN enrollments e ON e.host_id = h.host_id
+		ORDER BY h.last_seen_ns DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
 	}

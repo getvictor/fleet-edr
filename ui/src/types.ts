@@ -1,5 +1,10 @@
 export interface HostSummary {
   host_id: string;
+  // hostname + os_version come from the endpoint enrollment row joined into the
+  // hosts summary; both are empty for a host that has sent events but never
+  // enrolled, so the UI falls back to host_id / a placeholder dash.
+  hostname?: string;
+  os_version?: string;
   event_count: number;
   last_seen_ns: number;
 }

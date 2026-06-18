@@ -1,0 +1,50 @@
+@use "../../styles/var/colors" as *;
+@use "../../styles/var/fonts" as *;
+@use "../../styles/var/padding" as *;
+@use "../../styles/var/global" as *;
+
+.summary-strip {
+  display: flex;
+  gap: $pad-medium;
+  margin-bottom: $pad-large;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: $pad-xxsmall;
+  padding: 14px 20px;
+  min-width: 160px;
+  background: $core-fleet-white;
+  border: 1px solid $ui-fleet-black-10;
+  border-left: 4px solid $ui-fleet-black-25;
+  border-radius: $border-radius-large;
+
+  &--green {
+    border-left-color: $core-fleet-green;
+  }
+
+  &--red {
+    border-left-color: $ui-error;
+  }
+
+  &--neutral {
+    border-left-color: $ui-fleet-black-25;
+  }
+
+  &__value {
+    font-size: 28px;
+    font-weight: $bold;
+    color: $core-fleet-black;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__label {
+    font-size: $xx-small;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: $ui-fleet-black-50;
+  }
+}
