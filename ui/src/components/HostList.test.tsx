@@ -63,15 +63,6 @@ describe("HostList rendering", () => {
     expect(document.querySelector(".host-list__uuid")).not.toBeInTheDocument();
   });
 
-  it("renders a placeholder dash when os_version is empty", async () => {
-    mockHosts([makeHost({ os_version: "" })]);
-    renderList();
-    await waitFor(() => {
-      const platform = document.querySelector(".host-list__platform");
-      expect(platform).toHaveTextContent("-");
-    });
-  });
-
   it("formats the event count with thousands separators in a right-aligned column", async () => {
     mockHosts([makeHost({ event_count: 128944 })]);
     renderList();
@@ -81,7 +72,7 @@ describe("HostList rendering", () => {
 });
 
 describe("HostList summary strip", () => {
-  // spec:web-ui/host-list-is-the-home-view/host-list-shows-hostname-platform-and-a-fleet-summary
+  // spec:web-ui/host-list-is-the-home-view/host-list-shows-hostname-and-a-fleet-summary
   it("counts online, offline and total hosts", async () => {
     mockHosts([
       makeHost({ host_id: "a", last_seen_ns: minutesAgoNs(1) }), // online

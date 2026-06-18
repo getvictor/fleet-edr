@@ -153,7 +153,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
     for (const d of driven) {
       const row = p.locator("tr").filter({ has: p.getByText(d.hostId, { exact: true }) });
       await expect(row).toBeVisible({ timeout: 10_000 });
-      // Target the Events cell by its class rather than a positional index: the column order is Host | Platform | Status | Events |
+      // Target the Events cell by its class rather than a positional index: the column order is Host | Status | Events |
       // Last seen, and a positional nth() silently lands on the wrong cell whenever the columns are reordered.
       // HostList.tsx renders event_count via .toLocaleString() so counts >= 1000 get locale separators ("1,000" not "1000").
       // Mirror that here so the assertion stays correct if the scenario count ever crosses that threshold.

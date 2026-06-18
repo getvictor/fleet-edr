@@ -8,7 +8,7 @@ The hosts page is the operator's landing view, but it keys every row on the raw 
 
 - **`GET /api/hosts` carries the enrollment hostname and OS version.** `detection.api.HostSummary` gains `hostname` and `os_version`, and `detection`'s `ListHosts` query LEFT JOINs the endpoint context's `enrollments` table on the shared `host_id`. LEFT (not INNER) so a host that has sent events but never enrolled still appears, with empty hostname/OS version; `COALESCE` folds the outer-join NULLs into empty strings.
 - **The hosts page opens with a fleet-overview summary strip.** Three stat cards (Online / Offline / Total hosts) computed from the existing `isOnline(last_seen_ns)` classification, rendered above the table. The page header is dropped so the page opens directly into the summary.
-- **The host table is enriched.** The `Host ID` column becomes a `Host` column showing the enrollment hostname over the full hardware UUID (UUID alone when no hostname is known); a new `Platform` column shows the OS version; the `Events` column is right-aligned with tabular figures. Status, last-seen, and row-click-to-process-tree are unchanged.
+- **The host table is enriched.** The `Host ID` column becomes a `Host` column showing the enrollment hostname over the full hardware UUID (UUID alone when no hostname is known); the `Events` column is right-aligned with tabular figures. Status, last-seen, and row-click-to-process-tree are unchanged.
 - **A shared `StatCard` / `SummaryStrip` UI primitive is extracted.** The summary strip reuses one component rather than bespoke markup; the existing inline stat cards on the ATT&CK coverage page are refactored onto the same primitive, removing the duplicated `.attack-coverage__summary` / `__metric` styling.
 
 ### Not in this change

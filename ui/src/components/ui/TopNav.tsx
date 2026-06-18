@@ -54,7 +54,6 @@ export function TopNav({ user, authMethod, onLogout }: TopNavProps) {
     <nav className="top-nav">
       <div className="top-nav__inner">
         <div className="top-nav__brand">
-          <span className="top-nav__logo-mark">F</span>
           <span className="top-nav__logo-text">
             Fleet <span className="top-nav__logo-accent">EDR</span>
           </span>
