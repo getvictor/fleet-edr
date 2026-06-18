@@ -23,19 +23,6 @@
     padding: $pad-small 0;
   }
 
-  &__logo-mark {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
-    background-color: $core-fleet-green;
-    color: $core-fleet-white;
-    font-weight: $bold;
-    font-size: $small;
-  }
-
   &__logo-text {
     font-weight: $bold;
     font-size: $small;

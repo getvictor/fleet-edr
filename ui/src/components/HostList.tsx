@@ -63,7 +63,6 @@ export function HostList() {
             <thead>
               <tr>
                 <th>Host</th>
-                <th>Platform</th>
                 <th>Status</th>
                 <th className="host-list__events-col">Events</th>
                 <th>Last seen</th>
@@ -98,7 +97,6 @@ export function HostList() {
                         <div className="host-list__hostname">{h.host_id}</div>
                       )}
                     </td>
-                    <td className="host-list__platform">{h.os_version || "-"}</td>
                     <td>
                       <span className={pillClass}>{rowOnline ? "online" : "offline"}</span>
                     </td>

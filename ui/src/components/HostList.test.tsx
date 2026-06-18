@@ -63,15 +63,6 @@ describe("HostList rendering", () => {
     expect(document.querySelector(".host-list__uuid")).not.toBeInTheDocument();
   });
 
-  it("renders a placeholder dash when os_version is empty", async () => {
-    mockHosts([makeHost({ os_version: "" })]);
-    renderList();
-    await waitFor(() => {
-      const platform = document.querySelector(".host-list__platform");
-      expect(platform).toHaveTextContent("-");
-    });
-  });
-
   it("formats the event count with thousands separators in a right-aligned column", async () => {
     mockHosts([makeHost({ event_count: 128944 })]);
     renderList();
