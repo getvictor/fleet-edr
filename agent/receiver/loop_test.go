@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -539,4 +540,86 @@ func TestLoop_CleanShutdownOnContextCancellation(t *testing.T) {
 	built := conns()
 	require.GreaterOrEqual(t, len(built), 1)
 	assert.True(t, built[0].disconnected.Load(), "Disconnect must run on shutdown")
+}
+
+func bufferLogger() (*slog.Logger, *bytes.Buffer) {
+	buf := &bytes.Buffer{}
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})), buf
+}
+
+// spec:agent-xpc-receiver/distinct-signal-when-a-sysext-upgrade-leaves-the-ne-registration-stale/ne-connect-keeps-failing-while-a-prior-version-waits-to-uninstall-on-reboot
+// spec:agent-xpc-receiver/distinct-signal-when-a-sysext-upgrade-leaves-the-ne-registration-stale/a-not-yet-approved-network-extension-keeps-the-generic-warning
+//
+// TestLoop_ConnectFailureLog pins the #399 message selection: the distinct reboot-required hint fires only when an
+// UpgradeProbe is wired (the NE loop) AND the failure has persisted past the grace threshold AND the probe reports a pending
+// uninstall; otherwise the bare "receiver connect" warning is logged. The hint fires at most once per stale episode.
+func TestLoop_ConnectFailureLog(t *testing.T) {
+	const distinct = "stale after an upgrade"
+	const bare = "receiver connect"
+	connErr := errors.New("xpc_bridge_connect failed")
+	nilFactory := func() Connector { return nil } // never invoked: these subtests call logConnectFailure directly
+
+	t.Run("no probe (ESF loop) always logs the bare warning", func(t *testing.T) {
+		logger, buf := bufferLogger()
+		l := NewLoop(nilFactory, LoopConfig{ServiceName: "sys"}, LoopHooks{}, logger)
+		l.consecutiveFailures = staleProbeAfterFailures + 5
+		l.logConnectFailure(context.Background(), connErr)
+		assert.Contains(t, buf.String(), bare)
+		assert.NotContains(t, buf.String(), distinct)
+	})
+
+	t.Run("under the grace threshold logs the bare warning", func(t *testing.T) {
+		logger, buf := bufferLogger()
+		l := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
+			LoopHooks{UpgradeProbe: func() bool { return true }}, logger)
+		l.consecutiveFailures = staleProbeAfterFailures - 1
+		l.logConnectFailure(context.Background(), connErr)
+		assert.Contains(t, buf.String(), bare)
+		assert.NotContains(t, buf.String(), distinct)
+	})
+
+	t.Run("probe false (not approved) logs the bare warning past the threshold", func(t *testing.T) {
+		logger, buf := bufferLogger()
+		l := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
+			LoopHooks{UpgradeProbe: func() bool { return false }}, logger)
+		l.consecutiveFailures = staleProbeAfterFailures + 1
+		l.logConnectFailure(context.Background(), connErr)
+		assert.Contains(t, buf.String(), bare)
+		assert.NotContains(t, buf.String(), distinct)
+	})
+
+	t.Run("upgrade pending past the threshold logs the distinct hint once", func(t *testing.T) {
+		logger, buf := bufferLogger()
+		var probeCalls int
+		l := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
+			LoopHooks{UpgradeProbe: func() bool { probeCalls++; return true }}, logger)
+		l.consecutiveFailures = staleProbeAfterFailures
+		l.logConnectFailure(context.Background(), connErr)
+		assert.Contains(t, buf.String(), distinct)
+		assert.Contains(t, buf.String(), "reboot_required_after_upgrade")
+
+		buf.Reset()
+		l.consecutiveFailures++
+		l.logConnectFailure(context.Background(), connErr)
+		assert.NotContains(t, buf.String(), distinct, "the reboot hint fires once per stale episode")
+		assert.Contains(t, buf.String(), bare)
+		assert.Equal(t, 1, probeCalls, "probe is not consulted again once the hint has fired")
+	})
+}
+
+// TestLoop_SuccessResetsStaleTracking verifies a successful connect clears the stale-after-upgrade state so a later upgrade
+// is reported again (#399).
+func TestLoop_SuccessResetsStaleTracking(t *testing.T) {
+	factory, _ := scriptedFactory([]stubScript{{
+		onConnect: func(c *stubConnector) { c.emitError(1) }, // end the session promptly so runOnce returns
+	}})
+	l := NewLoop(factory, LoopConfig{ServiceName: "net", HeartbeatInterval: time.Hour, HeartbeatTimeout: time.Second},
+		LoopHooks{Sleep: (&recordingSleep{}).Sleep, UpgradeProbe: func() bool { return true }}, discardLogger())
+	l.consecutiveFailures = staleProbeAfterFailures + 2
+	l.staleHintLogged = true
+
+	_, connected := l.runOnce(context.Background())
+	assert.True(t, connected)
+	assert.Equal(t, 0, l.consecutiveFailures, "a successful connect resets the failure counter")
+	assert.False(t, l.staleHintLogged, "a successful connect re-arms the one-shot reboot hint")
 }

@@ -171,6 +171,17 @@ func postAggregateStep(for action: HostAppAction, verdict: AggregateVerdict) -> 
     return .exitImmediately
 }
 
+/// rebootRequiredMessage returns the operator-facing message the host app surfaces when an activation will complete only
+/// after a reboot, or nil when no reboot signal is warranted. A `.rebootRequired` verdict on the activate path means the OS
+/// is deferring removal of a previous extension version until reboot; during that window the network extension's Mach
+/// service stays bound to the terminated old version, so the agent loses network + DNS telemetry until the host reboots
+/// (#399). A fresh install reports `.allSucceeded` (no prior version to evict) and so gets no message, which keeps the
+/// fresh-install path free of a spurious reboot prompt. Deactivate and failure paths never warrant a reboot message.
+func rebootRequiredMessage(for action: HostAppAction, verdict: AggregateVerdict) -> String? {
+    guard action == .activate, verdict == .rebootRequired else { return nil }
+    return "Fleet EDR upgrade staged; reboot to finish the extension cutover and restore network + DNS coverage."
+}
+
 /// SubcommandIntent is the typed side-effect a single host-app subcommand invocation produces. The
 /// production code in main.swift translates each subcommand into the equivalent OSSystemExtensionRequest
 /// or NEManager mutation; the intents here are a pure-data view of that contract so tests can assert
