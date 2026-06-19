@@ -467,11 +467,18 @@ func openTestQueue(t *testing.T) *queue.Queue {
 // read (the OTel collection cycle does not run here, but defensive against future httptest.Server work that fires the metric
 // from a worker goroutine).
 type fakeMetrics struct {
-	droppedTooLarge atomic.Int64
+	droppedTooLarge  atomic.Int64
+	endpointRejected atomic.Int64
+	lastRejectStatus atomic.Int64
 }
 
 func (f *fakeMetrics) EventsDroppedTooLarge(_ context.Context, n int64) {
 	f.droppedTooLarge.Add(n)
+}
+
+func (f *fakeMetrics) UploadRejected(_ context.Context, statusCode int) {
+	f.endpointRejected.Add(1)
+	f.lastRejectStatus.Store(int64(statusCode))
 }
 
 // tooLarge413Server stands up an httptest.Server that returns HTTP 413 with the body_too_large diagnostic when the
@@ -859,5 +866,121 @@ func TestUpload_GracefulShutdownDrainsRemaining(t *testing.T) {
 	depth, _ := q.Depth(parentCtx)
 	if depth != 0 {
 		t.Fatalf("graceful-shutdown drain must mark queued events uploaded before Run returns; depth=%d", depth)
+	}
+}
+
+// spec:agent-event-uploader/blanket-endpoint-rejections-keep-the-queue/sustained-403-preserves-the-queue-and-resumes-on-recovery
+//
+// The #398 regression: a sustained 403 (edge/WAF/unhealthy origin) must NOT quarantine good telemetry. Drive the uploader
+// well past the default quarantine threshold against a 403-everytime endpoint; every queued event must survive (the old
+// behaviour sealed the batch after 10 ticks). The endpoint-rejected counter fires, labelled with the 403. When the endpoint
+// recovers to 200, the preserved queue drains.
+func TestUpload_Sustained403PreservesQueueAndResumesOnRecovery(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	for i := range 3 {
+		require.NoError(t, q.Enqueue(ctx, fmt.Appendf(nil, `{"event_id":"keep-%d"}`, i)))
+	}
+
+	var status atomic.Int32
+	status.Store(http.StatusForbidden) // the edge rejects every upload with 403
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(status.Load()))
+	}))
+	defer srv.Close()
+
+	fm := &fakeMetrics{}
+	cfg := DefaultConfig() // ClientErrorQuarantineThreshold == 10
+	cfg.ServerURL = srv.URL
+	u := New(q, cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	u.SetMetrics(fm)
+
+	for range cfg.ClientErrorQuarantineThreshold + 5 {
+		_ = u.drainOnce(ctx)
+	}
+	depth, _ := q.Depth(ctx)
+	assert.Equal(t, int64(3), depth, "sustained 403 must NOT seal or drop any event, even past the quarantine threshold")
+	assert.Positive(t, fm.endpointRejected.Load(), "the endpoint-rejected counter must fire on the 403s")
+	assert.Equal(t, int64(http.StatusForbidden), fm.lastRejectStatus.Load(), "the counter must be labelled with the 403 status")
+
+	status.Store(http.StatusOK) // endpoint recovers
+	u.drainUntilCaughtUp(ctx)
+	depth, _ = q.Depth(ctx)
+	assert.Equal(t, int64(0), depth, "the preserved queue must drain once the endpoint returns 2xx")
+}
+
+// spec:agent-event-uploader/permanent-client-errors-are-not-infinitely-retained/a-poison-batch-quarantines-while-sibling-batches-deliver
+//
+// A genuine poison batch (HTTP 400 content rejection) must still quarantine after the threshold, and it must not block its
+// siblings: with one event per batch, good-1 delivers, the poison burns its 3-tick budget and is sealed, then good-2
+// delivers. A 400 is content poison, so it must NOT trip the endpoint-rejected counter (that is the blanket-rejection path).
+func TestUpload_PoisonBatchQuarantinesWhileSiblingDelivers(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"good-1"}`)))
+	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"poison"}`)))
+	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"good-2"}`)))
+
+	var goodDelivered atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if bytes.Contains(body, []byte("poison")) {
+			w.WriteHeader(http.StatusBadRequest) // genuine poison-content 400
+			return
+		}
+		goodDelivered.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	fm := &fakeMetrics{}
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.BatchSize = 1 // one event per batch so the poison batch is isolated from its siblings
+	cfg.ClientErrorQuarantineThreshold = 3
+	u := New(q, cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	u.SetMetrics(fm)
+
+	for range 6 { // deliver good-1, burn the poison's 3-tick budget, deliver good-2
+		_ = u.drainOnce(ctx)
+	}
+
+	depth, _ := q.Depth(ctx)
+	assert.Equal(t, int64(0), depth, "queue must be empty: both good events delivered, poison sealed")
+	assert.Equal(t, int32(2), goodDelivered.Load(), "both sibling good events must be delivered (200) despite the poison")
+	assert.Equal(t, int64(0), fm.endpointRejected.Load(), "a 400 is poison content, NOT a blanket endpoint rejection")
+}
+
+// spec:agent-event-uploader/blanket-endpoint-rejections-keep-the-queue/a-non-400-4xx-does-not-consume-the-quarantine-budget
+//
+// Generalises the 403 fix: any non-400 4xx the ingest route never emits itself (404, 429, ...) is a blanket rejection, so
+// it must be kept queued past the quarantine threshold rather than sealed.
+func TestUpload_Non400ClientErrorsKeepQueue(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			q := openTestQueue(t)
+			ctx := t.Context()
+			require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"keep"}`)))
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+
+			fm := &fakeMetrics{}
+			cfg := DefaultConfig()
+			cfg.ServerURL = srv.URL
+			cfg.ClientErrorQuarantineThreshold = 3
+			u := New(q, cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			u.SetMetrics(fm)
+
+			for range cfg.ClientErrorQuarantineThreshold + 2 {
+				_ = u.drainOnce(ctx)
+			}
+			depth, _ := q.Depth(ctx)
+			assert.Equal(t, int64(1), depth, "a non-400 4xx must be kept queued, never quarantined")
+			assert.Positive(t, fm.endpointRejected.Load(), "the endpoint-rejected counter must fire")
+			assert.Equal(t, int64(status), fm.lastRejectStatus.Load())
+		})
 	}
 }
