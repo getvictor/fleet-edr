@@ -32,8 +32,9 @@ const (
 	// up and falls through to the next drain tick.
 	defaultMaxRetries = 5
 
-	// defaultClientErrorQuarantineThreshold caps the number of consecutive drain ticks a row's batch may return a non-401 4xx
-	// before the row is quarantined (uploaded=1, removed from the dequeue set, audit log emitted). 10 matches the spec's
+	// defaultClientErrorQuarantineThreshold caps the number of consecutive drain ticks a row's batch may return an HTTP 400 (the
+	// only content-poison status; other 4xx are kept queued, see endpointRejectedError) before the row is quarantined (uploaded=1,
+	// removed from the dequeue set, audit log emitted). 10 matches the spec's
 	// "after the configured maximum retry budget is exhausted" clause and gives operators ~10 seconds at the default tick
 	// rate to roll back a bad server change before client events start dropping.
 	defaultClientErrorQuarantineThreshold = 10
@@ -70,9 +71,9 @@ type Config struct {
 	// MaxRetries is the maximum number of retries per batch on failure.
 	MaxRetries int
 
-	// ClientErrorQuarantineThreshold is the count of consecutive drain ticks a row's batch returning a non-401 4xx
+	// ClientErrorQuarantineThreshold is the count of consecutive drain ticks a row's batch returning an HTTP 400
 	// must reach before the row is marked uploaded so it stops being dequeued. 0 disables quarantine (the legacy
-	// behaviour: 4xx batches stay in the queue forever and re-fail every tick). Default applied by DefaultConfig is
+	// behaviour: 400 batches stay in the queue forever and re-fail every tick). Default applied by DefaultConfig is
 	// 10, which gives the server ~10 drain-ticks (~10s with the default 1s tick) to recover from a transient
 	// validation glitch before the agent gives up on the events.
 	ClientErrorQuarantineThreshold int
@@ -220,7 +221,8 @@ func (u *Uploader) drainBatch(ctx context.Context) (int, error) {
 //  4. 413 (requestEntityTooLargeError) with len(batch) == 1: drop the event. MarkUploaded so the queue stops surfacing it, emit
 //     a WARN log with the event id, and increment the events_dropped_too_large counter. Per the spec, 413 does NOT
 //     consume the quarantine budget because the recovery shape differs (size signal, not "malformed event" signal).
-//  5. Other 4xx: route through recordClientErrorAndAudit (the existing #253 quarantine path).
+//  5. 400: route through recordClientErrorAndAudit (the #253 quarantine path). Any other 4xx (403/404/429/...) is an
+//     endpointRejectedError: logged + counted and left queued (#398), never quarantined.
 //  6. 5xx / network / timeout (the non-clientError return from uploadWithRetry after MaxRetries): logged + returned, the
 //     batch stays queued for the next drain tick.
 //

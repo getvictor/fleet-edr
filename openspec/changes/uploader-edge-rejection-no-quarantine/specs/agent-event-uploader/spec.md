@@ -1,4 +1,4 @@
-# Agent Event Uploader Specification (delta)
+# Agent event uploader specification (delta)
 
 ## MODIFIED Requirements
 
