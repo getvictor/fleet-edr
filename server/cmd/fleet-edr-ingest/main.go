@@ -117,8 +117,8 @@ func run() error {
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),
 		HostTokenLifetime:   cfg.HostTokenLifetime,
-		HostTokenGrace:      cfg.HostTokenGrace,
 		HostTokenPepper:     kr.Derive(keyring.HostTokenPepperLabel),
+		HostTokenSigningKey: kr.Derive(keyring.HostTokenSigningLabel),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)
@@ -129,12 +129,22 @@ func run() error {
 		return err
 	}
 
+	// Fail closed on the revocation snapshot: it is the only revocation enforcement on the no-DB verify hot path, so an empty snapshot
+	// would accept already-revoked/epoch-bumped tokens. A failed initial load (right after the schema apply succeeded) is a real
+	// outage, so refuse to serve rather than start allow-all. The background ticker keeps it fresh afterward.
+	revSnap := endpointCtx.RevocationSnapshot()
+	if rerr := revSnap.Refresh(ctx); rerr != nil {
+		return fmt.Errorf("initial revocation snapshot load: %w", rerr)
+	}
+	go revSnap.Run(ctx, endpointbootstrap.DefaultRevocationRefreshInterval)
+
 	hostTokenMW := endpointCtx.HostTokenMiddleware()
 
 	mux := http.NewServeMux()
 	detectionCtx.RegisterHealthRoutes(mux)
 	endpointCtx.RegisterPublicRoutes(mux)
 	mux.Handle("POST /api/events", hostTokenMW(detectionCtx.Service().IngestHandler()))
+	mux.Handle("POST /api/token/refresh", hostTokenMW(endpointCtx.TokenRefreshHandler()))
 
 	handler := httpserver.Build(mux, httpserver.Options{
 		Logger:      logger,

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -14,11 +15,23 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/middleware"
 	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
 	"github.com/fleetdm/edr/server/endpoint/internal/operator"
+	"github.com/fleetdm/edr/server/endpoint/internal/revocation"
 	"github.com/fleetdm/edr/server/endpoint/internal/service"
+	"github.com/fleetdm/edr/server/endpoint/internal/signedtoken"
+	"github.com/fleetdm/edr/server/endpoint/internal/token"
 	endpointmigrations "github.com/fleetdm/edr/server/endpoint/migrations"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 )
+
+// hostTokenKeyID labels the active host-token signing key; it is carried in every token's claims and checked on verify. Bump when
+// rotating the signing key (and add an overlap verifier for the old id).
+const hostTokenKeyID = "v1"
+
+// DefaultRevocationRefreshInterval is how often each replica reloads the revocation snapshot from the database. It bounds the
+// worst-case staleness of a revocation / credential-cycle across replicas. 5s keeps a kill switch effectively immediate without
+// hammering the DB (one small query per replica per interval).
+const DefaultRevocationRefreshInterval = 5 * time.Second
 
 // CommandInserter is the closure cmd/main supplies so endpoint can queue commands (today: rotate_token) without importing response/api
 // directly. Method-value-shaped to match response.Service.Insert exactly: cmd/main passes `responseCtx.Service().Insert` here as a
@@ -32,13 +45,14 @@ type Deps struct {
 	Logger              *slog.Logger
 	EnrollSecret        string
 	EnrollRatePerMinute int
-	// HostTokenPepper is the server-held HMAC key the enrollment store uses to hash + verify host tokens. Required, at least 32 bytes.
-	// cmd/main derives it from the deployment root secret (EDR_SECRET_KEY) via internal/keyring; changing the root invalidates every
-	// existing host token (a breaking, operator-initiated fleet-wide re-enroll).
+	// HostTokenPepper is the server-held HMAC key the enrollment store uses to hash the legacy host_token columns. Required, at least 32
+	// bytes. cmd/main derives it from the deployment root secret (EDR_SECRET_KEY) via internal/keyring. Retained for the enrollment row's
+	// columns; agent auth no longer verifies against it (see HostTokenSigningKey).
 	HostTokenPepper []byte
-	// CommandInserter inserts commands the endpoint context emits (today: only rotate_token). Optional: when nil, rotate_token commits the
-	// new bearer to the DB but the agent will not receive a command: it re-enrolls once the grace window expires.
-	CommandInserter CommandInserter
+	// HostTokenSigningKey is the server-held HMAC key that signs + verifies self-validating host tokens. Required, at least 32 bytes.
+	// cmd/main derives it from the deployment root secret via internal/keyring under a distinct label, so it is independent of the
+	// pepper. Changing the root (or the label) invalidates every outstanding token: a fleet-wide re-enroll.
+	HostTokenSigningKey []byte
 
 	// Audit is the operator-action recorder. Optional: nil disables audit emission for enrollment.revoke + enrollment.rotate_token.
 	// cmd/main wires identityCtx.AuditRecorder().
@@ -48,12 +62,9 @@ type Deps struct {
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
-	// HostTokenLifetime is how long a host bearer token may live before the verify path triggers an auto-rotation. Zero -> service default
-	// (24h). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
+	// HostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. Zero -> service
+	// default (60m). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
 	HostTokenLifetime time.Duration
-	// HostTokenGrace is the window during which the just-superseded token still verifies after rotation, so an in-flight agent poll
-	// doesn't 401 mid-cycle. Zero -> service default (5m). cmd/main reads EDR_HOST_TOKEN_GRACE.
-	HostTokenGrace time.Duration
 }
 
 // Endpoint is the handle cmd/main holds for the endpoint bounded context. It exposes the Service for cross-context callers (today:
@@ -62,7 +73,9 @@ type Endpoint struct {
 	svc         api.Service
 	enrollH     *enroll.Handler
 	operatorH   *operator.Handler
+	tokenH      *token.Handler
 	hostTokenMW func(http.Handler) http.Handler
+	snapshot    *revocation.Snapshot
 	db          *sqlx.DB
 	logger      *slog.Logger
 }
@@ -79,6 +92,9 @@ func New(deps Deps) (*Endpoint, error) {
 	if len(deps.HostTokenPepper) < 32 {
 		return nil, errors.New("endpoint bootstrap: HostTokenPepper is required (at least 32 bytes)")
 	}
+	if len(deps.HostTokenSigningKey) < 32 {
+		return nil, errors.New("endpoint bootstrap: HostTokenSigningKey is required (at least 32 bytes)")
+	}
 	if deps.AuthZ == nil {
 		return nil, errors.New("endpoint bootstrap: AuthZ is required")
 	}
@@ -87,15 +103,20 @@ func New(deps Deps) (*Endpoint, error) {
 		logger = slog.Default()
 	}
 
+	signer, err := signedtoken.New(deps.HostTokenSigningKey, hostTokenKeyID)
+	if err != nil {
+		return nil, fmt.Errorf("endpoint bootstrap: host token signer: %w", err)
+	}
 	store := mysql.NewStore(deps.DB, deps.HostTokenPepper)
+	snapshot := revocation.NewSnapshot(store, logger)
 	svc := service.New(service.Options{
-		Store:    store,
-		Secret:   deps.EnrollSecret,
-		Commands: deps.CommandInserter,
-		Audit:    deps.Audit,
-		Lifetime: deps.HostTokenLifetime,
-		Grace:    deps.HostTokenGrace,
-		Logger:   logger,
+		Store:       store,
+		Secret:      deps.EnrollSecret,
+		Signer:      signer,
+		Revocations: snapshot,
+		Audit:       deps.Audit,
+		TokenTTL:    deps.HostTokenLifetime,
+		Logger:      logger,
 	})
 
 	opH := operator.New(svc, deps.AuthZ, logger)
@@ -107,7 +128,9 @@ func New(deps Deps) (*Endpoint, error) {
 			Logger:        logger,
 		}),
 		operatorH:   opH,
+		tokenH:      token.New(svc, logger),
 		hostTokenMW: middleware.HostToken(svc, logger),
+		snapshot:    snapshot,
 		db:          deps.DB,
 		logger:      logger,
 	}, nil
@@ -137,8 +160,16 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 func (e *Endpoint) Service() api.Service { return e.svc }
 
 // HostTokenMiddleware returns the per-request middleware that gates agent endpoints. cmd/main chains this on POST /api/events,
-// GET /api/commands, and PUT /api/commands/{id}.
+// GET /api/commands, PUT /api/commands/{id}, and POST /api/token/refresh.
 func (e *Endpoint) HostTokenMiddleware() func(http.Handler) http.Handler { return e.hostTokenMW }
+
+// TokenRefreshHandler returns the POST /api/token/refresh handler. cmd/main mounts it inside the host-token-protected mux so it shares
+// the same authentication as the other agent routes.
+func (e *Endpoint) TokenRefreshHandler() http.Handler { return e.tokenH }
+
+// RevocationSnapshot returns the per-replica revocation snapshot so cmd/main can trigger an initial synchronous load before serving and
+// run the background refresh loop. Per ADR-0010 it is a perf cache, safe to lose.
+func (e *Endpoint) RevocationSnapshot() *revocation.Snapshot { return e.snapshot }
 
 // RegisterPublicRoutes wires POST /api/enroll. Public because the agent
 // has no token yet; the handler does its own per-IP rate limit + audit.

@@ -2,334 +2,211 @@ package service_test
 
 import (
 	"context"
-	"errors"
 	"log/slog"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
+	"github.com/fleetdm/edr/server/endpoint/internal/revocation"
 	"github.com/fleetdm/edr/server/endpoint/internal/service"
+	"github.com/fleetdm/edr/server/endpoint/internal/signedtoken"
 	"github.com/fleetdm/edr/server/endpoint/testkit"
-	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/testdb"
 )
+
+// noRevocations is a do-nothing revocation.Source for constructing a snapshot in the New-guard test without a database.
+type noRevocations struct{}
+
+func (noRevocations) RevocationEntries(context.Context) ([]revocation.Entry, error) { return nil, nil }
+
+// TestServiceNew_Panics covers the fail-fast guards: New panics on a missing Store, Signer, Revocations, or empty Secret, and does not
+// panic when all are present.
+func TestServiceNew_Panics(t *testing.T) {
+	t.Parallel()
+	store := &mysql.Store{}
+	signer, err := signedtoken.New(testSigningKey, "v1")
+	require.NoError(t, err)
+	snap := revocation.NewSnapshot(noRevocations{}, nil)
+
+	assert.Panics(t, func() { service.New(service.Options{}) }, "nil store")
+	assert.Panics(t, func() { service.New(service.Options{Store: store}) }, "nil signer")
+	assert.Panics(t, func() { service.New(service.Options{Store: store, Signer: signer}) }, "nil revocations")
+	assert.Panics(t, func() { service.New(service.Options{Store: store, Signer: signer, Revocations: snap}) }, "empty secret")
+	assert.NotPanics(t, func() {
+		service.New(service.Options{Store: store, Signer: signer, Revocations: snap, Secret: "s"})
+	})
+}
 
 const (
 	testHostID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 	testSecret = "test-enroll-secret"
 )
 
-// testPepper is the fixed 32-byte HMAC pepper the rotation tests construct their store with. Constant so a token hashed at enroll
-// verifies on a later rotate within the same test.
-var testPepper = []byte("test-host-token-pepper-0123456789abcdef")
+// Fixed >=32-byte keys so a token minted at enroll verifies on a later call within the same test.
+var (
+	testPepper     = []byte("test-host-token-pepper-0123456789abcdef")
+	testSigningKey = []byte("test-host-token-signing-0123456789abcdef")
+)
 
-// fakeRecorder captures audit events for assertion. Goroutine-safe so future moves of the verify-time auto-rotate trigger to a
-// background scheduler do not silently introduce data races; today the path is synchronous, but the contract is the safer side of the
-// change. Tests read events via Snapshot so the slice copy is taken under the same mutex.
-type fakeRecorder struct {
-	mu     sync.Mutex
-	events []identityapi.AuditEvent
-}
-
-func (f *fakeRecorder) Record(_ context.Context, e identityapi.AuditEvent) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.events = append(f.events, e)
-	return nil
-}
-
-// Snapshot returns a copy of the captured events so tests assert on a
-// stable view independent of concurrent Record calls.
-func (f *fakeRecorder) Snapshot() []identityapi.AuditEvent {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]identityapi.AuditEvent, len(f.events))
-	copy(out, f.events)
-	return out
-}
-
-// commandCapture records (host_id, command_type, payload) tuples so tests can assert which commands the service queued. Returns a fake
-// command_id sequence (1, 2, ...) so the operator path can verify the CommandID field of the api.RotateResult.
-type commandCapture struct {
-	calls atomic.Int64
-	last  struct {
-		hostID      string
-		commandType string
-		payload     []byte
-	}
-}
-
-func (c *commandCapture) Insert(_ context.Context, hostID, commandType string, payload []byte) (int64, error) {
-	id := c.calls.Add(1)
-	c.last.hostID = hostID
-	c.last.commandType = commandType
-	c.last.payload = payload
-	return id, nil
-}
-
-// newServiceForTest stands up an endpoint Service backed by a real MySQL test DB, with a captured CommandInserter + audit recorder so
-// each test can inspect the side effects of rotation.
-func newServiceForTest(t *testing.T, lifetime, grace time.Duration) (svc api.Service, store *mysql.Store, db *sqlx.DB, audit *fakeRecorder, cmds *commandCapture) {
+// newServiceForTest stands up an endpoint Service over a real MySQL test DB, wired with the signer + revocation snapshot the
+// self-validating-token model needs. The snapshot is returned so tests can Refresh it deterministically (production refreshes it on a
+// ticker; tests drive it by hand to avoid sleeping).
+func newServiceForTest(t *testing.T) (api.Service, *revocation.Snapshot) {
 	t.Helper()
-	db = testdb.Open(t)
+	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	store = mysql.NewStore(db, testPepper)
-	audit = &fakeRecorder{}
-	cmds = &commandCapture{}
-	svc = service.New(service.Options{
-		Store:    store,
-		Secret:   testSecret,
-		Audit:    audit,
-		Commands: cmds.Insert,
-		Lifetime: lifetime,
-		Grace:    grace,
-		Logger:   slog.Default(),
+	store := mysql.NewStore(db, testPepper)
+	signer, err := signedtoken.New(testSigningKey, "v1")
+	require.NoError(t, err)
+	snap := revocation.NewSnapshot(store, slog.Default())
+	svc := service.New(service.Options{
+		Store:       store,
+		Secret:      testSecret,
+		Signer:      signer,
+		Revocations: snap,
+		TokenTTL:    time.Hour,
+		Logger:      slog.Default(),
 	})
-	return svc, store, db, audit, cmds
+	return svc, snap
 }
 
-// enrollOne issues a fresh enrollment via the public Service.Enroll path and returns the bearer token + the row's current
-// host_token_id (lifted out of the DB for tests that need to assert "this rotation changed the underlying id").
-func enrollOne(t *testing.T, svc api.Service, hostID string) string {
+func enrollForTest(t *testing.T, svc api.Service) api.EnrollResponse {
 	t.Helper()
 	res, err := svc.Enroll(t.Context(), api.EnrollRequest{
 		EnrollSecret: testSecret,
-		HardwareUUID: hostID,
-		Hostname:     "qa",
-		AgentVersion: "v",
-		OSVersion:    "o",
-	}, "127.0.0.1")
+		HardwareUUID: testHostID,
+		Hostname:     "h",
+		OSVersion:    "macOS 14",
+		AgentVersion: "0.1.0",
+	}, "192.0.2.1")
 	require.NoError(t, err)
-	return res.HostToken
+	return res
 }
 
-// ageToken backdates the host's host_token_issued_at by the given duration so the next VerifyToken sees the token as past lifetime
-// without making the test wait. The schema column is NOT NULL with a CURRENT_TIMESTAMP default; a direct UPDATE is the cheap test-only
-// way to forge token age.
-func ageToken(t *testing.T, db *sqlx.DB, hostID string, age time.Duration) {
-	t.Helper()
-	_, err := db.ExecContext(t.Context(),
-		`UPDATE enrollments SET host_token_issued_at = ? WHERE host_id = ?`,
-		time.Now().UTC().Add(-age), hostID)
-	require.NoError(t, err)
-}
-
-// A fresh token does not trigger rotation: the agent's normal poll
-// shouldn't pay an extra UPDATE + INSERT + audit cost on every request.
-func TestVerifyToken_FreshTokenDoesNotRotate(t *testing.T) {
+// spec:agent-enrollment/host-tokens-are-self-validating-signed-tokens/issued-token-verifies-without-a-database-lookup
+//
+// TestEnroll_MintsVerifiableSignedToken: the enroll response carries a self-validating token that verifies, with an expiry about one
+// TTL out.
+func TestEnroll_MintsVerifiableSignedToken(t *testing.T) {
 	t.Parallel()
-	svc, _, _, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
-	tok := enrollOne(t, svc, testHostID)
+	svc, _ := newServiceForTest(t)
+	res := enrollForTest(t, svc)
+	require.NotEmpty(t, res.HostToken)
+	assert.WithinDuration(t, time.Now().Add(time.Hour), res.ExpiresAt, 2*time.Minute)
 
-	hostID, err := svc.VerifyToken(t.Context(), tok)
+	hostID, err := svc.VerifyToken(t.Context(), res.HostToken)
 	require.NoError(t, err)
 	assert.Equal(t, testHostID, hostID)
-	assert.Empty(t, audit.Snapshot(), "fresh token must not emit any audit row")
-	assert.Zero(t, cmds.calls.Load(), "fresh token must not queue any rotate_token command")
 }
 
-// A token past lifetime triggers rotation on the next verify, queues a rotate_token command for the agent, and emits exactly one audit
-// row tagged with trigger=auto.
-func TestVerifyToken_StaleTokenAutoRotates(t *testing.T) {
+// TestRefreshToken_IssuesFreshVerifiableToken: with host_id pinned on the context (as the middleware does), refresh returns a new,
+// distinct, verifiable token.
+func TestRefreshToken_IssuesFreshVerifiableToken(t *testing.T) {
 	t.Parallel()
-	svc, _, db, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
-	tok := enrollOne(t, svc, testHostID)
-	ageToken(t, db, testHostID, 2*time.Hour) // well past 1h lifetime
+	svc, _ := newServiceForTest(t)
+	res := enrollForTest(t, svc)
 
-	hostID, err := svc.VerifyToken(t.Context(), tok)
+	ref, err := svc.RefreshToken(t.Context(), res.HostToken)
+	require.NoError(t, err)
+	require.NotEmpty(t, ref.HostToken)
+	assert.Equal(t, testHostID, ref.HostID)
+
+	hostID, err := svc.VerifyToken(t.Context(), ref.HostToken)
 	require.NoError(t, err)
 	assert.Equal(t, testHostID, hostID)
-
-	require.Len(t, audit.Snapshot(), 1, "stale-token verify must emit exactly one audit row")
-	got := audit.Snapshot()[0]
-	assert.Equal(t, identityapi.AuditEnrollmentRotateToken, got.Action)
-	assert.Equal(t, "host", got.TargetType)
-	assert.Equal(t, testHostID, got.TargetID)
-	assert.Equal(t, "auto", got.Payload["trigger"])
-	assert.NotEmpty(t, got.Payload["previous_token_id_prefix"])
-
-	assert.Equal(t, int64(1), cmds.calls.Load(), "exactly one rotate_token command must be queued")
-	assert.Equal(t, testHostID, cmds.last.hostID)
-	assert.Equal(t, "rotate_token", cmds.last.commandType)
-	assert.Contains(t, string(cmds.last.payload), "new_token", "rotate_token payload must carry the new bearer")
 }
 
-// A verify against the previous-token grace path must NOT trigger a rotation: rotation is already in flight (the new token has been
-// issued; the agent just hasn't picked it up yet). Triggering another would discard the in-flight rotation prematurely.
-func TestVerifyToken_GraceTokenDoesNotReRotate(t *testing.T) {
+// TestRefreshToken_RejectsStaleEpochAndGarbage covers the refresh-path guards: an unverifiable token is rejected, and (the security
+// fix) a pre-rotate token cannot refresh into a current-epoch token after an operator epoch bump, even though the revocation snapshot
+// here is never refreshed (the refresh path checks the DB epoch directly, closing the snapshot-staleness window).
+func TestRefreshToken_RejectsStaleEpochAndGarbage(t *testing.T) {
 	t.Parallel()
-	svc, _, db, audit, cmds := newServiceForTest(t, time.Hour, time.Minute)
-	oldTok := enrollOne(t, svc, testHostID)
+	svc, _ := newServiceForTest(t)
+	res := enrollForTest(t, svc)
 
-	// First verify: stale -> rotation triggers, new token queued.
-	ageToken(t, db, testHostID, 2*time.Hour)
-	_, err := svc.VerifyToken(t.Context(), oldTok)
-	require.NoError(t, err)
-	require.Len(t, audit.Snapshot(), 1)
-	require.Equal(t, int64(1), cmds.calls.Load())
+	_, err := svc.RefreshToken(t.Context(), "not.a.token")
+	require.ErrorIs(t, err, api.ErrInvalidToken)
 
-	// Second verify with the OLD token: matches the previous-token grace
-	// path. Service must NOT trigger another rotation.
-	_, err = svc.VerifyToken(t.Context(), oldTok)
+	_, err = svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "incident")
 	require.NoError(t, err)
-	assert.Len(t, audit.Snapshot(), 1, "grace-path verify must not emit another audit row")
-	assert.Equal(t, int64(1), cmds.calls.Load(), "grace-path verify must not queue another rotate_token command")
+	_, err = svc.RefreshToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken, "stale-epoch token must not refresh after an epoch bump")
 }
 
-// RotateToken (operator path) force-rotates regardless of the token's age and emits an audit row tagged with trigger=operator + the
-// supplied actor + reason fields.
-func TestRotateToken_OperatorPath(t *testing.T) {
+// spec:agent-enrollment/revocation-is-enforced-by-a-per-replica-snapshot/operator-rotate-invalidates-after-the-snapshot-refreshes
+//
+// TestRotateToken_BumpsEpochAndInvalidates: operator rotate bumps the epoch (no command pushed). After the snapshot refreshes, the
+// pre-rotate token is rejected; a re-enroll mints a fresh token that verifies.
+func TestRotateToken_BumpsEpochAndInvalidates(t *testing.T) {
 	t.Parallel()
-	svc, _, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
-	enrollOne(t, svc, testHostID) // intentionally fresh; operator override should still rotate
-
-	res, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator,
-		"victor@example", "incident-2026-Q2")
+	svc, snap := newServiceForTest(t)
+	res := enrollForTest(t, svc)
+	require.NoError(t, snap.Refresh(t.Context()))
+	_, err := svc.VerifyToken(t.Context(), res.HostToken)
 	require.NoError(t, err)
-	assert.NotEmpty(t, res.PreviousTokenIDPrefix)
-	require.NotNil(t, res.CommandID, "operator path must surface the queued command_id")
-	assert.Positive(t, *res.CommandID)
 
-	require.Len(t, audit.Snapshot(), 1)
-	got := audit.Snapshot()[0]
-	assert.Equal(t, "operator", got.Payload["trigger"])
-	assert.Equal(t, "victor@example", got.Payload["actor"])
-	assert.Equal(t, "incident-2026-Q2", got.Payload["reason"])
-	assert.Equal(t, int64(1), cmds.calls.Load())
+	rot, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "victor@example", "incident-2026")
+	require.NoError(t, err)
+	assert.Nil(t, rot.CommandID, "no rotate_token command is pushed under the signed-token model")
+
+	require.NoError(t, snap.Refresh(t.Context()))
+	_, err = svc.VerifyToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken, "pre-rotate token rejected once the epoch bump is visible")
+
+	// Re-enroll PRESERVES the bumped epoch (it is not reset to 0), so the fresh token verifies while the pre-rotate token stays
+	// rejected. This is the credential-cycling-survives-re-enroll guarantee: if Register reset the epoch, the stolen pre-rotate token
+	// below would become valid again here, defeating the rotate.
+	res2 := enrollForTest(t, svc)
+	require.NoError(t, snap.Refresh(t.Context()))
+	hostID, err := svc.VerifyToken(t.Context(), res2.HostToken)
+	require.NoError(t, err, "re-enroll mints a fresh token at the preserved epoch")
+	assert.Equal(t, testHostID, hostID)
+
+	_, err = svc.VerifyToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken, "the pre-rotate token MUST stay rejected after re-enroll: the epoch bump is monotonic")
 }
 
-// Rotate on a missing host returns ErrNotFound (no audit, no command).
-func TestRotateToken_MissingHost(t *testing.T) {
+// TestRotateToken_NotFound: rotating a host with no enrollment is ErrNotFound.
+func TestRotateToken_NotFound(t *testing.T) {
 	t.Parallel()
-	svc, _, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
-
-	_, err := svc.RotateToken(t.Context(), "AAAA1111-2222-3333-4444-555566667777",
-		api.RotationTriggerOperator, "operator", "test")
+	svc, _ := newServiceForTest(t)
+	_, err := svc.RotateToken(t.Context(), "00000000-0000-0000-0000-000000000000", api.RotationTriggerOperator, "a", "b")
 	require.ErrorIs(t, err, api.ErrNotFound)
-	assert.Empty(t, audit.Snapshot())
-	assert.Zero(t, cmds.calls.Load())
 }
 
-// Rotate against a revoked enrollment also surfaces as ErrNotFound: the row exists but is no longer eligible for rotation. Otherwise
-// an attacker who has the (revoked) token could nudge the row back into a usable state.
-func TestRotateToken_RevokedHost(t *testing.T) {
+// TestRevoke_InvalidatesAfterSnapshot: Revoke sets revoked_at; after the snapshot refreshes the token is rejected.
+func TestRevoke_InvalidatesAfterSnapshot(t *testing.T) {
 	t.Parallel()
-	svc, store, _, audit, cmds := newServiceForTest(t, 24*time.Hour, time.Minute)
-	enrollOne(t, svc, testHostID)
-	require.NoError(t, store.Revoke(t.Context(), testHostID, "compromised", "operator"))
-
-	_, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "test")
-	require.ErrorIs(t, err, api.ErrNotFound)
-	assert.Empty(t, audit.Snapshot())
-	assert.Zero(t, cmds.calls.Load())
+	svc, snap := newServiceForTest(t)
+	res := enrollForTest(t, svc)
+	require.NoError(t, svc.Revoke(t.Context(), testHostID, "compromised", "op"))
+	require.NoError(t, snap.Refresh(t.Context()))
+	_, err := svc.VerifyToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken)
 }
 
-// RotateToken with both Audit and Commands nil must not panic; the service degrades gracefully (DB rotation still happens, audit +
-// command emission no-op). This is the "tests / ingest binary" mode.
-func TestRotateToken_NilDepsOK(t *testing.T) {
+// TestReEnroll_ClearsStaleSnapshotLocally: after an operator epoch bump leaves the snapshot rejecting the old token, a re-enroll yields
+// a token that verifies immediately on this replica WITHOUT a snapshot refresh, because Enroll evicts the host from the local snapshot
+// (the transient-401-after-re-enroll mitigation).
+func TestReEnroll_ClearsStaleSnapshotLocally(t *testing.T) {
 	t.Parallel()
-	db := testdb.Open(t)
-	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	svc := service.New(service.Options{
-		Store:    mysql.NewStore(db, testPepper),
-		Secret:   testSecret,
-		Lifetime: 24 * time.Hour,
-		Grace:    time.Minute,
-		Logger:   slog.Default(),
-	})
-	_, err := svc.Enroll(t.Context(), api.EnrollRequest{
-		EnrollSecret: testSecret, HardwareUUID: testHostID,
-		Hostname: "h", AgentVersion: "v", OSVersion: "o",
-	}, "127.0.0.1")
+	svc, snap := newServiceForTest(t)
+	res := enrollForTest(t, svc)
+	require.NoError(t, snap.Refresh(t.Context()))
+
+	_, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "incident")
 	require.NoError(t, err)
+	require.NoError(t, snap.Refresh(t.Context()))
+	_, err = svc.VerifyToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken, "old token rejected after epoch bump")
 
-	res, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "", "")
-	require.NoError(t, err)
-	assert.Nil(t, res.CommandID, "nil CommandInserter -> CommandID nil so the wire shape omits command_id")
-	assert.NotEmpty(t, res.PreviousTokenIDPrefix)
-}
-
-// erroringRecorder satisfies identityapi.AuditRecorder by returning a fixed error for every Record call so tests can drive the
-// audit-emit error branch.
-type erroringRecorder struct{}
-
-func (erroringRecorder) Record(_ context.Context, _ identityapi.AuditEvent) error {
-	return errors.New("audit sink offline")
-}
-
-// RotateToken must not surface an audit-record failure to the caller: rotation already committed in the DB and a missed audit row is a
-// follow-up incident, not a reason to fail the HTTP 200. The error is logged + swallowed.
-func TestRotateToken_AuditRecordErrorIsSwallowed(t *testing.T) {
-	t.Parallel()
-	db := testdb.Open(t)
-	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	cmds := &commandCapture{}
-	svc := service.New(service.Options{
-		Store:    mysql.NewStore(db, testPepper),
-		Secret:   testSecret,
-		Audit:    erroringRecorder{},
-		Commands: cmds.Insert,
-		Lifetime: 24 * time.Hour,
-		Grace:    time.Minute,
-		Logger:   slog.Default(),
-	})
-	_, err := svc.Enroll(t.Context(), api.EnrollRequest{
-		EnrollSecret: testSecret, HardwareUUID: testHostID,
-		Hostname: "h", AgentVersion: "v", OSVersion: "o",
-	}, "127.0.0.1")
-	require.NoError(t, err)
-
-	res, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "victor@example", "incident")
-	require.NoError(t, err, "audit failure must not fail rotation")
-	assert.NotEmpty(t, res.PreviousTokenIDPrefix, "DB rotation must still commit")
-	require.NotNil(t, res.CommandID, "command must still queue even when audit fails")
-	assert.Equal(t, int64(1), cmds.calls.Load())
-}
-
-// erroringInserter satisfies api.CommandInserter by returning a fixed
-// error so tests can drive the rotate_token enqueue-error branch.
-func erroringInserter(_ context.Context, _, _ string, _ []byte) (int64, error) {
-	return 0, errors.New("commands queue offline")
-}
-
-// RotateToken must not surface a commands-enqueue failure: the agent's previous token still works during grace; once grace expires
-// it'll 401 and re-enroll. Acceptable failure mode for a queue hiccup. CommandID must be nil so the wire shape omits command_id.
-func TestRotateToken_CommandsEnqueueErrorIsSwallowed(t *testing.T) {
-	t.Parallel()
-	db := testdb.Open(t)
-	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	audit := &fakeRecorder{}
-	svc := service.New(service.Options{
-		Store:    mysql.NewStore(db, testPepper),
-		Secret:   testSecret,
-		Audit:    audit,
-		Commands: erroringInserter,
-		Lifetime: 24 * time.Hour,
-		Grace:    time.Minute,
-		Logger:   slog.Default(),
-	})
-	_, err := svc.Enroll(t.Context(), api.EnrollRequest{
-		EnrollSecret: testSecret, HardwareUUID: testHostID,
-		Hostname: "h", AgentVersion: "v", OSVersion: "o",
-	}, "127.0.0.1")
-	require.NoError(t, err)
-
-	res, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "victor@example", "incident")
-	require.NoError(t, err, "commands enqueue failure must not fail rotation")
-	assert.NotEmpty(t, res.PreviousTokenIDPrefix, "DB rotation must still commit")
-	assert.Nil(t, res.CommandID, "failed commands enqueue must surface as nil CommandID")
-
-	// Audit row still emitted so operator visibility is preserved; the
-	// command_id field is omitted from the payload.
-	require.Len(t, audit.Snapshot(), 1)
-	got := audit.Snapshot()[0]
-	assert.NotContains(t, got.Payload, "command_id",
-		"failed enqueue: audit payload must omit command_id rather than carry a stale zero")
+	// Re-enroll, then verify with NO intervening snap.Refresh: the new token must pass because Enroll forgot the host locally.
+	res2 := enrollForTest(t, svc)
+	hostID, err := svc.VerifyToken(t.Context(), res2.HostToken)
+	require.NoError(t, err, "re-enrolled token verifies immediately on the enrolling replica")
+	assert.Equal(t, testHostID, hostID)
 }

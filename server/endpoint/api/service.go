@@ -6,15 +6,23 @@ import "context"
 // operator-facing listing/revoke endpoints all consume this. Other contexts that need endpoint functionality (today: cmd/main wires
 // the host-token middleware into the agent route stack) call into it through this api.Service interface.
 type Service interface {
-	// Enroll handles the agent enroll flow: validates the enroll secret + hardware UUID, persists the enrollment row, generates a bearer
-	// token, and best-effort enqueues an initial set_blocklist command. sourceIP is the resolved client IP (the caller is responsible for
-	// any X-Forwarded-For handling). Returns ErrInvalidSecret on bad secret and ErrInvalidHardwareUUID on malformed UUID; both are 401/400
-	// mappings the handler does.
+	// Enroll handles the agent enroll flow: validates the enroll secret + hardware UUID, persists the enrollment row, and mints a
+	// self-validating signed bearer token. sourceIP is the resolved client IP (the caller is responsible for any X-Forwarded-For
+	// handling). Returns ErrInvalidSecret on bad secret and ErrInvalidHardwareUUID on malformed UUID; both are 401/400 mappings the
+	// handler does.
 	Enroll(ctx context.Context, req EnrollRequest, sourceIP string) (EnrollResponse, error)
 
-	// VerifyToken resolves a presented bearer token to a host_id. Used by the HostToken middleware on every agent request. Returns
-	// ErrInvalidToken on any kind of mismatch (unknown, revoked, malformed); the caller does not distinguish those cases.
+	// VerifyToken resolves a presented bearer token to a host_id. Used by the HostToken middleware on every agent request. The token is
+	// self-validating (local signature + expiry check); revocation is enforced via an in-memory snapshot, so this does no database
+	// lookup. Returns ErrInvalidToken on any kind of mismatch (unknown, revoked, expired, malformed); the caller does not distinguish
+	// those cases, which would be an oracle.
 	VerifyToken(ctx context.Context, token string) (string, error)
+
+	// RefreshToken issues a fresh signed token for the presented (already host-token-authenticated) token. The agent calls this before
+	// its current token expires so a live host never lapses. It re-verifies the presented token and rejects it if the host is unknown or
+	// revoked or the token's epoch is below the host's current epoch (closing the revocation-snapshot staleness window); the handler maps
+	// that to 401, prompting the agent to re-enroll.
+	RefreshToken(ctx context.Context, token string) (RefreshResponse, error)
 
 	// List returns operator-visible enrollment rows.
 	List(ctx context.Context) ([]Enrollment, error)
@@ -36,17 +44,10 @@ type Service interface {
 	// Used by the policy fan-out path.
 	ActiveHostIDs(ctx context.Context) ([]string, error)
 
-	// RotateToken atomically issues a fresh bearer token for hostID, moves
-	// the prior token into the grace-window slot (so an in-flight agent
-	// poll doesn't 401 mid-cycle), and queues a rotate_token command that
-	// delivers the new token to the agent on its next poll. Returns
-	// ErrNotFound when the host_id has no enrollment.
-	//
-	// trigger names who initiated the rotation; actor + reason are the
-	// operator-supplied attribution carried into the audit row when
-	// trigger == RotationTriggerOperator (both empty for auto). The raw
-	// new token is intentionally not in the response: the agent gets it
-	// via the rotate_token command, and exposing it via the operator API
-	// would invite copy-paste flows that bypass the command queue.
+	// RotateToken cycles a host's credentials by bumping its token_epoch, invalidating every signed token minted at the prior epoch once
+	// the revocation snapshot picks up the change. Under the self-validating-token model there is no opaque token to rotate and no
+	// command to push: the agent recovers by re-enrolling when its refresh (carrying the now-stale epoch) 401s. trigger names who
+	// initiated it; actor + reason are the operator-supplied attribution carried into the audit row. Returns ErrNotFound when the
+	// host_id has no enrollment. The returned RotateResult is empty (no token/command under this model).
 	RotateToken(ctx context.Context, hostID string, trigger RotationTrigger, actor, reason string) (RotateResult, error)
 }

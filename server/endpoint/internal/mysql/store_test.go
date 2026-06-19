@@ -120,6 +120,37 @@ func TestRegister_ReenrollRevokesPrevious(t *testing.T) {
 	assert.Equal(t, testUUID, hostID)
 }
 
+// spec:agent-enrollment/revocation-is-enforced-by-a-per-replica-snapshot/re-enrollment-preserves-the-token-epoch
+//
+// TestRegister_ReenrollPreservesEpoch pins the credential-cycling-survives-re-enroll guarantee at the store layer: a re-enroll updates
+// the row in place and MUST NOT reset token_epoch (the old REPLACE INTO did, which let a stolen pre-rotate token validate again once the
+// agent re-enrolled). It must, however, still clear revocation so a re-enrolled host is active again.
+func TestRegister_ReenrollPreservesEpoch(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	first, err := s.Register(ctx, mysql.RegisterRequest{
+		HostID: testUUID, Hostname: "h", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), first.Epoch, "a brand-new host starts at epoch 0")
+
+	require.NoError(t, s.BumpTokenEpoch(ctx, testUUID))
+	require.NoError(t, s.Revoke(ctx, testUUID, "compromised", "op"))
+
+	second, err := s.Register(ctx, mysql.RegisterRequest{
+		HostID: testUUID, Hostname: "h-reimaged", AgentVersion: "v", OSVersion: "o", SourceIP: "127.0.0.2",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), second.Epoch, "re-enroll preserves the bumped epoch instead of resetting to 0")
+
+	epoch, revoked, err := s.TokenStatus(ctx, testUUID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), epoch, "the DB row still carries the bumped epoch after re-enroll")
+	assert.False(t, revoked, "re-enroll clears the prior revocation")
+}
+
 func TestList_RedactsTokenColumns(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

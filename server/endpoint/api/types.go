@@ -32,17 +32,23 @@ type EnrollRequest struct {
 	AgentVersion string `json:"agent_version"`
 }
 
-// EnrollResponse is what the agent receives. The HostToken is the only
-// place the raw token bytes appear server-side; subsequent verification
-// uses the SHA-256 digest stored in the DB.
-//
-// Initial policy fan-out happens through the command queue (a separate
-// best-effort goroutine in the enroll handler), not through this
-// response, so the agent's wire surface stays minimal.
+// EnrollResponse is what the agent receives. HostToken is a self-validating signed token (see internal/signedtoken): it carries the
+// host_id, epoch, and expiry, signed with a server-held key, so subsequent verification is a local signature check with no database
+// lookup. ExpiresAt is the token's absolute expiry; the agent refreshes via POST /api/token/refresh before it is reached.
 type EnrollResponse struct {
 	HostID     string    `json:"host_id"`
 	HostToken  string    `json:"host_token"`
 	EnrolledAt time.Time `json:"enrolled_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// RefreshResponse is returned by POST /api/token/refresh: a freshly minted signed token for the already-authenticated host plus its new
+// expiry. host_id echoes the authenticated identity for symmetry with enroll; the agent keeps its existing host_id and swaps only the
+// token + expiry.
+type RefreshResponse struct {
+	HostID    string    `json:"host_id"`
+	HostToken string    `json:"host_token"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // RotationTrigger describes who initiated a host-token rotation. Used by the audit row payload so reviewers can distinguish a routine
@@ -51,33 +57,18 @@ type EnrollResponse struct {
 type RotationTrigger string
 
 const (
-	// RotationTriggerAuto is the verify-time trigger: an agent presented
-	// a token whose host_token_issued_at + lifetime is in the past.
+	// RotationTriggerAuto is reserved for an automatic (non-operator) credential cycle. No path emits it today (the verify-time
+	// auto-rotation it once labelled was removed with the move to self-validating tokens); retained for the audit-payload vocabulary.
 	RotationTriggerAuto RotationTrigger = "auto"
 	// RotationTriggerOperator is the explicit operator-driven trigger
 	// from POST /api/enrollments/{host_id}/rotate.
 	RotationTriggerOperator RotationTrigger = "operator"
 )
 
-// RotateResult is the operator-visible outcome of a host-token rotation.
-// The newly minted raw token is intentionally NOT in this struct: the
-// agent receives it via the rotate_token command on its next poll, and
-// surfacing it through the operator API would tempt copy-paste flows
-// that bypass the command queue. PreviousTokenIDPrefix is the hex of
-// the first 4 bytes of the rotated-out host_token_id, included on the
-// operator's UI confirmation + the audit row so a reviewer can pivot
-// from a rotation event to the verify request that triggered it
-// (audit + access-log share the X-Request-ID / trace_id correlation).
-//
-// CommandID is the rotate_token command queued for the agent. *int64
-// (not int64) so a rotation that committed in the DB but failed to
-// queue the agent command is observably distinct on the wire: nil ->
-// JSON omits command_id, telling the operator UI "rotation succeeded
-// but the agent will only pick up the new token via re-enroll after
-// the previous-token grace expires." A bare int64 zero would be
-// indistinguishable from a successful queue at id 0 (auto-increment
-// never returns 0, but a JSON consumer can't know that without
-// reading server source).
+// RotateResult is the operator-visible outcome of a credential cycle. Under the self-validating-token model RotateToken bumps the
+// host's token_epoch (invalidating its current token once the revocation snapshot catches up) rather than minting+pushing a new token,
+// so both fields are now zero-valued: there is no rotated-out token id to prefix and no agent command to reference. The struct shape is
+// retained for wire compatibility with the operator UI; the agent recovers by re-enrolling.
 type RotateResult struct {
 	PreviousTokenIDPrefix string `json:"previous_token_id_prefix"`
 	CommandID             *int64 `json:"command_id,omitempty"`
@@ -107,7 +98,6 @@ var (
 	ErrNotFound = errors.New("endpoint: enrollment not found")
 )
 
-// CommandInserter is a closure type defined in endpoint/bootstrap (consumed by endpoint/internal/service via the call site
-// `s.commands(ctx, hostID, ct, payload)`). cmd/main passes responseCtx.Service().Insert as a method value, which matches the closure
-// shape; using a func type instead of a one-method interface lets endpoint and rules share the pattern without endpoint importing
-// response/api.
+// CommandInserter (the closure type lives in endpoint/internal/service, aliased in endpoint/bootstrap) is retained for wiring
+// compatibility. The endpoint context no longer emits commands under the self-validating-token model: token refresh is agent-pull and
+// credential cycling is an epoch bump, so nothing calls it today.

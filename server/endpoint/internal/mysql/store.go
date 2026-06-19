@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/fleetdm/edr/server/endpoint/internal/revocation"
 )
 
 const (
@@ -72,18 +74,23 @@ type RegisterRequest struct {
 	SourceIP     string
 }
 
-// RegisterResult carries the generated token back to the caller.
+// RegisterResult carries the generated token + the epoch the row now holds back to the caller. Epoch is 0 for a brand-new host and the
+// preserved (possibly operator-bumped) value for a re-enroll; the service mints the signed token at this epoch so it is not immediately
+// rejected by the revocation snapshot.
 type RegisterResult struct {
 	HostID     string
 	HostToken  string
 	EnrolledAt time.Time
+	Epoch      int64
 }
 
-// Register issues a new token for HostID and replaces any existing row keyed by host_id. The enrollments table holds the *current*
-// enrollment state only; an older design called for an archive UPDATE before REPLACE, but REPLACE on the primary key deletes and
-// re-inserts the row, so "re-enrolled" audit metadata cannot survive in the same row. Enrollment history (revocation reasons, who
-// revoked, etc.) is deferred to a dedicated history table; for the MVP, the audit trail lives in structured logs emitted by handler.go
-// (enroll) and admin.go (revoke).
+// Register upserts the enrollment row keyed by host_id: a brand-new host inserts a fresh row at token_epoch 0; a re-enroll updates the
+// credential + metadata IN PLACE. token_epoch is deliberately NOT in the UPDATE list, so it is PRESERVED across a re-enroll. That is
+// load-bearing for credential cycling: an operator epoch bump (RotateToken) must survive the agent's automatic re-enroll, or a stolen
+// pre-rotate token would become valid again the moment the host re-enrolls (the re-enroll resets the epoch back to 0). The revocation
+// state and the dead grace-window previous_* columns are cleared so a re-enroll is otherwise a clean slate, matching the old REPLACE
+// semantics. Enrollment history (who revoked, prior reasons) is deferred to a dedicated history table; the MVP audit trail lives in
+// structured logs emitted by handler.go (enroll) and admin.go (revoke).
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
 	token, err := generateToken()
 	if err != nil {
@@ -97,23 +104,46 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 	// so sourcing it from the app clock rather than the DB default keeps a single clock per write.
 	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
-		REPLACE INTO enrollments (
+		INSERT INTO enrollments (
 			host_id, host_token_id, host_token_hash,
 			hostname, agent_version, os_version, source_ip,
 			enrolled_at, host_token_issued_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			host_token_id             = VALUES(host_token_id),
+			host_token_hash           = VALUES(host_token_hash),
+			hostname                  = VALUES(hostname),
+			agent_version             = VALUES(agent_version),
+			os_version                = VALUES(os_version),
+			source_ip                 = VALUES(source_ip),
+			enrolled_at               = VALUES(enrolled_at),
+			host_token_issued_at      = VALUES(host_token_issued_at),
+			previous_host_token_id    = NULL,
+			previous_host_token_hash  = NULL,
+			previous_token_expires_at = NULL,
+			revoked_at                = NULL,
+			revoke_reason             = NULL,
+			revoked_by                = NULL
 	`,
 		req.HostID, tokID, hash,
 		req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP,
 		now, now,
 	); err != nil {
-		return nil, fmt.Errorf("insert enrollment: %w", err)
+		return nil, fmt.Errorf("upsert enrollment: %w", err)
+	}
+
+	// Read back the epoch the row now carries (0 for a fresh host, the preserved value for a re-enroll). Sourced from the DB rather than
+	// assumed 0 so the minted token matches the host's current epoch and survives the revocation-snapshot check.
+	var epoch int64
+	if err := s.db.GetContext(ctx, &epoch, `SELECT token_epoch FROM enrollments WHERE host_id = ?`, req.HostID); err != nil {
+		return nil, fmt.Errorf("read token epoch: %w", err)
 	}
 
 	return &RegisterResult{
 		HostID:     req.HostID,
 		HostToken:  token,
 		EnrolledAt: now,
+		Epoch:      epoch,
 	}, nil
 }
 
@@ -478,6 +508,75 @@ func (s *Store) Revoke(ctx context.Context, hostID, reason, actor string) error 
 		return fmt.Errorf("revoke enrollment: %w", err)
 	}
 	return nil
+}
+
+// BumpTokenEpoch increments a host's token_epoch by one, invalidating every signed token minted at the prior epoch. This is the
+// operator-driven "cycle this host's credentials" action under the self-validating-token model: there is no opaque token to rotate, so
+// revocation of the current credential is expressed as an epoch bump that the per-replica revocation snapshot then enforces. The agent
+// recovers by re-enrolling (its refresh, carrying the now-stale epoch, 401s). Returns ErrNotFound when the host has no enrollment row.
+func (s *Store) BumpTokenEpoch(ctx context.Context, hostID string) error {
+	if hostID == "" {
+		return errors.New("BumpTokenEpoch: hostID is required")
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE enrollments SET token_epoch = token_epoch + 1 WHERE host_id = ?`, hostID)
+	if err != nil {
+		return fmt.Errorf("bump token epoch: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("bump token epoch rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// TokenStatus returns a host's current token_epoch and whether it is revoked. Used by the refresh path (not the hot verify path) to
+// mint a new token at the host's current epoch and to refuse refresh for a revoked host. Returns ErrNotFound when the host has no
+// enrollment row.
+func (s *Store) TokenStatus(ctx context.Context, hostID string) (epoch int64, revoked bool, err error) {
+	var row struct {
+		Epoch   int64 `db:"token_epoch"`
+		Revoked int   `db:"revoked"`
+	}
+	e := s.db.GetContext(ctx, &row, `
+		SELECT token_epoch, IF(revoked_at IS NOT NULL, 1, 0) AS revoked
+		FROM enrollments
+		WHERE host_id = ?
+	`, hostID)
+	if errors.Is(e, sql.ErrNoRows) {
+		return 0, false, ErrNotFound
+	}
+	if e != nil {
+		return 0, false, fmt.Errorf("token status: %w", e)
+	}
+	return row.Epoch, row.Revoked != 0, nil
+}
+
+// RevocationEntries returns every host that is revoked or has a non-zero token_epoch: the minimal set the revocation snapshot needs to
+// reject cut-off or cycled tokens. The bulk of a fleet is neither, so the result stays small even at large host counts. Implements
+// revocation.Source.
+func (s *Store) RevocationEntries(ctx context.Context) ([]revocation.Entry, error) {
+	var rows []struct {
+		HostID  string `db:"host_id"`
+		Epoch   int64  `db:"token_epoch"`
+		Revoked int    `db:"revoked"`
+	}
+	// IF(...,1,0) rather than the bare boolean expression: the MySQL driver yields int64 for a boolean column expression, which
+	// database/sql will not Scan into a Go bool, so we select an explicit int and map it below.
+	if err := s.db.SelectContext(ctx, &rows, `
+		SELECT host_id, token_epoch, IF(revoked_at IS NOT NULL, 1, 0) AS revoked
+		FROM enrollments
+		WHERE token_epoch > 0 OR revoked_at IS NOT NULL
+	`); err != nil {
+		return nil, fmt.Errorf("load revocation entries: %w", err)
+	}
+	out := make([]revocation.Entry, len(rows))
+	for i, r := range rows {
+		out[i] = revocation.Entry{HostID: r.HostID, Epoch: r.Epoch, Revoked: r.Revoked != 0}
+	}
+	return out, nil
 }
 
 // ErrNotFound mirrors sql.ErrNoRows without leaking the database concept to callers that

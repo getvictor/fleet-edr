@@ -53,12 +53,17 @@ const (
 	// logAttrHostID is the structured-log attribute key for the agent's persisted host_id. Centralised so a key rename propagates
 	// uniformly to operator log dashboards.
 	logAttrHostID = "edr.host_id"
+
+	// refreshCheckInterval is how often the proactive refresh loop checks whether the current token is within its refresh window. The
+	// window itself is two-thirds of the token lifetime, so a one-minute check is ample granularity for a 60-minute token.
+	refreshCheckInterval = time.Minute
 )
 
 // Persisted is the on-disk representation of a successful enrollment.
 type Persisted struct {
 	HostID     string    `plist:"host_id" json:"host_id"`
 	HostToken  string    `plist:"host_token" json:"host_token"`
+	ExpiresAt  time.Time `plist:"expires_at" json:"expires_at"`
 	EnrolledAt time.Time `plist:"enrolled_at" json:"enrolled_at"`
 	ServerURL  string    `plist:"server_url" json:"server_url"`
 }
@@ -72,6 +77,12 @@ type TokenProvider interface {
 	HostID() string
 	OnUnauthorized(ctx context.Context)
 	Rotate(ctx context.Context, newToken string) error
+}
+
+// Refresher is implemented by the concrete provider to run the proactive token-refresh loop. It is an optional interface (the agent
+// type-asserts the TokenProvider to it) so test doubles that don't need refresh stay minimal. RunRefresh blocks until ctx is cancelled.
+type Refresher interface {
+	RunRefresh(ctx context.Context)
 }
 
 // Options bundle the inputs to Ensure. Populate from agent/config and env.
@@ -112,7 +123,7 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 				opts.TokenFile, existing.ServerURL, opts.ServerURL,
 			)
 		}
-		p.state.Store(&persistedState{p: existing})
+		p.state.Store(&persistedState{p: existing, refreshAt: computeRefreshAt(time.Now(), existing.ExpiresAt)})
 		opts.Logger.InfoContext(ctx, "loaded persisted token",
 			logAttrHostID, existing.HostID, "edr.token_file", opts.TokenFile)
 		return p, nil
@@ -140,6 +151,9 @@ func Ensure(ctx context.Context, opts Options) (TokenProvider, error) {
 
 type persistedState struct {
 	p *Persisted
+	// refreshAt is when the proactive refresh loop should renew this token: two-thirds through its remaining lifetime at the moment it
+	// was received or loaded. Zero means "no proactive refresh" (legacy token with no expiry, or already expired).
+	refreshAt time.Time
 }
 
 type provider struct {
@@ -199,7 +213,7 @@ func (p *provider) Rotate(ctx context.Context, newToken string) error {
 	if err := writePersisted(p.opts.TokenFile, &next); err != nil {
 		return fmt.Errorf("persist rotated token: %w", err)
 	}
-	p.state.Store(&persistedState{p: &next})
+	p.state.Store(&persistedState{p: &next, refreshAt: computeRefreshAt(time.Now(), next.ExpiresAt)})
 	p.logger.InfoContext(ctx, "agent token rotated", logAttrHostID, next.HostID)
 	return nil
 }
@@ -224,6 +238,113 @@ func (p *provider) OnUnauthorized(ctx context.Context) {
 	if err := p.enroll(ctx); err != nil {
 		p.logger.WarnContext(ctx, "reenroll failed", "err", err)
 	}
+}
+
+// computeRefreshAt returns when the agent should proactively refresh a token expiring at exp, given the current time now: two-thirds of
+// the way through the remaining lifetime. A zero or already-past exp returns the zero time, which the refresh loop treats as "no
+// proactive refresh" (a legacy token with no expiry that will 401 and re-enroll, or an already-expired one).
+func computeRefreshAt(now, exp time.Time) time.Time {
+	if exp.IsZero() || !exp.After(now) {
+		return time.Time{}
+	}
+	return now.Add(exp.Sub(now) * 2 / 3)
+}
+
+// RunRefresh runs the proactive token-refresh loop until ctx is cancelled. Each tick it checks whether the current token has entered
+// its refresh window (computeRefreshAt) and, if so, calls POST /api/token/refresh to mint a fresh token before the current one expires,
+// so a live agent never lapses without a full re-enroll. Refresh uses only the current token (no enroll secret), so it works even on a
+// host that has no EDR_ENROLL_SECRET on disk.
+func (p *provider) RunRefresh(ctx context.Context) {
+	// Check immediately on entry, not only on the first tick: an agent that just started or resumed from sleep may already hold a token
+	// past its refresh point (or within a tick of expiry). Waiting a full refreshCheckInterval could let it expire first, after which
+	// even /api/token/refresh 401s and recovery needs the enroll secret. Then check on every tick.
+	p.maybeRefresh(ctx)
+	ticker := time.NewTicker(refreshCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.maybeRefresh(ctx)
+		}
+	}
+}
+
+// maybeRefresh refreshes the token if it has entered its refresh window (computeRefreshAt has passed). A no-op otherwise; safe to call
+// repeatedly from both the immediate-entry check and the ticker.
+func (p *provider) maybeRefresh(ctx context.Context) {
+	st := p.state.Load()
+	if st == nil || st.p == nil || st.refreshAt.IsZero() || time.Now().Before(st.refreshAt) {
+		return
+	}
+	if err := p.refreshOnce(ctx); err != nil {
+		p.logger.WarnContext(ctx, "token refresh failed", "err", err)
+	}
+}
+
+// refreshOnce performs one POST /api/token/refresh round-trip and swaps in the returned token. A 401 means the token was revoked or
+// otherwise rejected: fall back to the re-enroll path (which needs EDR_ENROLL_SECRET) rather than spinning on a dead token.
+func (p *provider) refreshOnce(ctx context.Context) error {
+	cur := p.state.Load()
+	if cur == nil || cur.p == nil {
+		return errors.New("refresh: no persisted token")
+	}
+	client, err := p.httpClient() //nolint:contextcheck // httpClient is pure config assembly; see enroll's identical call.
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.opts.ServerURL+"/api/token/refresh", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+cur.p.HostToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("post refresh: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		p.logger.WarnContext(ctx, "token refresh unauthorized; re-enrolling", logAttrHostID, cur.p.HostID)
+		p.OnUnauthorized(ctx)
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, enrollErrorBodyLimit))
+		return fmt.Errorf("refresh server returned %d: %s", resp.StatusCode, string(b))
+	}
+	var body struct {
+		HostToken string    `json:"host_token"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return fmt.Errorf("decode refresh response: %w", err)
+	}
+	if body.HostToken == "" {
+		return errors.New("refresh: empty token in response")
+	}
+	return p.applyRefresh(ctx, body.HostToken, body.ExpiresAt)
+}
+
+// applyRefresh atomically swaps the persisted token + expiry to the refreshed values (write-to-temp + rename), mirroring Rotate but
+// also carrying the new expiry so the refresh loop reschedules. Serialised against re-enroll / rotate via reenrollMu.
+func (p *provider) applyRefresh(ctx context.Context, newToken string, exp time.Time) error {
+	p.reenrollMu.Lock()
+	defer p.reenrollMu.Unlock()
+	cur := p.state.Load()
+	if cur == nil || cur.p == nil {
+		return errors.New("applyRefresh: no persisted state")
+	}
+	next := *cur.p
+	next.HostToken = newToken
+	next.ExpiresAt = exp
+	if err := writePersisted(p.opts.TokenFile, &next); err != nil {
+		return fmt.Errorf("persist refreshed token: %w", err)
+	}
+	p.state.Store(&persistedState{p: &next, refreshAt: computeRefreshAt(time.Now(), exp)})
+	p.logger.InfoContext(ctx, "host token refreshed", logAttrHostID, next.HostID, "edr.token.expires_at", exp)
+	return nil
 }
 
 // enroll performs the actual /api/enroll call + persist. Thread-safety is the caller's
@@ -276,6 +397,7 @@ func (p *provider) enroll(ctx context.Context) error {
 		HostID     string    `json:"host_id"`
 		HostToken  string    `json:"host_token"`
 		EnrolledAt time.Time `json:"enrolled_at"`
+		ExpiresAt  time.Time `json:"expires_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
 		return fmt.Errorf("decode enroll response: %w", err)
@@ -284,13 +406,14 @@ func (p *provider) enroll(ctx context.Context) error {
 	persisted := &Persisted{
 		HostID:     respBody.HostID,
 		HostToken:  respBody.HostToken,
+		ExpiresAt:  respBody.ExpiresAt,
 		EnrolledAt: respBody.EnrolledAt,
 		ServerURL:  p.opts.ServerURL,
 	}
 	if err := writePersisted(p.opts.TokenFile, persisted); err != nil {
 		return fmt.Errorf("persist token file: %w", err)
 	}
-	p.state.Store(&persistedState{p: persisted})
+	p.state.Store(&persistedState{p: persisted, refreshAt: computeRefreshAt(time.Now(), persisted.ExpiresAt)})
 
 	p.logger.InfoContext(ctx, "agent enrolled",
 		"edr.enroll.result", "success",
@@ -451,6 +574,7 @@ func marshalMinimalPlist(p *Persisted) []byte {
 	writePlistString(&buf, "host_token", p.HostToken)
 	writePlistString(&buf, "server_url", p.ServerURL)
 	writePlistDate(&buf, "enrolled_at", p.EnrolledAt)
+	writePlistDate(&buf, "expires_at", p.ExpiresAt)
 	buf.WriteString(`</dict></plist>` + "\n")
 	return buf.Bytes()
 }
@@ -523,9 +647,12 @@ func applyPlistElement(dec *xml.Decoder, se xml.StartElement, keyPtr *string, p 
 		if err := dec.DecodeElement(&v, &se); err != nil {
 			return err
 		}
-		if *keyPtr == "enrolled_at" {
-			if t, err := time.Parse(time.RFC3339, strings.TrimSpace(v)); err == nil {
+		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(v)); err == nil {
+			switch *keyPtr {
+			case "enrolled_at":
 				p.EnrolledAt = t
+			case "expires_at":
+				p.ExpiresAt = t
 			}
 		}
 		*keyPtr = ""

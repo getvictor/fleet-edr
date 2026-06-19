@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"golang.org/x/net/http2"
 
 	"github.com/fleetdm/edr/agent/coalesce"
 	"github.com/fleetdm/edr/agent/codesign"
@@ -60,6 +61,11 @@ const (
 	// commanderPollInterval is how often the commander polls the server for
 	// pending commands. Mirrored as the package-level default in commander.New.
 	commanderPollInterval = 5 * time.Second
+
+	// h2ReadIdleTimeout / h2PingTimeout configure HTTP/2 keep-alive PINGs: if no frame arrives for ReadIdleTimeout, send a PING and
+	// fail the connection if no ack lands within PingTimeout, so a half-open link (sleep, NAT rebind) is detected and re-established.
+	h2ReadIdleTimeout = 15 * time.Second
+	h2PingTimeout     = 10 * time.Second
 
 	// receiverEventBuffer is the channel buffer between the XPC reader goroutine
 	// and the agent's enqueue loop. 4 KiB events is one ring of slow-drain margin.
@@ -128,6 +134,12 @@ func run() error {
 	// as the pre-enroll derived value above). Keep hostID in sync for the commander.
 	if tpID := tokenProvider.HostID(); tpID != "" {
 		hostID = tpID
+	}
+
+	// Proactively refresh the host token before it expires so a live agent never lapses (self-validating tokens have a bounded TTL).
+	// Optional capability: only the concrete provider implements Refresher; test doubles skip it.
+	if refresher, ok := tokenProvider.(enrollment.Refresher); ok {
+		go refresher.RunRefresh(ctx)
 	}
 
 	q, err := queue.Open(ctx, cfg.QueueDBPath, queue.Options{MaxBytes: cfg.QueueMaxBytes, Logger: logger})
@@ -253,6 +265,15 @@ func newAgentHTTPClient(cfg *config.Config, logger *slog.Logger) (http.RoundTrip
 	}
 	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
 	baseTransport.TLSClientConfig = tlsCfg
+	// Enable HTTP/2 with keep-alive PINGs so the long-lived agent connection (shared by the uploader + commander) detects a half-open
+	// link (laptop sleep, NAT rebind) and re-establishes it instead of hanging until the request timeout. ConfigureTransports negotiates
+	// h2 over the existing TLS config and returns the h2 transport for tuning. Non-fatal on failure: the agent keeps HTTP/1.1 keep-alive.
+	if h2, h2err := http2.ConfigureTransports(baseTransport); h2err == nil {
+		h2.ReadIdleTimeout = h2ReadIdleTimeout
+		h2.PingTimeout = h2PingTimeout
+	} else {
+		logger.WarnContext(context.Background(), "http2 configure failed; using http/1.1 keep-alive", "err", h2err)
+	}
 	agentTransport := otelhttp.NewTransport(baseTransport)
 	return agentTransport, &http.Client{Transport: agentTransport, Timeout: agentHTTPTimeout}, nil
 }

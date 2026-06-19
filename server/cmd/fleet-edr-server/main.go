@@ -121,6 +121,16 @@ func run() error {
 		return err
 	}
 
+	// The revocation snapshot is the ONLY revocation enforcement on the no-DB verify hot path, so an empty snapshot is "revocation
+	// disabled" (absent host => allowed). Fail closed: load it once before serving and treat a failed initial load as fatal rather than
+	// serving with an allow-all snapshot. The DB was just exercised by the schema apply above, so a failure here is a real outage, not a
+	// transient blip. After the initial load the background ticker keeps it fresh (and retains the previous snapshot on a later blip).
+	revSnap := endpointCtx.RevocationSnapshot()
+	if rerr := revSnap.Refresh(ctx); rerr != nil {
+		return fmt.Errorf("initial revocation snapshot load: %w", rerr)
+	}
+	go revSnap.Run(ctx, endpointbootstrap.DefaultRevocationRefreshInterval)
+
 	// Build the metrics recorder AFTER detectionCtx + endpointCtx exist so the gauge source can read live state from both. Wire it back
 	// into detectionCtx via SetMetrics so the engine + intake + pipeline (processttl + retention) all instrument: the recorder + recorder
 	// consumer dependency cycle resolves through this two-phase setup.
@@ -218,7 +228,8 @@ func openContexts(
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, responseCtx.Service().Insert, identityCtx, kr.Derive(keyring.HostTokenPepperLabel))
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx,
+		kr.Derive(keyring.HostTokenPepperLabel), kr.Derive(keyring.HostTokenSigningLabel))
 	return
 }
 
@@ -393,21 +404,20 @@ func openEndpoint(
 	logger *slog.Logger,
 	db *sqlx.DB,
 	cfg *config.Config,
-	cmdInserter endpointbootstrap.CommandInserter,
 	identityCtx *identitybootstrap.Identity,
 	hostTokenPepper []byte,
+	hostTokenSigningKey []byte,
 ) (*endpointbootstrap.Endpoint, error) {
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,
 		Logger:              logger,
 		EnrollSecret:        cfg.EnrollSecret,
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
-		CommandInserter:     cmdInserter,
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),
 		HostTokenLifetime:   cfg.HostTokenLifetime,
-		HostTokenGrace:      cfg.HostTokenGrace,
 		HostTokenPepper:     hostTokenPepper,
+		HostTokenSigningKey: hostTokenSigningKey,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)
@@ -598,10 +608,12 @@ func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
 	hostTokenMW := d.endpointCtx.HostTokenMiddleware()
 	hostMux := http.NewServeMux()
 	hostMux.Handle("POST /api/events", d.detectionCtx.Service().IngestHandler())
+	hostMux.Handle("POST /api/token/refresh", d.endpointCtx.TokenRefreshHandler())
 	d.responseCtx.RegisterAgentRoutes(hostMux)
 	hostProtected := hostTokenMW(hostMux)
 	for _, p := range []string{
 		"POST /api/events",
+		"POST /api/token/refresh",
 		"GET /api/commands",
 		"PUT /api/commands/{id}",
 	} {
