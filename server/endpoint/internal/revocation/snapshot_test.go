@@ -81,15 +81,31 @@ func TestSnapshot_Run_RefreshesThenStops(t *testing.T) {
 	<-done
 }
 
-func TestSnapshot_Forget(t *testing.T) {
+func TestSnapshot_Observe(t *testing.T) {
 	t.Parallel()
-	src := &fakeSource{entries: []Entry{{HostID: "h", Revoked: true}}}
-	s := NewSnapshot(src, nil)
-	require.NoError(t, s.Refresh(t.Context()))
-	assert.False(t, s.Allowed("h", 0))
-	s.Forget("h")
-	assert.True(t, s.Allowed("h", 0), "forgotten host is allowed without waiting for a refresh")
-	assert.Equal(t, 0, s.Size())
+
+	t.Run("clears a stale revoked entry on re-enroll at epoch 0", func(t *testing.T) {
+		t.Parallel()
+		src := &fakeSource{entries: []Entry{{HostID: "h", Revoked: true}}}
+		s := NewSnapshot(src, nil)
+		require.NoError(t, s.Refresh(t.Context()))
+		assert.False(t, s.Allowed("h", 0))
+		s.Observe("h", 0)
+		assert.True(t, s.Allowed("h", 0), "re-enrolled host at epoch 0 is allowed without waiting for a refresh")
+		assert.Equal(t, 0, s.Size())
+	})
+
+	t.Run("re-enroll at a bumped epoch accepts the new token but still rejects the pre-rotate token", func(t *testing.T) {
+		t.Parallel()
+		// A rotated host: the snapshot shows it epoch-bumped to 2. A re-enroll preserves that epoch, so Observe records {epoch 2}.
+		src := &fakeSource{entries: []Entry{{HostID: "h", Epoch: 2}}}
+		s := NewSnapshot(src, nil)
+		require.NoError(t, s.Refresh(t.Context()))
+		s.Observe("h", 2)
+		assert.True(t, s.Allowed("h", 2), "the freshly minted current-epoch token verifies immediately")
+		assert.False(t, s.Allowed("h", 1), "a pre-rotate token below the preserved epoch stays rejected with no window")
+		assert.Equal(t, 1, s.Size(), "the host is retained (not dropped) so the lower-epoch token keeps failing")
+	})
 }
 
 // spec:agent-enrollment/revocation-is-enforced-by-a-per-replica-snapshot/snapshot-refresh-failure-retains-the-previous-view

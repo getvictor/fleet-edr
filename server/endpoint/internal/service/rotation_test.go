@@ -157,11 +157,17 @@ func TestRotateToken_BumpsEpochAndInvalidates(t *testing.T) {
 	_, err = svc.VerifyToken(t.Context(), res.HostToken)
 	require.ErrorIs(t, err, api.ErrInvalidToken, "pre-rotate token rejected once the epoch bump is visible")
 
+	// Re-enroll PRESERVES the bumped epoch (it is not reset to 0), so the fresh token verifies while the pre-rotate token stays
+	// rejected. This is the credential-cycling-survives-re-enroll guarantee: if Register reset the epoch, the stolen pre-rotate token
+	// below would become valid again here, defeating the rotate.
 	res2 := enrollForTest(t, svc)
 	require.NoError(t, snap.Refresh(t.Context()))
 	hostID, err := svc.VerifyToken(t.Context(), res2.HostToken)
-	require.NoError(t, err, "re-enroll mints a fresh token at the reset epoch")
+	require.NoError(t, err, "re-enroll mints a fresh token at the preserved epoch")
 	assert.Equal(t, testHostID, hostID)
+
+	_, err = svc.VerifyToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken, "the pre-rotate token MUST stay rejected after re-enroll: the epoch bump is monotonic")
 }
 
 // TestRotateToken_NotFound: rotating a host with no enrollment is ErrNotFound.

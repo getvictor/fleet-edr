@@ -74,18 +74,23 @@ type RegisterRequest struct {
 	SourceIP     string
 }
 
-// RegisterResult carries the generated token back to the caller.
+// RegisterResult carries the generated token + the epoch the row now holds back to the caller. Epoch is 0 for a brand-new host and the
+// preserved (possibly operator-bumped) value for a re-enroll; the service mints the signed token at this epoch so it is not immediately
+// rejected by the revocation snapshot.
 type RegisterResult struct {
 	HostID     string
 	HostToken  string
 	EnrolledAt time.Time
+	Epoch      int64
 }
 
-// Register issues a new token for HostID and replaces any existing row keyed by host_id. The enrollments table holds the *current*
-// enrollment state only; an older design called for an archive UPDATE before REPLACE, but REPLACE on the primary key deletes and
-// re-inserts the row, so "re-enrolled" audit metadata cannot survive in the same row. Enrollment history (revocation reasons, who
-// revoked, etc.) is deferred to a dedicated history table; for the MVP, the audit trail lives in structured logs emitted by handler.go
-// (enroll) and admin.go (revoke).
+// Register upserts the enrollment row keyed by host_id: a brand-new host inserts a fresh row at token_epoch 0; a re-enroll updates the
+// credential + metadata IN PLACE. token_epoch is deliberately NOT in the UPDATE list, so it is PRESERVED across a re-enroll. That is
+// load-bearing for credential cycling: an operator epoch bump (RotateToken) must survive the agent's automatic re-enroll, or a stolen
+// pre-rotate token would become valid again the moment the host re-enrolls (the re-enroll resets the epoch back to 0). The revocation
+// state and the dead grace-window previous_* columns are cleared so a re-enroll is otherwise a clean slate, matching the old REPLACE
+// semantics. Enrollment history (who revoked, prior reasons) is deferred to a dedicated history table; the MVP audit trail lives in
+// structured logs emitted by handler.go (enroll) and admin.go (revoke).
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
 	token, err := generateToken()
 	if err != nil {
@@ -99,23 +104,46 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 	// so sourcing it from the app clock rather than the DB default keeps a single clock per write.
 	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
-		REPLACE INTO enrollments (
+		INSERT INTO enrollments (
 			host_id, host_token_id, host_token_hash,
 			hostname, agent_version, os_version, source_ip,
 			enrolled_at, host_token_issued_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			host_token_id             = VALUES(host_token_id),
+			host_token_hash           = VALUES(host_token_hash),
+			hostname                  = VALUES(hostname),
+			agent_version             = VALUES(agent_version),
+			os_version                = VALUES(os_version),
+			source_ip                 = VALUES(source_ip),
+			enrolled_at               = VALUES(enrolled_at),
+			host_token_issued_at      = VALUES(host_token_issued_at),
+			previous_host_token_id    = NULL,
+			previous_host_token_hash  = NULL,
+			previous_token_expires_at = NULL,
+			revoked_at                = NULL,
+			revoke_reason             = NULL,
+			revoked_by                = NULL
 	`,
 		req.HostID, tokID, hash,
 		req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP,
 		now, now,
 	); err != nil {
-		return nil, fmt.Errorf("insert enrollment: %w", err)
+		return nil, fmt.Errorf("upsert enrollment: %w", err)
+	}
+
+	// Read back the epoch the row now carries (0 for a fresh host, the preserved value for a re-enroll). Sourced from the DB rather than
+	// assumed 0 so the minted token matches the host's current epoch and survives the revocation-snapshot check.
+	var epoch int64
+	if err := s.db.GetContext(ctx, &epoch, `SELECT token_epoch FROM enrollments WHERE host_id = ?`, req.HostID); err != nil {
+		return nil, fmt.Errorf("read token epoch: %w", err)
 	}
 
 	return &RegisterResult{
 		HostID:     req.HostID,
 		HostToken:  token,
 		EnrolledAt: now,
+		Epoch:      epoch,
 	}, nil
 }
 

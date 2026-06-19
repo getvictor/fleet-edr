@@ -121,16 +121,22 @@ func (s *Snapshot) Size() int {
 	return len(s.entries)
 }
 
-// Forget removes a host from this replica's snapshot so it is immediately treated as allowed, without waiting for the next refresh. The
-// service calls this on a successful (re-)enrollment: the host has proven the enroll secret and its DB row was reset to a clean state
-// (epoch 0, not revoked), so the freshly issued token must verify right away on the replica that handled the enroll. This is a
-// best-effort, per-replica optimization: a concurrent refresh that already read the host's pre-reset row could re-add it, but the next
-// refresh drops it again, so the worst case is the normal eventual-consistency window rather than a regression. Other replicas converge
-// on their own refresh.
-func (s *Snapshot) Forget(hostID string) {
+// Observe records a host's post-enrollment revocation state on this replica so a freshly issued token is accepted immediately, without
+// waiting for the next refresh. The service calls this on a successful (re-)enrollment with the epoch the row now carries: the host has
+// proven the enroll secret and its row was reset to a not-revoked state, but its token_epoch is PRESERVED across a re-enroll so an
+// operator credential cycle survives. Setting the entry to {epoch, not revoked} (rather than dropping the host) keeps any pre-rotate
+// token below that epoch rejected on this replica with no staleness window, while the just-minted current-epoch token verifies. A
+// never-cycled host (epoch 0) carries no revocation state, so it is simply dropped from the map. Best-effort + per-replica: a concurrent
+// refresh that read the pre-enroll row could momentarily disagree, but the next refresh reconciles to the DB; other replicas converge on
+// their own refresh.
+func (s *Snapshot) Observe(hostID string, epoch int64) {
 	s.mu.Lock()
-	delete(s.entries, hostID)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if epoch <= 0 {
+		delete(s.entries, hostID)
+		return
+	}
+	s.entries[hostID] = Entry{HostID: hostID, Epoch: epoch, Revoked: false}
 }
 
 // Refresh reloads the snapshot from the source. On error the previous snapshot is retained (stale is better than empty: dropping to

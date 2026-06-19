@@ -110,8 +110,16 @@ func (s *Signer) Verify(token string, now time.Time) (Claims, error) {
 	if !ok || version != formatVersion {
 		return Claims{}, ErrMalformed
 	}
-	gotMAC, err := base64.RawURLEncoding.DecodeString(mac)
+	// Strict() rejects a non-canonical encoding (non-zero trailing bits in the final base64 char). Without it the MAC is malleable: the
+	// last char carries 2 unused bits, so a token whose final byte is altered only in those bits decodes to the same 32 MAC bytes and
+	// still verifies. Strict decoding makes every byte of the token significant.
+	gotMAC, err := base64.RawURLEncoding.Strict().DecodeString(mac)
 	if err != nil {
+		return Claims{}, ErrMalformed
+	}
+	// hmac.Equal is only constant-time over equal-length inputs; a MAC that does not decode to the HMAC-SHA256 width is structurally
+	// malformed, not a signature mismatch. Reject it here so the constant-time compare below only ever sees two 32-byte slices.
+	if len(gotMAC) != sha256.Size {
 		return Claims{}, ErrMalformed
 	}
 	// Constant-time compare; recompute over the exact received bytes (version + "." + payload), never a re-encoding, so a payload that

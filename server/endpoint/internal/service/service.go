@@ -119,13 +119,15 @@ func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP st
 	if err != nil {
 		return api.EnrollResponse{}, fmt.Errorf("register enrollment: %w", err)
 	}
-	// Register's REPLACE INTO reset the row to a clean state (epoch 0, not revoked), so the host mints at epoch 0. Evict it from this
-	// replica's revocation snapshot so the token we are about to mint verifies immediately here, instead of being rejected by a stale
-	// snapshot (still showing the pre-re-enroll epoch / revoked state) for up to the refresh interval: the transient-401-after-re-enroll
-	// race. Other replicas converge on their next refresh.
-	s.revocations.Forget(res.HostID)
+	// Register preserved the host's token_epoch across a re-enroll (a brand-new host is 0) and cleared any revocation, returning the
+	// epoch we must mint at. Minting at the preserved epoch is what keeps an operator credential cycle effective: a stolen pre-rotate
+	// token stays below the current epoch and is still rejected after the legitimate agent re-enrolls. Record the post-enroll state in
+	// this replica's revocation snapshot so the freshly minted token verifies immediately here (instead of being rejected by a stale
+	// snapshot still showing the pre-re-enroll revoked state for up to the refresh interval: the transient-401-after-re-enroll race),
+	// while any pre-rotate token below this epoch stays rejected with no window. Other replicas converge on their next refresh.
+	s.revocations.Observe(res.HostID, res.Epoch)
 	now := time.Now().UTC()
-	token, exp, err := s.signer.Mint(res.HostID, 0, s.tokenTTL, now)
+	token, exp, err := s.signer.Mint(res.HostID, res.Epoch, s.tokenTTL, now)
 	if err != nil {
 		return api.EnrollResponse{}, fmt.Errorf("mint host token: %w", err)
 	}
