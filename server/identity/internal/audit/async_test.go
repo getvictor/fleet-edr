@@ -254,13 +254,6 @@ func TestAsyncWriter_ShutdownRace_NoLostEvents(t *testing.T) {
 // numeric without dragging math.MaxInt into a single test file.
 const intMaxAsUint64 uint64 = 1<<63 - 1
 
-// drain bounded by the global deadline: when the wall clock runs out before the queue empties, remaining events spill to slog as
-// "drain_deadline_exceeded" rather than blocking shutdown forever.
-func TestAsyncWriter_DrainGlobalDeadline_SpillsToSlog(t *testing.T) {
-	t.Parallel()
-	t.Skip("skipping: the 30s global deadline is slow for a unit test; behavior is exercised by TestAsyncWriter_ShutdownRace_NoLostEvents under a degraded DB")
-}
-
 // Sanity: the dropped slog line carries the payload so post-incident
 // log scraping can reconstruct what didn't land in the DB.
 func TestAsyncWriter_DropPreservesPayload(t *testing.T) {
