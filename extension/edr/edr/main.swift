@@ -83,6 +83,13 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     /// body has nothing to do with. The collision would be a compile error if both kept the same selector.
     private func finalizeAggregate() {
         let verdict = aggregator.verdict
+        // A staged upgrade (the OS defers removing a previous extension version until reboot) leaves the network
+        // extension's Mach service bound to the terminated old version, so the agent loses network + DNS telemetry until
+        // the host reboots. Surface a distinct, operator-facing log line so a reboot is recognizably the fix rather than a
+        // generic "will complete after reboot" info line (#399). A fresh install reports .allSucceeded and gets nothing.
+        if let message = rebootRequiredMessage(for: action, verdict: verdict) {
+            logger.warning("\(message, privacy: .public)")
+        }
         switch postAggregateStep(for: action, verdict: verdict) {
         case .enableContentFilterThenDNSProxy:
             // Enable the content filter, then chain into the DNS proxy so a freshly activated host emits all

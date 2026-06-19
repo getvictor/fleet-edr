@@ -168,9 +168,10 @@ func run() error {
 	go coalescer.Run(ctx)
 
 	pidTable := proctable.New()
-	go startReceiverLoop(ctx, logger, cfg.XPCService, coalescer.Handle, pidTable, true, esfDispatcher)
+	go startReceiverLoop(ctx, logger, cfg.XPCService, coalescer.Handle, pidTable, true, esfDispatcher, nil)
 	if cfg.NetXPCService != "" {
-		go startReceiverLoop(ctx, logger, cfg.NetXPCService, coalescer.Handle, pidTable, false, nil)
+		go startReceiverLoop(ctx, logger, cfg.NetXPCService, coalescer.Handle, pidTable, false, nil,
+			func() bool { return receiver.NEUpgradePending(ctx) })
 	}
 	go runUploader(ctx, up, logger)
 
@@ -374,6 +375,7 @@ func startReceiverLoop(
 	pt *proctable.Table,
 	updateTable bool,
 	dispatcher *receiver.Dispatcher,
+	upgradeProbe func() bool,
 ) {
 	factory := func() receiver.Connector {
 		return receiver.New(xpcService, receiverEventBuffer)
@@ -396,6 +398,10 @@ func startReceiverLoop(
 		hooks.OnConnected = dispatcher.Set
 		hooks.OnDisconnected = dispatcher.Clear
 	}
+	// Only the network-extension loop wires UpgradeProbe (nil for ESF): after a staged upgrade the NE's nesessionmanager-owned
+	// Mach service stays bound to the terminated old version until reboot, so a sustained NE connect failure paired with a
+	// pending-uninstall old version means "reboot required", not "needs approval" (#399).
+	hooks.UpgradeProbe = upgradeProbe
 	loop := receiver.NewLoop(factory, receiver.LoopConfig{
 		ServiceName:       xpcService,
 		HeartbeatInterval: xpcHeartbeatInterval,

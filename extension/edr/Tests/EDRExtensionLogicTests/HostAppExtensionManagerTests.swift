@@ -292,4 +292,20 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertTrue(usage.lowercased().contains("extra positional"),
                       "usage message must call out the extra-positional rejection rule")
     }
+
+    // spec:host-app-extension-manager/a-staged-upgrade-surfaces-a-reboot-required-signal/activation-will-complete-after-reboot
+    // spec:host-app-extension-manager/a-staged-upgrade-surfaces-a-reboot-required-signal/fresh-activation-does-not-prompt-for-reboot
+    //
+    // #399: a staged upgrade (.rebootRequired on activate) must surface an operator-facing reboot message, while a fresh
+    // install (.allSucceeded), a failure, and any deactivate path must not, so a fresh install never shows a spurious prompt.
+    func testRebootRequiredMessageOnlyForActivateRebootRequired() {
+        XCTAssertNotNil(rebootRequiredMessage(for: .activate, verdict: .rebootRequired),
+                        "a staged upgrade on activate must surface a reboot message")
+        XCTAssertNil(rebootRequiredMessage(for: .activate, verdict: .allSucceeded),
+                     "a fresh install (allSucceeded) must not prompt for reboot")
+        XCTAssertNil(rebootRequiredMessage(for: .activate, verdict: .anyFailed),
+                     "a failed activation must not prompt for reboot")
+        XCTAssertNil(rebootRequiredMessage(for: .deactivate, verdict: .rebootRequired),
+                     "deactivate never warrants a reboot message")
+    }
 }

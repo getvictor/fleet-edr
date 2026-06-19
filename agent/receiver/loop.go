@@ -31,6 +31,10 @@ const (
 	// defaultHeartbeatTimeout is the per-ping wait for a "hello-ack". Aligned with HELLO_ACK_TIMEOUT_NS in agent/xpcbridge/xpc_bridge.c
 	// and comfortably above the observed round-trip latency on edr-dev.
 	defaultHeartbeatTimeout = 5 * time.Second
+	// staleProbeAfterFailures is the consecutive-connect-failure grace before the UpgradeProbe is consulted. With the
+	// 1s/2s/4s... backoff this is several seconds of sustained failure, long enough to skip a transient blip but short
+	// enough that an operator sees the actionable reboot hint promptly after a staged sysext upgrade (#399).
+	staleProbeAfterFailures = 3
 )
 
 // Connector represents a single XPC connection's lifecycle. Production code satisfies it with *Receiver; tests pass a deterministic
@@ -83,6 +87,13 @@ type LoopHooks struct {
 	// observable without real wall-clock waits. The function returns false if ctx was cancelled during the wait, true if the
 	// duration elapsed normally.
 	Sleep func(ctx context.Context, d time.Duration) bool
+
+	// UpgradeProbe, when non-nil, is consulted after staleProbeAfterFailures consecutive connect failures to decide whether the
+	// failure is a stale network-extension registration left by a staged sysext upgrade (the OS reports a previous NE version
+	// "waiting to uninstall on reboot") rather than a not-yet-approved extension. Wired ONLY on the network-extension loop
+	// (#399); nil on the ESF loop. Returning true switches the connect-failure log to a distinct, actionable reboot-required
+	// hint, emitted once per stale episode.
+	UpgradeProbe func() bool
 }
 
 // Loop runs a single XPC service's connect/reconnect/event-pump cycle. Build one with NewLoop and call Run(ctx) in its own goroutine.
@@ -92,6 +103,12 @@ type Loop struct {
 	cfg     LoopConfig
 	hooks   LoopHooks
 	logger  *slog.Logger
+
+	// consecutiveFailures counts connect failures since the last successful session; it gates the UpgradeProbe so a
+	// transient blip does not trigger the reboot hint. staleHintLogged keeps the distinct hint to once per stale episode.
+	// Both are touched only from the single Run goroutine, so they need no synchronization.
+	consecutiveFailures int
+	staleHintLogged     bool
 }
 
 // NewLoop constructs a Loop. The factory MUST return a fresh Connector per call. A nil logger falls back to slog.Default(). Zero-valued
@@ -164,9 +181,14 @@ func (l *Loop) Run(ctx context.Context) {
 func (l *Loop) runOnce(ctx context.Context) (reconnect, connected bool) {
 	conn := l.factory()
 	if err := conn.Connect(); err != nil {
-		l.logger.WarnContext(ctx, "receiver connect", "service", l.cfg.ServiceName, "err", err)
+		l.consecutiveFailures++
+		l.logConnectFailure(ctx, err)
 		return true, false
 	}
+	// Successful connect ends any stale episode: reset the failure counter and re-arm the one-shot reboot hint so a future
+	// upgrade is reported again.
+	l.consecutiveFailures = 0
+	l.staleHintLogged = false
 	l.logger.InfoContext(ctx, "receiver connected", "service", l.cfg.ServiceName)
 
 	if l.hooks.OnConnected != nil {
@@ -178,6 +200,22 @@ func (l *Loop) runOnce(ctx context.Context) (reconnect, connected bool) {
 	}
 	conn.Disconnect()
 	return reconnect, true
+}
+
+// logConnectFailure emits the per-attempt connect-failure log. Once the failure has persisted past staleProbeAfterFailures
+// consecutive attempts AND an UpgradeProbe is wired (the network-extension loop) AND it reports a previous version pending
+// removal on reboot, it emits a distinct, actionable reboot-required hint once per stale episode (#399) instead of the bare
+// "receiver connect" warning. The bare warning stays for the genuine not-yet-approved case, where no UpgradeProbe is wired or
+// no old version is pending removal, so an operator can still tell "needs approval" from "needs reboot after upgrade".
+func (l *Loop) logConnectFailure(ctx context.Context, err error) {
+	if l.hooks.UpgradeProbe != nil && l.consecutiveFailures >= staleProbeAfterFailures && !l.staleHintLogged && l.hooks.UpgradeProbe() {
+		l.staleHintLogged = true
+		l.logger.WarnContext(ctx,
+			"network extension XPC registration is stale after an upgrade; reboot to complete the extension cutover",
+			"service", l.cfg.ServiceName, "err", err, "hint", "reboot_required_after_upgrade")
+		return
+	}
+	l.logger.WarnContext(ctx, "receiver connect", "service", l.cfg.ServiceName, "err", err)
 }
 
 // pipeEvents reads from the connector's event + error channels and dispatches
