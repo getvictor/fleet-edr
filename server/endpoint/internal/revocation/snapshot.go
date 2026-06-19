@@ -121,6 +121,18 @@ func (s *Snapshot) Size() int {
 	return len(s.entries)
 }
 
+// Forget removes a host from this replica's snapshot so it is immediately treated as allowed, without waiting for the next refresh. The
+// service calls this on a successful (re-)enrollment: the host has proven the enroll secret and its DB row was reset to a clean state
+// (epoch 0, not revoked), so the freshly issued token must verify right away on the replica that handled the enroll. This is a
+// best-effort, per-replica optimization: a concurrent refresh that already read the host's pre-reset row could re-add it, but the next
+// refresh drops it again, so the worst case is the normal eventual-consistency window rather than a regression. Other replicas converge
+// on their own refresh.
+func (s *Snapshot) Forget(hostID string) {
+	s.mu.Lock()
+	delete(s.entries, hostID)
+	s.mu.Unlock()
+}
+
 // Refresh reloads the snapshot from the source. On error the previous snapshot is retained (stale is better than empty: dropping to
 // empty would briefly un-revoke every cut-off host) and the failure is counted + logged.
 func (s *Snapshot) Refresh(ctx context.Context) error {

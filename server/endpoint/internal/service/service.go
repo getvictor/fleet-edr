@@ -119,8 +119,11 @@ func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP st
 	if err != nil {
 		return api.EnrollResponse{}, fmt.Errorf("register enrollment: %w", err)
 	}
-	// Register's REPLACE INTO resets token_epoch to 0, so a freshly enrolled (or re-enrolled) host mints at epoch 0. A host that was
-	// credential-cycled (epoch bumped) and then re-enrolls thus starts fresh at 0; the revocation snapshot drops it on its next refresh.
+	// Register's REPLACE INTO reset the row to a clean state (epoch 0, not revoked), so the host mints at epoch 0. Evict it from this
+	// replica's revocation snapshot so the token we are about to mint verifies immediately here, instead of being rejected by a stale
+	// snapshot (still showing the pre-re-enroll epoch / revoked state) for up to the refresh interval: the transient-401-after-re-enroll
+	// race. Other replicas converge on their next refresh.
+	s.revocations.Forget(res.HostID)
 	now := time.Now().UTC()
 	token, exp, err := s.signer.Mint(res.HostID, 0, s.tokenTTL, now)
 	if err != nil {

@@ -182,3 +182,25 @@ func TestRevoke_InvalidatesAfterSnapshot(t *testing.T) {
 	_, err := svc.VerifyToken(t.Context(), res.HostToken)
 	require.ErrorIs(t, err, api.ErrInvalidToken)
 }
+
+// TestReEnroll_ClearsStaleSnapshotLocally: after an operator epoch bump leaves the snapshot rejecting the old token, a re-enroll yields
+// a token that verifies immediately on this replica WITHOUT a snapshot refresh, because Enroll evicts the host from the local snapshot
+// (the transient-401-after-re-enroll mitigation).
+func TestReEnroll_ClearsStaleSnapshotLocally(t *testing.T) {
+	t.Parallel()
+	svc, snap := newServiceForTest(t)
+	res := enrollForTest(t, svc)
+	require.NoError(t, snap.Refresh(t.Context()))
+
+	_, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "incident")
+	require.NoError(t, err)
+	require.NoError(t, snap.Refresh(t.Context()))
+	_, err = svc.VerifyToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken, "old token rejected after epoch bump")
+
+	// Re-enroll, then verify with NO intervening snap.Refresh: the new token must pass because Enroll forgot the host locally.
+	res2 := enrollForTest(t, svc)
+	hostID, err := svc.VerifyToken(t.Context(), res2.HostToken)
+	require.NoError(t, err, "re-enrolled token verifies immediately on the enrolling replica")
+	assert.Equal(t, testHostID, hostID)
+}

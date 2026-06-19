@@ -81,6 +81,17 @@ func TestSnapshot_Run_RefreshesThenStops(t *testing.T) {
 	<-done
 }
 
+func TestSnapshot_Forget(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{entries: []Entry{{HostID: "h", Revoked: true}}}
+	s := NewSnapshot(src, nil)
+	require.NoError(t, s.Refresh(t.Context()))
+	assert.False(t, s.Allowed("h", 0))
+	s.Forget("h")
+	assert.True(t, s.Allowed("h", 0), "forgotten host is allowed without waiting for a refresh")
+	assert.Equal(t, 0, s.Size())
+}
+
 // spec:agent-enrollment/revocation-is-enforced-by-a-per-replica-snapshot/snapshot-refresh-failure-retains-the-previous-view
 func TestSnapshot_Refresh_ErrorRetainsPrevious(t *testing.T) {
 	t.Parallel()
