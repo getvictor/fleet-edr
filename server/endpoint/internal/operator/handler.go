@@ -216,6 +216,7 @@ func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
 	trace.SpanFromContext(ctx).SetAttributes(
 		attribute.String(attrkeys.AdminAction, "rotate_token"),
 		attribute.String(attrkeys.AdminActor, body.Actor),
+		attribute.String(attrkeys.AdminReason, body.Reason),
 		attribute.String(attrkeys.HostID, hostID),
 	)
 	h.logger.InfoContext(ctx, "host token rotated",

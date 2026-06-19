@@ -634,10 +634,11 @@ tasks:
       client-side overrides. The server binary has no plaintext-HTTP mode (issue #140);
       reach for those client-side workarounds, not a non-existent HTTP variant.
 
-      Host-token lifetime default: EDR_HOST_TOKEN_LIFETIME 24h. Override to a short value
-      (e.g. EDR_HOST_TOKEN_LIFETIME=30s) when QA-ing the agent-pull token-refresh flow
-      against a real VM agent so you can observe a refresh cycle inside one minute rather
-      than next-day.
+      Host-token lifetime: this dev task overrides EDR_HOST_TOKEN_LIFETIME to 24h for
+      convenience (the server default is 60m, see defaultHostTokenLifetime in server/config).
+      Override to a short value (e.g. EDR_HOST_TOKEN_LIFETIME=30s) when QA-ing the agent-pull
+      token-refresh flow against a real VM agent so you can observe a refresh cycle inside one
+      minute rather than next-day.
 
       EDR_UI_LIVE_DIR (issue #141) points the server at server/ui/dist on disk instead of
       the compile-time embedded bundle, so `task build:ui` is picked up on the next

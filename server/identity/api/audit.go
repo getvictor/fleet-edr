@@ -35,7 +35,9 @@ const (
 	AuditCommandIssue AuditAction = "command.issue"
 
 	// Enrollment lifecycle (endpoint context). Constants follow the <resource>.<verb> convention documented at the top of this file:
-	// rotate_token reads as "rotate the host token of the enrollment," matching the wire-shape command_type the agent dispatches on.
+	// rotate_token reads as "rotate the host token of the enrollment." Under the self-validating-token model this is an operator-driven
+	// epoch bump (no agent command is dispatched); the affected agent recovers when its refresh carrying the now-stale epoch 401s and it
+	// re-enrolls.
 	AuditEnrollmentRevoke      AuditAction = "enrollment.revoke"
 	AuditEnrollmentRotateToken AuditAction = "enrollment.rotate_token"
 
