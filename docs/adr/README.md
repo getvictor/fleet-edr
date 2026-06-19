@@ -26,7 +26,7 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0001](0001-single-go-module-with-internal.md) | Single Go module with `internal/` for shared code | Accepted |
 | [0002](0002-macos-apple-silicon-mvp-only.md) | MVP ships macOS on Apple Silicon only | Accepted |
 | [0003](0003-standalone-product-not-fleet-integrated.md) | EDR is a standalone product, Fleet is a deployment channel | Accepted |
-| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Accepted |
+| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Implemented |
 | [0005](0005-mysql-only-data-plane.md) | MySQL is the only supported RDBMS for the data plane | Accepted |
 | [0006](0006-otel-only-metrics.md) | OpenTelemetry is the only metrics pipeline; no Prometheus /metrics | Accepted |
 | [0007](0007-xpc-peer-validation-libxpc-only.md) | XPC peer validation via libxpc code-signing requirement; no audit_token layer | Accepted |
@@ -34,7 +34,7 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0009](0009-migrations-via-goose.md) | Versioned, forward-only, per-context schema migrations via goose | Accepted |
 | [0010](0010-stateless-server.md) | Stateless server: no in-process state survives a request | Accepted |
 | [0011](0011-ha-architecture.md) | High-availability architecture: multi-replica app tier with rolling upgrade | Accepted |
-| [0012](0012-capability-based-ui-gating.md) | Capability-based UI gating from a server-provided permission set | Proposed |
+| [0012](0012-capability-based-ui-gating.md) | Capability-based UI gating from a server-provided permission set | Accepted |
 
 ## Tooling
 
