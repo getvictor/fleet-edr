@@ -41,6 +41,7 @@ type QueueDepthSource interface {
 type Recorder struct {
 	queueDropped          metric.Int64Counter
 	eventsDroppedTooLarge metric.Int64Counter
+	endpointRejected      metric.Int64Counter
 	queueDepth            metric.Int64ObservableGauge
 }
 
@@ -64,6 +65,11 @@ func NewWithMeter(depthSrc QueueDepthSource, m metric.Meter) *Recorder {
 		"edr.agent.uploader.events_dropped_too_large",
 		metric.WithDescription("Events the uploader dropped after a single-event batch was rejected by the server with HTTP 413 `body_too_large`. A non-zero rate indicates an agent producing events larger than the server's per-request cap."),
 		metric.WithUnit(unitEvent),
+	)
+	r.endpointRejected, _ = m.Int64Counter(
+		"edr.agent.uploader.endpoint_rejected",
+		metric.WithDescription("Drain ticks on which the ingest endpoint returned a blanket rejection (a 4xx the EDR server never emits itself, e.g. 403/404/429), by `status_code`. Non-zero means the agent is queueing telemetry it cannot deliver: the endpoint URL is wrong, the origin is unhealthy, or an edge/WAF is blocking. The batch is kept queued, not dropped."),
+		metric.WithUnit("{rejection}"),
 	)
 	if depthSrc != nil {
 		r.queueDepth, _ = m.Int64ObservableGauge(
@@ -105,4 +111,14 @@ func (r *Recorder) EventsDroppedTooLarge(ctx context.Context, n int64) {
 		return
 	}
 	r.eventsDroppedTooLarge.Add(ctx, n)
+}
+
+// UploadRejected increments the endpoint-rejected counter once per drain tick on which the ingest endpoint returned a blanket
+// rejection (a 4xx the EDR server never emits itself: 403/404/429/...). The batch is kept queued, not dropped; this counter is the
+// operator signal that the endpoint is unreachable or misconfigured (#398). Nil-safe.
+func (r *Recorder) UploadRejected(ctx context.Context, statusCode int) {
+	if r == nil || r.endpointRejected == nil {
+		return
+	}
+	r.endpointRejected.Add(ctx, 1, metric.WithAttributes(attribute.Int("status_code", statusCode)))
 }

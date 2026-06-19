@@ -95,6 +95,11 @@ type MetricsRecorder interface {
 	// caller MUST have already MarkUploaded'd the row before this fires (drop is durable before the metric is recorded so
 	// a crash between metric + DB write doesn't manifest as a counter rate without a matching audit log).
 	EventsDroppedTooLarge(ctx context.Context, n int64)
+
+	// UploadRejected is called once per drain tick on which the ingest endpoint returned a blanket rejection (a 4xx the
+	// EDR server never emits itself, e.g. 403/404/429): the batch is kept queued, NOT dropped. statusCode labels the
+	// rejection so an operator can dashboard the "endpoint rejecting uploads" state (#398).
+	UploadRejected(ctx context.Context, statusCode int)
 }
 
 // Uploader reads from a Queue and uploads to the ingestion server.
@@ -246,9 +251,9 @@ func (u *Uploader) uploadBatch(ctx context.Context, batch []queue.QueuedEvent) e
 	return nil
 }
 
-// handleUploadErr routes a non-nil uploadWithRetry return to the appropriate recovery path: 401 leaves queued, 413
-// splits or drops, other 4xx records-and-audits, 5xx/network logs-and-returns. Extracted so uploadBatch stays under the
-// cognitive-complexity budget (Sonar S3776).
+// handleUploadErr routes a non-nil uploadWithRetry return to the appropriate recovery path: 401 leaves the batch queued for
+// re-enroll, 413 splits or drops, a 400 records-and-audits (the quarantine path), any other 4xx is a blanket endpoint rejection
+// kept queued with a loud signal, and 5xx/network logs-and-returns. Extracted so uploadBatch stays under the Sonar S3776 budget.
 func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEvent, ids []int64, err error) error {
 	var tooLargeErr *requestEntityTooLargeError
 	if errors.As(err, &tooLargeErr) {
@@ -264,8 +269,24 @@ func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEven
 			"batch_size", len(batch))
 		return err
 	}
-	// Non-401 4xx is a permanent client error for this batch (malformed event, schema-rejected payload, etc.). Without
-	// the quarantine path, the batch would stay queued and re-fail every drain tick forever (#253).
+	// A blanket endpoint rejection (any 4xx the ingest route never emits itself: 403/404/429/...) is an infrastructure
+	// signal, not a per-batch content verdict (#398). Keep the batch queued and back off to the next tick like a 5xx;
+	// emit a distinct loud signal so an operator sees "endpoint rejecting uploads" (wrong URL, unhealthy origin, WAF)
+	// instead of a silent quarantine-and-drop.
+	var rejectedErr *endpointRejectedError
+	if errors.As(err, &rejectedErr) {
+		u.logger.WarnContext(ctx, "uploader endpoint rejecting uploads; batch kept queued",
+			"audit", "uploader.endpoint_rejecting",
+			"status_code", rejectedErr.statusCode,
+			"batch_size", len(batch))
+		if u.metrics != nil {
+			u.metrics.UploadRejected(ctx, rejectedErr.statusCode)
+		}
+		return err
+	}
+	// HTTP 400 is the only status the ingest contract emits to mean "this batch's content is bad" (invalid_json,
+	// host_id_mismatch, missing_fields_at_<i>). Without the quarantine path, the poison batch would stay queued and
+	// re-fail every drain tick forever (#253).
 	if errors.As(err, &clientErr) && u.cfg.ClientErrorQuarantineThreshold > 0 {
 		u.recordClientErrorAndAudit(ctx, ids, clientErr.statusCode, len(batch))
 	}
@@ -384,6 +405,12 @@ func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 		if errors.As(err, &clientErr) {
 			return clientErr
 		}
+		// A blanket endpoint rejection is sustained (a down / misconfigured edge), so within-cycle retries would just
+		// hammer it; return immediately and let the per-tick drain cadence back off (#398).
+		var rejectedErr *endpointRejectedError
+		if errors.As(err, &rejectedErr) {
+			return rejectedErr
+		}
 
 		backoff := time.Duration(math.Pow(2, float64(attempt))) * 100 * time.Millisecond
 		u.logger.WarnContext(ctx, "uploader attempt failed",
@@ -401,13 +428,28 @@ func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 	return fmt.Errorf("all %d attempts failed", u.cfg.MaxRetries)
 }
 
-// clientError represents a non-retryable HTTP 4xx response other than 413.
+// clientError represents a non-retryable HTTP 4xx response the EDR ingest route itself emits as a per-batch verdict: 400 (poison
+// content, routes to the quarantine path) or 401 (stale token, routes to re-enroll). 413 is handled by its own type, and every
+// other 4xx is an endpointRejectedError.
 type clientError struct {
 	statusCode int
 }
 
 func (e *clientError) Error() string {
 	return fmt.Sprintf("server returned %d", e.statusCode)
+}
+
+// endpointRejectedError represents a non-2xx response that the EDR ingest route never emits as a per-batch content
+// verdict: any 4xx other than 400 / 401 / 413. On POST /api/events the server returns only 200 / 400 / 413 (intake) and
+// 401 / 503 (host-token middleware), so a 403 / 404 / 429 / etc. is always injected by an edge / proxy / WAF or a wrong
+// or unhealthy origin (#398): the batch content is fine, the endpoint is rejecting everything. The recovery is to keep
+// the batch queued and back off (resuming on 2xx), NOT to quarantine it as poison.
+type endpointRejectedError struct {
+	statusCode int
+}
+
+func (e *endpointRejectedError) Error() string {
+	return fmt.Sprintf("endpoint rejected upload with %d", e.statusCode)
 }
 
 // requestEntityTooLargeError represents an HTTP 413 (Request Entity Too Large) response. The server uses this status for
@@ -458,8 +500,18 @@ func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error 
 		return &requestEntityTooLargeError{}
 	}
 
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+	// 401 (re-enroll) and 400 (poison content) are the only 4xx the EDR ingest contract emits as a per-batch verdict: the
+	// host-token middleware returns 401/503 and the intake handler returns 200/400/413. clientError carries them to the
+	// re-enroll (401) and quarantine (400) paths in handleUploadErr.
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusBadRequest {
 		return &clientError{statusCode: resp.StatusCode}
+	}
+
+	// Any other 4xx (403, 404, 405, 408, 429, 451, ...) on POST /api/events is never the server's own content verdict; it
+	// is a blanket rejection injected by an edge/proxy/WAF or a wrong/unhealthy origin (#398). Keep the batch queued and
+	// back off rather than quarantine good telemetry.
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return &endpointRejectedError{statusCode: resp.StatusCode}
 	}
 
 	return fmt.Errorf("server returned %d", resp.StatusCode)
