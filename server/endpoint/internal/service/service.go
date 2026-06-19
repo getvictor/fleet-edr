@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,95 +13,90 @@ import (
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/endpoint/internal/mysql"
+	"github.com/fleetdm/edr/server/endpoint/internal/revocation"
+	"github.com/fleetdm/edr/server/endpoint/internal/signedtoken"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
-// Command-type constants for endpoint-emitted commands. Exposed as
-// constants so future renames are mechanical.
-const (
-	commandTypeRotateToken = "rotate_token"
-)
+// defaultTokenTTL is how long a freshly minted signed host token is valid. The agent refreshes well before this (see the agent refresh
+// loop), so a live host never lets its token expire; the TTL bounds how long a stolen token survives if revocation somehow lagged. 60
+// minutes matches the SPIFFE guidance for hot-path workload identities.
+const defaultTokenTTL = 60 * time.Minute
 
-// Default rotation parameters, applied by the service when bootstrap passes zero values. Lifetime = 24 hours matches #86's specified
-// default; grace = 5 minutes matches the issue body's "in-flight poll must not 401" target.
-const (
-	defaultHostTokenLifetime = 24 * time.Hour
-	defaultHostTokenGrace    = 5 * time.Minute
-)
-
-// hardwareUUIDPattern accepts the canonical hyphenated UUID form in either case. macOS IOPlatformUUID is uppercase-hyphenated.
-// Future platforms emitting unhyphenated 32-hex strings need a matching agent + regex update.
-var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
-
-// CommandInserter is the closure shape endpoint uses to queue commands it emits (today: only rotate_token). cmd/main passes
-// response.Service.Insert as a method value satisfying this type. The closure pattern matches what rules uses elsewhere.
+// CommandInserter is retained for wiring compatibility (the bootstrap alias + cmd/main type references). The endpoint context no longer
+// emits commands under the self-validating-token model: token refresh is agent-pull, and credential cycling is an epoch bump enforced
+// by the revocation snapshot, not a server-pushed rotate_token command.
 type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
+
+// hardwareUUIDPattern accepts the canonical hyphenated UUID form in either case. macOS IOPlatformUUID is uppercase-hyphenated. Future
+// platforms emitting unhyphenated 32-hex strings need a matching agent + regex update.
+var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
 // Options bundles every dependency the endpoint service needs.
 type Options struct {
-	// Store, Secret, Logger are required.
-	Store  *mysql.Store
-	Secret string
-	Logger *slog.Logger
+	// Store, Secret, Signer, Revocations, Logger are required.
+	Store       *mysql.Store
+	Secret      string
+	Signer      *signedtoken.Signer
+	Revocations *revocation.Snapshot
+	Logger      *slog.Logger
 
-	// Commands queues commands the endpoint service emits (today: only rotate_token). Optional: when nil, rotation will commit the new
-	// bearer in the DB but the agent will not receive a command: it will re-enroll once the grace window expires.
-	Commands CommandInserter
-
-	// Audit is the operator-action audit recorder. Nil disables audit
-	// emission for token rotations; tests that don't care can pass nil.
+	// Audit is the operator-action audit recorder. Nil disables audit emission for credential cycling; tests that don't care pass nil.
 	Audit identityapi.AuditRecorder
 
-	// Lifetime is the maximum age of a current token before the verify
-	// path triggers an auto-rotation. Zero -> defaultHostTokenLifetime.
-	Lifetime time.Duration
-	// Grace is the window during which the just-superseded token still
-	// verifies after rotation. Zero -> defaultHostTokenGrace.
-	Grace time.Duration
+	// TokenTTL is the lifetime of a minted host token. Zero -> defaultTokenTTL (60m).
+	TokenTTL time.Duration
 }
 
-// service implements api.Service by composing the mysql.Store with the CommandInserter closure (today: response.api.Service.Insert)
-// and audit recorder (today: identity.api.AuditRecorder) that cmd/main supplies.
+// service implements api.Service. Verification is a local signature check (signer) plus an in-memory revocation lookup (revocations),
+// so the agent hot path never touches the database. The store is used only on the rare paths: enroll, refresh (one read), credential
+// cycling, and operator listings.
 type service struct {
-	store    *mysql.Store
-	secret   string
-	commands CommandInserter
-	audit    identityapi.AuditRecorder
-	lifetime time.Duration
-	grace    time.Duration
-	logger   *slog.Logger
+	store       *mysql.Store
+	secret      string
+	signer      *signedtoken.Signer
+	revocations *revocation.Snapshot
+	audit       identityapi.AuditRecorder
+	tokenTTL    time.Duration
+	logger      *slog.Logger
 }
 
-// New constructs a Service.
+// New constructs a Service. Panics on a missing Store, Signer, or Revocations: those are wiring bugs (the only callers are bootstrap,
+// which validates first, and tests), not recoverable runtime conditions.
 func New(opts Options) api.Service {
+	if opts.Store == nil {
+		panic("service.New: Store is required")
+	}
+	if opts.Signer == nil {
+		panic("service.New: Signer is required")
+	}
+	if opts.Revocations == nil {
+		panic("service.New: Revocations is required")
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	lifetime := opts.Lifetime
-	if lifetime <= 0 {
-		lifetime = defaultHostTokenLifetime
-	}
-	grace := opts.Grace
-	if grace <= 0 {
-		grace = defaultHostTokenGrace
+	ttl := opts.TokenTTL
+	if ttl <= 0 {
+		ttl = defaultTokenTTL
 	}
 	return &service{
-		store:    opts.Store,
-		secret:   opts.Secret,
-		commands: opts.Commands,
-		audit:    opts.Audit,
-		lifetime: lifetime,
-		grace:    grace,
-		logger:   logger,
+		store:       opts.Store,
+		secret:      opts.Secret,
+		signer:      opts.Signer,
+		revocations: opts.Revocations,
+		audit:       opts.Audit,
+		tokenTTL:    ttl,
+		logger:      logger,
 	}
 }
 
 func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP string) (api.EnrollResponse, error) {
 	if req.EnrollSecret == "" || req.HardwareUUID == "" || req.Hostname == "" ||
 		req.OSVersion == "" || req.AgentVersion == "" {
-		// The handler maps this to 400/bad_body via the missing-field check it already does. Service returns ErrInvalidSecret
-		// only if secret is non-empty but wrong; an empty secret is a body-shape error.
+		// The handler maps this to 400/bad_body via the missing-field check it already does. Service returns ErrInvalidSecret only if
+		// the secret is non-empty but wrong; an empty secret is a body-shape error.
 		return api.EnrollResponse{}, api.ErrInvalidEnrollRequest
 	}
 	if !hardwareUUIDPattern.MatchString(req.HardwareUUID) {
@@ -122,124 +116,93 @@ func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP st
 	if err != nil {
 		return api.EnrollResponse{}, fmt.Errorf("register enrollment: %w", err)
 	}
-
+	// Register's REPLACE INTO resets token_epoch to 0, so a freshly enrolled (or re-enrolled) host mints at epoch 0. A host that was
+	// credential-cycled (epoch bumped) and then re-enrolls thus starts fresh at 0; the revocation snapshot drops it on its next refresh.
+	now := time.Now().UTC()
+	token, exp, err := s.signer.Mint(res.HostID, 0, s.tokenTTL, now)
+	if err != nil {
+		return api.EnrollResponse{}, fmt.Errorf("mint host token: %w", err)
+	}
 	return api.EnrollResponse{
 		HostID:     res.HostID,
-		HostToken:  res.HostToken,
+		HostToken:  token,
 		EnrolledAt: res.EnrolledAt,
+		ExpiresAt:  exp,
 	}, nil
 }
 
-func (s *service) VerifyToken(ctx context.Context, token string) (string, error) {
-	res, err := s.store.VerifyWithMeta(ctx, token)
-	if errors.Is(err, mysql.ErrTokenMismatch) {
+// VerifyToken is the agent hot path: a local HMAC signature + expiry check (no DB), then an in-memory revocation lookup. Every failure
+// mode collapses to ErrInvalidToken so the wire cannot distinguish "expired" from "forged" from "revoked" (that would be an oracle).
+func (s *service) VerifyToken(_ context.Context, token string) (string, error) {
+	claims, err := s.signer.Verify(token, time.Now())
+	if err != nil {
 		return "", api.ErrInvalidToken
 	}
-	if err != nil {
-		return "", fmt.Errorf("verify token: %w", err)
+	if !s.revocations.Allowed(claims.HostID, claims.Epoch) {
+		return "", api.ErrInvalidToken
 	}
-
-	// Verify-time auto-rotation trigger. Conditions: the verify hit the CURRENT token (not the previous-token grace path; if it
-	// hit previous, a rotation is already in flight and another would be wasteful) AND the current token is past its lifetime.
-	// Best-effort: failures are warn-logged but do not fail the verify. The verify already succeeded; the agent's next poll will
-	// re-trigger any rotation we couldn't queue this time.
-	if !res.MatchedPrevious && time.Since(res.TokenIssuedAt) > s.lifetime {
-		s.maybeAutoRotate(ctx, res.HostID, res.CurrentTokenID)
-	}
-
-	return res.HostID, nil
+	return claims.HostID, nil
 }
 
-// maybeAutoRotate is the verify-time auto-rotation path. Optimistic-locked on currentTokenID so concurrent verifies for the same host
-// don't double-rotate: only the verify whose currentTokenID still matches the row's host_token_id commits, the rest race-lose with
-// ErrRotateRaced (silently swallowed because the other verify already did the work).
-func (s *service) maybeAutoRotate(ctx context.Context, hostID string, currentTokenID []byte) {
-	rot, err := s.store.RotateHostToken(ctx, hostID, currentTokenID, s.grace)
-	if errors.Is(err, mysql.ErrRotateRaced) {
-		return
+// RefreshToken issues a fresh token for the host_id pinned on the context by the host-token middleware. The agent calls this before its
+// current token expires so a live host never lapses. It is not the hot path (once per token lifetime per host), so a single DB read for
+// the host's current epoch + revocation state is acceptable; minting at the current epoch keeps the new token valid against the
+// revocation snapshot. A revoked or unknown host gets ErrInvalidToken, which the handler maps to 401 -> the agent re-enrolls.
+func (s *service) RefreshToken(ctx context.Context) (api.RefreshResponse, error) {
+	hostID, ok := api.HostIDFromContext(ctx)
+	if !ok || hostID == "" {
+		return api.RefreshResponse{}, api.ErrInvalidToken
+	}
+	epoch, revoked, err := s.store.TokenStatus(ctx, hostID)
+	if errors.Is(err, mysql.ErrNotFound) {
+		return api.RefreshResponse{}, api.ErrInvalidToken
 	}
 	if err != nil {
-		s.logger.WarnContext(ctx, "auto-rotate failed",
-			attrkeys.HostID, hostID, "err", err)
-		return
+		return api.RefreshResponse{}, fmt.Errorf("refresh token status: %w", err)
 	}
-	s.deliverRotation(ctx, hostID, api.RotationTriggerAuto, "", "", rot)
+	if revoked {
+		return api.RefreshResponse{}, api.ErrInvalidToken
+	}
+	now := time.Now().UTC()
+	token, exp, err := s.signer.Mint(hostID, epoch, s.tokenTTL, now)
+	if err != nil {
+		return api.RefreshResponse{}, fmt.Errorf("mint refresh token: %w", err)
+	}
+	return api.RefreshResponse{HostID: hostID, HostToken: token, ExpiresAt: exp}, nil
 }
 
+// RotateToken cycles a host's credentials by bumping its token_epoch, which invalidates every signed token minted at the prior epoch
+// once the revocation snapshot picks up the change. There is no opaque token to rotate and no command to push: the agent recovers by
+// re-enrolling when its refresh (carrying the now-stale epoch) 401s. trigger/actor/reason feed the audit row. Returns ErrNotFound when
+// the host has no enrollment.
 func (s *service) RotateToken(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) (api.RotateResult, error) {
 	if hostID == "" {
 		return api.RotateResult{}, fmt.Errorf("rotate token: %w", api.ErrNotFound)
 	}
-	rot, err := s.store.RotateHostTokenForce(ctx, hostID, s.grace)
-	if errors.Is(err, mysql.ErrNotFound) {
-		return api.RotateResult{}, api.ErrNotFound
-	}
-	if err != nil {
+	if err := s.store.BumpTokenEpoch(ctx, hostID); err != nil {
+		if errors.Is(err, mysql.ErrNotFound) {
+			return api.RotateResult{}, api.ErrNotFound
+		}
 		return api.RotateResult{}, fmt.Errorf("rotate token: %w", err)
 	}
-	return api.RotateResult{
-		PreviousTokenIDPrefix: rot.PreviousTokenIDPrefix,
-		CommandID:             s.deliverRotation(ctx, hostID, trigger, actor, reason, rot),
-	}, nil
+	s.recordRotationAudit(ctx, hostID, trigger, actor, reason)
+	// RotateResult carries no token or command under this model: the prefix + command_id fields stay zero, which the operator handler
+	// already renders as "agent will recover via re-enroll".
+	return api.RotateResult{}, nil
 }
 
-// deliverRotation queues the rotate_token command for the agent and
-// emits the audit row. Shared between the verify-time auto path and
-// the operator-driven RotateToken path so both audit row shapes are
-// byte-identical except for the trigger / actor / reason payload
-// fields. Returns *int64: a non-nil pointer carries the freshly-queued
-// command id, nil signals "rotation committed in the DB but the agent
-// command queue did not receive the new bearer." The operator UI uses
-// the nil case to surface "agent will recover via re-enroll once the
-// previous-token grace expires" rather than waiting indefinitely for
-// an ack.
-//
-// Best-effort on the command insert: rotation already committed in
-// the DB. If we can't queue the rotate_token command, the agent's
-// previous token still works during grace; once grace expires it'll
-// 401 and re-enroll. Acceptable failure mode for a queue hiccup.
-//
-// Best-effort on the audit emit too: a missed audit row is a follow-up
-// incident, not a reason to fail an HTTP response that already
-// returned 200/204.
-func (s *service) deliverRotation(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string, rot mysql.RotateResult) *int64 {
-	cmdID := s.enqueueRotateCommand(ctx, hostID, rot.NewToken)
-	s.recordRotationAudit(ctx, hostID, trigger, actor, reason, rot, cmdID)
-	return cmdID
-}
-
-func (s *service) enqueueRotateCommand(ctx context.Context, hostID, newToken string) *int64 {
-	if s.commands == nil {
-		return nil
-	}
-	// json.Marshal on map[string]string cannot fail (UTF-8 string keys + values always serialize); the err is intentionally dropped so the
-	// call has no unreachable branch dragging coverage down.
-	payload, _ := json.Marshal(map[string]string{"new_token": newToken}) //nolint:errcheck // map[string]string never fails to marshal
-	id, err := s.commands(ctx, hostID, commandTypeRotateToken, payload)
-	if err != nil {
-		s.logger.WarnContext(ctx, "rotate_token enqueue failed",
-			attrkeys.HostID, hostID, "err", err)
-		return nil
-	}
-	return &id
-}
-
-func (s *service) recordRotationAudit(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string, rot mysql.RotateResult, cmdID *int64) {
+// recordRotationAudit emits one audit row for a credential-cycle. Best-effort: a missed audit row is a follow-up incident, not a reason
+// to fail an HTTP response that already succeeded.
+func (s *service) recordRotationAudit(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) {
 	if s.audit == nil {
 		return
 	}
-	payload := map[string]any{
-		"trigger":                  string(trigger),
-		"previous_token_id_prefix": rot.PreviousTokenIDPrefix,
-	}
+	payload := map[string]any{"trigger": string(trigger)}
 	if actor != "" {
 		payload["actor"] = actor
 	}
 	if reason != "" {
 		payload["reason"] = reason
-	}
-	if cmdID != nil {
-		payload["command_id"] = *cmdID
 	}
 	if err := s.audit.Record(ctx, identityapi.AuditEvent{
 		Action:     identityapi.AuditEnrollmentRotateToken,
@@ -297,9 +260,9 @@ func (s *service) ActiveHostIDs(ctx context.Context) ([]string, error) {
 	return s.store.ActiveHostIDs(ctx)
 }
 
-// toAPIEnrollment is a struct-to-struct copy. Field shapes match exactly today (the api.Enrollment was lifted from the mysql row),
-// so this is a pure relocation, but the conversion stays explicit so a future field drift between the storage layer and the public
-// api surface forces a review here rather than slipping through.
+// toAPIEnrollment is a struct-to-struct copy. Field shapes match exactly today (the api.Enrollment was lifted from the mysql row), so
+// this is a pure relocation, but the conversion stays explicit so a future field drift between the storage layer and the public api
+// surface forces a review here rather than slipping through.
 func toAPIEnrollment(r mysql.Enrollment) api.Enrollment {
 	return api.Enrollment{
 		HostID:       r.HostID,

@@ -26,6 +26,7 @@ const MinRootKeyLen = 32
 // purpose can be rotated by bumping its suffix without disturbing the root or any sibling key.
 const (
 	HostTokenPepperLabel   = "edr/host-token/pepper/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
+	HostTokenSigningLabel  = "edr/host-token/sign/v1"   //nolint:gosec // G101: HKDF domain-separation label, not a credential
 	SessionSigningKeyLabel = "edr/session/signing/v1"
 )
 

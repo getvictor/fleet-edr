@@ -42,9 +42,10 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 const (
 	testEnrollSecret = "endpoint-integration-secret"
 	testHardwareUUID = "12345678-1234-1234-1234-123456789012"
-	// testHostTokenPepper is the fixed >=32-byte HMAC pepper the endpoint bootstrap requires. A constant keeps a token hashed at enroll
-	// verifiable on a later rotate/verify within the same test.
+	// testHostTokenPepper is the fixed >=32-byte HMAC pepper the endpoint bootstrap requires for the legacy host_token columns.
 	testHostTokenPepper = "endpoint-integration-host-token-pepper-0123"
+	// testHostTokenSigningKey is the fixed >=32-byte HMAC key the endpoint bootstrap requires for signing self-validating host tokens.
+	testHostTokenSigningKey = "endpoint-integration-host-token-signing-key0"
 )
 
 // recordingCommandInserter captures every CommandInserter call so tests can assert on the host_id targeting and the command type.
@@ -98,6 +99,7 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 		EnrollRatePerMinute: 600,
 		AuthZ:               allowAllAuthZ{},
 		HostTokenPepper:     []byte(testHostTokenPepper),
+		HostTokenSigningKey: []byte(testHostTokenSigningKey),
 	}
 	for _, opt := range opts {
 		opt(&deps)
@@ -162,6 +164,10 @@ func TestEnrollVerifyListRevoke(t *testing.T) {
 	assert.Equal(t, []string{testHardwareUUID}, active)
 
 	require.NoError(t, ep.Service().Revoke(ctx, testHardwareUUID, "qa cleanup", "operator@example.com"))
+
+	// Revocation is enforced via the per-replica snapshot (a server refreshes it on a ticker bounded by
+	// DefaultRevocationRefreshInterval). Refresh it synchronously here so the assertion is deterministic.
+	require.NoError(t, ep.RevocationSnapshot().Refresh(ctx))
 
 	_, err = ep.Service().VerifyToken(ctx, res.HostToken)
 	require.ErrorIs(t, err, api.ErrInvalidToken)
@@ -299,6 +305,7 @@ func TestHostTokenMiddleware_PinsHostID(t *testing.T) {
 	})
 
 	require.NoError(t, ep.Service().Revoke(ctx, testHardwareUUID, "qa", "op"))
+	require.NoError(t, ep.RevocationSnapshot().Refresh(ctx))
 
 	t.Run("revoked token rejected", func(t *testing.T) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/", nil)

@@ -34,9 +34,9 @@ const (
 	defaultStaleProcessTTL = 6 * time.Hour
 	// defaultStaleProcessInterval is how often the process-TTL reconciler runs.
 	defaultStaleProcessInterval = 10 * time.Minute
-	// defaultHostTokenLifetime is how long a host's bearer token is good for
-	// before the verify path triggers an automatic rotation (issue #86).
-	defaultHostTokenLifetime = 24 * time.Hour
+	// defaultHostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. The
+	// agent refreshes well before expiry; 60 minutes matches SPIFFE hot-path workload-identity guidance.
+	defaultHostTokenLifetime = 60 * time.Minute
 	// defaultHostTokenGrace is how long a just-rotated previous token still verifies after rotation. Wider than an agent's poll interval
 	// so an in-flight request does not 401 mid-cycle.
 	defaultHostTokenGrace = 5 * time.Minute
@@ -126,12 +126,12 @@ type Config struct {
 	// see spec server-detection-rules-engine/operator-toggling-of-individual-rules for the boot-time contract.
 	DisabledRuleIDs []string
 
-	// HostTokenLifetime is the maximum age of an agent's bearer token before the verify path triggers an automatic rotation (issue #86).
-	// Populated from EDR_HOST_TOKEN_LIFETIME. Default 24h: short enough that an exfiltrated token has bounded value, long enough that the
-	// per-host rotation traffic is negligible.
+	// HostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. Populated from
+	// EDR_HOST_TOKEN_LIFETIME. Default 60m: short enough that a leaked token has bounded value, long enough that refresh traffic is
+	// negligible.
 	HostTokenLifetime time.Duration
-	// HostTokenGrace is the window during which a just-rotated previous token still verifies. Populated from EDR_HOST_TOKEN_GRACE. Default
-	// 5m: comfortably wider than an agent's poll interval so an in-flight request doesn't 401 mid-cycle.
+	// HostTokenGrace is retained for config compatibility but is no longer consumed: the self-validating-token model has no rotation
+	// grace window (the agent pulls a fresh token before expiry). Populated from EDR_HOST_TOKEN_GRACE; slated for removal.
 	HostTokenGrace time.Duration
 
 	// TrustedProxies is the set of CIDRs (or bare IPs) the server will trust X-Forwarded-For from. Populated from EDR_TRUSTED_PROXIES

@@ -117,8 +117,8 @@ func run() error {
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),
 		HostTokenLifetime:   cfg.HostTokenLifetime,
-		HostTokenGrace:      cfg.HostTokenGrace,
 		HostTokenPepper:     kr.Derive(keyring.HostTokenPepperLabel),
+		HostTokenSigningKey: kr.Derive(keyring.HostTokenSigningLabel),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open endpoint", "err", err)
@@ -129,12 +129,21 @@ func run() error {
 		return err
 	}
 
+	// Load the revocation snapshot before serving so a cold intake replica never accepts an already-revoked token, then refresh it in
+	// the background (per-replica perf cache, safe to lose per ADR-0010).
+	revSnap := endpointCtx.RevocationSnapshot()
+	if rerr := revSnap.Refresh(ctx); rerr != nil {
+		logger.WarnContext(ctx, "initial revocation snapshot refresh failed; starting empty", "err", rerr)
+	}
+	go revSnap.Run(ctx, endpointbootstrap.DefaultRevocationRefreshInterval)
+
 	hostTokenMW := endpointCtx.HostTokenMiddleware()
 
 	mux := http.NewServeMux()
 	detectionCtx.RegisterHealthRoutes(mux)
 	endpointCtx.RegisterPublicRoutes(mux)
 	mux.Handle("POST /api/events", hostTokenMW(detectionCtx.Service().IngestHandler()))
+	mux.Handle("POST /api/token/refresh", hostTokenMW(endpointCtx.TokenRefreshHandler()))
 
 	handler := httpserver.Build(mux, httpserver.Options{
 		Logger:      logger,

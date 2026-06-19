@@ -26,7 +26,10 @@ func (f fakeRevokeService) Enroll(context.Context, api.EnrollRequest, string) (a
 	panic("not used")
 }
 func (f fakeRevokeService) VerifyToken(context.Context, string) (string, error) { panic("not used") }
-func (f fakeRevokeService) List(context.Context) ([]api.Enrollment, error)      { return nil, nil }
+func (f fakeRevokeService) RefreshToken(context.Context) (api.RefreshResponse, error) {
+	panic("not used")
+}
+func (f fakeRevokeService) List(context.Context) ([]api.Enrollment, error) { return nil, nil }
 func (f fakeRevokeService) Get(context.Context, string) (*api.Enrollment, error) {
 	panic("not used")
 }

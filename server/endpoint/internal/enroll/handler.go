@@ -89,6 +89,7 @@ type enrollResponse struct {
 	HostID     string    `json:"host_id"`
 	HostToken  string    `json:"host_token"`
 	EnrolledAt time.Time `json:"enrolled_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type errBody struct {
@@ -174,6 +175,7 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		HostID:     res.HostID,
 		HostToken:  res.HostToken,
 		EnrolledAt: res.EnrolledAt,
+		ExpiresAt:  res.ExpiresAt,
 	})
 }
 

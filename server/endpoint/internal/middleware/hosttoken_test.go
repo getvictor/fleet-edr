@@ -47,6 +47,9 @@ func (f fakeService) ActiveHostIDs(context.Context) ([]string, error) {
 func (f fakeService) RotateToken(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
 	panic("not implemented in fakeService")
 }
+func (f fakeService) RefreshToken(context.Context) (api.RefreshResponse, error) {
+	panic("not implemented in fakeService")
+}
 
 const testHostID = "93DFC6F5-763D-5075-B305-8AC145D12F96"
 const testToken = "abcdefghijklmnopqrstuvwxyz0123456789012345_"
