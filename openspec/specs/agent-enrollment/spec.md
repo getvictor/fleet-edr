@@ -104,7 +104,7 @@ The system SHALL re-enroll using the deployment secret when the server returns 4
 
 ### Requirement: Per-host token scoping
 
-The system MUST issue tokens that are scoped to a single host so that one host's token cannot read or write data that belongs to any other host.
+The system MUST issue tokens that are scoped to a single host so that one host's token cannot read or write data that belongs to any other host. Revocation of a host's token is enforced by the per-replica revocation snapshot and therefore takes effect within the snapshot refresh interval (a bounded eventual consistency across replicas), rather than instantaneously on every replica.
 
 #### Scenario: Token cannot read another host's commands
 
@@ -115,8 +115,8 @@ The system MUST issue tokens that are scoped to a single host so that one host's
 
 #### Scenario: Revoking a host invalidates its token
 
-- **GIVEN** an operator revokes a specific host's enrollment in the admin UI
-- **WHEN** that host next presents its previously valid token
+- **GIVEN** an operator revokes a specific host's enrollment
+- **WHEN** the revocation has propagated to a replica's revocation snapshot (within the refresh interval) and that host presents its previously valid token
 - **THEN** the server returns 401
 - **AND** the agent's re-enroll path engages on the next request
 
@@ -131,33 +131,63 @@ The system SHALL rate limit enrollment attempts per source IP so that a misconfi
 - **THEN** the server returns 429 with a Retry-After header
 - **AND** no enrollment row is created or modified
 
-### Requirement: Host tokens are stored and verified with a fast keyed hash
+### Requirement: Host tokens are self-validating signed tokens
 
-The server SHALL store each issued host token as a keyed HMAC-SHA256 of the token under a server-held secret pepper, and SHALL NOT store the token in plaintext, reversibly encrypted, or under a memory-hard password KDF (argon2id, bcrypt, scrypt). The server SHALL verify a presented token by recomputing HMAC-SHA256 under the same pepper and comparing the result to the stored value with a constant-time equality check. Because the host token is a high-entropy random secret (not a human-chosen password), a fast keyed hash gives the same practical resistance to offline recovery as a slow KDF while removing the per-request hashing cost from the authenticated agent hot path. The server SHALL continue to fetch the candidate enrollment row by the deterministic SHA-256 token-id lookup key, so verification reads a single indexed row rather than scanning active enrollments.
+The server SHALL issue each host token as a self-validating signed token that carries the host identity, a revocation epoch, an issued-at time, and an absolute expiry, signed with a server-held HMAC-SHA256 key. The server SHALL verify a presented token by recomputing the HMAC under that key, comparing with a constant-time check, and validating the expiry, WITHOUT any database access on the authenticated hot path. The signing key SHALL be derived from the required server root secret (`EDR_SECRET_KEY`, with the `*_FILE` fallback) via HKDF-SHA256 under a fixed versioned domain-separation label distinct from the storage pepper. Every verification failure (bad signature, wrong key id, malformed, expired) SHALL surface to the agent as an indistinguishable 401 so the wire is not an oracle. The enroll response SHALL carry the token's absolute expiry.
 
-The pepper SHALL be derived from a single required server root secret (`EDR_SECRET_KEY`, with the standard `*_FILE` fallback) using HKDF-SHA256 under a fixed versioned domain-separation label, rather than provisioned as its own secret; the server SHALL refuse to boot when the root secret is absent. Rotating or changing the root secret (or the pepper's derivation label) invalidates every existing host token, which is an accepted operator-initiated fleet-wide re-enroll, not a routine action.
+#### Scenario: Issued token verifies without a database lookup
 
-This change is breaking and ships no token re-hash migration: enrollment rows created before the change hold a value that is not an HMAC of any presented token, so those tokens SHALL fail verification and the affected hosts SHALL recover through the existing re-enrollment-on-revocation path.
+- **GIVEN** a host completes enrollment and receives a signed token plus its expiry
+- **WHEN** the host presents that token on an authenticated request
+- **THEN** the server accepts it by verifying the signature and expiry locally, with no enrollment-row read
+- **AND** the request is scoped to the host_id carried in the token's claims
 
-#### Scenario: Issued token is stored as a keyed hash
+#### Scenario: A tampered or expired token is rejected
 
-- **GIVEN** a host completes enrollment and the server issues an opaque host token
-- **WHEN** the server persists the enrollment row
-- **THEN** the stored authenticator is HMAC-SHA256 of the token under the server pepper
-- **AND** no plaintext token and no per-row salt is stored
-- **AND** the row also carries the SHA-256 token-id as the indexed lookup key
-
-#### Scenario: Verification on the authenticated hot path
-
-- **GIVEN** an enrolled host presents its valid host token in an Authorization Bearer header
-- **WHEN** the server authenticates the request
-- **THEN** the server fetches the enrollment row by the token-id lookup key
-- **AND** recomputes HMAC-SHA256 of the presented token under the server pepper
-- **AND** accepts the request when the recomputed value matches the stored value under a constant-time compare
-
-#### Scenario: A token that does not match is rejected
-
-- **GIVEN** an enrollment row whose stored authenticator is not the HMAC of the presented token, including any row hashed under a different pepper or created before this change
+- **GIVEN** a token whose signature does not verify under the server key, or whose expiry is in the past
 - **WHEN** the host presents that token
 - **THEN** the server rejects the request with 401
-- **AND** the host re-enrolls using the deployment secret through the re-enrollment-on-revocation path
+- **AND** the rejection does not distinguish tampering from expiry from an unknown host
+
+### Requirement: Agent refreshes its token before expiry
+
+The agent SHALL proactively refresh its host token before the token's expiry by calling a dedicated refresh endpoint that is gated by the same host-token authentication as other agent routes, so a continuously running host never lets its token lapse. The refresh endpoint SHALL re-verify the presented token and mint a fresh token for the host at the host's current revocation epoch, rejecting the request (401) when the token's epoch is below the host's current epoch. This closes the revocation-snapshot staleness window: a stale-epoch token that the eventually-consistent snapshot still accepts at the middleware MUST NOT be refreshed into a current-epoch token. The agent SHALL also check refresh-eligibility immediately on startup, not only on its periodic timer, so a token already near expiry after a restart or resume is refreshed promptly. A refresh that is rejected with 401 (the host has been revoked or its epoch bumped) SHALL cause the agent to fall back to the re-enrollment path.
+
+#### Scenario: Refresh issues a fresh token
+
+- **GIVEN** an enrolled host with a valid, unexpired token
+- **WHEN** the agent calls the refresh endpoint with that token
+- **THEN** the server returns a fresh signed token and its new expiry
+- **AND** the new token verifies on subsequent requests
+
+#### Scenario: Refresh after revocation re-enrolls
+
+- **GIVEN** a host whose enrollment has been revoked and the revocation is visible in the snapshot
+- **WHEN** the agent calls the refresh endpoint with its current token
+- **THEN** the server returns 401
+- **AND** the agent engages its re-enrollment path
+
+### Requirement: Revocation is enforced by a per-replica snapshot
+
+The server SHALL enforce revocation of self-validating tokens via a per-replica in-memory snapshot of hosts that are revoked or have had their token epoch bumped, loaded before the replica serves traffic and refreshed on a short interval. A token SHALL be rejected when its host is revoked or when the token's epoch is below the host's current epoch. Operator-driven credential cycling SHALL bump the host's token epoch (rather than minting and pushing a replacement token); the affected agent recovers by re-enrolling. A re-enrollment SHALL preserve the host's existing token epoch (never reset it) and mint the new token at that epoch, so an operator credential cycle is monotonic and is not undone by the agent's automatic re-enroll. The snapshot is a per-replica performance cache holding no state a peer replica needs. The replica SHALL fail closed on the initial load: if the snapshot cannot be loaded before serving, the replica SHALL refuse to start rather than serve with an empty (allow-all) snapshot. On a later runtime refresh failure the previous snapshot SHALL be retained rather than dropped to empty. On a successful (re-)enrollment the replica SHALL record the host's post-enrollment state (not revoked, at the preserved epoch) in its local snapshot so the newly issued token is accepted immediately on that replica while any token below that epoch stays rejected; other replicas converge within their refresh interval.
+
+#### Scenario: Operator rotate invalidates after the snapshot refreshes
+
+- **GIVEN** an enrolled host with a valid token
+- **WHEN** an operator cycles the host's credentials (bumping its token epoch) and the snapshot refreshes
+- **THEN** the host's pre-rotate token is rejected with 401
+- **AND** a re-enrollment by that host mints a fresh token that verifies
+
+#### Scenario: Re-enrollment preserves the token epoch
+
+- **GIVEN** a host whose credentials an operator has cycled (token epoch bumped) and whose pre-rotate token is rejected
+- **WHEN** the host re-enrolls
+- **THEN** the freshly minted token verifies
+- **AND** the pre-rotate token remains rejected, because the bumped epoch is preserved across the re-enrollment rather than reset
+
+#### Scenario: Snapshot refresh failure retains the previous view
+
+- **GIVEN** a populated revocation snapshot on a replica
+- **WHEN** a subsequent refresh from the database fails
+- **THEN** the replica continues enforcing the previously loaded revocation state
+- **AND** does not fail open by dropping to an empty snapshot
