@@ -42,8 +42,6 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 const (
 	testEnrollSecret = "endpoint-integration-secret"
 	testHardwareUUID = "12345678-1234-1234-1234-123456789012"
-	// testHostTokenPepper is the fixed >=32-byte HMAC pepper the endpoint bootstrap requires for the legacy host_token columns.
-	testHostTokenPepper = "endpoint-integration-host-token-pepper-0123"
 	// testHostTokenSigningKey is the fixed >=32-byte HMAC key the endpoint bootstrap requires for signing self-validating host tokens.
 	testHostTokenSigningKey = "endpoint-integration-host-token-signing-key0"
 )
@@ -98,7 +96,6 @@ func newEndpointWithDB(t *testing.T, opts ...func(*bootstrap.Deps)) (*bootstrap.
 		EnrollSecret:        testEnrollSecret,
 		EnrollRatePerMinute: 600,
 		AuthZ:               allowAllAuthZ{},
-		HostTokenPepper:     []byte(testHostTokenPepper),
 		HostTokenSigningKey: []byte(testHostTokenSigningKey),
 	}
 	for _, opt := range opts {

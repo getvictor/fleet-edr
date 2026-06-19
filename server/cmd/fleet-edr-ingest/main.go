@@ -117,7 +117,6 @@ func run() error {
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),
 		HostTokenLifetime:   cfg.HostTokenLifetime,
-		HostTokenPepper:     kr.Derive(keyring.HostTokenPepperLabel),
 		HostTokenSigningKey: kr.Derive(keyring.HostTokenSigningLabel),
 	})
 	if err != nil {

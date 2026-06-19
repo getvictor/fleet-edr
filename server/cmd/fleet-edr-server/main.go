@@ -228,8 +228,7 @@ func openContexts(
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx,
-		kr.Derive(keyring.HostTokenPepperLabel), kr.Derive(keyring.HostTokenSigningLabel))
+	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel))
 	return
 }
 
@@ -405,7 +404,6 @@ func openEndpoint(
 	db *sqlx.DB,
 	cfg *config.Config,
 	identityCtx *identitybootstrap.Identity,
-	hostTokenPepper []byte,
 	hostTokenSigningKey []byte,
 ) (*endpointbootstrap.Endpoint, error) {
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
@@ -416,7 +414,6 @@ func openEndpoint(
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),
 		HostTokenLifetime:   cfg.HostTokenLifetime,
-		HostTokenPepper:     hostTokenPepper,
 		HostTokenSigningKey: hostTokenSigningKey,
 	})
 	if err != nil {

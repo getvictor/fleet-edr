@@ -47,10 +47,7 @@ const (
 )
 
 // Fixed >=32-byte keys so a token minted at enroll verifies on a later call within the same test.
-var (
-	testPepper     = []byte("test-host-token-pepper-0123456789abcdef")
-	testSigningKey = []byte("test-host-token-signing-0123456789abcdef")
-)
+var testSigningKey = []byte("test-host-token-signing-0123456789abcdef")
 
 // newServiceForTest stands up an endpoint Service over a real MySQL test DB, wired with the signer + revocation snapshot the
 // self-validating-token model needs. The snapshot is returned so tests can Refresh it deterministically (production refreshes it on a
@@ -59,7 +56,7 @@ func newServiceForTest(t *testing.T) (api.Service, *revocation.Snapshot) {
 	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	store := mysql.NewStore(db, testPepper)
+	store := mysql.NewStore(db)
 	signer, err := signedtoken.New(testSigningKey, "v1")
 	require.NoError(t, err)
 	snap := revocation.NewSnapshot(store, slog.Default())
