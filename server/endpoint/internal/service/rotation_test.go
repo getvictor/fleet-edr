@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 	"time"
@@ -16,6 +17,29 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 )
+
+// noRevocations is a do-nothing revocation.Source for constructing a snapshot in the New-guard test without a database.
+type noRevocations struct{}
+
+func (noRevocations) RevocationEntries(context.Context) ([]revocation.Entry, error) { return nil, nil }
+
+// TestServiceNew_Panics covers the fail-fast guards: New panics on a missing Store, Signer, Revocations, or empty Secret, and does not
+// panic when all are present.
+func TestServiceNew_Panics(t *testing.T) {
+	t.Parallel()
+	store := &mysql.Store{}
+	signer, err := signedtoken.New(testSigningKey, "v1")
+	require.NoError(t, err)
+	snap := revocation.NewSnapshot(noRevocations{}, nil)
+
+	assert.Panics(t, func() { service.New(service.Options{}) }, "nil store")
+	assert.Panics(t, func() { service.New(service.Options{Store: store}) }, "nil signer")
+	assert.Panics(t, func() { service.New(service.Options{Store: store, Signer: signer}) }, "nil revocations")
+	assert.Panics(t, func() { service.New(service.Options{Store: store, Signer: signer, Revocations: snap}) }, "empty secret")
+	assert.NotPanics(t, func() {
+		service.New(service.Options{Store: store, Signer: signer, Revocations: snap, Secret: "s"})
+	})
+}
 
 const (
 	testHostID = "93DFC6F5-763D-5075-B305-8AC145D12F96"

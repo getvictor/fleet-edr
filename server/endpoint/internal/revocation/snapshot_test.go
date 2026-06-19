@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,6 +60,25 @@ func TestSnapshot_Size(t *testing.T) {
 	assert.Equal(t, 0, s.Size(), "empty before first refresh")
 	require.NoError(t, s.Refresh(t.Context()))
 	assert.Equal(t, 2, s.Size())
+}
+
+func TestNewSnapshot_NilSource_Panics(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { NewSnapshot(nil, nil) })
+}
+
+func TestSnapshot_Run_RefreshesThenStops(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{entries: []Entry{{HostID: "revoked-host", Revoked: true}}}
+	s := NewSnapshot(src, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.Run(ctx, 50*time.Millisecond); close(done) }()
+	// Run performs an immediate refresh on entry, so the revoked host becomes visible without waiting for the first tick.
+	require.Eventually(t, func() bool { return s.Size() == 1 }, time.Second, 10*time.Millisecond)
+	assert.False(t, s.Allowed("revoked-host", 0))
+	cancel()
+	<-done
 }
 
 // spec:agent-enrollment/revocation-is-enforced-by-a-per-replica-snapshot/snapshot-refresh-failure-retains-the-previous-view

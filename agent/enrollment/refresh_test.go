@@ -128,3 +128,43 @@ func TestRefreshOnce_Unauthorized_ReEnrolls(t *testing.T) {
 	assert.Equal(t, tokenName(2), p.Token(), "401 refresh re-enrolled to a fresh token")
 	assert.Equal(t, int64(2), fake.enrollCalls.Load())
 }
+
+// TestMaybeRefresh covers the refresh-window gate: a no-op before refreshAt, an actual refresh once refreshAt has passed.
+func TestMaybeRefresh(t *testing.T) {
+	t.Parallel()
+	fake := &refreshFakeServer{refreshStatus: http.StatusOK, refreshToken: "ref-tok"}
+	srv := httptest.NewServer(fake.handler(t, testUUID))
+	t.Cleanup(srv.Close)
+	p := enrollProvider(t, srv.URL)
+
+	cur := p.state.Load()
+	p.state.Store(&persistedState{p: cur.p, refreshAt: time.Now().Add(time.Hour)})
+	p.maybeRefresh(context.Background())
+	assert.Equal(t, tokenName(1), p.Token(), "not refreshed before refreshAt")
+	assert.Equal(t, int64(0), fake.refreshCalls.Load())
+
+	cur = p.state.Load()
+	p.state.Store(&persistedState{p: cur.p, refreshAt: time.Now().Add(-time.Minute)})
+	p.maybeRefresh(context.Background())
+	assert.Equal(t, "ref-tok", p.Token(), "refreshed once refreshAt passed")
+	assert.Equal(t, int64(1), fake.refreshCalls.Load())
+}
+
+// TestRunRefresh_ImmediateThenCancel covers the loop's immediate-on-entry check (a due token is refreshed without waiting a tick) and
+// the ctx-cancel exit.
+func TestRunRefresh_ImmediateThenCancel(t *testing.T) {
+	t.Parallel()
+	fake := &refreshFakeServer{refreshStatus: http.StatusOK, refreshToken: "ref-tok"}
+	srv := httptest.NewServer(fake.handler(t, testUUID))
+	t.Cleanup(srv.Close)
+	p := enrollProvider(t, srv.URL)
+	cur := p.state.Load()
+	p.state.Store(&persistedState{p: cur.p, refreshAt: time.Now().Add(-time.Minute)}) // due immediately
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.RunRefresh(ctx); close(done) }()
+	require.Eventually(t, func() bool { return p.Token() == "ref-tok" }, 2*time.Second, 10*time.Millisecond)
+	cancel()
+	<-done
+}
