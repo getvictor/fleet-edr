@@ -92,6 +92,18 @@ func enrollProvider(t *testing.T, serverURL string) *provider {
 	return tp.(*provider)
 }
 
+// setRefreshAt overrides the persisted state's refreshAt so a test can drive the refresh-window gate without waiting. The explicit nil
+// guard (with return) is what NilAway needs to prove cur / cur.p are non-nil after state.Load(), which has a nil-return path.
+func setRefreshAt(t *testing.T, p *provider, at time.Time) {
+	t.Helper()
+	cur := p.state.Load()
+	if cur == nil || cur.p == nil {
+		t.Fatal("setRefreshAt: provider has no persisted state")
+		return
+	}
+	p.state.Store(&persistedState{p: cur.p, refreshAt: at})
+}
+
 // TestRefreshOnce_Success: a 200 refresh swaps in the new token + expiry, in memory and on disk.
 func TestRefreshOnce_Success(t *testing.T) {
 	t.Parallel()
@@ -137,14 +149,12 @@ func TestMaybeRefresh(t *testing.T) {
 	t.Cleanup(srv.Close)
 	p := enrollProvider(t, srv.URL)
 
-	cur := p.state.Load()
-	p.state.Store(&persistedState{p: cur.p, refreshAt: time.Now().Add(time.Hour)})
+	setRefreshAt(t, p, time.Now().Add(time.Hour))
 	p.maybeRefresh(context.Background())
 	assert.Equal(t, tokenName(1), p.Token(), "not refreshed before refreshAt")
 	assert.Equal(t, int64(0), fake.refreshCalls.Load())
 
-	cur = p.state.Load()
-	p.state.Store(&persistedState{p: cur.p, refreshAt: time.Now().Add(-time.Minute)})
+	setRefreshAt(t, p, time.Now().Add(-time.Minute))
 	p.maybeRefresh(context.Background())
 	assert.Equal(t, "ref-tok", p.Token(), "refreshed once refreshAt passed")
 	assert.Equal(t, int64(1), fake.refreshCalls.Load())
@@ -158,8 +168,7 @@ func TestRunRefresh_ImmediateThenCancel(t *testing.T) {
 	srv := httptest.NewServer(fake.handler(t, testUUID))
 	t.Cleanup(srv.Close)
 	p := enrollProvider(t, srv.URL)
-	cur := p.state.Load()
-	p.state.Store(&persistedState{p: cur.p, refreshAt: time.Now().Add(-time.Minute)}) // due immediately
+	setRefreshAt(t, p, time.Now().Add(-time.Minute)) // due immediately
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
