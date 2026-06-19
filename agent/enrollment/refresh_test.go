@@ -43,6 +43,7 @@ type refreshFakeServer struct {
 	refreshCalls  atomic.Int64
 	refreshStatus int
 	refreshToken  string
+	rawBody       string // when set, written verbatim on a 200 refresh (to exercise malformed-response handling)
 }
 
 func (f *refreshFakeServer) handler(t *testing.T, hostID string) http.HandlerFunc {
@@ -64,6 +65,10 @@ func (f *refreshFakeServer) handler(t *testing.T, hostID string) http.HandlerFun
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
+			if f.rawBody != "" {
+				_, _ = w.Write([]byte(f.rawBody))
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"host_id": hostID, "host_token": f.refreshToken, "expires_at": exp,
 			})
@@ -139,6 +144,49 @@ func TestRefreshOnce_Unauthorized_ReEnrolls(t *testing.T) {
 	require.NoError(t, p.refreshOnce(context.Background()))
 	assert.Equal(t, tokenName(2), p.Token(), "401 refresh re-enrolled to a fresh token")
 	assert.Equal(t, int64(2), fake.enrollCalls.Load())
+}
+
+// TestPersisted_ExpiresAtRoundTrip pins the new expires_at field through the plist write/read codec.
+func TestPersisted_ExpiresAtRoundTrip(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "enrolled.plist")
+	want := &Persisted{
+		HostID:     testUUID,
+		HostToken:  "v1.tok.mac",
+		ServerURL:  "https://edr.example",
+		EnrolledAt: time.Now().UTC().Truncate(time.Second),
+		ExpiresAt:  time.Now().Add(time.Hour).UTC().Truncate(time.Second),
+	}
+	require.NoError(t, writePersisted(path, want))
+	got, err := loadPersisted(path)
+	require.NoError(t, err)
+	assert.Equal(t, want.ExpiresAt, got.ExpiresAt, "expires_at round-trips through the plist")
+	assert.Equal(t, want.HostToken, got.HostToken)
+	assert.Equal(t, want.EnrolledAt, got.EnrolledAt)
+}
+
+// TestRefreshOnce_ErrorPaths covers the non-happy refresh branches: a 5xx, an empty token, and a malformed body all return an error
+// and leave the current token in place (no re-enroll, since only a 401 triggers that).
+func TestRefreshOnce_ErrorPaths(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		fake *refreshFakeServer
+	}{
+		{"server 500", &refreshFakeServer{refreshStatus: http.StatusInternalServerError}},
+		{"empty token", &refreshFakeServer{refreshStatus: http.StatusOK, refreshToken: ""}},
+		{"malformed json", &refreshFakeServer{refreshStatus: http.StatusOK, rawBody: "{not-json"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(tc.fake.handler(t, testUUID))
+			t.Cleanup(srv.Close)
+			p := enrollProvider(t, srv.URL)
+			require.Error(t, p.refreshOnce(context.Background()))
+			assert.Equal(t, tokenName(1), p.Token(), "token unchanged when refresh fails")
+		})
+	}
 }
 
 // TestMaybeRefresh covers the refresh-window gate: a no-op before refreshAt, an actual refresh once refreshAt has passed.
