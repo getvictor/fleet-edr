@@ -56,6 +56,9 @@ type Snapshot struct {
 // synchronously before serving so a cold replica does not accept an already-revoked token. Registers OTel instruments for size, age,
 // and refresh failures so an operator can see the snapshot is live in SigNoz.
 func NewSnapshot(src Source, logger *slog.Logger) *Snapshot {
+	if src == nil {
+		panic("revocation.NewSnapshot: Source must not be nil")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}

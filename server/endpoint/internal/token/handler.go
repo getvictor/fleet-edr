@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -38,7 +39,10 @@ func New(svc api.Service, logger *slog.Logger) *Handler {
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	res, err := h.svc.RefreshToken(ctx)
+	// The host-token middleware already authenticated this request; re-read the bearer token so the service can re-check the presented
+	// token's epoch against the DB (the middleware uses the eventually-consistent snapshot, which the refresh path must not rely on).
+	_, bearer, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	res, err := h.svc.RefreshToken(ctx, strings.TrimSpace(bearer))
 	if errors.Is(err, api.ErrInvalidToken) {
 		// Host unknown or revoked: same 401 the middleware would emit, so the agent's existing re-enroll-on-401 path recovers it.
 		httpserver.WriteAuthFailure(ctx, w, h.logger, http.StatusUnauthorized, "invalid_token")

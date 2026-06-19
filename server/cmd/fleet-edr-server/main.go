@@ -121,11 +121,13 @@ func run() error {
 		return err
 	}
 
-	// The revocation snapshot powers no-DB token verification: load it once before serving so a cold replica never accepts an
-	// already-revoked token, then refresh it in the background. Per ADR-0010 it is a per-replica perf cache, safe to lose.
+	// The revocation snapshot is the ONLY revocation enforcement on the no-DB verify hot path, so an empty snapshot is "revocation
+	// disabled" (absent host => allowed). Fail closed: load it once before serving and treat a failed initial load as fatal rather than
+	// serving with an allow-all snapshot. The DB was just exercised by the schema apply above, so a failure here is a real outage, not a
+	// transient blip. After the initial load the background ticker keeps it fresh (and retains the previous snapshot on a later blip).
 	revSnap := endpointCtx.RevocationSnapshot()
 	if rerr := revSnap.Refresh(ctx); rerr != nil {
-		logger.WarnContext(ctx, "initial revocation snapshot refresh failed; starting empty", "err", rerr)
+		return fmt.Errorf("initial revocation snapshot load: %w", rerr)
 	}
 	go revSnap.Run(ctx, endpointbootstrap.DefaultRevocationRefreshInterval)
 

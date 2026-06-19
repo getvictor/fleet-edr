@@ -84,12 +84,9 @@ func TestEnroll_MintsVerifiableSignedToken(t *testing.T) {
 func TestRefreshToken_IssuesFreshVerifiableToken(t *testing.T) {
 	t.Parallel()
 	svc, _ := newServiceForTest(t)
-	// Enroll to create the row; the refresh path reads it. We do not compare the refresh token to the enroll token: a same-second
-	// refresh mints byte-identical claims (iat/exp are second-granular) and distinctness is not a requirement (both are equally valid).
-	enrollForTest(t, svc)
+	res := enrollForTest(t, svc)
 
-	ctx := api.WithHostID(t.Context(), testHostID)
-	ref, err := svc.RefreshToken(ctx)
+	ref, err := svc.RefreshToken(t.Context(), res.HostToken)
 	require.NoError(t, err)
 	require.NotEmpty(t, ref.HostToken)
 	assert.Equal(t, testHostID, ref.HostID)
@@ -99,13 +96,21 @@ func TestRefreshToken_IssuesFreshVerifiableToken(t *testing.T) {
 	assert.Equal(t, testHostID, hostID)
 }
 
-// TestRefreshToken_UnknownHost: refresh for a host with no enrollment row is ErrInvalidToken (handler maps to 401 -> re-enroll).
-func TestRefreshToken_UnknownHost(t *testing.T) {
+// TestRefreshToken_RejectsStaleEpochAndGarbage covers the refresh-path guards: an unverifiable token is rejected, and (the security
+// fix) a pre-rotate token cannot refresh into a current-epoch token after an operator epoch bump, even though the revocation snapshot
+// here is never refreshed (the refresh path checks the DB epoch directly, closing the snapshot-staleness window).
+func TestRefreshToken_RejectsStaleEpochAndGarbage(t *testing.T) {
 	t.Parallel()
 	svc, _ := newServiceForTest(t)
-	ctx := api.WithHostID(t.Context(), "00000000-0000-0000-0000-000000000000")
-	_, err := svc.RefreshToken(ctx)
+	res := enrollForTest(t, svc)
+
+	_, err := svc.RefreshToken(t.Context(), "not.a.token")
 	require.ErrorIs(t, err, api.ErrInvalidToken)
+
+	_, err = svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "incident")
+	require.NoError(t, err)
+	_, err = svc.RefreshToken(t.Context(), res.HostToken)
+	require.ErrorIs(t, err, api.ErrInvalidToken, "stale-epoch token must not refresh after an epoch bump")
 }
 
 // spec:agent-enrollment/revocation-is-enforced-by-a-per-replica-snapshot/operator-rotate-invalidates-after-the-snapshot-refreshes

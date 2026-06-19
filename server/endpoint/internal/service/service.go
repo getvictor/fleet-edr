@@ -73,6 +73,9 @@ func New(opts Options) api.Service {
 	if opts.Revocations == nil {
 		panic("service.New: Revocations is required")
 	}
+	if opts.Secret == "" {
+		panic("service.New: Secret is required")
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -148,27 +151,32 @@ func (s *service) VerifyToken(_ context.Context, token string) (string, error) {
 // current token expires so a live host never lapses. It is not the hot path (once per token lifetime per host), so a single DB read for
 // the host's current epoch + revocation state is acceptable; minting at the current epoch keeps the new token valid against the
 // revocation snapshot. A revoked or unknown host gets ErrInvalidToken, which the handler maps to 401 -> the agent re-enrolls.
-func (s *service) RefreshToken(ctx context.Context) (api.RefreshResponse, error) {
-	hostID, ok := api.HostIDFromContext(ctx)
-	if !ok || hostID == "" {
+func (s *service) RefreshToken(ctx context.Context, token string) (api.RefreshResponse, error) {
+	// Re-verify the presented token (cheap; refresh is not the hot path) so we can compare ITS epoch to the host's current DB epoch.
+	// The host-token middleware gates this route using the per-replica revocation snapshot, which is eventually consistent, so during
+	// the staleness window a pre-rotate (stale-epoch) token can still pass the middleware. Without this check, refresh would then mint
+	// a fresh token at the current (bumped) epoch and let the stale token survive an operator credential cycle. Rejecting a presented
+	// epoch below the current epoch closes that window authoritatively against the DB.
+	claims, err := s.signer.Verify(token, time.Now())
+	if err != nil {
 		return api.RefreshResponse{}, api.ErrInvalidToken
 	}
-	epoch, revoked, err := s.store.TokenStatus(ctx, hostID)
+	epoch, revoked, err := s.store.TokenStatus(ctx, claims.HostID)
 	if errors.Is(err, mysql.ErrNotFound) {
 		return api.RefreshResponse{}, api.ErrInvalidToken
 	}
 	if err != nil {
 		return api.RefreshResponse{}, fmt.Errorf("refresh token status: %w", err)
 	}
-	if revoked {
+	if revoked || claims.Epoch < epoch {
 		return api.RefreshResponse{}, api.ErrInvalidToken
 	}
 	now := time.Now().UTC()
-	token, exp, err := s.signer.Mint(hostID, epoch, s.tokenTTL, now)
+	newToken, exp, err := s.signer.Mint(claims.HostID, epoch, s.tokenTTL, now)
 	if err != nil {
 		return api.RefreshResponse{}, fmt.Errorf("mint refresh token: %w", err)
 	}
-	return api.RefreshResponse{HostID: hostID, HostToken: token, ExpiresAt: exp}, nil
+	return api.RefreshResponse{HostID: claims.HostID, HostToken: newToken, ExpiresAt: exp}, nil
 }
 
 // RotateToken cycles a host's credentials by bumping its token_epoch, which invalidates every signed token minted at the prior epoch

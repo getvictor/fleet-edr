@@ -50,7 +50,7 @@ The server SHALL issue each host token as a self-validating signed token that ca
 
 ### Requirement: Agent refreshes its token before expiry
 
-The agent SHALL proactively refresh its host token before the token's expiry by calling a dedicated refresh endpoint that is gated by the same host-token authentication as other agent routes, so a continuously running host never lets its token lapse. The refresh endpoint SHALL mint a fresh token for the already-authenticated host at the host's current revocation epoch. A refresh that is rejected with 401 (the host has been revoked or its epoch bumped) SHALL cause the agent to fall back to the re-enrollment path.
+The agent SHALL proactively refresh its host token before the token's expiry by calling a dedicated refresh endpoint that is gated by the same host-token authentication as other agent routes, so a continuously running host never lets its token lapse. The refresh endpoint SHALL re-verify the presented token and mint a fresh token for the host at the host's current revocation epoch, rejecting the request (401) when the token's epoch is below the host's current epoch. This closes the revocation-snapshot staleness window: a stale-epoch token that the eventually-consistent snapshot still accepts at the middleware MUST NOT be refreshed into a current-epoch token. The agent SHALL also check refresh-eligibility immediately on startup, not only on its periodic timer, so a token already near expiry after a restart or resume is refreshed promptly. A refresh that is rejected with 401 (the host has been revoked or its epoch bumped) SHALL cause the agent to fall back to the re-enrollment path.
 
 #### Scenario: Refresh issues a fresh token
 
@@ -68,7 +68,7 @@ The agent SHALL proactively refresh its host token before the token's expiry by 
 
 ### Requirement: Revocation is enforced by a per-replica snapshot
 
-The server SHALL enforce revocation of self-validating tokens via a per-replica in-memory snapshot of hosts that are revoked or have had their token epoch bumped, loaded before the replica serves traffic and refreshed on a short interval. A token SHALL be rejected when its host is revoked or when the token's epoch is below the host's current epoch. Operator-driven credential cycling SHALL bump the host's token epoch (rather than minting and pushing a replacement token); the affected agent recovers by re-enrolling. The snapshot is a per-replica performance cache holding no state a peer replica needs; on refresh failure the previous snapshot SHALL be retained rather than dropped to empty.
+The server SHALL enforce revocation of self-validating tokens via a per-replica in-memory snapshot of hosts that are revoked or have had their token epoch bumped, loaded before the replica serves traffic and refreshed on a short interval. A token SHALL be rejected when its host is revoked or when the token's epoch is below the host's current epoch. Operator-driven credential cycling SHALL bump the host's token epoch (rather than minting and pushing a replacement token); the affected agent recovers by re-enrolling. The snapshot is a per-replica performance cache holding no state a peer replica needs. The replica SHALL fail closed on the initial load: if the snapshot cannot be loaded before serving, the replica SHALL refuse to start rather than serve with an empty (allow-all) snapshot. On a later runtime refresh failure the previous snapshot SHALL be retained rather than dropped to empty.
 
 #### Scenario: Operator rotate invalidates after the snapshot refreshes
 

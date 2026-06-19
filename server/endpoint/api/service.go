@@ -18,10 +18,11 @@ type Service interface {
 	// those cases, which would be an oracle.
 	VerifyToken(ctx context.Context, token string) (string, error)
 
-	// RefreshToken issues a fresh signed token for the host_id pinned on ctx by the HostToken middleware. The agent calls this before its
-	// current token expires so a live host never lapses. Returns ErrInvalidToken when the host is unknown or revoked (the handler maps
-	// that to 401, prompting the agent to re-enroll).
-	RefreshToken(ctx context.Context) (RefreshResponse, error)
+	// RefreshToken issues a fresh signed token for the presented (already host-token-authenticated) token. The agent calls this before
+	// its current token expires so a live host never lapses. It re-verifies the presented token and rejects it if the host is unknown or
+	// revoked or the token's epoch is below the host's current epoch (closing the revocation-snapshot staleness window); the handler maps
+	// that to 401, prompting the agent to re-enroll.
+	RefreshToken(ctx context.Context, token string) (RefreshResponse, error)
 
 	// List returns operator-visible enrollment rows.
 	List(ctx context.Context) ([]Enrollment, error)

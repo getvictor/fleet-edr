@@ -159,9 +159,9 @@ func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
 		Logger:              logger,
 		EnrollSecret:        EnrollSecret,
 		EnrollRatePerMinute: 1000,
-		CommandInserter:     responseCtx.Service().Insert,
 		AuthZ:               identityCtx.AuthZ(),
 		HostTokenPepper:     signingKey, // any fixed >=32-byte key; the cross-context tests only need enroll/verify to round-trip
+		HostTokenSigningKey: signingKey,
 	})
 	require.NoError(t, err, "open endpoint")
 

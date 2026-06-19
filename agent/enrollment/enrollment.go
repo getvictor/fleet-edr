@@ -255,6 +255,10 @@ func computeRefreshAt(now, exp time.Time) time.Time {
 // so a live agent never lapses without a full re-enroll. Refresh uses only the current token (no enroll secret), so it works even on a
 // host that has no EDR_ENROLL_SECRET on disk.
 func (p *provider) RunRefresh(ctx context.Context) {
+	// Check immediately on entry, not only on the first tick: an agent that just started or resumed from sleep may already hold a token
+	// past its refresh point (or within a tick of expiry). Waiting a full refreshCheckInterval could let it expire first, after which
+	// even /api/token/refresh 401s and recovery needs the enroll secret. Then check on every tick.
+	p.maybeRefresh(ctx)
 	ticker := time.NewTicker(refreshCheckInterval)
 	defer ticker.Stop()
 	for {
@@ -262,14 +266,20 @@ func (p *provider) RunRefresh(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			st := p.state.Load()
-			if st == nil || st.p == nil || st.refreshAt.IsZero() || time.Now().Before(st.refreshAt) {
-				continue
-			}
-			if err := p.refreshOnce(ctx); err != nil {
-				p.logger.WarnContext(ctx, "token refresh failed", "err", err)
-			}
+			p.maybeRefresh(ctx)
 		}
+	}
+}
+
+// maybeRefresh refreshes the token if it has entered its refresh window (computeRefreshAt has passed). A no-op otherwise; safe to call
+// repeatedly from both the immediate-entry check and the ticker.
+func (p *provider) maybeRefresh(ctx context.Context) {
+	st := p.state.Load()
+	if st == nil || st.p == nil || st.refreshAt.IsZero() || time.Now().Before(st.refreshAt) {
+		return
+	}
+	if err := p.refreshOnce(ctx); err != nil {
+		p.logger.WarnContext(ctx, "token refresh failed", "err", err)
 	}
 }
 
