@@ -51,29 +51,6 @@ type RefreshResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// RotationTrigger describes who initiated a host-token rotation. Used by the audit row payload so reviewers can distinguish a routine
-// scheduled rotation from a deliberate operator-driven one (incident response, suspected token leak). Stored as a string so adding new
-// triggers (e.g. "scheduler" if a background sweep is added later) is a constant-time addition rather than a wire-shape break.
-type RotationTrigger string
-
-const (
-	// RotationTriggerAuto is reserved for an automatic (non-operator) credential cycle. No path emits it today (the verify-time
-	// auto-rotation it once labelled was removed with the move to self-validating tokens); retained for the audit-payload vocabulary.
-	RotationTriggerAuto RotationTrigger = "auto"
-	// RotationTriggerOperator is the explicit operator-driven trigger
-	// from POST /api/enrollments/{host_id}/rotate.
-	RotationTriggerOperator RotationTrigger = "operator"
-)
-
-// RotateResult is the operator-visible outcome of a credential cycle. Under the self-validating-token model RotateToken bumps the
-// host's token_epoch (invalidating its current token once the revocation snapshot catches up) rather than minting+pushing a new token,
-// so both fields are now zero-valued: there is no rotated-out token id to prefix and no agent command to reference. The struct shape is
-// retained for wire compatibility with the operator UI; the agent recovers by re-enrolling.
-type RotateResult struct {
-	PreviousTokenIDPrefix string `json:"previous_token_id_prefix"`
-	CommandID             *int64 `json:"command_id,omitempty"`
-}
-
 // Errors returned across the api boundary. Callers compare with errors.Is.
 var (
 	// ErrInvalidSecret is returned when the agent's enroll_secret doesn't
@@ -97,7 +74,3 @@ var (
 	// enrollment row.
 	ErrNotFound = errors.New("endpoint: enrollment not found")
 )
-
-// CommandInserter (the closure type lives in endpoint/internal/service, aliased in endpoint/bootstrap) is retained for wiring
-// compatibility. The endpoint context no longer emits commands under the self-validating-token model: token refresh is agent-pull and
-// credential cycling is an epoch bump, so nothing calls it today.

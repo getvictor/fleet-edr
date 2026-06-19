@@ -37,9 +37,6 @@ const (
 	// defaultHostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. The
 	// agent refreshes well before expiry; 60 minutes matches SPIFFE hot-path workload-identity guidance.
 	defaultHostTokenLifetime = 60 * time.Minute
-	// defaultHostTokenGrace is how long a just-rotated previous token still verifies after rotation. Wider than an agent's poll interval
-	// so an in-flight request does not 401 mid-cycle.
-	defaultHostTokenGrace = 5 * time.Minute
 	// defaultOIDCStateCookieTTL is how long the signed state cookie that carries (state, nonce, code_verifier) stays valid. 5 minutes
 	// matches the IdP's typical authorization-code window: long enough to survive an MFA prompt, short enough to bound CSRF replay.
 	defaultOIDCStateCookieTTL = 5 * time.Minute
@@ -130,9 +127,6 @@ type Config struct {
 	// EDR_HOST_TOKEN_LIFETIME. Default 60m: short enough that a leaked token has bounded value, long enough that refresh traffic is
 	// negligible.
 	HostTokenLifetime time.Duration
-	// HostTokenGrace is retained for config compatibility but is no longer consumed: the self-validating-token model has no rotation
-	// grace window (the agent pulls a fresh token before expiry). Populated from EDR_HOST_TOKEN_GRACE; slated for removal.
-	HostTokenGrace time.Duration
 
 	// TrustedProxies is the set of CIDRs (or bare IPs) the server will trust X-Forwarded-For from. Populated from EDR_TRUSTED_PROXIES
 	// (comma-separated). Empty by default: XFF is ignored and the per-IP rate limiter + audit log see the direct TCP peer (issue #81).
@@ -180,7 +174,7 @@ type Config struct {
 	AuthAllowNoOIDC bool
 
 	// SecretKey is the deployment root secret. Every long-lived server-side key is derived from it via HKDF (internal/keyring) under a
-	// versioned domain-separation label: the host-token HMAC pepper and the pre-auth cookie signing key (OIDC state + break-glass
+	// versioned domain-separation label: the host-token signing key and the pre-auth cookie signing key (OIDC state + break-glass
 	// challenge) are both derived, so a deployment provisions one secret rather than one per purpose. Populated from EDR_SECRET_KEY (or
 	// EDR_SECRET_KEY_FILE for docker-secret mounts). Always required; validated at boot to be at least 32 bytes. Changing it invalidates
 	// every existing host token (a breaking, operator-initiated fleet-wide re-enroll).
@@ -281,7 +275,6 @@ func defaults() Config {
 		StaleProcessTTL:          defaultStaleProcessTTL,
 		StaleProcessInterval:     defaultStaleProcessInterval,
 		HostTokenLifetime:        defaultHostTokenLifetime,
-		HostTokenGrace:           defaultHostTokenGrace,
 		ShutdownDrain:            defaultShutdownDrain,
 		OIDCScopes:               []string{"openid", "email", "profile"},
 		OIDCAllowJITProvisioning: true,
@@ -365,11 +358,11 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 }
 
 // secretKeyMinBytes is the floor for EDR_SECRET_KEY. 32 bytes matches the HKDF-SHA256 output width every derived key uses; a shorter
-// root would cap the entropy of the host-token pepper and the cookie signing key regardless of their requested length.
+// root would cap the entropy of the host-token signing key and the cookie signing key regardless of their requested length.
 const secretKeyMinBytes = 32
 
 // loadSecretKey reads + validates the deployment root secret. Unlike the OIDC signing key it replaces, it is required unconditionally:
-// the host-token HMAC pepper derives from it and host tokens are used by every deployment, OIDC or not. The EDR_SECRET_KEY_FILE
+// the host-token signing key derives from it and host tokens are used by every deployment, OIDC or not. The EDR_SECRET_KEY_FILE
 // docker-secret sibling is honored transparently by the FileBackedGetenv wrapper.
 func loadSecretKey(c *Config, getenv func(string) string, errs *[]error) {
 	v := getenv("EDR_SECRET_KEY")
@@ -423,19 +416,11 @@ func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, errs)
 }
 
-// loadHostTokenConfig parses the wave-1 host-token rotation knobs and enforces the cross-field invariant: grace MUST be strictly
-// shorter than lifetime. Both must be positive; "disable rotation" is not a supported deployment mode (a never-rotating bearer
-// token is the very thing this feature exists to fix). With grace >= lifetime, two consecutive rotations would leave THREE valid
-// tokens at once (current + previous still in grace + previous-previous's grace window stretching past the next rotation), which the
-// previous_token_* schema columns can't represent.
+// loadHostTokenConfig parses the host-token lifetime. Under the self-validating-token model there is no rotation grace window: the
+// agent pulls a fresh token before expiry, and credential cycling is an epoch bump that takes effect once the revocation snapshot
+// catches up, not a rotate-with-grace. Lifetime must be positive when set; zero falls back to the service default.
 func loadHostTokenConfig(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_LIFETIME", &c.HostTokenLifetime, errs)
-	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_GRACE", &c.HostTokenGrace, errs)
-	if c.HostTokenLifetime > 0 && c.HostTokenGrace > 0 && c.HostTokenGrace >= c.HostTokenLifetime {
-		*errs = append(*errs, fmt.Errorf(
-			"EDR_HOST_TOKEN_GRACE (%s) must be strictly shorter than EDR_HOST_TOKEN_LIFETIME (%s)",
-			c.HostTokenGrace, c.HostTokenLifetime))
-	}
 }
 
 // loadAllowlists reads each detection-rule allowlist env var. Each is

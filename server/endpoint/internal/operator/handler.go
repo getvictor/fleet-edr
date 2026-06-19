@@ -200,7 +200,7 @@ func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.svc.RotateToken(ctx, hostID, api.RotationTriggerOperator, body.Actor, body.Reason)
+	err := h.svc.RotateToken(ctx, hostID, body.Actor, body.Reason)
 	switch {
 	case errors.Is(err, api.ErrNotFound):
 		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
@@ -223,10 +223,10 @@ func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
 		attrkeys.AdminActor, body.Actor,
 		attrkeys.AdminReason, body.Reason,
 		attrkeys.HostID, hostID,
-		"edr.command.id", commandIDForLog(res.CommandID),
-		"edr.previous_token_id_prefix", res.PreviousTokenIDPrefix,
 	)
-	writeJSON(ctx, h.logger, w, http.StatusOK, res)
+	// The epoch bump invalidates the host's current token once every replica's revocation snapshot catches up; there is no token or
+	// command to hand back, so a 204 with an empty body is the whole result. The agent recovers by re-enrolling when its refresh 401s.
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {
@@ -235,14 +235,4 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
-}
-
-// commandIDForLog dereferences a *int64 for slog attribute output, returning 0 when the rotation committed but no rotate_token command
-// was queued (the nil case carries that signal explicitly on the wire via the omitempty JSON shape; the access log uses 0 to keep the
-// attribute monomorphic int64 rather than mixing int64 and "absent").
-func commandIDForLog(p *int64) int64 {
-	if p == nil {
-		return 0
-	}
-	return *p
 }

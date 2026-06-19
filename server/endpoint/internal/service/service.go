@@ -23,11 +23,6 @@ import (
 // minutes matches the SPIFFE guidance for hot-path workload identities.
 const defaultTokenTTL = 60 * time.Minute
 
-// CommandInserter is retained for wiring compatibility (the bootstrap alias + cmd/main type references). The endpoint context no longer
-// emits commands under the self-validating-token model: token refresh is agent-pull, and credential cycling is an epoch bump enforced
-// by the revocation snapshot, not a server-pushed rotate_token command.
-type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
-
 // hardwareUUIDPattern accepts the canonical hyphenated UUID form in either case. macOS IOPlatformUUID is uppercase-hyphenated. Future
 // platforms emitting unhyphenated 32-hex strings need a matching agent + regex update.
 var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
@@ -186,31 +181,29 @@ func (s *service) RefreshToken(ctx context.Context, token string) (api.RefreshRe
 
 // RotateToken cycles a host's credentials by bumping its token_epoch, which invalidates every signed token minted at the prior epoch
 // once the revocation snapshot picks up the change. There is no opaque token to rotate and no command to push: the agent recovers by
-// re-enrolling when its refresh (carrying the now-stale epoch) 401s. trigger/actor/reason feed the audit row. Returns ErrNotFound when
-// the host has no enrollment.
-func (s *service) RotateToken(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) (api.RotateResult, error) {
+// re-enrolling when its refresh (carrying the now-stale epoch) 401s. actor + reason feed the audit row. Returns ErrNotFound when the
+// host has no enrollment.
+func (s *service) RotateToken(ctx context.Context, hostID, actor, reason string) error {
 	if hostID == "" {
-		return api.RotateResult{}, fmt.Errorf("rotate token: %w", api.ErrNotFound)
+		return fmt.Errorf("rotate token: %w", api.ErrNotFound)
 	}
 	if err := s.store.BumpTokenEpoch(ctx, hostID); err != nil {
 		if errors.Is(err, mysql.ErrNotFound) {
-			return api.RotateResult{}, api.ErrNotFound
+			return api.ErrNotFound
 		}
-		return api.RotateResult{}, fmt.Errorf("rotate token: %w", err)
+		return fmt.Errorf("rotate token: %w", err)
 	}
-	s.recordRotationAudit(ctx, hostID, trigger, actor, reason)
-	// RotateResult carries no token or command under this model: the prefix + command_id fields stay zero, which the operator handler
-	// already renders as "agent will recover via re-enroll".
-	return api.RotateResult{}, nil
+	s.recordRotationAudit(ctx, hostID, actor, reason)
+	return nil
 }
 
 // recordRotationAudit emits one audit row for a credential-cycle. Best-effort: a missed audit row is a follow-up incident, not a reason
 // to fail an HTTP response that already succeeded.
-func (s *service) recordRotationAudit(ctx context.Context, hostID string, trigger api.RotationTrigger, actor, reason string) {
+func (s *service) recordRotationAudit(ctx context.Context, hostID, actor, reason string) {
 	if s.audit == nil {
 		return
 	}
-	payload := map[string]any{"trigger": string(trigger)}
+	payload := map[string]any{}
 	if actor != "" {
 		payload["actor"] = actor
 	}

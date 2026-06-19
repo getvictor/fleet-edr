@@ -47,7 +47,7 @@ func (f fakeService) CountActive(context.Context) (int, error) {
 func (f fakeService) ActiveHostIDs(context.Context) ([]string, error) {
 	panic("not implemented in fakeService")
 }
-func (f fakeService) RotateToken(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
+func (f fakeService) RotateToken(context.Context, string, string, string) error {
 	panic("not implemented in fakeService")
 }
 func (f fakeService) RefreshToken(context.Context, string) (api.RefreshResponse, error) {

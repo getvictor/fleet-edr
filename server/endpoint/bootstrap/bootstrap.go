@@ -33,11 +33,6 @@ const hostTokenKeyID = "v1"
 // hammering the DB (one small query per replica per interval).
 const DefaultRevocationRefreshInterval = 5 * time.Second
 
-// CommandInserter is the closure cmd/main supplies so endpoint can queue commands (today: rotate_token) without importing response/api
-// directly. Method-value-shaped to match response.Service.Insert exactly: cmd/main passes `responseCtx.Service().Insert` here as a
-// one-liner.
-type CommandInserter = service.CommandInserter
-
 // Deps bundles what New needs to wire the endpoint context. cmd/main owns the *sqlx.DB handle and shares it across every context's
 // bootstrap.
 type Deps struct {

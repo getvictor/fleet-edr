@@ -45,9 +45,8 @@ type Service interface {
 	ActiveHostIDs(ctx context.Context) ([]string, error)
 
 	// RotateToken cycles a host's credentials by bumping its token_epoch, invalidating every signed token minted at the prior epoch once
-	// the revocation snapshot picks up the change. Under the self-validating-token model there is no opaque token to rotate and no
-	// command to push: the agent recovers by re-enrolling when its refresh (carrying the now-stale epoch) 401s. trigger names who
-	// initiated it; actor + reason are the operator-supplied attribution carried into the audit row. Returns ErrNotFound when the
-	// host_id has no enrollment. The returned RotateResult is empty (no token/command under this model).
-	RotateToken(ctx context.Context, hostID string, trigger RotationTrigger, actor, reason string) (RotateResult, error)
+	// the revocation snapshot picks up the change. There is no opaque token to rotate and no command to push: the agent recovers by
+	// re-enrolling when its refresh (carrying the now-stale epoch) 401s. actor + reason are the operator-supplied attribution carried
+	// into the audit row. Returns ErrNotFound when the host_id has no enrollment.
+	RotateToken(ctx context.Context, hostID, actor, reason string) error
 }
