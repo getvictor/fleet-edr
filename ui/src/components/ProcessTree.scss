@@ -200,6 +200,20 @@
     &--error {
       color: $core-vibrant-red;
     }
+
+    // Process-optional alert explanation: a neutral framed note, not an error. Sits where the empty canvas would be and
+    // carries the opt-in to widen to the full host tree.
+    &--info {
+      display: flex;
+      align-items: center;
+      gap: $pad-medium;
+      padding: $pad-medium;
+      background-color: $ui-fleet-black-5;
+      border: 1px solid $ui-fleet-black-10;
+      border-radius: $border-radius;
+
+      p { margin: 0; }
+    }
   }
 
   &__layout {
@@ -301,6 +315,26 @@
 
   &__spacer {
     flex: 1;
+  }
+}
+
+// Finding detail: the alert's description + technique tags, rendered under the breadcrumb. The primary "what and why"
+// surface, and the only meaningful content for a process-optional alert whose graph is intentionally empty.
+.alert-detail-panel {
+  margin-bottom: $pad-medium;
+  padding: 0 $pad-medium;
+
+  &__description {
+    margin: 0 0 $pad-small;
+    color: $core-fleet-black;
+    font-size: $x-small;
+    line-height: 1.5;
+  }
+
+  &__techniques {
+    display: flex;
+    flex-wrap: wrap;
+    gap: $pad-xsmall;
   }
 }
 

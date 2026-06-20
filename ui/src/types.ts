@@ -116,6 +116,9 @@ export interface Alert {
   severity: string;
   title: string;
   description: string;
+  // techniques are the MITRE ATT&CK ids the rule maps to (e.g. ["T1543.004"]). Omitted by the server when the rule
+  // declares none, so optional here.
+  techniques?: string[];
   process_id: number;
   status: string;
   created_at: string;
