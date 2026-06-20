@@ -343,6 +343,11 @@ func validAbsoluteURL(raw string) bool {
 	if err != nil {
 		return false
 	}
+	// Reject a query string or fragment: an OIDC issuer per spec carries neither, and the redirect URI is derived from the external
+	// URL's origin + path, so a "?x=1" would otherwise be dropped silently rather than round-tripped.
+	if u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
 	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 

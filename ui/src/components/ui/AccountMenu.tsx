@@ -18,7 +18,9 @@ function authMethodLabel(authMethod?: string): string | null {
 // AccountMenu is the top-right avatar dropdown: it carries the entry point to the Admin
 // settings area (gated on sso.manage so only admins see it) plus Documentation and Log
 // out. The "Admin settings" link is the only way into the settings area, matching the
-// design. Closes on outside-click and Escape.
+// design. Closes on outside-click and Escape. Implemented as a disclosure (trigger carries
+// aria-expanded) rather than the ARIA menu pattern: the items are plain links/buttons, so
+// menu/menuitem roles would promise arrow-key navigation that this control does not provide.
 export function AccountMenu({ user, authMethod, onLogout }: AccountMenuProps) {
   const can = useCan();
   const [open, setOpen] = useState(false);
@@ -47,7 +49,7 @@ export function AccountMenu({ user, authMethod, onLogout }: AccountMenuProps) {
       <button
         type="button"
         className="account-menu__trigger"
-        aria-haspopup="menu"
+        aria-haspopup="true"
         aria-expanded={open}
         onClick={() => { setOpen((v) => !v); }}
       >
@@ -61,12 +63,11 @@ export function AccountMenu({ user, authMethod, onLogout }: AccountMenuProps) {
         <span className="account-menu__chevron" aria-hidden="true" />
       </button>
       {open && (
-        <div className="account-menu__dropdown" role="menu">
+        <div className="account-menu__dropdown">
           <div className="account-menu__header">{user.email}</div>
           {can(PermissionAction.SSOManage) && (
             <Link
               to="/admin/settings/sso"
-              role="menuitem"
               className="account-menu__item account-menu__item--highlight"
               onClick={() => { setOpen(false); }}
             >
@@ -76,16 +77,15 @@ export function AccountMenu({ user, authMethod, onLogout }: AccountMenuProps) {
           <a
             href="https://github.com/getvictor/fleet-edr/tree/main/docs"
             target="_blank"
-            rel="noreferrer"
-            role="menuitem"
+            rel="noopener noreferrer"
             className="account-menu__item"
+            onClick={() => { setOpen(false); }}
           >
             Documentation
           </a>
           <div className="account-menu__divider" />
           <button
             type="button"
-            role="menuitem"
             className="account-menu__item account-menu__item--logout"
             onClick={() => { setOpen(false); onLogout(); }}
           >

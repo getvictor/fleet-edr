@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -35,13 +36,23 @@ type Config struct {
 const CallbackPath = "/api/auth/callback"
 
 // RedirectURLFor derives the OIDC redirect URI from a deployment external URL: a single trailing slash on the base is tolerated so
-// "https://edr.acme.com" and "https://edr.acme.com/" both yield "https://edr.acme.com/api/auth/callback". Returns "" for an empty base
-// so callers can detect an unconfigured deployment.
+// "https://edr.acme.com" and "https://edr.acme.com/" both yield "https://edr.acme.com/api/auth/callback". A query string or fragment on
+// the base is dropped rather than concatenated into the path, so a stray "?x=1" can't produce a malformed callback. Returns "" for an
+// empty base so callers can detect an unconfigured deployment.
 func RedirectURLFor(externalURL string) string {
 	if externalURL == "" {
 		return ""
 	}
-	return strings.TrimRight(externalURL, "/") + CallbackPath
+	u, err := url.Parse(externalURL)
+	if err != nil || u.Host == "" {
+		// Unparseable base: fall back to the trim-and-concat form. The admin path validates the external URL before persisting, so
+		// this branch only covers legacy/env-seeded values.
+		return strings.TrimRight(externalURL, "/") + CallbackPath
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.Path = strings.TrimRight(u.Path, "/") + CallbackPath
+	return u.String()
 }
 
 // row is the raw DB shape; client_secret_enc stays sealed until GetDecrypted opens it.

@@ -13,14 +13,36 @@ import "./SSOSettings.scss";
 const CALLBACK_PATH = "/api/auth/callback";
 
 function deriveRedirect(externalURL: string): string {
-  const base = externalURL.trim().replace(/\/+$/, "");
-  return base ? base + CALLBACK_PATH : "";
+  const raw = externalURL.trim();
+  if (raw === "") return "";
+  try {
+    // Parse rather than concatenate so a query string or fragment on the base can't bleed into the path and produce a
+    // malformed callback (e.g. "https://e.example.com?x=1/api/auth/callback"). Mirrors the server's RedirectURLFor.
+    const u = new URL(raw);
+    u.search = "";
+    u.hash = "";
+    u.pathname = u.pathname.replace(/\/+$/, "") + CALLBACK_PATH;
+    return u.toString();
+  } catch {
+    return "";
+  }
 }
 
 function isHTTPURL(raw: string): boolean {
   try {
     const u = new URL(raw.trim());
     return (u.protocol === "http:" || u.protocol === "https:") && u.host !== "";
+  } catch {
+    return false;
+  }
+}
+
+// hasQueryOrFragment flags external URLs carrying a query string or fragment; the redirect URI is derived from the bare
+// origin + path, so a query/fragment can't be round-tripped and must be rejected before save.
+function hasQueryOrFragment(raw: string): boolean {
+  try {
+    const u = new URL(raw.trim());
+    return u.search !== "" || u.hash !== "";
   } catch {
     return false;
   }
@@ -84,18 +106,22 @@ export function SSOSettings() {
   if (error) return <div className="sso-settings__status sso-settings__status--error">Error: {error}</div>;
   if (!form || !config) return <div className="sso-settings__status">No configuration available.</div>;
 
-  const scopes = config.scopes.length > 0 ? config.scopes : ["openid", "email", "profile"];
+  const scopes = config.scopes && config.scopes.length > 0 ? config.scopes : ["openid", "email", "profile"];
   const redirectURL = deriveRedirect(form.externalURL);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
     setSaved(false);
+    // A prior connection-test verdict was for the old issuer/external URL; clear it so the UI never shows a stale
+    // "verified" against fields the operator has since edited.
+    setTestResult(null);
   }
 
   function validate(f: FormState): string | null {
     if (!isHTTPURL(f.issuer)) return "Issuer must be a valid http(s) URL.";
     if (f.clientID.trim() === "") return "Client ID is required.";
     if (!isHTTPURL(f.externalURL)) return "External URL must be a valid http(s) URL.";
+    if (hasQueryOrFragment(f.externalURL)) return "External URL must not contain a query string or fragment.";
     return null;
   }
 
@@ -109,12 +135,15 @@ export function SSOSettings() {
     setSaving(true);
     setSaveError(null);
     setSaved(false);
+    // Trim before the rotate check so a whitespace-only entry is treated as "keep" rather than rotating the stored
+    // secret to blanks (which would silently break SSO logins).
+    const secret = form.secret.trim();
     try {
       const updated = await updateSSOConfig({
         issuer: form.issuer.trim(),
         client_id: form.clientID.trim(),
         // Omit the secret unless the operator entered a new value (write-only rotate).
-        ...(form.secret !== "" ? { client_secret: form.secret } : {}),
+        ...(secret !== "" ? { client_secret: secret } : {}),
         external_url: form.externalURL.trim(),
         scopes,
         jit_enabled: form.jitEnabled,
@@ -139,6 +168,11 @@ export function SSOSettings() {
 
   async function handleTest() {
     if (!form) return;
+    // Validate locally first so a malformed issuer surfaces a clear message instead of a generic 400 from the probe endpoint.
+    if (!isHTTPURL(form.issuer)) {
+      setTestResult({ ok: false, reason: "Issuer must be a valid http(s) URL." });
+      return;
+    }
     setTesting(true);
     setTestResult(null);
     try {
@@ -151,8 +185,12 @@ export function SSOSettings() {
   }
 
   async function handleCopyRedirect() {
+    // navigator.clipboard is undefined in insecure contexts / older browsers (the lib types declare it always-present, hence
+    // the cast); the field stays selectable as a fallback.
+    const clipboard = navigator.clipboard as Clipboard | undefined;
+    if (!clipboard) return;
     try {
-      await navigator.clipboard.writeText(redirectURL);
+      await clipboard.writeText(redirectURL);
     } catch {
       // Clipboard can be unavailable (insecure context); the field is selectable as a fallback.
     }

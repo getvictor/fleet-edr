@@ -657,7 +657,8 @@ export interface SSOConfig {
   client_id: string;
   external_url: string;
   redirect_url: string;
-  scopes: string[];
+  // scopes is null when the server marshals a nil slice (an unconfigured deployment); the page falls back to defaults.
+  scopes: string[] | null;
   jit_enabled: boolean;
   default_role: string;
   secret_set: boolean;
@@ -685,8 +686,10 @@ export async function updateSSOConfig(req: SSOConfigUpdate): Promise<SSOConfig> 
 }
 
 // testSSOConnection probes a candidate issuer's discovery + token endpoint without
-// persisting. It returns ok=false with a reason on failure (HTTP 200 either way), so
-// the caller renders the diagnostic inline rather than treating it as a thrown error.
+// persisting. A reachable-but-unhealthy provider returns HTTP 200 with ok=false + a reason,
+// so the caller renders that diagnostic inline. Pre-probe validation failures (malformed or
+// missing issuer => 400, store read error => 500) are thrown by fetchJSON instead; callers
+// either pre-validate the issuer or catch and surface the error.
 export async function testSSOConnection(issuer: string): Promise<{ ok: boolean; reason?: string }> {
   return fetchJSON<{ ok: boolean; reason?: string }>("/settings/sso/test-connection", {
     method: "POST",

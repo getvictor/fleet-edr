@@ -18,10 +18,11 @@ test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
     const db = await openDB();
     try {
       const [rows] = (await db.query("SELECT jit_enabled FROM oidc_config WHERE id = 1")) as [Array<{ jit_enabled: number }>, unknown];
-      if (rows.length > 0) {
-        originalJIT = rows[0].jit_enabled;
-      }
-      await db.query("UPDATE oidc_config SET jit_enabled = 0");
+      // Fail fast if the singleton config row is missing: the UPDATE below would otherwise affect 0 rows and the test would
+      // silently stop exercising the JIT-disabled path (Dex-seeded config absent or migrations did not run).
+      expect(rows, "oidc_config singleton row (id = 1) must exist before this suite runs").toHaveLength(1);
+      originalJIT = rows[0].jit_enabled;
+      await db.query("UPDATE oidc_config SET jit_enabled = 0 WHERE id = 1");
     } finally {
       await db.end();
     }
@@ -30,7 +31,7 @@ test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
   test.afterAll(async () => {
     const db = await openDB();
     try {
-      await db.query("UPDATE oidc_config SET jit_enabled = ?", [originalJIT]);
+      await db.query("UPDATE oidc_config SET jit_enabled = ? WHERE id = 1", [originalJIT]);
     } finally {
       await db.end();
     }

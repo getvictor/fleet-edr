@@ -35,7 +35,7 @@ describe("SSOSettings", () => {
     expect(screen.getByLabelText("Client secret")).toHaveValue("");
     expect(screen.getByLabelText("Client secret")).toHaveAttribute("placeholder", expect.stringContaining("rotate"));
     // Scopes render as read-only chips.
-    for (const s of baseConfig.scopes) expect(screen.getByText(s)).toBeInTheDocument();
+    for (const s of baseConfig.scopes ?? []) expect(screen.getByText(s)).toBeInTheDocument();
   });
 
   it("derives the redirect URL live as the external URL changes", async () => {
@@ -146,5 +146,107 @@ describe("SSOSettings", () => {
     vi.spyOn(api, "getSSOConfig").mockRejectedValue(new Error("boom"));
     render(<SSOSettings />);
     expect(await screen.findByText(/Error: boom/)).toBeInTheDocument();
+  });
+
+  it("falls back to default scopes when the server returns null scopes", async () => {
+    // A nil Go slice serializes to JSON null; the page must not crash dereferencing .length.
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue({ ...baseConfig, scopes: null });
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+    for (const s of ["openid", "email", "profile"]) expect(screen.getByText(s)).toBeInTheDocument();
+  });
+
+  it("strips a query/fragment from the derived redirect and blocks save on such an external URL", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    await screen.findByLabelText("External URL");
+
+    fireEvent.change(screen.getByLabelText("External URL"), { target: { value: "https://edr.example.org/?x=1#frag" } });
+    // Redirect is derived from origin + path only; the query/fragment never leak into the callback.
+    expect(screen.getByLabelText("Redirect URL")).toHaveValue("https://edr.example.org/api/auth/callback");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/must not contain a query string or fragment/);
+    expect(upd).not.toHaveBeenCalled();
+  });
+
+  it("omits a whitespace-only client_secret rather than rotating to blanks", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    await screen.findByLabelText("Client secret");
+
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
+    expect(upd.mock.calls[0][0]).not.toHaveProperty("client_secret");
+  });
+
+  it("validates the issuer before calling the test-connection endpoint", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    const test = vi.spyOn(api, "testSSOConnection").mockResolvedValue({ ok: true });
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "not a url" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(/Issuer must be a valid/)).toBeInTheDocument();
+    expect(test).not.toHaveBeenCalled();
+  });
+
+  it("clears a stale connection-test result when a field is edited", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    vi.spyOn(api, "testSSOConnection").mockResolvedValue({ ok: true });
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(/Connection verified/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://other.okta.com" } });
+    expect(screen.queryByText(/Connection verified/)).not.toBeInTheDocument();
+  });
+
+  it("reverts edits on Cancel", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://edited.okta.com" } });
+    expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://edited.okta.com");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://acme.okta.com");
+  });
+
+  it("surfaces a thrown error from the test-connection endpoint", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    vi.spyOn(api, "testSSOConnection").mockRejectedValue(new Error("network down"));
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(/network down/)).toBeInTheDocument();
+  });
+
+  it("copies the redirect URL when the clipboard API is available", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => { expect(writeText).toHaveBeenCalledWith("https://edr.acme.com/api/auth/callback"); });
+    vi.unstubAllGlobals();
+  });
+
+  it("does not throw when copying without a clipboard API", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    vi.stubGlobal("navigator", {});
+    render(<SSOSettings />);
+    await screen.findByLabelText("Issuer URL");
+
+    expect(() => { fireEvent.click(screen.getByRole("button", { name: "Copy" })); }).not.toThrow();
+    vi.unstubAllGlobals();
   });
 });
