@@ -644,3 +644,55 @@ export async function createCommand(hostId: string, commandType: string, payload
 export async function getCommand(id: number): Promise<Command> {
   return fetchJSON<Command>(`/commands/${String(id)}`);
 }
+
+// --- SSO / OIDC configuration (issue #375) --------------------------------------
+
+// SSOConfig is the read shape from GET /api/settings/sso. The client secret is NEVER
+// returned (write-only); secret_set reports whether one is stored. redirect_url is
+// derived server-side from external_url and is read-only here. configured is false
+// before any provider has been set up.
+export interface SSOConfig {
+  configured: boolean;
+  issuer: string;
+  client_id: string;
+  external_url: string;
+  redirect_url: string;
+  // scopes is null when the server marshals a nil slice (an unconfigured deployment); the page falls back to defaults.
+  scopes: string[] | null;
+  jit_enabled: boolean;
+  default_role: string;
+  secret_set: boolean;
+}
+
+// SSOConfigUpdate is the PUT body. client_secret is OMITTED to keep the stored secret,
+// or set to a non-empty value to rotate it (write-only). redirect_url is not sent: the
+// server derives it from external_url.
+export interface SSOConfigUpdate {
+  issuer: string;
+  client_id: string;
+  client_secret?: string;
+  external_url: string;
+  scopes: string[];
+  jit_enabled: boolean;
+  default_role: string;
+}
+
+export async function getSSOConfig(): Promise<SSOConfig> {
+  return fetchJSON<SSOConfig>("/settings/sso");
+}
+
+export async function updateSSOConfig(req: SSOConfigUpdate): Promise<SSOConfig> {
+  return fetchJSON<SSOConfig>("/settings/sso", { method: "PUT", body: JSON.stringify(req) });
+}
+
+// testSSOConnection probes a candidate issuer's discovery + token endpoint without
+// persisting. A reachable-but-unhealthy provider returns HTTP 200 with ok=false + a reason,
+// so the caller renders that diagnostic inline. Pre-probe validation failures (malformed or
+// missing issuer => 400, store read error => 500) are thrown by fetchJSON instead; callers
+// either pre-validate the issuer or catch and surface the error.
+export async function testSSOConnection(issuer: string): Promise<{ ok: boolean; reason?: string }> {
+  return fetchJSON<{ ok: boolean; reason?: string }>("/settings/sso/test-connection", {
+    method: "POST",
+    body: JSON.stringify({ issuer }),
+  });
+}

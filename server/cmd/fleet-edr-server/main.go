@@ -666,6 +666,9 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		// router needs each path enumerated here so the session-protected wrapper actually serves them. Otherwise requests
 		// fall through to the `/` catchall and 302 → /ui/, silently breaking the destructive-action reauth path.
 		"POST /api/auth/reauth/challenge", "POST /api/auth/reauth",
+		// SSO/OIDC configuration admin surface (issue #375). Mounted on apiMux via identityCtx.RegisterAuthedRoutes; enumerated
+		// here for the same reason as the app-control surface above (else the UI's GET parses the SPA index.html as JSON).
+		"GET /api/settings/sso", "PUT /api/settings/sso", "POST /api/settings/sso/test-connection",
 	} {
 		mux.Handle(p, sessionProtected)
 	}

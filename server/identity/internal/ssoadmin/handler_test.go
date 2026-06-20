@@ -229,6 +229,10 @@ func TestHandleUpdate_validationRejectsBeforeApply(t *testing.T) {
 		{"bad issuer", updateRequest{Issuer: "not a url", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_issuer"},
 		{"missing client id", updateRequest{Issuer: "https://i", ClientID: "", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "missing_client_id"},
 		{"bad external url", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "nope", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_external_url"},
+		{"external url with query", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e?x=1", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_external_url"},
+		{"external url with fragment", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e#frag", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_external_url"},
+		{"external url with bare trailing query marker", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e?", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_external_url"},
+		{"issuer with query", updateRequest{Issuer: "https://i?probe=1", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_issuer"},
 		{"missing openid", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"email"}, DefaultRole: "analyst"}, "missing_openid_scope"},
 		{"admin default role", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "admin"}, "invalid_default_role"},
 	}

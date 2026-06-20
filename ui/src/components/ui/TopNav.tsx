@@ -2,6 +2,7 @@ import classnames from "classnames";
 import { Link, useLocation } from "react-router-dom";
 import "./TopNav.scss";
 import { useCan, PermissionAction } from "../../permissions-core";
+import { AccountMenu } from "./AccountMenu";
 
 interface NavLink {
   to: string;
@@ -31,15 +32,6 @@ interface TopNavProps {
   // signals that the operator is NOT in a normal SSO session.
   readonly authMethod?: string;
   readonly onLogout?: () => void;
-}
-
-// authMethodLabel turns the wire-shape AuthMethod ("oidc" /
-// "local_password") into operator-friendly copy. break-glass is the
-// only case worth surfacing. An OIDC session is the default and
-// doesn't need a badge.
-function authMethodLabel(authMethod?: string): string | null {
-  if (authMethod === "local_password") return "Break-glass";
-  return null;
 }
 
 export function TopNav({ user, authMethod, onLogout }: TopNavProps) {
@@ -77,24 +69,7 @@ export function TopNav({ user, authMethod, onLogout }: TopNavProps) {
           })}
         </ul>
         {user && onLogout && (
-          <div className="top-nav__account">
-            <span className="top-nav__avatar" aria-hidden="true">
-              {user.email.charAt(0) || "?"}
-            </span>
-            <span className="top-nav__user">{user.email}</span>
-            {authMethodLabel(authMethod) && (
-              <span className="top-nav__auth-method" title="This session was minted via the break-glass recovery flow.">
-                {authMethodLabel(authMethod)}
-              </span>
-            )}
-            <button
-              type="button"
-              className="top-nav__logout"
-              onClick={onLogout}
-            >
-              Log out
-            </button>
-          </div>
+          <AccountMenu user={user} authMethod={authMethod} onLogout={onLogout} />
         )}
       </div>
     </nav>

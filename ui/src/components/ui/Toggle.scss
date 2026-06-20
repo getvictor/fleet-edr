@@ -1,0 +1,67 @@
+@import "../../styles/var/colors.scss";
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+
+  &__control {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+
+  // The native checkbox sits invisibly over the track so it keeps focus + keyboard + AT semantics.
+  &__input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  &__track {
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background-color: $ui-fleet-black-25;
+    transition: background-color 0.15s ease;
+  }
+
+  &__knob {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: $core-fleet-white;
+    transition: transform 0.15s ease;
+  }
+
+  &__input:checked + &__track {
+    background-color: $core-fleet-green;
+  }
+
+  &__input:checked + &__track .toggle__knob {
+    transform: translateX(20px);
+  }
+
+  &__input:focus-visible + &__track {
+    box-shadow: 0 0 0 3px rgba(0, 154, 125, 0.15);
+  }
+
+  &__input:disabled + &__track {
+    opacity: 0.5;
+  }
+
+  &__label {
+    color: $ui-fleet-black-75;
+    font-size: 14px;
+  }
+}

@@ -1,0 +1,115 @@
+@import "../../styles/var/colors.scss";
+
+.account-menu {
+  position: relative;
+  margin-left: auto;
+
+  &__trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    color: $core-fleet-white;
+    font: inherit;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+  }
+
+  &__avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: $core-fleet-green;
+    color: $core-fleet-white;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  &__email {
+    font-family: "Source Code Pro", monospace;
+    font-size: 13px;
+  }
+
+  &__auth-method {
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(235, 188, 67, 0.2);
+    color: #ebbc43;
+    font-size: 11px;
+  }
+
+  &__chevron {
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid currentcolor;
+    opacity: 0.8;
+  }
+
+  &__dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 236px;
+    background: $core-fleet-white;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(25, 33, 71, 0.16);
+    padding: 8px;
+    z-index: 100;
+  }
+
+  &__header {
+    padding: 8px 10px;
+    color: $ui-fleet-black-50;
+    font-family: "Source Code Pro", monospace;
+    font-size: 12px;
+    border-bottom: 1px solid $ui-fleet-black-10;
+    margin-bottom: 4px;
+    overflow-wrap: anywhere;
+  }
+
+  &__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    color: $ui-fleet-black-75;
+    font: inherit;
+    font-size: 14px;
+    text-decoration: none;
+    cursor: pointer;
+
+    &:hover {
+      background: $ui-fleet-black-5;
+    }
+
+    &--highlight {
+      color: $core-fleet-green;
+      font-weight: 600;
+    }
+
+    &--logout {
+      color: $ui-fleet-black-75;
+    }
+  }
+
+  &__divider {
+    height: 1px;
+    background: $ui-fleet-black-10;
+    margin: 4px 0;
+  }
+}

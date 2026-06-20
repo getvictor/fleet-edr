@@ -24,6 +24,7 @@ export const PermissionAction = {
   AlertReopen: "alert.reopen",
   HostKillProcess: "host.kill_process",
   AppControlRead: "application_control.read",
+  SSOManage: "sso.manage",
 } as const;
 
 export type PermissionActionValue = (typeof PermissionAction)[keyof typeof PermissionAction];

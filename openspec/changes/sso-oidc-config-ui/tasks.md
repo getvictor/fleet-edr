@@ -35,13 +35,13 @@
 
 ## 6. UI: Admin settings shell + Single sign-on page
 
-- [ ] 6.1 Add the Admin settings area shell (account-menu entry + sub-nav) in `ui/src/`, gated on `sso.manage` via the existing `useCan()`/`Can` seam and the `/api/session` permission set
-- [ ] 6.2 Build the Single sign-on page using Fleet's existing component library + design tokens (do not port the prototype HTML): provider form, read-only redirect URL with copy, read-only scope chips, write-only secret-rotate field, JIT toggle, default-role select (Analyst/Auditor only), connection-status pill, test-connection button, break-glass callout
-- [ ] 6.3 Add the API client calls (read/update/test-connection) in `ui/src/`, sending CSRF on mutation; secret omitted from the form unless the admin enters a new value
-- [ ] 6.4 Vitest unit + component tests: page hidden without `sso.manage`; secret field never prefilled; save sends only changed fields; test-connection surfaces success/failure
+- [x] 6.1 Add the Admin settings area shell (account-menu entry + sub-nav) in `ui/src/`, gated on `sso.manage` via the existing `useCan()`/`Can` seam and the `/api/session` permission set
+- [x] 6.2 Build the Single sign-on page using Fleet's existing component library + design tokens (do not port the prototype HTML): provider form, read-only redirect URL with copy, read-only scope chips, write-only secret-rotate field, JIT toggle, default-role select (Analyst/Auditor only), connection-status pill, test-connection button, break-glass callout
+- [x] 6.3 Add the API client calls (read/update/test-connection) in `ui/src/`, sending CSRF on mutation; secret omitted from the form unless the admin enters a new value
+- [x] 6.4 Vitest unit + component tests: page hidden without `sso.manage`; secret field never prefilled; save sends only changed fields; test-connection surfaces success/failure
 
 ## 7. Docs and spec traceability
 
-- [ ] 7.1 Update `docs/okta-setup.md`: configuration now lives in the UI; document the env-seeds-DB-governs precedence and the `EDR_SECRET_KEY`-rotation coupling for the stored secret
-- [ ] 7.2 Add spectrace markers tying tests to the new `sso-configuration` scenarios and the modified authentication/authorization scenarios
-- [ ] 7.3 Run `openspec validate sso-oidc-config-ui --strict` and the no-emdash/dash + markdown-prose linters; fix any findings
+- [x] 7.1 Update `docs/okta-setup.md`: configuration now lives in the UI; document the env-seeds-DB-governs precedence and the `EDR_SECRET_KEY`-rotation coupling for the stored secret
+- [x] 7.2 Add spectrace markers tying tests to the new `sso-configuration` scenarios and the modified authentication/authorization scenarios
+- [x] 7.3 Run `openspec validate sso-oidc-config-ui --strict` and the no-emdash/dash + markdown-prose linters; fix any findings

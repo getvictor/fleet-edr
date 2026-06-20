@@ -6,31 +6,44 @@ import { openDB, resetDB } from "../../fixtures/db";
 //
 // JIT is DB-governed (issue #375): EDR_OIDC_ALLOW_JIT_PROVISIONING only seeds the stored oidc_config on first boot and is inert once a
 // row exists, so this test disables JIT by writing jit_enabled = 0 directly to the stored config (the provisioner reads it per OIDC
-// callback, so it applies without a restart) and restores it in afterAll so later phases that JIT-provision are unaffected.
+// callback, so it applies without a restart). resetDB() intentionally does not touch oidc_config, so the flag is persistent shared
+// state across specs; beforeAll captures the prior value and afterAll restores it exactly, leaving the suite's SSO posture unchanged.
 
 const dexPassword = "qa-password-123";
 
 test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
-  test.afterAll(async () => {
+  let originalJIT = 1;
+
+  test.beforeAll(async () => {
     const db = await openDB();
     try {
-      await db.query("UPDATE oidc_config SET jit_enabled = 1");
+      const [rows] = (await db.query("SELECT jit_enabled FROM oidc_config WHERE id = 1")) as [Array<{ jit_enabled: number }>, unknown];
+      // Fail fast if the singleton config row is missing: the UPDATE below would otherwise affect 0 rows and the test would
+      // silently stop exercising the JIT-disabled path (Dex-seeded config absent or migrations did not run).
+      expect(rows, "oidc_config singleton row (id = 1) must exist before this suite runs").toHaveLength(1);
+      originalJIT = rows[0].jit_enabled;
+      await db.query("UPDATE oidc_config SET jit_enabled = 0 WHERE id = 1");
     } finally {
       await db.end();
     }
   });
 
-  test("sign in with admin@qa.local (never seen) returns oidc.unknown_subject", async ({
-    page,
-  }) => {
+  test.afterAll(async () => {
+    const db = await openDB();
+    try {
+      await db.query("UPDATE oidc_config SET jit_enabled = ? WHERE id = 1", [originalJIT]);
+    } finally {
+      await db.end();
+    }
+  });
+
+  test("sign in with admin@qa.local (never seen) returns oidc.unknown_subject", async ({ page }) => {
     // Reset DB so admin@qa.local truly doesn't exist (the other
     // three dex users may have been JIT'd earlier; admin@qa.local
     // is reserved for this test).
     const db = await openDB();
     try {
       await resetDB(db);
-      // Disable JIT in the stored config (DB-governed; see file header).
-      await db.query("UPDATE oidc_config SET jit_enabled = 0");
     } finally {
       await db.end();
     }
@@ -53,10 +66,10 @@ test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
     // No row should have been created for admin@qa.local.
     const verifyDB = await openDB();
     try {
-      const [users] = (await verifyDB.query(
-        "SELECT id FROM users WHERE email = ?",
-        ["admin@qa.local"],
-      )) as [Array<{ id: number }>, unknown];
+      const [users] = (await verifyDB.query("SELECT id FROM users WHERE email = ?", ["admin@qa.local"])) as [
+        Array<{ id: number }>,
+        unknown,
+      ];
       expect(users).toHaveLength(0);
 
       // Audit row records the precise reason.
