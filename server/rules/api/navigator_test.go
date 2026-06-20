@@ -57,17 +57,36 @@ func TestBuildNavigatorLayer(t *testing.T) {
 	})
 }
 
-// TestMarshalNavigatorLayerIndented checks the committed-artifact encoding: two-space indentation, a trailing newline, and the
-// ampersand in the description left unescaped (encoding/json's default HTML escaping is disabled for the file).
+// TestMarshalNavigatorLayerIndented pins the committed-artifact encoding against the literal expected bytes for the deterministic
+// no-rules layer: two-space indentation, a trailing newline, the description's ampersand left unescaped (encoding/json's default
+// HTML escaping is disabled for the file), and an empty `techniques` array. This is the example-based wire-shape pin; the
+// catalog-driven full-document pin lives in the bootstrap drift test against docs/attack-navigator-layer.json.
 func TestMarshalNavigatorLayerIndented(t *testing.T) {
 	t.Parallel()
+
+	const wantEmptyLayer = `{
+  "name": "Fleet EDR coverage",
+  "versions": {
+    "attack": "14",
+    "layer": "4.5",
+    "navigator": "4.9.1"
+  },
+  "domain": "enterprise-attack",
+  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",
+  "filters": {
+    "platforms": [
+      "macOS"
+    ]
+  },
+  "techniques": []
+}
+`
+
 	b, err := api.MarshalNavigatorLayerIndented(api.BuildNavigatorLayer(nil))
 	require.NoError(t, err)
-
-	out := string(b)
-	require.NotEmpty(t, out)
-	assert.Equal(t, byte('\n'), out[len(out)-1], "must end with a trailing newline")
-	assert.Contains(t, out, "\n  \"domain\"", "must be two-space indented")
-	// With HTML escaping on, encoding/json would emit ATT&CK, so the presence of the literal ATT&CK proves escaping is off.
-	assert.Contains(t, out, "ATT&CK", "the ampersand must be left as a literal & (HTML escaping disabled)")
+	// Literal byte comparison, not assert.JSONEq: this test pins the exact wire bytes (indentation, trailing newline, unescaped
+	// ampersand). JSONEq compares JSON semantically and would ignore precisely the formatting this assertion exists to lock.
+	//nolint:testifylint // intentional literal-bytes pin; JSONEq would mask the formatting drift this test guards
+	assert.Equal(t, wantEmptyLayer, string(b),
+		"committed-artifact encoding drifted: indentation, trailing newline, unescaped ampersand, or empty techniques array changed")
 }
