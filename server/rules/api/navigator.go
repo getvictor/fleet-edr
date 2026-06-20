@@ -78,7 +78,8 @@ func BuildNavigatorLayer(rules []RuleMetadata) NavigatorLayer {
 
 	techniques := make([]NavigatorTechnique, 0, len(techniqueIDs))
 	for _, tid := range techniqueIDs {
-		ruleIDs := slices.Clone(coverage[tid])
+		// coverage is a throwaway local map, so sorting and compacting its slices in place is safe and avoids a per-technique clone.
+		ruleIDs := coverage[tid]
 		slices.Sort(ruleIDs)
 		ruleIDs = slices.Compact(ruleIDs)
 		techniques = append(techniques, NavigatorTechnique{
@@ -101,9 +102,11 @@ func BuildNavigatorLayer(rules []RuleMetadata) NavigatorLayer {
 
 // MarshalNavigatorLayerIndented renders a layer as the two-space-indented, newline-terminated JSON the committed artifact uses.
 // The generator (tools/gen-attack-layer) and the drift test both call this, so the bytes they compare are produced by one code
-// path. HTML escaping is disabled so the description's literal `&` (ATT&CK) survives as `&` rather than `&` in the committed
-// file; the result is still valid JSON the Navigator imports cleanly. The live endpoint marshals the same struct compactly via
-// its own JSON writer (HTML-escaped); both decode to the same document.
+// path. HTML escaping is disabled so the ampersand in the description (ATT&CK) is written as a literal `&`; with encoding/json's
+// default HTML escaping it would be emitted as a six-character unicode escape sequence (backslash-u-0-0-2-6), which is valid but
+// noisy in a committed, human-diffed file. The result is still valid JSON the Navigator imports cleanly. The live endpoint
+// marshals the same struct compactly via its own JSON writer with HTML escaping left on, so it serves the escaped form; both
+// decode to the same document.
 func MarshalNavigatorLayerIndented(layer NavigatorLayer) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
