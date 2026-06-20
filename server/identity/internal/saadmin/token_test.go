@@ -70,6 +70,7 @@ func jsonTokenReq(t *testing.T, clientID, secret string) *http.Request {
 	return r
 }
 
+// spec:server-identity-service-accounts/service-account-lifecycle-and-token-issuance-are-audited/token-issuance-is-audited
 func TestToken_validCredentialMintsToken(t *testing.T) {
 	t.Parallel()
 	store := &fakeTokenStore{rec: validRecord("edrsa_good")}
@@ -186,6 +187,7 @@ func TestToken_malformedJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// spec:server-identity-service-accounts/the-token-endpoint-issues-short-lived-self-validating-access-tokens/the-token-endpoint-rate-limits-rapid-requests
 func TestToken_rateLimited(t *testing.T) {
 	t.Parallel()
 	store := &fakeTokenStore{rec: validRecord("edrsa_good")}

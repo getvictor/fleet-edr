@@ -52,6 +52,7 @@ func TestAPIAuth_bearerPinsActorSkippingSession(t *testing.T) {
 	assert.False(t, csrfRan, "bearer path is CSRF-exempt")
 }
 
+// spec:server-identity-authentication/the-api-accepts-a-bearer-access-token-as-a-second-transport/neither-credential-present-is-unauthorized
 func TestAPIAuth_invalidBearerIs401(t *testing.T) {
 	t.Parallel()
 	var sessionRan bool
@@ -64,6 +65,7 @@ func TestAPIAuth_invalidBearerIs401(t *testing.T) {
 	assert.False(t, sessionRan, "an invalid bearer token is a clear 401, never a fall-through to the cookie path")
 }
 
+// spec:server-identity-authentication/the-api-accepts-a-bearer-access-token-as-a-second-transport/cookie-transport-is-unchanged-for-the-browser
 func TestAPIAuth_noBearerDelegatesToSession(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

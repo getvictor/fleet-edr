@@ -111,6 +111,7 @@ func TestMint_rejectsBadInputs(t *testing.T) {
 	}
 }
 
+// spec:server-identity-service-accounts/access-tokens-are-validated-statelessly-on-the-api-request-path/expired-or-wrong-audience-token-is-rejected
 func TestVerify_expired(t *testing.T) {
 	t.Parallel()
 	signer := newSigner(t)

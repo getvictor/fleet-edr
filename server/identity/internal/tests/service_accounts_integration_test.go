@@ -55,6 +55,13 @@ func superAdminReq(r *http.Request, uid int64) *http.Request {
 	return r.WithContext(api.WithActor(r.Context(), actor))
 }
 
+// spec:server-identity-service-accounts/the-client-credential-is-hashed-at-rest-and-shown-once/secret-is-returned-once-and-never-again
+// spec:server-identity-service-accounts/the-client-credential-is-hashed-at-rest-and-shown-once/secret-is-stored-hashed
+// spec:server-identity-service-accounts/the-token-endpoint-issues-short-lived-self-validating-access-tokens/valid-credential-mints-a-short-lived-token
+// spec:server-identity-service-accounts/the-token-endpoint-issues-short-lived-self-validating-access-tokens/revoked-credential-is-refused
+// spec:server-identity-service-accounts/access-tokens-are-validated-statelessly-on-the-api-request-path/valid-token-authenticates-without-a-database-read
+// spec:server-identity-service-accounts/revocation-takes-effect-via-short-ttl-and-a-per-replica-epoch-snapshot/a-revoked-service-account-stops-working-within-the-refresh-window
+// spec:server-identity-authentication/the-api-accepts-a-bearer-access-token-as-a-second-transport/bearer-token-authenticates-a-service-account-principal
 func TestServiceAccounts_endToEnd(t *testing.T) {
 	t.Parallel()
 	id, db := newServiceAccountIdentity(t)
@@ -181,6 +188,7 @@ func TestServiceAccounts_listAndRotate(t *testing.T) {
 	_ = mintToken(t, public, created.ClientID, rotated.Secret) // the new secret mints
 }
 
+// spec:server-identity-service-accounts/a-service-account-is-a-non-human-principal-bound-to-a-single-role/a-service-account-cannot-bind-to-a-management-capable-role
 func TestServiceAccounts_managementRoleRejected(t *testing.T) {
 	t.Parallel()
 	id, db := newServiceAccountIdentity(t)
@@ -196,6 +204,8 @@ func TestServiceAccounts_managementRoleRejected(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "invalid_role")
 }
 
+// spec:server-identity-service-accounts/service-accounts-are-managed-from-an-admin-surface-behind-the-chokepoint/unauthorized-caller-cannot-manage-service-accounts
+// spec:server-identity-authorization/service-account-management-actions-are-registered-and-admin-scoped/a-role-without-the-grant-is-denied
 func TestServiceAccounts_unauthorizedCallerForbidden(t *testing.T) {
 	t.Parallel()
 	id, _ := newServiceAccountIdentity(t)

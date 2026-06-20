@@ -104,6 +104,7 @@ func TestHandleList(t *testing.T) {
 	assert.Equal(t, "expired", resp.ServiceAccounts[2].Status)
 }
 
+// spec:server-identity-authorization/service-account-management-actions-are-registered-and-admin-scoped/admin-holds-the-service-account-actions
 func TestHandleList_deniedIsForbidden(t *testing.T) {
 	t.Parallel()
 	h := newHandler(&fakeMgmtStore{}, denyAuthZ{}, &captureAudit{})
@@ -120,6 +121,7 @@ func createReq(t *testing.T, body any) *http.Request {
 	return withActor(r, 42)
 }
 
+// spec:server-identity-service-accounts/service-account-lifecycle-and-token-issuance-are-audited/creating-a-service-account-writes-an-audit-row-without-the-secret
 func TestHandleCreate_success(t *testing.T) {
 	t.Parallel()
 	store := &fakeMgmtStore{}
