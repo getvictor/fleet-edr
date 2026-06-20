@@ -67,9 +67,9 @@ func TestMarshalNavigatorLayerIndented(t *testing.T) {
 	const wantEmptyLayer = `{
   "name": "Fleet EDR coverage",
   "versions": {
-    "attack": "14",
+    "attack": "19",
     "layer": "4.5",
-    "navigator": "4.9.1"
+    "navigator": "5.2.0"
   },
   "domain": "enterprise-attack",
   "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",

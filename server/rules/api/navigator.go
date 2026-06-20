@@ -27,6 +27,16 @@ const (
 	// navigatorPlatformMacOS is the canonical ATT&CK platform string Fleet EDR scopes the layer to. Fleet EDR is a macOS-only
 	// product, so the layer filters the matrix to the macOS columns rather than rendering the full cross-platform enterprise grid.
 	navigatorPlatformMacOS = "macOS"
+	// navigatorATTACKVersion is the ATT&CK content version the layer is authored against. BUMP THIS on each ATT&CK release
+	// (https://attack.mitre.org/resources/versions/): a stale value makes the Navigator prompt the operator to upgrade the
+	// layer on import. The catalog's mapped technique IDs are verified to still exist (not deprecated/revoked) at this
+	// version. Currently ATT&CK v19 (v19.1, released 2026-04-28).
+	navigatorATTACKVersion = "19"
+	// navigatorAppVersion is the Navigator application version the layer declares compatibility with. The v4.5 layer spec
+	// requires >= "4.9.0"; track the current Navigator release so a v19 layer doesn't advertise a pre-v19 tool version.
+	navigatorAppVersion = "5.2.0"
+	// navigatorLayerFormatVersion is the Navigator layer file-format version. Still "4.5" as of Navigator 5.x / ATT&CK v19.
+	navigatorLayerFormatVersion = "4.5"
 )
 
 // NavigatorTechnique is one technique entry in a Navigator layer document. Field tags are the layer-4.5 wire shape the upstream
@@ -92,7 +102,7 @@ func BuildNavigatorLayer(rules []RuleMetadata) NavigatorLayer {
 
 	return NavigatorLayer{
 		Name:        navigatorLayerName,
-		Versions:    map[string]string{"attack": "14", "navigator": "4.9.1", "layer": "4.5"},
+		Versions:    map[string]string{"attack": navigatorATTACKVersion, "navigator": navigatorAppVersion, "layer": navigatorLayerFormatVersion},
 		Domain:      navigatorDomain,
 		Description: navigatorLayerDescription,
 		Filters:     NavigatorFilters{Platforms: []string{navigatorPlatformMacOS}},

@@ -890,8 +890,8 @@ components:
           type: object
           additionalProperties: {type: string}
           example:
-            attack: "14"
-            navigator: "4.9.1"
+            attack: "19"
+            navigator: "5.2.0"
             layer: "4.5"
         domain:
           type: string
