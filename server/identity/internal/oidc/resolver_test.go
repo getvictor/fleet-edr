@@ -22,7 +22,7 @@ func (s *stubClient) Exchange(context.Context, string, string, string) (*Claims,
 func TestResolver_cachesUntilVersionChanges(t *testing.T) {
 	t.Parallel()
 	var cfg atomic.Pointer[ProviderConfig]
-	cfg.Store(&ProviderConfig{Issuer: "https://a.example.com", Version: 1})
+	cfg.Store(&ProviderConfig{Issuer: "https://a.example.com", Stamp: "1"})
 
 	var builds atomic.Int64
 	r := newResolverWithBuilder(
@@ -44,7 +44,7 @@ func TestResolver_cachesUntilVersionChanges(t *testing.T) {
 	assert.Equal(t, int64(1), builds.Load(), "no rebuild while version is unchanged")
 
 	// A config change (new issuer + bumped version) forces exactly one rebuild, reflecting the new issuer without a restart.
-	cfg.Store(&ProviderConfig{Issuer: "https://b.example.com", Version: 2})
+	cfg.Store(&ProviderConfig{Issuer: "https://b.example.com", Stamp: "2"})
 	rebuilt, err := r.Current(t.Context())
 	require.NoError(t, err)
 	assert.NotSame(t, first, rebuilt, "a version bump must rebuild")
@@ -70,7 +70,7 @@ func TestResolver_propagatesBuildError(t *testing.T) {
 	wantErr := errors.New("discovery unreachable")
 	r := newResolverWithBuilder(
 		func(context.Context) (ProviderConfig, error) {
-			return ProviderConfig{Issuer: "https://x", Version: 1}, nil
+			return ProviderConfig{Issuer: "https://x", Stamp: "1"}, nil
 		},
 		func(context.Context, ProviderConfig) (IDPClient, error) { return nil, wantErr },
 	)
@@ -82,7 +82,7 @@ func TestResolver_concurrentCurrentIsSafe(t *testing.T) {
 	t.Parallel()
 	r := newResolverWithBuilder(
 		func(context.Context) (ProviderConfig, error) {
-			return ProviderConfig{Issuer: "https://a", Version: 1}, nil
+			return ProviderConfig{Issuer: "https://a", Stamp: "1"}, nil
 		},
 		func(_ context.Context, c ProviderConfig) (IDPClient, error) { return &stubClient{id: c.Issuer}, nil },
 	)

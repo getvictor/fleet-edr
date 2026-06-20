@@ -21,7 +21,10 @@ type ProviderConfig struct {
 	ClientSecret string
 	RedirectURL  string
 	Scopes       []string
-	Version      int64
+	// Stamp is an opaque change marker the resolver compares for equality to decide whether to rebuild. The caller composes it from
+	// every input that shapes the client (e.g. the oidc_config version AND the app_config version, since the redirect URL is derived
+	// from the deployment external URL that lives in app_config). Any change to either flips the stamp and forces a rebuild.
+	Stamp string
 }
 
 // ConfigFunc supplies the current provider configuration. It returns ErrNotConfigured when OIDC is unset for the deployment.
@@ -39,9 +42,10 @@ type Resolver struct {
 	// the cache/rebuild logic without a live discovery endpoint.
 	build clientBuilder
 
-	mu            sync.Mutex
-	cachedVersion int64
-	cached        IDPClient
+	mu          sync.Mutex
+	cachedStamp string
+	cachedSet   bool
+	cached      IDPClient
 }
 
 // clientBuilder constructs the per-config IDPClient. Returns an error on provider-build failure (e.g. discovery unreachable).
@@ -83,7 +87,7 @@ func (r *Resolver) Current(ctx context.Context) (IDPClient, error) {
 	}
 
 	r.mu.Lock()
-	if r.cached != nil && r.cachedVersion == cfg.Version {
+	if r.cachedSet && r.cachedStamp == cfg.Stamp {
 		c := r.cached
 		r.mu.Unlock()
 		return c, nil
@@ -98,11 +102,12 @@ func (r *Resolver) Current(ctx context.Context) (IDPClient, error) {
 	}
 
 	r.mu.Lock()
-	// A concurrent caller may have already cached this version; either built client is correct, so only adopt ours when the cache is
-	// empty or still on an older version.
-	if r.cached == nil || r.cachedVersion != cfg.Version {
+	// A concurrent caller may have already cached this stamp; either built client is correct, so only adopt ours when the cache is
+	// empty or still on a different stamp.
+	if !r.cachedSet || r.cachedStamp != cfg.Stamp {
 		r.cached = client
-		r.cachedVersion = cfg.Version
+		r.cachedStamp = cfg.Stamp
+		r.cachedSet = true
 	}
 	c := r.cached
 	r.mu.Unlock()

@@ -16,6 +16,7 @@ import (
 
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/appconfig"
 	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
 )
 
@@ -32,24 +33,34 @@ type configStore interface {
 	Upsert(ctx context.Context, in ssoconfig.UpsertInput) error
 }
 
+// appConfigStore is the subset of *appconfig.Store the handler needs: the general settings document the external URL lives in.
+type appConfigStore interface {
+	Get(ctx context.Context) (appconfig.AppConfig, int64, error)
+	Put(ctx context.Context, cfg appconfig.AppConfig, updatedBy *int64) error
+}
+
 // prober verifies a candidate issuer is reachable. Production wraps oidc.Probe with the deployment HTTP client; tests inject a fake.
 type prober func(ctx context.Context, issuer string) error
 
 // Handler serves the /api/settings/sso routes. Construct via NewHandler; mount with RegisterAuthedRoutes behind the session + CSRF
-// middleware.
+// middleware. It spans two stores: the typed oidc_config (with its sealed secret) and the appconfig document (external URL).
 type Handler struct {
 	store  configStore
+	appCfg appConfigStore
 	authz  api.AuthZ
 	audit  api.AuditRecorder
 	probe  prober
 	logger *slog.Logger
 }
 
-// NewHandler builds the handler. store, authz, and probe are load-bearing; logger defaults to slog.Default. audit may be nil only in
-// tests that do not assert on the audit row.
-func NewHandler(store configStore, authz api.AuthZ, audit api.AuditRecorder, probe prober, logger *slog.Logger) *Handler {
+// NewHandler builds the handler. store, appCfg, authz, and probe are load-bearing; logger defaults to slog.Default. audit may be nil
+// only in tests that do not assert on the audit row.
+func NewHandler(store configStore, appCfg appConfigStore, authz api.AuthZ, audit api.AuditRecorder, probe prober, logger *slog.Logger) *Handler {
 	if store == nil {
 		panic("ssoadmin.NewHandler: store is required")
+	}
+	if appCfg == nil {
+		panic("ssoadmin.NewHandler: appCfg is required")
 	}
 	if authz == nil {
 		panic("ssoadmin.NewHandler: authz is required")
@@ -60,7 +71,7 @@ func NewHandler(store configStore, authz api.AuthZ, audit api.AuditRecorder, pro
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{store: store, authz: authz, audit: audit, probe: probe, logger: logger}
+	return &Handler{store: store, appCfg: appCfg, authz: authz, audit: audit, probe: probe, logger: logger}
 }
 
 // RegisterAuthedRoutes mounts the SSO settings routes. The mux is expected to be wrapped in the session + CSRF middleware before being
@@ -92,9 +103,20 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionSSOManage, api.Resource{Type: "sso_config"}) {
 		return
 	}
+	// External URL is deployment-level (appconfig) and may be set even before OIDC is configured; always include it.
+	appCfg, _, err := h.appCfg.Get(ctx)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "app config get", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
 	cfg, err := h.store.Get(ctx)
 	if errors.Is(err, ssoconfig.ErrNotFound) {
-		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, configResponse{Configured: false})
+		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, configResponse{
+			Configured:  false,
+			ExternalURL: appCfg.ExternalURL,
+			RedirectURL: ssoconfig.RedirectURLFor(appCfg.ExternalURL),
+		})
 		return
 	}
 	if err != nil {
@@ -102,7 +124,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg))
+	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, appCfg.ExternalURL))
 }
 
 // updateRequest is the write shape. ClientSecret is a pointer so the field is distinguishable as absent (keep the stored secret) vs
@@ -127,7 +149,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	in, reason, ok := req.toUpsert()
+	in, externalURL, reason, ok := req.toUpsert()
 	if !ok {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, reason)
 		return
@@ -145,7 +167,20 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	h.recordUpdate(ctx, r, actor.UserID, in)
+	// Persist the external URL into the appconfig document (read-modify-write so unrelated settings are preserved).
+	appCfg, _, err := h.appCfg.Get(ctx)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "app config read for update", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	appCfg.ExternalURL = externalURL
+	if err := h.appCfg.Put(ctx, appCfg, &actor.UserID); err != nil {
+		h.logger.ErrorContext(ctx, "app config put", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	h.recordUpdate(ctx, r, actor.UserID, in, externalURL)
 
 	cfg, err := h.store.Get(ctx)
 	if err != nil {
@@ -153,7 +188,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg))
+	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, toResponse(cfg, externalURL))
 }
 
 // testConnectionRequest carries the candidate issuer to probe. Empty issuer means "probe the stored config".
@@ -198,7 +233,7 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 // recordUpdate emits the mutation audit row. It never includes the client secret, only whether one was rotated.
-func (h *Handler) recordUpdate(ctx context.Context, r *http.Request, userID int64, in ssoconfig.UpsertInput) {
+func (h *Handler) recordUpdate(ctx context.Context, r *http.Request, userID int64, in ssoconfig.UpsertInput, externalURL string) {
 	if h.audit == nil {
 		return
 	}
@@ -210,6 +245,7 @@ func (h *Handler) recordUpdate(ctx context.Context, r *http.Request, userID int6
 		RemoteAddr: httpserver.ClientIP(r),
 		Payload: map[string]any{
 			"issuer":         in.Issuer,
+			"external_url":   externalURL,
 			"jit_enabled":    in.JITEnabled,
 			"default_role":   in.DefaultRole,
 			"secret_rotated": in.NewSecret != nil,
@@ -219,24 +255,25 @@ func (h *Handler) recordUpdate(ctx context.Context, r *http.Request, userID int6
 	}
 }
 
-// toUpsert validates the request and maps it to a store UpsertInput. Returns a wire-format reason + false on the first validation
-// failure. NewSecret is set only when a non-empty client_secret was supplied (rotate-only); otherwise the stored secret is preserved.
-func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, bool) {
+// toUpsert validates the request and maps it to a store UpsertInput plus the external URL (persisted separately in appconfig). Returns
+// a wire-format reason + false on the first validation failure. NewSecret is set only when a non-empty client_secret was supplied
+// (rotate-only); otherwise the stored secret is preserved.
+func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, string, bool) {
 	issuer := strings.TrimSpace(req.Issuer)
 	if !validAbsoluteURL(issuer) {
-		return ssoconfig.UpsertInput{}, "invalid_issuer", false
+		return ssoconfig.UpsertInput{}, "", "invalid_issuer", false
 	}
 	clientID := strings.TrimSpace(req.ClientID)
 	if clientID == "" {
-		return ssoconfig.UpsertInput{}, "missing_client_id", false
+		return ssoconfig.UpsertInput{}, "", "missing_client_id", false
 	}
 	externalURL := strings.TrimSpace(req.ExternalURL)
 	if !validAbsoluteURL(externalURL) {
-		return ssoconfig.UpsertInput{}, "invalid_external_url", false
+		return ssoconfig.UpsertInput{}, "", "invalid_external_url", false
 	}
 	scopes := normalizeScopes(req.Scopes)
 	if !slicesContains(scopes, "openid") {
-		return ssoconfig.UpsertInput{}, "missing_openid_scope", false
+		return ssoconfig.UpsertInput{}, "", "missing_openid_scope", false
 	}
 	role := strings.ToLower(strings.TrimSpace(req.DefaultRole))
 	if role == "" {
@@ -245,7 +282,7 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, bool) {
 	// The default role is meaningful only when JIT is on, but we validate it whenever provided so a stored value is always one the
 	// chokepoint posture allows (never admin from a claim).
 	if !allowedJITRoles[role] {
-		return ssoconfig.UpsertInput{}, "invalid_default_role", false
+		return ssoconfig.UpsertInput{}, "", "invalid_default_role", false
 	}
 	var newSecret *string
 	if req.ClientSecret != nil && *req.ClientSecret != "" {
@@ -256,20 +293,19 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, bool) {
 		Issuer:      issuer,
 		ClientID:    clientID,
 		NewSecret:   newSecret,
-		ExternalURL: externalURL,
 		Scopes:      scopes,
 		JITEnabled:  req.JITEnabled,
 		DefaultRole: role,
-	}, "", true
+	}, externalURL, "", true
 }
 
-func toResponse(c *ssoconfig.Config) configResponse {
+func toResponse(c *ssoconfig.Config, externalURL string) configResponse {
 	return configResponse{
 		Configured:  true,
 		Issuer:      c.Issuer,
 		ClientID:    c.ClientID,
-		ExternalURL: c.ExternalURL,
-		RedirectURL: ssoconfig.RedirectURLFor(c.ExternalURL),
+		ExternalURL: externalURL,
+		RedirectURL: ssoconfig.RedirectURLFor(externalURL),
 		Scopes:      c.Scopes,
 		JITEnabled:  c.JITEnabled,
 		DefaultRole: c.DefaultRole,

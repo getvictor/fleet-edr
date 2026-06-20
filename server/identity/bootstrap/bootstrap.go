@@ -12,6 +12,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/appconfig"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
 	"github.com/fleetdm/edr/server/identity/internal/authz"
 	"github.com/fleetdm/edr/server/identity/internal/breakglass"
@@ -120,6 +121,7 @@ type Identity struct {
 	// ssoStore is the durable OIDC config store (nil when the OIDC handler was not built). oidcSeed carries the env OIDC values used to
 	// seed the store on first boot; oidcConfiguredAtBoot records whether a usable config existed after seeding, for OIDCEnabled.
 	ssoStore             *ssoconfig.Store
+	appConfigStore       *appconfig.Store
 	ssoAdminHandler      *ssoadmin.Handler // nil when the OIDC handler was not built (no signing/secret key)
 	oidcSeed             OIDCDeps
 	oidcConfiguredAtBoot bool
@@ -170,6 +172,10 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		return nil, fmt.Errorf("identity bootstrap: construct authz engine: %w", err)
 	}
 
+	// appConfigStore holds the deployment's general settings document (external URL today). It is consumed by the OIDC resolver (redirect
+	// derivation) and the SSO admin API, and seeded from env at ApplySchema time.
+	appConfigStore := appconfig.New(deps.DB)
+
 	oidcHandler, ssoStore, err := buildOIDCHandler(oidcHandlerDeps{
 		deps:       deps,
 		logger:     logger,
@@ -178,16 +184,18 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		identities: identitiesStore,
 		rbac:       rbacStore,
 		audit:      auditStore,
+		appCfg:     appConfigStore,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// The SSO admin API (read/update/test-connection) shares the config store with the resolver; built only when the store exists.
+	// The SSO admin API (read/update/test-connection) shares the config + app-config stores with the resolver; built only when the
+	// OIDC config store exists (i.e. keys were supplied).
 	var ssoAdminHandler *ssoadmin.Handler
 	if ssoStore != nil {
 		oidcHTTPClient := deps.OIDC.HTTPClient
-		ssoAdminHandler = ssoadmin.NewHandler(ssoStore, authzEngine, auditStore,
+		ssoAdminHandler = ssoadmin.NewHandler(ssoStore, appConfigStore, authzEngine, auditStore,
 			func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, logger)
 	}
 
@@ -225,6 +233,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		logger:            logger,
 		cleanupEvery:      cleanupEvery,
 		ssoStore:          ssoStore,
+		appConfigStore:    appConfigStore,
 		ssoAdminHandler:   ssoAdminHandler,
 		oidcSeed:          deps.OIDC,
 	}, nil
@@ -323,6 +332,7 @@ type oidcHandlerDeps struct {
 	identities *identities.Store
 	rbac       *rbac.Store
 	audit      *audit.Store
+	appCfg     *appconfig.Store
 }
 
 // buildOIDCHandler constructs the runtime-reconfigurable OIDC handler plus the durable config store it reads from. Unlike the wave-1
@@ -352,13 +362,19 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 		if err != nil {
 			return oidc.ProviderConfig{}, err
 		}
+		// The redirect URI is derived from the deployment external URL, which lives in the appconfig document and changes independently
+		// of oidc_config; fold both versions into the cache stamp so an external-URL edit rebuilds the client too.
+		appCfg, appVersion, err := in.appCfg.Get(ctx)
+		if err != nil {
+			return oidc.ProviderConfig{}, err
+		}
 		return oidc.ProviderConfig{
 			Issuer:       c.Issuer,
 			ClientID:     c.ClientID,
 			ClientSecret: c.ClientSecret,
-			RedirectURL:  ssoconfig.RedirectURLFor(c.ExternalURL),
+			RedirectURL:  ssoconfig.RedirectURLFor(appCfg.ExternalURL),
 			Scopes:       c.Scopes,
-			Version:      c.Version,
+			Stamp:        fmt.Sprintf("%d.%d", c.Version, appVersion),
 		}, nil
 	}, in.deps.OIDC.HTTPClient, in.logger)
 
@@ -434,21 +450,30 @@ func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
 		defaultRole = oidc.DefaultJITRole
 	}
 	secret := i.oidcSeed.ClientSecret
-	// EDR_OIDC_REDIRECT_URL is the full callback URL; the stored config keeps the external base URL and derives the redirect, so trim a
-	// trailing callback path to recover the base (best-effort: a non-conforming redirect is stored as-is and the operator corrects it in
-	// the UI).
-	externalURL := strings.TrimSuffix(strings.TrimRight(i.oidcSeed.RedirectURL, "/"), ssoconfig.CallbackPath)
 	if err := i.ssoStore.Upsert(ctx, ssoconfig.UpsertInput{
 		Issuer:      i.oidcSeed.Issuer,
 		ClientID:    i.oidcSeed.ClientID,
 		NewSecret:   &secret,
-		ExternalURL: externalURL,
 		Scopes:      i.oidcSeed.Scopes,
 		JITEnabled:  i.oidcSeed.AllowJITProvisioning,
 		DefaultRole: defaultRole,
 		UpdatedBy:   nil,
 	}); err != nil {
 		return fmt.Errorf("identity bootstrap: seed OIDC config from env: %w", err)
+	}
+	// The external URL is deployment-level and lives in the appconfig document. EDR_OIDC_REDIRECT_URL is the full callback URL; recover
+	// the base by trimming a trailing callback path (best-effort). Seed it only when the app_config document has no external URL yet, so
+	// a later UI edit is never clobbered on restart.
+	externalURL := strings.TrimSuffix(strings.TrimRight(i.oidcSeed.RedirectURL, "/"), ssoconfig.CallbackPath)
+	if externalURL != "" {
+		if cur, _, err := i.appConfigStore.Get(ctx); err != nil {
+			return fmt.Errorf("identity bootstrap: read app config: %w", err)
+		} else if cur.ExternalURL == "" {
+			cur.ExternalURL = externalURL
+			if err := i.appConfigStore.Put(ctx, cur, nil); err != nil {
+				return fmt.Errorf("identity bootstrap: seed external URL from env: %w", err)
+			}
+		}
 	}
 	i.oidcConfiguredAtBoot = true
 	i.logger.InfoContext(ctx, "seeded OIDC config from EDR_OIDC_* env vars (first boot); the stored config now governs and survives restarts")

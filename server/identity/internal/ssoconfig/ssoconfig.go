@@ -22,18 +22,16 @@ type Config struct {
 	ClientID     string
 	ClientSecret string
 	HasSecret    bool
-	// ExternalURL is the deployment's externally-reachable base URL. The OIDC redirect URI is derived from it via RedirectURLFor; it is
-	// not stored independently so the operator maintains a single value.
-	ExternalURL string
-	Scopes      []string
-	JITEnabled  bool
-	DefaultRole string
-	Version     int64
-	UpdatedAt   time.Time
-	UpdatedBy   sql.NullInt64
+	Scopes       []string
+	JITEnabled   bool
+	DefaultRole  string
+	Version      int64
+	UpdatedAt    time.Time
+	UpdatedBy    sql.NullInt64
 }
 
-// CallbackPath is the OIDC redirect/callback route the server serves. The registered redirect URI is ExternalURL + CallbackPath.
+// CallbackPath is the OIDC redirect/callback route the server serves. The registered redirect URI is the deployment external URL +
+// CallbackPath; the external URL lives in the appconfig document, not here.
 const CallbackPath = "/api/auth/callback"
 
 // RedirectURLFor derives the OIDC redirect URI from a deployment external URL: a single trailing slash on the base is tolerated so
@@ -51,7 +49,6 @@ type row struct {
 	Issuer          string        `db:"issuer"`
 	ClientID        string        `db:"client_id"`
 	ClientSecretEnc []byte        `db:"client_secret_enc"`
-	ExternalURL     string        `db:"external_url"`
 	Scopes          string        `db:"scopes"`
 	JITEnabled      bool          `db:"jit_enabled"`
 	DefaultRole     string        `db:"default_role"`
@@ -66,7 +63,6 @@ type UpsertInput struct {
 	Issuer      string
 	ClientID    string
 	NewSecret   *string
-	ExternalURL string
 	Scopes      []string
 	JITEnabled  bool
 	DefaultRole string
@@ -91,7 +87,7 @@ func New(db *sqlx.DB, sealer *Sealer) *Store {
 }
 
 const selectConfig = `
-	SELECT issuer, client_id, client_secret_enc, external_url, scopes, jit_enabled, default_role,
+	SELECT issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role,
 	       config_version, updated_at, updated_by
 	FROM oidc_config
 	WHERE id = 1`
@@ -113,7 +109,6 @@ func toConfig(r *row) *Config {
 		Issuer:      r.Issuer,
 		ClientID:    r.ClientID,
 		HasSecret:   len(r.ClientSecretEnc) > 0,
-		ExternalURL: r.ExternalURL,
 		Scopes:      splitScopes(r.Scopes),
 		JITEnabled:  r.JITEnabled,
 		DefaultRole: r.DefaultRole,
@@ -168,13 +163,13 @@ func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
 		}
 		_, err = s.db.ExecContext(ctx, `
 			INSERT INTO oidc_config
-				(id, issuer, client_id, client_secret_enc, external_url, scopes, jit_enabled, default_role, config_version, updated_by)
-			VALUES (1, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+				(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, config_version, updated_by)
+			VALUES (1, ?, ?, ?, ?, ?, ?, 1, ?)
 			ON DUPLICATE KEY UPDATE
 				issuer = VALUES(issuer), client_id = VALUES(client_id), client_secret_enc = VALUES(client_secret_enc),
-				external_url = VALUES(external_url), scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled),
+				scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled),
 				default_role = VALUES(default_role), config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-			in.Issuer, in.ClientID, sealed, in.ExternalURL, scopes, in.JITEnabled, in.DefaultRole, updatedBy)
+			in.Issuer, in.ClientID, sealed, scopes, in.JITEnabled, in.DefaultRole, updatedBy)
 		if err != nil {
 			return fmt.Errorf("ssoconfig: upsert with secret: %w", err)
 		}
@@ -184,13 +179,13 @@ func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
 	// No secret change: insert with NULL secret (first boot), and on update leave client_secret_enc untouched.
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO oidc_config
-			(id, issuer, client_id, client_secret_enc, external_url, scopes, jit_enabled, default_role, config_version, updated_by)
-		VALUES (1, ?, ?, NULL, ?, ?, ?, ?, 1, ?)
+			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, config_version, updated_by)
+		VALUES (1, ?, ?, NULL, ?, ?, ?, 1, ?)
 		ON DUPLICATE KEY UPDATE
 			issuer = VALUES(issuer), client_id = VALUES(client_id),
-			external_url = VALUES(external_url), scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled),
+			scopes = VALUES(scopes), jit_enabled = VALUES(jit_enabled),
 			default_role = VALUES(default_role), config_version = config_version + 1, updated_by = VALUES(updated_by)`,
-		in.Issuer, in.ClientID, in.ExternalURL, scopes, in.JITEnabled, in.DefaultRole, updatedBy)
+		in.Issuer, in.ClientID, scopes, in.JITEnabled, in.DefaultRole, updatedBy)
 	if err != nil {
 		return fmt.Errorf("ssoconfig: upsert: %w", err)
 	}

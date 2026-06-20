@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/server/identity/bootstrap"
+	"github.com/fleetdm/edr/server/identity/internal/appconfig"
 	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
 	"github.com/fleetdm/edr/server/testdb/full"
 	"github.com/jmoiron/sqlx"
@@ -62,6 +63,11 @@ func TestBootstrap_OIDCEnvSeedsThenStoredGoverns(t *testing.T) {
 	assert.Equal(t, "https://first.example.com", seeded.Issuer)
 	assert.Equal(t, "cid-1", seeded.ClientID)
 	assert.Equal(t, "secret-1", seeded.ClientSecret)
+
+	// The external URL is recovered from EDR_OIDC_REDIRECT_URL (callback suffix trimmed) into the appconfig document.
+	appCfg, _, err := appconfig.New(db).Get(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "https://edr.example.com", appCfg.ExternalURL)
 
 	// Simulate a restart with DIFFERENT env on the same DB: the stored row must win.
 	_ = newIdentityWithOIDCEnv(t, db, secretKey, bootstrap.OIDCDeps{

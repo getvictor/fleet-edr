@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/appconfig"
 	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,10 +33,26 @@ func (f *fakeStore) Upsert(_ context.Context, in ssoconfig.UpsertInput) error {
 	f.last = &in
 	// Reflect the write into cfg so the handler's re-read returns the new values (secret tracked separately as HasSecret).
 	f.cfg = &ssoconfig.Config{
-		Issuer: in.Issuer, ClientID: in.ClientID, ExternalURL: in.ExternalURL, Scopes: in.Scopes,
+		Issuer: in.Issuer, ClientID: in.ClientID, Scopes: in.Scopes,
 		JITEnabled: in.JITEnabled, DefaultRole: in.DefaultRole,
 		HasSecret: in.NewSecret != nil || (f.cfg != nil && f.cfg.HasSecret),
 	}
+	return nil
+}
+
+// fakeAppCfg is an in-memory appConfigStore.
+type fakeAppCfg struct {
+	cfg  appconfig.AppConfig
+	last *appconfig.AppConfig
+}
+
+func (f *fakeAppCfg) Get(context.Context) (appconfig.AppConfig, int64, error) {
+	return f.cfg, 1, nil
+}
+
+func (f *fakeAppCfg) Put(_ context.Context, cfg appconfig.AppConfig, _ *int64) error {
+	f.cfg = cfg
+	f.last = &cfg
 	return nil
 }
 
@@ -68,7 +85,7 @@ func withActor(r *http.Request, userID int64) *http.Request {
 
 func TestHandleGet_unconfiguredReturnsConfiguredFalse(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(&fakeStore{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 
@@ -83,9 +100,9 @@ func TestHandleGet_neverReturnsSecret(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{cfg: &ssoconfig.Config{
 		Issuer: "https://idp.example.com", ClientID: "cid", HasSecret: true,
-		ExternalURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}}
-	h := NewHandler(store, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 
@@ -99,7 +116,7 @@ func TestHandleGet_neverReturnsSecret(t *testing.T) {
 
 func TestHandleGet_deniedIsForbidden(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(&fakeStore{}, denyAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, denyAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 	assert.Equal(t, http.StatusForbidden, w.Code)
@@ -117,7 +134,7 @@ func TestHandleUpdate_validRotatesSecretAndAudits(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{}
 	audit := &captureAudit{}
-	h := NewHandler(store, allowAuthZ{}, audit, okProbe, nil)
+	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, audit, okProbe, nil)
 
 	secret := "rotate-me"
 	w := httptest.NewRecorder()
@@ -147,7 +164,7 @@ func TestHandleUpdate_validRotatesSecretAndAudits(t *testing.T) {
 func TestHandleUpdate_omittedSecretIsKept(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{}
-	h := NewHandler(store, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
@@ -163,7 +180,7 @@ func TestHandleUpdate_omittedSecretIsKept(t *testing.T) {
 func TestHandleUpdate_emptySecretStringIsKept(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{}
-	h := NewHandler(store, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	empty := ""
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
@@ -191,7 +208,7 @@ func TestHandleUpdate_validationRejects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			store := &fakeStore{}
-			h := NewHandler(store, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 			w := httptest.NewRecorder()
 			h.handleUpdate(w, putReq(t, tc.req))
 			require.Equal(t, http.StatusBadRequest, w.Code)
@@ -205,7 +222,7 @@ func TestHandleTestConnection_passAndFail(t *testing.T) {
 	t.Parallel()
 	t.Run("reachable", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(&fakeStore{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		w := httptest.NewRecorder()
 		body := `{"issuer":"https://idp.example.com"}`
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/settings/sso/test-connection", strings.NewReader(body)))
@@ -219,7 +236,7 @@ func TestHandleTestConnection_passAndFail(t *testing.T) {
 		t.Parallel()
 		store := &fakeStore{}
 		failProbe := func(context.Context, string) error { return errors.New("discovery unreachable") }
-		h := NewHandler(store, allowAuthZ{}, &captureAudit{}, failProbe, nil)
+		h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, failProbe, nil)
 		w := httptest.NewRecorder()
 		body := `{"issuer":"https://down.example.com"}`
 		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/settings/sso/test-connection", strings.NewReader(body)))
