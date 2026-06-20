@@ -1,0 +1,36 @@
+@import "../../styles/var/colors.scss";
+
+.settings-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+
+  &__nav {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid $ui-fleet-black-10;
+  }
+
+  &__link {
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    color: $ui-fleet-black-50;
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+
+    &:hover {
+      color: $ui-fleet-black-75;
+    }
+
+    &--active {
+      color: $core-fleet-green;
+      border-bottom-color: $core-fleet-green;
+    }
+  }
+
+  &__content {
+    min-width: 0;
+  }
+}

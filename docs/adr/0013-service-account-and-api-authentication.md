@@ -1,6 +1,6 @@
 # 0013. Service-account and API authentication: client-credentials with short-lived self-validating tokens
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-20
 - Deciders: getvictor
 

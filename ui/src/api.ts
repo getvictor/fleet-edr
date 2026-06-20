@@ -696,3 +696,52 @@ export async function testSSOConnection(issuer: string): Promise<{ ok: boolean; 
     body: JSON.stringify({ issuer }),
   });
 }
+
+// --- Service accounts (issue #376) ----------------------------------------------
+
+// ServiceAccount is the read shape from GET /api/settings/service-accounts. The secret is
+// NEVER returned here: it is shown once at create/rotate (see ServiceAccountSecret). status
+// is "active" | "revoked" | "expired", computed server-side.
+export interface ServiceAccount {
+  id: number;
+  client_id: string;
+  name: string;
+  role: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at?: string;
+}
+
+// ServiceAccountCreate is the POST body. expires_in_days is optional (server defaults to 90,
+// caps at 365); role must be an operational role (analyst, senior_analyst, auditor).
+export interface ServiceAccountCreate {
+  name: string;
+  role: string;
+  expires_in_days?: number;
+}
+
+// ServiceAccountSecret is the create response: the account plus its one-time plaintext secret,
+// returned exactly once and never retrievable again.
+export interface ServiceAccountSecret extends ServiceAccount {
+  secret: string;
+}
+
+export async function listServiceAccounts(): Promise<ServiceAccount[]> {
+  const res = await fetchJSON<{ service_accounts: ServiceAccount[] | null }>("/settings/service-accounts");
+  return res.service_accounts ?? [];
+}
+
+export async function createServiceAccount(req: ServiceAccountCreate): Promise<ServiceAccountSecret> {
+  return fetchJSON<ServiceAccountSecret>("/settings/service-accounts", { method: "POST", body: JSON.stringify(req) });
+}
+
+// rotateServiceAccount issues a fresh secret (and invalidates the old one + any outstanding
+// access tokens). The new secret is returned once.
+export async function rotateServiceAccount(id: number): Promise<{ secret: string }> {
+  return fetchJSON<{ secret: string }>(`/settings/service-accounts/${String(id)}/rotate`, { method: "POST" });
+}
+
+export async function revokeServiceAccount(id: number): Promise<void> {
+  await fetchJSON<{ status: string }>(`/settings/service-accounts/${String(id)}`, { method: "DELETE" });
+}

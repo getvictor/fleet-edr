@@ -28,12 +28,12 @@
 
 - [x] 5.1 Management routes under operator-session + CSRF + `service_account.*`: `GET /api/settings/service-accounts` (list, no secrets), `POST` (create, secret shown once), `POST /{id}/rotate` (new secret shown once), `DELETE /{id}` (revoke)
 - [x] 5.2 Wire every existing API route to accept the bearer access token as a second authenticator alongside the session cookie via a shared actor-resolution step; the bearer boundary is CSRF-exempt
-- [ ] 5.3 Add the Service-accounts admin settings page in `ui/src/` (list with name/role/created/last-used/state, create-with-one-time-secret, rotate, revoke), gated on the management actions via the `useCan()`/`RequirePermission` seam; add the API client calls (CSRF on mutation)
-- [ ] 5.4 Vitest unit + component tests: page hidden without the grant; the one-time secret is shown on create/rotate and never re-fetched; revoke confirms
+- [x] 5.3 Add the Service-accounts admin settings page in `ui/src/` (list with name/role/created/last-used/state, create-with-one-time-secret, rotate, revoke), gated on the management actions via the `useCan()`/`RequirePermission` seam; add the API client calls (CSRF on mutation)
+- [x] 5.4 Vitest unit + component tests: page hidden without the grant; the one-time secret is shown on create/rotate and never re-fetched; revoke confirms
 
 ## 6. Docs and spec traceability
 
 - [x] 6.1 Add a docs section on creating and using a service account (obtain a token via the client-credentials grant, present it as a bearer token, rotate/revoke), and the env-vs-stored, TTL, and revocation-window semantics
 - [x] 6.2 Add spectrace markers tying tests to the new `server-identity-service-accounts` scenarios and the modified authentication/authorization scenarios
 - [x] 6.3 Run `openspec validate service-account-auth --strict` and the no-emdash/dash + markdown-prose linters; fix any findings
-- [ ] 6.4 Mark ADR-0013 Accepted once this change merges
+- [x] 6.4 Mark ADR-0013 Accepted once this change merges
