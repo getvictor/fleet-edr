@@ -13,4 +13,4 @@
 ## Verification
 
 - [x] `tsc --noEmit`, eslint clean on changed files, full vitest suite green (282 tests).
-- [ ] Real-tool QA against `task dev:server`: open the LaunchDaemon-persistence alert (the agent's own daemon registration produces one), confirm the description + technique render, the explanation replaces the blank canvas, the opt-in widens to the host tree, and a reload preserves the explanation. (Pending; run before merge.)
+- [x] Real-tool QA against `task dev:server` (Chrome, edr-dev VM agent data): opened real process-optional `privilege_launchd_plist_write` alerts (agent daemon + synthetic-dropper registrations, `process_id = 0`). Confirmed the description + `T1543.004` tag render, the "not attributed to a single process" explanation replaces the blank canvas, "Show surrounding host activity" widens to the full host tree, and a reload restores the explanation. Regression: a process-backed `suspicious_exec` alert still focuses its chain with no explanation.
