@@ -59,7 +59,7 @@ func TestMintVerify_roundTrip(t *testing.T) {
 
 		token, exp, err := signer.Mint(satoken.MintInput{Subject: subject, Role: role, Epoch: epoch}, ttl, now)
 		require.NoError(rt, err)
-		require.Equal(rt, now.Add(ttl).UTC().Truncate(time.Second), exp)
+		require.Equal(rt, exp, now.Add(ttl).UTC().Truncate(time.Second))
 
 		claims, err := signer.Verify(token, now)
 		require.NoError(rt, err)

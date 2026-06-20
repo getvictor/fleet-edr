@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,6 +73,25 @@ func TestSnapshot_emptyAllowsEverything(t *testing.T) {
 	snap := NewSnapshot(&fakeSource{}, nil)
 	// Before any refresh, a cold snapshot allows everything (fail-open until the first load).
 	assert.True(t, snap.Allowed("sa_any", 0))
+}
+
+func TestSnapshot_RunStopsOnContextCancel(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{}
+	snap := NewSnapshot(src, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled: Run does its initial Refresh then returns on the ctx.Done branch
+	done := make(chan struct{})
+	go func() {
+		snap.Run(ctx, time.Hour)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after context cancel")
+	}
+	assert.GreaterOrEqual(t, src.calls, 1, "Run performs an initial synchronous refresh")
 }
 
 func TestCredentialGeneration(t *testing.T) {

@@ -20,9 +20,10 @@ import (
 )
 
 const (
+	day = 24 * time.Hour
 	// defaultLifetime is the credential lifetime when the caller does not specify one; maxLifetime caps any caller-supplied value.
-	defaultLifetime = 90 * 24 * time.Hour
-	maxLifetime     = 365 * 24 * time.Hour
+	defaultLifetime = 90 * day
+	maxLifetime     = 365 * day
 
 	// maxBodyBytes bounds the create request body.
 	maxBodyBytes = 16 << 10
@@ -228,12 +229,12 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) resolveExpiry(days *int) time.Time {
 	lifetime := defaultLifetime
 	if days != nil {
-		d := time.Duration(*days) * 24 * time.Hour
-		if d > 0 && d < maxLifetime {
-			lifetime = d
-		} else if d <= 0 {
+		switch d := time.Duration(*days) * day; {
+		case d <= 0:
 			lifetime = defaultLifetime
-		} else {
+		case d < maxLifetime:
+			lifetime = d
+		default:
 			lifetime = maxLifetime
 		}
 	}
