@@ -116,6 +116,12 @@ export function ProcessTreeView() {
   );
   const [alertDetail, setAlertDetail] = useState<AlertDetail | null>(null);
 
+  // A process-optional alert (process_id === 0) has no attributed process node to focus on: it keys on an artifact, not a
+  // process (e.g. a LaunchDaemon registration, where the BTM instigator is Apple's smd, not the actor). Focus mode would
+  // filter the forest to an empty chain and render a silent blank canvas, so these alerts get an explicit explanation +
+  // opt-in expansion instead. process_id is the authoritative signal (the ?process= URL param mirrors it).
+  const isProcessOptionalAlert = alertDetail !== null && alertDetail.process_id === 0;
+
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
   }, [showSystem]);
@@ -495,17 +501,45 @@ export function ProcessTreeView() {
             variant={focusAlertChain ? "primary" : "inverse"}
             onClick={() => { setFocusAlertChain((v) => !v); }}
             title={focusAlertChain
-              ? "Showing only the alert's process chain"
+              ? "Showing only the processes related to this alert"
               : "Showing the full host tree"}
           >
-            {focusAlertChain ? "Focused on chain" : "Show full tree"}
+            {focusAlertChain
+              ? (isProcessOptionalAlert ? "Focused on alert" : "Focused on chain")
+              : "Show full tree"}
           </Button>
+        </div>
+      )}
+
+      {/* The finding detail (description + technique tags) is the "what and why" of the alert. It renders for every alert,
+          and is the primary surface for a process-optional alert whose graph is intentionally empty. */}
+      {alertDetail && (
+        <div className="alert-detail-panel">
+          <p className="alert-detail-panel__description">{alertDetail.description}</p>
+          {alertDetail.techniques && alertDetail.techniques.length > 0 && (
+            <div className="alert-detail-panel__techniques">
+              {alertDetail.techniques.map((t) => (
+                <Badge key={t} variant="neutral">{t}</Badge>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {loading && <p className="process-tree__status">Loading...</p>}
       {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
-      {!loading && roots.length === 0 && (
+      {/* Process-optional alert in focus mode: the graph is intentionally empty (there is no attributed process chain), so
+          explain that instead of leaving a silent blank canvas, and offer the opt-in to widen to the surrounding host
+          activity. This takes precedence over the generic empty message below. */}
+      {!loading && !error && isProcessOptionalAlert && focusAlertChain && (
+        <div className="process-tree__status process-tree__status--info">
+          <p>This detection isn’t attributed to a single process. See the detail above for what fired and why.</p>
+          <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(false); }}>
+            Show surrounding host activity
+          </Button>
+        </div>
+      )}
+      {!loading && !error && !(isProcessOptionalAlert && focusAlertChain) && roots.length === 0 && (
         <p className="process-tree__status">No processes in this time range.</p>
       )}
 
