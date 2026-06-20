@@ -62,6 +62,14 @@ const (
 	// super_admin; the admin settings read/update/test-connection handlers funnel through the chokepoint on this action.
 	ActionSSOManage Action = "sso.manage"
 
+	// Service-account management (issue #376, ADR-0013). Gates the admin surface that creates, lists, rotates, and revokes
+	// non-human API principals. Held by admin + super_admin. A service account may itself never bind to a role granting these
+	// actions, so it cannot mint or escalate other service accounts.
+	ActionServiceAccountRead   Action = "service_account.read"
+	ActionServiceAccountCreate Action = "service_account.create"
+	ActionServiceAccountRotate Action = "service_account.rotate"
+	ActionServiceAccountRevoke Action = "service_account.revoke"
+
 	// Audit-log read.
 	ActionAuditRead Action = "audit.read"
 
@@ -95,6 +103,7 @@ func RegisteredActions() []Action {
 		ActionEnrollmentRead, ActionEnrollmentRevoke, ActionEnrollmentRotateToken,
 		ActionUserRead, ActionUserInvite,
 		ActionSSOManage,
+		ActionServiceAccountRead, ActionServiceAccountCreate, ActionServiceAccountRotate, ActionServiceAccountRevoke,
 		ActionAuditRead,
 		ActionAppControlRead,
 		ActionAppControlRuleCreate, ActionAppControlRuleUpdate, ActionAppControlRuleDelete, ActionAppControlRuleBulkUpsert,
