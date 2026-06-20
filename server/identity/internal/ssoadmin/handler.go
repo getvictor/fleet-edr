@@ -42,7 +42,9 @@ type appConfigStore interface {
 // applyUpdate persists the OIDC config and the app-config document ATOMICALLY (one DB transaction), so a partial write can never leave
 // a new issuer/client paired with a stale derived redirect. expectedAppVersion drives the app-config optimistic-concurrency check;
 // implementations return appconfig.ErrVersionConflict on a concurrent edit. Injected so the handler stays unit-testable without a DB.
-type applyUpdate func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy int64) error
+type applyUpdate func(
+	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy int64,
+) error
 
 // prober verifies a candidate issuer is reachable. Production wraps oidc.Probe with the deployment HTTP client; tests inject a fake.
 type prober func(ctx context.Context, issuer string) error
@@ -61,7 +63,10 @@ type Handler struct {
 
 // NewHandler builds the handler. store, appCfg, apply, authz, and probe are load-bearing; logger defaults to slog.Default. audit may
 // be nil only in tests that do not assert on the audit row.
-func NewHandler(store configStore, appCfg appConfigStore, apply applyUpdate, authz api.AuthZ, audit api.AuditRecorder, probe prober, logger *slog.Logger) *Handler {
+func NewHandler(
+	store configStore, appCfg appConfigStore, apply applyUpdate,
+	authz api.AuthZ, audit api.AuditRecorder, probe prober, logger *slog.Logger,
+) *Handler {
 	if store == nil {
 		panic("ssoadmin.NewHandler: store is required")
 	}

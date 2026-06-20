@@ -1,18 +1,25 @@
 import { test, expect } from "../../fixtures/test";
 import { openDB, resetDB } from "../../fixtures/db";
 
-// With EDR_OIDC_ALLOW_JIT_PROVISIONING=0 the OIDC callback refuses
-// to create a new users row for a `sub` it doesn't already know,
-// emits an oidc.unknown_subject audit row, and bounces the operator
-// to /login?error=unknown_subject. Run ONLY against a dev server
-// started with that env set; otherwise admin@qa.local will
-// JIT-provision as analyst and the test will pass for the wrong
-// reason. The package.json `qa:jit-off` script orchestrates the
-// restart.
+// When JIT provisioning is disabled the OIDC callback refuses to create a new users row for a `sub` it doesn't already know, emits an
+// oidc.unknown_subject audit row, and bounces the operator to /login?error=unknown_subject.
+//
+// JIT is DB-governed (issue #375): EDR_OIDC_ALLOW_JIT_PROVISIONING only seeds the stored oidc_config on first boot and is inert once a
+// row exists, so this test disables JIT by writing jit_enabled = 0 directly to the stored config (the provisioner reads it per OIDC
+// callback, so it applies without a restart) and restores it in afterAll so later phases that JIT-provision are unaffected.
 
 const dexPassword = "qa-password-123";
 
 test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
+  test.afterAll(async () => {
+    const db = await openDB();
+    try {
+      await db.query("UPDATE oidc_config SET jit_enabled = 1");
+    } finally {
+      await db.end();
+    }
+  });
+
   test("sign in with admin@qa.local (never seen) returns oidc.unknown_subject", async ({
     page,
   }) => {
@@ -22,6 +29,8 @@ test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
     const db = await openDB();
     try {
       await resetDB(db);
+      // Disable JIT in the stored config (DB-governed; see file header).
+      await db.query("UPDATE oidc_config SET jit_enabled = 0");
     } finally {
       await db.end();
     }
