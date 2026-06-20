@@ -16,8 +16,10 @@ const layer: AttackNavigatorLayer = {
   description: "",
   filters: { platforms: ["macOS"] },
   techniques: [
-    { techniqueID: "T1555.001", score: 100, comment: "Covered by: rule_a, rule_b" },
-    { techniqueID: "T1059", score: 100, comment: "Covered by: rule_a" },
+    // score is 1 (binary coverage) to match the server's Navigator layer builder; the component ignores score, but the fixture
+    // should still reflect the real wire value.
+    { techniqueID: "T1555.001", score: 1, comment: "Covered by: rule_a, rule_b" },
+    { techniqueID: "T1059", score: 1, comment: "Covered by: rule_a" },
   ],
 };
 
