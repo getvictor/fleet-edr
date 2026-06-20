@@ -130,6 +130,16 @@ func run() error {
 	}
 	go revSnap.Run(ctx, endpointbootstrap.DefaultRevocationRefreshInterval)
 
+	// Service-account revocation snapshot: same posture as the host-token snapshot above. Nil when no service-account signing key was
+	// configured. Load once synchronously (fatal on failure: an allow-all snapshot would honour revoked accounts) then refresh in the
+	// background.
+	if saSnap := identityCtx.ServiceAccountSnapshot(); saSnap != nil {
+		if rerr := saSnap.Refresh(ctx); rerr != nil {
+			return fmt.Errorf("initial service-account revocation snapshot load: %w", rerr)
+		}
+		go saSnap.Run(ctx, identitybootstrap.DefaultServiceAccountRevocationRefreshInterval)
+	}
+
 	// Build the metrics recorder AFTER detectionCtx + endpointCtx exist so the gauge source can read live state from both. Wire it back
 	// into detectionCtx via SetMetrics so the engine + intake + pipeline (processttl + retention) all instrument: the recorder + recorder
 	// consumer dependency cycle resolves through this two-phase setup.
@@ -215,7 +225,8 @@ func openContexts(
 	defer release()
 
 	if identityCtx, err = openIdentity(ctx, logger, db, cfg,
-		kr.Derive(keyring.SessionSigningKeyLabel), kr.Derive(keyring.OIDCClientSecretLabel)); err != nil {
+		kr.Derive(keyring.SessionSigningKeyLabel), kr.Derive(keyring.OIDCClientSecretLabel),
+		kr.Derive(keyring.ServiceAccountTokenSigningLabel)); err != nil {
 		return
 	}
 	if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord); err != nil {
@@ -239,13 +250,15 @@ func openIdentity(
 	cfg *config.Config,
 	sessionSigningKey []byte,
 	oidcSecretKey []byte,
+	serviceAccountTokenSigningKey []byte,
 ) (*identitybootstrap.Identity, error) {
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
-		DB:                db,
-		Logger:            logger,
-		CookieSecure:      cfg.ExternalTLS(),
-		SessionSigningKey: sessionSigningKey,
-		OIDCSecretKey:     oidcSecretKey,
+		DB:                            db,
+		Logger:                        logger,
+		CookieSecure:                  cfg.ExternalTLS(),
+		SessionSigningKey:             sessionSigningKey,
+		OIDCSecretKey:                 oidcSecretKey,
+		ServiceAccountTokenSigningKey: serviceAccountTokenSigningKey,
 		OIDC: identitybootstrap.OIDCDeps{
 			Issuer:               cfg.OIDCIssuer,
 			ClientID:             cfg.OIDCClientID,
@@ -625,7 +638,15 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	d.endpointCtx.RegisterAuthedRoutes(apiMux)
 	d.responseCtx.RegisterAuthedRoutes(apiMux)
 	d.identityCtx.RegisterAuthedRoutes(apiMux)
-	sessionProtected := sessionMW(csrfMW(apiMux))
+	// The operator API accepts two transports (ADR-0013): a service-account bearer token (verified statelessly, CSRF-exempt) or a
+	// browser cookie session + CSRF. APIAuthMiddleware composes both and pins an actor either way. It is nil only in minimal wiring
+	// with no service-account signing key, in which case fall back to the cookie-only chain.
+	var sessionProtected http.Handler
+	if apiAuth := d.identityCtx.APIAuthMiddleware(); apiAuth != nil {
+		sessionProtected = apiAuth(apiMux)
+	} else {
+		sessionProtected = sessionMW(csrfMW(apiMux))
+	}
 	for _, p := range []string{
 		"GET /api/hosts", "GET /api/hosts/{host_id}/tree", "GET /api/hosts/{host_id}/processes/{pid}",
 		"GET /api/alerts", "GET /api/alerts/{id}", "PUT /api/alerts/{id}",
@@ -669,6 +690,11 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		// SSO/OIDC configuration admin surface (issue #375). Mounted on apiMux via identityCtx.RegisterAuthedRoutes; enumerated
 		// here for the same reason as the app-control surface above (else the UI's GET parses the SPA index.html as JSON).
 		"GET /api/settings/sso", "PUT /api/settings/sso", "POST /api/settings/sso/test-connection",
+		// Service-account admin surface (issue #376). Mounted on apiMux via identityCtx.RegisterAuthedRoutes; enumerated here for the
+		// same reason as the surfaces above. The credential-exchange token endpoint (POST /api/oauth/token) is NOT here: it is a
+		// public route (no session/CSRF) registered via RegisterPublicRoutes.
+		"GET /api/settings/service-accounts", "POST /api/settings/service-accounts",
+		"POST /api/settings/service-accounts/{id}/rotate", "DELETE /api/settings/service-accounts/{id}",
 	} {
 		mux.Handle(p, sessionProtected)
 	}
