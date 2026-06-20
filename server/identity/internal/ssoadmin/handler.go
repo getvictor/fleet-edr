@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/fleetdm/edr/server/httpserver"
@@ -272,7 +273,7 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, string, bool
 		return ssoconfig.UpsertInput{}, "", "invalid_external_url", false
 	}
 	scopes := normalizeScopes(req.Scopes)
-	if !slicesContains(scopes, "openid") {
+	if !slices.Contains(scopes, "openid") {
 		return ssoconfig.UpsertInput{}, "", "missing_openid_scope", false
 	}
 	role := strings.ToLower(strings.TrimSpace(req.DefaultRole))
@@ -337,15 +338,6 @@ func normalizeScopes(in []string) []string {
 		}
 	}
 	return out
-}
-
-func slicesContains(s []string, want string) bool {
-	for _, v := range s {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }
 
 func decodeJSON[T any](ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request) (T, bool) {

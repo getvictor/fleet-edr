@@ -86,15 +86,18 @@ func TestResolver_concurrentCurrentIsSafe(t *testing.T) {
 		},
 		func(_ context.Context, c ProviderConfig) (IDPClient, error) { return &stubClient{id: c.Issuer}, nil },
 	)
+	const n = 20
+	clients := make([]IDPClient, n)
+	errs := make([]error, n)
 	var wg sync.WaitGroup
-	for range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			c, err := r.Current(t.Context())
-			assert.NoError(t, err)
-			assert.NotNil(t, c)
-		}()
+	for i := range n {
+		wg.Go(func() {
+			clients[i], errs[i] = r.Current(t.Context())
+		})
 	}
 	wg.Wait()
+	for i := range n {
+		require.NoError(t, errs[i])
+		require.NotNil(t, clients[i])
+	}
 }

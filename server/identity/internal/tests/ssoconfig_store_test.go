@@ -21,8 +21,6 @@ func newSSOStore(t *testing.T) *ssoconfig.Store {
 	return ssoconfig.New(db, sealer)
 }
 
-func strptr(s string) *string { return &s }
-
 func TestSSOConfigStore_getOnEmptyIsNotFound(t *testing.T) {
 	t.Parallel()
 	store := newSSOStore(t)
@@ -42,7 +40,7 @@ func TestSSOConfigStore_insertReadAndSecretIsWriteOnly(t *testing.T) {
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 		Issuer:      "https://acme.okta.com",
 		ClientID:    "0oa8x2k4mWq1ZpL5d7",
-		NewSecret:   strptr("top-secret-value"),
+		NewSecret:   new("top-secret-value"),
 		Scopes:      []string{"openid", "email", "profile"},
 		JITEnabled:  true,
 		DefaultRole: "analyst",
@@ -72,7 +70,7 @@ func TestSSOConfigStore_omittedSecretIsPreservedAndVersionBumps(t *testing.T) {
 	ctx := t.Context()
 
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
-		Issuer: "https://one.example.com", ClientID: "cid-1", NewSecret: strptr("original-secret"),
+		Issuer: "https://one.example.com", ClientID: "cid-1", NewSecret: new("original-secret"),
 		Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 
@@ -98,11 +96,11 @@ func TestSSOConfigStore_rotateSecret(t *testing.T) {
 	ctx := t.Context()
 
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
-		Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: strptr("secret-v1"),
+		Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: new("secret-v1"),
 		Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
-		Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: strptr("secret-v2"),
+		Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: new("secret-v2"),
 		Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 
