@@ -138,7 +138,6 @@ The break-glass surface reads the following env vars at boot. The production dep
 | --- | --- | --- | --- | --- |
 | `EDR_BREAKGLASS_RP_ID` | yes (prod) | none (dev falls back to localhost) | WebAuthn relying-party identifier: the canonical host that browser-stored credentials bind to. Registrable host portion of the EDR UI URL, no scheme, no port (e.g. `edr.example.com`). | Pin to your externally reachable hostname. Changing it post-deploy INVALIDATES every registered credential (WebAuthn scopes credentials to RP_ID); recovery then requires the SQL path in "Lost-credential recovery" above. |
 | `EDR_BREAKGLASS_RP_ORIGINS` | yes (prod) | none | Comma-separated absolute URLs the RP accepts in the authenticator's origin attestation. The browser-observed origin must match one entry exactly. | Pin to the externally reachable HTTPS URL (e.g. `https://edr.example.com`). Mismatches between configured and observed origin reject the WebAuthn ceremony with a generic failure. |
-| `EDR_BREAKGLASS_RP_DISPLAY_NAME` | no | `EDR Break-glass` | Operator-visible name the browser shows during authenticator enrollment. Metadata only; the chokepoint does not read it. | Set to something a human recognizes in the YubiKey / Touch ID prompt (e.g. `ExampleCorp EDR`). |
 | `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL` | no | `1h` | Go duration string. How long the redemption URL printed at first boot stays redeemable. | Default 1h is fine for most deployments. Shorten to cap the value of an exfiltrated stderr log; lengthen for a busy operator who needs more time between launch and redemption. |
 | `EDR_BREAKGLASS_IP_ALLOWLIST` | no | empty (no gate; dev shape) | Comma-separated CIDR list (bare IPs accepted) that gates the entire `/admin/break-glass*` surface. Off-list callers receive a generic 404; the path's existence is concealed. | Set to the operator bastion's CIDR (or your office egress). Leaving empty is a dev convenience; production should always pin a list. |
 | `EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT` | no | `15m` | Strict idle cap for recovery sessions. Idle is measured as NOW() minus last_seen_at. | Recovery is a short, focused surface; keep tight unless you have a specific reason. Tightening below 5m starts to chafe; loosening above 1h erodes the "recovery is brief" model. |
@@ -149,7 +148,6 @@ Production-deployment example, server reachable at `https://edr.example.com` beh
 ```sh
 EDR_BREAKGLASS_RP_ID=edr.example.com
 EDR_BREAKGLASS_RP_ORIGINS=https://edr.example.com
-EDR_BREAKGLASS_RP_DISPLAY_NAME=ExampleCorp EDR
 EDR_BREAKGLASS_IP_ALLOWLIST=10.20.30.0/24
 EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL=1h
 ```

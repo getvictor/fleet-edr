@@ -14,32 +14,32 @@ import (
 	"strings"
 	"time"
 
-	mysqldriver "github.com/go-sql-driver/mysql"
-
 	"github.com/fleetdm/edr/internal/envparse"
 )
 
 const (
-	// defaultProcessInterval is the cadence the server's process-graph builder ticks at. 500ms keeps tree freshness under a second on the
-	// hot path while letting the batch worker amortise DB queries.
-	defaultProcessInterval = 500 * time.Millisecond
-	// defaultProcessBatch is the maximum events processed per tick.
-	defaultProcessBatch = 500
+	// DefaultProcessInterval is the cadence the server's process-graph builder ticks at. 500ms keeps tree freshness under a second on
+	// the hot path while letting the batch worker amortise DB queries. Wired into the detection processor at boot (no longer an env knob).
+	DefaultProcessInterval = 500 * time.Millisecond
+	// DefaultProcessBatch is the maximum events processed per process-graph tick.
+	DefaultProcessBatch = 500
 	// defaultEnrollRatePerMin is the per-IP enrollment rate cap.
 	defaultEnrollRatePerMin = 30
 	// defaultRetentionDays is the event-row retention window.
 	defaultRetentionDays = 30
-	// defaultStaleProcessTTL is the fork-time age past which a still-running process row is force-exited by the freshness reconciler.
+	// DefaultRetentionInterval is how often the retention runner wakes up. Wired into the retention runner at boot (no longer an env knob).
+	DefaultRetentionInterval = time.Hour
+	// DefaultStaleProcessTTL is the fork-time age past which a still-running process row is force-exited by the freshness reconciler.
 	// Long enough to cover an analyst's working window; short enough that overnight greens are gone by morning.
-	defaultStaleProcessTTL = 6 * time.Hour
-	// defaultStaleProcessInterval is how often the process-TTL reconciler runs.
-	defaultStaleProcessInterval = 10 * time.Minute
-	// defaultHostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. The
+	DefaultStaleProcessTTL = 6 * time.Hour
+	// DefaultStaleProcessInterval is how often the process-TTL reconciler runs.
+	DefaultStaleProcessInterval = 10 * time.Minute
+	// DefaultHostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. The
 	// agent refreshes well before expiry; 60 minutes matches SPIFFE hot-path workload-identity guidance.
-	defaultHostTokenLifetime = 60 * time.Minute
-	// defaultOIDCStateCookieTTL is how long the signed state cookie that carries (state, nonce, code_verifier) stays valid. 5 minutes
+	DefaultHostTokenLifetime = 60 * time.Minute
+	// DefaultOIDCStateCookieTTL is how long the signed state cookie that carries (state, nonce, code_verifier) stays valid. 5 minutes
 	// matches the IdP's typical authorization-code window: long enough to survive an MFA prompt, short enough to bound CSRF replay.
-	defaultOIDCStateCookieTTL = 5 * time.Minute
+	DefaultOIDCStateCookieTTL = 5 * time.Minute
 	// DefaultBreakglassBootstrapTokenTTL mirrors the package-side fallback in server/identity/internal/breakglass/tokens.go. Exposed
 	// at the config layer so cmd/main can build the redemption-URL banner with a non-zero TTL string when the operator did not pin
 	// EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL.
@@ -50,6 +50,10 @@ const (
 	defaultShutdownDrain = 30 * time.Second
 )
 
+// DefaultOIDCScopes returns the scopes requested at AuthURL time. [openid, email, profile] gives the verifier the claims it needs
+// (sub, email, name) without leaking unused permissions. Returned as a fresh slice so callers can't mutate a shared backing array.
+func DefaultOIDCScopes() []string { return []string{"openid", "email", "profile"} }
+
 // Config is the resolved server configuration.
 type Config struct {
 	DSN          string
@@ -57,7 +61,6 @@ type Config struct {
 	EnrollSecret string
 	TLSCertFile  string
 	TLSKeyFile   string
-	AllowTLS12   bool
 	// TLSTerminatedByProxy lets the server listen plaintext HTTP when a TLS-terminating proxy (a PaaS edge, an ALB, nginx, or
 	// Cloudflare) sits in front. It is the gated exception to the mandatory-TLS default (issue #140): the default still refuses
 	// to boot without certs, but an operator who sets EDR_TLS_TERMINATED_BY_PROXY=1 asserts that something in front terminates
@@ -70,28 +73,13 @@ type Config struct {
 	EnrollRatePerMin int
 	LogLevel         string
 	LogFormat        string
-	ProcessInterval  time.Duration
-	ProcessBatch     int
 
-	// Data lifecycle + observability.
+	// Data lifecycle.
 	//
 	// RetentionDays is the age cap for events in days. 0 disables the retention
 	// runner entirely (useful for operators who ship events to another store and
 	// don't want MVP's default 30-day window). Default 30.
 	RetentionDays int
-	// RetentionInterval is how often the retention runner wakes up. Default 1h.
-	RetentionInterval time.Duration
-
-	// Process-tree freshness TTL (issue #6).
-	//
-	// StaleProcessTTL is the fork-time age past which a still-running
-	// process is force-exited by the reconciler. 0 disables the runner.
-	// Default 6h: long enough to cover normal analyst-session work but
-	// short enough that overnight greens are gone by morning.
-	StaleProcessTTL time.Duration
-	// StaleProcessInterval is how often the process-TTL reconciler runs.
-	// Default 10m.
-	StaleProcessInterval time.Duration
 
 	// LaunchAgentAllowlist is the set of plist paths the `persistence_launchagent` rule should silently accept. Populated from
 	// EDR_LAUNCHAGENT_ALLOWLIST (comma-separated absolute paths). Empty by default: every plist load fires.
@@ -123,27 +111,11 @@ type Config struct {
 	// see spec server-detection-rules-engine/operator-toggling-of-individual-rules for the boot-time contract.
 	DisabledRuleIDs []string
 
-	// HostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. Populated from
-	// EDR_HOST_TOKEN_LIFETIME. Default 60m: short enough that a leaked token has bounded value, long enough that refresh traffic is
-	// negligible.
-	HostTokenLifetime time.Duration
-
 	// TrustedProxies is the set of CIDRs (or bare IPs) the server will trust X-Forwarded-For from. Populated from EDR_TRUSTED_PROXIES
 	// (comma-separated). Empty by default: XFF is ignored and the per-IP rate limiter + audit log see the direct TCP peer (issue #81).
 	// Set this to your reverse proxy / load-balancer pool the moment you put an ALB / nginx / Cloudflare in front of fleet-edr-server,
 	// or one user hitting the rate limit will lock out everyone behind the proxy.
 	TrustedProxies []string
-
-	// AuditReadSampling is the inclusion probability (0.0-1.0) the chokepoint applies to read-action allow events before submitting
-	// them to the async writer. Default 0.0 (audit zero non-carve-out read-allow events). Operators set EDR_AUDIT_READ_SAMPLING=1.0 to
-	// keep the wave-1 historical behavior of auditing every decision. Carve-outs ALWAYS audit regardless of rate: break-glass actor +
-	// ActionAuditRead (the audit-of-audit row).
-	AuditReadSampling float64
-
-	// AuditAsyncQueueCap sizes the bounded buffer in the async audit writer. Default 8192 (~minutes of read-burst headroom at wave-1
-	// volumes). Larger reduces drop probability under burst at the cost of more memory; smaller catches a queue-leak earlier. Populated
-	// from EDR_AUDIT_ASYNC_QUEUE_CAP. Zero -> use the package default.
-	AuditAsyncQueueCap int
 
 	// OIDC authentication configuration. When OIDCIssuer is non-empty, the server enables the OIDC sign-in flow at /api/auth/login +
 	// /api/auth/callback. When OIDCIssuer is empty, the server refuses to start unless AuthAllowNoOIDC=true (which lets dev workflows run
@@ -152,9 +124,6 @@ type Config struct {
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL  string
-	// OIDCScopes are the scopes requested at AuthURL time. Default is [openid, email, profile] which gives the verifier the claims it
-	// needs (sub, email, name) without leaking unused permissions. Wave-2 will add `groups` for role mapping.
-	OIDCScopes []string
 	// OIDCAllowJITProvisioning controls whether a successful OIDC sign-in by an unknown subject creates a user + identity + default role
 	// binding. true = create on first sign-in (recommended for most deployments); false = require an admin to pre-provision the user.
 	// Default true.
@@ -163,9 +132,6 @@ type Config struct {
 	// the identity context's default (`analyst`). Must name a seeded role. Lets a deployment land SSO users at a higher role without
 	// per-user pre-provisioning (the docker demo uses it to land its single SSO user at `admin`).
 	OIDCDefaultRole string
-	// OIDCStateCookieTTL bounds how long the signed state cookie (carrying state + nonce + PKCE verifier) stays valid. Defaults to 5m;
-	// tune up for slow IdPs / MFA prompts.
-	OIDCStateCookieTTL time.Duration
 
 	// AuthAllowNoOIDC is the dedicated dev flag that lets the server boot in break-glass-only mode (no OIDC). Default false:
 	// production deployments without OIDC config refuse to start with an explicit error pointing the operator at the missing
@@ -174,7 +140,7 @@ type Config struct {
 	AuthAllowNoOIDC bool
 
 	// SecretKey is the deployment root secret. Every long-lived server-side key is derived from it via HKDF (internal/keyring) under a
-	// versioned domain-separation label: the host-token signing key and the pre-auth cookie signing key (OIDC state + break-glass
+	// versioned domain-separation label: the host-token HMAC pepper and the pre-auth cookie signing key (OIDC state + break-glass
 	// challenge) are both derived, so a deployment provisions one secret rather than one per purpose. Populated from EDR_SECRET_KEY (or
 	// EDR_SECRET_KEY_FILE for docker-secret mounts). Always required; validated at boot to be at least 32 bytes. Changing it invalidates
 	// every existing host token (a breaking, operator-initiated fleet-wide re-enroll).
@@ -193,9 +159,6 @@ type Config struct {
 	// the registrable host portion of the EDR UI URL without scheme (e.g. "edr.example.com"). Required when the break-glass surface is
 	// enabled; changing it post-deploy invalidates every registered credential.
 	BreakglassRPID string
-	// BreakglassRPDisplayName is the operator-visible name shown by the browser during authenticator enrollment. Defaults to "EDR
-	// Break-glass" if unset.
-	BreakglassRPDisplayName string
 	// BreakglassRPOrigins enumerates the absolute URLs the RP accepts in the authenticator's origin attestation. At least one is required
 	// when the break-glass surface is enabled; production typically pins the externally reachable HTTPS URL.
 	BreakglassRPOrigins []string
@@ -226,29 +189,6 @@ type Config struct {
 	ReauthWindow time.Duration
 }
 
-// composeDSN builds a go-sql-driver DSN from discrete EDR_MYSQL_* parts, or returns "" if any required part is missing. The parts
-// mirror the values a PaaS blueprint can wire from a managed/bundled MySQL service (host:port + generated user/password/db). It
-// goes through go-sql-driver's Config.FormatDSN rather than fmt.Sprintf so a generated password containing DSN metacharacters
-// (`@`, `:`, `/`, `?`) is escaped instead of corrupting the DSN. PaaS blueprints generate such passwords routinely, so naive
-// string interpolation would intermittently brick boot (the same round-trip rationale as testdb's replaceDBName).
-func composeDSN(getenv func(string) string) string {
-	addr := getenv("EDR_MYSQL_ADDRESS")
-	user := getenv("EDR_MYSQL_USERNAME")
-	pass := getenv("EDR_MYSQL_PASSWORD")
-	db := getenv("EDR_MYSQL_DATABASE")
-	if addr == "" || user == "" || pass == "" || db == "" {
-		return ""
-	}
-	dc := mysqldriver.NewConfig()
-	dc.User = user
-	dc.Passwd = pass
-	dc.Net = "tcp"
-	dc.Addr = addr
-	dc.DBName = db
-	dc.ParseTime = true
-	return dc.FormatDSN()
-}
-
 // TLSEnabled reports whether the server terminates TLS itself (cert and key both set).
 func (c Config) TLSEnabled() bool {
 	return c.TLSCertFile != "" && c.TLSKeyFile != ""
@@ -267,18 +207,10 @@ func defaults() Config {
 		ListenAddr:               ":8088",
 		LogLevel:                 "info",
 		LogFormat:                "json",
-		ProcessInterval:          defaultProcessInterval,
-		ProcessBatch:             defaultProcessBatch,
 		EnrollRatePerMin:         defaultEnrollRatePerMin,
 		RetentionDays:            defaultRetentionDays,
-		RetentionInterval:        time.Hour,
-		StaleProcessTTL:          defaultStaleProcessTTL,
-		StaleProcessInterval:     defaultStaleProcessInterval,
-		HostTokenLifetime:        defaultHostTokenLifetime,
 		ShutdownDrain:            defaultShutdownDrain,
-		OIDCScopes:               []string{"openid", "email", "profile"},
 		OIDCAllowJITProvisioning: true,
-		OIDCStateCookieTTL:       defaultOIDCStateCookieTTL,
 	}
 }
 
@@ -296,12 +228,11 @@ func Load() (*Config, error) {
 // loadFrom is the testable core of Load; it takes a lookup function so tests can provide a fake env.
 //
 // The function fan-outs to per-section helpers (loadCoreEnv,
-// loadTLSConfig, loadRateLimits, loadHostTokenConfig, loadAllowlists,
-// loadLogConfig, loadProcessConfig) so the parent stays at a
-// cognitive complexity Sonar's S3776 rule accepts. Order between
-// helpers is preserved: TLS validation depends on the certificate
-// paths the core helper read; the host-token cross-field check
-// depends on both durations being parsed first.
+// loadTLSConfig, loadRateLimits, loadAllowlists, loadLogConfig,
+// loadOIDCConfig, loadBreakglassConfig, loadSessionTimeouts) so the
+// parent stays at a cognitive complexity Sonar's S3776 rule accepts.
+// Order between helpers is preserved: TLS validation depends on the
+// certificate paths the core helper read.
 func loadFrom(getenv func(string) string) (*Config, error) {
 	c := defaults()
 	var errs []error
@@ -310,10 +241,8 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	loadSecretKey(&c, getenv, &errs)
 	loadTLSConfig(&c, &errs)
 	loadRateLimits(&c, getenv, &errs)
-	loadHostTokenConfig(&c, getenv, &errs)
 	loadAllowlists(&c, getenv)
 	loadLogConfig(&c, getenv, &errs)
-	loadProcessConfig(&c, getenv, &errs)
 	loadOIDCConfig(&c, getenv, &errs)
 	loadBreakglassConfig(&c, getenv, &errs)
 	loadSessionTimeouts(&c, getenv, &errs)
@@ -327,30 +256,22 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 // loadCoreEnv reads required strings + scalar feature flags. The TLS certificate paths land here too because they're optionalStr;
 // their cross-field validation runs in loadTLSConfig once both sides are known.
 func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
-	// EDR_DSN is the canonical single-string DSN. When it is empty, compose one from discrete parts
-	// (EDR_MYSQL_ADDRESS/USERNAME/PASSWORD/DATABASE). Some PaaS blueprints (Fly, ECS, and similar) hand the DB host:port and a
-	// generated password to separate env vars and cannot interpolate them into one DSN string, so the compose-from-parts path is
-	// what makes a one-click blueprint work. An explicit EDR_DSN always wins.
+	// EDR_DSN is the canonical MySQL DSN; it is the only supported way to point the server at its database (use EDR_DSN_FILE for
+	// docker-secret mounts). A generated password containing DSN metacharacters must be URL-encoded by the operator before it goes
+	// into the DSN string.
 	optionalStr(&c.DSN, "EDR_DSN", getenv)
 	if c.DSN == "" {
-		c.DSN = composeDSN(getenv)
-	}
-	if c.DSN == "" {
-		*errs = append(*errs, errors.New(
-			"EDR_DSN is required (or supply EDR_MYSQL_ADDRESS + EDR_MYSQL_USERNAME + EDR_MYSQL_PASSWORD + EDR_MYSQL_DATABASE)"))
+		*errs = append(*errs, errors.New("EDR_DSN is required (use EDR_DSN_FILE for docker-secret mounts)"))
 	}
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
 	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, errs, true)
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)
 
-	c.AllowTLS12 = getenv("EDR_TLS_ALLOW_TLS12") == "1"
 	c.TLSTerminatedByProxy = getenv("EDR_TLS_TERMINATED_BY_PROXY") == "1"
 	// NonNegative (not Positive): 0 is the documented "disable the drain wait" sentinel. RunAndShutdown skips the drain phase and
 	// shuts down immediately. Integration + single-process tests set EDR_SHUTDOWN_DRAIN=0 so they don't sleep the drain window.
 	envparse.NonNegativeDuration(getenv, "EDR_SHUTDOWN_DRAIN", &c.ShutdownDrain, errs)
-	envparse.UnitFraction(getenv, "EDR_AUDIT_READ_SAMPLING", &c.AuditReadSampling, errs)
-	envparse.NonNegativeInt(getenv, "EDR_AUDIT_ASYNC_QUEUE_CAP", &c.AuditAsyncQueueCap, errs)
 
 	if v := getenv("EDR_TRUSTED_PROXIES"); v != "" {
 		c.TrustedProxies = splitCSV(v)
@@ -358,11 +279,11 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 }
 
 // secretKeyMinBytes is the floor for EDR_SECRET_KEY. 32 bytes matches the HKDF-SHA256 output width every derived key uses; a shorter
-// root would cap the entropy of the host-token signing key and the cookie signing key regardless of their requested length.
+// root would cap the entropy of the host-token pepper and the cookie signing key regardless of their requested length.
 const secretKeyMinBytes = 32
 
 // loadSecretKey reads + validates the deployment root secret. Unlike the OIDC signing key it replaces, it is required unconditionally:
-// the host-token signing key derives from it and host tokens are used by every deployment, OIDC or not. The EDR_SECRET_KEY_FILE
+// the host-token HMAC pepper derives from it and host tokens are used by every deployment, OIDC or not. The EDR_SECRET_KEY_FILE
 // docker-secret sibling is honored transparently by the FileBackedGetenv wrapper.
 func loadSecretKey(c *Config, getenv func(string) string, errs *[]error) {
 	v := getenv("EDR_SECRET_KEY")
@@ -406,21 +327,11 @@ func loadTLSConfig(c *Config, errs *[]error) {
 	}
 }
 
-// loadRateLimits parses the per-minute throttles for enroll + login alongside the retention/process-reconciler windows. All but
-// retention require strictly-positive values; retention permits 0 as the documented "disable" sentinel.
+// loadRateLimits parses the per-minute enrollment throttle alongside the retention window. Enroll rate must be strictly positive;
+// retention permits 0 as the documented "disable" sentinel.
 func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, errs)
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, errs)
-	envparse.PositiveDuration(getenv, "EDR_RETENTION_INTERVAL", &c.RetentionInterval, errs)
-	envparse.NonNegativeDuration(getenv, "EDR_STALE_PROCESS_TTL", &c.StaleProcessTTL, errs)
-	envparse.PositiveDuration(getenv, "EDR_STALE_PROCESS_INTERVAL", &c.StaleProcessInterval, errs)
-}
-
-// loadHostTokenConfig parses the host-token lifetime. Under the self-validating-token model there is no rotation grace window: the
-// agent pulls a fresh token before expiry, and credential cycling is an epoch bump that takes effect once the revocation snapshot
-// catches up, not a rotate-with-grace. Lifetime must be positive when set; zero falls back to the service default.
-func loadHostTokenConfig(c *Config, getenv func(string) string, errs *[]error) {
-	envparse.PositiveDuration(getenv, "EDR_HOST_TOKEN_LIFETIME", &c.HostTokenLifetime, errs)
 }
 
 // loadAllowlists reads each detection-rule allowlist env var. Each is
@@ -462,13 +373,6 @@ func loadLogConfig(c *Config, getenv func(string) string, errs *[]error) {
 	}
 }
 
-// loadProcessConfig parses the detection processor cadence knobs. Interval must be strictly positive (processor.Run feeds it into
-// time.NewTicker which panics on non-positive values); batch must be strictly positive (a zero-batch loop spins).
-func loadProcessConfig(c *Config, getenv func(string) string, errs *[]error) {
-	envparse.PositiveDuration(getenv, "EDR_PROCESS_INTERVAL", &c.ProcessInterval, errs)
-	envparse.PositiveInt(getenv, "EDR_PROCESS_BATCH", &c.ProcessBatch, errs)
-}
-
 // loadOIDCConfig parses the Phase-4 authentication knobs and enforces the "OIDC required unless explicitly opted out" gate.
 // When EDR_OIDC_ISSUER is non-empty, the rest of the config block is validated as a coherent set; missing client_id / redirect URL
 // surfaces a focused error. When EDR_OIDC_ISSUER is empty, the gate requires EDR_AUTH_ALLOW_NO_OIDC=1 so dev workflows can opt into
@@ -479,7 +383,6 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 	optionalStr(&c.OIDCClientSecret, "EDR_OIDC_CLIENT_SECRET", getenv)
 	optionalStr(&c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL", getenv)
 	parseOIDCOverrides(c, getenv, errs)
-	envparse.PositiveDuration(getenv, "EDR_OIDC_STATE_COOKIE_TTL", &c.OIDCStateCookieTTL, errs)
 	c.AuthAllowNoOIDC = getenv("EDR_AUTH_ALLOW_NO_OIDC") == "1"
 	enforceOIDCGate(c, errs)
 }
@@ -490,18 +393,9 @@ func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
 // error instead of an opaque foreign-key failure on the first SSO sign-in.
 var builtinRoleIDs = []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}
 
-// parseOIDCOverrides reads the optional override env vars (EDR_OIDC_SCOPES, EDR_OIDC_ALLOW_JIT_PROVISIONING) onto c. Pulled out so
-// loadOIDCConfig stays under the cognitive-complexity budget.
+// parseOIDCOverrides reads the optional override env vars (EDR_OIDC_ALLOW_JIT_PROVISIONING, EDR_OIDC_DEFAULT_ROLE) onto c. Pulled out
+// so loadOIDCConfig stays under the cognitive-complexity budget.
 func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
-	if v := getenv("EDR_OIDC_SCOPES"); v != "" {
-		c.OIDCScopes = splitCSV(v)
-		// openid is mandatory for the discovery + ID-token flow; an override that drops it leaves the operator with a worse failure mode
-		// (token endpoint succeeds, ID-token absent at callback) than a startup refusal.
-		if !slices.Contains(c.OIDCScopes, "openid") {
-			*errs = append(*errs, errors.New(
-				"EDR_OIDC_SCOPES must include \"openid\" (the OIDC core scope)"))
-		}
-	}
 	if v := getenv("EDR_OIDC_ALLOW_JIT_PROVISIONING"); v != "" {
 		c.OIDCAllowJITProvisioning = v == "1"
 	}
@@ -597,7 +491,6 @@ func loadBreakglassConfig(c *Config, getenv func(string) string, errs *[]error) 
 		c.BreakglassIPAllowlist = splitCSV(v)
 	}
 	optionalStr(&c.BreakglassRPID, "EDR_BREAKGLASS_RP_ID", getenv)
-	optionalStr(&c.BreakglassRPDisplayName, "EDR_BREAKGLASS_RP_DISPLAY_NAME", getenv)
 	if v := getenv("EDR_BREAKGLASS_RP_ORIGINS"); v != "" {
 		c.BreakglassRPOrigins = splitCSV(v)
 	}

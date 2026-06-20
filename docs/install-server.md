@@ -211,11 +211,9 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTPS server binds |
 | `EDR_TLS_CERT_FILE` | **yes** | none | PEM cert. Required unless `EDR_TLS_TERMINATED_BY_PROXY=1`; the server has no _unguarded_ plaintext-HTTP mode (issue #140) |
 | `EDR_TLS_KEY_FILE` | **yes** | none | PEM key (pair with cert) |
-| `EDR_TLS_ALLOW_TLS12` | no | 0 | Allow TLS 1.2 (default is 1.3-only) |
 | `EDR_SHUTDOWN_DRAIN` | no | 30s | On SIGTERM the server reports `/readyz` 503 and keeps serving for this long before closing the listener, so a load balancer drains the replica from rotation first. 0 disables the wait (immediate shutdown) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
 | `EDR_RETENTION_DAYS` | no | 30 | Event TTL, 0 disables retention |
-| `EDR_RETENTION_INTERVAL` | no | 1h | How often the retention job runs |
 | `EDR_LAUNCHAGENT_ALLOWLIST` | no | none | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
 | `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | none | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
 | `EDR_SUDOERS_WRITER_ALLOWLIST` | no | none | Comma-separated writer-process absolute paths the `sudoers_tamper` rule treats as benign; alerts may surface either `/etc/sudoers...` or `/private/etc/sudoers...` because `/etc` is a symlink and ES reports the path as opened |
@@ -226,7 +224,6 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_SECRET_KEY` / `EDR_SECRET_KEY_FILE` | yes | none | Deployment root secret (≥ 32 bytes). Every long-lived server-side key derives from it via HKDF: the host-token HMAC pepper and the cookie signing key (OIDC state cookie + WebAuthn registration session). Required on every boot. Rotating it invalidates every host token (fleet-wide re-enroll) plus every session and in-flight ceremony; see [operations.md](operations.md#edr-root-secret) |
 | `EDR_BREAKGLASS_RP_ID` | yes in prod | none | WebAuthn relying-party identifier (registrable host, no scheme, no port). Changing post-deploy invalidates every registered credential. See [breakglass.md](breakglass.md#configuration) |
 | `EDR_BREAKGLASS_RP_ORIGINS` | yes in prod | none | Comma-separated absolute URLs accepted as the WebAuthn origin (e.g. `https://edr.example.com`). See [breakglass.md](breakglass.md#configuration) |
-| `EDR_BREAKGLASS_RP_DISPLAY_NAME` | no | `EDR Break-glass` | Operator-visible name shown during authenticator enrollment |
 | `EDR_BREAKGLASS_BOOTSTRAP_TOKEN_TTL` | no | 1h | Go duration. Lifetime of the first-boot redemption URL |
 | `EDR_BREAKGLASS_IP_ALLOWLIST` | no | none | Comma-separated CIDR list gating `/admin/break-glass*`. Off-list callers get a 404 |
 | `EDR_SESSION_IDLE_TIMEOUT` | no | 8h | Inactivity cap for OIDC-minted sessions. Sliding window on last_seen_at |

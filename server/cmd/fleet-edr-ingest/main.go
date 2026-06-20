@@ -13,6 +13,7 @@ import (
 
 	"github.com/fleetdm/edr/internal/keyring"
 	"github.com/fleetdm/edr/server/bootstrap"
+	"github.com/fleetdm/edr/server/config"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/httpserver"
@@ -116,7 +117,7 @@ func run() error {
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),
-		HostTokenLifetime:   cfg.HostTokenLifetime,
+		HostTokenLifetime:   config.DefaultHostTokenLifetime,
 		HostTokenSigningKey: kr.Derive(keyring.HostTokenSigningLabel),
 	})
 	if err != nil {
@@ -165,10 +166,9 @@ func run() error {
 		logger.WarnContext(ctx, "ingest serving plaintext HTTP: EDR_TLS_TERMINATED_BY_PROXY=1 is set; only safe behind a "+
 			"TLS-terminating proxy", "listen_addr", cfg.ListenAddr)
 	} else if err := httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
-		CertFile:   cfg.TLSCertFile,
-		KeyFile:    cfg.TLSKeyFile,
-		AllowTLS12: cfg.AllowTLS12,
-		Logger:     logger,
+		CertFile: cfg.TLSCertFile,
+		KeyFile:  cfg.TLSKeyFile,
+		Logger:   logger,
 	}); err != nil {
 		return err
 	}
