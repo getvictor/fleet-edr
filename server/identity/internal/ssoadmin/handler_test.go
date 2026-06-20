@@ -16,23 +16,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeStore is an in-memory configStore (read side). cfg nil => ErrNotFound.
-type fakeStore struct{ cfg *ssoconfig.Config }
+// fakeStore is an in-memory configStore (read side). cfg nil => ErrNotFound; err overrides with an arbitrary failure.
+type fakeStore struct {
+	cfg *ssoconfig.Config
+	err error
+}
 
 func (f *fakeStore) Get(context.Context) (*ssoconfig.Config, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.cfg == nil {
 		return nil, ssoconfig.ErrNotFound
 	}
 	return f.cfg, nil
 }
 
-// fakeAppCfg is an in-memory appConfigStore (read side).
+// fakeAppCfg is an in-memory appConfigStore (read side). err overrides with an arbitrary failure.
 type fakeAppCfg struct {
 	cfg     appconfig.AppConfig
 	version int64
+	err     error
 }
 
 func (f *fakeAppCfg) Get(context.Context) (appconfig.AppConfig, int64, error) {
+	if f.err != nil {
+		return appconfig.AppConfig{}, 0, f.err
+	}
 	return f.cfg, f.version, nil
 }
 
@@ -272,5 +282,119 @@ func TestHandleTestConnection(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.OK)
 		assert.Contains(t, resp.Reason, "unreachable")
+	})
+}
+
+// --- error / edge branch coverage -------------------------------------------------
+
+func errStore() *fakeStore   { return &fakeStore{err: errors.New("boom")} }
+func errAppCfg() *fakeAppCfg { return &fakeAppCfg{err: errors.New("boom")} }
+func okStoreCfg() *fakeStore {
+	return &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp", ClientID: "cid"}}
+}
+func validUpdateBody() updateRequest {
+	return updateRequest{Issuer: "https://idp.example.com", ClientID: "cid", ExternalURL: "https://edr.example.com", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst"}
+}
+
+func TestHandleGet_storeErrorsAre500(t *testing.T) {
+	t.Parallel()
+	t.Run("app config read error", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(&fakeStore{}, errAppCfg(), noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+	t.Run("oidc config read error", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(errStore(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+}
+
+func TestHandleUpdate_errorBranches(t *testing.T) {
+	t.Parallel()
+	t.Run("no actor on context is 500", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		// Marshal through `any` so gosec G117 doesn't flag the concrete client_secret field (the fixture carries no real secret).
+		var body any = validUpdateBody()
+		b, _ := json.Marshal(body)
+		// No withActor wrapper, so ActorFromContext fails.
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/x", strings.NewReader(string(b)))
+		w := httptest.NewRecorder()
+		h.handleUpdate(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+	t.Run("app config read error is 500", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(okStoreCfg(), errAppCfg(), noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleUpdate(w, putReq(t, validUpdateBody()))
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+	t.Run("apply generic error is 500", func(t *testing.T) {
+		t.Parallel()
+		ap := &captureApply{err: errors.New("tx failed")}
+		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleUpdate(w, putReq(t, validUpdateBody()))
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+	t.Run("invalid json is 400", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		req := withActor(httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/x", strings.NewReader("{not json")), 42)
+		w := httptest.NewRecorder()
+		h.handleUpdate(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "invalid_json")
+	})
+	t.Run("oversized body is 413", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		big := strings.Repeat("a", (1<<16)+10)
+		req := withActor(httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/x", strings.NewReader(big)), 42)
+		w := httptest.NewRecorder()
+		h.handleUpdate(w, req)
+		assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	})
+	t.Run("nil audit recorder does not panic", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, nil, okProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleUpdate(w, putReq(t, validUpdateBody()))
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+}
+
+func TestHandleTestConnection_storedIssuerAndErrors(t *testing.T) {
+	t.Parallel()
+	t.Run("empty issuer unconfigured is 400 no_issuer", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{}`)))
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "no_issuer")
+	})
+	t.Run("empty issuer falls back to stored", func(t *testing.T) {
+		t.Parallel()
+		probed := ""
+		h := NewHandler(okStoreCfg(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{},
+			func(_ context.Context, issuer string) error { probed = issuer; return nil }, nil)
+		w := httptest.NewRecorder()
+		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{}`)))
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "https://idp", probed, "falls back to the stored issuer")
+	})
+	t.Run("stored read error is 500", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(errStore(), &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{}`)))
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
