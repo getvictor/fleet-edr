@@ -157,7 +157,7 @@
         "coalesced_count": {
           "type": "integer",
           "minimum": 1,
-          "description": "Optional. Number of occurrences this representative event stands for after agent-side coalescing (issue #408). The agent collapses repeated identical 5-tuples (pid, pidversion, protocol, direction, remote_address, remote_port) seen within EDR_NETWORK_COALESCE_WINDOW into one event. Absent or 1 means a single occurrence. The envelope timestamp_ns is the earliest occurrence."
+          "description": "Optional. Number of occurrences this representative event stands for after agent-side coalescing (issue #408). The agent collapses repeated identical 5-tuples (pid, pidversion, protocol, direction, remote_address, remote_port) seen within the agent's coalescing window into one event. Absent or 1 means a single occurrence. The envelope timestamp_ns is the earliest occurrence."
         },
         "last_timestamp_ns": {
           "type": "integer",
@@ -177,7 +177,7 @@
         "response_addresses": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Resolved addresses. After agent-side coalescing (issue #408) this is the union of every address observed across the merged queries for the same (pid, pidversion, query_name, query_type) within EDR_NETWORK_COALESCE_WINDOW, so a later connection to any resolved address still correlates."
+          "description": "Resolved addresses. After agent-side coalescing (issue #408) this is the union of every address observed across the merged queries for the same (pid, pidversion, query_name, query_type) within the agent's coalescing window, so a later connection to any resolved address still correlates."
         },
         "protocol": { "type": "string", "enum": ["udp", "tcp"] },
         "pidversion": {
@@ -188,7 +188,7 @@
         "coalesced_count": {
           "type": "integer",
           "minimum": 1,
-          "description": "Optional. Number of occurrences this representative event stands for after agent-side coalescing (issue #408). The agent collapses repeated lookups for the same (pid, pidversion, query_name, query_type) seen within EDR_NETWORK_COALESCE_WINDOW into one event, merging a query with its follow-on response. Absent or 1 means a single occurrence. The envelope timestamp_ns is the earliest occurrence."
+          "description": "Optional. Number of occurrences this representative event stands for after agent-side coalescing (issue #408). The agent collapses repeated lookups for the same (pid, pidversion, query_name, query_type) seen within the agent's coalescing window into one event, merging a query with its follow-on response. Absent or 1 means a single occurrence. The envelope timestamp_ns is the earliest occurrence."
         },
         "last_timestamp_ns": {
           "type": "integer",

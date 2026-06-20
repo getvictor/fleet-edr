@@ -4,9 +4,8 @@
 // adding security signal. ShouldSampleRead is the gate the chokepoint
 // consults before submitting a read-allow event to the async writer.
 //
-// Default rate is 0.0 (audit zero non-breakglass read-allow events);
-// operators set EDR_AUDIT_READ_SAMPLING=1.0 to keep the wave-1
-// audit-everything behavior.
+// The rate is fixed at 0.0 (audit zero non-breakglass read-allow
+// events) and is no longer operator-tunable.
 //
 // Carve-outs preserved regardless of rate:
 //   - Break-glass actor: every action is audited at the chokepoint

@@ -142,7 +142,7 @@ func run() error {
 		go refresher.RunRefresh(ctx)
 	}
 
-	q, err := queue.Open(ctx, cfg.QueueDBPath, queue.Options{MaxBytes: cfg.QueueMaxBytes, Logger: logger})
+	q, err := queue.Open(ctx, cfg.QueueDBPath, queue.Options{MaxBytes: config.DefaultQueueMaxBytes, Logger: logger})
 	if err != nil {
 		logger.ErrorContext(ctx, "open queue", "err", err)
 		return err
@@ -163,8 +163,8 @@ func run() error {
 		ServerURL:  cfg.ServerURL,
 		TokenFn:    tokenProvider.Token,
 		OnAuthFail: tokenProvider.OnUnauthorized,
-		BatchSize:  cfg.BatchSize,
-		Interval:   cfg.UploadInterval,
+		BatchSize:  config.DefaultBatchSize,
+		Interval:   config.DefaultUploadInterval,
 		MaxRetries: uploaderMaxRetries,
 	}, httpClient, logger)
 	up.SetMetrics(rec)
@@ -176,7 +176,7 @@ func run() error {
 
 	// coalescer collapses repetitive network_connect / dns_query telemetry within a window before enqueue (issue #408). A zero
 	// window disables it (Handle is a direct passthrough, Run just waits on ctx), so it can be wired unconditionally.
-	coalescer := coalesce.New(cfg.NetworkCoalesceWindow, q.Enqueue, logger)
+	coalescer := coalesce.New(config.DefaultNetworkCoalesceWindow, q.Enqueue, logger)
 	go coalescer.Run(ctx)
 
 	pidTable := proctable.New()
@@ -188,7 +188,7 @@ func run() error {
 	go runUploader(ctx, up, logger)
 
 	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, logger)
-	go pruneLoop(ctx, q, cfg.PruneAge, logger)
+	go pruneLoop(ctx, q, config.DefaultPruneAge, logger)
 	startProcessReconciler(ctx, cfg, pidTable, q, tokenProvider, logger)
 
 	<-ctx.Done()

@@ -26,26 +26,29 @@ const (
 	defaultNetXPCService = "group.com.fleetdm.edr.networkextension"
 	defaultQueueDBPath   = "/var/db/fleet-edr/events.db"
 
-	// defaultPruneAge is the default for EDR_PRUNE_AGE: drop uploaded events
-	// older than 24h from the local SQLite queue.
-	defaultPruneAge = 24 * time.Hour
+	// DefaultPruneAge drops uploaded events older than 24h from the local SQLite queue. Wired into the prune loop at boot (no longer
+	// an env knob).
+	DefaultPruneAge = 24 * time.Hour
 
 	// defaultProcessReconcileInterval is the default for EDR_PROCESS_RECONCILE_INTERVAL: how often the agent sweeps its proctable for
 	// missed exit events. 60s tracks the server's freshness reconciler but is closer to ground truth on a single host.
 	defaultProcessReconcileInterval = 60 * time.Second
 
-	// defaultQueueMaxBytes is the default soft cap for the agent's SQLite
-	// queue (500 MiB). Operators set EDR_AGENT_QUEUE_MAX_BYTES=0 to disable.
-	defaultQueueMaxBytes = 500 * 1024 * 1024
+	// DefaultQueueMaxBytes is the soft cap for the agent's SQLite queue (500 MiB). Wired into the queue at boot (no longer an env knob).
+	DefaultQueueMaxBytes = 500 * 1024 * 1024
 
-	// defaultNetworkCoalesceWindow is the default for EDR_NETWORK_COALESCE_WINDOW: the window over which the agent collapses
-	// repetitive network_connect / dns_query telemetry into one representative event before enqueue (issue #408). 10s cuts most
-	// repetitive chatter while staying well under the 30s DNS-to-connect beacon-correlation window so a representative can never be
-	// pushed outside it. 0 disables coalescing.
-	defaultNetworkCoalesceWindow = 10 * time.Second
+	// DefaultNetworkCoalesceWindow is the window over which the agent collapses repetitive network_connect / dns_query telemetry into
+	// one representative event before enqueue (issue #408). 10s cuts most repetitive chatter while staying well under the 30s
+	// DNS-to-connect beacon-correlation window, so a representative can never be pushed outside it; that invariant is why the window is
+	// a fixed constant rather than an operator knob. Wired into the coalescer at boot.
+	DefaultNetworkCoalesceWindow = 10 * time.Second
 
-	// defaultBatchSize is the default upload batch size.
-	defaultBatchSize = 100
+	// DefaultBatchSize is the upload batch size. Wired into the uploader at boot (no longer an env knob).
+	DefaultBatchSize = 100
+
+	// DefaultUploadInterval is how often the uploader drains the queue to the server. Wired into the uploader at boot (no longer an
+	// env knob).
+	DefaultUploadInterval = time.Second
 )
 
 // Config is the resolved agent configuration.
@@ -56,14 +59,9 @@ type Config struct {
 	ServerFingerprint        string
 	HostIDOverride           string
 	QueueDBPath              string
-	QueueMaxBytes            int64 // EDR_AGENT_QUEUE_MAX_BYTES; default 500 MiB, 0 = unbounded
 	XPCService               string
 	NetXPCService            string
-	BatchSize                int
-	UploadInterval           time.Duration
-	PruneAge                 time.Duration
 	ProcessReconcileInterval time.Duration // EDR_PROCESS_RECONCILE_INTERVAL; default 60s, 0 disables.
-	NetworkCoalesceWindow    time.Duration // EDR_NETWORK_COALESCE_WINDOW; default 10s, 0 disables.
 	LogLevel                 string
 	LogFormat                string
 	AllowInsecure            bool
@@ -96,14 +94,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	c := Config{
 		TokenFile:                "/var/db/fleet-edr/enrolled.plist",
 		QueueDBPath:              defaultQueueDBPath,
-		QueueMaxBytes:            defaultQueueMaxBytes,
 		XPCService:               defaultXPCService,
 		NetXPCService:            defaultNetXPCService,
-		BatchSize:                defaultBatchSize,
-		UploadInterval:           time.Second,
-		PruneAge:                 defaultPruneAge,
 		ProcessReconcileInterval: defaultProcessReconcileInterval,
-		NetworkCoalesceWindow:    defaultNetworkCoalesceWindow,
 		LogLevel:                 "info",
 		LogFormat:                "json",
 	}
@@ -128,20 +121,9 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	optional(&c.XPCService, "EDR_XPC_SERVICE", getenv)
 	optional(&c.NetXPCService, "EDR_NET_XPC_SERVICE", getenv)
 
-	envparse.PositiveInt(getenv, "EDR_BATCH_SIZE", &c.BatchSize, &errs)
-	// uploader.Run feeds UploadInterval into time.NewTicker, which panics on non-positive values.
-	envparse.PositiveDuration(getenv, "EDR_UPLOAD_INTERVAL", &c.UploadInterval, &errs)
-	// A zero or negative prune age computes a future cutoff and deletes nearly every uploaded
-	// row; outright reject.
-	envparse.PositiveDuration(getenv, "EDR_PRUNE_AGE", &c.PruneAge, &errs)
 	// 0 disables the agent-side process-tree reconciliation loop entirely (issue #6 client half): useful for narrow QA where synthetic
 	// exits would distort what a clean ESF feed looks like. Negative values are rejected.
 	envparse.NonNegativeDuration(getenv, "EDR_PROCESS_RECONCILE_INTERVAL", &c.ProcessReconcileInterval, &errs)
-	// EDR_NETWORK_COALESCE_WINDOW: non-negative; 0 disables coalescing. Default set above.
-	envparse.NonNegativeDuration(getenv, "EDR_NETWORK_COALESCE_WINDOW", &c.NetworkCoalesceWindow, &errs)
-	// EDR_AGENT_QUEUE_MAX_BYTES: positive int for cap, 0 to disable. Default 500 MiB is set above and applies when the env var is unset;
-	// setting it explicitly to 0 restores the pre-Phase-4 unbounded behaviour for benchmarking or recovery.
-	envparse.NonNegativeInt64(getenv, "EDR_AGENT_QUEUE_MAX_BYTES", &c.QueueMaxBytes, &errs)
 
 	if v := getenv("EDR_LOG_LEVEL"); v != "" {
 		// Normalize to canonical lowercase so downstream slog handlers see one of the documented

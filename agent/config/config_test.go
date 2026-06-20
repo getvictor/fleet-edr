@@ -4,7 +4,6 @@ import (
 	"maps"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,39 +30,27 @@ func TestLoad(t *testing.T) {
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
 				assert.Equal(t, "https://edr.example.com", c.ServerURL)
-				assert.Equal(t, 100, c.BatchSize)
-				assert.Equal(t, time.Second, c.UploadInterval)
 				assert.Equal(t, "/var/db/fleet-edr/events.db", c.QueueDBPath)
 				assert.Equal(t, "json", c.LogFormat)
-				assert.Equal(t, 10*time.Second, c.NetworkCoalesceWindow, "default network coalesce window")
 			},
 		},
 		{
-			name: "network coalesce window override",
+			// Removed tuning knobs must be inert: setting them (even to unparseable junk the old parsers would have rejected)
+			// must not fail startup. The trimmed agent ignores them and uses the fixed defaults.
+			// spec:agent-configuration/the-agent-configuration-surface-is-intentionally-minimal/a-removed-tuning-variable-is-ignored-at-startup
+			name: "removed tuning variables are inert",
 			env: withExtra(minEnv, map[string]string{
-				"EDR_NETWORK_COALESCE_WINDOW": "30s",
+				"EDR_BATCH_SIZE":              "notanint",
+				"EDR_UPLOAD_INTERVAL":         "soon",
+				"EDR_PRUNE_AGE":               "nope",
+				"EDR_NETWORK_COALESCE_WINDOW": "garbage",
+				"EDR_AGENT_QUEUE_MAX_BYTES":   "xxl",
 			}),
 			validate: func(t *testing.T, c *Config) {
 				t.Helper()
-				assert.Equal(t, 30*time.Second, c.NetworkCoalesceWindow)
+				assert.Equal(t, "https://edr.example.com", c.ServerURL, "kept config unaffected by inert vars")
+				assert.Equal(t, "json", c.LogFormat)
 			},
-		},
-		{
-			name: "network coalesce window zero disables",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_NETWORK_COALESCE_WINDOW": "0",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Equal(t, time.Duration(0), c.NetworkCoalesceWindow)
-			},
-		},
-		{
-			name: "bad network coalesce window rejected",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_NETWORK_COALESCE_WINDOW": "soon",
-			}),
-			wantErr: "EDR_NETWORK_COALESCE_WINDOW",
 		},
 		{
 			name:    "missing server url",
@@ -89,20 +76,6 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name: "bad batch size",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_BATCH_SIZE": "zero",
-			}),
-			wantErr: "EDR_BATCH_SIZE",
-		},
-		{
-			name: "zero batch size rejected",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_BATCH_SIZE": "0",
-			}),
-			wantErr: "must be positive",
-		},
-		{
 			name: "bad log level",
 			env: withExtra(minEnv, map[string]string{
 				"EDR_LOG_LEVEL": "spam",
@@ -115,41 +88,6 @@ func TestLoad(t *testing.T) {
 				"EDR_LOG_FORMAT": "xml",
 			}),
 			wantErr: "EDR_LOG_FORMAT",
-		},
-		{
-			name: "bad upload interval",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_UPLOAD_INTERVAL": "not-a-dur",
-			}),
-			wantErr: "EDR_UPLOAD_INTERVAL",
-		},
-		{
-			name: "zero upload interval rejected (would panic ticker)",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_UPLOAD_INTERVAL": "0s",
-			}),
-			wantErr: `EDR_UPLOAD_INTERVAL="0s" must be positive`,
-		},
-		{
-			name: "negative upload interval rejected",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_UPLOAD_INTERVAL": "-1s",
-			}),
-			wantErr: "must be positive",
-		},
-		{
-			name: "zero prune age rejected (would delete all uploaded events)",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_PRUNE_AGE": "0s",
-			}),
-			wantErr: `EDR_PRUNE_AGE="0s" must be positive`,
-		},
-		{
-			name: "negative prune age rejected",
-			env: withExtra(minEnv, map[string]string{
-				"EDR_PRUNE_AGE": "-1h",
-			}),
-			wantErr: "must be positive",
 		},
 		{
 			name: "invalid server URL rejected",
@@ -199,9 +137,6 @@ func TestLoad(t *testing.T) {
 				"EDR_QUEUE_DB_PATH":   "/tmp/test.db",
 				"EDR_XPC_SERVICE":     "my-xpc",
 				"EDR_NET_XPC_SERVICE": "my-net-xpc",
-				"EDR_BATCH_SIZE":      "250",
-				"EDR_UPLOAD_INTERVAL": "2s",
-				"EDR_PRUNE_AGE":       "48h",
 				"EDR_HOST_ID":         "override-host",
 				"EDR_LOG_LEVEL":       "debug",
 				"EDR_LOG_FORMAT":      "text",
@@ -211,9 +146,6 @@ func TestLoad(t *testing.T) {
 				assert.Equal(t, "/tmp/test.db", c.QueueDBPath)
 				assert.Equal(t, "my-xpc", c.XPCService)
 				assert.Equal(t, "my-net-xpc", c.NetXPCService)
-				assert.Equal(t, 250, c.BatchSize)
-				assert.Equal(t, 2*time.Second, c.UploadInterval)
-				assert.Equal(t, 48*time.Hour, c.PruneAge)
 				assert.Equal(t, "override-host", c.HostIDOverride)
 				assert.Equal(t, "debug", c.LogLevel)
 				assert.Equal(t, "text", c.LogFormat)

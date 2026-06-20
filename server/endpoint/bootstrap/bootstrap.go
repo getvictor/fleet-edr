@@ -54,7 +54,7 @@ type Deps struct {
 	AuthZ identityapi.AuthZ
 
 	// HostTokenLifetime is the TTL of a minted signed host token: how long it is valid before the agent must refresh it. Zero -> service
-	// default (60m). cmd/main reads EDR_HOST_TOKEN_LIFETIME.
+	// default (60m). cmd/main passes the fixed config.DefaultHostTokenLifetime (60m); it is no longer operator-tunable.
 	HostTokenLifetime time.Duration
 }
 

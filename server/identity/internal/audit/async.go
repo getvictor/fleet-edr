@@ -38,8 +38,8 @@ import (
 )
 
 // DefaultAsyncQueueCap is the default channel capacity. ~8K rows of cushion is enough for a multi-minute burst at expected
-// wave-1 read volumes without consuming meaningful memory (each AuditEvent is well under 1 KB on the wire). Operators tune via
-// EDR_AUDIT_ASYNC_QUEUE_CAP.
+// wave-1 read volumes without consuming meaningful memory (each AuditEvent is well under 1 KB on the wire). The capacity is fixed
+// at this constant and is no longer operator-tunable.
 const DefaultAsyncQueueCap = 8192
 
 // shutdownDrainPerEvent caps how long a single drained event spends in the INSERT path. Five seconds matches sync Record's implicit
