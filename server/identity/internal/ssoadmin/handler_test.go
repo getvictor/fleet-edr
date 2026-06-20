@@ -16,11 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeStore is an in-memory configStore. cfg nil => ErrNotFound.
-type fakeStore struct {
-	cfg  *ssoconfig.Config
-	last *ssoconfig.UpsertInput
-}
+// fakeStore is an in-memory configStore (read side). cfg nil => ErrNotFound.
+type fakeStore struct{ cfg *ssoconfig.Config }
 
 func (f *fakeStore) Get(context.Context) (*ssoconfig.Config, error) {
 	if f.cfg == nil {
@@ -29,30 +26,37 @@ func (f *fakeStore) Get(context.Context) (*ssoconfig.Config, error) {
 	return f.cfg, nil
 }
 
-func (f *fakeStore) Upsert(_ context.Context, in ssoconfig.UpsertInput) error {
-	f.last = &in
-	// Reflect the write into cfg so the handler's re-read returns the new values (secret tracked separately as HasSecret).
-	f.cfg = &ssoconfig.Config{
-		Issuer: in.Issuer, ClientID: in.ClientID, Scopes: in.Scopes,
-		JITEnabled: in.JITEnabled, DefaultRole: in.DefaultRole,
-		HasSecret: in.NewSecret != nil || (f.cfg != nil && f.cfg.HasSecret),
-	}
-	return nil
-}
-
-// fakeAppCfg is an in-memory appConfigStore.
+// fakeAppCfg is an in-memory appConfigStore (read side).
 type fakeAppCfg struct {
-	cfg  appconfig.AppConfig
-	last *appconfig.AppConfig
+	cfg     appconfig.AppConfig
+	version int64
 }
 
 func (f *fakeAppCfg) Get(context.Context) (appconfig.AppConfig, int64, error) {
-	return f.cfg, 1, nil
+	return f.cfg, f.version, nil
 }
 
-func (f *fakeAppCfg) Put(_ context.Context, cfg appconfig.AppConfig, _ *int64) error {
-	f.cfg = cfg
-	f.last = &cfg
+// captureApply records the transactional write the handler requests, and can inject an error (e.g. a version conflict). It stands in
+// for the bootstrap-provided transaction so the handler is testable without a DB.
+type captureApply struct {
+	called          bool
+	oidcIn          ssoconfig.UpsertInput
+	appCfg          appconfig.AppConfig
+	expectedVersion int64
+	updatedBy       int64
+	err             error
+}
+
+func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedVersion int64, updatedBy int64) error {
+	c.called = true
+	c.oidcIn = oidcIn
+	c.appCfg = appCfg
+	c.expectedVersion = expectedVersion
+	c.updatedBy = updatedBy
+	return c.err
+}
+
+func noopApply(context.Context, ssoconfig.UpsertInput, appconfig.AppConfig, int64, int64) error {
 	return nil
 }
 
@@ -79,13 +83,20 @@ func okProbe(context.Context, string) error { return nil }
 
 // withActor pins an actor on the request context so handleUpdate's ActorFromContext succeeds.
 func withActor(r *http.Request, userID int64) *http.Request {
-	ctx := api.WithActor(r.Context(), &api.Actor{UserID: userID, AuthMethod: "oidc"})
-	return r.WithContext(ctx)
+	return r.WithContext(api.WithActor(r.Context(), &api.Actor{UserID: userID, AuthMethod: "oidc"}))
+}
+
+func putReq(t *testing.T, body any) *http.Request {
+	t.Helper()
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(b)))
+	return withActor(r, 42)
 }
 
 func TestHandleGet_unconfiguredReturnsConfiguredFalse(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 
@@ -102,7 +113,8 @@ func TestHandleGet_neverReturnsSecret(t *testing.T) {
 		Issuer: "https://idp.example.com", ClientID: "cid", HasSecret: true,
 		Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}}
-	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+	appCfg := &fakeAppCfg{cfg: appconfig.AppConfig{ExternalURL: "https://edr.example.com"}, version: 1}
+	h := NewHandler(store, appCfg, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 
@@ -112,48 +124,44 @@ func TestHandleGet_neverReturnsSecret(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.True(t, resp.Configured)
 	assert.True(t, resp.SecretSet)
+	assert.Equal(t, "https://edr.example.com", resp.ExternalURL)
+	assert.Equal(t, "https://edr.example.com/api/auth/callback", resp.RedirectURL, "redirect is derived read-only from external URL")
 }
 
 func TestHandleGet_deniedIsForbidden(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, denyAuthZ{}, &captureAudit{}, okProbe, nil)
+	h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, denyAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleGet(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil))
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-func putReq(t *testing.T, body any) *http.Request {
-	t.Helper()
-	b, err := json.Marshal(body)
-	require.NoError(t, err)
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(b)))
-	return withActor(r, 42)
-}
-
-func TestHandleUpdate_validRotatesSecretAndAudits(t *testing.T) {
+func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	t.Parallel()
-	store := &fakeStore{}
+	ap := &captureApply{}
 	audit := &captureAudit{}
-	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, audit, okProbe, nil)
+	// Pre-populate the read store so the handler's post-write response re-read succeeds (the fake apply records but does not persist).
+	store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid", HasSecret: true}}
+	h := NewHandler(store, &fakeAppCfg{version: 3}, ap.fn, allowAuthZ{}, audit, okProbe, nil)
 
 	secret := "rotate-me"
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: &secret,
-		ExternalURL: "https://edr/cb", Scopes: []string{"openid", "email"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr.example.com", Scopes: []string{"openid", "email"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.NotNil(t, store.last)
-	require.NotNil(t, store.last.NewSecret)
-	assert.Equal(t, "rotate-me", *store.last.NewSecret)
-	require.NotNil(t, store.last.UpdatedBy)
-	assert.Equal(t, int64(42), *store.last.UpdatedBy)
+	require.True(t, ap.called, "the transactional apply must be invoked")
+	require.NotNil(t, ap.oidcIn.NewSecret)
+	assert.Equal(t, "rotate-me", *ap.oidcIn.NewSecret)
+	assert.Equal(t, int64(42), ap.updatedBy)
+	assert.Equal(t, "https://edr.example.com", ap.appCfg.ExternalURL)
+	assert.Equal(t, int64(3), ap.expectedVersion, "the read app-config version must flow into the OCC check")
 
 	require.Len(t, audit.events, 1)
 	assert.Equal(t, api.AuditAction("sso.config.updated"), audit.events[0].Action)
 	assert.Equal(t, true, audit.events[0].Payload["secret_rotated"])
-	// The audit payload must not carry the secret value.
 	for k, v := range audit.events[0].Payload {
 		if s, ok := v.(string); ok {
 			assert.NotEqual(t, "rotate-me", s, "audit payload key %q leaked the secret", k)
@@ -161,90 +169,108 @@ func TestHandleUpdate_validRotatesSecretAndAudits(t *testing.T) {
 	}
 }
 
-func TestHandleUpdate_omittedSecretIsKept(t *testing.T) {
+func TestHandleUpdate_secretKeepSemantics(t *testing.T) {
 	t.Parallel()
-	store := &fakeStore{}
-	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
-
-	w := httptest.NewRecorder()
-	h.handleUpdate(w, putReq(t, updateRequest{
-		Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: nil,
-		ExternalURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: false, DefaultRole: "auditor",
-	}))
-
-	require.Equal(t, http.StatusOK, w.Code)
-	require.NotNil(t, store.last)
-	assert.Nil(t, store.last.NewSecret, "omitted client_secret must not rotate the stored secret")
+	cases := []struct {
+		name   string
+		secret *string
+	}{
+		{"omitted", nil},
+		{"empty string", new("")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ap := &captureApply{}
+			store := &fakeStore{cfg: &ssoconfig.Config{Issuer: "https://idp.example.com", ClientID: "cid"}}
+			h := NewHandler(store, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			w := httptest.NewRecorder()
+			h.handleUpdate(w, putReq(t, updateRequest{
+				Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: tc.secret,
+				ExternalURL: "https://edr.example.com", Scopes: []string{"openid"}, JITEnabled: false, DefaultRole: "auditor",
+			}))
+			require.Equal(t, http.StatusOK, w.Code)
+			require.True(t, ap.called)
+			assert.Nil(t, ap.oidcIn.NewSecret, "a kept secret must not rotate the stored value")
+		})
+	}
 }
 
-func TestHandleUpdate_emptySecretStringIsKept(t *testing.T) {
+func TestHandleUpdate_versionConflictIs409(t *testing.T) {
 	t.Parallel()
-	store := &fakeStore{}
-	h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
-	empty := ""
+	ap := &captureApply{err: appconfig.ErrVersionConflict}
+	h := NewHandler(&fakeStore{}, &fakeAppCfg{version: 5}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
-		Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: &empty,
-		ExternalURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		Issuer: "https://idp.example.com", ClientID: "cid",
+		ExternalURL: "https://edr.example.com", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
-	require.Equal(t, http.StatusOK, w.Code)
-	assert.Nil(t, store.last.NewSecret, "empty client_secret string must be treated as keep")
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "version_conflict")
 }
 
-func TestHandleUpdate_validationRejects(t *testing.T) {
+func TestHandleUpdate_validationRejectsBeforeApply(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name   string
 		req    updateRequest
 		reason string
 	}{
-		{"bad issuer", updateRequest{Issuer: "not a url", ClientID: "c", ExternalURL: "https://e/cb", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_issuer"},
-		{"missing client id", updateRequest{Issuer: "https://i", ClientID: "", ExternalURL: "https://e/cb", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "missing_client_id"},
+		{"bad issuer", updateRequest{Issuer: "not a url", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_issuer"},
+		{"missing client id", updateRequest{Issuer: "https://i", ClientID: "", ExternalURL: "https://e", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "missing_client_id"},
 		{"bad external url", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "nope", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_external_url"},
-		{"missing openid", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e/cb", Scopes: []string{"email"}, DefaultRole: "analyst"}, "missing_openid_scope"},
-		{"admin default role", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "admin"}, "invalid_default_role"},
+		{"missing openid", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"email"}, DefaultRole: "analyst"}, "missing_openid_scope"},
+		{"admin default role", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "admin"}, "invalid_default_role"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			store := &fakeStore{}
-			h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+			ap := &captureApply{}
+			h := NewHandler(&fakeStore{}, &fakeAppCfg{}, ap.fn, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 			w := httptest.NewRecorder()
 			h.handleUpdate(w, putReq(t, tc.req))
 			require.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Contains(t, w.Body.String(), tc.reason)
-			assert.Nil(t, store.last, "invalid request must not persist")
+			assert.False(t, ap.called, "an invalid request must not reach the write")
 		})
 	}
 }
 
-func TestHandleTestConnection_passAndFail(t *testing.T) {
+func TestHandleTestConnection(t *testing.T) {
 	t.Parallel()
 	t.Run("reachable", func(t *testing.T) {
 		t.Parallel()
-		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, okProbe, nil)
+		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 		w := httptest.NewRecorder()
-		body := `{"issuer":"https://idp.example.com"}`
-		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/settings/sso/test-connection", strings.NewReader(body)))
+		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{"issuer":"https://idp.example.com"}`)))
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp testConnectionResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.True(t, resp.OK)
 	})
 
-	t.Run("unreachable returns ok=false with reason, no persist", func(t *testing.T) {
+	t.Run("invalid candidate issuer is 400", func(t *testing.T) {
 		t.Parallel()
-		store := &fakeStore{}
-		failProbe := func(context.Context, string) error { return errors.New("discovery unreachable") }
-		h := NewHandler(store, &fakeAppCfg{}, allowAuthZ{}, &captureAudit{}, failProbe, nil)
+		probed := false
+		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{},
+			func(context.Context, string) error { probed = true; return nil }, nil)
 		w := httptest.NewRecorder()
-		body := `{"issuer":"https://down.example.com"}`
-		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/settings/sso/test-connection", strings.NewReader(body)))
+		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{"issuer":"not a url"}`)))
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "invalid_issuer")
+		assert.False(t, probed, "a malformed issuer must not trigger a network probe")
+	})
+
+	t.Run("unreachable returns ok=false with reason", func(t *testing.T) {
+		t.Parallel()
+		failProbe := func(context.Context, string) error { return errors.New("discovery unreachable") }
+		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, failProbe, nil)
+		w := httptest.NewRecorder()
+		h.handleTestConnection(w, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{"issuer":"https://down.example.com"}`)))
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp testConnectionResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.OK)
 		assert.Contains(t, resp.Reason, "unreachable")
-		assert.Nil(t, store.last, "test-connection must not persist")
 	})
 }

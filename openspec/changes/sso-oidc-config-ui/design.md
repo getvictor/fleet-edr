@@ -24,7 +24,7 @@ This change is the IdP-connection half of the wave-2 SSO + RBAC story. The RBAC 
 
 ### Decision: A singleton stored-config record in MySQL, owned by the identity context
 
-A new table (e.g. `oidc_config`) holds one deployment-wide row (enforced by a fixed primary key / single-row constraint) with columns for issuer, client id, encrypted client secret, redirect URL, scopes, JIT enabled, default role, plus `updated_at` and `updated_by`. The store lives behind a new internal package in `server/identity` and is exposed to the rest of the server only through the identity `api/` package, consistent with ADR-0004.
+A new table (e.g. `oidc_config`) holds one deployment-wide row (enforced by a fixed primary key / single-row constraint) with columns for issuer, client id, encrypted client secret, scopes, JIT enabled, default role, plus `config_version`, `updated_at`, and `updated_by`. The redirect URI is NOT a column: it is derived from the deployment external URL, which lives in a separate single-row versioned `app_config` JSON-document store (the scalable home for general, non-secret settings). The stores live behind new internal packages in `server/identity` and are exposed to the rest of the server only through the identity `api/` package, consistent with ADR-0004.
 
 *Alternatives considered:* a generic key/value settings table (rejected: weaker typing/validation, and SSO is the only consumer this wave); a config file on disk (rejected: violates stateless multi-replica consistency, no transactional audit).
 

@@ -28,17 +28,21 @@ const updateBodyLimit = 1 << 16
 // (matches the seeded-role posture and the design's Analyst/Auditor-only selector).
 var allowedJITRoles = map[string]bool{"analyst": true, "auditor": true}
 
-// configStore is the subset of *ssoconfig.Store the handler needs. Narrowed to an interface so tests inject a fake.
+// configStore is the read subset of *ssoconfig.Store the handler needs. Writes go through applyUpdate (transactional). Narrowed to an
+// interface so tests inject a fake.
 type configStore interface {
 	Get(ctx context.Context) (*ssoconfig.Config, error)
-	Upsert(ctx context.Context, in ssoconfig.UpsertInput) error
 }
 
-// appConfigStore is the subset of *appconfig.Store the handler needs: the general settings document the external URL lives in.
+// appConfigStore is the read subset of *appconfig.Store the handler needs: the general settings document the external URL lives in.
 type appConfigStore interface {
 	Get(ctx context.Context) (appconfig.AppConfig, int64, error)
-	Put(ctx context.Context, cfg appconfig.AppConfig, updatedBy *int64) error
 }
+
+// applyUpdate persists the OIDC config and the app-config document ATOMICALLY (one DB transaction), so a partial write can never leave
+// a new issuer/client paired with a stale derived redirect. expectedAppVersion drives the app-config optimistic-concurrency check;
+// implementations return appconfig.ErrVersionConflict on a concurrent edit. Injected so the handler stays unit-testable without a DB.
+type applyUpdate func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy int64) error
 
 // prober verifies a candidate issuer is reachable. Production wraps oidc.Probe with the deployment HTTP client; tests inject a fake.
 type prober func(ctx context.Context, issuer string) error
@@ -48,20 +52,24 @@ type prober func(ctx context.Context, issuer string) error
 type Handler struct {
 	store  configStore
 	appCfg appConfigStore
+	apply  applyUpdate
 	authz  api.AuthZ
 	audit  api.AuditRecorder
 	probe  prober
 	logger *slog.Logger
 }
 
-// NewHandler builds the handler. store, appCfg, authz, and probe are load-bearing; logger defaults to slog.Default. audit may be nil
-// only in tests that do not assert on the audit row.
-func NewHandler(store configStore, appCfg appConfigStore, authz api.AuthZ, audit api.AuditRecorder, probe prober, logger *slog.Logger) *Handler {
+// NewHandler builds the handler. store, appCfg, apply, authz, and probe are load-bearing; logger defaults to slog.Default. audit may
+// be nil only in tests that do not assert on the audit row.
+func NewHandler(store configStore, appCfg appConfigStore, apply applyUpdate, authz api.AuthZ, audit api.AuditRecorder, probe prober, logger *slog.Logger) *Handler {
 	if store == nil {
 		panic("ssoadmin.NewHandler: store is required")
 	}
 	if appCfg == nil {
 		panic("ssoadmin.NewHandler: appCfg is required")
+	}
+	if apply == nil {
+		panic("ssoadmin.NewHandler: apply is required")
 	}
 	if authz == nil {
 		panic("ssoadmin.NewHandler: authz is required")
@@ -72,7 +80,7 @@ func NewHandler(store configStore, appCfg appConfigStore, authz api.AuthZ, audit
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{store: store, appCfg: appCfg, authz: authz, audit: audit, probe: probe, logger: logger}
+	return &Handler{store: store, appCfg: appCfg, apply: apply, authz: authz, audit: audit, probe: probe, logger: logger}
 }
 
 // RegisterAuthedRoutes mounts the SSO settings routes. The mux is expected to be wrapped in the session + CSRF middleware before being
@@ -163,21 +171,22 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.UpdatedBy = &actor.UserID
-	if err := h.store.Upsert(ctx, in); err != nil {
-		h.logger.ErrorContext(ctx, "sso config upsert", "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
-		return
-	}
-	// Persist the external URL into the appconfig document (read-modify-write so unrelated settings are preserved).
-	appCfg, _, err := h.appCfg.Get(ctx)
+	// Read the app-config document (read-modify-write preserves unrelated settings) and capture its version for the optimistic-
+	// concurrency check inside the transactional apply.
+	appCfg, appVersion, err := h.appCfg.Get(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "app config read for update", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 	appCfg.ExternalURL = externalURL
-	if err := h.appCfg.Put(ctx, appCfg, &actor.UserID); err != nil {
-		h.logger.ErrorContext(ctx, "app config put", "err", err)
+	// One transaction writes oidc_config + app_config together: a partial write can never pair a new issuer with a stale redirect.
+	if err := h.apply(ctx, in, appCfg, appVersion, actor.UserID); err != nil {
+		if errors.Is(err, appconfig.ErrVersionConflict) {
+			writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
+			return
+		}
+		h.logger.ErrorContext(ctx, "sso config apply", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
@@ -224,6 +233,11 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		issuer = cfg.Issuer
+	} else if !validAbsoluteURL(issuer) {
+		// Validate a caller-supplied candidate the same way handleUpdate does, so a malformed issuer is a fast 400 rather than a
+		// network discovery attempt that fails opaquely.
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_issuer")
+		return
 	}
 	// Probe persists nothing; a failure is a 200 with ok=false + reason so the UI can render the diagnostic inline.
 	if err := h.probe(ctx, issuer); err != nil {
@@ -342,9 +356,14 @@ func normalizeScopes(in []string) []string {
 
 func decodeJSON[T any](ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
-	body, err := io.ReadAll(io.LimitReader(r.Body, updateBodyLimit))
+	// Read one byte past the cap so an oversized body is detected and rejected, rather than silently truncated to a parseable prefix.
+	body, err := io.ReadAll(io.LimitReader(r.Body, updateBodyLimit+1))
 	if err != nil {
 		writeErr(ctx, logger, w, http.StatusBadRequest, "read_body")
+		return v, false
+	}
+	if len(body) > updateBodyLimit {
+		writeErr(ctx, logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
 		return v, false
 	}
 	if err := json.Unmarshal(body, &v); err != nil {

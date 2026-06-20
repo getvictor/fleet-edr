@@ -1,6 +1,6 @@
 ## 1. Persistence and encryption
 
-- [x] 1.1 Add a forward-only MySQL migration creating a single-row `oidc_config` table (issuer, client_id, client_secret_enc, redirect_url, scopes, jit_enabled, default_role, updated_at, updated_by) with a single-row constraint
+- [x] 1.1 Add forward-only MySQL migrations: a single-row `oidc_config` table (issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, config_version, updated_at, updated_by) for the secret-bearing OIDC config, plus a single-row versioned `app_config` JSON-document table for general settings (the deployment external URL); the redirect URI is derived from the external URL, not stored
 - [x] 1.2 Add a new internal package in `server/identity` owning the table: typed Get/Upsert plus a config-version/stamp (use `updated_at` or a version column) for cache invalidation
 - [x] 1.3 Derive a dedicated AEAD key from `EDR_SECRET_KEY` via HKDF under a new domain-separation label (alongside the existing session/host-token derivations in `config.go`); seal/open the client secret with AES-GCM
 - [x] 1.4 PBT round-trip test: `Open ∘ Seal == identity` for the secret; assert ciphertext differs from plaintext and a wrong key fails to open

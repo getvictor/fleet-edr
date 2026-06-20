@@ -1,7 +1,8 @@
 // Package ssoconfig owns the oidc_config table: the deployment's single, durable, runtime-editable OIDC provider configuration
-// (issue #375). It persists issuer, client id, redirect URL, scopes, JIT toggle, default role, and the client secret sealed at rest,
-// and is the runtime source of truth the OIDC login path resolves its provider from. Env vars (EDR_OIDC_*) only seed the row on first
-// boot; the stored row governs thereafter.
+// (issue #375). It persists issuer, client id, scopes, JIT toggle, default role, and the client secret sealed at rest, and is the
+// runtime source of truth the OIDC login path resolves its provider from. The redirect URI is NOT stored here: it is derived at read
+// time from the deployment external URL (kept in the appconfig document) via RedirectURLFor. Env vars (EDR_OIDC_*) only seed the row on
+// first boot; the stored row governs thereafter.
 package ssoconfig
 
 import (
@@ -13,6 +14,10 @@ import (
 	"io"
 )
 
+// aes256KeyLen is the required key length for the AES-256-GCM sealer. aes.NewCipher also accepts 16- and 24-byte keys (AES-128/192);
+// pinning 32 here keeps the implementation matching the documented AES-256 property instead of silently downgrading on a short key.
+const aes256KeyLen = 32
+
 // Sealer encrypts and decrypts the OIDC client secret at rest with AES-256-GCM under a key derived from the deployment root secret
 // (keyring label edr/oidc/client-secret/v1). The sealed form is nonce || ciphertext||tag; a fresh random 96-bit nonce per Seal keeps
 // GCM safe across rotations. Plaintext secrets are never persisted and never returned over the API: only the sealed blob is stored.
@@ -20,9 +25,12 @@ type Sealer struct {
 	aead cipher.AEAD
 }
 
-// NewSealer builds a Sealer from a 32-byte key (keyring.Derive output width). Returns an error if the key is not a valid AES key
-// length, which for a keyring-derived key is a defensive invariant rather than a runtime condition.
+// NewSealer builds a Sealer from a 32-byte key (keyring.Derive output width). It REQUIRES exactly 32 bytes so the cipher is always
+// AES-256; a shorter key (which aes.NewCipher would otherwise accept as AES-128/192) is rejected as a defensive invariant.
 func NewSealer(key []byte) (*Sealer, error) {
+	if len(key) != aes256KeyLen {
+		return nil, fmt.Errorf("ssoconfig: sealer key must be %d bytes (AES-256), got %d", aes256KeyLen, len(key))
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("ssoconfig: new cipher: %w", err)

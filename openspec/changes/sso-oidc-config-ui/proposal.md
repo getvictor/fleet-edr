@@ -4,7 +4,7 @@ Today an operator can only configure SSO by editing `EDR_OIDC_*` environment var
 
 ## What Changes
 
-- Persist the deployment's OIDC provider configuration durably in MySQL (issuer, client id, client secret, redirect URL, scopes, JIT-provisioning toggle, default JIT role) so it is the runtime source of truth and is consistent across replicas (ADR-0010).
+- Persist the deployment's OIDC provider configuration durably in MySQL (issuer, client id, client secret, scopes, JIT-provisioning toggle, default JIT role) so it is the runtime source of truth and is consistent across replicas (ADR-0010). The redirect URI is derived from the deployment external URL (stored in a separate general settings document), not persisted as its own field.
 - Establish precedence explicitly: `EDR_OIDC_*` env vars seed the stored config row on first boot when none exists; thereafter the stored row governs and env values are inert (logged once at boot, never silently applied). This keeps existing env-only deployments working unchanged on upgrade.
 - Apply config changes at runtime without a restart: the OIDC provider/verifier is built from the stored config and rebuilt when the stored row changes, replacing today's boot-only `gooidc.NewProvider` wiring. Each replica refreshes from the durable row (per-replica cache, safe to lose).
 - Store the client secret encrypted at rest under a key derived from `EDR_SECRET_KEY` (HKDF, matching the codebase's existing derived-key pattern). The secret is write-only over the API: it is accepted to rotate but never returned to the browser.

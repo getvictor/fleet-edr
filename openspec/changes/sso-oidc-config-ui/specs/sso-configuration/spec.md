@@ -2,13 +2,13 @@
 
 ### Requirement: OIDC configuration is stored durably and is the runtime source of truth
 
-The system SHALL persist the deployment's OIDC provider configuration (issuer URL, client id, client secret, redirect URL, requested scopes, JIT-provisioning enabled flag, default JIT role) in MySQL as a single deployment-wide configuration record. When a stored configuration record exists, the OIDC login flow SHALL derive its issuer, client id, client secret, redirect URL, scopes, JIT toggle, and default role from that record rather than from any in-process value captured at boot. The store is the single source of truth so that every replica serves a consistent configuration and a configuration change survives a restart.
+The system SHALL persist the deployment's OIDC provider configuration (issuer URL, client id, client secret, requested scopes, JIT-provisioning enabled flag, default JIT role) in MySQL as a single deployment-wide configuration record. The OIDC redirect URI is NOT stored: it is derived from the deployment external URL (persisted in the general app-config document) as external URL + `/api/auth/callback`. When a stored configuration record exists, the OIDC login flow SHALL derive its issuer, client id, client secret, scopes, JIT toggle, and default role from that record, and its redirect URI from the stored external URL, rather than from any in-process value captured at boot. The store is the single source of truth so that every replica serves a consistent configuration and a configuration change survives a restart.
 
 #### Scenario: Login flow reads the stored configuration
 
 - **GIVEN** a stored OIDC configuration record exists with a given issuer and client id
 - **WHEN** an operator initiates SSO login
-- **THEN** the authorization redirect carries the client id and redirect URL from the stored record, not from any environment variable
+- **THEN** the authorization redirect carries the client id from the stored record and a redirect URL derived from the stored external URL, not from any environment variable
 
 #### Scenario: Stored configuration survives a restart
 

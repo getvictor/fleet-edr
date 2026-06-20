@@ -15,6 +15,11 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// ErrVersionConflict is returned by Put when the row's version no longer matches the expected version (a concurrent write landed
+// between the caller's Get and Put). The caller should re-read and retry. This is the optimistic-concurrency guard the version column
+// exists for.
+var ErrVersionConflict = errors.New("appconfig: version conflict")
+
 // AppConfig is the typed deployment-wide settings document. ADD A FIELD HERE to add a setting; no migration is needed. Every field
 // MUST be omitempty-friendly and have a sensible zero value, because a fresh deployment reads a zero-value AppConfig until the first
 // write. Do NOT put secrets here.
@@ -56,10 +61,17 @@ func (s *Store) Get(ctx context.Context) (AppConfig, int64, error) {
 	return cfg, version, nil
 }
 
-// Put writes the whole document, inserting the singleton row on first write (version 1) and bumping version on update. Callers that
-// change one field should Get, mutate, then Put (read-modify-write) so unrelated fields are preserved. updatedBy nil records a
-// non-operator write (env seed).
-func (s *Store) Put(ctx context.Context, cfg AppConfig, updatedBy *int64) error {
+// Put writes the whole document with optimistic concurrency. Callers Get (which returns the current version), mutate, then Put with
+// that version (read-modify-write) so unrelated fields are preserved and a concurrent write is detected. expectedVersion <= 0 means
+// "first write" (no row yet) and inserts the singleton; expectedVersion > 0 updates only when the stored version still matches,
+// returning ErrVersionConflict otherwise. updatedBy nil records a non-operator write (env seed).
+func (s *Store) Put(ctx context.Context, cfg AppConfig, expectedVersion int64, updatedBy *int64) error {
+	return s.PutTx(ctx, s.db, cfg, expectedVersion, updatedBy)
+}
+
+// PutTx is Put against a caller-supplied executor (*sqlx.Tx or the Store's *sqlx.DB), so a write can join a transaction that also
+// updates other tables atomically (e.g. the SSO admin update that writes oidc_config and app_config together).
+func (s *Store) PutTx(ctx context.Context, ext sqlx.ExtContext, cfg AppConfig, expectedVersion int64, updatedBy *int64) error {
 	encoded, err := json.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("appconfig: marshal: %w", err)
@@ -68,14 +80,31 @@ func (s *Store) Put(ctx context.Context, cfg AppConfig, updatedBy *int64) error 
 	if updatedBy != nil {
 		by = sql.NullInt64{Int64: *updatedBy, Valid: true}
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO app_config (id, config, version, updated_by)
-		VALUES (1, ?, 1, ?)
-		ON DUPLICATE KEY UPDATE
-			config = VALUES(config), version = version + 1, updated_by = VALUES(updated_by)`,
-		encoded, by)
+	if expectedVersion <= 0 {
+		// First write: insert the singleton. ON DUPLICATE KEY UPDATE keeps the env-seed path idempotent across a concurrent first boot.
+		if _, err := ext.ExecContext(ctx, `
+			INSERT INTO app_config (id, config, version, updated_by)
+			VALUES (1, ?, 1, ?)
+			ON DUPLICATE KEY UPDATE
+				config = VALUES(config), version = version + 1, updated_by = VALUES(updated_by)`,
+			encoded, by); err != nil {
+			return fmt.Errorf("appconfig: put insert: %w", err)
+		}
+		return nil
+	}
+	res, err := ext.ExecContext(ctx, `
+		UPDATE app_config SET config = ?, version = version + 1, updated_by = ?
+		WHERE id = 1 AND version = ?`,
+		encoded, by, expectedVersion)
 	if err != nil {
-		return fmt.Errorf("appconfig: put: %w", err)
+		return fmt.Errorf("appconfig: put update: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("appconfig: put rows-affected: %w", err)
+	}
+	if rows == 0 {
+		return ErrVersionConflict
 	}
 	return nil
 }

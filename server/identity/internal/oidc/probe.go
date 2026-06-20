@@ -5,9 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 )
+
+// probeTimeout bounds the discovery round-trip so a slow, unresponsive, or hostile issuer cannot hang the test-connection handler
+// (and tie up a goroutine/socket) indefinitely.
+const probeTimeout = 10 * time.Second
 
 // Probe verifies an issuer is reachable and advertises a token endpoint, without building a full client (no client id/secret/redirect
 // required). It backs the admin test-connection action: a discovery-document fetch plus a token-endpoint presence check, run against a
@@ -16,6 +21,8 @@ func Probe(ctx context.Context, issuer string, httpClient *http.Client) error {
 	if issuer == "" {
 		return errors.New("oidc: issuer is required")
 	}
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
 	if httpClient != nil {
 		ctx = gooidc.ClientContext(ctx, httpClient)
 	}

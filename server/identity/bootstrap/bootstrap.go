@@ -195,7 +195,32 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	var ssoAdminHandler *ssoadmin.Handler
 	if ssoStore != nil {
 		oidcHTTPClient := deps.OIDC.HTTPClient
-		ssoAdminHandler = ssoadmin.NewHandler(ssoStore, appConfigStore, authzEngine, auditStore,
+		// apply writes oidc_config and app_config in ONE transaction so a partial failure can't pair a new issuer with a stale
+		// derived redirect; app_config carries the optimistic-concurrency version check.
+		apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy int64) error {
+			tx, err := deps.DB.BeginTxx(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
+			}
+			committed := false
+			defer func() {
+				if !committed {
+					_ = tx.Rollback()
+				}
+			}()
+			if err := ssoStore.UpsertTx(ctx, tx, oidcIn); err != nil {
+				return err
+			}
+			if err := appConfigStore.PutTx(ctx, tx, appCfg, expectedAppVersion, &updatedBy); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("identity bootstrap: commit sso update tx: %w", err)
+			}
+			committed = true
+			return nil
+		}
+		ssoAdminHandler = ssoadmin.NewHandler(ssoStore, appConfigStore, apply, authzEngine, auditStore,
 			func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, logger)
 	}
 
@@ -368,11 +393,17 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 		if err != nil {
 			return oidc.ProviderConfig{}, err
 		}
+		redirectURL := ssoconfig.RedirectURLFor(appCfg.ExternalURL)
+		if redirectURL == "" {
+			// OIDC rows exist but the deployment external URL is unset, so the redirect cannot be derived. Surface this as "not
+			// configured" (a directed login response) rather than letting an empty redirect fail opaquely in client construction.
+			return oidc.ProviderConfig{}, oidc.ErrNotConfigured
+		}
 		return oidc.ProviderConfig{
 			Issuer:       c.Issuer,
 			ClientID:     c.ClientID,
 			ClientSecret: c.ClientSecret,
-			RedirectURL:  ssoconfig.RedirectURLFor(appCfg.ExternalURL),
+			RedirectURL:  redirectURL,
 			Scopes:       c.Scopes,
 			Stamp:        fmt.Sprintf("%d.%d", c.Version, appVersion),
 		}, nil
@@ -445,8 +476,11 @@ func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
 	if i.oidcSeed.Issuer == "" {
 		return nil
 	}
-	defaultRole := i.oidcSeed.DefaultRole
-	if defaultRole == "" {
+	// Clamp the seeded JIT default role to the same analyst/auditor floor the admin API enforces: a deployment with
+	// EDR_OIDC_DEFAULT_ROLE=admin must not auto-elevate JIT-provisioned SSO users to a privileged role. Anything outside the allowed
+	// set (including the empty default) falls back to the lowest-privilege JIT role.
+	defaultRole := strings.ToLower(strings.TrimSpace(i.oidcSeed.DefaultRole))
+	if defaultRole != "analyst" && defaultRole != "auditor" {
 		defaultRole = oidc.DefaultJITRole
 	}
 	secret := i.oidcSeed.ClientSecret
@@ -466,11 +500,11 @@ func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
 	// a later UI edit is never clobbered on restart.
 	externalURL := strings.TrimSuffix(strings.TrimRight(i.oidcSeed.RedirectURL, "/"), ssoconfig.CallbackPath)
 	if externalURL != "" {
-		if cur, _, err := i.appConfigStore.Get(ctx); err != nil {
+		if cur, version, err := i.appConfigStore.Get(ctx); err != nil {
 			return fmt.Errorf("identity bootstrap: read app config: %w", err)
 		} else if cur.ExternalURL == "" {
 			cur.ExternalURL = externalURL
-			if err := i.appConfigStore.Put(ctx, cur, nil); err != nil {
+			if err := i.appConfigStore.Put(ctx, cur, version, nil); err != nil {
 				return fmt.Errorf("identity bootstrap: seed external URL from env: %w", err)
 			}
 		}

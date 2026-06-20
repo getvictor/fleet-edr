@@ -150,6 +150,12 @@ func (s *Store) GetDecrypted(ctx context.Context) (*Config, error) {
 // increments config_version. When NewSecret is nil the existing sealed secret is preserved (the UPDATE clause omits the secret
 // column); when non-nil it seals and stores the new value.
 func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
+	return s.UpsertTx(ctx, s.db, in)
+}
+
+// UpsertTx is Upsert against a caller-supplied executor (*sqlx.Tx or the Store's *sqlx.DB), so the write can join a transaction that
+// also updates other tables atomically (e.g. the SSO admin update that writes oidc_config and app_config together).
+func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInput) error {
 	scopes := strings.Join(in.Scopes, ",")
 	var updatedBy sql.NullInt64
 	if in.UpdatedBy != nil {
@@ -161,7 +167,7 @@ func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
 		if err != nil {
 			return err
 		}
-		_, err = s.db.ExecContext(ctx, `
+		_, err = ext.ExecContext(ctx, `
 			INSERT INTO oidc_config
 				(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, config_version, updated_by)
 			VALUES (1, ?, ?, ?, ?, ?, ?, 1, ?)
@@ -177,7 +183,7 @@ func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
 	}
 
 	// No secret change: insert with NULL secret (first boot), and on update leave client_secret_enc untouched.
-	_, err := s.db.ExecContext(ctx, `
+	_, err := ext.ExecContext(ctx, `
 		INSERT INTO oidc_config
 			(id, issuer, client_id, client_secret_enc, scopes, jit_enabled, default_role, config_version, updated_by)
 		VALUES (1, ?, ?, NULL, ?, ?, ?, 1, ?)
@@ -198,9 +204,8 @@ func splitScopes(csv string) []string {
 	if strings.TrimSpace(csv) == "" {
 		return nil
 	}
-	parts := strings.Split(csv, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
+	var out []string
+	for p := range strings.SplitSeq(csv, ",") {
 		if t := strings.TrimSpace(p); t != "" {
 			out = append(out, t)
 		}
