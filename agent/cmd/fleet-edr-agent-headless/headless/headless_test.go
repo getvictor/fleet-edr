@@ -32,10 +32,9 @@ type stubTokenProvider struct {
 	hostID string
 }
 
-func (s *stubTokenProvider) Token() string                            { return s.token }
-func (s *stubTokenProvider) HostID() string                           { return s.hostID }
-func (s *stubTokenProvider) OnUnauthorized(_ context.Context)         {}
-func (s *stubTokenProvider) Rotate(_ context.Context, _ string) error { return nil }
+func (s *stubTokenProvider) Token() string                    { return s.token }
+func (s *stubTokenProvider) HostID() string                   { return s.hostID }
+func (s *stubTokenProvider) OnUnauthorized(_ context.Context) {}
 
 func TestOptionsValidate(t *testing.T) {
 	cases := []struct {

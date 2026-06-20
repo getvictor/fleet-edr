@@ -1,10 +1,8 @@
 package mysql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -14,23 +12,8 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/revocation"
 )
 
-const (
-	// hostTokenBase64Len is the base64url-no-padding length of a tokenLen-byte token (tokenLen lives in hash.go). For n bytes the encoded
-	// length is ceil(n*4/3), computed as (n*4+2)/3. It is derived from tokenLen rather than hard-coded so a future tokenLen bump stays in
-	// sync without a second edit. Anything else is a malformed presentation; we reject before the DB lookup.
-	hostTokenBase64Len = (tokenLen*4 + 2) / 3
-
-	// tokenIDPrefixBytes is how many leading bytes of a host_token_id we hex-encode for audit metadata (8 hex chars). Long enough to
-	// disambiguate in operator UIs, short enough that the prefix stays a credential-free identifier.
-	tokenIDPrefixBytes = 4
-
-	// minPepperLen is the floor for the HMAC pepper, matching the HKDF-SHA256 output width the keyring derives. A shorter pepper would
-	// make host-token hashing effectively unkeyed, so NewStore treats it as a fatal wiring bug.
-	minPepperLen = 32
-)
-
-// Enrollment mirrors the `enrollments` row shape used by admin listings. The raw token hash is intentionally not exported;
-// callers that need to verify a token go through Verify, not direct row access.
+// Enrollment mirrors the `enrollments` row shape used by admin listings. Token verification goes through the signed-token path in the
+// service layer, not direct row access.
 type Enrollment struct {
 	HostID       string     `db:"host_id" json:"host_id"`
 	Hostname     string     `db:"hostname" json:"hostname"`
@@ -45,27 +28,18 @@ type Enrollment struct {
 }
 
 // Store owns the `enrollments` table. It is backed by *sqlx.DB (the store package already opens one via otelsql.Open); we take a db
-// handle rather than the full *store.Store so this package stays unit-testable with a plain sqlx.DB. The pepper is the server-held
-// HMAC key (derived from the deployment root secret) every token hash + verify keys on.
+// handle rather than the full *store.Store so this package stays unit-testable with a plain sqlx.DB.
 type Store struct {
-	db     *sqlx.DB
-	pepper []byte
+	db *sqlx.DB
 }
 
-// NewStore constructs an enrollment store over an existing sqlx.DB handle. pepper is the HMAC key used to hash and verify host tokens
-// (the endpoint bootstrap derives it from the deployment root key via internal/keyring). NewStore enforces the minPepperLen minimum
-// with a panic: a short pepper would make host-token hashing effectively unkeyed, which is a fatal wiring bug, not a recoverable
-// runtime condition (the only callers are bootstrap, which validates first, and tests). The pepper is cloned so a later mutation of
-// the caller's slice cannot change the store's key material out from under in-flight verifications.
-func NewStore(db *sqlx.DB, pepper []byte) *Store {
-	if len(pepper) < minPepperLen {
-		panic(fmt.Sprintf("mysql.NewStore: host-token pepper must be at least %d bytes, got %d", minPepperLen, len(pepper)))
-	}
-	return &Store{db: db, pepper: bytes.Clone(pepper)}
+// NewStore constructs an enrollment store over an existing sqlx.DB handle.
+func NewStore(db *sqlx.DB) *Store {
+	return &Store{db: db}
 }
 
-// RegisterRequest captures the inputs to a successful enrollment. The presented secret has already been validated by the handler;
-// by the time Register is called we're committed to issuing a token.
+// RegisterRequest captures the inputs to a successful enrollment. The presented secret has already been validated by the handler; by
+// the time Register is called we are committed to creating the enrollment row.
 type RegisterRequest struct {
 	HostID       string
 	Hostname     string
@@ -74,61 +48,36 @@ type RegisterRequest struct {
 	SourceIP     string
 }
 
-// RegisterResult carries the generated token + the epoch the row now holds back to the caller. Epoch is 0 for a brand-new host and the
-// preserved (possibly operator-bumped) value for a re-enroll; the service mints the signed token at this epoch so it is not immediately
-// rejected by the revocation snapshot.
+// RegisterResult carries the host id, enrollment timestamp, and the epoch the row now holds back to the caller. The bearer token is no
+// longer minted here: the service layer mints a self-validating signed token (see internal/signedtoken) at this epoch. Epoch is 0 for a
+// brand-new host and the preserved (possibly operator-bumped) value for a re-enroll.
 type RegisterResult struct {
 	HostID     string
-	HostToken  string
 	EnrolledAt time.Time
 	Epoch      int64
 }
 
 // Register upserts the enrollment row keyed by host_id: a brand-new host inserts a fresh row at token_epoch 0; a re-enroll updates the
-// credential + metadata IN PLACE. token_epoch is deliberately NOT in the UPDATE list, so it is PRESERVED across a re-enroll. That is
-// load-bearing for credential cycling: an operator epoch bump (RotateToken) must survive the agent's automatic re-enroll, or a stolen
-// pre-rotate token would become valid again the moment the host re-enrolls (the re-enroll resets the epoch back to 0). The revocation
-// state and the dead grace-window previous_* columns are cleared so a re-enroll is otherwise a clean slate, matching the old REPLACE
-// semantics. Enrollment history (who revoked, prior reasons) is deferred to a dedicated history table; the MVP audit trail lives in
-// structured logs emitted by handler.go (enroll) and admin.go (revoke).
+// metadata IN PLACE. token_epoch is deliberately NOT in the UPDATE list, so it is PRESERVED across a re-enroll. That is load-bearing for
+// credential cycling: an operator epoch bump (BumpTokenEpoch) must survive the agent's automatic re-enroll, or a stolen pre-rotate token
+// would become valid again the moment the host re-enrolls (the re-enroll would otherwise reset the epoch back to 0). Revocation is
+// cleared so a host that proves the enroll secret is admitted afresh. The enrollments table holds the *current* enrollment state only;
+// revocation/audit history lives in structured logs (enroll handler + operator revoke).
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
-	token, err := generateToken()
-	if err != nil {
-		return nil, err
-	}
-	hash := hashToken(s.pepper, token)
-	tokID := tokenID(token)
-
-	// One app-clock timestamp for both enrolled_at and host_token_issued_at: on enroll they denote the same instant (the schema
-	// comment relies on that equality), and the verify path's rotation-age check reads host_token_issued_at against the app clock,
-	// so sourcing it from the app clock rather than the DB default keeps a single clock per write.
 	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO enrollments (
-			host_id, host_token_id, host_token_hash,
-			hostname, agent_version, os_version, source_ip,
-			enrolled_at, host_token_issued_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, source_ip, enrolled_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
-			host_token_id             = VALUES(host_token_id),
-			host_token_hash           = VALUES(host_token_hash),
-			hostname                  = VALUES(hostname),
-			agent_version             = VALUES(agent_version),
-			os_version                = VALUES(os_version),
-			source_ip                 = VALUES(source_ip),
-			enrolled_at               = VALUES(enrolled_at),
-			host_token_issued_at      = VALUES(host_token_issued_at),
-			previous_host_token_id    = NULL,
-			previous_host_token_hash  = NULL,
-			previous_token_expires_at = NULL,
-			revoked_at                = NULL,
-			revoke_reason             = NULL,
-			revoked_by                = NULL
-	`,
-		req.HostID, tokID, hash,
-		req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP,
-		now, now,
-	); err != nil {
+			hostname      = VALUES(hostname),
+			agent_version = VALUES(agent_version),
+			os_version    = VALUES(os_version),
+			source_ip     = VALUES(source_ip),
+			enrolled_at   = VALUES(enrolled_at),
+			revoked_at    = NULL,
+			revoke_reason = NULL,
+			revoked_by    = NULL
+	`, req.HostID, req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP, now); err != nil {
 		return nil, fmt.Errorf("upsert enrollment: %w", err)
 	}
 
@@ -139,292 +88,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterRes
 		return nil, fmt.Errorf("read token epoch: %w", err)
 	}
 
-	return &RegisterResult{
-		HostID:     req.HostID,
-		HostToken:  token,
-		EnrolledAt: now,
-		Epoch:      epoch,
-	}, nil
-}
-
-// VerifyResult is the rotation-aware shape returned by VerifyWithMeta: HostID identifies the matched enrollment, CurrentTokenID is
-// the SHA-256 of the matched token (used by the service layer as the optimistic-lock key for RotateHostToken), TokenIssuedAt is the
-// current token's issue timestamp (the rotation-eligibility input), and MatchedPrevious tells the caller whether the verify succeeded
-// against the grace-window previous token (in which case rotation is already in flight and the caller must NOT trigger another).
-type VerifyResult struct {
-	HostID          string
-	CurrentTokenID  []byte
-	TokenIssuedAt   time.Time
-	MatchedPrevious bool
-}
-
-// Verify is the thin wrapper that callers who only need the host_id keep using; new callers (the service-level rotation trigger) reach
-// for VerifyWithMeta below.
-func (s *Store) Verify(ctx context.Context, token string) (string, error) {
-	r, err := s.VerifyWithMeta(ctx, token)
-	if err != nil {
-		return "", err
-	}
-	return r.HostID, nil
-}
-
-// VerifyWithMeta returns the host_id + rotation metadata for a presented
-// token, or ErrTokenMismatch on any kind of mismatch (unknown token,
-// revoked enrollment, expired previous-token grace, hash mismatch).
-//
-// Implementation: try the current token first by host_token_id (SHA-256
-// O(1) lookup, then keyed HMAC verify). On miss, fall back to the previous
-// token via previous_host_token_id WHERE previous_token_expires_at is still
-// ahead of the app clock (bound as a query parameter, not DB NOW()): this is
-// the grace window the rotation flow opens.
-func (s *Store) VerifyWithMeta(ctx context.Context, token string) (VerifyResult, error) {
-	if token == "" {
-		return VerifyResult{}, ErrTokenMismatch
-	}
-	// Bearer tokens have 32 bytes of entropy (43 base64url chars); short-circuit obviously bad lengths before the DB lookup.
-	if len(token) != hostTokenBase64Len {
-		return VerifyResult{}, ErrTokenMismatch
-	}
-	tid := tokenID(token)
-
-	if r, ok, err := s.verifyAgainstCurrent(ctx, token, tid); err != nil {
-		return VerifyResult{}, err
-	} else if ok {
-		return r, nil
-	}
-	return s.verifyAgainstPrevious(ctx, token, tid)
-}
-
-// verifyAgainstCurrent does the host_token_id lookup. ok=false means the row was not found (caller should fall through to
-// previous-token path); any other error is surfaced as-is. ok=true with err=nil is the happy path; ok=true with ErrTokenMismatch means
-// the row was found but the HMAC verify failed (treat as mismatch, do NOT fall through to previous since that would be redundant
-// computation against the same host).
-func (s *Store) verifyAgainstCurrent(ctx context.Context, token string, tid []byte) (VerifyResult, bool, error) {
-	var row struct {
-		HostID   string    `db:"host_id"`
-		Hash     []byte    `db:"host_token_hash"`
-		IssuedAt time.Time `db:"host_token_issued_at"`
-	}
-	err := s.db.GetContext(ctx, &row, `
-		SELECT host_id, host_token_hash, host_token_issued_at
-		FROM enrollments
-		WHERE host_token_id = ? AND revoked_at IS NULL
-	`, tid)
-	if errors.Is(err, sql.ErrNoRows) {
-		return VerifyResult{}, false, nil
-	}
-	if err != nil {
-		return VerifyResult{}, false, fmt.Errorf("query enrollment by token id: %w", err)
-	}
-	if !verifyToken(s.pepper, token, row.Hash) {
-		// Token_id match but hash mismatch would require a SHA-256 collision; treat as mismatch rather than internal error and
-		// do not fall through to previous-token lookup (which is for a different token entirely, by id).
-		return VerifyResult{}, true, ErrTokenMismatch
-	}
-	return VerifyResult{
-		HostID:         row.HostID,
-		CurrentTokenID: tid,
-		TokenIssuedAt:  row.IssuedAt,
-	}, true, nil
-}
-
-// verifyAgainstPrevious does the previous_host_token_id lookup, gated on previous_token_expires_at being ahead of the app clock (bound
-// as a query parameter, not DB NOW()). Returns the same
-// VerifyResult shape with MatchedPrevious=true so the service layer skips the rotation trigger (rotation is already in flight; another
-// would be wasteful).
-func (s *Store) verifyAgainstPrevious(ctx context.Context, token string, tid []byte) (VerifyResult, error) {
-	var row struct {
-		HostID   string    `db:"host_id"`
-		Hash     []byte    `db:"previous_host_token_hash"`
-		IssuedAt time.Time `db:"host_token_issued_at"`
-	}
-	err := s.db.GetContext(ctx, &row, `
-		SELECT host_id, previous_host_token_hash, host_token_issued_at
-		FROM enrollments
-		WHERE previous_host_token_id = ?
-		  AND revoked_at IS NULL
-		  AND previous_token_expires_at IS NOT NULL
-		  AND previous_token_expires_at > ?
-	`, tid, time.Now().UTC())
-	if errors.Is(err, sql.ErrNoRows) {
-		return VerifyResult{}, ErrTokenMismatch
-	}
-	if err != nil {
-		return VerifyResult{}, fmt.Errorf("query enrollment by previous token id: %w", err)
-	}
-	if !verifyToken(s.pepper, token, row.Hash) {
-		return VerifyResult{}, ErrTokenMismatch
-	}
-	return VerifyResult{
-		HostID:          row.HostID,
-		CurrentTokenID:  nil, // intentionally nil: caller must not trigger rotation against a previous-token match
-		TokenIssuedAt:   row.IssuedAt,
-		MatchedPrevious: true,
-	}, nil
-}
-
-// RotateResult carries the freshly minted token + audit-friendly metadata back to the caller. NewToken is the raw bearer the service
-// layer queues into a rotate_token command for the agent. PreviousTokenIDPrefix is the first 8 hex chars of the prior host_token_id,
-// included on the audit row so reviewers can correlate a rotation to the verify request that triggered it without storing the full
-// token id (which is preimage-resistant but still a per-host identifier).
-type RotateResult struct {
-	NewToken              string
-	PreviousTokenIDPrefix string
-}
-
-// RotateHostToken atomically swaps a host's bearer token: generates a
-// fresh (id, hash), captures the existing values into previous_*,
-// sets previous_token_expires_at = now + grace, and updates
-// host_token_issued_at to now, where now is a single app-clock
-// time.Now().UTC() bound as a parameter (not DB-side NOW(); see the
-// inline comment at the UPDATE). The atomic UPDATE is keyed on the
-// currentTokenID the caller asserts (typically the value returned from
-// a recent VerifyWithMeta), so two concurrent rotations serialise:
-// only the one whose currentTokenID matches the row's host_token_id
-// commits; the loser's UPDATE affects 0 rows and returns
-// ErrRotateRaced. Callers map ErrRotateRaced to a "no-op, the other
-// rotation already swapped the token" branch.
-//
-// The UPDATE uses LEFT-side ordering carefully (previous_* before
-// host_*) because MySQL evaluates SET assignments left-to-right and
-// uses the new value for subsequent right-side reads. Reversing the
-// order would copy the NEW host_token_id into previous_host_token_id,
-// not the old one.
-func (s *Store) RotateHostToken(ctx context.Context, hostID string, currentTokenID []byte, grace time.Duration) (RotateResult, error) {
-	if hostID == "" {
-		return RotateResult{}, errors.New("RotateHostToken: hostID is required")
-	}
-	if len(currentTokenID) == 0 {
-		return RotateResult{}, errors.New("RotateHostToken: currentTokenID is required")
-	}
-	if grace <= 0 {
-		return RotateResult{}, errors.New("RotateHostToken: grace must be > 0")
-	}
-
-	newToken, err := generateToken()
-	if err != nil {
-		return RotateResult{}, err
-	}
-	newHash := hashToken(s.pepper, newToken)
-	newID := tokenID(newToken)
-	// Single app-clock timestamp: previous_token_expires_at and host_token_issued_at are both derived from it so the grace expiry
-	// and the new token's issue time share one clock (the verify path also reads both against the app clock).
-	now := time.Now().UTC()
-	expiresAt := now.Add(grace)
-
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE enrollments
-		SET previous_host_token_id    = host_token_id,
-		    previous_host_token_hash  = host_token_hash,
-		    previous_token_expires_at = ?,
-		    host_token_id             = ?,
-		    host_token_hash           = ?,
-		    host_token_issued_at      = ?
-		WHERE host_id = ? AND host_token_id = ? AND revoked_at IS NULL
-	`, expiresAt, newID, newHash, now, hostID, currentTokenID)
-	if err != nil {
-		return RotateResult{}, fmt.Errorf("rotate host token: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return RotateResult{}, fmt.Errorf("rotate rows affected: %w", err)
-	}
-	if affected == 0 {
-		return RotateResult{}, ErrRotateRaced
-	}
-
-	prefix := ""
-	if len(currentTokenID) >= tokenIDPrefixBytes {
-		prefix = hex.EncodeToString(currentTokenID[:tokenIDPrefixBytes])
-	}
-	return RotateResult{
-		NewToken:              newToken,
-		PreviousTokenIDPrefix: prefix,
-	}, nil
-}
-
-// RotateHostTokenForce is the operator-driven counterpart to
-// RotateHostToken: it commits a rotation regardless of recent
-// rotations, gated only on (host exists AND not revoked). Used by the
-// POST /api/enrollments/{host_id}/rotate handler where the operator's
-// intent is "issue a fresh token NOW," not "rotate only if no other
-// rotation slipped in." Returns ErrNotFound when the host has no
-// non-revoked enrollment.
-//
-// Internally a SELECT FOR UPDATE inside a tx serialises concurrent
-// operator-clicks for the same host so the previous_* slot reflects
-// the most recently superseded token (not whichever one a non-locked
-// UPDATE happened to read mid-flip). The same SET-clause ordering rule
-// applies as RotateHostToken: previous_* assignments must come before
-// the host_* assignments since MySQL evaluates left-to-right.
-func (s *Store) RotateHostTokenForce(ctx context.Context, hostID string, grace time.Duration) (RotateResult, error) {
-	if hostID == "" {
-		return RotateResult{}, errors.New("RotateHostTokenForce: hostID is required")
-	}
-	if grace <= 0 {
-		return RotateResult{}, errors.New("RotateHostTokenForce: grace must be > 0")
-	}
-
-	newToken, err := generateToken()
-	if err != nil {
-		return RotateResult{}, err
-	}
-	newHash := hashToken(s.pepper, newToken)
-	newID := tokenID(newToken)
-	// Single app-clock timestamp for the grace expiry and the new token's issue time (see RotateHostToken).
-	now := time.Now().UTC()
-	expiresAt := now.Add(grace)
-
-	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return RotateResult{}, fmt.Errorf("rotate force begin tx: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
-	var currentID []byte
-	err = tx.GetContext(ctx, &currentID, `
-		SELECT host_token_id FROM enrollments
-		WHERE host_id = ? AND revoked_at IS NULL
-		FOR UPDATE
-	`, hostID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return RotateResult{}, ErrNotFound
-	}
-	if err != nil {
-		return RotateResult{}, fmt.Errorf("rotate force lock: %w", err)
-	}
-
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE enrollments
-		SET previous_host_token_id    = host_token_id,
-		    previous_host_token_hash  = host_token_hash,
-		    previous_token_expires_at = ?,
-		    host_token_id             = ?,
-		    host_token_hash           = ?,
-		    host_token_issued_at      = ?
-		WHERE host_id = ? AND revoked_at IS NULL
-	`, expiresAt, newID, newHash, now, hostID); err != nil {
-		return RotateResult{}, fmt.Errorf("rotate force update: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return RotateResult{}, fmt.Errorf("rotate force commit: %w", err)
-	}
-	committed = true
-
-	prefix := ""
-	if len(currentID) >= tokenIDPrefixBytes {
-		prefix = hex.EncodeToString(currentID[:tokenIDPrefixBytes])
-	}
-	return RotateResult{
-		NewToken:              newToken,
-		PreviousTokenIDPrefix: prefix,
-	}, nil
+	return &RegisterResult{HostID: req.HostID, EnrolledAt: now, Epoch: epoch}, nil
 }
 
 // CountActive returns how many non-revoked enrollments exist. Cheaper than ActiveHostIDs when the caller only needs the count. The
@@ -450,8 +114,7 @@ func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
-// List returns every enrollment row, active + revoked, for the admin UI. The token hash
-// column is intentionally omitted.
+// List returns every enrollment row, active + revoked, for the admin UI.
 func (s *Store) List(ctx context.Context) ([]Enrollment, error) {
 	var rows []Enrollment
 	err := s.db.SelectContext(ctx, &rows, `

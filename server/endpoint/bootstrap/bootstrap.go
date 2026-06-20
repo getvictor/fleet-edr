@@ -33,11 +33,6 @@ const hostTokenKeyID = "v1"
 // hammering the DB (one small query per replica per interval).
 const DefaultRevocationRefreshInterval = 5 * time.Second
 
-// CommandInserter is the closure cmd/main supplies so endpoint can queue commands (today: rotate_token) without importing response/api
-// directly. Method-value-shaped to match response.Service.Insert exactly: cmd/main passes `responseCtx.Service().Insert` here as a
-// one-liner.
-type CommandInserter = service.CommandInserter
-
 // Deps bundles what New needs to wire the endpoint context. cmd/main owns the *sqlx.DB handle and shares it across every context's
 // bootstrap.
 type Deps struct {
@@ -45,13 +40,9 @@ type Deps struct {
 	Logger              *slog.Logger
 	EnrollSecret        string
 	EnrollRatePerMinute int
-	// HostTokenPepper is the server-held HMAC key the enrollment store uses to hash the legacy host_token columns. Required, at least 32
-	// bytes. cmd/main derives it from the deployment root secret (EDR_SECRET_KEY) via internal/keyring. Retained for the enrollment row's
-	// columns; agent auth no longer verifies against it (see HostTokenSigningKey).
-	HostTokenPepper []byte
 	// HostTokenSigningKey is the server-held HMAC key that signs + verifies self-validating host tokens. Required, at least 32 bytes.
-	// cmd/main derives it from the deployment root secret via internal/keyring under a distinct label, so it is independent of the
-	// pepper. Changing the root (or the label) invalidates every outstanding token: a fleet-wide re-enroll.
+	// cmd/main derives it from the deployment root secret (EDR_SECRET_KEY) via internal/keyring. Changing the root (or the derivation
+	// label) invalidates every outstanding token: a fleet-wide re-enroll.
 	HostTokenSigningKey []byte
 
 	// Audit is the operator-action recorder. Optional: nil disables audit emission for enrollment.revoke + enrollment.rotate_token.
@@ -89,9 +80,6 @@ func New(deps Deps) (*Endpoint, error) {
 	if deps.EnrollSecret == "" {
 		return nil, errors.New("endpoint bootstrap: EnrollSecret is required")
 	}
-	if len(deps.HostTokenPepper) < 32 {
-		return nil, errors.New("endpoint bootstrap: HostTokenPepper is required (at least 32 bytes)")
-	}
 	if len(deps.HostTokenSigningKey) < 32 {
 		return nil, errors.New("endpoint bootstrap: HostTokenSigningKey is required (at least 32 bytes)")
 	}
@@ -107,7 +95,7 @@ func New(deps Deps) (*Endpoint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("endpoint bootstrap: host token signer: %w", err)
 	}
-	store := mysql.NewStore(deps.DB, deps.HostTokenPepper)
+	store := mysql.NewStore(deps.DB)
 	snapshot := revocation.NewSnapshot(store, logger)
 	svc := service.New(service.Options{
 		Store:       store,

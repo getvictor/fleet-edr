@@ -32,7 +32,7 @@ func (f fakeRefreshService) Get(context.Context, string) (*api.Enrollment, error
 func (f fakeRefreshService) Revoke(context.Context, string, string, string) error { panic("not used") }
 func (f fakeRefreshService) CountActive(context.Context) (int, error)             { panic("not used") }
 func (f fakeRefreshService) ActiveHostIDs(context.Context) ([]string, error)      { panic("not used") }
-func (f fakeRefreshService) RotateToken(context.Context, string, api.RotationTrigger, string, string) (api.RotateResult, error) {
+func (f fakeRefreshService) RotateToken(context.Context, string, string, string) error {
 	panic("not used")
 }
 

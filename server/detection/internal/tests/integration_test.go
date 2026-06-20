@@ -1420,12 +1420,12 @@ func TestListHosts_DecoratesWithEnrollment(t *testing.T) {
 	require.NoError(t, d.Service().RecordHostSeen(ctx, bareHost, time.Now().Add(-time.Minute)))
 
 	// Seed an enrollment row directly (the endpoint enroll handler is out of scope for this detection-side test). Only the NOT NULL
-	// columns without a default need values; host_token_issued_at / enrolled_at default to CURRENT_TIMESTAMP.
+	// columns without a default need values; enrolled_at defaults to CURRENT_TIMESTAMP. The opaque host-token columns were dropped
+	// with the move to self-validating signed tokens, so they are no longer part of the row.
 	_, err := d.Store().DB().ExecContext(ctx, `
-		INSERT INTO enrollments (host_id, host_token_id, host_token_hash, hostname, agent_version, os_version, source_ip)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		enrolledHost, []byte("token-id-0001"), []byte("token-hash"),
-		"eng-lopez-mbp.local", "1.2.3", "macOS 26.0", "203.0.113.7")
+		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, source_ip)
+		VALUES (?, ?, ?, ?, ?)`,
+		enrolledHost, "eng-lopez-mbp.local", "1.2.3", "macOS 26.0", "203.0.113.7")
 	require.NoError(t, err)
 
 	hosts, err := d.Service().ListHosts(ctx)

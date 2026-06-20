@@ -48,7 +48,7 @@ func TestNew_rejectsShortRoot(t *testing.T) {
 // exact strings, so changing a value here silently invalidates every issued token and breaks cross-binary validation. Treat a failure
 // as "this is a deliberate key rotation" and update the literal only with that intent.
 func TestLabelConstants_arePinned(t *testing.T) {
-	assert.Equal(t, "edr/host-token/pepper/v1", keyring.HostTokenPepperLabel)
+	assert.Equal(t, "edr/host-token/sign/v1", keyring.HostTokenSigningLabel)
 	assert.Equal(t, "edr/session/signing/v1", keyring.SessionSigningKeyLabel)
 }
 
@@ -57,8 +57,8 @@ func TestDerive_isDeterministicPerLabel(t *testing.T) {
 	kr, err := keyring.New(root)
 	require.NoError(t, err)
 
-	a := kr.Derive("edr/host-token/pepper/v1")
-	b := kr.Derive("edr/host-token/pepper/v1")
+	a := kr.Derive("edr/host-token/sign/v1")
+	b := kr.Derive("edr/host-token/sign/v1")
 	assert.Equal(t, a, b, "same label must derive the same key across calls")
 	assert.Len(t, a, 32)
 }
@@ -68,12 +68,12 @@ func TestDerive_distinctLabelsAreIndependent(t *testing.T) {
 	kr, err := keyring.New(root)
 	require.NoError(t, err)
 
-	pepper := kr.Derive("edr/host-token/pepper/v1")
+	signing := kr.Derive("edr/host-token/sign/v1")
 	session := kr.Derive("edr/session/signing/v1")
-	versioned := kr.Derive("edr/host-token/pepper/v2")
+	versioned := kr.Derive("edr/host-token/sign/v2")
 
-	assert.NotEqual(t, pepper, session, "different purposes must derive different keys")
-	assert.NotEqual(t, pepper, versioned, "bumping the version must derive a fresh key")
+	assert.NotEqual(t, signing, session, "different purposes must derive different keys")
+	assert.NotEqual(t, signing, versioned, "bumping the version must derive a fresh key")
 }
 
 func TestDerive_differsAcrossRoots(t *testing.T) {

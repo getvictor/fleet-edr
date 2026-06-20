@@ -5,10 +5,7 @@
 // that orchestrates host enrollment + token verification, error
 // sentinels, context helpers (HostIDFromContext, WithHostIDForTest)
 // used by the host-token middleware, and the narrow PolicyProvider
-// interface the enroll handler needs at boot time. The
-// CommandInserter shape is a closure type defined in
-// endpoint/bootstrap, satisfied by response.Service.Insert as a
-// method value.
+// interface the enroll handler needs at boot time.
 //
 // The package contains no executable logic, no database code, and no
 // HTTP handlers. Implementations live under server/endpoint/internal/.

@@ -327,7 +327,6 @@ func startCommander(
 		ServerURL:                serverURL,
 		TokenFn:                  tokenProvider.Token,
 		OnAuthFail:               tokenProvider.OnUnauthorized,
-		RotateTokenFn:            tokenProvider.Rotate,
 		HostID:                   hostID,
 		Interval:                 commanderPollInterval,
 		ApplicationControlSender: appControlSender,

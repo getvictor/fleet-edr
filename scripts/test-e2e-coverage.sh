@@ -59,7 +59,6 @@ COMMON_ENV=(
   EDR_LISTEN_ADDR="0.0.0.0:8088"
   EDR_LOG_FORMAT=text
   EDR_HOST_TOKEN_LIFETIME=24h
-  EDR_HOST_TOKEN_GRACE=5m
   # Raise the per-IP enroll cap well above the suite's enroll volume. Every spec enrolls its hosts from the one CI runner IP,
   # so the production default (30/min, burst 30) is occasionally exhausted mid-suite and a setup enroll gets a 429, flaking
   # an unrelated test. No E2E spec asserts the enroll limiter (the rate-limit specs cover break-glass, a separate limiter), so

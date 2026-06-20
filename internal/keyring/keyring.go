@@ -25,8 +25,7 @@ const MinRootKeyLen = 32
 // under another running the same root secret, which only holds if they pass the same Derive label. Each is versioned so a single
 // purpose can be rotated by bumping its suffix without disturbing the root or any sibling key.
 const (
-	HostTokenPepperLabel   = "edr/host-token/pepper/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
-	HostTokenSigningLabel  = "edr/host-token/sign/v1"   //nolint:gosec // G101: HKDF domain-separation label, not a credential
+	HostTokenSigningLabel  = "edr/host-token/sign/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
 	SessionSigningKeyLabel = "edr/session/signing/v1"
 )
 
@@ -50,7 +49,7 @@ func New(root []byte) (*Keyring, error) {
 
 // Derive returns the 32-byte key bound to label. The label is the HKDF info string and is the sole domain separator: distinct labels
 // yield independent keys, and a fixed label is stable across calls and process restarts, so a derived key can authenticate data it
-// produced earlier. Labels SHOULD be namespaced and versioned (e.g. "edr/host-token/pepper/v1") so a single purpose can be rotated by
+// produced earlier. Labels SHOULD be namespaced and versioned (e.g. "edr/host-token/sign/v1") so a single purpose can be rotated by
 // bumping its version without disturbing the root or sibling keys.
 func (k *Keyring) Derive(label string) []byte {
 	// HKDF-SHA256 Extract-then-Expand. The root is already high-entropy, so the Extract salt is nil per RFC 5869 guidance; the label

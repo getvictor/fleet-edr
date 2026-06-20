@@ -47,10 +47,7 @@ const (
 )
 
 // Fixed >=32-byte keys so a token minted at enroll verifies on a later call within the same test.
-var (
-	testPepper     = []byte("test-host-token-pepper-0123456789abcdef")
-	testSigningKey = []byte("test-host-token-signing-0123456789abcdef")
-)
+var testSigningKey = []byte("test-host-token-signing-0123456789abcdef")
 
 // newServiceForTest stands up an endpoint Service over a real MySQL test DB, wired with the signer + revocation snapshot the
 // self-validating-token model needs. The snapshot is returned so tests can Refresh it deterministically (production refreshes it on a
@@ -59,7 +56,7 @@ func newServiceForTest(t *testing.T) (api.Service, *revocation.Snapshot) {
 	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	store := mysql.NewStore(db, testPepper)
+	store := mysql.NewStore(db)
 	signer, err := signedtoken.New(testSigningKey, "v1")
 	require.NoError(t, err)
 	snap := revocation.NewSnapshot(store, slog.Default())
@@ -131,8 +128,7 @@ func TestRefreshToken_RejectsStaleEpochAndGarbage(t *testing.T) {
 	_, err := svc.RefreshToken(t.Context(), "not.a.token")
 	require.ErrorIs(t, err, api.ErrInvalidToken)
 
-	_, err = svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "incident")
-	require.NoError(t, err)
+	require.NoError(t, svc.RotateToken(t.Context(), testHostID, "op", "incident"))
 	_, err = svc.RefreshToken(t.Context(), res.HostToken)
 	require.ErrorIs(t, err, api.ErrInvalidToken, "stale-epoch token must not refresh after an epoch bump")
 }
@@ -149,9 +145,7 @@ func TestRotateToken_BumpsEpochAndInvalidates(t *testing.T) {
 	_, err := svc.VerifyToken(t.Context(), res.HostToken)
 	require.NoError(t, err)
 
-	rot, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "victor@example", "incident-2026")
-	require.NoError(t, err)
-	assert.Nil(t, rot.CommandID, "no rotate_token command is pushed under the signed-token model")
+	require.NoError(t, svc.RotateToken(t.Context(), testHostID, "victor@example", "incident-2026"))
 
 	require.NoError(t, snap.Refresh(t.Context()))
 	_, err = svc.VerifyToken(t.Context(), res.HostToken)
@@ -174,7 +168,7 @@ func TestRotateToken_BumpsEpochAndInvalidates(t *testing.T) {
 func TestRotateToken_NotFound(t *testing.T) {
 	t.Parallel()
 	svc, _ := newServiceForTest(t)
-	_, err := svc.RotateToken(t.Context(), "00000000-0000-0000-0000-000000000000", api.RotationTriggerOperator, "a", "b")
+	err := svc.RotateToken(t.Context(), "00000000-0000-0000-0000-000000000000", "a", "b")
 	require.ErrorIs(t, err, api.ErrNotFound)
 }
 
@@ -198,10 +192,9 @@ func TestReEnroll_ClearsStaleSnapshotLocally(t *testing.T) {
 	res := enrollForTest(t, svc)
 	require.NoError(t, snap.Refresh(t.Context()))
 
-	_, err := svc.RotateToken(t.Context(), testHostID, api.RotationTriggerOperator, "op", "incident")
-	require.NoError(t, err)
+	require.NoError(t, svc.RotateToken(t.Context(), testHostID, "op", "incident"))
 	require.NoError(t, snap.Refresh(t.Context()))
-	_, err = svc.VerifyToken(t.Context(), res.HostToken)
+	_, err := svc.VerifyToken(t.Context(), res.HostToken)
 	require.ErrorIs(t, err, api.ErrInvalidToken, "old token rejected after epoch bump")
 
 	// Re-enroll, then verify with NO intervening snap.Refresh: the new token must pass because Enroll forgot the host locally.
