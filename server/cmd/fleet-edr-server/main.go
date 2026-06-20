@@ -214,7 +214,8 @@ func openContexts(
 	}
 	defer release()
 
-	if identityCtx, err = openIdentity(ctx, logger, db, cfg, kr.Derive(keyring.SessionSigningKeyLabel)); err != nil {
+	if identityCtx, err = openIdentity(ctx, logger, db, cfg,
+		kr.Derive(keyring.SessionSigningKeyLabel), kr.Derive(keyring.OIDCClientSecretLabel)); err != nil {
 		return
 	}
 	if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord); err != nil {
@@ -237,12 +238,14 @@ func openIdentity(
 	db *sqlx.DB,
 	cfg *config.Config,
 	sessionSigningKey []byte,
+	oidcSecretKey []byte,
 ) (*identitybootstrap.Identity, error) {
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
 		DB:                db,
 		Logger:            logger,
 		CookieSecure:      cfg.ExternalTLS(),
 		SessionSigningKey: sessionSigningKey,
+		OIDCSecretKey:     oidcSecretKey,
 		OIDC: identitybootstrap.OIDCDeps{
 			Issuer:               cfg.OIDCIssuer,
 			ClientID:             cfg.OIDCClientID,

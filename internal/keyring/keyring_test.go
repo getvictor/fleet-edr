@@ -50,6 +50,7 @@ func TestNew_rejectsShortRoot(t *testing.T) {
 func TestLabelConstants_arePinned(t *testing.T) {
 	assert.Equal(t, "edr/host-token/sign/v1", keyring.HostTokenSigningLabel)
 	assert.Equal(t, "edr/session/signing/v1", keyring.SessionSigningKeyLabel)
+	assert.Equal(t, "edr/oidc/client-secret/v1", keyring.OIDCClientSecretLabel)
 }
 
 func TestDerive_isDeterministicPerLabel(t *testing.T) {

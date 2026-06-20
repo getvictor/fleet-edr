@@ -35,7 +35,7 @@ func newTestHandler(t *testing.T) (*Handler, *captureAudit) {
 		signingKey[i] = byte(i + 1)
 	}
 	h := &Handler{
-		client:      nil, // never reached on failure paths
+		resolve:     nil, // never reached: callback failure paths return before client resolution
 		provisioner: nil,
 		sessions:    nil,
 		signingKey:  signingKey,

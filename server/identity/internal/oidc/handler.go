@@ -42,7 +42,9 @@ type IDPClient interface {
 // Handler serves the OIDC login + callback routes. Construct via
 // NewHandler; mount with RegisterPublicRoutes.
 type Handler struct {
-	client      IDPClient
+	// resolve returns the IDPClient for the current OIDC configuration. In production it is a *Resolver's Current method, which builds
+	// the client from the stored config and rebuilds it on a config change (no restart). It returns ErrNotConfigured when SSO is unset.
+	resolve     func(ctx context.Context) (IDPClient, error)
 	provisioner *Provisioner
 	sessions    *sessions.Store
 	signingKey  []byte
@@ -63,7 +65,9 @@ type Handler struct {
 // in misconfigured production deployments and trips
 // CodeQL go/cookie-secure-not-set on every static analysis pass.
 type HandlerOptions struct {
-	Client      *Client
+	// Resolve returns the IDPClient for the current configuration; production passes a *Resolver's Current method so a UI config edit
+	// applies without a restart. Required.
+	Resolve     func(ctx context.Context) (IDPClient, error)
 	Provisioner *Provisioner
 	Sessions    *sessions.Store
 	SigningKey  []byte
@@ -75,8 +79,8 @@ type HandlerOptions struct {
 // NewHandler constructs a Handler. Panics on missing dependencies -
 // every field is load-bearing in production.
 func NewHandler(opts HandlerOptions) *Handler {
-	if opts.Client == nil {
-		panic("oidc.NewHandler: Client is required")
+	if opts.Resolve == nil {
+		panic("oidc.NewHandler: Resolve is required")
 	}
 	if opts.Provisioner == nil {
 		panic("oidc.NewHandler: Provisioner is required")
@@ -96,7 +100,7 @@ func NewHandler(opts HandlerOptions) *Handler {
 		logger = slog.Default()
 	}
 	return &Handler{
-		client:      opts.Client,
+		resolve:     opts.Resolve,
 		provisioner: opts.Provisioner,
 		sessions:    opts.Sessions,
 		signingKey:  opts.SigningKey,
@@ -127,6 +131,13 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 // expiry); accepting the orphan was the simpler tradeoff than
 // threading session-continuity through the state cookie.
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// Resolve the client first so an unconfigured deployment fails fast without minting a state cookie. ErrNotConfigured means no
+	// admin has set up SSO yet; any other error is a provider-build failure (e.g. discovery unreachable).
+	client, err := h.resolve(r.Context())
+	if err != nil {
+		h.loginUnavailable(r, w, err)
+		return
+	}
 	state, nonce, codeVerifier, codeChallenge, err := GenerateFlowSecrets()
 	if err != nil {
 		h.callbackError(r, w, http.StatusInternalServerError, "flow_secrets_failed", err)
@@ -139,11 +150,21 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeStateCookie(w, cookieValue, int(h.stateTTL.Seconds()))
-	authorizeURL := h.client.AuthURL(state, nonce, codeChallenge)
+	authorizeURL := client.AuthURL(state, nonce, codeChallenge)
 	if r.URL.Query().Get("reauth") == "1" {
 		authorizeURL = withPromptLogin(authorizeURL)
 	}
 	http.Redirect(w, r, authorizeURL, http.StatusFound)
+}
+
+// loginUnavailable handles the resolve failure at login start. ErrNotConfigured (no SSO configured yet) is a 503 with reason
+// sso_not_configured so the operator UI can present "configure SSO" rather than a hard error; a provider-build failure is a 502.
+func (h *Handler) loginUnavailable(r *http.Request, w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotConfigured) {
+		h.callbackError(r, w, http.StatusServiceUnavailable, "sso_not_configured", err)
+		return
+	}
+	h.callbackError(r, w, http.StatusBadGateway, "provider_unavailable", err)
 }
 
 // withPromptLogin returns the authorize URL with prompt=login set. Used by the reauth flow so the IdP rejects its existing
@@ -189,7 +210,14 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 			fmt.Errorf("idp returned: %s", idpErr))
 		return
 	}
-	claims, err := h.client.Exchange(ctx, code, decoded.CodeVerifier, decoded.Nonce)
+	// Resolve the client only after state validation so the failure-path responses above never depend on a configured provider. A
+	// resolve failure here (config changed/removed mid-flow, or discovery down) maps to 502.
+	client, err := h.resolve(ctx)
+	if err != nil {
+		h.callbackError(r, w, http.StatusBadGateway, "provider_unavailable", err)
+		return
+	}
+	claims, err := client.Exchange(ctx, code, decoded.CodeVerifier, decoded.Nonce)
 	if err != nil {
 		// Exchange failure crosses two boundaries: a malformed code (caller's fault, 400) is indistinguishable in the wire
 		// from an IdP/token-endpoint outage. Treat as 502, which is closer to the truth: the upstream we depend on did not produce a

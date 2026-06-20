@@ -27,6 +27,10 @@ const MinRootKeyLen = 32
 const (
 	HostTokenSigningLabel  = "edr/host-token/sign/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
 	SessionSigningKeyLabel = "edr/session/signing/v1"
+	// OIDCClientSecretLabel derives the AES-256-GCM key that seals the stored OIDC client secret at rest (issue #375). The secret is
+	// persisted only in sealed form; rotating EDR_SECRET_KEY (or bumping this label's version) makes the stored ciphertext
+	// undecryptable, after which an operator re-enters the client secret through the admin UI.
+	OIDCClientSecretLabel = "edr/oidc/client-secret/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
 )
 
 // derivedKeyLen is the byte length of every derived key. 32 bytes is a full HMAC-SHA256 key and an ample HMAC/AEAD key budget.
