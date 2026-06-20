@@ -6,6 +6,7 @@ import { AlertList } from "./components/AlertList";
 import { AttackCoverage } from "./components/AttackCoverage";
 import { ApplicationControlRoutes } from "./components/ApplicationControl/ApplicationControlRoutes";
 import { RuleDetail } from "./components/RuleDetail";
+import { SSOSettings } from "./components/SSOSettings/SSOSettings";
 import { Login } from "./components/Login";
 import { BreakGlassSetup } from "./components/BreakGlassSetup";
 import { BreakGlassLogin } from "./components/BreakGlassLogin";
@@ -156,6 +157,14 @@ export function AuthedApp() {
             )}
           />
           <Route path="/coverage" element={<AttackCoverage />} />
+          <Route
+            path="/admin/settings/sso"
+            element={(
+              <RequirePermission action={PermissionAction.SSOManage} surface="Single sign-on settings">
+                <SSOSettings />
+              </RequirePermission>
+            )}
+          />
           <Route path="/rules/:ruleId" element={<RuleDetail />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -4,6 +4,14 @@ The EDR server speaks OIDC with PKCE. Okta is the reference IdP: every other con
 
 SSO covers everyday operator login. The break-glass account at `admin@fleet-edr.local` is the only path in when SSO is unavailable (see [`breakglass.md`](breakglass.md)).
 
+## Configure SSO in the UI (recommended)
+
+OIDC is configurable in-product under **Admin settings -> Single sign-on** (the account menu, top right; visible to operators with the `sso.manage` permission). An admin sets the issuer, client ID, client secret (write-only: enter a value to rotate, never displayed), the deployment external URL, the JIT toggle, and the default JIT role, then saves. Changes apply at runtime with no restart, and the test-connection button verifies the provider before saving.
+
+Precedence is env-seeds / DB-governs: the `EDR_OIDC_*` env vars below seed the stored config on first boot only; once a stored config exists the UI is the source of truth and env changes are inert. To configure SSO purely from the UI (no env), boot break-glass-only (`EDR_AUTH_ALLOW_NO_OIDC=1`), sign in via break-glass, and fill in the form. The redirect URI is derived from the external URL (`<external-url>/api/auth/callback`) and shown read-only; register that exact value at the IdP.
+
+The stored client secret is sealed with a key derived from `EDR_SECRET_KEY`. Rotating `EDR_SECRET_KEY` makes the stored secret undecryptable; after such a rotation, re-enter the client secret in the UI.
+
 ## Prerequisites
 
 - An Okta tenant with admin access. Free developer tenants (`*.okta.com`, `*.oktapreview.com`) work for staging; production deployments use the customer's existing tenant.
