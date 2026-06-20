@@ -151,6 +151,88 @@ func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
 	return ids, nil
 }
 
+// parseRemovedRequirementKeys returns the set of "<capability>/<requirement-slug>" keys that in-flight OpenSpec change deltas
+// mark under a `## REMOVED Requirements` section. A canonical scenario whose parent requirement matches one of these keys is
+// being retired by a merged-but-not-yet-archived change: its tests are deleted in the same release cycle, but the requirement
+// only leaves openspec/specs when the change is archived (batched at release time, see docs/release-checklist.md). Without
+// this exemption, every PR that removes a requirement's code+tests would fail `spectrace check --strict` on the now-orphaned
+// canonical scenarios for the whole window between merge and the release archive. The key shape mirrors the scenario ID prefix
+// built in parseSpec (specDir + "/" + slugify(requirement-title)), so a scenario is matched by SpecDir + "/" + slugify(Requirement).
+// The archive subtree is skipped: archived removals are already applied into openspec/specs, so the scenarios are simply gone.
+func parseRemovedRequirementKeys(changesDir string) (map[string]struct{}, error) {
+	keys := make(map[string]struct{})
+	if changesDir == "" {
+		return keys, nil
+	}
+	info, statErr := os.Stat(changesDir)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return keys, nil
+		}
+		return nil, statErr
+	}
+	if !info.IsDir() {
+		return keys, nil
+	}
+	entries, err := os.ReadDir(changesDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == archiveDirName {
+			continue
+		}
+		if err := collectRemovedRequirementKeys(filepath.Join(changesDir, e.Name()), keys); err != nil {
+			return nil, err
+		}
+	}
+	return keys, nil
+}
+
+// collectRemovedRequirementKeys walks one in-flight change directory for delta spec.md files and adds a key per
+// `### Requirement:` heading found under a `## REMOVED Requirements` section. The capability is the parent directory name of
+// the spec.md (openspec/changes/<change>/specs/<capability>/spec.md), matching the specDir parseSpec derives for the canonical
+// tree so the keys line up with scenario ID prefixes.
+func collectRemovedRequirementKeys(changeDir string, keys map[string]struct{}) error {
+	return filepath.WalkDir(changeDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || filepath.Base(path) != "spec.md" {
+			return nil
+		}
+		f, err := os.Open(path) //nolint:gosec // path comes from filepath.WalkDir under changesDir
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		defer f.Close()
+		capability := filepath.Base(filepath.Dir(path))
+		return scanRemovedRequirements(f, capability, keys)
+	})
+}
+
+// scanRemovedRequirements is the streaming parser behind collectRemovedRequirementKeys. It tracks the active `## ` section and,
+// while inside `## REMOVED Requirements`, records a "<capability>/<requirement-slug>" key for each `### Requirement:` heading.
+// REMOVED requirements carry no `#### Scenario:` headings in a delta (they name the requirement being retired, not its
+// scenarios), which is exactly why the exemption keys on the requirement rather than on scenario IDs.
+func scanRemovedRequirements(r io.Reader, capability string, keys map[string]struct{}) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	inRemoved := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "## "):
+			// A new top-level section opens; the exemption applies only inside `## REMOVED Requirements`.
+			inRemoved = strings.HasPrefix(line, "## REMOVED")
+		case inRemoved && strings.HasPrefix(line, "### Requirement:"):
+			title := strings.TrimSpace(strings.TrimPrefix(line, "### Requirement:"))
+			keys[capability+"/"+slugify(title)] = struct{}{}
+		}
+	}
+	return scanner.Err()
+}
+
 // openReportWriter returns (writer, cleanup, error). When path is empty the writer is stdout and the cleanup is a no-op.
 // When path is non-empty the writer is a newly-created file whose cleanup closes it. Errors from Close are reported via
 // stderr at cleanup time because the report renderer has already returned by then.

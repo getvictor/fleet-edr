@@ -41,8 +41,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # OpenSpec deltas are archived in one batch at release time (docs/release-checklist.md), not per-merge. Any folder under
+  # openspec/changes other than archive/ is a merged change not yet folded into openspec/specs, so the release must not ship.
+  # Every publishing job below depends on this via needs:, so a v* tag push fails here before any signing. On a
+  # workflow_dispatch dry-run the gate is advisory (a topic branch legitimately carries in-flight changes).
+  openspec-archived:
+    name: OpenSpec archived for release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # checkout only: the gate reads the openspec/changes tree
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Fail if any OpenSpec change is left un-archived
+        env:
+          IS_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          pending=$(find openspec/changes -mindepth 1 -maxdepth 1 -type d ! -name archive -printf '%f\n' 2>/dev/null || true)
+          if [ -z "$pending" ]; then
+            echo "No un-archived OpenSpec changes; release may proceed."
+            exit 0
+          fi
+          echo "Un-archived OpenSpec changes present:"
+          echo "$pending"
+          if [ "$IS_RELEASE_TAG" = "true" ]; then
+            echo "::error::Archive all completed OpenSpec changes before tagging a release (see docs/release-checklist.md)."
+            exit 1
+          fi
+          echo "::warning::Dry-run from a non-tag ref: archive gate is advisory, not failing."
+
   macos-pkg:
     name: Build + sign + notarize pkg
+    needs: openspec-archived
     runs-on: macos-15  # pin: needs Xcode 16.3+ (project objectVersion 77)
     environment: release-signing
     permissions:
@@ -292,6 +321,7 @@ jobs:
 
   docker-server:
     name: Build + push server image
+    needs: openspec-archived
     runs-on: ubuntu-latest
     permissions:
       contents: read      # checkout source for the build context
@@ -409,6 +439,7 @@ jobs:
 
   docker-demo-seed:
     name: Build + push demo-seed image
+    needs: openspec-archived
     runs-on: ubuntu-latest
     # Separate job (not a matrix with docker-server) so the proven server-release
     # path stays byte-identical. This is the one-shot seeder for the Mac-free
