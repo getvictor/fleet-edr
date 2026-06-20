@@ -24,6 +24,11 @@ const (
 	// defaultLifetime is the credential lifetime when the caller does not specify one; maxLifetime caps any caller-supplied value.
 	defaultLifetime = 90 * day
 	maxLifetime     = 365 * day
+	// maxLifetimeDays mirrors maxLifetime as an integer-day count so the caller's day value can be clamped BEFORE the int->Duration
+	// multiply, avoiding an overflow that would wrap a huge day count to a small positive duration.
+	maxLifetimeDays = 365
+	// maxNameLen matches the service_accounts.name column width.
+	maxNameLen = 255
 
 	// maxBodyBytes bounds the create request body.
 	maxBodyBytes = 16 << 10
@@ -149,6 +154,11 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "missing_name")
 		return
 	}
+	if len(name) > maxNameLen {
+		// The column is VARCHAR(255); reject overlong names with a 400 rather than letting the insert fail as a 500.
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "name_too_long")
+		return
+	}
 	role := strings.ToLower(strings.TrimSpace(req.Role))
 	if !bindableRoles[role] {
 		// Covers admin/super_admin (management-capable) and unknown roles alike.
@@ -229,13 +239,15 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) resolveExpiry(days *int) time.Time {
 	lifetime := defaultLifetime
 	if days != nil {
-		switch d := time.Duration(*days) * day; {
-		case d <= 0:
+		// Clamp the integer day count before converting to a Duration: a huge *days (>~213506) would overflow time.Duration and wrap
+		// to a small positive value, silently yielding a near-immediate expiry.
+		switch {
+		case *days <= 0:
 			lifetime = defaultLifetime
-		case d < maxLifetime:
-			lifetime = d
-		default:
+		case *days >= maxLifetimeDays:
 			lifetime = maxLifetime
+		default:
+			lifetime = time.Duration(*days) * day
 		}
 	}
 	return h.now().Add(lifetime).UTC()

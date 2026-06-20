@@ -2,7 +2,7 @@
 -- service_accounts holds non-human API principals (issue #376, ADR-0013). A service account authenticates with a long-lived client
 -- credential (client_id + secret) that is exchanged at the token endpoint for a short-lived self-validating access token; the secret is
 -- stored only as a SHA-256 hash, never plaintext, and is shown once at creation/rotation. epoch is the revocation generation: a revoke
--- or disable bumps it, and the per-replica revocation snapshot rejects any outstanding access token carrying a stale epoch (mirrors the
+-- or rotate bumps it, and the per-replica revocation snapshot rejects any outstanding access token carrying a stale epoch (mirrors the
 -- #454 host-token mechanism). The bound role MUST NOT be admin/super_admin or any role granting console-management actions; that rule
 -- is enforced in the application layer (the role set is dynamic), not by a CHECK here.
 

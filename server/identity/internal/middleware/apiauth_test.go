@@ -65,6 +65,18 @@ func TestAPIAuth_invalidBearerIs401(t *testing.T) {
 	assert.False(t, sessionRan, "an invalid bearer token is a clear 401, never a fall-through to the cookie path")
 }
 
+func TestAPIAuth_emptyBearerIs401(t *testing.T) {
+	t.Parallel()
+	var sessionRan bool
+	mw := APIAuth(stubAuth{ok: false}, markerMW(&sessionRan), markerMW(new(bool)), nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/hosts", nil)
+	r.Header.Set("Authorization", "Bearer ") // scheme present, token empty
+	w := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(w, r)
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "a present-but-empty Bearer credential is 401, not a cookie fall-through")
+	assert.False(t, sessionRan)
+}
+
 // spec:server-identity-authentication/the-api-accepts-a-bearer-access-token-as-a-second-transport/cookie-transport-is-unchanged-for-the-browser
 func TestAPIAuth_noBearerDelegatesToSession(t *testing.T) {
 	t.Parallel()
@@ -74,7 +86,6 @@ func TestAPIAuth_noBearerDelegatesToSession(t *testing.T) {
 	}{
 		{"no header", ""},
 		{"non-bearer scheme", "Basic Zm9vOmJhcg=="},
-		{"empty bearer", "Bearer "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

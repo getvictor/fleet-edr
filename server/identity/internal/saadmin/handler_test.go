@@ -202,6 +202,17 @@ func TestHandleCreate_malformedBody(t *testing.T) {
 	})
 }
 
+func TestHandleCreate_nameTooLong(t *testing.T) {
+	t.Parallel()
+	store := &fakeMgmtStore{}
+	h := newHandler(store, allowAuthZ{}, &captureAudit{})
+	w := httptest.NewRecorder()
+	h.handleCreate(w, createReq(t, map[string]any{"name": strings.Repeat("a", maxNameLen+1), "role": "analyst"}))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "name_too_long")
+	assert.Equal(t, 0, store.createCalls)
+}
+
 func TestHandleCreate_nilAuditDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	store := &fakeMgmtStore{}

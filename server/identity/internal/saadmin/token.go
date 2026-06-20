@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -26,6 +27,12 @@ const (
 	defaultRateLimit  = 60
 	rateLimitWindow   = time.Minute
 	maxTokenBodyBytes = 8 << 10
+	// maxClientIDLen bounds the client_id before it is used as a rate-limiter map key, so an attacker can't grow per-key memory with
+	// oversized keys. Real client ids are "sa_" + 16 hex = 19 chars.
+	maxClientIDLen = 64
+	// maxLimiterKeys caps the rate-limiter map so a flood of unique client_ids on this public endpoint cannot grow memory without
+	// bound; once full, new keys are refused rather than admitted.
+	maxLimiterKeys = 10_000
 )
 
 // TokenStore is the persistence the token endpoint needs.
@@ -80,7 +87,9 @@ type tokenResponse struct {
 func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	clientID, secret, ok := parseCredentials(r)
-	if !ok || clientID == "" || secret == "" {
+	if !ok || clientID == "" || secret == "" || len(clientID) > maxClientIDLen {
+		// Bound the client_id length here, before it is used as a rate-limiter map key or hits the DB, so oversized/garbage ids are
+		// rejected cheaply.
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -158,7 +167,9 @@ func parseCredentials(r *http.Request) (clientID, secret string, ok bool) {
 			ClientID     string `json:"client_id"`
 			ClientSecret string `json:"client_secret"`
 		}
-		dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxTokenBodyBytes))
+		// io.LimitReader, not http.MaxBytesReader: the latter requires a non-nil http.ResponseWriter and we have none here. The bound
+		// is all we need; an over-limit body simply truncates and fails to decode.
+		dec := json.NewDecoder(io.LimitReader(r.Body, maxTokenBodyBytes))
 		if err := dec.Decode(&body); err != nil {
 			return "", "", false
 		}
@@ -167,7 +178,7 @@ func parseCredentials(r *http.Request) (clientID, secret string, ok bool) {
 		}
 		return strings.TrimSpace(body.ClientID), body.ClientSecret, true
 	}
-	r.Body = http.MaxBytesReader(nil, r.Body, maxTokenBodyBytes)
+	r.Body = io.NopCloser(io.LimitReader(r.Body, maxTokenBodyBytes))
 	if err := r.ParseForm(); err != nil {
 		return "", "", false
 	}
@@ -180,11 +191,13 @@ func parseCredentials(r *http.Request) (clientID, secret string, ok bool) {
 // rateLimiter is a per-key fixed-window limiter. Per-replica and best-effort (ADR-0010): behind N replicas a client gets up to N
 // times the budget, which is an accepted bound for a DoS/brute-force guard, not a correctness control.
 type rateLimiter struct {
-	mu     sync.Mutex
-	limit  int
-	window time.Duration
-	now    func() time.Time
-	seen   map[string]*windowCounter
+	mu      sync.Mutex
+	limit   int
+	maxKeys int
+	window  time.Duration
+	now     func() time.Time
+	// seen is a per-replica perf cache, safe to lose: it holds only in-window request counts and is bounded by maxKeys.
+	seen map[string]*windowCounter
 }
 
 type windowCounter struct {
@@ -193,27 +206,34 @@ type windowCounter struct {
 }
 
 func newRateLimiter(limit int, window time.Duration, now func() time.Time) *rateLimiter {
-	return &rateLimiter{limit: limit, window: window, now: now, seen: map[string]*windowCounter{}}
+	return &rateLimiter{limit: limit, maxKeys: maxLimiterKeys, window: window, now: now, seen: map[string]*windowCounter{}}
 }
 
 func (rl *rateLimiter) allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := rl.now()
-	c, ok := rl.seen[key]
-	if !ok || now.After(c.resetAt) {
-		rl.pruneLocked(now)
-		rl.seen[key] = &windowCounter{count: 1, resetAt: now.Add(rl.window)}
+	if c, ok := rl.seen[key]; ok && !now.After(c.resetAt) {
+		if c.count >= rl.limit {
+			return false
+		}
+		c.count++
 		return true
 	}
-	if c.count >= rl.limit {
-		return false
+	// New or expired window for this key. Keep the common path O(1): only scan-to-prune when the map is at its cap, and once it is
+	// still full after pruning, refuse new keys rather than grow without bound under a unique-key flood.
+	if len(rl.seen) >= rl.maxKeys {
+		rl.pruneLocked(now)
+		if len(rl.seen) >= rl.maxKeys {
+			return false
+		}
 	}
-	c.count++
+	rl.seen[key] = &windowCounter{count: 1, resetAt: now.Add(rl.window)}
 	return true
 }
 
-// pruneLocked drops expired windows so the map stays bounded by the count of keys seen within one window. Caller holds the lock.
+// pruneLocked drops expired windows. Caller holds the lock. Called only when the map reaches its cap, so it is amortized rather than
+// run on every new key.
 func (rl *rateLimiter) pruneLocked(now time.Time) {
 	for k, c := range rl.seen {
 		if now.After(c.resetAt) {

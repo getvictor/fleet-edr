@@ -260,7 +260,9 @@ func (e *Engine) recordDecision(
 		// ctx-extracted id.
 		TraceID: traceIDFromContext(ctx),
 	}
-	if actor != nil {
+	// Only stamp a user id for a real human user. A service-account actor (issue #376) has UserID==0 and no users row; setting it would
+	// persist actor_user_id=0 and make the audit writer's actor_email resolution query users for id 0 on every audited call.
+	if actor != nil && actor.UserID > 0 {
 		uid := actor.UserID
 		event.UserID = &uid
 	}

@@ -200,6 +200,25 @@ func TestToken_rateLimited(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "rate_limited")
 }
 
+func TestRateLimiter_boundedMap(t *testing.T) {
+	t.Parallel()
+	now := fixedNow
+	rl := newRateLimiter(100, time.Minute, func() time.Time { return now })
+	rl.maxKeys = 2
+	assert.True(t, rl.allow("a"))
+	assert.True(t, rl.allow("b"))
+	assert.False(t, rl.allow("c"), "a unique-key flood cannot grow the map past its cap")
+	assert.True(t, rl.allow("a"), "an existing key is still served within its per-key budget")
+}
+
+func TestToken_clientIDTooLong(t *testing.T) {
+	t.Parallel()
+	h := newTokenH(&fakeTokenStore{rec: validRecord("edrsa_good")}, &captureAudit{})
+	w := httptest.NewRecorder()
+	h.handleToken(w, jsonTokenReq(t, strings.Repeat("x", maxClientIDLen+1), "edrsa_good"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestRateLimiter(t *testing.T) {
 	t.Parallel()
 	now := fixedNow

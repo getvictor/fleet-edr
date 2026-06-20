@@ -17,7 +17,7 @@ Service accounts are managed from the Admin settings area (requires the `service
 - `POST /api/settings/service-accounts/{id}/rotate` issues a new secret and bumps the account's revocation epoch, so access tokens minted from the old secret stop working. Use this after a suspected leak.
 - `DELETE /api/settings/service-accounts/{id}` revokes the account: it can no longer mint tokens, and outstanding access tokens stop validating within the revocation refresh window (about 5 seconds).
 
-Every lifecycle change and every token issuance is audited; no audit row, log line, or API response ever contains the secret or an access token.
+Every lifecycle change and every token issuance is audited. No audit row or log line ever contains the secret or an access token; the only place a secret appears is the one-time create/rotate response, and the only place an access token appears is the token-endpoint response.
 
 ## Obtaining and using an access token
 
@@ -39,6 +39,6 @@ The token response is `{"access_token": "...", "token_type": "Bearer", "expires_
 
 ## Notes and limits
 
-- The token endpoint is rate-limited per `client_id`. A well-behaved client mints roughly once per token lifetime; bursts beyond the limit receive `429`.
+- The token endpoint is rate-limited per `client_id`, per replica (an in-memory fixed-window limiter). A well-behaved client mints roughly once per token lifetime; bursts beyond the limit receive `429`. Because the limit is per replica, a clustered deployment behind a load balancer can admit up to N times the per-replica budget; the limiter is a brute-force/DoS guard, not a precise cluster-wide quota.
 - Access tokens are signed with a key derived from `EDR_SECRET_KEY`. Rotating that root secret (or losing it) invalidates all outstanding access tokens; service accounts then obtain fresh tokens at the next grant. The stored credential hashes are unaffected.
 - Deferred (tracked for later): OIDC workload-identity federation for keyless CI access, token attenuation for sub-agent delegation, and DPoP/mTLS sender-constraining. See ADR-0013.

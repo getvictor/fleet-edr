@@ -69,8 +69,8 @@ type Deps struct {
 	// OIDCSecretKey seals the stored OIDC client secret at rest (keyring label edr/oidc/client-secret/v1). Required to build the
 	// runtime OIDC config store; when empty (minimal test wiring) the OIDC handler is not constructed.
 	OIDCSecretKey []byte
-	// ServiceAccountTokenSigningKey signs service-account access tokens (keyring label edr/service-account/sign/v1). Required to build
-	// the service-account surface; when empty (minimal test wiring) the service-account handlers are not constructed.
+	// ServiceAccountTokenSigningKey signs service-account access tokens (keyring label edr/service-account-token/sign/v1). Required to
+	// build the service-account surface; when empty (minimal test wiring) the service-account handlers are not constructed.
 	ServiceAccountTokenSigningKey []byte
 
 	// Breakglass carries the break-glass surface knobs. When Breakglass.RPID is empty AND OIDC is configured, the break-glass surface is

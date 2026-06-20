@@ -35,15 +35,17 @@ func APIAuth(
 	return func(next http.Handler) http.Handler {
 		sessionChain := sessionMW(csrfMW(next))
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := bearerToken(r)
-			if !ok {
-				// No bearer credential: this is the browser. Hand off to cookie session + CSRF.
+			token, hasScheme := bearerToken(r)
+			if !hasScheme {
+				// No Bearer scheme at all: this is the browser. Hand off to cookie session + CSRF.
 				sessionChain.ServeHTTP(w, r)
 				return
 			}
+			// A Bearer scheme is present: this is a service-account request. It MUST authenticate as one; we never fall through to the
+			// cookie path, so a malformed/empty/invalid bearer is a clear 401 rather than a confusing "missing session cookie".
 			actor, ok := auth.Authenticate(token, time.Now())
 			if !ok {
-				// Invalid / expired / wrong-audience / revoked all collapse to one opaque 401 (no oracle).
+				// Invalid / empty / expired / wrong-audience / revoked all collapse to one opaque 401 (no oracle).
 				httpserver.WriteAuthFailure(r.Context(), w, logger, http.StatusUnauthorized, "invalid_token")
 				return
 			}
@@ -52,16 +54,21 @@ func APIAuth(
 	}
 }
 
-// bearerToken returns the token portion of an `Authorization: Bearer <token>` header (scheme matched case-insensitively per RFC 7235).
-func bearerToken(r *http.Request) (string, bool) {
+// bearerToken reports whether the request uses the `Authorization: Bearer` scheme (matched case-insensitively per RFC 7235) and
+// returns the token portion (possibly empty). hasScheme distinguishes "no bearer credential" (delegate to cookies) from "bearer
+// scheme present but token empty/malformed" (authenticate, and 401 on failure).
+func bearerToken(r *http.Request) (token string, hasScheme bool) {
+	const scheme = "Bearer"
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	scheme, rest, ok := strings.Cut(auth, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
+	if len(auth) < len(scheme) || !strings.EqualFold(auth[:len(scheme)], scheme) {
 		return "", false
 	}
-	token := strings.TrimSpace(rest)
-	if token == "" {
+	rest := auth[len(scheme):]
+	// The scheme name must be followed by whitespace or end-of-string; otherwise "Bearerfoo" would falsely match the scheme. An empty
+	// rest ("Authorization: Bearer") is a present-but-empty credential, which the caller treats as an invalid bearer (401), not a
+	// missing one (cookie fall-through).
+	if rest != "" && rest[0] != ' ' && rest[0] != '\t' {
 		return "", false
 	}
-	return token, true
+	return strings.TrimSpace(rest), true
 }

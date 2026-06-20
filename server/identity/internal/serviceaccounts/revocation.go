@@ -32,7 +32,9 @@ type Snapshot struct {
 	src    Source
 	logger *slog.Logger
 
-	mu      sync.RWMutex
+	mu sync.RWMutex
+	// entries is a per-replica perf cache, safe to lose: it is rebuilt from MySQL on every Refresh and holds only revoked/rotated
+	// accounts, so a lost snapshot fails open until the next refresh rather than corrupting state.
 	entries map[string]Entry
 
 	lastRefreshUnix atomic.Int64
