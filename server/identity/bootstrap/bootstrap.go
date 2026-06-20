@@ -21,8 +21,11 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/middleware"
 	"github.com/fleetdm/edr/server/identity/internal/oidc"
 	"github.com/fleetdm/edr/server/identity/internal/rbac"
+	"github.com/fleetdm/edr/server/identity/internal/saadmin"
+	"github.com/fleetdm/edr/server/identity/internal/satoken"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/service"
+	"github.com/fleetdm/edr/server/identity/internal/serviceaccounts"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/ssoadmin"
 	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
@@ -66,6 +69,9 @@ type Deps struct {
 	// OIDCSecretKey seals the stored OIDC client secret at rest (keyring label edr/oidc/client-secret/v1). Required to build the
 	// runtime OIDC config store; when empty (minimal test wiring) the OIDC handler is not constructed.
 	OIDCSecretKey []byte
+	// ServiceAccountTokenSigningKey signs service-account access tokens (keyring label edr/service-account/sign/v1). Required to build
+	// the service-account surface; when empty (minimal test wiring) the service-account handlers are not constructed.
+	ServiceAccountTokenSigningKey []byte
 
 	// Breakglass carries the break-glass surface knobs. When Breakglass.RPID is empty AND OIDC is configured, the break-glass surface is
 	// not constructed (operator opted out by not setting EDR_BREAKGLASS_RP_ID). When RPID is empty AND OIDC is also unconfigured, the
@@ -125,6 +131,12 @@ type Identity struct {
 	ssoAdminHandler      *ssoadmin.Handler // nil when the OIDC handler was not built (no signing/secret key)
 	oidcSeed             OIDCDeps
 	oidcConfiguredAtBoot bool
+	// Service-account surface (issue #376). All nil when no SA signing key was provided (minimal test wiring). saSnapshot is a
+	// per-replica revocation cache; apiAuthMW is the combined bearer-or-session+CSRF middleware for the operator API mux.
+	saAdminHandler *saadmin.Handler
+	saTokenHandler *saadmin.TokenHandler
+	saSnapshot     *serviceaccounts.Snapshot
+	apiAuthMW      func(http.Handler) http.Handler
 }
 
 // New wires the identity context. It does NOT apply the schema (call ApplySchema for that) and does NOT start any goroutines (call
@@ -224,6 +236,29 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 			func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, logger)
 	}
 
+	// Service-account surface (issue #376, ADR-0013). Built only when a signing key was provided (omitted in minimal test wiring). The
+	// snapshot is a per-replica revocation cache (ADR-0010 safe-to-lose); cmd/main starts its refresh loop.
+	var (
+		saAdminHandler *saadmin.Handler
+		saTokenHandler *saadmin.TokenHandler
+		saSnapshot     *serviceaccounts.Snapshot
+		apiAuthMW      func(http.Handler) http.Handler
+	)
+	sessionMW := middleware.Session(svc, logger)
+	csrfMW := middleware.CSRF(logger)
+	if len(deps.ServiceAccountTokenSigningKey) > 0 {
+		saStore := serviceaccounts.New(deps.DB)
+		saSigner, sErr := satoken.New(deps.ServiceAccountTokenSigningKey, serviceAccountTokenKeyID, serviceAccountTokenAudience)
+		if sErr != nil {
+			return nil, fmt.Errorf("identity bootstrap: service-account token signer: %w", sErr)
+		}
+		saSnapshot = serviceaccounts.NewSnapshot(saStore, logger)
+		saAuthenticator := serviceaccounts.NewAuthenticator(saSigner, saSnapshot)
+		apiAuthMW = middleware.APIAuth(saAuthenticator, sessionMW, csrfMW, logger)
+		saAdminHandler = saadmin.NewHandler(saStore, authzEngine, auditStore, logger)
+		saTokenHandler = saadmin.NewTokenHandler(saStore, saSigner, auditStore, logger)
+	}
+
 	bgService, bgHandler, err := buildBreakglass(breakglassDeps{
 		deps:       deps,
 		logger:     logger,
@@ -252,17 +287,33 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		auditStore:        auditStore,
 		auditHandler:      audit.NewHandler(auditStore, authzEngine, logger),
 		auditAsync:        auditAsync,
-		sessionMW:         middleware.Session(svc, logger),
-		csrfMW:            middleware.CSRF(logger),
+		sessionMW:         sessionMW,
+		csrfMW:            csrfMW,
 		db:                deps.DB,
 		logger:            logger,
 		cleanupEvery:      cleanupEvery,
 		ssoStore:          ssoStore,
 		appConfigStore:    appConfigStore,
 		ssoAdminHandler:   ssoAdminHandler,
+		saAdminHandler:    saAdminHandler,
+		saTokenHandler:    saTokenHandler,
+		saSnapshot:        saSnapshot,
+		apiAuthMW:         apiAuthMW,
 		oidcSeed:          deps.OIDC,
 	}, nil
 }
+
+const (
+	// serviceAccountTokenKeyID labels the current SA signing key inside the token, so a future key rotation can verify old + new
+	// during an overlap window. serviceAccountTokenAudience binds tokens to the API; cross-deployment forgery is additionally blocked
+	// by the per-deployment signing key.
+	serviceAccountTokenKeyID    = "v1"
+	serviceAccountTokenAudience = "edr-api"
+)
+
+// DefaultServiceAccountRevocationRefreshInterval re-exports the per-replica service-account revocation snapshot refresh cadence so
+// cmd/main (which cannot import the identity-internal package) can drive the background refresh loop.
+const DefaultServiceAccountRevocationRefreshInterval = serviceaccounts.DefaultRevocationRefreshInterval
 
 // breakglassDeps bundles the per-call inputs to buildBreakglass. Same shape pattern as oidcHandlerDeps so future field additions don't
 // widen the function signature.
@@ -547,6 +598,16 @@ func (i *Identity) SessionMiddleware() func(http.Handler) http.Handler { return 
 // CSRFMiddleware returns the CSRF middleware. Always inner to Session.
 func (i *Identity) CSRFMiddleware() func(http.Handler) http.Handler { return i.csrfMW }
 
+// APIAuthMiddleware returns the operator-API auth front door: a bearer service-account token is verified statelessly and pinned as an
+// actor (CSRF-exempt), and any other request takes the cookie session + CSRF path (ADR-0013). Returns nil when the service-account
+// surface was not built (no signing key); cmd/main falls back to SessionMiddleware(CSRFMiddleware(...)) in that case.
+func (i *Identity) APIAuthMiddleware() func(http.Handler) http.Handler { return i.apiAuthMW }
+
+// ServiceAccountSnapshot returns the per-replica service-account revocation snapshot so cmd/main can load it once synchronously before
+// serving and run the background refresh loop. Nil when the service-account surface was not built. Per ADR-0010 it is a perf cache,
+// safe to lose.
+func (i *Identity) ServiceAccountSnapshot() *serviceaccounts.Snapshot { return i.saSnapshot }
+
 // OIDCEnabled reports whether a usable OIDC configuration was present after boot seeding (env-seeded or already stored). cmd/main uses
 // it to log a single info-level line at startup summarising the auth modes the deployment honours. It reflects boot-time state; an
 // admin who configures OIDC via the UI afterward enables SSO at runtime without flipping this flag (the login routes are always
@@ -563,6 +624,11 @@ func (i *Identity) RegisterPublicRoutes(mux *http.ServeMux) {
 	}
 	if i.breakglassHandler != nil {
 		i.breakglassHandler.RegisterPublicRoutes(mux)
+	}
+	if i.saTokenHandler != nil {
+		// The client-credentials token endpoint authenticates by the presented credential, not a session or host token, so it mounts
+		// here (no session/CSRF wrapper) rather than on the authed mux.
+		i.saTokenHandler.RegisterPublicRoutes(mux)
 	}
 }
 
@@ -596,6 +662,9 @@ func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.auditHandler.RegisterAuthedRoutes(mux)
 	if i.ssoAdminHandler != nil {
 		i.ssoAdminHandler.RegisterAuthedRoutes(mux)
+	}
+	if i.saAdminHandler != nil {
+		i.saAdminHandler.RegisterAuthedRoutes(mux)
 	}
 	if i.breakglassHandler != nil {
 		i.breakglassHandler.RegisterAuthedRoutes(mux)
