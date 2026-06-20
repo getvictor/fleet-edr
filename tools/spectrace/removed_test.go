@@ -35,6 +35,34 @@ The server SHALL issue self-validating tokens.
 		assert.Len(t, keys, 1)
 	})
 
+	t.Run("a REMOVED section other than 'REMOVED Requirements' is not treated as a removal", func(t *testing.T) {
+		changes := t.TempDir()
+		writeChangeSpec(t, changes, "weird", "agent-enrollment", `## REMOVED Notes
+
+### Requirement: Should not be exempted
+**Reason**: this lives under a non-canonical REMOVED heading.
+`)
+		keys, err := parseRemovedRequirementKeys(changes)
+		require.NoError(t, err)
+		assert.Empty(t, keys, "only the exact '## REMOVED Requirements' heading drives exemptions")
+	})
+
+	t.Run("a stray spec.md outside the specs/ subtree contributes no keys", func(t *testing.T) {
+		changes := t.TempDir()
+		// A spec.md placed directly under the change folder (not under specs/<capability>/) must be ignored so it cannot
+		// derive a bogus capability and exempt scenarios it shouldn't.
+		strayDir := filepath.Join(changes, "stray-change")
+		require.NoError(t, os.MkdirAll(strayDir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(strayDir, "spec.md"), []byte(`## REMOVED Requirements
+
+### Requirement: Misplaced removal
+**Reason**: not under specs/.
+`), 0o600))
+		keys, err := parseRemovedRequirementKeys(changes)
+		require.NoError(t, err)
+		assert.Empty(t, keys, "only spec.md under <change>/specs/<capability>/ is parsed")
+	})
+
 	t.Run("archived removals are not counted (already applied into live specs)", func(t *testing.T) {
 		changes := t.TempDir()
 		archived := filepath.Join(changes, archiveDirName, "2026-01-01-old", "specs", "agent-enrollment")

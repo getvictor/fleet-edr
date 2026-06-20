@@ -189,19 +189,32 @@ func parseRemovedRequirementKeys(changesDir string) (map[string]struct{}, error)
 	return keys, nil
 }
 
-// collectRemovedRequirementKeys walks one in-flight change directory for delta spec.md files and adds a key per
-// `### Requirement:` heading found under a `## REMOVED Requirements` section. The capability is the parent directory name of
-// the spec.md (openspec/changes/<change>/specs/<capability>/spec.md), matching the specDir parseSpec derives for the canonical
-// tree so the keys line up with scenario ID prefixes.
+// collectRemovedRequirementKeys walks one in-flight change's delta-spec subtree (openspec/changes/<change>/specs) for spec.md
+// files and adds a key per `### Requirement:` heading found under a `## REMOVED Requirements` section. The capability is the
+// parent directory name of the spec.md (specs/<capability>/spec.md), matching the specDir parseSpec derives for the canonical
+// tree so the keys line up with scenario ID prefixes. Scoping the walk to specs/ (rather than the whole change folder) keeps a
+// stray spec.md elsewhere under the change from deriving a bogus capability and exempting scenarios it shouldn't. A change with
+// no specs/ subtree (no delta) contributes nothing.
 func collectRemovedRequirementKeys(changeDir string, keys map[string]struct{}) error {
-	return filepath.WalkDir(changeDir, func(path string, d os.DirEntry, walkErr error) error {
+	specsDir := filepath.Join(changeDir, "specs")
+	info, err := os.Stat(specsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	return filepath.WalkDir(specsDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if d.IsDir() || filepath.Base(path) != "spec.md" {
 			return nil
 		}
-		f, err := os.Open(path) //nolint:gosec // path comes from filepath.WalkDir under changesDir
+		f, err := os.Open(path) //nolint:gosec // path comes from filepath.WalkDir under changesDir/<change>/specs
 		if err != nil {
 			return fmt.Errorf("open %s: %w", path, err)
 		}
@@ -223,8 +236,10 @@ func scanRemovedRequirements(r io.Reader, capability string, keys map[string]str
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "## "):
-			// A new top-level section opens; the exemption applies only inside `## REMOVED Requirements`.
-			inRemoved = strings.HasPrefix(line, "## REMOVED")
+			// A new top-level section opens; the exemption applies ONLY inside the exact `## REMOVED Requirements` heading.
+			// Matching the precise heading (not any `## REMOVED...` prefix) avoids a future `## REMOVED <other>` section that
+			// happens to carry `### Requirement:` lines wrongly exempting canonical scenarios.
+			inRemoved = strings.TrimSpace(line) == "## REMOVED Requirements"
 		case inRemoved && strings.HasPrefix(line, "### Requirement:"):
 			title := strings.TrimSpace(strings.TrimPrefix(line, "### Requirement:"))
 			keys[capability+"/"+slugify(title)] = struct{}{}

@@ -30,7 +30,7 @@ Open the release-prep PR, get it reviewed (the archive is where editing `openspe
 ## 3. Tag and let the release workflow run
 
 1. Create the annotated tag on the merged release-prep commit: `git tag -a vX.Y.Z -m "vX.Y.Z"` and push it.
-2. The `v*` push triggers `.github/workflows/release.yml`. Its `openspec-archived` job runs first; every publishing job (`macos-pkg`, `docker-server`, `docker-demo-seed`) depends on it via `needs:`, so the release fails before any signing if `openspec/changes/` still holds a non-archive folder. That is the automated backstop for step 1.5.
+2. The `v*` push triggers `.github/workflows/release.yml`. Its `openspec-archived` job runs first; every publishing job (`macos-pkg`, `docker-server`, `docker-demo-seed`) depends on it via `needs:`, so the release fails before any signing if `openspec/changes/` still holds a non-archive folder. That is the automated backstop for the "nothing un-archived remains" check (section 1, item 5).
 3. After the workflow succeeds, verify the GitHub Release carries the signed pkg, the two mobileconfig profiles, the SBOMs, the `SHA256SUMS`, and the cosign bundles; spot-check `cosign verify-attestation` per the signing docs.
 
 ## 4. Dry-run option
