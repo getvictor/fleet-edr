@@ -74,9 +74,12 @@ func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
 // configResponse is the read shape. It NEVER carries the client secret; SecretSet reports whether one is stored. Configured is false
 // when no config row exists yet (the UI renders an empty first-time form).
 type configResponse struct {
-	Configured  bool     `json:"configured"`
-	Issuer      string   `json:"issuer"`
-	ClientID    string   `json:"client_id"`
+	Configured bool   `json:"configured"`
+	Issuer     string `json:"issuer"`
+	ClientID   string `json:"client_id"`
+	// ExternalURL is the operator-editable deployment base URL; RedirectURL is derived from it (external + /api/auth/callback) and is
+	// read-only in the UI (the value to register at the IdP).
+	ExternalURL string   `json:"external_url"`
 	RedirectURL string   `json:"redirect_url"`
 	Scopes      []string `json:"scopes"`
 	JITEnabled  bool     `json:"jit_enabled"`
@@ -109,7 +112,7 @@ type updateRequest struct {
 	Issuer       string   `json:"issuer"`
 	ClientID     string   `json:"client_id"`
 	ClientSecret *string  `json:"client_secret"`
-	RedirectURL  string   `json:"redirect_url"`
+	ExternalURL  string   `json:"external_url"`
 	Scopes       []string `json:"scopes"`
 	JITEnabled   bool     `json:"jit_enabled"`
 	DefaultRole  string   `json:"default_role"`
@@ -227,9 +230,9 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, bool) {
 	if clientID == "" {
 		return ssoconfig.UpsertInput{}, "missing_client_id", false
 	}
-	redirect := strings.TrimSpace(req.RedirectURL)
-	if !validAbsoluteURL(redirect) {
-		return ssoconfig.UpsertInput{}, "invalid_redirect_url", false
+	externalURL := strings.TrimSpace(req.ExternalURL)
+	if !validAbsoluteURL(externalURL) {
+		return ssoconfig.UpsertInput{}, "invalid_external_url", false
 	}
 	scopes := normalizeScopes(req.Scopes)
 	if !slicesContains(scopes, "openid") {
@@ -253,7 +256,7 @@ func (req updateRequest) toUpsert() (ssoconfig.UpsertInput, string, bool) {
 		Issuer:      issuer,
 		ClientID:    clientID,
 		NewSecret:   newSecret,
-		RedirectURL: redirect,
+		ExternalURL: externalURL,
 		Scopes:      scopes,
 		JITEnabled:  req.JITEnabled,
 		DefaultRole: role,
@@ -265,7 +268,8 @@ func toResponse(c *ssoconfig.Config) configResponse {
 		Configured:  true,
 		Issuer:      c.Issuer,
 		ClientID:    c.ClientID,
-		RedirectURL: c.RedirectURL,
+		ExternalURL: c.ExternalURL,
+		RedirectURL: ssoconfig.RedirectURLFor(c.ExternalURL),
 		Scopes:      c.Scopes,
 		JITEnabled:  c.JITEnabled,
 		DefaultRole: c.DefaultRole,

@@ -16,7 +16,11 @@ CREATE TABLE IF NOT EXISTS oidc_config (
 	issuer             VARCHAR(2048)   NOT NULL,
 	client_id          VARCHAR(512)    NOT NULL,
 	client_secret_enc  VARBINARY(1024) NULL,
-	redirect_url       VARCHAR(2048)   NOT NULL,
+	-- external_url is the deployment's externally-reachable base URL (e.g. https://edr.acme.com). The OIDC redirect URI registered at
+	-- the IdP is DERIVED from it (external_url + /api/auth/callback) and shown read-only in the UI, so the operator maintains one value.
+	-- It is deployment-level (not OIDC-specific) and will move to a General settings section when one lands; it lives here for now
+	-- because SSO is its only consumer this wave.
+	external_url       VARCHAR(2048)   NOT NULL,
 	scopes             VARCHAR(1024)   NOT NULL DEFAULT 'openid,email,profile',
 	jit_enabled        TINYINT(1)      NOT NULL DEFAULT 1,
 	default_role       VARCHAR(64)     NOT NULL DEFAULT 'analyst',

@@ -32,7 +32,7 @@ func (f *fakeStore) Upsert(_ context.Context, in ssoconfig.UpsertInput) error {
 	f.last = &in
 	// Reflect the write into cfg so the handler's re-read returns the new values (secret tracked separately as HasSecret).
 	f.cfg = &ssoconfig.Config{
-		Issuer: in.Issuer, ClientID: in.ClientID, RedirectURL: in.RedirectURL, Scopes: in.Scopes,
+		Issuer: in.Issuer, ClientID: in.ClientID, ExternalURL: in.ExternalURL, Scopes: in.Scopes,
 		JITEnabled: in.JITEnabled, DefaultRole: in.DefaultRole,
 		HasSecret: in.NewSecret != nil || (f.cfg != nil && f.cfg.HasSecret),
 	}
@@ -83,7 +83,7 @@ func TestHandleGet_neverReturnsSecret(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{cfg: &ssoconfig.Config{
 		Issuer: "https://idp.example.com", ClientID: "cid", HasSecret: true,
-		RedirectURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}}
 	h := NewHandler(store, allowAuthZ{}, &captureAudit{}, okProbe, nil)
 	w := httptest.NewRecorder()
@@ -123,7 +123,7 @@ func TestHandleUpdate_validRotatesSecretAndAudits(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: &secret,
-		RedirectURL: "https://edr/cb", Scopes: []string{"openid", "email"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr/cb", Scopes: []string{"openid", "email"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -152,7 +152,7 @@ func TestHandleUpdate_omittedSecretIsKept(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: nil,
-		RedirectURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: false, DefaultRole: "auditor",
+		ExternalURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: false, DefaultRole: "auditor",
 	}))
 
 	require.Equal(t, http.StatusOK, w.Code)
@@ -168,7 +168,7 @@ func TestHandleUpdate_emptySecretStringIsKept(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.handleUpdate(w, putReq(t, updateRequest{
 		Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: &empty,
-		RedirectURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Nil(t, store.last.NewSecret, "empty client_secret string must be treated as keep")
@@ -181,11 +181,11 @@ func TestHandleUpdate_validationRejects(t *testing.T) {
 		req    updateRequest
 		reason string
 	}{
-		{"bad issuer", updateRequest{Issuer: "not a url", ClientID: "c", RedirectURL: "https://e/cb", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_issuer"},
-		{"missing client id", updateRequest{Issuer: "https://i", ClientID: "", RedirectURL: "https://e/cb", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "missing_client_id"},
-		{"bad redirect", updateRequest{Issuer: "https://i", ClientID: "c", RedirectURL: "nope", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_redirect_url"},
-		{"missing openid", updateRequest{Issuer: "https://i", ClientID: "c", RedirectURL: "https://e/cb", Scopes: []string{"email"}, DefaultRole: "analyst"}, "missing_openid_scope"},
-		{"admin default role", updateRequest{Issuer: "https://i", ClientID: "c", RedirectURL: "https://e/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "admin"}, "invalid_default_role"},
+		{"bad issuer", updateRequest{Issuer: "not a url", ClientID: "c", ExternalURL: "https://e/cb", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_issuer"},
+		{"missing client id", updateRequest{Issuer: "https://i", ClientID: "", ExternalURL: "https://e/cb", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "missing_client_id"},
+		{"bad external url", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "nope", Scopes: []string{"openid"}, DefaultRole: "analyst"}, "invalid_external_url"},
+		{"missing openid", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e/cb", Scopes: []string{"email"}, DefaultRole: "analyst"}, "missing_openid_scope"},
+		{"admin default role", updateRequest{Issuer: "https://i", ClientID: "c", ExternalURL: "https://e/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "admin"}, "invalid_default_role"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

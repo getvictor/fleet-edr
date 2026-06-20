@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -355,7 +356,7 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 			Issuer:       c.Issuer,
 			ClientID:     c.ClientID,
 			ClientSecret: c.ClientSecret,
-			RedirectURL:  c.RedirectURL,
+			RedirectURL:  ssoconfig.RedirectURLFor(c.ExternalURL),
 			Scopes:       c.Scopes,
 			Version:      c.Version,
 		}, nil
@@ -433,11 +434,15 @@ func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
 		defaultRole = oidc.DefaultJITRole
 	}
 	secret := i.oidcSeed.ClientSecret
+	// EDR_OIDC_REDIRECT_URL is the full callback URL; the stored config keeps the external base URL and derives the redirect, so trim a
+	// trailing callback path to recover the base (best-effort: a non-conforming redirect is stored as-is and the operator corrects it in
+	// the UI).
+	externalURL := strings.TrimSuffix(strings.TrimRight(i.oidcSeed.RedirectURL, "/"), ssoconfig.CallbackPath)
 	if err := i.ssoStore.Upsert(ctx, ssoconfig.UpsertInput{
 		Issuer:      i.oidcSeed.Issuer,
 		ClientID:    i.oidcSeed.ClientID,
 		NewSecret:   &secret,
-		RedirectURL: i.oidcSeed.RedirectURL,
+		ExternalURL: externalURL,
 		Scopes:      i.oidcSeed.Scopes,
 		JITEnabled:  i.oidcSeed.AllowJITProvisioning,
 		DefaultRole: defaultRole,

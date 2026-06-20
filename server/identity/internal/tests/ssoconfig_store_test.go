@@ -43,7 +43,7 @@ func TestSSOConfigStore_insertReadAndSecretIsWriteOnly(t *testing.T) {
 		Issuer:      "https://acme.okta.com",
 		ClientID:    "0oa8x2k4mWq1ZpL5d7",
 		NewSecret:   strptr("top-secret-value"),
-		RedirectURL: "https://edr.acme.com/api/auth/callback",
+		ExternalURL: "https://edr.acme.com/api/auth/callback",
 		Scopes:      []string{"openid", "email", "profile"},
 		JITEnabled:  true,
 		DefaultRole: "analyst",
@@ -74,13 +74,13 @@ func TestSSOConfigStore_omittedSecretIsPreservedAndVersionBumps(t *testing.T) {
 
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 		Issuer: "https://one.example.com", ClientID: "cid-1", NewSecret: strptr("original-secret"),
-		RedirectURL: "https://edr.example.com/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr.example.com/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 
 	// Update everything EXCEPT the secret (NewSecret nil): the stored secret must survive.
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 		Issuer: "https://two.example.com", ClientID: "cid-2", NewSecret: nil,
-		RedirectURL: "https://edr.example.com/cb2", Scopes: []string{"openid", "email"}, JITEnabled: false, DefaultRole: "auditor",
+		ExternalURL: "https://edr.example.com/cb2", Scopes: []string{"openid", "email"}, JITEnabled: false, DefaultRole: "auditor",
 	}))
 
 	dec, err := store.GetDecrypted(ctx)
@@ -100,11 +100,11 @@ func TestSSOConfigStore_rotateSecret(t *testing.T) {
 
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 		Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: strptr("secret-v1"),
-		RedirectURL: "https://edr.example.com/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr.example.com/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 	require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{
 		Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: strptr("secret-v2"),
-		RedirectURL: "https://edr.example.com/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr.example.com/cb", Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
 	}))
 
 	dec, err := store.GetDecrypted(ctx)
