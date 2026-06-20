@@ -163,7 +163,9 @@ func TestSSOAdmin_updateDeniedWithoutGrant(t *testing.T) {
 	analyst := &api.Actor{UserID: 2, AuthMethod: "oidc", SessionFresh: true, Roles: []api.RoleBinding{{
 		UserID: 2, RoleID: "analyst", ScopeType: api.RoleBindingScopeGlobal, ScopeID: api.RoleBindingScopeWildcard,
 	}}}
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/sso", nil)
+	// Exercise the actual update verb so the test matches its name: the chokepoint must reject the PUT before any write.
+	body := strings.NewReader(`{"issuer":"https://idp.example.com","client_id":"x","external_url":"https://e.example.com","scopes":["openid"],"jit_enabled":true,"default_role":"analyst"}`)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", body)
 	req = req.WithContext(api.WithActor(req.Context(), analyst))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
