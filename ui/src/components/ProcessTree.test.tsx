@@ -121,6 +121,8 @@ describe("ProcessTreeView process-backed alert", () => {
     // An attributed alert (process_id !== 0) whose target happens to be outside the loaded window: the graph is empty, but
     // the process-optional explanation must NOT appear. This guards the regression that the explanation is gated on
     // process-optional-ness, not merely on "the focused chain came back empty".
+    // Empty host tree so toggling focus off doesn't trigger the d3/SVG render path (jsdom lacks the SVG geometry APIs).
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: [] });
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({
       ...launchDaemonAlert,
       rule_id: "suspicious_exec",
@@ -133,7 +135,11 @@ describe("ProcessTreeView process-backed alert", () => {
     expect(await screen.findByText(/registered as system LaunchDaemon/i)).toBeInTheDocument();
     // But the process-optional explanation must not appear.
     expect(screen.queryByText(/isn’t attributed to a single process/i)).not.toBeInTheDocument();
-    // And the generic chain toggle IS present for a process-backed alert (it is only hidden for process-optional ones).
-    expect(screen.getByRole("button", { name: /focused on chain/i })).toBeInTheDocument();
+
+    // The generic chain toggle IS present for a process-backed alert (it is only hidden for process-optional ones), and it
+    // is a state label that flips between "Focused on chain" and "Full host tree" rather than reading as a stale action.
+    const toggle = screen.getByRole("button", { name: /focused on chain/i });
+    fireEvent.click(toggle);
+    expect(await screen.findByRole("button", { name: /full host tree/i })).toBeInTheDocument();
   });
 });
