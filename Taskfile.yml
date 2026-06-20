@@ -137,6 +137,11 @@ tasks:
     cmds:
       - go run ./tools/gen-rule-docs
 
+  docs:attack-layer:
+    desc: Regenerate docs/attack-navigator-layer.json from the registered rule catalogue.
+    cmds:
+      - go run ./tools/gen-attack-layer
+
   # -------- test --------
 
   test:

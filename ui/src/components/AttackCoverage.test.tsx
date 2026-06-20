@@ -14,6 +14,7 @@ const layer: AttackNavigatorLayer = {
   versions: { layer: "4.5", navigator: "5.0.0" },
   domain: "enterprise-attack",
   description: "",
+  filters: { platforms: ["macOS"] },
   techniques: [
     { techniqueID: "T1555.001", score: 100, comment: "Covered by: rule_a, rule_b" },
     { techniqueID: "T1059", score: 100, comment: "Covered by: rule_a" },

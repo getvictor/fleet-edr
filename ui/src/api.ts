@@ -370,6 +370,9 @@ export interface AttackNavigatorLayer {
   versions: Record<string, string>;
   domain: string;
   description: string;
+  // filters scopes the rendered matrix to the platforms Fleet EDR supports. Fleet EDR is macOS-only,
+  // so the server always emits platforms: ["macOS"].
+  filters: { platforms: string[] };
   techniques: Array<{
     techniqueID: string;
     score: number;

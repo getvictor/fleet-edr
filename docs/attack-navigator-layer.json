@@ -1,0 +1,89 @@
+{
+  "name": "Fleet EDR coverage",
+  "versions": {
+    "attack": "14",
+    "layer": "4.5",
+    "navigator": "4.9.1"
+  },
+  "domain": "enterprise-attack",
+  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",
+  "filters": {
+    "platforms": [
+      "macOS"
+    ]
+  },
+  "techniques": [
+    {
+      "techniqueID": "T1059",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: suspicious_exec"
+    },
+    {
+      "techniqueID": "T1059.002",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: osascript_network_exec"
+    },
+    {
+      "techniqueID": "T1059.004",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: shell_from_office"
+    },
+    {
+      "techniqueID": "T1071.004",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: dns_c2_beacon"
+    },
+    {
+      "techniqueID": "T1105",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: osascript_network_exec, suspicious_exec"
+    },
+    {
+      "techniqueID": "T1543.001",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: persistence_launchagent"
+    },
+    {
+      "techniqueID": "T1543.004",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: privilege_launchd_plist_write"
+    },
+    {
+      "techniqueID": "T1548.003",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: sudoers_tamper"
+    },
+    {
+      "techniqueID": "T1555.001",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: credential_keychain_dump"
+    },
+    {
+      "techniqueID": "T1566.001",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: shell_from_office"
+    },
+    {
+      "techniqueID": "T1568.002",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: dns_c2_beacon"
+    },
+    {
+      "techniqueID": "T1574.006",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: dyld_insert"
+    }
+  ]
+}
