@@ -55,8 +55,9 @@ type NavigatorFilters struct {
 }
 
 // NavigatorLayer is a MITRE ATT&CK Navigator layer-4.5 document. It is the response body of GET /api/attack-coverage and the
-// content of the committed docs/attack-navigator-layer.json artifact; both are produced by BuildNavigatorLayer so they stay
-// byte-equivalent (modulo whitespace). The UI's AttackNavigatorLayer interface mirrors this shape.
+// content of the committed docs/attack-navigator-layer.json artifact; both are produced by BuildNavigatorLayer so they decode
+// to the same document (the serialized bytes differ: the endpoint is compact + HTML-escaped, the committed file is indented +
+// HTML-unescaped). The UI's AttackNavigatorLayer interface mirrors this shape.
 type NavigatorLayer struct {
 	Name        string               `json:"name"`
 	Versions    map[string]string    `json:"versions"`
