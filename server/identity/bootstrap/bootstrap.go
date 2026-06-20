@@ -22,6 +22,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
+	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 	identitymigrations "github.com/fleetdm/edr/server/identity/migrations"
 	"github.com/fleetdm/edr/server/migrations/runner"
@@ -59,6 +60,9 @@ type Deps struct {
 	// SessionSigningKey is the HMAC key the OIDC state cookie reuses (per spec). Required when OIDC.Issuer is set; ignored otherwise.
 	// 32+ bytes recommended. The break-glass challenge cookie reuses the same key.
 	SessionSigningKey []byte
+	// OIDCSecretKey seals the stored OIDC client secret at rest (keyring label edr/oidc/client-secret/v1). Required to build the
+	// runtime OIDC config store; when empty (minimal test wiring) the OIDC handler is not constructed.
+	OIDCSecretKey []byte
 
 	// Breakglass carries the break-glass surface knobs. When Breakglass.RPID is empty AND OIDC is configured, the break-glass surface is
 	// not constructed (operator opted out by not setting EDR_BREAKGLASS_RP_ID). When RPID is empty AND OIDC is also unconfigured, the
@@ -100,7 +104,7 @@ type Identity struct {
 	svc               api.Service
 	authzEngine       *authz.Engine
 	loginHandler      *login.Handler
-	oidcHandler       *oidc.Handler       // nil in break-glass-only deployments
+	oidcHandler       *oidc.Handler       // nil only when no signing/secret key was provided (minimal test wiring)
 	breakglassHandler *breakglass.Handler // nil when RPID is unset (opt-out)
 	breakglassService *breakglass.Service // exposed for cmd/main first-boot seed
 	auditStore        *audit.Store
@@ -111,6 +115,11 @@ type Identity struct {
 	db                *sqlx.DB
 	logger            *slog.Logger
 	cleanupEvery      time.Duration
+	// ssoStore is the durable OIDC config store (nil when the OIDC handler was not built). oidcSeed carries the env OIDC values used to
+	// seed the store on first boot; oidcConfiguredAtBoot records whether a usable config existed after seeding, for OIDCEnabled.
+	ssoStore             *ssoconfig.Store
+	oidcSeed             OIDCDeps
+	oidcConfiguredAtBoot bool
 }
 
 // New wires the identity context. It does NOT apply the schema (call ApplySchema for that) and does NOT start any goroutines (call
@@ -158,7 +167,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		return nil, fmt.Errorf("identity bootstrap: construct authz engine: %w", err)
 	}
 
-	oidcHandler, err := buildOIDCHandler(ctx, oidcHandlerDeps{
+	oidcHandler, ssoStore, err := buildOIDCHandler(oidcHandlerDeps{
 		deps:       deps,
 		logger:     logger,
 		sessions:   sessionsStore,
@@ -204,6 +213,8 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		db:                deps.DB,
 		logger:            logger,
 		cleanupEvery:      cleanupEvery,
+		ssoStore:          ssoStore,
+		oidcSeed:          deps.OIDC,
 	}, nil
 }
 
@@ -302,42 +313,68 @@ type oidcHandlerDeps struct {
 	audit      *audit.Store
 }
 
-// buildOIDCHandler constructs the OIDC handler when the deployment supplied OIDC config. Returns (nil, nil) for break-glass-only
-// deployments: the route registration step skips it. Returns an error when the OIDC discovery / verifier setup fails so cmd/main
-// refuses to start with an explicit error rather than silently falling back.
-func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, error) {
-	if in.deps.OIDC.Issuer == "" {
-		return nil, nil
+// buildOIDCHandler constructs the runtime-reconfigurable OIDC handler plus the durable config store it reads from. Unlike the wave-1
+// boot-once client, this builds no provider at boot: the resolver discovers and caches the provider on the first login from whatever
+// configuration the store holds, and rebuilds it on a config change (no restart). It returns (nil, nil, nil) only when no signing or
+// secret key was supplied (minimal test wiring), in which case OIDC is simply unavailable; production always supplies both keys.
+//
+// The returned *ssoconfig.Store is retained by New so the ApplySchema step can seed the row from env on first boot and so OIDCEnabled
+// can report config presence.
+func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, error) {
+	if len(in.deps.SessionSigningKey) == 0 || len(in.deps.OIDCSecretKey) == 0 {
+		return nil, nil, nil
 	}
-	if len(in.deps.SessionSigningKey) == 0 {
-		return nil, errors.New("identity bootstrap: SessionSigningKey is required when OIDC is configured")
-	}
-	client, err := oidc.New(ctx, oidc.Options{
-		Issuer:       in.deps.OIDC.Issuer,
-		ClientID:     in.deps.OIDC.ClientID,
-		ClientSecret: in.deps.OIDC.ClientSecret,
-		RedirectURL:  in.deps.OIDC.RedirectURL,
-		Scopes:       in.deps.OIDC.Scopes,
-		HTTPClient:   in.deps.OIDC.HTTPClient,
-		Logger:       in.logger,
-	})
+	sealer, err := ssoconfig.NewSealer(in.deps.OIDCSecretKey)
 	if err != nil {
-		return nil, fmt.Errorf("identity bootstrap: construct OIDC client: %w", err)
+		return nil, nil, fmt.Errorf("identity bootstrap: build OIDC secret sealer: %w", err)
 	}
+	store := ssoconfig.New(in.deps.DB, sealer)
+
+	// The resolver reads the decrypted connection config per login; ErrNotFound (no config yet) maps to oidc.ErrNotConfigured so the
+	// login route returns a directed "SSO not configured" response instead of a 500.
+	resolver := oidc.NewResolver(func(ctx context.Context) (oidc.ProviderConfig, error) {
+		c, err := store.GetDecrypted(ctx)
+		if errors.Is(err, ssoconfig.ErrNotFound) {
+			return oidc.ProviderConfig{}, oidc.ErrNotConfigured
+		}
+		if err != nil {
+			return oidc.ProviderConfig{}, err
+		}
+		return oidc.ProviderConfig{
+			Issuer:       c.Issuer,
+			ClientID:     c.ClientID,
+			ClientSecret: c.ClientSecret,
+			RedirectURL:  c.RedirectURL,
+			Scopes:       c.Scopes,
+			Version:      c.Version,
+		}, nil
+	}, in.deps.OIDC.HTTPClient, in.logger)
+
+	// The provisioner reads the JIT toggle + default role from the same store at provision time, so a UI edit of either applies on the
+	// next sign-in. No stored config means JIT is off (unknown subjects are denied), matching the wave-1 default.
 	prov := oidc.NewProvisioner(in.deps.DB, in.users, in.identities, in.rbac, in.audit, oidc.ProvisionerOptions{
-		AllowJIT:    in.deps.OIDC.AllowJITProvisioning,
-		DefaultRole: in.deps.OIDC.DefaultRole,
-		Logger:      in.logger,
+		Logger: in.logger,
+		PolicyFn: func(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
+			c, err := store.Get(ctx)
+			if errors.Is(err, ssoconfig.ErrNotFound) {
+				return false, "", nil
+			}
+			if err != nil {
+				return false, "", err
+			}
+			return c.JITEnabled, c.DefaultRole, nil
+		},
 	})
+
 	return oidc.NewHandler(oidc.HandlerOptions{
-		Client:      client,
+		Resolve:     resolver.Current,
 		Provisioner: prov,
 		Sessions:    in.sessions,
 		SigningKey:  in.deps.SessionSigningKey,
 		StateTTL:    in.deps.OIDC.StateCookieTTL,
 		Audit:       in.audit,
 		Logger:      in.logger,
-	}), nil
+	}), store, nil
 }
 
 // ApplySchema applies identity's goose migration corpus and seeds the
@@ -349,7 +386,57 @@ func buildOIDCHandler(ctx context.Context, in oidcHandlerDeps) (*oidc.Handler, e
 // of code-level UserExists validation, so call order across contexts
 // is no longer load-bearing.
 func (i *Identity) ApplySchema(ctx context.Context) error {
-	return ApplySchema(ctx, i.db)
+	if err := ApplySchema(ctx, i.db); err != nil {
+		return err
+	}
+	return i.seedOIDCConfigFromEnv(ctx)
+}
+
+// seedOIDCConfigFromEnv implements the env-seeds / DB-governs precedence (issue #375). On first boot, when no stored OIDC config row
+// exists and the EDR_OIDC_* block is set, it seeds the row from those env values so existing env-only deployments keep working
+// unchanged across the upgrade. When a row already exists, env values are inert and only logged. It runs after the schema is applied
+// (the oidc_config table must exist) and records whether a usable config is present for OIDCEnabled. No-op when the OIDC handler was
+// not built (no signing/secret key).
+func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
+	if i.ssoStore == nil {
+		return nil
+	}
+	_, err := i.ssoStore.Get(ctx)
+	switch {
+	case err == nil:
+		i.oidcConfiguredAtBoot = true
+		if i.oidcSeed.Issuer != "" {
+			i.logger.InfoContext(ctx, "EDR_OIDC_* env vars present but a stored OIDC config exists; env values are inert (stored config governs)")
+		}
+		return nil
+	case !errors.Is(err, ssoconfig.ErrNotFound):
+		return fmt.Errorf("identity bootstrap: read OIDC config: %w", err)
+	}
+	// No stored row. Seed from env when the block is set; otherwise leave OIDC unconfigured (admin configures it via the UI after a
+	// break-glass login).
+	if i.oidcSeed.Issuer == "" {
+		return nil
+	}
+	defaultRole := i.oidcSeed.DefaultRole
+	if defaultRole == "" {
+		defaultRole = oidc.DefaultJITRole
+	}
+	secret := i.oidcSeed.ClientSecret
+	if err := i.ssoStore.Upsert(ctx, ssoconfig.UpsertInput{
+		Issuer:      i.oidcSeed.Issuer,
+		ClientID:    i.oidcSeed.ClientID,
+		NewSecret:   &secret,
+		RedirectURL: i.oidcSeed.RedirectURL,
+		Scopes:      i.oidcSeed.Scopes,
+		JITEnabled:  i.oidcSeed.AllowJITProvisioning,
+		DefaultRole: defaultRole,
+		UpdatedBy:   nil,
+	}); err != nil {
+		return fmt.Errorf("identity bootstrap: seed OIDC config from env: %w", err)
+	}
+	i.oidcConfiguredAtBoot = true
+	i.logger.InfoContext(ctx, "seeded OIDC config from EDR_OIDC_* env vars (first boot); the stored config now governs and survives restarts")
+	return nil
 }
 
 // ApplySchema is the package-level form: applies identity's goose migration corpus against the given DB, then seeds the five
@@ -385,9 +472,11 @@ func (i *Identity) SessionMiddleware() func(http.Handler) http.Handler { return 
 // CSRFMiddleware returns the CSRF middleware. Always inner to Session.
 func (i *Identity) CSRFMiddleware() func(http.Handler) http.Handler { return i.csrfMW }
 
-// OIDCEnabled reports whether the OIDC handler was constructed at boot. cmd/main uses it to log a single info-level line at startup
-// summarising the auth modes the deployment honours.
-func (i *Identity) OIDCEnabled() bool { return i.oidcHandler != nil }
+// OIDCEnabled reports whether a usable OIDC configuration was present after boot seeding (env-seeded or already stored). cmd/main uses
+// it to log a single info-level line at startup summarising the auth modes the deployment honours. It reflects boot-time state; an
+// admin who configures OIDC via the UI afterward enables SSO at runtime without flipping this flag (the login routes are always
+// mounted when the handler is built).
+func (i *Identity) OIDCEnabled() bool { return i.oidcConfiguredAtBoot }
 
 // RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured).
 // Sessions are minted by the OIDC callback or the break-glass FinishLogin / FinishSetup endpoints; there is no

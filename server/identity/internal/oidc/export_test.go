@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -19,7 +20,7 @@ func NewHandlerForTest(
 		logger = slog.Default()
 	}
 	return &Handler{
-		client:      idp,
+		resolve:     func(context.Context) (IDPClient, error) { return idp, nil },
 		provisioner: prov,
 		sessions:    sess,
 		signingKey:  signingKey,

@@ -7,16 +7,16 @@
 
 ## 2. Bootstrap precedence (env seeds, DB governs)
 
-- [ ] 2.1 On boot, when no `oidc_config` row exists and the `EDR_OIDC_*` block is set, seed the row from env (reuse the existing validation in `loadOIDCConfig`/`enforceOIDCGate`)
-- [ ] 2.2 When a row exists, do not apply env; log once that env values are present but inert
-- [ ] 2.3 Tests: first-boot seeds the row from env; existing row makes a differing `EDR_OIDC_ISSUER` inert
+- [x] 2.1 On boot, when no `oidc_config` row exists and the `EDR_OIDC_*` block is set, seed the row from env (reuse the existing validation in `loadOIDCConfig`/`enforceOIDCGate`)
+- [x] 2.2 When a row exists, do not apply env; log once that env values are present but inert
+- [x] 2.3 Tests: first-boot seeds the row from env; existing row makes a differing `EDR_OIDC_ISSUER` inert
 
 ## 3. Runtime provider resolver (no restart)
 
-- [ ] 3.1 Replace the boot-once `gooidc.NewProvider` wiring in `server/identity/bootstrap/bootstrap.go` with a resolver that reads the stored config on the login/callback path and returns a provider + `oauth2.Config`
-- [ ] 3.2 Add a per-replica cache keyed by (issuer, config stamp); rebuild on stamp change; document it as a safe-to-lose per-replica perf cache (ADR-0010)
-- [ ] 3.3 Update the OIDC handler so login/callback use the resolver result rather than a captured client
-- [ ] 3.4 Test: updating the stored issuer makes the next `GET /api/auth/login` redirect to the new issuer with no restart
+- [x] 3.1 Replace the boot-once `gooidc.NewProvider` wiring in `server/identity/bootstrap/bootstrap.go` with a resolver that reads the stored config on the login/callback path and returns a provider + `oauth2.Config`
+- [x] 3.2 Add a per-replica cache keyed by (issuer, config stamp); rebuild on stamp change; document it as a safe-to-lose per-replica perf cache (ADR-0010)
+- [x] 3.3 Update the OIDC handler so login/callback use the resolver result rather than a captured client
+- [x] 3.4 Test: updating the stored issuer makes the next `GET /api/auth/login` redirect to the new issuer with no restart
 
 ## 4. Authorization and audit
 

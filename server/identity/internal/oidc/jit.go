@@ -56,6 +56,10 @@ type Provisioner struct {
 	logger      *slog.Logger
 	defaultRole string
 	allowJIT    bool
+	// policyFn, when non-nil, supplies the JIT policy (allowJIT + defaultRole) per-call from the runtime OIDC configuration store,
+	// overriding the static defaultRole/allowJIT above. Production wires this to ssoconfig so a UI edit of the JIT toggle / default
+	// role takes effect on the next sign-in without a restart; tests omit it and exercise the static fields directly.
+	policyFn func(ctx context.Context) (allowJIT bool, defaultRole string, err error)
 }
 
 // ProvisionerOptions bundles the per-deployment knobs. Zero values fall through to wave-1 defaults: defaultRole="analyst",
@@ -64,6 +68,9 @@ type ProvisionerOptions struct {
 	AllowJIT    bool
 	DefaultRole string
 	Logger      *slog.Logger
+	// PolicyFn, when non-nil, supplies the JIT policy (allowJIT + defaultRole) at provision time from the runtime OIDC config, taking
+	// precedence over the static AllowJIT/DefaultRole above. Production wires this to the ssoconfig store; tests leave it nil.
+	PolicyFn func(ctx context.Context) (allowJIT bool, defaultRole string, err error)
 }
 
 // NewProvisioner constructs a Provisioner over an existing DB + already-constructed stores. db is the same handle the stores share so
@@ -93,6 +100,7 @@ func NewProvisioner(
 		logger:      logger,
 		defaultRole: role,
 		allowJIT:    opts.AllowJIT,
+		policyFn:    opts.PolicyFn,
 	}
 }
 
@@ -115,6 +123,10 @@ func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, i
 	if c == nil || c.Subject == "" {
 		return 0, 0, errors.New("oidc: claims.Subject is required")
 	}
+	allowJIT, defaultRole, err := p.resolvePolicy(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
 	existing, err := p.identities.FindByProviderSubject(ctx, identities.ProviderOIDC, c.Subject)
 	switch {
 	case err == nil:
@@ -124,10 +136,10 @@ func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, i
 	default:
 		return 0, 0, fmt.Errorf("oidc: lookup identity: %w", err)
 	}
-	if !p.allowJIT {
+	if !allowJIT {
 		return 0, 0, ErrUnknownIdentity
 	}
-	userID, identityID, err = p.jitProvision(ctx, c)
+	userID, identityID, err = p.jitProvision(ctx, c, defaultRole)
 	if err == nil {
 		return userID, identityID, nil
 	}
@@ -144,6 +156,23 @@ func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, i
 	return 0, 0, err
 }
 
+// resolvePolicy returns the JIT policy (allowJIT + defaultRole) for this provision. When policyFn is wired (production), it reads the
+// runtime OIDC config so a UI edit applies on the next sign-in; otherwise it falls back to the static fields (tests). An empty
+// defaultRole from policyFn falls through to the static default so a misconfigured row never binds an empty role.
+func (p *Provisioner) resolvePolicy(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
+	if p.policyFn == nil {
+		return p.allowJIT, p.defaultRole, nil
+	}
+	aj, dr, err := p.policyFn(ctx)
+	if err != nil {
+		return false, "", fmt.Errorf("oidc: resolve jit policy: %w", err)
+	}
+	if dr == "" {
+		dr = p.defaultRole
+	}
+	return aj, dr, nil
+}
+
 // isDuplicateKey returns true when err wraps a MySQL 1062
 // "Duplicate entry" error from any layer of the JIT transaction.
 func isDuplicateKey(err error) bool {
@@ -158,7 +187,7 @@ func isDuplicateKey(err error) bool {
 // every modern IdP, but if the IdP omits it we fall back to the subject as a stable display value (the audit row records it verbatim).
 // When the email exists already on a different account we surface ErrEmailConflict so the operator path doesn't silently merge
 // identities. That promotion is an admin action.
-func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, identityID int64, err error) {
+func (p *Provisioner) jitProvision(ctx context.Context, c *Claims, defaultRole string) (userID, identityID int64, err error) {
 	email := jitEmail(c)
 	tx, err := p.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -187,7 +216,7 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, iden
 	}
 	if err := p.rbac.BindRole(ctx, tx, rbac.BindRoleRequest{
 		UserID:    user.ID,
-		RoleID:    p.defaultRole,
+		RoleID:    defaultRole,
 		ScopeType: string(api.RoleBindingScopeGlobal),
 		ScopeID:   api.RoleBindingScopeWildcard,
 	}); err != nil {
@@ -197,7 +226,7 @@ func (p *Provisioner) jitProvision(ctx context.Context, c *Claims) (userID, iden
 		return 0, 0, fmt.Errorf("oidc jit: commit: %w", err)
 	}
 	committed = true
-	p.recordCreated(ctx, user, c.Subject)
+	p.recordCreated(ctx, user, c.Subject, defaultRole)
 	return user.ID, idID, nil
 }
 
@@ -214,7 +243,7 @@ func jitEmail(c *Claims) string {
 // recordCreated emits an audit row for a successful JIT provisioning. Soft-fail at the request level: a missing audit row does NOT
 // roll the transaction back: the user is real and reachable. The chokepoint's standard authz rows still capture every subsequent
 // action. Per spec, audit-write failures must log at ERROR so the operator pipeline notices the gap.
-func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subject string) {
+func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subject, defaultRole string) {
 	if p.audit == nil {
 		return
 	}
@@ -227,7 +256,7 @@ func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subje
 		TargetID:   strconv.FormatInt(user.ID, 10),
 		Payload: map[string]any{
 			"subject": subject,
-			"role":    p.defaultRole,
+			"role":    defaultRole,
 			"source":  "oidc.jit",
 		},
 	}); err != nil && p.logger != nil {
