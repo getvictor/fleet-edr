@@ -1,8 +1,8 @@
 ## 1. Persistence and credential
 
-- [ ] 1.1 Add forward-only MySQL migration(s): a `service_accounts` table (id, name, role, created_by, expires_at, enabled, epoch, last_used_at, created_at) and a credential store holding the client id + `SHA-256(secret)`, never plaintext; index by client id for the token-endpoint lookup
-- [ ] 1.2 Add a `server/identity` internal package owning the tables: create / list / rotate / revoke, epoch bump on revoke/disable, constant-time secret comparison; expose cross-context surface only through `server/identity/api`
-- [ ] 1.3 Reserve and use the `api_token` identity kind for the service-account principal; bind exactly one seeded role, reject `super_admin`
+- [ ] 1.1 Add forward-only MySQL migration(s): a `service_accounts` table (id, client_id, name, role, created_by, expires_at, enabled, epoch, last_used_at, created_at) and a credential store holding the client id + `SHA-256(secret)`, never plaintext; index by client id for the token-endpoint lookup
+- [ ] 1.2 Add a new `server/identity/internal/serviceaccounts` package owning the tables: create / list / rotate / revoke, epoch bump on revoke/disable, constant-time hash comparison; expose cross-context surface only through `server/identity/api` (do not create a parallel identity context)
+- [ ] 1.3 Reserve and use the `api_token` identity kind for the service-account principal; bind exactly one seeded role, and reject `admin`/`super_admin` and any role granting the console-management actions (`service_account.*`, `user.*`, `sso.manage`) so a service account cannot mint or escalate other service accounts
 
 ## 2. Token issuance and signing
 
@@ -14,7 +14,7 @@
 ## 3. Stateless verification and revocation
 
 - [ ] 3.1 Add bearer middleware on the API mux that validates the access token locally (signature + `exp` + `aud`) with no per-request DB read and resolves the service-account principal onto the request context
-- [ ] 3.2 Add the per-replica epoch snapshot (reuse the #454 host-token revocation pattern): refresh `{service_account_id -> epoch, revoked_at}` from MySQL on a short interval; reject a token whose epoch is stale; document the cache as per-replica, safe to lose (ADR-0010)
+- [ ] 3.2 Add the per-replica epoch snapshot (reuse the #454 host-token revocation pattern): refresh `{service_account_id -> epoch, revoked_at}` from MySQL on a short fixed interval (≈5 seconds, matching the #454 host-token snapshot cadence); reject a token whose epoch is stale; document the cache as per-replica, safe to lose (ADR-0010)
 - [ ] 3.3 Test: a revoked service account cannot mint a new token immediately, and an outstanding token stops validating within the refresh window with no restart
 
 ## 4. Authorization and audit
