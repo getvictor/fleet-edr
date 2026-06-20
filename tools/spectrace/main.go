@@ -126,6 +126,22 @@ func runCheck(args []string) int {
 		return exitCode
 	}
 
+	// Exempt canonical scenarios whose parent requirement an in-flight change marks `## REMOVED`. Archiving is batched at
+	// release time (docs/release-checklist.md), so a merged removal lives in openspec/changes until the release; for that
+	// window the requirement is still in openspec/specs but its code+tests are gone. Dropping these scenarios from the gate
+	// set (after referenceValid is built, so a stray leftover marker still validates rather than hard-failing) keeps
+	// `--strict` honest without forcing per-merge archiving. referenceValid is intentionally left intact.
+	removedReqKeys, err := parseRemovedRequirementKeys(*changesDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "spectrace: parse removed requirements:", err)
+		return 2
+	}
+	if kept := filterOutRemovedRequirements(scenarios, removedReqKeys); len(kept) != len(scenarios) {
+		fmt.Printf("spectrace: %d canonical scenarios exempted (parent requirement marked REMOVED in an in-flight change)\n",
+			len(scenarios)-len(kept))
+		scenarios = kept
+	}
+
 	// A marker is a valid reference when its ID is in referenceValid (live specs ∪ in-flight proposals); only then does it
 	// count toward `covered`. A live scenario it points at is covered; a WIP-only ID resolves without error but covers no
 	// gated scenario (WIP scenarios are not in `scenarios`, so splitUncovered + --strict ignore them).
@@ -166,6 +182,23 @@ func runCheck(args []string) int {
 	default:
 		return 0
 	}
+}
+
+// filterOutRemovedRequirements drops scenarios whose parent requirement an in-flight change marks `## REMOVED`. The match key
+// is SpecDir + "/" + slugify(Requirement), the same prefix parseSpec builds into each scenario ID, so it lines up with the
+// keys parseRemovedRequirementKeys collects from the change deltas. Returns the input unchanged when there are no removals.
+func filterOutRemovedRequirements(scenarios []Scenario, removedReqKeys map[string]struct{}) []Scenario {
+	if len(removedReqKeys) == 0 {
+		return scenarios
+	}
+	out := make([]Scenario, 0, len(scenarios))
+	for _, s := range scenarios {
+		if _, ok := removedReqKeys[s.SpecDir+"/"+slugify(s.Requirement)]; ok {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // filterByIDSet keeps only scenarios whose ID is in the set. Used by --new-code to scope the gate to scenarios touched
