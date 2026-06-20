@@ -22,6 +22,7 @@ func TestRedirectURLFor(t *testing.T) {
 		{"query is dropped not concatenated", "https://edr.acme.com?x=1", "https://edr.acme.com/api/auth/callback"},
 		{"fragment is dropped not concatenated", "https://edr.acme.com#frag", "https://edr.acme.com/api/auth/callback"},
 		{"query and fragment both dropped", "https://edr.acme.com/?x=1#frag", "https://edr.acme.com/api/auth/callback"},
+		{"bare trailing query marker dropped", "https://edr.acme.com?", "https://edr.acme.com/api/auth/callback"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

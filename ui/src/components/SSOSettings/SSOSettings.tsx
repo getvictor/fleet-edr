@@ -38,14 +38,11 @@ function isHTTPURL(raw: string): boolean {
 }
 
 // hasQueryOrFragment flags external URLs carrying a query string or fragment; the redirect URI is derived from the bare
-// origin + path, so a query/fragment can't be round-tripped and must be rejected before save.
+// origin + path, so a query/fragment can't be round-tripped and must be rejected before save. A raw scan (rather than
+// URL.search/hash, which drop a bare trailing "?"/"#") keeps this in lockstep with the server's validation.
 function hasQueryOrFragment(raw: string): boolean {
-  try {
-    const u = new URL(raw.trim());
-    return u.search !== "" || u.hash !== "";
-  } catch {
-    return false;
-  }
+  const trimmed = raw.trim();
+  return trimmed.includes("?") || trimmed.includes("#");
 }
 
 // editable mirrors the operator-editable fields; the secret is write-only (empty unless

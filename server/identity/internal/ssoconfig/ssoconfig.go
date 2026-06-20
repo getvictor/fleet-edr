@@ -51,6 +51,8 @@ func RedirectURLFor(externalURL string) string {
 	}
 	u.RawQuery = ""
 	u.Fragment = ""
+	// ForceQuery is set for a bare trailing "?"; clear it too so String() can't emit a stray trailing "?".
+	u.ForceQuery = false
 	u.Path = strings.TrimRight(u.Path, "/") + CallbackPath
 	return u.String()
 }

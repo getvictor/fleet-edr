@@ -339,13 +339,14 @@ func validAbsoluteURL(raw string) bool {
 	if raw == "" {
 		return false
 	}
-	u, err := url.Parse(raw)
-	if err != nil {
+	// Reject any query string or fragment up front: an OIDC issuer per spec carries neither, and the redirect URI is derived from the
+	// external URL's origin + path. A raw scan also catches a bare trailing marker like "https://e?" (Go parses that into ForceQuery
+	// with an empty RawQuery), which would otherwise validate and then serialize a redirect URI with a stray "?".
+	if strings.ContainsAny(raw, "?#") {
 		return false
 	}
-	// Reject a query string or fragment: an OIDC issuer per spec carries neither, and the redirect URI is derived from the external
-	// URL's origin + path, so a "?x=1" would otherwise be dropped silently rather than round-tripped.
-	if u.RawQuery != "" || u.Fragment != "" {
+	u, err := url.Parse(raw)
+	if err != nil {
 		return false
 	}
 	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""

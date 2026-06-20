@@ -171,6 +171,18 @@ describe("SSOSettings", () => {
     expect(upd).not.toHaveBeenCalled();
   });
 
+  it("blocks save on a bare trailing query marker in the external URL", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    await screen.findByLabelText("External URL");
+
+    fireEvent.change(screen.getByLabelText("External URL"), { target: { value: "https://edr.example.org?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/must not contain a query string or fragment/);
+    expect(upd).not.toHaveBeenCalled();
+  });
+
   it("omits a whitespace-only client_secret rather than rotating to blanks", async () => {
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
     const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
