@@ -51,14 +51,22 @@ const shutdownDrainPerEvent = 5 * time.Second
 // queued past it spill to slog as the dual-emit fallback.
 const shutdownDrainGlobal = 30 * time.Second
 
+// auditRecorder is the one method AsyncWriter needs from *Store: persist a single event. Declared as an interface (not *Store
+// directly) so a test can inject a deliberately-slow recorder and exercise the global drain deadline without a genuinely degraded DB.
+// Production always supplies *Store via NewAsyncWriter.
+type auditRecorder interface {
+	Record(ctx context.Context, e api.AuditEvent) error
+}
+
 // AsyncWriter implements api.AsyncAuditWriter. Construct via NewAsyncWriter and call Run from a goroutine owned by the host context's
 // Run method.
 type AsyncWriter struct {
-	store   *Store
-	queue   chan api.AuditEvent
-	logger  *slog.Logger
-	dropped uint64
-	dropMu  sync.Mutex
+	store         auditRecorder
+	queue         chan api.AuditEvent
+	logger        *slog.Logger
+	drainDeadline time.Duration
+	dropped       uint64
+	dropMu        sync.Mutex
 
 	// submitMu serializes Submit (RLock) against shutdown (Lock). shutdown.Lock() blocks until every in-flight Submit has released its
 	// RLock, then sets closed=true under the write lock so subsequent Submits see the closed flag and return false without queuing.
@@ -74,6 +82,10 @@ type AsyncOptions struct {
 	// Logger receives drop / shutdown / panic warnings. Zero ->
 	// slog.Default.
 	Logger *slog.Logger
+	// DrainDeadline overrides the global wall-clock budget the shutdown drain runs under. Values <= 0 mean the production default
+	// (shutdownDrainGlobal). This is a test-only seam: a tiny deadline plus a slow store lets a unit test hit the spill-to-slog path
+	// deterministically instead of waiting out the 30s default against a degraded DB.
+	DrainDeadline time.Duration
 }
 
 // NewAsyncWriter constructs an AsyncWriter. The returned writer is
@@ -86,6 +98,12 @@ func NewAsyncWriter(store *Store, opts AsyncOptions) *AsyncWriter {
 	if store == nil {
 		panic("audit.NewAsyncWriter: store must not be nil")
 	}
+	return newAsyncWriter(store, opts)
+}
+
+// newAsyncWriter builds the writer around any auditRecorder. NewAsyncWriter is the production entry point (store is always *Store); the
+// interface seam exists so an internal test can inject a slow recorder to drive the drain-deadline spill path.
+func newAsyncWriter(store auditRecorder, opts AsyncOptions) *AsyncWriter {
 	queueCap := opts.QueueCap
 	if queueCap <= 0 {
 		queueCap = DefaultAsyncQueueCap
@@ -94,10 +112,15 @@ func NewAsyncWriter(store *Store, opts AsyncOptions) *AsyncWriter {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	drainDeadline := opts.DrainDeadline
+	if drainDeadline <= 0 {
+		drainDeadline = shutdownDrainGlobal
+	}
 	return &AsyncWriter{
-		store:  store,
-		queue:  make(chan api.AuditEvent, queueCap),
-		logger: logger,
+		store:         store,
+		queue:         make(chan api.AuditEvent, queueCap),
+		logger:        logger,
+		drainDeadline: drainDeadline,
 	}
 }
 
@@ -190,7 +213,7 @@ func (w *AsyncWriter) writeOne(e api.AuditEvent) {
 //
 //nolint:contextcheck
 func (w *AsyncWriter) drain() {
-	deadline := time.Now().Add(shutdownDrainGlobal)
+	deadline := time.Now().Add(w.drainDeadline)
 	for {
 		if !time.Now().Before(deadline) {
 			w.logUndrainedTail()
