@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -69,8 +70,12 @@ func TestAsyncWriter_DrainGlobalDeadline_SpillsToSlog(t *testing.T) {
 		"a 1ms deadline against a 40ms recorder must drain at most one event before spilling the rest")
 
 	logs := buf.String()
-	assert.Contains(t, logs, `"reason":"drain_deadline_exceeded"`,
-		"spilled events must carry the drain_deadline_exceeded reason")
 	assert.Contains(t, logs, `"undrained-payload"`, "the spill line must carry the undrained event payload")
 	assert.Contains(t, logs, "h-spill", "the spill line must carry the undrained payload fields")
+	// logUndrainedTail emits one drain_deadline_exceeded record PER still-queued event, so the count of spill lines must equal Dropped().
+	// Counting (rather than a single Contains) pins the per-event semantics: a regression that logged only the first undrained event, or
+	// logged the tail once in aggregate, would still satisfy a bare Contains but fail this equality.
+	spillLines := strings.Count(logs, `"reason":"drain_deadline_exceeded"`)
+	assert.Equal(t, int(spilled), spillLines, //nolint:gosec // spilled <= queued (4), no overflow
+		"each still-queued event must emit its own drain_deadline_exceeded slog record")
 }
