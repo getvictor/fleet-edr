@@ -15,6 +15,7 @@
     "enrollment.rotate_token",
     "user.read",
     "user.invite",
+    "sso.manage",
     "audit.read",
     "application_control.read",
     "application_control.rule_create",

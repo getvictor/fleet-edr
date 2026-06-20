@@ -20,18 +20,18 @@
 
 ## 4. Authorization and audit
 
-- [ ] 4.1 Register the `sso.manage` action in `server/identity/api/authz.go`
-- [ ] 4.2 Add `sso.manage` to the seeded `admin` role bundle (super_admin already covers it via wildcard); update the role seed + the authz Rego/data
-- [ ] 4.3 Emit an SSO-config mutation audit row (actor user id + action, never the secret) on create/update/rotate
-- [ ] 4.4 Tests: admin/super_admin allowed, analyst/senior_analyst/auditor denied with `no_matching_rule`; audit row asserted to contain no secret
+- [x] 4.1 Register the `sso.manage` action in `server/identity/api/authz.go`
+- [x] 4.2 Add `sso.manage` to the seeded `admin` role bundle (super_admin already covers it via wildcard); update the role seed + the authz Rego/data
+- [x] 4.3 Emit an SSO-config mutation audit row (actor user id + action, never the secret) on create/update/rotate
+- [x] 4.4 Tests: admin/super_admin allowed, analyst/senior_analyst/auditor denied with `no_matching_rule`; audit row asserted to contain no secret
 
 ## 5. Admin API
 
-- [ ] 5.1 `GET /api/settings/sso` behind operator-session + `sso.manage`: return config minus secret, plus `secret_set` and a connection-status hint
-- [ ] 5.2 `PUT /api/settings/sso` behind operator-session + CSRF + `sso.manage`: validate (issuer URL syntactically valid; default role in {analyst, auditor} when JIT enabled), rotate secret only when provided, persist + audit
-- [ ] 5.3 `POST /api/settings/sso/test-connection` behind `sso.manage`: fetch discovery doc + confirm token endpoint reachable for the submitted candidate (or stored record); persist nothing; return pass/fail + reason
-- [ ] 5.4 Wire the routes through the identity bootstrap mux registration; expose any cross-context surface via `server/identity/api` only
-- [ ] 5.5 Handler tests: read omits secret; update rejects default role `admin`; unauthorized caller gets 403; test-connection persists nothing
+- [x] 5.1 `GET /api/settings/sso` behind operator-session + `sso.manage`: return config minus secret, plus `secret_set` and a connection-status hint
+- [x] 5.2 `PUT /api/settings/sso` behind operator-session + CSRF + `sso.manage`: validate (issuer URL syntactically valid; default role in {analyst, auditor} when JIT enabled), rotate secret only when provided, persist + audit
+- [x] 5.3 `POST /api/settings/sso/test-connection` behind `sso.manage`: fetch discovery doc + confirm token endpoint reachable for the submitted candidate (or stored record); persist nothing; return pass/fail + reason
+- [x] 5.4 Wire the routes through the identity bootstrap mux registration; expose any cross-context surface via `server/identity/api` only
+- [x] 5.5 Handler tests: read omits secret; update rejects default role `admin`; unauthorized caller gets 403; test-connection persists nothing
 
 ## 6. UI: Admin settings shell + Single sign-on page
 

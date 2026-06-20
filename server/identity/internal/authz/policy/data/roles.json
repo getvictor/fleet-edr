@@ -7,6 +7,7 @@
       "grants": [
         "user.read",
         "user.invite",
+        "sso.manage",
         "host.read",
         "host.isolate",
         "host.kill_process",

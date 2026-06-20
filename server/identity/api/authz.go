@@ -58,6 +58,10 @@ const (
 	ActionUserRead   Action = "user.read"
 	ActionUserInvite Action = "user.invite"
 
+	// SSO configuration. Gates reading and mutating the deployment's stored OIDC provider config (issue #375). Held by admin +
+	// super_admin; the admin settings read/update/test-connection handlers funnel through the chokepoint on this action.
+	ActionSSOManage Action = "sso.manage"
+
 	// Audit-log read.
 	ActionAuditRead Action = "audit.read"
 
@@ -90,6 +94,7 @@ func RegisteredActions() []Action {
 		ActionAlertResolve, ActionAlertReopen,
 		ActionEnrollmentRead, ActionEnrollmentRevoke, ActionEnrollmentRotateToken,
 		ActionUserRead, ActionUserInvite,
+		ActionSSOManage,
 		ActionAuditRead,
 		ActionAppControlRead,
 		ActionAppControlRuleCreate, ActionAppControlRuleUpdate, ActionAppControlRuleDelete, ActionAppControlRuleBulkUpsert,

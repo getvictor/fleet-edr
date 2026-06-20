@@ -22,6 +22,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/seed"
 	"github.com/fleetdm/edr/server/identity/internal/service"
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
+	"github.com/fleetdm/edr/server/identity/internal/ssoadmin"
 	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 	identitymigrations "github.com/fleetdm/edr/server/identity/migrations"
@@ -118,6 +119,7 @@ type Identity struct {
 	// ssoStore is the durable OIDC config store (nil when the OIDC handler was not built). oidcSeed carries the env OIDC values used to
 	// seed the store on first boot; oidcConfiguredAtBoot records whether a usable config existed after seeding, for OIDCEnabled.
 	ssoStore             *ssoconfig.Store
+	ssoAdminHandler      *ssoadmin.Handler // nil when the OIDC handler was not built (no signing/secret key)
 	oidcSeed             OIDCDeps
 	oidcConfiguredAtBoot bool
 }
@@ -180,6 +182,14 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		return nil, err
 	}
 
+	// The SSO admin API (read/update/test-connection) shares the config store with the resolver; built only when the store exists.
+	var ssoAdminHandler *ssoadmin.Handler
+	if ssoStore != nil {
+		oidcHTTPClient := deps.OIDC.HTTPClient
+		ssoAdminHandler = ssoadmin.NewHandler(ssoStore, authzEngine, auditStore,
+			func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, logger)
+	}
+
 	bgService, bgHandler, err := buildBreakglass(breakglassDeps{
 		deps:       deps,
 		logger:     logger,
@@ -214,6 +224,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		logger:            logger,
 		cleanupEvery:      cleanupEvery,
 		ssoStore:          ssoStore,
+		ssoAdminHandler:   ssoAdminHandler,
 		oidcSeed:          deps.OIDC,
 	}, nil
 }
@@ -514,11 +525,14 @@ func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
 	return i.breakglassHandler.AllowlistMiddleware
 }
 
-// RegisterAuthedRoutes wires GET /api/session (who-am-i), GET /api/audit-events (operator-action history), and the
-// break-glass reauth POST endpoints. Caller wraps in SessionMiddleware + CSRFMiddleware before mounting.
+// RegisterAuthedRoutes wires GET /api/session (who-am-i), GET /api/audit-events (operator-action history), the SSO settings API
+// (/api/settings/sso), and the break-glass reauth POST endpoints. Caller wraps in SessionMiddleware + CSRFMiddleware before mounting.
 func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
 	i.auditHandler.RegisterAuthedRoutes(mux)
+	if i.ssoAdminHandler != nil {
+		i.ssoAdminHandler.RegisterAuthedRoutes(mux)
+	}
 	if i.breakglassHandler != nil {
 		i.breakglassHandler.RegisterAuthedRoutes(mux)
 	}
