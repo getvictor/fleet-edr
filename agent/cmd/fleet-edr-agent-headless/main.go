@@ -70,8 +70,8 @@ func mainErr() error {
 		QueuePath:      cfg.QueueDBPath,
 		SocketPath:     *socketPath,
 		TokenProvider:  tokenProvider,
-		BatchSize:      cfg.BatchSize,
-		UploadInterval: cfg.UploadInterval,
+		BatchSize:      config.DefaultBatchSize,
+		UploadInterval: config.DefaultUploadInterval,
 		Logger:         logger,
 	})
 }

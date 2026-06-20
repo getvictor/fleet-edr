@@ -93,7 +93,7 @@ Size the per-replica limit with that in mind: divide the fleet-wide budget you w
 
 ### Audit-event durability under crash
 
-The audit log dual-emits: every event is written to MySQL AND to slog (the secondary durable sink). Writes, denials, and auth events take the synchronous path and are durable before the request returns. Only sampled read-audit events ride an in-memory async queue (`EDR_AUDIT_ASYNC_QUEUE_CAP`, default 8192) so the read hot path does not wait on an INSERT.
+The audit log dual-emits: every event is written to MySQL AND to slog (the secondary durable sink). Writes, denials, and auth events take the synchronous path and are durable before the request returns. Only sampled read-audit events ride an in-memory async queue (~8192 deep) so the read hot path does not wait on an INSERT.
 
 On a graceful shutdown that queue is drained (bounded by a 30s deadline). On a hard kill (SIGKILL, OOM) the in-flight queue is lost, but those same events were already emitted to slog, so they survive in your OTel/log backend. The append-only MySQL audit table can therefore miss sampled read rows after a hard crash; the slog stream is the recovery source. The current release accepts this rather than shipping a write-ahead audit outbox (a possible follow-up). Alert on the `audit dropped` / `audit async record failed` WARN logs (see [Auth + authz dashboard](#auth--authz-dashboard)) to catch sustained drops.
 
@@ -227,7 +227,7 @@ If your host filesystem is ZFS / Btrfs / LVM-thin, volume snapshots are faster t
 
 ## Retention tuning
 
-The server deletes events older than `EDR_RETENTION_DAYS` (default 30) on a schedule set by `EDR_RETENTION_INTERVAL` (default 1h). Both knobs live in the server's environment; restart to take effect.
+The server deletes events older than `EDR_RETENTION_DAYS` (default 30) on a fixed hourly schedule. The knob lives in the server's environment; restart to take effect.
 
 Three common scenarios:
 
@@ -242,14 +242,14 @@ Alerts are NOT deleted by retention. They stay until you delete them via the adm
 Retention bounds how long events live; two levers reduce how many are written in the first place (issue #408):
 
 - **`snapshot_heartbeat` events are no longer persisted.** The server applies their freshness side effect (the `processes.last_seen_ns` bump that exempts a live snapshot row from the 6h TTL force-exit) at ingest and drops them, so they never occupy an `events` row. Watch `edr.ingest.heartbeats_dropped` to see the row-count savings.
-- **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats no longer cost an `events` row, but they still cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under `EDR_STALE_PROCESS_TTL` (default 6h) so a live snapshot row is always re-freshened before the TTL would force-exit it.
-- **`EDR_NETWORK_COALESCE_WINDOW` coalesces repetitive network/DNS telemetry** (agent-side, default `10s`, `0` disables). Within each window the agent collapses repeated identical connection 5-tuples and repeated DNS lookups into one representative event plus a `coalesced_count`, preserving the earliest timestamp and (for DNS) the union of resolved addresses. Raise it to coalesce more aggressively, but keep it well under the 30s DNS-to-connect beacon-correlation window so coalescing can never push a representative outside it.
+- **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats no longer cost an `events` row, but they still cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under the 6h stale-process TTL so a live snapshot row is always re-freshened before the TTL would force-exit it.
+- **Repetitive network/DNS telemetry is coalesced automatically** (agent-side, fixed `10s` window). Within each window the agent collapses repeated identical connection 5-tuples and repeated DNS lookups into one representative event plus a `coalesced_count`, preserving the earliest timestamp and (for DNS) the union of resolved addresses. The window is a fixed constant, deliberately well under the 30s DNS-to-connect beacon-correlation window so coalescing can never push a representative outside it.
 
 ## Process-tree freshness (issue #6)
 
 ESF is best-effort and exit events go missing under kernel back-pressure, sysext crashes, and agent restarts. Two reconcilers cooperate to keep the process tree from filling with forever-green ghost rows.
 
-**Server-side TTL** (`EDR_STALE_PROCESS_TTL`, default `6h`). On each pass the server force-greys any process whose `fork_time_ns` is older than the TTL and which still has no `exit_time_ns`. The synthesized exit is tagged `exit_reason = ttl_reconciliation`. Set to `0` to disable. Pass cadence is controlled by `EDR_STALE_PROCESS_INTERVAL` (default `10m`).
+**Server-side TTL** (fixed `6h`). On each pass the server force-greys any process whose `fork_time_ns` is older than the TTL and which still has no `exit_time_ns`. The synthesized exit is tagged `exit_reason = ttl_reconciliation`. The reconciler pass runs every `10m`.
 
 **Agent-side `kill(pid, 0)` sweep** (`EDR_PROCESS_RECONCILE_INTERVAL`, default `60s` on the agent). Every interval the agent walks its in-memory PID table and probes each tracked PID with `kill(pid, 0)`. Any PID that returns `ESRCH` ("no such process") is gone: the agent emits a synthetic exit event tagged `exit_reason = host_reconciled`, which the server records on the row. PIDs younger than 30s are skipped to avoid racing the exec; at most 256 synthetic exits are emitted per pass to bound queue pressure on a host that just lost a large burst of exits. Set the interval to `0` on the agent (via `/etc/fleet-edr.conf` or env) to disable; useful only for narrow QA where synthetic exits would distort what a clean ESF feed looks like.
 
@@ -269,7 +269,7 @@ Core metrics to chart:
 | `edr.alerts.created` | counter | By `rule_id` + `severity`. Sudden spike warrants a look |
 | `edr.enrolled.hosts` | gauge | Should match your MDM's scoped Mac count |
 | `edr.offline.hosts` | gauge | Hosts whose `last_seen` is older than 5 min. Keep near zero |
-| `edr.retention.rows_deleted` | counter | Should tick up every `EDR_RETENTION_INTERVAL` |
+| `edr.retention.rows_deleted` | counter | Should tick up every retention run (hourly) |
 | `edr.processes.ttl_reconciled` | counter | TTL-driven synthetic-exit emissions. The counter only increments when the reconciler synthesises an exit (it no-ops when there's nothing stale), so a non-zero rate or spike means the reconciler is firing, typically because a host missed an exec/exit pair. A sustained zero is ambiguous (either no stale processes to reconcile, or the reconciler has wedged); rely on logs/traces or a separate heartbeat to distinguish |
 | `db.sql.latency` | histogram | DB call latency, emitted by the otelsql driver instrumentation (not a bespoke metric). p99 creeping up = DB overloaded or a slow query regressed |
 | `edr.agent.queue.dropped` | counter | Non-zero = agent's local SQLite queue hit its cap. Investigate connectivity |

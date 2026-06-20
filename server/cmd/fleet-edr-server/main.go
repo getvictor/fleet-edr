@@ -95,7 +95,6 @@ func run() error {
 		"version", version,
 		"commit", commit,
 		"build_time", buildTime,
-		"tls12_allowed", cfg.AllowTLS12,
 	)
 
 	db, err := bootstrap.OpenDB(ctx, cfg.DSN)
@@ -242,28 +241,25 @@ func openIdentity(
 	oidcSecretKey []byte,
 ) (*identitybootstrap.Identity, error) {
 	identityCtx, err := identitybootstrap.New(ctx, identitybootstrap.Deps{
-		DB:                 db,
-		Logger:             logger,
-		CookieSecure:       cfg.ExternalTLS(),
-		AuditReadSampling:  cfg.AuditReadSampling,
-		AuditAsyncQueueCap: cfg.AuditAsyncQueueCap,
-		SessionSigningKey:  sessionSigningKey,
-		OIDCSecretKey:      oidcSecretKey,
+		DB:                db,
+		Logger:            logger,
+		CookieSecure:      cfg.ExternalTLS(),
+		SessionSigningKey: sessionSigningKey,
+		OIDCSecretKey:     oidcSecretKey,
 		OIDC: identitybootstrap.OIDCDeps{
 			Issuer:               cfg.OIDCIssuer,
 			ClientID:             cfg.OIDCClientID,
 			ClientSecret:         cfg.OIDCClientSecret,
 			RedirectURL:          cfg.OIDCRedirectURL,
-			Scopes:               cfg.OIDCScopes,
+			Scopes:               config.DefaultOIDCScopes(),
 			AllowJITProvisioning: cfg.OIDCAllowJITProvisioning,
 			DefaultRole:          cfg.OIDCDefaultRole,
-			StateCookieTTL:       cfg.OIDCStateCookieTTL,
+			StateCookieTTL:       config.DefaultOIDCStateCookieTTL,
 		},
 		Breakglass: identitybootstrap.BreakglassDeps{
 			BootstrapTokenTTL: cfg.BreakglassBootstrapTokenTTL,
 			IPAllowlist:       cfg.BreakglassIPAllowlist,
 			RPID:              cfg.BreakglassRPID,
-			RPDisplayName:     cfg.BreakglassRPDisplayName,
 			RPOrigins:         cfg.BreakglassRPOrigins,
 		},
 		SessionIdle:               cfg.SessionIdleTimeout,
@@ -301,12 +297,12 @@ func openDetection(
 			Commit:    commit,
 			BuildTime: buildTime,
 		},
-		ProcessInterval:      cfg.ProcessInterval,
-		ProcessBatch:         cfg.ProcessBatch,
-		StaleProcessTTL:      cfg.StaleProcessTTL,
-		StaleProcessInterval: cfg.StaleProcessInterval,
+		ProcessInterval:      config.DefaultProcessInterval,
+		ProcessBatch:         config.DefaultProcessBatch,
+		StaleProcessTTL:      config.DefaultStaleProcessTTL,
+		StaleProcessInterval: config.DefaultStaleProcessInterval,
 		RetentionDays:        cfg.RetentionDays,
-		RetentionInterval:    cfg.RetentionInterval,
+		RetentionInterval:    config.DefaultRetentionInterval,
 		UserExists:           identityCtx.Service().UserExists,
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
@@ -416,7 +412,7 @@ func openEndpoint(
 		EnrollRatePerMinute: cfg.EnrollRatePerMin,
 		Audit:               identityCtx.AuditRecorder(),
 		AuthZ:               identityCtx.AuthZ(),
-		HostTokenLifetime:   cfg.HostTokenLifetime,
+		HostTokenLifetime:   config.DefaultHostTokenLifetime,
 		HostTokenSigningKey: hostTokenSigningKey,
 	})
 	if err != nil {
@@ -539,10 +535,9 @@ func configureTLS(ctx context.Context, logger *slog.Logger, srv *http.Server, cf
 		return nil
 	}
 	return httpserver.ConfigureTLS(ctx, srv, httpserver.TLSOptions{
-		CertFile:   cfg.TLSCertFile,
-		KeyFile:    cfg.TLSKeyFile,
-		AllowTLS12: cfg.AllowTLS12,
-		Logger:     logger,
+		CertFile: cfg.TLSCertFile,
+		KeyFile:  cfg.TLSKeyFile,
+		Logger:   logger,
 	})
 }
 

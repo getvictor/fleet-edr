@@ -1,15 +1,14 @@
 // Package queue provides a durable SQLite WAL-based event queue for the EDR agent.
 //
-// The queue enforces a byte-size cap (EDR_AGENT_QUEUE_MAX_BYTES). When an
+// The queue enforces a byte-size cap. When an
 // Enqueue would push the main DB file past the cap, the queue drops oldest rows to
 // stay bounded. Uploaded rows are dropped first (lossless: they've already reached
 // the server); if the cap is still exceeded, non-uploaded rows are dropped lossy and
 // a warn log is emitted so the operator sees the backpressure.
 //
-// At this layer, MaxBytes=0 disables the cap (unbounded growth). The agent-level
-// config (`EDR_AGENT_QUEUE_MAX_BYTES`) defaults that knob to 500 MiB, so bounded
-// queueing is on by default in a stock agent; set `EDR_AGENT_QUEUE_MAX_BYTES=0`
-// to disable the cap entirely.
+// At this layer, MaxBytes=0 disables the cap (unbounded growth) and is used by tests
+// and benchmarks. The agent always wires a fixed 500 MiB cap (config.DefaultQueueMaxBytes),
+// so bounded queueing is always on in a stock agent; it is no longer operator-tunable.
 package queue
 
 import (

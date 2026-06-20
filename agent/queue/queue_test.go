@@ -212,6 +212,7 @@ func openCappedQueue(t *testing.T, maxBytes int64) *Queue {
 }
 
 // spec:agent-event-queue/bounded-storage-with-operator-visible-lossy-fallback/cap-is-reached-but-uploaded-rows-can-absorb-the-pressure
+// spec:agent-configuration/the-agent-configuration-surface-is-intentionally-minimal/the-queue-byte-cap-remains-enforced-though-not-configurable
 //
 // TestEnqueue_CapDropsUploadedFirst locks in the queue-cap contract: with a tight cap plus a batch of uploaded-then-unuploaded rows,
 // cap enforcement drops the uploaded rows before it touches the unuploaded ones.

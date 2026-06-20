@@ -11,14 +11,12 @@ import (
 	"syscall"
 )
 
-// TLSOptions configures TLS for a fleet-edr daemon. CertFile and KeyFile must both be non-empty. AllowTLS12 drops the floor from TLS
-// 1.3 to 1.2 only when the operator explicitly opts in (EDR_TLS_ALLOW_TLS12=1).
+// TLSOptions configures TLS for a fleet-edr daemon. CertFile and KeyFile must both be non-empty. The TLS floor is TLS 1.3,
+// unconditionally: the only client is our own modern Go agent, so there is no legacy-client opt-out to maintain.
 type TLSOptions struct {
-	CertFile   string
-	KeyFile    string
-	AllowTLS12 bool
-	// Logger is required; the TLS cipher-list warning and the cert-reload loop both
-	// log through it. Using slog.Default() is acceptable.
+	CertFile string
+	KeyFile  string
+	// Logger is required; the cert-reload loop logs through it. Using slog.Default() is acceptable.
 	Logger *slog.Logger
 }
 
@@ -44,22 +42,9 @@ func ConfigureTLS(ctx context.Context, srv *http.Server, opts TLSOptions) error 
 	certHolder := &atomic.Pointer[tls.Certificate]{}
 	certHolder.Store(&cert)
 
-	minVer := uint16(tls.VersionTLS13)
-	if opts.AllowTLS12 {
-		minVer = tls.VersionTLS12
-		logger.WarnContext(ctx, "EDR_TLS_ALLOW_TLS12=1 set; TLS 1.2 enabled for legacy pilot")
-	}
-	//nolint:gosec // MinVersion may be TLS12 only when the operator explicitly opts in via EDR_TLS_ALLOW_TLS12=1.
+	// TLS 1.3 floor, unconditionally. TLS 1.3 negotiates its own fixed cipher list, so no CipherSuites override is needed.
 	srv.TLSConfig = &tls.Config{
-		MinVersion: minVer,
-		// TLS 1.2 cipher list restricted to forward-secrecy AEADs. TLS 1.3 has its
-		// own fixed list, so this only takes effect when AllowTLS12 is on.
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
-			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
-		},
+		MinVersion: tls.VersionTLS13,
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return certHolder.Load(), nil
 		},

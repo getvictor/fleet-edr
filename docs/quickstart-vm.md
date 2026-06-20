@@ -110,7 +110,7 @@ EDR_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
 EDR_AUTH_ALLOW_NO_OIDC=0
 ```
 
-Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). The redirect URL must exactly match what your IdP has on file. See [okta-setup.md](okta-setup.md) for the IdP-side steps and the optional knobs (`EDR_OIDC_DEFAULT_ROLE`, `EDR_OIDC_ALLOW_JIT_PROVISIONING`, `EDR_OIDC_SCOPES`).
+Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). The redirect URL must exactly match what your IdP has on file. See [okta-setup.md](okta-setup.md) for the IdP-side steps and the optional knobs (`EDR_OIDC_DEFAULT_ROLE`, `EDR_OIDC_ALLOW_JIT_PROVISIONING`).
 
 ## Operations
 

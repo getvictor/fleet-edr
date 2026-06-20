@@ -74,19 +74,17 @@ EDR_SECRET_KEY=<generate with: openssl rand -hex 32>
 Optional knobs (defaults shown):
 
 ```bash
-EDR_OIDC_SCOPES=openid,email,profile
 EDR_OIDC_ALLOW_JIT_PROVISIONING=1
-EDR_OIDC_STATE_COOKIE_TTL=5m
 EDR_SESSION_IDLE_TIMEOUT=8h
 EDR_SESSION_ABSOLUTE_TIMEOUT=24h
 EDR_REAUTH_WINDOW=30m
 ```
 
+The requested OIDC scopes are fixed at `openid,email,profile`: enough for the claims the JIT provisioner needs (`sub`, `email`, `name`), with no `groups` until group-to-role mapping ships in a future release. The OIDC state cookie is valid for 5 minutes, long enough for a password manager plus an MFA prompt.
+
 Notes on the optional knobs:
 
-- **Scopes.** The current default `openid,email,profile` gives the callback the claims the JIT provisioner needs (`sub`, `email`, `name`). Adding scopes Okta hasn't granted on the application fails the consent step at Okta, not the EDR server. Do not add `groups` until group-to-role mapping ships in a future release.
 - **JIT provisioning.** `EDR_OIDC_ALLOW_JIT_PROVISIONING=1` (default) creates a user + identity + `analyst` role binding on first successful sign-in. Set to `0` to require an operator to pre-create the user via SQL; an unknown subject then sees a directed `403 unknown_subject` instead of being auto-onboarded.
-- **State cookie TTL.** Defaults to 5 minutes, long enough for a password manager and an MFA prompt. Tune up for tenants that gate on slow upstream MFA (push notifications, hardware key roundtrip).
 - **Session timeouts.** OIDC-minted sessions slide on every authenticated request up to `EDR_SESSION_ABSOLUTE_TIMEOUT`. The reauth window applies to destructive actions (`host.isolate`, `host.kill_process`, `host.run_script`, `alert.resolve` when severity=critical) and forces a fresh IdP prompt when `last_auth_at` is older than `EDR_REAUTH_WINDOW`.
 
 The server refuses to start if `EDR_OIDC_ISSUER` is set without the matching client ID / secret / redirect URL: boot-time validation prints a single error block listing every missing knob.
