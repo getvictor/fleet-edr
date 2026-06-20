@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import * as api from "../api";
@@ -77,11 +77,14 @@ describe("ProcessTreeView process-optional alert", () => {
     expect(screen.getByText(/isn’t attributed to a single process/i)).toBeInTheDocument();
     // The generic "no processes" message must NOT be what the analyst sees here.
     expect(screen.queryByText(/No processes in this time range/i)).not.toBeInTheDocument();
+    // Single control: the generic breadcrumb chain toggle is hidden for process-optional alerts, leaving only the info-bar
+    // button below, so the analyst isn't faced with two controls that do the same thing.
+    expect(screen.queryByRole("button", { name: /show full tree|focused on chain/i })).not.toBeInTheDocument();
   });
 
-  it("offers an opt-in that widens out of the focused (empty) view", async () => {
+  it("widens and collapses via the single info-bar control", async () => {
     // Empty host tree so widening doesn't trigger the d3/SVG render path (jsdom lacks the SVG geometry APIs d3 needs); the
-    // assertion is about the focus state flipping off, not about drawing the forest.
+    // assertion is about the focus state flipping, not about drawing the forest.
     vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: [] });
     vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
     renderTree("?alert=7&process=0&at=1750248000000");
@@ -89,10 +92,15 @@ describe("ProcessTreeView process-optional alert", () => {
     const widen = await screen.findByRole("button", { name: /show surrounding host activity/i });
     fireEvent.click(widen);
 
-    // After opting in, focus mode is off so the process-optional explanation is gone.
-    await waitFor(() => {
-      expect(screen.queryByText(/isn’t attributed to a single process/i)).not.toBeInTheDocument();
-    });
+    // After widening: the explanation is gone and the single control flips to a collapse-back affordance.
+    const collapse = await screen.findByRole("button", { name: /show alert detail only/i });
+    expect(collapse).toBeInTheDocument();
+    expect(screen.queryByText(/isn’t attributed to a single process/i)).not.toBeInTheDocument();
+
+    // Collapsing returns to the explanation, and there is never a second (breadcrumb) chain toggle.
+    fireEvent.click(collapse);
+    expect(await screen.findByText(/isn’t attributed to a single process/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show full tree|focused on chain/i })).not.toBeInTheDocument();
   });
 });
 
@@ -113,5 +121,7 @@ describe("ProcessTreeView process-backed alert", () => {
     expect(await screen.findByText(/registered as system LaunchDaemon/i)).toBeInTheDocument();
     // But the process-optional explanation must not appear.
     expect(screen.queryByText(/isn’t attributed to a single process/i)).not.toBeInTheDocument();
+    // And the generic chain toggle IS present for a process-backed alert (it is only hidden for process-optional ones).
+    expect(screen.getByRole("button", { name: /focused on chain/i })).toBeInTheDocument();
   });
 });

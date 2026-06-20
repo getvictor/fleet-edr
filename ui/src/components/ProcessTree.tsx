@@ -495,19 +495,23 @@ export function ProcessTreeView() {
           <span className="alert-breadcrumb__time">
             {new Date(alertDetail.created_at).toLocaleString()}
           </span>
-          <span className="alert-breadcrumb__spacer" />
-          <Button
-            size="small"
-            variant={focusAlertChain ? "primary" : "inverse"}
-            onClick={() => { setFocusAlertChain((v) => !v); }}
-            title={focusAlertChain
-              ? "Showing only the processes related to this alert"
-              : "Showing the full host tree"}
-          >
-            {focusAlertChain
-              ? (isProcessOptionalAlert ? "Focused on alert" : "Focused on chain")
-              : "Show full tree"}
-          </Button>
+          {/* Process-optional alerts have no chain to focus, so this generic chain toggle would be a confusing second control
+              next to the info bar's widen/collapse button below. Show it only for process-backed alerts. */}
+          {!isProcessOptionalAlert && (
+            <>
+              <span className="alert-breadcrumb__spacer" />
+              <Button
+                size="small"
+                variant={focusAlertChain ? "primary" : "inverse"}
+                onClick={() => { setFocusAlertChain((v) => !v); }}
+                title={focusAlertChain
+                  ? "Showing only the processes related to this alert"
+                  : "Showing the full host tree"}
+              >
+                {focusAlertChain ? "Focused on chain" : "Show full tree"}
+              </Button>
+            </>
+          )}
         </div>
       )}
 
@@ -528,18 +532,29 @@ export function ProcessTreeView() {
 
       {loading && <p className="process-tree__status">Loading...</p>}
       {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
-      {/* Process-optional alert in focus mode: the graph is intentionally empty (there is no attributed process chain), so
-          explain that instead of leaving a silent blank canvas, and offer the opt-in to widen to the surrounding host
-          activity. This takes precedence over the generic empty message below. */}
-      {!loading && !error && isProcessOptionalAlert && focusAlertChain && (
+      {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph
+          (the generic chain toggle in the breadcrumb is hidden above). Focused: explain the empty graph + offer to widen.
+          Widened: a short note + collapse back. Exactly one button in either state. */}
+      {!loading && !error && isProcessOptionalAlert && (
         <div className="process-tree__status process-tree__status--info">
-          <p>This detection isn’t attributed to a single process. See the detail above for what fired and why.</p>
-          <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(false); }}>
-            Show surrounding host activity
-          </Button>
+          {focusAlertChain ? (
+            <>
+              <p>This detection isn’t attributed to a single process. See the detail above for what fired and why.</p>
+              <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(false); }}>
+                Show surrounding host activity
+              </Button>
+            </>
+          ) : (
+            <>
+              <p>Showing the surrounding host activity for this detection.</p>
+              <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(true); }}>
+                Show alert detail only
+              </Button>
+            </>
+          )}
         </div>
       )}
-      {!loading && !error && !(isProcessOptionalAlert && focusAlertChain) && roots.length === 0 && (
+      {!loading && !error && !isProcessOptionalAlert && roots.length === 0 && (
         <p className="process-tree__status">No processes in this time range.</p>
       )}
 
