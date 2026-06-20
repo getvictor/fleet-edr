@@ -79,7 +79,7 @@ describe("ProcessTreeView process-optional alert", () => {
     expect(screen.queryByText(/No processes in this time range/i)).not.toBeInTheDocument();
     // Single control: the generic breadcrumb chain toggle is hidden for process-optional alerts, leaving only the info-bar
     // button below, so the analyst isn't faced with two controls that do the same thing.
-    expect(screen.queryByRole("button", { name: /show full tree|focused on chain/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /full host tree|focused on chain/i })).not.toBeInTheDocument();
   });
 
   it("widens and collapses via the single info-bar control", async () => {
@@ -100,7 +100,19 @@ describe("ProcessTreeView process-optional alert", () => {
     // Collapsing returns to the explanation, and there is never a second (breadcrumb) chain toggle.
     fireEvent.click(collapse);
     expect(await screen.findByText(/isn’t attributed to a single process/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /show full tree|focused on chain/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /full host tree|focused on chain/i })).not.toBeInTheDocument();
+  });
+
+  it("still explains the alert (no blank canvas) when getAlertDetail fails", async () => {
+    // The focus filter empties the forest from ?process=0 on mount, before (or even if never) alertDetail loads. Keying the
+    // process-optional classification on the URL param means the explanation still renders, so a slow or failed
+    // getAlertDetail never leaves a silent blank canvas. Regression guard for the Gemini/Qodo race finding on PR #466.
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    vi.spyOn(api, "getAlertDetail").mockRejectedValue(new Error("alert detail unavailable"));
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText(/isn’t attributed to a single process/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No processes in this time range/i)).not.toBeInTheDocument();
   });
 });
 

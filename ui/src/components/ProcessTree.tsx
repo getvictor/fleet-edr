@@ -119,8 +119,12 @@ export function ProcessTreeView() {
   // A process-optional alert (process_id === 0) has no attributed process node to focus on: it keys on an artifact, not a
   // process (e.g. a LaunchDaemon registration, where the BTM instigator is Apple's smd, not the actor). Focus mode would
   // filter the forest to an empty chain and render a silent blank canvas, so these alerts get an explicit explanation +
-  // opt-in expansion instead. process_id is the authoritative signal (the ?process= URL param mirrors it).
-  const isProcessOptionalAlert = alertDetail !== null && alertDetail.process_id === 0;
+  // opt-in expansion instead. We key on the ?process=0 URL param FIRST (it mirrors process_id and is available on the very
+  // first render) so the explanation shows immediately: the focus filter already empties the forest from that same param on
+  // mount, so deriving this from the async alertDetail alone would leave a blank canvas during the fetch (or permanently if
+  // getAlertDetail fails) before the explanation appears. alertDetail.process_id is the fallback for any path that omits the
+  // param.
+  const isProcessOptionalAlert = searchParams.get("process") === "0" || (alertDetail !== null && alertDetail.process_id === 0);
 
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
@@ -505,10 +509,12 @@ export function ProcessTreeView() {
                 variant={focusAlertChain ? "primary" : "inverse"}
                 onClick={() => { setFocusAlertChain((v) => !v); }}
                 title={focusAlertChain
-                  ? "Showing only the processes related to this alert"
-                  : "Showing the full host tree"}
+                  ? "Showing only the processes related to this alert; click to show the full host tree"
+                  : "Showing the full host tree; click to focus the alert's process chain"}
               >
-                {focusAlertChain ? "Focused on chain" : "Show full tree"}
+                {/* State label, not an action: both cases describe what's currently shown (the click action is in the
+                    tooltip), so the toggle isn't read as "Show full tree" while it actually enables focus mode. */}
+                {focusAlertChain ? "Focused on chain" : "Full host tree"}
               </Button>
             </>
           )}
