@@ -35,6 +35,24 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			// Removed tuning knobs must be inert: setting them (even to unparseable junk the old parsers would have rejected)
+			// must not fail startup. The trimmed agent ignores them and uses the fixed defaults.
+			// spec:agent-configuration/the-agent-configuration-surface-is-intentionally-minimal/a-removed-tuning-variable-is-ignored-at-startup
+			name: "removed tuning variables are inert",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_BATCH_SIZE":              "notanint",
+				"EDR_UPLOAD_INTERVAL":         "soon",
+				"EDR_PRUNE_AGE":               "nope",
+				"EDR_NETWORK_COALESCE_WINDOW": "garbage",
+				"EDR_AGENT_QUEUE_MAX_BYTES":   "xxl",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "https://edr.example.com", c.ServerURL, "kept config unaffected by inert vars")
+				assert.Equal(t, "json", c.LogFormat)
+			},
+		},
+		{
 			name:    "missing server url",
 			env:     map[string]string{},
 			wantErr: "EDR_SERVER_URL",

@@ -257,8 +257,8 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 // their cross-field validation runs in loadTLSConfig once both sides are known.
 func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	// EDR_DSN is the canonical MySQL DSN; it is the only supported way to point the server at its database (use EDR_DSN_FILE for
-	// docker-secret mounts). A generated password containing DSN metacharacters must be URL-encoded by the operator before it goes
-	// into the DSN string.
+	// docker-secret mounts). go-sql-driver does not URL-decode the DSN, so a password containing DSN metacharacters (@, :, /, ?)
+	// is not supported in the raw DSN string and must be avoided.
 	optionalStr(&c.DSN, "EDR_DSN", getenv)
 	if c.DSN == "" {
 		*errs = append(*errs, errors.New("EDR_DSN is required (use EDR_DSN_FILE for docker-secret mounts)"))

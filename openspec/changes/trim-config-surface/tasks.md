@@ -20,5 +20,5 @@
 ## Verification
 
 - [x] `go build ./...`, `go vet`, server + agent config unit tests, agent consumer tests, httpserver test.
-- [ ] Dev-server boot QA + macOS VM agent enroll/upload QA with the trimmed surface.
+- [x] Dev-server boot QA (trimmed surface boots, removed vars inert, TLS 1.3 enforced) + macOS VM agent enroll/upload QA (edr-dev, enrolled end-to-end).
 - [x] File the follow-up issue to move the detection allowlists to a DB/policy-backed config layer (getvictor/fleet-edr#459).

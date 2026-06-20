@@ -99,6 +99,26 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			// Removed tuning knobs must be inert: setting them (even to unparseable junk that the old parsers would have
+			// rejected) must not fail boot. The trimmed surface ignores them and uses the fixed defaults.
+			// spec:server-configuration/the-server-configuration-surface-is-intentionally-minimal/a-removed-tuning-variable-is-ignored-at-boot
+			name: "removed tuning variables are inert",
+			env: withExtra(minEnv, map[string]string{
+				"EDR_PROCESS_INTERVAL":      "garbage",
+				"EDR_HOST_TOKEN_LIFETIME":   "nonsense",
+				"EDR_AUDIT_READ_SAMPLING":   "banana",
+				"EDR_TLS_ALLOW_TLS12":       "1",
+				"EDR_OIDC_STATE_COOKIE_TTL": "later",
+				"EDR_MYSQL_ADDRESS":         "should-be-ignored",
+			}),
+			validate: func(t *testing.T, c *Config) {
+				t.Helper()
+				assert.Equal(t, "root@tcp(127.0.0.1:3306)/edr?parseTime=true", c.DSN, "EDR_DSN still wins; EDR_MYSQL_* is gone")
+				assert.Equal(t, 30, c.EnrollRatePerMin, "kept default unaffected by inert vars")
+			},
+		},
+		{
+			// spec:server-configuration/the-server-configuration-surface-is-intentionally-minimal/the-database-requires-a-single-dsn
 			name: "missing EDR_DSN",
 			env: map[string]string{
 				"EDR_ENROLL_SECRET": "s",
@@ -555,6 +575,15 @@ func withExtra(base, extra map[string]string) map[string]string {
 	maps.Copy(out, base)
 	maps.Copy(out, extra)
 	return out
+}
+
+// TestDefaultOIDCScopes pins the fixed OIDC scope set wired at boot (EDR_OIDC_SCOPES was removed) and confirms each call returns a
+// fresh slice so a caller can't mutate a shared backing array.
+func TestDefaultOIDCScopes(t *testing.T) {
+	assert.Equal(t, []string{"openid", "email", "profile"}, DefaultOIDCScopes())
+	a := DefaultOIDCScopes()
+	a[0] = "mutated"
+	assert.Equal(t, []string{"openid", "email", "profile"}, DefaultOIDCScopes(), "must return a fresh slice each call")
 }
 
 // TestLoad_TLSCertFailFast pins the fail-fast behaviour added in response to a CodeRabbit review on PR #182: bad cert paths

@@ -79,7 +79,7 @@ type Options struct {
 //
 // opts carries the async-audit + read-sampling configuration. Zero
 // value is valid (no async writer, 0.0 read sampling); production
-// wires identityCtx's AsyncWriter and cfg.AuditReadSampling.
+// wires identityCtx's AsyncWriter, and the read-sampling rate is fixed at 0.0.
 func New(ctx context.Context, audit api.AuditRecorder, logger *slog.Logger, opts Options) (*Engine, error) {
 	if logger == nil {
 		logger = slog.Default()
