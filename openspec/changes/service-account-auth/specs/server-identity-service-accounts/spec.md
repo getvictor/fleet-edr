@@ -2,7 +2,7 @@
 
 ### Requirement: A service account is a non-human principal bound to a single role
 
-The system SHALL represent a service account as an identity of kind `api_token` with no associated human user, carrying a display name, an owning creator, exactly one bound seeded role, an expiry, and an enabled/revoked state. The expiry SHALL always be set, defaulted from the deployment-configured maximum credential lifetime and optionally shortened by the creator. The bound role MUST NOT be `admin` or `super_admin`, nor any role granting the console-management actions (`service_account.*`, `user.*`, `sso.manage`); a service account therefore cannot create, rotate, or revoke service accounts, invite users, or change SSO configuration. A verified service-account access token SHALL resolve to an actor carrying that bound role, evaluated by the same authorization chokepoint as a human operator.
+The system SHALL represent a service account as an identity of kind `api_token` with no associated human user, carrying a display name, an owning creator, exactly one bound seeded role, an expiry, and an enabled/revoked state. The expiry SHALL always be set, defaulted from the deployment-configured maximum credential lifetime and optionally shortened by the creator. The bound role MAY be any seeded role except `super_admin`, which the system MUST reject: a non-human credential carrying the unrestricted wildcard is never warranted. The `admin` role IS permitted at operator discretion, with the understanding that an admin-bound service account holds the console-management actions (`service_account.*`, `user.*`, `sso.manage`) and is therefore a full-control credential; operators SHOULD bind the least-privileged role that satisfies the automation. A verified service-account access token SHALL resolve to an actor carrying that bound role, evaluated by the same authorization chokepoint as a human operator.
 
 #### Scenario: Service account binds to one role
 
@@ -11,9 +11,9 @@ The system SHALL represent a service account as an identity of kind `api_token` 
 - **THEN** the request is authorized as an actor holding exactly the `analyst` role's actions
 - **AND** no human user is associated with the call
 
-#### Scenario: A service account cannot bind to a management-capable role
+#### Scenario: A service account cannot bind to super_admin
 
-- **WHEN** an admin attempts to create a service account bound to `admin`, `super_admin`, or any role granting `service_account.*`
+- **WHEN** an admin attempts to create a service account bound to `super_admin`
 - **THEN** the system rejects the request without creating the service account
 
 ### Requirement: The client credential is hashed at rest and shown once
