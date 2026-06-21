@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -520,4 +521,212 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	assert.Contains(t, findings2[0].Description, "/usr/bin/python3")
 	assert.Contains(t, findings2[0].Description, "/bin/sh")
 	assert.Contains(t, findings2[0].Description, "/tmp/payload")
+}
+
+// TestGlobMatch pins the wildcard matcher behind the version-agnostic parent allowlist. `*` matches any run of characters INCLUDING
+// the path separator (unlike a shell glob), and a pattern with no `*` is exact equality. The evidence-host patterns from issue #391
+// (`*/claude/versions/*`, `*/lefthook_*`, the Homebrew Cellar git path) are pinned as named cases.
+func TestGlobMatch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		pattern string
+		input   string
+		want    bool
+	}{
+		{"exact match", "/usr/libexec/sshd-session", "/usr/libexec/sshd-session", true},
+		{"exact mismatch", "/usr/libexec/sshd-session", "/usr/libexec/sshd", false},
+		{"empty pattern matches empty", "", "", true},
+		{"empty pattern rejects nonempty", "", "/x", false},
+		{"lone star matches anything", "*", "/anything/at/all", true},
+		{"lone star matches empty", "*", "", true},
+		{"trailing star is prefix match", "/opt/tool/*", "/opt/tool/v1/bin/tool", true},
+		{"leading star is suffix match", "*/tool", "/opt/tool/v1/tool", true},
+		{"star crosses path separators", "*/claude/versions/*", "/Users/dev/.local/share/claude/versions/2.1.178/claude", true},
+		{"claude version churn pattern still matches a different version", "*/claude/versions/*", "/Users/dev/.local/share/claude/versions/2.1.999/claude", true},
+		{"lefthook version-stamped binary", "*/lefthook_*", "/Users/dev/.local/share/mise/installs/lefthook/1.8.0/lefthook_1.8.0_MacOS_arm64", true},
+		{"homebrew cellar git with version wildcard", "/opt/homebrew/Cellar/git/*/bin/git", "/opt/homebrew/Cellar/git/2.42.1/bin/git", true},
+		{"embedded star requires the literal tail", "*/claude/versions/*", "/Users/dev/.local/share/claude/2.1.178/claude", false},
+		{"anchored pattern rejects a tmp impostor", "/opt/homebrew/Cellar/git/*/bin/git", "/tmp/evil/git", false},
+		{"multiple stars", "*/a/*/c/*", "/x/a/b/c/d", true},
+		{"multiple stars no match", "*/a/*/c/*", "/x/a/b/d/e", false},
+		{"star matches empty run between literals", "/a*b", "/ab", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, globMatch(tc.pattern, tc.input))
+		})
+	}
+}
+
+// TestSuspiciousExec_ParentAllowlistGlobMatching covers the version-agnostic parent allowlist: a glob entry suppresses a
+// version-stamped developer-tool parent (the issue #391 noise), while a literal entry keeps exact-match semantics.
+//
+// spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-glob-allowlist-entry-suppresses-a-version-stamped-parent
+// spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-literal-allowlist-entry-still-matches-exactly
+func TestSuspiciousExec_ParentAllowlistGlobMatching(t *testing.T) {
+	t.Parallel()
+
+	// claude (version-stamped path) -> /bin/sh -> curl -> outbound to a public address: the dominant benign shape on the pilot host.
+	makeEvents := func(parentPath string) []api.Event {
+		return []api.Event{
+			{EventID: "fork-parent", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+			{EventID: "exec-parent", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"` + parentPath + `","args":["claude"],"uid":501,"gid":20}`)},
+			{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+			{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh","-c","curl ..."],"uid":501,"gid":20}`)},
+			{EventID: "fork-curl", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+			{EventID: "exec-curl", HostID: "host-a", TimestampNs: 3100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","https://github.com"],"uid":501,"gid":20}`)},
+			{EventID: "net-curl", HostID: "host-a", TimestampNs: 3500, EventType: "network_connect",
+				Payload: json.RawMessage(`{"pid":200,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound","local_address":"10.0.1.5","local_port":54321,"remote_address":"140.82.112.3","remote_port":443,"remote_hostname":"github.com"}`)},
+		}
+	}
+
+	const versionStampedParent = "/Users/dev/.local/share/claude/versions/2.1.178/claude"
+
+	t.Run("glob entry suppresses a version-stamped parent", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		events := makeEvents(versionStampedParent)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{AllowedNonShellParents: map[string]struct{}{"*/claude/versions/*": {}}}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		assert.Empty(t, findings, "version-stamped parent must match the glob allowlist entry")
+	})
+
+	t.Run("glob entry does not suppress a non-matching parent", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		events := makeEvents(versionStampedParent)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		// A glob for a DIFFERENT tool must not suppress the claude chain.
+		rule := &SuspiciousExec{AllowedNonShellParents: map[string]struct{}{"*/lefthook_*": {}}}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		require.Len(t, findings, 1, "non-matching glob must leave the rule firing")
+		assert.Contains(t, findings[0].Description, versionStampedParent)
+	})
+
+	t.Run("literal entry still matches exactly", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		parent := "/usr/libexec/sshd-session"
+		events := makeEvents(parent)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{AllowedNonShellParents: map[string]struct{}{parent: {}}}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		assert.Empty(t, findings, "literal entry must match the parent path exactly")
+	})
+}
+
+// TestSuspiciousExec_LocalResolverDNSDeNoising covers the network-arm DNS de-noising: an outbound DNS lookup to the host's
+// local-resolver-class address (the Tailscale MagicDNS case from issue #391) is not a triggering connection, while a DNS lookup to a
+// publicly routable resolver still fires.
+//
+// spec:server-detection-rules-engine/local-resolver-dns-suppression-for-the-network-arm/outbound-dns-to-a-local-resolver-does-not-count-as-a-network-connection
+// spec:server-detection-rules-engine/local-resolver-dns-suppression-for-the-network-arm/outbound-dns-to-a-public-resolver-still-fires
+func TestSuspiciousExec_LocalResolverDNSDeNoising(t *testing.T) {
+	t.Parallel()
+
+	// python3 -> /bin/sh -> dig -> outbound UDP :53. The destination address is the only thing that varies between subtests.
+	makeEvents := func(remoteAddress string, remotePort int) []api.Event {
+		netPayload := fmt.Sprintf(
+			`{"pid":200,"path":"/usr/bin/dig","uid":501,"protocol":"udp","direction":"outbound","local_address":"10.0.1.5","local_port":54321,"remote_address":%q,"remote_port":%d}`,
+			remoteAddress, remotePort,
+		)
+		return []api.Event{
+			{EventID: "fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+			{EventID: "exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+			{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+			{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh","-c","dig ..."],"uid":501,"gid":20}`)},
+			{EventID: "fork-dig", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+			{EventID: "exec-dig", HostID: "host-a", TimestampNs: 3100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/dig","args":["dig","github.com"],"uid":501,"gid":20}`)},
+			{EventID: "net-dig", HostID: "host-a", TimestampNs: 3500, EventType: "network_connect",
+				Payload: json.RawMessage(netPayload)},
+		}
+	}
+
+	t.Run("outbound DNS to a local resolver does not count as a network connection", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// 100.100.100.100 is Tailscale MagicDNS, in the CGNAT 100.64.0.0/10 range.
+		events := makeEvents("100.100.100.100", 53)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		assert.Empty(t, findings, "DNS to the local resolver must not trigger the network arm")
+	})
+
+	t.Run("outbound DNS to a private RFC1918 resolver does not count", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		events := makeEvents("192.168.1.1", 53)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		assert.Empty(t, findings, "DNS to a private-range resolver must not trigger the network arm")
+	})
+
+	t.Run("outbound DNS to a public resolver still fires", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// 8.8.8.8 is a publicly routable resolver: DNS tunnelling to an external resolver must still surface.
+		events := makeEvents("8.8.8.8", 53)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		require.Len(t, findings, 1, "DNS to a public resolver must still trigger the network arm")
+		assert.Equal(t, "Shell spawn with outbound network connection", findings[0].Title)
+		assert.Contains(t, findings[0].Description, "8.8.8.8:53")
+	})
+
+	t.Run("outbound to a local-range address on a non-DNS port still fires", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// The de-noising is DNS-only: a connection to a private address on :443 is not name resolution and must still fire.
+		events := makeEvents("192.168.1.10", 443)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		require.Len(t, findings, 1, "non-DNS port must not be de-noised even to a private address")
+	})
 }
