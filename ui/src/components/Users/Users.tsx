@@ -44,7 +44,7 @@ function roleVariant(role: string): BadgeVariant {
 // reason body, so we key off the status: 403 is the super-admin restriction, 409 is a guardrail (last admin / self / break-glass).
 function friendlyError(err: unknown, fallback: string): string {
   const msg = err instanceof Error ? err.message : "";
-  if (msg.includes("403")) return "Only a super admin can manage super-admin users.";
+  if (msg.includes("403")) return "You do not have permission for that change (super-admin users can only be managed by a super admin).";
   if (msg.includes("409")) return "That change is not allowed: it would remove the last admin or affect your own or a break-glass account.";
   return err instanceof Error ? err.message : fallback;
 }
@@ -62,7 +62,15 @@ export function Users() {
     listUsers()
       // Clear any prior load error on success so the page recovers after a transient failure (the render gates on error === null).
       .then((rows) => { setUsers(rows); setError(null); })
-      .catch((err: unknown) => { setError(err instanceof Error ? err.message : "Failed to load users"); });
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : "Failed to load users";
+        // Only blow away the table for an INITIAL load failure. A failed background refresh (post-mutation) keeps the existing
+        // table and surfaces the problem as a transient action error instead.
+        setUsers((current) => {
+          if (current === null) { setError(msg); } else { setActionError(msg); }
+          return current;
+        });
+      });
   }
 
   useEffect(() => {
@@ -77,11 +85,15 @@ export function Users() {
     if (role === u.role) return;
     setBusyID(u.id);
     setActionError(null);
+    // Optimistically reflect the new role so the controlled <select> does not snap back to the old value while the request is in
+    // flight; reload() reconciles with server truth on success, and reverts the optimistic change on failure.
+    setUsers((rows) => rows?.map((x) => (x.id === u.id ? { ...x, role, roles: [role] } : x)) ?? rows);
     try {
       await setUserRole(u.id, role);
       reload();
     } catch (err: unknown) {
       setActionError(friendlyError(err, "Failed to change role."));
+      reload();
     } finally {
       setBusyID(null);
     }
@@ -129,7 +141,9 @@ export function Users() {
                 return (
                   <tr key={u.id}>
                     <td>
-                      <div className="users__name">{u.display_name ?? u.email}</div>
+                      <div className="users__name">
+                        {u.display_name !== undefined && u.display_name !== "" ? u.display_name : u.email}
+                      </div>
                       {u.display_name !== undefined && u.display_name !== "" && <div className="users__email">{u.email}</div>}
                       {u.is_breakglass && <Badge variant="medium">Break-glass</Badge>}
                     </td>

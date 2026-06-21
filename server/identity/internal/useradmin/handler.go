@@ -99,6 +99,10 @@ type userView struct {
 }
 
 func view(u users.AdminUser, roles []string) userView {
+	if roles == nil {
+		// A user with no live global binding has no map entry; serialize roles as [] (not null) so the wire contract stays an array.
+		roles = []string{}
+	}
 	return userView{
 		ID: u.ID, Email: u.Email, DisplayName: u.DisplayName.String,
 		Role: effectiveRole(roles), Roles: roles, Status: u.Status, IsBreakglass: u.IsBreakglass,

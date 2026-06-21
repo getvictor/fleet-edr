@@ -50,11 +50,14 @@ func init() {
 // IsBreakglass backs the wave-1 user-management surface; the AuthZ
 // chokepoint reads it when building the per-request Actor.
 type User struct {
-	ID           int64     `db:"id" json:"id"`
-	Email        string    `db:"email" json:"email"`
-	IsBreakglass bool      `db:"is_breakglass" json:"is_breakglass"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
+	ID           int64  `db:"id" json:"id"`
+	Email        string `db:"email" json:"email"`
+	IsBreakglass bool   `db:"is_breakglass" json:"is_breakglass"`
+	// Status is the account status ("active" / "disabled"). LoadActor reads it to lock a disabled account out of every authed request
+	// (#135). Populated by Get; other read paths that don't select it leave it empty, which is treated as active.
+	Status    string    `db:"status" json:"status"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // ErrNotFound is returned by GetByEmail when no row matches.
@@ -280,7 +283,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 func (s *Store) Get(ctx context.Context, id int64) (*User, error) {
 	var u User
 	err := s.db.GetContext(ctx, &u, `
-		SELECT id, email, is_breakglass, created_at, updated_at
+		SELECT id, email, is_breakglass, status, created_at, updated_at
 		FROM users WHERE id = ?
 	`, id)
 	if errors.Is(err, sql.ErrNoRows) {

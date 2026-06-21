@@ -63,6 +63,9 @@ var (
 	ErrUserNotFound    = errors.New("identity: user not found")
 	ErrSessionNotFound = errors.New("identity: session not found or expired")
 	ErrAlreadySeeded   = errors.New("identity: admin already seeded")
+	// ErrUserDisabled is returned by LoadActor when the user's account status is disabled. The session middleware maps it to an auth
+	// failure so a disabled user is locked out on their next request, even with an otherwise-valid session (#135 disable-blocks-access).
+	ErrUserDisabled = errors.New("identity: user disabled")
 )
 
 // ctxKey is unexported so ctx values can only be set via the With*

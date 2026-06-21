@@ -238,6 +238,37 @@ func TestUserAdmin_edgeCases(t *testing.T) {
 	})
 }
 
+// TestUserAdmin_disabledUserBlocked proves the disable mutation actually blocks access: LoadActor (run on every authed request by the
+// session middleware) rejects a disabled user with ErrUserDisabled, and re-enabling restores access. This is the enforcement half of
+// the "disabling blocks access" scenario, complementing the status+audit assertions above.
+// spec:server-identity-authorization/operators-manage-users-and-their-roles-through-an-audited-api/disabling-a-user-is-audited-and-blocks-access
+func TestUserAdmin_disabledUserBlocked(t *testing.T) {
+	t.Parallel()
+	id, db := newServiceAccountIdentity(t)
+	mux := http.NewServeMux()
+	id.RegisterAuthedRoutes(mux)
+	operator := seedUser(t, db, "op-disable@ua.local")
+	target := seedUserWithRole(t, db, "blockme@ua.local", "analyst")
+	tid := strconv.FormatInt(target, 10)
+	actor := actorWithRole(operator, "super_admin")
+
+	// Before disable, the actor loads.
+	_, err := id.Service().LoadActor(t.Context(), target, "oidc", false)
+	require.NoError(t, err)
+
+	require.Equal(t, http.StatusOK,
+		userReq(t, mux, actor, http.MethodPut, "/api/settings/users/"+tid+"/status", `{"status":"disabled"}`).Code)
+	// After disable, every authed request for this user is rejected at actor-load time.
+	_, err = id.Service().LoadActor(t.Context(), target, "oidc", false)
+	require.ErrorIs(t, err, api.ErrUserDisabled)
+
+	require.Equal(t, http.StatusOK,
+		userReq(t, mux, actor, http.MethodPut, "/api/settings/users/"+tid+"/status", `{"status":"active"}`).Code)
+	// Re-enabling restores access.
+	_, err = id.Service().LoadActor(t.Context(), target, "oidc", false)
+	require.NoError(t, err)
+}
+
 func TestUserAdmin_unauthorizedDenied(t *testing.T) {
 	t.Parallel()
 	// spec:server-identity-authorization/user-management-is-gated-by-a-dedicated-admin-action/a-role-without-the-grant-is-denied

@@ -36,4 +36,4 @@
 - [x] 6.1 Update `docs/authz.md`: the SQL promotion pattern becomes the documented break-glass alternative, not the primary path
 - [x] 6.2 `openspec validate user-role-management --strict`; `go run ./tools/spectrace check --strict`
 - [x] 6.3 `go test ./server/...`, `task lint:go`, `task lint:dashes`, `cd ui && npm test`
-- [ ] 6.4 Manual QA on the dev server (Chrome MCP): promote a user analyst to senior_analyst, disable/enable, confirm the audit rows
+- [x] 6.4 Manual QA on the dev server (Chrome MCP): promote a user analyst to senior_analyst, disable/enable, confirm the audit rows

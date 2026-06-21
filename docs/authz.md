@@ -18,7 +18,7 @@ Five built-in roles ship with the server. Their grants are the source of truth i
 
 `super_admin` is the break-glass account's role at first boot. SSO operators provisioned via JIT default to `analyst`; promote them from the Users page in Admin settings (or, as a break-glass alternative, the SQL pattern below).
 
-The five-role layout is current; a future release will add an admin API for role management. In the current release the `INSERT IGNORE` seed at boot guarantees the rows exist, and the `is_builtin=1` column protects them from accidental delete via a future admin endpoint.
+The five-role layout is current. Role bindings are managed through the admin API + Users page (see below); the `INSERT IGNORE` seed at boot guarantees the role rows exist, and the `is_builtin=1` column protects the seeded roles from accidental deletion.
 
 ## How a 403 reads on the wire
 

@@ -115,6 +115,11 @@ func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string
 	if err != nil {
 		return nil, fmt.Errorf("load actor user %d: %w", userID, err)
 	}
+	// A disabled account is locked out of every authed request, even under an otherwise-valid session: the admin user-management
+	// surface sets users.status, and this per-request check is what makes "disable" actually block access (#135).
+	if u.Status == "disabled" {
+		return nil, api.ErrUserDisabled
+	}
 	bindings, err := s.rbac.ListLiveBindings(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("load actor bindings: %w", err)

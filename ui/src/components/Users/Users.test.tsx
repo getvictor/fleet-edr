@@ -92,6 +92,20 @@ describe("Users", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/last admin|break-glass/i);
   });
 
+  it("keeps the table and shows a transient error when a background refresh fails", async () => {
+    // Initial load succeeds; the post-mutation reload() rejects. The table must stay visible (not be replaced by a page error).
+    vi.spyOn(api, "listUsers").mockResolvedValueOnce([baseUsers[0]]).mockRejectedValue(new Error("refresh boom"));
+    vi.spyOn(api, "setUserStatus").mockResolvedValue({ ...baseUsers[0], status: "disabled" });
+    renderUsers();
+    await screen.findByText("alice@acme.com");
+
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("refresh boom");
+    // Table is still there (not replaced by the page-level "Error:" state).
+    expect(screen.getByText("alice@acme.com")).toBeInTheDocument();
+    expect(screen.queryByText(/Error: refresh boom/)).not.toBeInTheDocument();
+  });
+
   it("shows the empty state", async () => {
     vi.spyOn(api, "listUsers").mockResolvedValue([]);
     renderUsers();
