@@ -35,6 +35,8 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0010](0010-stateless-server.md) | Stateless server: no in-process state survives a request | Accepted |
 | [0011](0011-ha-architecture.md) | High-availability architecture: multi-replica app tier with rolling upgrade | Accepted |
 | [0012](0012-capability-based-ui-gating.md) | Capability-based UI gating from a server-provided permission set | Accepted |
+| [0013](0013-service-account-and-api-authentication.md) | Service-account and API authentication: client-credentials with short-lived self-validating tokens | Accepted |
+| [0014](0014-inline-enforcement-failure-semantics.md) | Inline network enforcement: observation fails open, enforcement is explicit and resilient | Proposed |
 
 ## Tooling
 
