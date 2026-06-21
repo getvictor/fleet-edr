@@ -175,7 +175,7 @@ describe("ServiceAccounts", () => {
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "c" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await screen.findByLabelText("Client secret");
-    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy client secret" }));
     await waitFor(() => { expect(writeText).toHaveBeenCalledWith("edrsa_copy"); });
     vi.unstubAllGlobals();
 
@@ -197,7 +197,7 @@ describe("ServiceAccounts", () => {
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "d" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await screen.findByLabelText("Client secret");
-    expect(() => { fireEvent.click(screen.getByRole("button", { name: "Copy" })); }).not.toThrow();
+    expect(() => { fireEvent.click(screen.getByRole("button", { name: "Copy client secret" })); }).not.toThrow();
     vi.unstubAllGlobals();
   });
 });

@@ -11,6 +11,7 @@ import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
 import { Badge, type BadgeVariant } from "../ui/Badge";
+import { CopyButton } from "../ui/CopyButton";
 import "./ServiceAccounts.scss";
 
 // Bindable roles match the server allowlist: operational roles only, never a management-capable role.
@@ -145,16 +146,6 @@ export function ServiceAccounts() {
     }
   }
 
-  async function copySecret(secret: string) {
-    const clipboard = navigator.clipboard as Clipboard | undefined;
-    if (!clipboard) return;
-    try {
-      await clipboard.writeText(secret);
-    } catch {
-      // Clipboard unavailable (insecure context); the field is selectable as a fallback.
-    }
-  }
-
   return (
     <div className="service-accounts">
       <PageHeader
@@ -174,17 +165,18 @@ export function ServiceAccounts() {
             This is the only time the secret for <strong>{issued.name}</strong> is shown. Store it in your secret manager; it cannot be
             retrieved again.
           </p>
-          <div className="service-accounts__field">
+          <div className="field">
             <span className="field__label">Client ID</span>
-            <input className="field__input service-accounts__mono" type="text" readOnly aria-label="Client ID" value={issued.clientID} />
+            <div className="service-accounts__credential">
+              <input className="field__input service-accounts__mono" type="text" readOnly aria-label="Client ID" value={issued.clientID} />
+              <CopyButton value={issued.clientID} label="Copy client ID" />
+            </div>
           </div>
-          <div className="service-accounts__field">
+          <div className="field service-accounts__credential-gap">
             <span className="field__label">Client secret</span>
-            <div className="service-accounts__secret-row">
+            <div className="service-accounts__credential">
               <input className="field__input service-accounts__mono" type="text" readOnly aria-label="Client secret" value={issued.secret} />
-              <Button type="button" variant="inverse" size="small" onClick={() => { void copySecret(issued.secret); }}>
-                Copy
-              </Button>
+              <CopyButton value={issued.secret} label="Copy client secret" />
             </div>
           </div>
           <div className="service-accounts__footer">
