@@ -82,7 +82,7 @@ Running the NE binary via a custom LaunchDaemon registers the Mach service but d
 
 ### DNS proxy can break all DNS resolution
 
-`NEDNSProxyProvider` is a full DNS proxy. If your forwarding code fails, ALL DNS on the endpoint breaks. Safety practices:
+`NEDNSProxyProvider` is a full DNS proxy. If your forwarding code fails, ALL DNS on the endpoint breaks. For the field runbook when an endpoint loses name resolution (triage steps, log queries, the decisive disable test), see `dns-monitoring.md`. Safety practices:
 
 - Use `Network.NWConnection` to forward to the original destination (the system excludes extension's own connections from the proxy chain)
 - Never block or drop datagrams due to parse failures
