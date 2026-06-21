@@ -41,8 +41,10 @@ func (r *RecordingRouter) HandleFunc(pattern string, handler func(http.ResponseW
 	r.inner.HandleFunc(pattern, handler)
 }
 
-// Patterns returns a copy of every pattern registered through this RecordingRouter, in registration order. Patterns are unique by
-// construction: the inner *http.ServeMux panics on a duplicate registration, so a duplicate would fail at composition time, not here.
+// Patterns returns a copy of every pattern registered through this RecordingRouter, in registration order. Patterns are recorded
+// verbatim and would repeat if a caller registered the same pattern twice. In production the inner Router is *http.ServeMux, which
+// panics on a duplicate registration, so a duplicate fails at composition time rather than surfacing here; a Router that tolerates
+// duplicates would yield duplicate patterns, which the caller must handle.
 func (r *RecordingRouter) Patterns() []string {
 	return slices.Clone(r.patterns)
 }
