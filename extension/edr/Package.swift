@@ -100,6 +100,9 @@ let package = Package(
                 // claim/bypass decision. Pure Foundation (no NetworkExtension import), so its decision logic is
                 // unit-testable here without a live resolver. DNSProxyProvider (Xcode-only NE target) holds an instance.
                 "networkextension/DNSProxyHealth.swift",
+                // DNSForwardCompletion.swift is the once-only, atomic deadline-vs-receive resolver for a UDP forward.
+                // Pure Foundation, so its claim/fail state-machine transitions are unit-testable.
+                "networkextension/DNSForwardCompletion.swift",
                 // ProcessInfo.swift is pure Darwin (audit-token extraction + proc_pidpath), no NetworkExtension import, so it
                 // compiles in this logic library and its extractProcessInfo pidversion parsing is unit-testable (issue #403).
                 "networkextension/ProcessInfo.swift",

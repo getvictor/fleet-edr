@@ -23,36 +23,6 @@ private enum DNSProxy {
     static let udpForwardDeadlineSeconds: Double = 3
 }
 
-/// DNSForwardCompletion makes a single UDP forward record exactly one health outcome and run its cleanup once, whether the
-/// upstream answered, errored, or blew the deadline. The deadline timer and the receive completion race; whichever fires
-/// first wins and the loser is a no-op.
-private final class DNSForwardCompletion {
-    private let lock = NSLock()
-    private var done = false
-    private let onResolve: (Bool) -> Void
-
-    init(_ onResolve: @escaping (Bool) -> Void) { self.onResolve = onResolve }
-
-    /// Whether this forward has already resolved. Lets the receive path bail out when the deadline already fired, so a
-    /// late upstream reply does not emit a spurious dns_query event or write to an already-closed flow.
-    var isFinished: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return done
-    }
-
-    func finish(ok: Bool) {
-        lock.lock()
-        if done {
-            lock.unlock()
-            return
-        }
-        done = true
-        lock.unlock()
-        onResolve(ok)
-    }
-}
-
 /// Process attribution context for a single DNS flow. Bundled to keep function
 /// parameter counts manageable.
 private struct FlowContext {
@@ -197,10 +167,11 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                 flow?.closeWriteWithError(nil)
             }
         }
-        // The deadline races the receive: whichever fires first wins via DNSForwardCompletion's once-guard.
+        // The deadline races the receive: failIfPending resolves to a failure only if the receive path has not already
+        // claimed the forward, so a near-deadline success is never reclassified as a failure.
         let deadline = DispatchWorkItem {
             logger.error("Upstream UDP forward timed out after \(DNSProxy.udpForwardDeadlineSeconds, format: .fixed(precision: 0))s")
-            completion.finish(ok: false)
+            completion.failIfPending()
         }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + DNSProxy.udpForwardDeadlineSeconds,
                                                              execute: deadline)
@@ -214,7 +185,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             case .failed(let error):
                 logger.error("Upstream UDP connection failed: \(error.localizedDescription)")
                 deadline.cancel()
-                completion.finish(ok: false)
+                completion.failIfPending()
             case .cancelled:
                 break
             default:
@@ -229,7 +200,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             if let error {
                 logger.error("Failed to send UDP datagram: \(error.localizedDescription)")
                 forward.deadline.cancel()
-                forward.completion.finish(ok: false)
+                forward.completion.failIfPending()
                 return
             }
             self?.receiveUDPResponse(forward)
@@ -243,17 +214,18 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         forward.connection.receiveMessage { [weak self] responseData, _, _, recvError in
             forward.deadline.cancel()
 
-            // The deadline path may have already resolved this forward (fail-open) and closed the flow. If so, a late
-            // upstream reply must not emit a spurious dns_query event or write to the closed flow: bail out.
-            guard !forward.completion.isFinished else { return }
+            // Atomically claim the forward before touching the flow. If the deadline already won (fail-open, flow closed),
+            // claimResponse returns false and a late reply emits no spurious telemetry and does not write to the closed
+            // flow. Once claimed, the deadline's failIfPending is a no-op, so this success cannot be reclassified.
+            guard forward.completion.claimResponse() else { return }
 
             if let recvError {
                 logger.debug("UDP receive error: \(recvError.localizedDescription)")
-                forward.completion.finish(ok: false)
+                forward.completion.resolveResponse(ok: false)
                 return
             }
             guard let responseData, !responseData.isEmpty else {
-                forward.completion.finish(ok: false)
+                forward.completion.resolveResponse(ok: false)
                 return
             }
 
@@ -263,11 +235,11 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             forward.flow.writeDatagrams([(responseData, forward.responseEndpoint)]) { writeError in
                 if let writeError {
                     logger.error("Failed to write UDP response: \(writeError.localizedDescription)")
-                    forward.completion.finish(ok: false)
+                    forward.completion.resolveResponse(ok: false)
                     return
                 }
                 // Upstream answered and the client received it: a healthy forward.
-                forward.completion.finish(ok: true)
+                forward.completion.resolveResponse(ok: true)
             }
         }
     }
