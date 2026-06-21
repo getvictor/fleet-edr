@@ -714,7 +714,8 @@ export interface ServiceAccount {
 }
 
 // ServiceAccountCreate is the POST body. expires_in_days is optional (server defaults to 90,
-// caps at 365); role must be an operational role (analyst, senior_analyst, auditor).
+// caps at 365); role must be a bindable seeded role (analyst, senior_analyst, auditor, or admin);
+// super_admin is rejected server-side.
 export interface ServiceAccountCreate {
   name: string;
   role: string;

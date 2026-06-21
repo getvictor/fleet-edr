@@ -83,6 +83,38 @@ describe("ServiceAccounts", () => {
     expect(create.mock.calls[0][0]).toEqual({ name: "x", role: "auditor", expires_in_days: 30 });
   });
 
+  it("creates an admin service account (admin is in the allowlist)", async () => {
+    vi.spyOn(api, "listServiceAccounts").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createServiceAccount").mockResolvedValue({
+      id: 9, client_id: "sa_adm", name: "iac", role: "admin", status: "active",
+      created_at: "2026-06-21T00:00:00Z", expires_at: "2026-09-19T00:00:00Z", secret: "edrsa_adm",
+    });
+    render(<ServiceAccounts />);
+    await screen.findByText("No service accounts yet.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create service account" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "iac" } });
+    fireEvent.change(screen.getByLabelText("Role"), { target: { value: "admin" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => { expect(create).toHaveBeenCalledTimes(1); });
+    expect(create.mock.calls[0][0]).toEqual({ name: "iac", role: "admin" });
+  });
+
+  it("rejects an invalid expiry without calling the API", async () => {
+    vi.spyOn(api, "listServiceAccounts").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createServiceAccount");
+    render(<ServiceAccounts />);
+    await screen.findByText("No service accounts yet.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create service account" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "bot" } });
+    fireEvent.change(screen.getByLabelText("Expires in (days)"), { target: { value: "12.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/whole number from 1 to 365/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("requires a name", async () => {
     vi.spyOn(api, "listServiceAccounts").mockResolvedValue([]);
     const create = vi.spyOn(api, "createServiceAccount");

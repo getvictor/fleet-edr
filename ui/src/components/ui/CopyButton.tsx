@@ -33,29 +33,33 @@ export function CopyButton({ value, label }: CopyButtonProps) {
   }
 
   return (
-    <button
-      type="button"
-      className="copy-button"
-      aria-label={label}
-      title={copied ? "Copied" : "Copy"}
-      onClick={() => { void handleCopy(); }}
-    >
-      {copied ? (
-        <svg
-          className="copy-button__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
-          fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
-        >
-          <path d="M13 4.5 6.5 11 3 7.5" />
-        </svg>
-      ) : (
-        <svg
-          className="copy-button__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
-          fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
-        >
-          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-          <path d="M3.5 10.5H3A1.5 1.5 0 0 1 1.5 9V3A1.5 1.5 0 0 1 3 1.5h6A1.5 1.5 0 0 1 10.5 3v.5" />
-        </svg>
-      )}
-    </button>
+    <>
+      <button
+        type="button"
+        className="copy-button"
+        aria-label={label}
+        title={copied ? "Copied" : "Copy"}
+        onClick={() => { void handleCopy(); }}
+      >
+        {copied ? (
+          <svg
+            className="copy-button__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+            fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
+          >
+            <path d="M13 4.5 6.5 11 3 7.5" />
+          </svg>
+        ) : (
+          <svg
+            className="copy-button__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+            fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
+          >
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+            <path d="M3.5 10.5H3A1.5 1.5 0 0 1 1.5 9V3A1.5 1.5 0 0 1 3 1.5h6A1.5 1.5 0 0 1 10.5 3v.5" />
+          </svg>
+        )}
+      </button>
+      {/* Screen-reader confirmation: the title swap alone is not reliably announced. */}
+      <span className="copy-button__live" role="status" aria-live="polite">{copied ? "Copied" : ""}</span>
+    </>
   );
 }

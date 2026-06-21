@@ -23,6 +23,9 @@ const ROLES = [
   { value: "admin", label: "Admin" },
 ] as const;
 
+// MAX_EXPIRY_DAYS mirrors the server cap; the form validates against it before submitting.
+const MAX_EXPIRY_DAYS = 365;
+
 function statusVariant(status: string): BadgeVariant {
   switch (status) {
     case "active":
@@ -80,14 +83,15 @@ export function ServiceAccounts() {
 
   function reload(): void {
     listServiceAccounts()
-      .then((rows) => { setAccounts(rows); })
+      // Clear any prior error on success so the page recovers after a transient failure (the render gates on error === null).
+      .then((rows) => { setAccounts(rows); setError(null); })
       .catch((err: unknown) => { setError(err instanceof Error ? err.message : "Failed to load service accounts"); });
   }
 
   useEffect(() => {
     let cancelled = false;
     listServiceAccounts()
-      .then((rows) => { if (!cancelled) setAccounts(rows); })
+      .then((rows) => { if (!cancelled) { setAccounts(rows); setError(null); } })
       .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load service accounts"); });
     return () => { cancelled = true; };
   }, []);
@@ -98,14 +102,24 @@ export function ServiceAccounts() {
       setFormError("Name is required.");
       return;
     }
+    // Validate the optional expiry up front: a non-integer, out-of-range, or junk value must be a clear error, not silently dropped
+    // (which would create an account with the default expiry instead of the operator's intent).
+    let days: number | undefined;
+    if (expiresInDays.trim() !== "") {
+      const n = Number(expiresInDays);
+      if (!Number.isInteger(n) || n < 1 || n > MAX_EXPIRY_DAYS) {
+        setFormError(`Expires in days must be a whole number from 1 to ${String(MAX_EXPIRY_DAYS)}.`);
+        return;
+      }
+      days = n;
+    }
     setCreating(true);
     setFormError(null);
     try {
-      const days = expiresInDays.trim() === "" ? undefined : Number(expiresInDays);
       const created = await createServiceAccount({
         name: trimmed,
         role,
-        ...(days !== undefined && Number.isFinite(days) ? { expires_in_days: days } : {}),
+        ...(days !== undefined ? { expires_in_days: days } : {}),
       });
       setIssued({ name: created.name, clientID: created.client_id, secret: created.secret });
       setName("");
@@ -170,14 +184,26 @@ export function ServiceAccounts() {
           <div className="field">
             <span className="field__label">Client ID</span>
             <div className="service-accounts__credential">
-              <input className="field__input service-accounts__mono" type="text" readOnly aria-label="Client ID" value={issued.clientID} />
+              <input
+                className="field__input service-accounts__mono"
+                type="text"
+                readOnly
+                aria-label="Client ID"
+                value={issued.clientID}
+              />
               <CopyButton value={issued.clientID} label="Copy client ID" />
             </div>
           </div>
           <div className="field service-accounts__credential-gap">
             <span className="field__label">Client secret</span>
             <div className="service-accounts__credential">
-              <input className="field__input service-accounts__mono" type="text" readOnly aria-label="Client secret" value={issued.secret} />
+              <input
+                className="field__input service-accounts__mono"
+                type="text"
+                readOnly
+                aria-label="Client secret"
+                value={issued.secret}
+              />
               <CopyButton value={issued.secret} label="Copy client secret" />
             </div>
           </div>
@@ -198,6 +224,7 @@ export function ServiceAccounts() {
               label="Name"
               type="text"
               placeholder="ci-pipeline"
+              maxLength={255}
               value={name}
               onChange={(e) => { setName(e.target.value); }}
             />
