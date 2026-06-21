@@ -11,7 +11,8 @@ final class DNSForwardCompletionTests: XCTestCase {
         var outcomes: [Bool] = []
         let c = DNSForwardCompletion { outcomes.append($0) }
         XCTAssertTrue(c.claimResponse())     // receive path claims first
-        c.failIfPending()                    // deadline fires after the claim -> must be a no-op
+        // Deadline fires after the claim: it loses, returns false (so the caller does NOT log "timed out"), and is a no-op.
+        XCTAssertFalse(c.failIfPending())
         c.resolveResponse(ok: true)          // receive finalizes the success
         XCTAssertEqual(outcomes, [true])     // resolved exactly once, as success (not reclassified to failure)
     }
@@ -19,7 +20,7 @@ final class DNSForwardCompletionTests: XCTestCase {
     func testDeadlineWinsThenReceiveCannotClaim() {
         var outcomes: [Bool] = []
         let c = DNSForwardCompletion { outcomes.append($0) }
-        c.failIfPending()                    // deadline wins
+        XCTAssertTrue(c.failIfPending())     // deadline wins -> returns true so the caller logs the genuine timeout
         XCTAssertFalse(c.claimResponse())    // late receive path cannot claim -> it must bail without touching the flow
         c.resolveResponse(ok: true)          // and even if mis-called, it is a no-op
         XCTAssertEqual(outcomes, [false])    // resolved exactly once, as failure

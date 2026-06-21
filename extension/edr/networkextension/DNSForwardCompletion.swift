@@ -39,16 +39,20 @@ final class DNSForwardCompletion {
 
     /// Deadline / connection-failure / send-error path: resolve as a failure only if still pending. If the receive path has
     /// already claimed (`responding`) or the forward is `done`, this is a no-op, so a near-deadline success is never
-    /// reclassified as a failure and the flow is never closed out from under the receive path.
-    func failIfPending() {
+    /// reclassified as a failure and the flow is never closed out from under the receive path. Returns true only when this
+    /// call actually won the race (pending -> done), so the deadline caller can log "timed out" only when it genuinely
+    /// timed out rather than on every near-deadline success (a misleading operator signal otherwise).
+    @discardableResult
+    func failIfPending() -> Bool {
         lock.lock()
         guard state == .pending else {
             lock.unlock()
-            return
+            return false
         }
         state = .done
         lock.unlock()
         onResolve(false)
+        return true
     }
 
     /// Receive path: finalize a forward this caller already claimed via `claimResponse`, once the reply has (or has not)

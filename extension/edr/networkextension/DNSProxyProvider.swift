@@ -170,8 +170,12 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         // The deadline races the receive: failIfPending resolves to a failure only if the receive path has not already
         // claimed the forward, so a near-deadline success is never reclassified as a failure.
         let deadline = DispatchWorkItem {
-            logger.error("Upstream UDP forward timed out after \(DNSProxy.udpForwardDeadlineSeconds, format: .fixed(precision: 0))s")
-            completion.failIfPending()
+            // Log only when this deadline actually wins (genuinely timed out). DispatchWorkItem.cancel() is cooperative, so
+            // a deadline that starts running just as the receive path cancels it must not emit a "timed out" line on a
+            // forward that ultimately succeeded: that would be a misleading operator signal / false alert.
+            if completion.failIfPending() {
+                logger.error("Upstream UDP forward timed out after \(DNSProxy.udpForwardDeadlineSeconds, format: .fixed(precision: 0))s")
+            }
         }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + DNSProxy.udpForwardDeadlineSeconds,
                                                              execute: deadline)
