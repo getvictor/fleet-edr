@@ -96,6 +96,10 @@ let package = Package(
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",
                 "networkextension/DNSParser.swift",
+                // DNSProxyHealth.swift is the DNS proxy's self-heal watchdog: a sliding-window failure accumulator +
+                // claim/bypass decision. Pure Foundation (no NetworkExtension import), so its decision logic is
+                // unit-testable here without a live resolver. DNSProxyProvider (Xcode-only NE target) holds an instance.
+                "networkextension/DNSProxyHealth.swift",
                 // ProcessInfo.swift is pure Darwin (audit-token extraction + proc_pidpath), no NetworkExtension import, so it
                 // compiles in this logic library and its extractProcessInfo pidversion parsing is unit-testable (issue #403).
                 "networkextension/ProcessInfo.swift",
