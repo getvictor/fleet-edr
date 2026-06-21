@@ -53,10 +53,12 @@ const (
 	ActionEnrollmentRevoke      Action = "enrollment.revoke"
 	ActionEnrollmentRotateToken Action = "enrollment.rotate_token"
 
-	// User management. Wired up in wave 1 as part of the break-glass flow; the constants exist so the action registry + Rego policy
-	// stay coherent.
+	// User management. ActionUserRead/Invite were wired up in wave 1 as part of the break-glass flow; the constants existed so the action
+	// registry + Rego policy stayed coherent. ActionUserManage (issue #135) gates the wave-2 admin surface that lists operators and
+	// mutates their role bindings + account status. Held by admin + super_admin; the listing endpoint gates on user.read instead.
 	ActionUserRead   Action = "user.read"
 	ActionUserInvite Action = "user.invite"
+	ActionUserManage Action = "user.manage"
 
 	// SSO configuration. Gates reading and mutating the deployment's stored OIDC provider config (issue #375). Held by admin +
 	// super_admin; the admin settings read/update/test-connection handlers funnel through the chokepoint on this action.
@@ -101,7 +103,7 @@ func RegisteredActions() []Action {
 		ActionAlertRead, ActionAlertComment, ActionAlertAcknowledge,
 		ActionAlertResolve, ActionAlertReopen,
 		ActionEnrollmentRead, ActionEnrollmentRevoke, ActionEnrollmentRotateToken,
-		ActionUserRead, ActionUserInvite,
+		ActionUserRead, ActionUserInvite, ActionUserManage,
 		ActionSSOManage,
 		ActionServiceAccountRead, ActionServiceAccountCreate, ActionServiceAccountRotate, ActionServiceAccountRevoke,
 		ActionAuditRead,

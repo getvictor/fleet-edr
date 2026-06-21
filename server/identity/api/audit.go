@@ -48,6 +48,17 @@ const (
 	AuditAuthBreakglassSuccess   AuditAction = "auth.breakglass.success"
 	AuditAuthBreakglassFailure   AuditAction = "auth.breakglass.failure"
 
+	// User + role management (identity context, issue #135). The admin user-management surface emits one row per applied mutation. Role
+	// changes use the authz.role_binding.* verbs: update on a role swap (payload carries from/to), create on a first grant to a user with
+	// no prior global binding, delete when access is cleared. Account-status changes use user.disabled / user.enabled. The wave-2 UI always
+	// sets a concrete role, so update/create dominate; the delete + status constants cover #136's reconciliation and any future
+	// remove-access path. Stable wire strings; never repurposed (see the convention note at the top of this file).
+	AuditRoleBindingCreate AuditAction = "authz.role_binding.create"
+	AuditRoleBindingUpdate AuditAction = "authz.role_binding.update"
+	AuditRoleBindingDelete AuditAction = "authz.role_binding.delete"
+	AuditUserDisabled      AuditAction = "user.disabled"
+	AuditUserEnabled       AuditAction = "user.enabled"
+
 	// Application Control mutations (rules context). The payload records actor reason, rule type / identifier, policy version post-bump,
 	// and fan-out counts (fanout_hosts / fanout_failed) so SIEM dashboards can trace which hosts received the rule. Stable wire strings
 	// mirrored by AuthZ Actions of the same names.

@@ -16,7 +16,7 @@ Five built-in roles ship with the server. Their grants are the source of truth i
 | `analyst` | host, process, alert | alert.comment |
 | `auditor` | host, process, alert, audit | (none) |
 
-`super_admin` is the break-glass account's role at first boot. SSO operators provisioned via JIT default to `analyst`; promote via the SQL pattern below.
+`super_admin` is the break-glass account's role at first boot. SSO operators provisioned via JIT default to `analyst`; promote them from the Users page in Admin settings (or, as a break-glass alternative, the SQL pattern below).
 
 The five-role layout is current; a future release will add an admin API for role management. In the current release the `INSERT IGNORE` seed at boot guarantees the rows exist, and the `is_builtin=1` column protects them from accidental delete via a future admin endpoint.
 
@@ -56,7 +56,7 @@ Reading the `X-Edr-Authz-Reason` header (or the matching `audit_events` row's `p
 | `X-Edr-Authz-Reason` | What it means | What to do |
 | --- | --- | --- |
 | `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | (none) |
-| `no_matching_rule` | The actor's role bindings don't grant the action. | Bind the appropriate role via SQL (see below). |
+| `no_matching_rule` | The actor's role bindings don't grant the action. | Assign the appropriate role from the Users page in Admin settings (or SQL, see below). |
 | `reauth_required` | The actor's session is past the reauth window (default 30m). The role grants the action; the operator just needs to re-prove possession of credentials. | UI handles this automatically via the reauth modal. If a non-UI client hits it, follow `challenge.reauth_url` and retry. |
 | `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. The current release only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes are coming soon. |
 | `action_not_registered` | The handler called `Allow` with an action string outside `RegisteredActions`. | Server bug. File a ticket; the offending handler likely passed a string literal instead of a typed `api.Action` constant. |
@@ -64,9 +64,11 @@ Reading the `X-Edr-Authz-Reason` header (or the matching `audit_events` row's `p
 
 The audit-log row's `payload` carries `reason` matching the header. The granting role is not on the payload today: derive it by joining `role_bindings` for the actor's `user_id` if needed.
 
-## Binding a role to a user (current release)
+## Binding a role to a user
 
-There is no admin API in the current release; bindings go in via SQL. The shape mirrors `server/identity/bootstrap/schema.go`:
+The primary path is the Users page in Admin settings (`/admin/settings/users`, issue #135): an `admin` lists operators, sets each one's role, and enables or disables access, all audited (`authz.role_binding.*` / `user.disabled` / `user.enabled`). The API behind it is `GET /api/settings/users`, `PUT /api/settings/users/{id}/role`, and `PUT /api/settings/users/{id}/status`, gated on `user.read` / `user.manage`. The UI enforces the same guardrails the server does: the last admin cannot be demoted or disabled, an operator cannot change their own role, break-glass accounts are immutable here, and only a `super_admin` may grant `super_admin`.
+
+The SQL pattern below remains as a break-glass alternative (for example, recovering a deployment that has no usable admin session). The shape mirrors `server/identity/bootstrap/schema.go`:
 
 ```sql
 INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)
@@ -78,7 +80,7 @@ VALUES (
 );
 ```
 
-The `(user_id, role_id, scope_type, scope_id)` tuple is the `uk_role_bindings` UNIQUE key (the row's primary key is an auto-increment `id`). Re-running the same INSERT raises a duplicate-key error rather than a silent no-op, which is the safer direction. To upsert deliberately, add `ON DUPLICATE KEY UPDATE`.
+The `(user_id, role_id, scope_type, scope_id)` tuple is the `uk_role_bindings` UNIQUE key (the row's primary key is an auto-increment `id`). Re-running the same INSERT raises a duplicate-key error rather than a silent no-op, which is the safer direction. To upsert deliberately, add `ON DUPLICATE KEY UPDATE`. Note the admin Users page models a user as a single global role: setting a role there replaces the user's global bindings, so a hand-written multi-binding row is collapsed the next time an admin edits that user.
 
 To revoke: `DELETE FROM role_bindings WHERE user_id = <user_id> AND role_id = 'admin'`. Sessions don't get bounced automatically; the next chokepoint call reads fresh bindings via `Service.LoadActor`, so the change takes effect on the next request.
 

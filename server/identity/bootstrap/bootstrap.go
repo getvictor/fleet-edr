@@ -29,6 +29,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/ssoadmin"
 	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
+	"github.com/fleetdm/edr/server/identity/internal/useradmin"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 	identitymigrations "github.com/fleetdm/edr/server/identity/migrations"
 	"github.com/fleetdm/edr/server/migrations/runner"
@@ -137,6 +138,8 @@ type Identity struct {
 	saTokenHandler *saadmin.TokenHandler
 	saSnapshot     *serviceaccounts.Snapshot
 	apiAuthMW      func(http.Handler) http.Handler
+	// userAdminHandler serves the admin user-management surface (issue #135). Always built (it needs only the users + rbac stores).
+	userAdminHandler *useradmin.Handler
 }
 
 // New wires the identity context. It does NOT apply the schema (call ApplySchema for that) and does NOT start any goroutines (call
@@ -299,6 +302,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		saTokenHandler:    saTokenHandler,
 		saSnapshot:        saSnapshot,
 		apiAuthMW:         apiAuthMW,
+		userAdminHandler:  useradmin.NewHandler(usersStore, rbacStore, authzEngine, auditStore, logger),
 		oidcSeed:          deps.OIDC,
 	}, nil
 }
@@ -665,6 +669,9 @@ func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	}
 	if i.saAdminHandler != nil {
 		i.saAdminHandler.RegisterAuthedRoutes(mux)
+	}
+	if i.userAdminHandler != nil {
+		i.userAdminHandler.RegisterAuthedRoutes(mux)
 	}
 	if i.breakglassHandler != nil {
 		i.breakglassHandler.RegisterAuthedRoutes(mux)

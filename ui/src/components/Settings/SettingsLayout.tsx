@@ -7,10 +7,10 @@ import "./SettingsLayout.scss";
 // sections the operator can access (the design's Admin settings area). It is mounted by the
 // router around each settings page, so the individual page components stay free of nav chrome
 // (and their unit tests can render bare). Sections the operator lacks permission for are
-// omitted; the server chokepoint remains the authority (ADR-0012). Users (#135) is a future
-// section and is intentionally absent this wave.
+// omitted; the server chokepoint remains the authority (ADR-0012).
 const SECTIONS = [
   { to: "/admin/settings/sso", label: "Single sign-on", action: PermissionAction.SSOManage },
+  { to: "/admin/settings/users", label: "Users", action: PermissionAction.UserRead },
   { to: "/admin/settings/service-accounts", label: "Service accounts", action: PermissionAction.ServiceAccountRead },
 ] as const;
 

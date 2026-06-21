@@ -76,6 +76,126 @@ func (s *Store) BindRole(ctx context.Context, ec Executor, req BindRoleRequest) 
 	return nil
 }
 
+// globalScope is the wave-2 binding scope: deployment-wide. The admin user-management surface (#135) reads and writes only global
+// bindings; host_group / host scopes stay reserved for wave-3.
+const globalScope = "global"
+
+// adminTierRoles are the roles whose presence keeps the deployment self-manageable. The last-active-admin guard counts users holding
+// any of these; demoting or disabling the last one is refused.
+var adminTierRoles = []string{"admin", "super_admin"}
+
+// AllLiveBindings returns the live global role ids for every user, keyed by user id. Used by the admin user-list endpoint to render
+// each operator's effective role without an N+1 per-user query. Expired bindings and non-global scopes are excluded: the wave-2 surface
+// is single-role, global-scope only. A user with no live global binding is simply absent from the map.
+func (s *Store) AllLiveBindings(ctx context.Context) (map[int64][]string, error) {
+	if s.db == nil {
+		return nil, errors.New("rbac: db must not be nil")
+	}
+	var rows []struct {
+		UserID int64  `db:"user_id"`
+		RoleID string `db:"role_id"`
+	}
+	err := s.db.SelectContext(ctx, &rows, `
+		SELECT user_id, role_id
+		FROM role_bindings
+		WHERE scope_type = ?
+		  AND (expires_at IS NULL OR expires_at > NOW(6))
+		ORDER BY user_id, role_id
+	`, globalScope)
+	if err != nil {
+		return nil, fmt.Errorf("list all live bindings: %w", err)
+	}
+	out := make(map[int64][]string, len(rows))
+	for _, r := range rows {
+		out[r.UserID] = append(out[r.UserID], r.RoleID)
+	}
+	return out, nil
+}
+
+// LiveGlobalRoles returns one user's live global role ids. Used by the user-management handler for the guardrail checks (is the target
+// admin-tier? does it hold super_admin?), no-op detection, and the audit from-set. Non-global scopes and expired bindings are excluded.
+func (s *Store) LiveGlobalRoles(ctx context.Context, userID int64) ([]string, error) {
+	if s.db == nil {
+		return nil, errors.New("rbac: db must not be nil")
+	}
+	roles := []string{}
+	err := s.db.SelectContext(ctx, &roles, `
+		SELECT role_id FROM role_bindings
+		WHERE user_id = ? AND scope_type = ?
+		  AND (expires_at IS NULL OR expires_at > NOW(6))
+		ORDER BY role_id
+	`, userID, globalScope)
+	if err != nil {
+		return nil, fmt.Errorf("live global roles for user %d: %w", userID, err)
+	}
+	return roles, nil
+}
+
+// SetUserRole replaces a user's global role bindings with exactly one binding for roleID, in a single transaction, and returns the
+// user's previous live global role ids (for the audit payload). This is the wave-2 single-role model: a user holds exactly one global
+// role afterward, collapsing any legacy multi-binding rows. The caller (useradmin handler) has already validated roleID against the
+// bindable set and run the guardrails; SetUserRole is the persistence-level replace.
+func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (previous []string, err error) {
+	if s.db == nil {
+		return nil, errors.New("rbac: db must not be nil")
+	}
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin set-role tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err = tx.SelectContext(ctx, &previous, `
+		SELECT role_id FROM role_bindings
+		WHERE user_id = ? AND scope_type = ?
+		  AND (expires_at IS NULL OR expires_at > NOW(6))
+		ORDER BY role_id
+	`, userID, globalScope); err != nil {
+		return nil, fmt.Errorf("read previous bindings for user %d: %w", userID, err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		DELETE FROM role_bindings WHERE user_id = ? AND scope_type = ?
+	`, userID, globalScope); err != nil {
+		return nil, fmt.Errorf("clear bindings for user %d: %w", userID, err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id) VALUES (?, ?, ?, '*')
+	`, userID, roleID, globalScope); err != nil {
+		return nil, fmt.Errorf("bind role %q to user %d: %w", roleID, userID, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit set-role tx: %w", err)
+	}
+	return previous, nil
+}
+
+// CountActiveAdmins returns the number of active (non-disabled) users holding an admin-tier role via a live global binding, excluding
+// excludeUserID. The user-management guardrail calls it before demoting or disabling an admin-tier target: a result of 0 means the
+// target is the last admin and the mutation must be refused so the deployment stays self-manageable.
+func (s *Store) CountActiveAdmins(ctx context.Context, excludeUserID int64) (int, error) {
+	if s.db == nil {
+		return 0, errors.New("rbac: db must not be nil")
+	}
+	query, args, err := sqlx.In(`
+		SELECT COUNT(DISTINCT rb.user_id)
+		FROM role_bindings rb
+		JOIN users u ON u.id = rb.user_id
+		WHERE rb.role_id IN (?)
+		  AND rb.scope_type = ?
+		  AND (rb.expires_at IS NULL OR rb.expires_at > NOW(6))
+		  AND u.status = 'active'
+		  AND rb.user_id <> ?
+	`, adminTierRoles, globalScope, excludeUserID)
+	if err != nil {
+		return 0, fmt.Errorf("build count-active-admins query: %w", err)
+	}
+	var n int
+	if err := s.db.GetContext(ctx, &n, s.db.Rebind(query), args...); err != nil {
+		return 0, fmt.Errorf("count active admins: %w", err)
+	}
+	return n, nil
+}
+
 // ListLiveBindings returns every role binding for a user that is not
 // expired. The (user_id, expires_at) index keeps the query indexed
 // even on very large role_bindings tables.

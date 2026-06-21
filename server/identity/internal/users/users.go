@@ -292,6 +292,66 @@ func (s *Store) Get(ctx context.Context, id int64) (*User, error) {
 	return &u, nil
 }
 
+// AdminUser is the admin user-management list row (#135). It carries display_name + status, which the lean login-path User row omits.
+// Kept as a separate type so the login / break-glass queries are untouched.
+type AdminUser struct {
+	ID           int64          `db:"id" json:"id"`
+	Email        string         `db:"email" json:"email"`
+	DisplayName  sql.NullString `db:"display_name" json:"-"`
+	Status       string         `db:"status" json:"status"`
+	IsBreakglass bool           `db:"is_breakglass" json:"is_breakglass"`
+	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
+}
+
+// List returns every user as an admin-list row, ordered by id. Backs GET /api/settings/users. The operator population is small (a
+// handful per pilot deployment), so a single unpaginated scan is fine; pagination is a wave-3 concern if a deployment ever grows past
+// it.
+func (s *Store) List(ctx context.Context) ([]AdminUser, error) {
+	rows := []AdminUser{}
+	err := s.db.SelectContext(ctx, &rows, `
+		SELECT id, email, display_name, status, is_breakglass, created_at
+		FROM users ORDER BY id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	return rows, nil
+}
+
+// GetAdmin returns one user as an admin-list row (with status + display_name), or ErrNotFound. The user-management handler loads its
+// target through GetAdmin so it has status + is_breakglass for the guardrails in a single read.
+func (s *Store) GetAdmin(ctx context.Context, id int64) (*AdminUser, error) {
+	var u AdminUser
+	err := s.db.GetContext(ctx, &u, `
+		SELECT id, email, display_name, status, is_breakglass, created_at
+		FROM users WHERE id = ?
+	`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get admin user %d: %w", id, err)
+	}
+	return &u, nil
+}
+
+// SetStatus sets a user's account status ("active" or "disabled"). Returns ErrNotFound when no row matches. The caller validates the
+// status value and runs the user-management guardrails (last-admin, self, break-glass) before calling.
+func (s *Store) SetStatus(ctx context.Context, id int64, status string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return fmt.Errorf("set status for user %d: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for set status: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Count returns the number of users. Used by the first-boot seeder to decide whether to
 // create the initial admin. A bare Count query is faster than SELECT ... LIMIT 1.
 func (s *Store) Count(ctx context.Context) (int64, error) {
