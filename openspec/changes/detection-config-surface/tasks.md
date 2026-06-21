@@ -3,7 +3,7 @@
 ## Data model (rules context)
 
 - [x] `server/rules/migrations`: add `detection_rule_settings` (`rule_id`, `host_group_id` NOT NULL DEFAULT 0 where 0=global, `mode` ENUM('alert','monitor','disabled') DEFAULT 'alert', `severity_override` NULL, `settings` JSON, audit columns; unique on `(rule_id, host_group_id)`) and `detection_exclusions` (`id`, `rule_id` (''=shared), `match_type` ENUM, `value`, `host_group_id` NOT NULL DEFAULT 0, `reason`, `created_by`, `created_at`, `expires_at` NULL, `enabled`) plus `detection_config_meta` version counter. `host_group_id` is validated app-side; the FK + cascade to `host_groups` lands with editable host groups (Phase B).
-- [ ] A monotonic config `version` (per the App Control pattern) bumped on every mutation, for replica cache invalidation + hot reload.
+- [x] A monotonic config `version` (per the App Control pattern) bumped on every mutation, for replica cache invalidation + hot reload (`detection_config_meta`; `bumpVersion` fails closed if the row is missing).
 
 ## Rule-facing contract (`server/rules/api`)
 
@@ -15,6 +15,7 @@
 
 - [ ] `catalog.New` is built from the DB snapshot instead of `RegistryOptions` env allowlists. Rules consult the injected `ExclusionResolver` per finding/host instead of a baked `map[string]struct{}`.
 - [ ] Rules with allowlists (`suspicious_exec`, `persistence_launchagent`, `privilege_launchd_plist_write`, `sudoers_tamper`) call the resolver; remove their `Allowed*` map fields.
+- [ ] Canonicalize paths consistently between the rule and the resolver for `path_glob` / `parent_path_glob` matches, so an exclusion written against one macOS path form (`/etc/...`) still applies when ESF reports the aliased form (`/private/etc/...`); reuse the existing canonicalization (PR #50 / #290). Deferred from Stage 1 (no path flows through the resolver until rules consume it here).
 - [ ] Engine routes each finding by the `(rule, host)` resolved mode: `disabled` drops it, `monitor` drops the alert but emits an observability signal (a counter + structured log/trace recording the match), `alert` persists. Applies `severity_override`. A globally-disabled rule stays in the catalog surface.
 - [ ] Mutations rebuild the snapshot + call `Engine.LoadActive`; each replica reads MySQL and caches by version (safe-to-lose per-replica cache). No restart.
 
@@ -30,7 +31,7 @@
 
 ## UI
 
-- [ ] `ui/src`: detection-config admin views (per-rule enable/severity/settings from the declared schema; exclusion list CRUD with match-type, value, reason, expiry, scope). Generic, schema-driven. Co-located `*.test.tsx`.
+- [ ] `ui/src`: detection-config admin views (per-rule mode (alert/monitor/disabled) + severity + settings from the declared schema; exclusion list CRUD with match-type, value, reason, expiry, scope). Generic, schema-driven. Co-located `*.test.tsx`.
 
 ## Tests + docs
 

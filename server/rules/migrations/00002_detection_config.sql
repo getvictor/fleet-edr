@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS detection_rule_settings (
 	created_at        TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 	updated_at        TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 	updated_by        VARCHAR(255) NOT NULL DEFAULT 'system',
-	UNIQUE KEY uk_detection_rule_settings_rule_scope (rule_id, host_group_id),
-	INDEX idx_detection_rule_settings_rule (rule_id)
+	-- The unique key's leftmost prefix (rule_id) already serves rule_id-only lookups, so no separate single-column index is needed.
+	UNIQUE KEY uk_detection_rule_settings_rule_scope (rule_id, host_group_id)
 );
 -- +goose StatementEnd
 
@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS detection_exclusions (
 	host_group_id BIGINT       NOT NULL DEFAULT 0,
 	reason        VARCHAR(500) NOT NULL DEFAULT '',
 	enabled       TINYINT(1)   NOT NULL DEFAULT 1,
-	expires_at    TIMESTAMP(6) NULL,
+	-- DATETIME (not TIMESTAMP) so a far-future expiry is not capped at the TIMESTAMP Year-2038 ceiling.
+	expires_at    DATETIME(6)  NULL,
 	created_at    TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
 	created_by    VARCHAR(255) NOT NULL DEFAULT 'system',
 	INDEX idx_detection_exclusions_rule_type (rule_id, match_type)

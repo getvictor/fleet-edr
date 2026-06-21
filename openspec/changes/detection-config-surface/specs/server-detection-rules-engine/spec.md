@@ -32,7 +32,7 @@ The system SHALL allow an operator to set an individual rule's mode to one of `a
 
 ### Requirement: Durable detection configuration surface
 
-The system SHALL persist detection-rule configuration (per-rule enable state, optional severity override, per-rule settings, and false-positive exclusions) as durable state in MySQL, edited through the authenticated admin API and UI. Detection configuration MUST NOT be sourced from boot-time environment variables. Every mutation MUST pass through the RBAC authorization chokepoint and record an audit entry naming the actor. Each configuration record MAY carry a host-group scope (or be global); records also support an optional expiration after which they no longer apply. A configuration change MUST become effective for subsequent evaluations without a server restart.
+The system SHALL persist detection-rule configuration (per-rule mode, optional severity override, per-rule settings, and false-positive exclusions) as durable state in MySQL, edited through the authenticated admin API and UI. Detection configuration MUST NOT be sourced from boot-time environment variables. Every mutation MUST pass through the RBAC authorization chokepoint and record an audit entry naming the actor. Each configuration record MAY carry a host-group scope (or be global); records also support an optional expiration after which they no longer apply. A configuration change MUST become effective for subsequent evaluations without a server restart.
 
 #### Scenario: An operator adds a false-positive exclusion without restarting
 

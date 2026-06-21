@@ -54,28 +54,69 @@ type UpsertSettingInput struct {
 	Actor            string
 }
 
-// Version returns the current detection-config version. A reader compares it against the version its cached Snapshot was loaded at to
-// decide whether to reload.
-func (s *Store) Version(ctx context.Context) (int64, error) {
+// SQL shared by the *Store (whole-DB) read methods and the read transaction LoadSnapshot uses, so a query change lands once and the
+// duplicate-literal linter stays quiet. The exclusion select takes an optional `WHERE enabled = 1` suffix.
+const (
+	sqlSelectVersion    = `SELECT version FROM detection_config_meta WHERE id = 1`
+	sqlSelectExclusions = `SELECT id, rule_id, match_type, value, host_group_id, reason, enabled, expires_at, created_by, created_at
+		FROM detection_exclusions`
+	sqlSelectSettings = `SELECT id, rule_id, host_group_id, mode, COALESCE(severity_override, '') AS severity_override,
+		settings, updated_by, updated_at FROM detection_rule_settings ORDER BY rule_id, host_group_id`
+)
+
+// readVersion / readExclusions / readSettings run against any sqlx querier (the whole *Store DB or a read transaction), so a
+// consistent snapshot can read all three under one transaction.
+func readVersion(ctx context.Context, q sqlx.QueryerContext) (int64, error) {
 	var v int64
-	if err := s.db.GetContext(ctx, &v, `SELECT version FROM detection_config_meta WHERE id = 1`); err != nil {
+	if err := sqlx.GetContext(ctx, q, &v, sqlSelectVersion); err != nil {
 		return 0, fmt.Errorf("detectionconfig version: %w", err)
 	}
 	return v, nil
 }
 
-// LoadSnapshot reads the enabled exclusions + all rule settings at the current version and returns an immutable Snapshot. membership
-// and clock are passed through to the snapshot (nil clock defaults to time.Now).
+func readExclusions(ctx context.Context, q sqlx.QueryerContext, enabledOnly bool) ([]api.DetectionExclusion, error) {
+	query := sqlSelectExclusions
+	if enabledOnly {
+		query += ` WHERE enabled = 1`
+	}
+	query += ` ORDER BY id DESC`
+	var out []api.DetectionExclusion
+	if err := sqlx.SelectContext(ctx, q, &out, query); err != nil {
+		return nil, fmt.Errorf("detectionconfig list exclusions: %w", err)
+	}
+	return out, nil
+}
+
+func readSettings(ctx context.Context, q sqlx.QueryerContext) ([]api.DetectionRuleSetting, error) {
+	var out []api.DetectionRuleSetting
+	if err := sqlx.SelectContext(ctx, q, &out, sqlSelectSettings); err != nil {
+		return nil, fmt.Errorf("detectionconfig list settings: %w", err)
+	}
+	return out, nil
+}
+
+// Version returns the current detection-config version. A reader compares it against the version its cached Snapshot was loaded at to
+// decide whether to reload.
+func (s *Store) Version(ctx context.Context) (int64, error) { return readVersion(ctx, s.db) }
+
+// LoadSnapshot reads the enabled exclusions + all rule settings + the version under a single read transaction so the snapshot is a
+// consistent point-in-time view: a concurrent mutation that bumps the version cannot interleave between the three reads and yield a
+// version that disagrees with the rows. membership and clock are passed through to the snapshot (nil clock defaults to time.Now).
 func (s *Store) LoadSnapshot(ctx context.Context, membership Membership, clock func() time.Time) (*Snapshot, error) {
-	version, err := s.Version(ctx)
+	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("detectionconfig begin read tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	version, err := readVersion(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	exclusions, err := s.listExclusions(ctx, true)
+	exclusions, err := readExclusions(ctx, tx, true)
 	if err != nil {
 		return nil, err
 	}
-	settings, err := s.ListRuleSettings(ctx)
+	settings, err := readSettings(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -84,34 +125,12 @@ func (s *Store) LoadSnapshot(ctx context.Context, membership Membership, clock f
 
 // ListExclusions returns every exclusion row (enabled and disabled) for the operator surface, newest first.
 func (s *Store) ListExclusions(ctx context.Context) ([]api.DetectionExclusion, error) {
-	return s.listExclusions(ctx, false)
-}
-
-func (s *Store) listExclusions(ctx context.Context, enabledOnly bool) ([]api.DetectionExclusion, error) {
-	q := `SELECT id, rule_id, match_type, value, host_group_id,
-		reason, enabled, expires_at, created_by, created_at
-		FROM detection_exclusions`
-	if enabledOnly {
-		q += ` WHERE enabled = 1`
-	}
-	q += ` ORDER BY id DESC`
-	var out []api.DetectionExclusion
-	if err := s.db.SelectContext(ctx, &out, q); err != nil {
-		return nil, fmt.Errorf("detectionconfig list exclusions: %w", err)
-	}
-	return out, nil
+	return readExclusions(ctx, s.db, false)
 }
 
 // ListRuleSettings returns every per-rule setting row.
 func (s *Store) ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSetting, error) {
-	const q = `SELECT id, rule_id, host_group_id, mode,
-		COALESCE(severity_override, '') AS severity_override, settings, updated_by, updated_at
-		FROM detection_rule_settings ORDER BY rule_id, host_group_id`
-	var out []api.DetectionRuleSetting
-	if err := s.db.SelectContext(ctx, &out, q); err != nil {
-		return nil, fmt.Errorf("detectionconfig list settings: %w", err)
-	}
-	return out, nil
+	return readSettings(ctx, s.db)
 }
 
 // CreateExclusion inserts an exclusion and bumps the config version atomically.
@@ -176,8 +195,13 @@ func (s *Store) UpsertRuleSetting(ctx context.Context, in UpsertSettingInput) (a
 	if in.Actor == "" {
 		return api.DetectionRuleSetting{}, fmt.Errorf("%w: actor is required", ErrInvalidRequest)
 	}
+	// Validate the optional severity override in Go: the column is an ENUM, so an unrecognised value would otherwise surface as an
+	// opaque SQL error (HTTP 500) rather than a clean ErrInvalidRequest (HTTP 400).
 	var severity any
 	if in.SeverityOverride != "" {
+		if !api.IsValidSeverity(api.Severity(in.SeverityOverride)) {
+			return api.DetectionRuleSetting{}, fmt.Errorf("%w: severity_override %q", ErrInvalidRequest, in.SeverityOverride)
+		}
 		severity = in.SeverityOverride
 	}
 	err := s.inTx(ctx, func(tx *sqlx.Tx) error {
@@ -221,26 +245,37 @@ func (s *Store) getRuleSetting(ctx context.Context, ruleID string, hostGroupID i
 	return st, nil
 }
 
-// inTx runs fn in a transaction, committing on success and rolling back on error.
-func (s *Store) inTx(ctx context.Context, fn func(tx *sqlx.Tx) error) error {
+// inTx runs fn in a transaction, committing on success and rolling back otherwise. The deferred rollback guarantees cleanup even if
+// fn panics or returns early; after a successful Commit the rollback is a no-op (ErrTxDone), which is ignored.
+func (s *Store) inTx(ctx context.Context, fn func(tx *sqlx.Tx) error) (err error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("detectionconfig begin tx: %w", err)
 	}
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
+	if err = fn(tx); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("detectionconfig commit tx: %w", err)
 	}
 	return nil
 }
 
-// bumpVersion increments the single-row version counter inside the caller's tx.
+// bumpVersion increments the single-row version counter inside the caller's tx. A zero-rows-affected update means the seeded
+// detection_config_meta row (id=1) is missing, which would silently break the cache-invalidation contract (readers would never see a
+// version change), so it is treated as an error that rolls the mutation back rather than committing an un-versioned write.
 func bumpVersion(ctx context.Context, tx *sqlx.Tx) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE detection_config_meta SET version = version + 1 WHERE id = 1`); err != nil {
+	res, err := tx.ExecContext(ctx, `UPDATE detection_config_meta SET version = version + 1 WHERE id = 1`)
+	if err != nil {
 		return fmt.Errorf("bump detection-config version: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("bump detection-config version rows: %w", err)
+	}
+	if n == 0 {
+		return errors.New("detectionconfig: meta version row (id=1) missing; cannot bump version")
 	}
 	return nil
 }

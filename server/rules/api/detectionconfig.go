@@ -85,7 +85,11 @@ func MatchExclusionValue(mt ExclusionMatchType, entry, candidate string) bool {
 	case ExclusionMatchCommandSubstring:
 		return entry != "" && strings.Contains(candidate, entry)
 	case ExclusionMatchDomain:
-		return candidate == entry || strings.HasSuffix(candidate, "."+entry)
+		// DNS names are case-insensitive and may carry a trailing dot (the FQDN root); normalize both sides so an exclusion of
+		// `example.com` matches `Example.com`, `example.com.`, and `sub.example.com`.
+		e := strings.TrimSuffix(strings.ToLower(entry), ".")
+		c := strings.TrimSuffix(strings.ToLower(candidate), ".")
+		return c == e || strings.HasSuffix(c, "."+e)
 	case ExclusionMatchTeamID, ExclusionMatchSigningID, ExclusionMatchCDHash, ExclusionMatchSHA256:
 		return entry == candidate
 	}

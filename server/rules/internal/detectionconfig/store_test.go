@@ -130,4 +130,9 @@ func TestStoreRejectsInvalidInput(t *testing.T) {
 		RuleID: "suspicious_exec", Mode: "bogus", Actor: "alice",
 	})
 	require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest, "invalid mode is rejected")
+
+	_, err = s.UpsertRuleSetting(ctx, detectionconfig.UpsertSettingInput{
+		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeAlert, SeverityOverride: "catastrophic", Actor: "alice",
+	})
+	require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest, "invalid severity override is rejected before the SQL ENUM")
 }
