@@ -157,7 +157,6 @@ func TestHandleCreate_validation(t *testing.T) {
 		reason string
 	}{
 		{"missing name", map[string]any{"name": " ", "role": "analyst"}, "missing_name"},
-		{"admin role rejected", map[string]any{"name": "x", "role": "admin"}, "invalid_role"},
 		{"super_admin rejected", map[string]any{"name": "x", "role": "super_admin"}, "invalid_role"},
 		{"unknown role rejected", map[string]any{"name": "x", "role": "wizard"}, "invalid_role"},
 	}

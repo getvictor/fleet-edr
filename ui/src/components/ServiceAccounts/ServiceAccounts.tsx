@@ -14,11 +14,13 @@ import { Badge, type BadgeVariant } from "../ui/Badge";
 import { CopyButton } from "../ui/CopyButton";
 import "./ServiceAccounts.scss";
 
-// Bindable roles match the server allowlist: operational roles only, never a management-capable role.
+// Bindable roles match the server allowlist. admin is permitted (full control, including managing other service accounts); super_admin
+// is never bindable to a non-human credential.
 const ROLES = [
   { value: "analyst", label: "Analyst" },
   { value: "senior_analyst", label: "Senior analyst" },
   { value: "auditor", label: "Auditor" },
+  { value: "admin", label: "Admin" },
 ] as const;
 
 function statusVariant(status: string): BadgeVariant {
@@ -213,7 +215,9 @@ export function ServiceAccounts() {
               onChange={(e) => { setExpiresInDays(e.target.value); }}
             />
           </div>
-          <p className="service-accounts__help">Defaults to 90 days, capped at 365. The role cannot be an admin role.</p>
+          <p className="service-accounts__help">
+            Defaults to 90 days, capped at 365. Admin grants full control (including managing service accounts); super admin is not allowed.
+          </p>
           {formError !== null && <div className="service-accounts__error" role="alert">{formError}</div>}
           <div className="service-accounts__footer">
             <Button type="button" variant="primary" isLoading={creating} onClick={() => { void handleCreate(); }}>

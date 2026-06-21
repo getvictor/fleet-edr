@@ -4,7 +4,7 @@ Service accounts are non-human principals for automation, CI/release pipelines, 
 
 ## Model
 
-- A service account is an identity of kind `api_token` bound to exactly one operational role (`analyst`, `senior_analyst`, or `auditor`). It can never be bound to `admin`/`super_admin` or any role granting the console-management actions (`service_account.*`, `user.*`, `sso.manage`): a service account cannot create, rotate, or revoke other service accounts, invite users, or change SSO. Pick the least-privileged role that covers the automation's needs.
+- A service account is an identity of kind `api_token` bound to exactly one seeded role (`analyst`, `senior_analyst`, `auditor`, or `admin`). `super_admin` can never be bound to a service account. `admin` is allowed but grants full control, including the console-management actions (`service_account.*`, `user.*`, `sso.manage`): an admin service-account token can create, rotate, or revoke other service accounts, so treat it as a high-value credential and pick the least-privileged role that covers the automation's needs.
 - The credential is a `client_id` (prefix `sa_`) plus a `client_secret` (prefix `edrsa_`). The secret is shown exactly once, at creation or rotation, and is stored only as a SHA-256 hash. If it is lost, rotate; it cannot be recovered.
 - The credential carries an expiry (90 days by default, 365 days maximum).
 

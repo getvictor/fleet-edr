@@ -188,15 +188,16 @@ func TestServiceAccounts_listAndRotate(t *testing.T) {
 	_ = mintToken(t, public, created.ClientID, rotated.Secret) // the new secret mints
 }
 
-// spec:server-identity-service-accounts/a-service-account-is-a-non-human-principal-bound-to-a-single-role/a-service-account-cannot-bind-to-a-management-capable-role
-func TestServiceAccounts_managementRoleRejected(t *testing.T) {
+// spec:server-identity-service-accounts/a-service-account-is-a-non-human-principal-bound-to-a-single-role/a-service-account-cannot-bind-to-super-admin
+func TestServiceAccounts_superAdminRoleRejected(t *testing.T) {
 	t.Parallel()
 	id, db := newServiceAccountIdentity(t)
 	uid := seedUser(t, db, "admin2@itest.local")
 	authed := http.NewServeMux()
 	id.RegisterAuthedRoutes(authed)
 
-	body, _ := json.Marshal(map[string]any{"name": "x", "role": "admin"})
+	// admin is permitted (operator discretion); super_admin is never bindable to a non-human credential.
+	body, _ := json.Marshal(map[string]any{"name": "x", "role": "super_admin"})
 	w := httptest.NewRecorder()
 	authed.ServeHTTP(w, superAdminReq(httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/api/settings/service-accounts", strings.NewReader(string(body))), uid))

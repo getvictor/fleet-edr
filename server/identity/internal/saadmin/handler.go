@@ -34,13 +34,15 @@ const (
 	maxBodyBytes = 16 << 10
 )
 
-// bindableRoles is the set of seeded roles a service account may be bound to: operational roles only. admin/super_admin and any role
-// granting the console-management actions (service_account.*, user.*, sso.manage) are excluded so a service account can never mint or
-// escalate other service accounts (ADR-0013 least-privilege). When custom roles land, this becomes a grant-based check.
+// bindableRoles is the set of seeded roles a service account may be bound to. admin is permitted at operator discretion (an
+// admin-bound service account holds the console-management actions, including service_account.*, so its token is a full-control
+// credential that can mint more service accounts: grant it only when automation genuinely needs admin). super_admin remains excluded:
+// a non-human credential with the unrestricted wildcard is never warranted. When custom roles land, this becomes a grant-based check.
 var bindableRoles = map[string]bool{
 	"analyst":        true,
 	"senior_analyst": true,
 	"auditor":        true,
+	"admin":          true,
 }
 
 // ManagementStore is the persistence the CRUD handler needs.
