@@ -881,7 +881,7 @@ components:
     NavigatorLayer:
       type: object
       description: MITRE ATT&CK Navigator 4.5 layer document.
-      required: [name, versions, domain, techniques]
+      required: [name, versions, domain, filters, techniques]
       properties:
         name:
           type: string
@@ -890,13 +890,24 @@ components:
           type: object
           additionalProperties: {type: string}
           example:
-            attack: "14"
-            navigator: "4.9.1"
+            attack: "19"
+            navigator: "5.2.0"
             layer: "4.5"
         domain:
           type: string
           example: "enterprise-attack"
         description: {type: string}
+        filters:
+          type: object
+          description: >-
+            Navigator layer filters. Scopes the rendered matrix to the platforms Fleet EDR supports;
+            Fleet EDR is macOS-only, so the layer always carries `platforms: ["macOS"]`.
+          required: [platforms]
+          properties:
+            platforms:
+              type: array
+              items: {type: string}
+              example: ["macOS"]
         techniques:
           type: array
           items:

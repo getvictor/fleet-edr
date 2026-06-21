@@ -11,12 +11,17 @@ import type { AttackNavigatorLayer } from "../api";
 // distinct-rule and tactic counts derived from the layer.
 const layer: AttackNavigatorLayer = {
   name: "Fleet EDR coverage",
-  versions: { layer: "4.5", navigator: "5.0.0" },
+  // Mirror what the server's BuildNavigatorLayer emits (attack v19, navigator 5.2.0) so the fixture stays representative of
+  // the real wire shape, even though this component only reads `techniques`.
+  versions: { attack: "19", navigator: "5.2.0", layer: "4.5" },
   domain: "enterprise-attack",
-  description: "",
+  description: "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",
+  filters: { platforms: ["macOS"] },
   techniques: [
-    { techniqueID: "T1555.001", score: 100, comment: "Covered by: rule_a, rule_b" },
-    { techniqueID: "T1059", score: 100, comment: "Covered by: rule_a" },
+    // score is 1 (binary coverage) to match the server's Navigator layer builder; the component ignores score, but the fixture
+    // should still reflect the real wire value.
+    { techniqueID: "T1555.001", score: 1, comment: "Covered by: rule_a, rule_b" },
+    { techniqueID: "T1059", score: 1, comment: "Covered by: rule_a" },
   ],
 };
 

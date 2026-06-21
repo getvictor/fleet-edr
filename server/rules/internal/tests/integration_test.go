@@ -208,13 +208,15 @@ func TestOperator_GetRules(t *testing.T) {
 }
 
 // spec:server-admin-surface/att-ck-coverage-layer-endpoint/coverage-when-rules-are-registered
+// spec:server-admin-surface/att-ck-coverage-layer-endpoint/layer-is-scoped-to-the-macos-platform
 //
 // GET /api/attack-coverage MUST return a Navigator-layer JSON document whose top-level shape matches
 // the upstream MITRE format (domain="enterprise-attack"); the test seeds the default rule catalog so
 // the "techniques array contains an entry for every covered technique" clause is satisfied by the
 // presence of a non-empty techniques array (every shipped catalog rule declares at least one technique).
-// The byte-identical-across-requests assertion is a stronger invariant than the spec requires but it
-// catches any non-deterministic ordering that would break snapshot-based dashboards.
+// The document MUST also scope the matrix to the macOS platform via filters.platforms, since Fleet EDR
+// is macOS-only. The byte-identical-across-requests assertion is a stronger invariant than the spec
+// requires but it catches any non-deterministic ordering that would break snapshot-based dashboards.
 func TestOperator_GetAttackCoverage(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
@@ -233,6 +235,10 @@ func TestOperator_GetAttackCoverage(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 		assert.Equal(t, "enterprise-attack", body["domain"])
+		filters, ok := body["filters"].(map[string]any)
+		require.True(t, ok, "filters object must be present")
+		assert.Equal(t, []any{"macOS"}, filters["platforms"],
+			"layer must scope the matrix to the macOS platform Fleet EDR covers")
 		techniques, ok := body["techniques"].([]any)
 		require.True(t, ok, "techniques must be present and an array")
 		assert.NotEmpty(t, techniques, "with the default catalog wired in, techniques must be non-empty per spec")

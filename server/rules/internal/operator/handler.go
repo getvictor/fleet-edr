@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"slices"
-	"strings"
 
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
@@ -85,66 +83,14 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 
 // handleATTACKCoverage returns a MITRE ATT&CK Navigator layer document that enumerates the techniques covered by the registered
 // detection rules. The output is dropped directly into https://mitre-attack.github.io/attack-navigator/ to render as a heatmap on the
-// matrix. Score is 1 for "any rule covers it"; the list of covering rule IDs is in the technique's `comment`.
+// matrix. The layer is assembled by api.BuildNavigatorLayer, the same builder tools/gen-attack-layer uses to produce the committed
+// docs/attack-navigator-layer.json artifact, so the live endpoint and the checked-in file cannot drift.
 func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert"}) {
 		return
 	}
-	rules := h.svc.List()
-
-	// technique -> rule IDs that cover it.
-	coverage := make(map[string][]string)
-	for _, rule := range rules {
-		for _, t := range rule.Techniques {
-			coverage[t] = append(coverage[t], rule.ID)
-		}
-	}
-
-	type navigatorTechnique struct {
-		TechniqueID string `json:"techniqueID"`
-		Score       int    `json:"score"`
-		Color       string `json:"color,omitempty"`
-		Comment     string `json:"comment,omitempty"`
-	}
-	type navigatorLayer struct {
-		Name        string               `json:"name"`
-		Versions    map[string]string    `json:"versions"`
-		Domain      string               `json:"domain"`
-		Description string               `json:"description"`
-		Techniques  []navigatorTechnique `json:"techniques"`
-	}
-
-	// Emit techniques + per-technique rule lists in sorted order so the JSON is byte-identical across requests. This makes the endpoint
-	// safe to ETag, diff, and snapshot-test. Dedup rule IDs so a rule declaring the same technique twice doesn't produce a noisy "Covered
-	// by: X, X" comment.
-	techniqueIDs := make([]string, 0, len(coverage))
-	for tid := range coverage {
-		techniqueIDs = append(techniqueIDs, tid)
-	}
-	slices.Sort(techniqueIDs)
-
-	techniques := make([]navigatorTechnique, 0, len(techniqueIDs))
-	for _, tid := range techniqueIDs {
-		ruleIDs := slices.Clone(coverage[tid])
-		slices.Sort(ruleIDs)
-		ruleIDs = slices.Compact(ruleIDs)
-		techniques = append(techniques, navigatorTechnique{
-			TechniqueID: tid,
-			Score:       1,
-			Color:       "#31a354",
-			Comment:     "Covered by: " + strings.Join(ruleIDs, ", "),
-		})
-	}
-
-	layer := navigatorLayer{
-		Name:        "Fleet EDR coverage",
-		Versions:    map[string]string{"attack": "14", "navigator": "4.9.1", "layer": "4.5"},
-		Domain:      "enterprise-attack",
-		Description: "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",
-		Techniques:  techniques,
-	}
-	writeJSON(ctx, h.logger, w, http.StatusOK, layer)
+	writeJSON(ctx, h.logger, w, http.StatusOK, api.BuildNavigatorLayer(h.svc.List()))
 }
 
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {
