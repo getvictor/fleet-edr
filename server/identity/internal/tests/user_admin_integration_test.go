@@ -3,11 +3,13 @@ package tests
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/rbac"
 )
 
 // newUserAdminEnv builds an identity with schema applied and returns the DB plus the authed mux carrying the user-management routes.
@@ -267,6 +270,46 @@ func TestUserAdmin_disabledUserBlocked(t *testing.T) {
 	// Re-enabling restores access.
 	_, err = id.Service().LoadActor(t.Context(), target, "oidc", false)
 	require.NoError(t, err)
+}
+
+// TestUserAdmin_concurrentDisableKeepsOneAdmin fires two disables of the last two admins at the same time against the real store and
+// MySQL. The atomic guard (sentinel row lock + READ COMMITTED re-count) must let exactly one through and reject the other, leaving at
+// least one active admin. Without the lock both would pass their independent count and the deployment would be left admin-less.
+// spec:server-identity-authorization/user-management-guardrails-prevent-lockout-and-privilege-escalation/concurrent-demotions-cannot-both-remove-the-last-admin
+func TestUserAdmin_concurrentDisableKeepsOneAdmin(t *testing.T) {
+	t.Parallel()
+	_, db := newServiceAccountIdentity(t)
+	store := rbac.New(db)
+	a := seedUserWithRole(t, db, "admin-a@ua.local", "admin")
+	b := seedUserWithRole(t, db, "admin-b@ua.local", "admin")
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = store.SetUserStatus(t.Context(), a, "disabled") }()
+	go func() { defer wg.Done(); errs[1] = store.SetUserStatus(t.Context(), b, "disabled") }()
+	wg.Wait()
+
+	var rejected, succeeded int
+	for _, e := range errs {
+		switch {
+		case errors.Is(e, api.ErrLastAdmin):
+			rejected++
+		case e == nil:
+			succeeded++
+		default:
+			t.Fatalf("unexpected error: %v", e)
+		}
+	}
+	assert.Equal(t, 1, succeeded, "exactly one disable should succeed")
+	assert.Equal(t, 1, rejected, "exactly one disable should be rejected as last_admin")
+
+	var active int
+	require.NoError(t, db.GetContext(t.Context(), &active, `
+		SELECT COUNT(DISTINCT rb.user_id) FROM role_bindings rb JOIN users u ON u.id = rb.user_id
+		WHERE rb.role_id IN ('admin','super_admin') AND rb.scope_type='global'
+		  AND (rb.expires_at IS NULL OR rb.expires_at > NOW(6)) AND u.status='active'`))
+	assert.GreaterOrEqual(t, active, 1, "at least one active admin must remain")
 }
 
 func TestUserAdmin_unauthorizedDenied(t *testing.T) {

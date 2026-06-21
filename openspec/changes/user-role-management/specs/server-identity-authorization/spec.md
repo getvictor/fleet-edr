@@ -42,7 +42,7 @@ The system SHALL expose an admin API that lists users with their effective role 
 
 ### Requirement: User-management guardrails prevent lockout and privilege escalation
 
-The system SHALL reject a mutation that would leave the deployment with no active admin: demoting or disabling the last active user holding `admin` or `super_admin` SHALL fail. An operator SHALL NOT change their own role or disable themselves through this surface. A user with the break-glass flag SHALL NOT be modified through this surface. Only a `super_admin` actor MAY grant the `super_admin` role, and an `admin` actor SHALL NOT modify a user who currently holds `super_admin`. Each rejected mutation SHALL leave all persisted state unchanged.
+The system SHALL reject a mutation that would leave the deployment with no active admin: demoting or disabling the last active user holding `admin` or `super_admin` SHALL fail. This invariant SHALL hold under concurrency: two mutations that each individually pass the check SHALL NOT both commit if together they would remove the last active admin. An operator SHALL NOT change their own role or disable themselves through this surface. A user with the break-glass flag SHALL NOT be modified through this surface. Only a `super_admin` actor MAY grant the `super_admin` role, and an `admin` actor SHALL NOT modify a user who currently holds `super_admin`. Each rejected mutation SHALL leave all persisted state unchanged.
 
 #### Scenario: The last admin cannot be demoted or disabled
 
@@ -67,3 +67,10 @@ The system SHALL reject a mutation that would leave the deployment with no activ
 - **GIVEN** an operator whose own role is `admin`
 - **WHEN** they attempt to set another user's role to `super_admin`
 - **THEN** the request is rejected and the target user's role is unchanged
+
+#### Scenario: Concurrent demotions cannot both remove the last admin
+
+- **GIVEN** exactly two active users hold an admin-tier role
+- **WHEN** both are disabled (or demoted) concurrently
+- **THEN** exactly one mutation succeeds and the other is rejected
+- **AND** at least one active admin-tier user remains

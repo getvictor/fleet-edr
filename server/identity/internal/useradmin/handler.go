@@ -48,15 +48,15 @@ var roleRank = map[string]int{roleSuperAdmin: 5, roleAdmin: 4, "senior_analyst":
 type UsersStore interface {
 	List(ctx context.Context) ([]users.AdminUser, error)
 	GetAdmin(ctx context.Context, id int64) (*users.AdminUser, error)
-	SetStatus(ctx context.Context, id int64, status string) error
 }
 
-// RolesStore is the role_bindings surface the handler needs.
+// RolesStore is the role_bindings surface the handler needs. SetUserRole and SetUserStatus enforce the last-active-admin invariant
+// atomically and return api.ErrLastAdmin when a change would remove the last admin.
 type RolesStore interface {
 	AllLiveBindings(ctx context.Context) (map[int64][]string, error)
 	LiveGlobalRoles(ctx context.Context, userID int64) ([]string, error)
 	SetUserRole(ctx context.Context, userID int64, roleID string) (previous []string, err error)
-	CountActiveAdmins(ctx context.Context, excludeUserID int64) (int, error)
+	SetUserStatus(ctx context.Context, userID int64, status string) error
 }
 
 // AuditRecorder records lifecycle audit rows.
@@ -173,14 +173,13 @@ func (h *Handler) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, view(*target, current))
 		return
 	}
-	// Last-admin guard: demoting an admin-tier target away from admin-tier must leave at least one other active admin.
-	if isAdminTier(current) && !isAdminTier([]string{role}) {
-		if !h.hasOtherActiveAdmin(ctx, w, id) {
-			return
-		}
-	}
 
+	// SetUserRole enforces the last-active-admin invariant atomically; ErrLastAdmin means demoting this user would leave no admin.
 	previous, err := h.roles.SetUserRole(ctx, id, role)
+	if errors.Is(err, api.ErrLastAdmin) {
+		writeErr(ctx, h.logger, w, http.StatusConflict, "last_admin")
+		return
+	}
 	if err != nil {
 		h.internal(ctx, w, "set user role", err)
 		return
@@ -227,14 +226,14 @@ func (h *Handler) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, view(*target, current))
 		return
 	}
-	// Last-admin guard: disabling an admin-tier target must leave at least one other active admin.
-	if status == statusDisabled && isAdminTier(current) {
-		if !h.hasOtherActiveAdmin(ctx, w, id) {
-			return
-		}
-	}
 
-	if err := h.users.SetStatus(ctx, id, status); err != nil {
+	// SetUserStatus enforces the last-active-admin invariant atomically; ErrLastAdmin means disabling this user would leave no admin.
+	err := h.roles.SetUserStatus(ctx, id, status)
+	if errors.Is(err, api.ErrLastAdmin) {
+		writeErr(ctx, h.logger, w, http.StatusConflict, "last_admin")
+		return
+	}
+	if err != nil {
 		h.internal(ctx, w, "set user status", err)
 		return
 	}
@@ -279,21 +278,6 @@ func (h *Handler) guardTarget(ctx context.Context, w http.ResponseWriter, target
 	}
 	if !actorSuper && slices.Contains(current, roleSuperAdmin) {
 		writeErr(ctx, h.logger, w, http.StatusForbidden, "super_admin_forbidden")
-		return false
-	}
-	return true
-}
-
-// hasOtherActiveAdmin returns true when at least one active admin-tier user other than excludeID exists. On false it writes the 409
-// last_admin response; on a store error it writes the 500. Either way a false return means the caller must stop.
-func (h *Handler) hasOtherActiveAdmin(ctx context.Context, w http.ResponseWriter, excludeID int64) bool {
-	n, err := h.roles.CountActiveAdmins(ctx, excludeID)
-	if err != nil {
-		h.internal(ctx, w, "count active admins", err)
-		return false
-	}
-	if n < 1 {
-		writeErr(ctx, h.logger, w, http.StatusConflict, "last_admin")
 		return false
 	}
 	return true
@@ -346,10 +330,6 @@ func effectiveRole(roles []string) string {
 		}
 	}
 	return best
-}
-
-func isAdminTier(roles []string) bool {
-	return slices.Contains(roles, roleAdmin) || slices.Contains(roles, roleSuperAdmin)
 }
 
 func pathID(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request) (int64, bool) {

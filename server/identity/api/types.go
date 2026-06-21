@@ -66,6 +66,10 @@ var (
 	// ErrUserDisabled is returned by LoadActor when the user's account status is disabled. The session middleware maps it to an auth
 	// failure so a disabled user is locked out on their next request, even with an otherwise-valid session (#135 disable-blocks-access).
 	ErrUserDisabled = errors.New("identity: user disabled")
+	// ErrLastAdmin is returned by the guarded user-management mutations when the change would leave the deployment with no active
+	// admin-tier user. The admin surface maps it to 409 last_admin. Defined here so the store that raises it and the handler that maps
+	// it share one vocabulary without the handler importing the store package.
+	ErrLastAdmin = errors.New("identity: change would remove the last active admin")
 )
 
 // ctxKey is unexported so ctx values can only be set via the With*

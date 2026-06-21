@@ -28,27 +28,24 @@ func (f fakeAuthZ) Allow(_ context.Context, _ api.Action, _ api.Resource) (api.D
 }
 
 type fakeUsers struct {
-	list       []users.AdminUser
-	listErr    error
-	get        *users.AdminUser
-	getErr     error
-	setStatErr error
+	list    []users.AdminUser
+	listErr error
+	get     *users.AdminUser
+	getErr  error
 }
 
 func (f *fakeUsers) List(context.Context) ([]users.AdminUser, error) { return f.list, f.listErr }
 func (f *fakeUsers) GetAdmin(context.Context, int64) (*users.AdminUser, error) {
 	return f.get, f.getErr
 }
-func (f *fakeUsers) SetStatus(context.Context, int64, string) error { return f.setStatErr }
 
 type fakeRoles struct {
-	all      map[int64][]string
-	allErr   error
-	live     []string
-	liveErr  error
-	setErr   error
-	count    int
-	countErr error
+	all       map[int64][]string
+	allErr    error
+	live      []string
+	liveErr   error
+	setErr    error
+	statusErr error
 }
 
 func (f *fakeRoles) AllLiveBindings(context.Context) (map[int64][]string, error) {
@@ -60,8 +57,8 @@ func (f *fakeRoles) LiveGlobalRoles(context.Context, int64) ([]string, error) {
 func (f *fakeRoles) SetUserRole(context.Context, int64, string) ([]string, error) {
 	return f.live, f.setErr
 }
-func (f *fakeRoles) CountActiveAdmins(context.Context, int64) (int, error) {
-	return f.count, f.countErr
+func (f *fakeRoles) SetUserStatus(context.Context, int64, string) error {
+	return f.statusErr
 }
 
 func serve(h *Handler, method, path, body string, actor *api.Actor) *httptest.ResponseRecorder {
@@ -152,19 +149,33 @@ func TestHandler_setRoleNotFound(t *testing.T) {
 func TestHandler_setStatusStoreErrorReturns500(t *testing.T) {
 	t.Parallel()
 	h := NewHandler(
-		&fakeUsers{get: &users.AdminUser{ID: 5, Email: "t@x", Status: "active"}, setStatErr: errors.New("boom")},
-		&fakeRoles{live: []string{"analyst"}},
+		&fakeUsers{get: &users.AdminUser{ID: 5, Email: "t@x", Status: "active"}},
+		&fakeRoles{live: []string{"analyst"}, statusErr: errors.New("boom")},
 		fakeAuthZ{allow: true}, nil, nil)
 	w := serve(h, http.MethodPut, "/api/settings/users/5/status", `{"status":"disabled"}`, superActor())
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-func TestHandler_disableLastAdminCountErrorReturns500(t *testing.T) {
+func TestHandler_lastAdminMapsTo409(t *testing.T) {
 	t.Parallel()
-	h := NewHandler(
-		&fakeUsers{get: &users.AdminUser{ID: 5, Email: "admin@x", Status: "active"}},
-		&fakeRoles{live: []string{"admin"}, countErr: errors.New("boom")},
-		fakeAuthZ{allow: true}, nil, nil)
-	w := serve(h, http.MethodPut, "/api/settings/users/5/status", `{"status":"disabled"}`, superActor())
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	t.Run("set role", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(
+			&fakeUsers{get: &users.AdminUser{ID: 5, Email: "admin@x", Status: "active"}},
+			&fakeRoles{live: []string{"admin"}, setErr: api.ErrLastAdmin},
+			fakeAuthZ{allow: true}, nil, nil)
+		w := serve(h, http.MethodPut, "/api/settings/users/5/role", `{"role":"analyst"}`, superActor())
+		assert.Equal(t, http.StatusConflict, w.Code)
+		assert.Contains(t, w.Body.String(), "last_admin")
+	})
+	t.Run("set status", func(t *testing.T) {
+		t.Parallel()
+		h := NewHandler(
+			&fakeUsers{get: &users.AdminUser{ID: 5, Email: "admin@x", Status: "active"}},
+			&fakeRoles{live: []string{"admin"}, statusErr: api.ErrLastAdmin},
+			fakeAuthZ{allow: true}, nil, nil)
+		w := serve(h, http.MethodPut, "/api/settings/users/5/status", `{"status":"disabled"}`, superActor())
+		assert.Equal(t, http.StatusConflict, w.Code)
+		assert.Contains(t, w.Body.String(), "last_admin")
+	})
 }

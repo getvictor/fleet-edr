@@ -338,23 +338,6 @@ func (s *Store) GetAdmin(ctx context.Context, id int64) (*AdminUser, error) {
 	return &u, nil
 }
 
-// SetStatus sets a user's account status ("active" or "disabled"). Returns ErrNotFound when no row matches. The caller validates the
-// status value and runs the user-management guardrails (last-admin, self, break-glass) before calling.
-func (s *Store) SetStatus(ctx context.Context, id int64, status string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET status = ? WHERE id = ?`, status, id)
-	if err != nil {
-		return fmt.Errorf("set status for user %d: %w", id, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected for set status: %w", err)
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // Count returns the number of users. Used by the first-boot seeder to decide whether to
 // create the initial admin. A bare Count query is faster than SELECT ... LIMIT 1.
 func (s *Store) Count(ctx context.Context) (int64, error) {
