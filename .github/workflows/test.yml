@@ -428,7 +428,10 @@ jobs:
       && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     environment: sonarcloud
-    timeout-minutes: 10
+    # The scan (full-history checkout + Go/TS analysis upload) now runs ~9-10 min and was flapping against a 10-min cap:
+    # successful runs landed at 9:12 / 9:45 while any that drifted past 10:00 got killed mid-scan and posted no gate
+    # verdict, which blocks merge because the SonarCloud check is required. 15 gives headroom over the observed worst case.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
