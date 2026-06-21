@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/response/api"
@@ -118,6 +119,6 @@ func (r *Response) RegisterAgentRoutes(mux *http.ServeMux) {
 //
 // Caller wraps in identity.SessionMiddleware + identity.CSRFMiddleware
 // before mounting.
-func (r *Response) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (r *Response) RegisterAuthedRoutes(mux httpserver.Router) {
 	r.operatorH.RegisterRoutes(mux)
 }

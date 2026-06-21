@@ -45,7 +45,7 @@ func New(svc Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler {
 func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes wires the operator routes onto the given mux.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/rules", h.handleListRules)
 	mux.HandleFunc("GET /api/attack-coverage", h.handleATTACKCoverage)
 }

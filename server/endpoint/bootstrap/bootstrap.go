@@ -20,6 +20,7 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/signedtoken"
 	"github.com/fleetdm/edr/server/endpoint/internal/token"
 	endpointmigrations "github.com/fleetdm/edr/server/endpoint/migrations"
+	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 )
@@ -167,6 +168,6 @@ func (e *Endpoint) RegisterPublicRoutes(mux *http.ServeMux) {
 
 // RegisterAuthedRoutes wires the operator-facing routes: GET /api/enrollments and POST /api/enrollments/{host_id}/revoke. Caller wraps
 // in identity Session + CSRF middleware before mounting.
-func (e *Endpoint) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (e *Endpoint) RegisterAuthedRoutes(mux httpserver.Router) {
 	e.operatorH.RegisterRoutes(mux)
 }

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/rules/api"
@@ -167,7 +167,7 @@ func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r
 // Caller wraps in identity Session + CSRF middleware before mounting.
 // rules has no public agent-facing routes, so RegisterPublicRoutes
 // does not exist.
-func (r *Rules) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 	r.operatorH.RegisterRoutes(mux)
 	if r.appControlH != nil {
 		r.appControlH.RegisterRoutes(mux)

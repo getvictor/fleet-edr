@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
@@ -107,7 +108,7 @@ func NewAppControl(svc *appcontrol.Service, authz identityapi.AuthZ, logger *slo
 //	DELETE /api/v1/app-control/policies/{id}/assignments/{group_id}   (Phase A: 405 read_only_in_phase_a)
 //
 // Caller wraps the mux in identity Session + CSRF middleware before mounting (the existing operator pattern in cmd/main).
-func (h *AppControlHandler) RegisterRoutes(mux *http.ServeMux) {
+func (h *AppControlHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/v1/app-control/policies", h.handleListPolicies)
 	mux.HandleFunc("GET /api/v1/app-control/policies/{id}", h.handleGetPolicy)
 	mux.HandleFunc("POST /api/v1/app-control/policies", h.handleCreatePolicy)

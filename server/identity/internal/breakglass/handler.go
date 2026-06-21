@@ -160,7 +160,7 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 //	POST /api/auth/reauth → verify password + assertion against the
 //	    current session's user; on success stamp last_auth_at
 //	    via the identity Service. No new cookie minted.
-func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterAuthedRoutes(mux httpserver.Router) {
 	if h.identity == nil {
 		panic("breakglass.RegisterAuthedRoutes: HandlerOptions.Identity is required")
 	}

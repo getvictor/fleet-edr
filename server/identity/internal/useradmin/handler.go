@@ -82,7 +82,7 @@ func NewHandler(usersStore UsersStore, rolesStore RolesStore, authz api.AuthZ, a
 }
 
 // RegisterAuthedRoutes mounts the routes. The caller wraps the mux in the session auth + CSRF chain.
-func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterAuthedRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/settings/users", h.handleList)
 	mux.HandleFunc("PUT /api/settings/users/{id}/role", h.handleSetRole)
 	mux.HandleFunc("PUT /api/settings/users/{id}/status", h.handleSetStatus)

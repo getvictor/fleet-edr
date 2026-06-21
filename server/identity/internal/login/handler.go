@@ -84,7 +84,7 @@ func (h *Handler) RegisterPublicRoutes(mux *http.ServeMux) {
 
 // RegisterAuthedRoutes wires GET /api/session on the given mux. Caller
 // wraps the mux in Session + CSRF middleware before mounting.
-func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterAuthedRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/session", h.handleGet)
 }
 

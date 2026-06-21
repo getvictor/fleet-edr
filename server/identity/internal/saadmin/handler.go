@@ -76,7 +76,7 @@ func NewHandler(store ManagementStore, authz api.AuthZ, audit AuditRecorder, log
 }
 
 // RegisterAuthedRoutes mounts the CRUD routes. The caller wraps the mux in the session/bearer auth + CSRF chain.
-func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterAuthedRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/settings/service-accounts", h.handleList)
 	mux.HandleFunc("POST /api/settings/service-accounts", h.handleCreate)
 	mux.HandleFunc("POST /api/settings/service-accounts/{id}/rotate", h.handleRotate)
