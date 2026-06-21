@@ -15,6 +15,12 @@ private enum DNSProxy {
     /// upstream. 30s is past any sane resolver round-trip but bounded enough that a
     /// misbehaving upstream cannot pin our flow + NWConnection pair forever.
     static let tcpUpstreamLingerSeconds: Double = 30
+    /// Deadline for a single UDP DNS forward (connect + send + receive). Past this the upstream is treated as failed: the
+    /// flow is released (fail-open) and the failure is recorded so the health watchdog can bypass a wedged upstream. 3s is
+    /// past a sane resolver round-trip but short enough that a stuck upstream cannot pin the client's resolution. Before
+    /// this existed the UDP path waited on `receiveMessage` with no timeout, so a wedged upstream hung every claimed query
+    /// indefinitely and took down all DNS (the 2026-06-20 incident).
+    static let udpForwardDeadlineSeconds: Double = 3
 }
 
 /// Process attribution context for a single DNS flow. Bundled to keep function
@@ -25,6 +31,18 @@ private struct FlowContext {
     let path: String
     /// Kernel PID generation of the querying process when the flow carried an audit token; nil otherwise (issue #403).
     let pidVersion: UInt32?
+}
+
+/// Per-datagram UDP forward state, bundled so the send / receive helpers stay under the parameter-count limit (same reason
+/// FlowContext exists). One UDPForward exists per outbound query: it carries the upstream connection, the flow to write the
+/// answer back to, the once-guarded completion, and the deadline timer.
+private struct UDPForward {
+    let connection: Network.NWConnection
+    let responseEndpoint: Network.NWEndpoint
+    let flow: NEAppProxyUDPFlow
+    let ctx: FlowContext
+    let completion: DNSForwardCompletion
+    let deadline: DispatchWorkItem
 }
 
 /// DNSProxyProvider intercepts DNS queries, captures metadata for EDR telemetry,
@@ -40,6 +58,9 @@ private struct FlowContext {
 /// chain, so there's no infinite loop.
 final class DNSProxyProvider: NEDNSProxyProvider {
     private let serializer = NetworkEventSerializer()
+    /// Self-heal watchdog. Accounts UDP upstream-forward outcomes; when forwarding is sustainedly failing it tells
+    /// handleNewFlow to stop claiming DNS flows so the system resolver takes over (fail-open). See DNSProxyHealth + ADR-0014.
+    private let health = DNSProxyHealth()
 
     override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
         logger.info("DNS proxy started")
@@ -52,6 +73,24 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     }
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
+        // Self-heal: if upstream forwarding is sustainedly wedged, do NOT claim the flow. Returning false hands the flow
+        // to the system resolver, so a broken proxy fails open instead of taking down all DNS (the 2026-06-20 incident).
+        // We lose dns_query telemetry for the bypass window, which is the correct trade for a monitoring tap. policyActive
+        // is false until the network-response enforcement plane lands; an active policy will force claim + rebuild instead
+        // of bypass so a blocked domain can never resolve via the system resolver (see resilient-network-enforcement).
+        let decision = health.decide(policyActive: false)
+        if decision.verdict == .bypass {
+            if decision.transitioned {
+                logger.error("DNS proxy entering bypass: upstream forwarding sustainedly failing; handing DNS to the system resolver")
+            }
+            return false
+        }
+        if decision.transitioned {
+            // verdict flipped back to .claim: we just exited a bypass window (upstream recovered, or the failure samples
+            // aged out so we are probing again). Logged once, not per flow.
+            logger.info("DNS proxy resuming: claiming DNS flows again after a bypass window")
+        }
+
         if let udpFlow = flow as? NEAppProxyUDPFlow {
             handleUDPFlow(udpFlow)
             return true
@@ -112,14 +151,45 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         // extension's own connections from the DNS proxy chain, so there's no
         // infinite loop.
         let connection = Network.NWConnection(to: endpoint, using: .udp)
+
+        // One outcome per forward, recorded once. On failure we fail open: cancel the upstream connection and release the
+        // flow so the client retries or rolls over instead of being pinned on a wedged proxy. The recorded failure feeds
+        // the health watchdog, which bypasses to the system resolver once enough forwards fail in a row.
+        let completion = DNSForwardCompletion { [weak self, weak flow] ok in
+            self?.health.record(ok: ok)
+            // Break the retain cycle before cancelling: connection -> stateUpdateHandler closure -> UDPForward ->
+            // completion -> (this closure captures connection). Without clearing the handler, connection, completion, and
+            // the NEAppProxyUDPFlow all leak on every query. Clearing it drops the closure's strong refs.
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+            if !ok {
+                flow?.closeReadWithError(nil)
+                flow?.closeWriteWithError(nil)
+            }
+        }
+        // The deadline races the receive: failIfPending resolves to a failure only if the receive path has not already
+        // claimed the forward, so a near-deadline success is never reclassified as a failure.
+        let deadline = DispatchWorkItem {
+            // Log only when this deadline actually wins (genuinely timed out). DispatchWorkItem.cancel() is cooperative, so
+            // a deadline that starts running just as the receive path cancels it must not emit a "timed out" line on a
+            // forward that ultimately succeeded: that would be a misleading operator signal / false alert.
+            if completion.failIfPending() {
+                logger.error("Upstream UDP forward timed out after \(DNSProxy.udpForwardDeadlineSeconds, format: .fixed(precision: 0))s")
+            }
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + DNSProxy.udpForwardDeadlineSeconds,
+                                                             execute: deadline)
+
+        let forward = UDPForward(connection: connection, responseEndpoint: endpoint, flow: flow, ctx: ctx,
+                                 completion: completion, deadline: deadline)
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                self?.sendUDPAndReceive(connection: connection, datagram: datagram,
-                                        responseEndpoint: endpoint, flow: flow, ctx: ctx)
+                self?.sendUDPAndReceive(forward, datagram: datagram)
             case .failed(let error):
                 logger.error("Upstream UDP connection failed: \(error.localizedDescription)")
-                connection.cancel()
+                deadline.cancel()
+                completion.failIfPending()
             case .cancelled:
                 break
             default:
@@ -129,41 +199,51 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         connection.start(queue: .global(qos: .userInitiated))
     }
 
-    private func sendUDPAndReceive(connection: Network.NWConnection, datagram: Data,
-                                   responseEndpoint: Network.NWEndpoint, flow: NEAppProxyUDPFlow,
-                                   ctx: FlowContext) {
-        connection.send(content: datagram, completion: .contentProcessed { [weak self] error in
+    private func sendUDPAndReceive(_ forward: UDPForward, datagram: Data) {
+        forward.connection.send(content: datagram, completion: .contentProcessed { [weak self] error in
             if let error {
                 logger.error("Failed to send UDP datagram: \(error.localizedDescription)")
-                connection.cancel()
+                forward.deadline.cancel()
+                forward.completion.failIfPending()
                 return
             }
-            self?.receiveUDPResponse(connection: connection, responseEndpoint: responseEndpoint,
-                                     flow: flow, ctx: ctx)
+            self?.receiveUDPResponse(forward)
         })
     }
 
     /// receiveUDPResponse reads the upstream DNS reply and forwards it back to the
     /// originating flow. Split out of sendUDPAndReceive so each closure holds only one
     /// level of nested asynchronous work.
-    private func receiveUDPResponse(connection: Network.NWConnection, responseEndpoint: Network.NWEndpoint,
-                                    flow: NEAppProxyUDPFlow, ctx: FlowContext) {
-        connection.receiveMessage { [weak self] responseData, _, _, recvError in
-            defer { connection.cancel() }
+    private func receiveUDPResponse(_ forward: UDPForward) {
+        forward.connection.receiveMessage { [weak self] responseData, _, _, recvError in
+            forward.deadline.cancel()
+
+            // Atomically claim the forward before touching the flow. If the deadline already won (fail-open, flow closed),
+            // claimResponse returns false and a late reply emits no spurious telemetry and does not write to the closed
+            // flow. Once claimed, the deadline's failIfPending is a no-op, so this success cannot be reclassified.
+            guard forward.completion.claimResponse() else { return }
 
             if let recvError {
                 logger.debug("UDP receive error: \(recvError.localizedDescription)")
+                forward.completion.resolveResponse(ok: false)
                 return
             }
-            guard let responseData, !responseData.isEmpty else { return }
+            guard let responseData, !responseData.isEmpty else {
+                forward.completion.resolveResponse(ok: false)
+                return
+            }
 
             // Enrich telemetry with response addresses.
-            self?.emitDNSResponseTelemetry(response: responseData, ctx: ctx, proto: "udp")
+            self?.emitDNSResponseTelemetry(response: responseData, ctx: forward.ctx, proto: "udp")
 
-            flow.writeDatagrams([(responseData, responseEndpoint)]) { writeError in
+            forward.flow.writeDatagrams([(responseData, forward.responseEndpoint)]) { writeError in
                 if let writeError {
                     logger.error("Failed to write UDP response: \(writeError.localizedDescription)")
+                    forward.completion.resolveResponse(ok: false)
+                    return
                 }
+                // Upstream answered and the client received it: a healthy forward.
+                forward.completion.resolveResponse(ok: true)
             }
         }
     }
