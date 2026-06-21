@@ -33,6 +33,14 @@ private final class DNSForwardCompletion {
 
     init(_ onResolve: @escaping (Bool) -> Void) { self.onResolve = onResolve }
 
+    /// Whether this forward has already resolved. Lets the receive path bail out when the deadline already fired, so a
+    /// late upstream reply does not emit a spurious dns_query event or write to an already-closed flow.
+    var isFinished: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return done
+    }
+
     func finish(ok: Bool) {
         lock.lock()
         if done {
@@ -179,6 +187,10 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         // the health watchdog, which bypasses to the system resolver once enough forwards fail in a row.
         let completion = DNSForwardCompletion { [weak self, weak flow] ok in
             self?.health.record(ok: ok)
+            // Break the retain cycle before cancelling: connection -> stateUpdateHandler closure -> UDPForward ->
+            // completion -> (this closure captures connection). Without clearing the handler, connection, completion, and
+            // the NEAppProxyUDPFlow all leak on every query. Clearing it drops the closure's strong refs.
+            connection.stateUpdateHandler = nil
             connection.cancel()
             if !ok {
                 flow?.closeReadWithError(nil)
@@ -230,6 +242,10 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     private func receiveUDPResponse(_ forward: UDPForward) {
         forward.connection.receiveMessage { [weak self] responseData, _, _, recvError in
             forward.deadline.cancel()
+
+            // The deadline path may have already resolved this forward (fail-open) and closed the flow. If so, a late
+            // upstream reply must not emit a spurious dns_query event or write to the closed flow: bail out.
+            guard !forward.completion.isFinished else { return }
 
             if let recvError {
                 logger.debug("UDP receive error: \(recvError.localizedDescription)")

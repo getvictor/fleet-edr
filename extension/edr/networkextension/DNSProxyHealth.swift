@@ -41,18 +41,25 @@ final class DNSProxyHealth {
         /// Failure fraction over the window at or above which the proxy bypasses. 0.8 means "4 of every 5 recent forwards
         /// failed": a real outage, not the occasional benign timeout.
         var failureRateToBypass: Double = 0.8
+        /// Hard cap on retained samples, so a high DNS query rate cannot make the per-forward prune / failure-rate scans
+        /// (run under the lock on the DNS hot path) grow unbounded. A few hundred recent forwards is a representative
+        /// failure-rate sample; older ones are dropped even if still inside the time window.
+        var maxSamples: Int = 256
     }
 
     private let config: Config
-    private let now: () -> Date
+    // Monotonic seconds, NOT wall-clock: the window is "recent activity", so it must be immune to NTP steps and manual
+    // clock changes (a wall-clock jump would otherwise age samples out early or make them linger, distorting when the
+    // bypass clears). Production uses ProcessInfo.systemUptime; tests inject a fake monotonic clock.
+    private let now: () -> TimeInterval
     private let lock = NSLock()
     // Forward outcomes within the window, oldest first. `true` == upstream answered, `false` == failed or timed out.
-    private var outcomes: [(at: Date, ok: Bool)] = []
+    private var outcomes: [(at: TimeInterval, ok: Bool)] = []
     // The verdict last returned by decide(), for one-shot transition logging. Starts .claim (the proxy claims by default),
     // so the first decide() does not report a spurious transition.
     private var lastVerdict: Verdict = .claim
 
-    init(config: Config = Config(), now: @escaping () -> Date = Date.init) {
+    init(config: Config = Config(), now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.config = config
         self.now = now
     }
@@ -61,9 +68,8 @@ final class DNSProxyHealth {
     func record(ok: Bool) {
         lock.lock()
         defer { lock.unlock() }
-        let t = now()
-        outcomes.append((at: t, ok: ok))
-        prune(asOf: t)
+        outcomes.append((at: now(), ok: ok))
+        prune()
     }
 
     /// decide chooses whether the next flow should be claimed or bypassed, and reports whether that flips the previous
@@ -75,7 +81,7 @@ final class DNSProxyHealth {
     func decide(policyActive: Bool) -> Decision {
         lock.lock()
         defer { lock.unlock() }
-        prune(asOf: now())
+        prune()
         let verdict = computeVerdict(policyActive: policyActive)
         let transitioned = verdict != lastVerdict
         lastVerdict = verdict
@@ -89,19 +95,25 @@ final class DNSProxyHealth {
             // the rebuild path ships with the enforcement policy plane, so for now we simply keep claiming.
             return .claim
         }
-        guard outcomes.count >= config.minSamples else { return .claim }
+        // Clamp to >= 1 so a misconfigured minSamples (0 or negative) cannot pass the guard with an empty window and then
+        // divide by zero into a NaN failure rate below.
+        let minSamples = max(1, config.minSamples)
+        guard outcomes.count >= minSamples else { return .claim }
         let failures = outcomes.reduce(0) { $0 + ($1.ok ? 0 : 1) }
         let failureRate = Double(failures) / Double(outcomes.count)
         return failureRate >= config.failureRateToBypass ? .bypass : .claim
     }
 
-    /// prune drops samples older than the window. Caller holds the lock.
-    private func prune(asOf t: Date) {
-        let cutoff = t.addingTimeInterval(-config.window)
+    /// prune drops samples older than the window, then enforces the maxSamples cap so the scans above stay bounded under a
+    /// high query rate. Caller holds the lock; reads the monotonic clock once.
+    private func prune() {
+        let cutoff = now() - config.window
         if let firstFresh = outcomes.firstIndex(where: { $0.at >= cutoff }) {
             if firstFresh > 0 { outcomes.removeFirst(firstFresh) }
         } else {
             outcomes.removeAll(keepingCapacity: true)
         }
+        let cap = max(1, config.maxSamples)
+        if outcomes.count > cap { outcomes.removeFirst(outcomes.count - cap) }
     }
 }

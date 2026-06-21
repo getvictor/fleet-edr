@@ -8,18 +8,21 @@ import Foundation
 import XCTest
 
 final class DNSProxyHealthTests: XCTestCase {
-    /// A movable clock so tests advance time explicitly rather than sleeping.
+    /// A movable monotonic clock (seconds) so tests advance time explicitly rather than sleeping. Matches the production
+    /// seam, which is monotonic (ProcessInfo.systemUptime), not wall-clock.
     private final class FakeClock {
-        var t = Date(timeIntervalSince1970: 1_000_000)
-        func now() -> Date { t }
-        func advance(_ seconds: TimeInterval) { t = t.addingTimeInterval(seconds) }
+        var t: TimeInterval = 1_000_000
+        func now() -> TimeInterval { t }
+        func advance(_ seconds: TimeInterval) { t += seconds }
     }
 
     private func makeHealth(_ clock: FakeClock,
                             window: TimeInterval = 30,
                             minSamples: Int = 5,
-                            failureRate: Double = 0.8) -> DNSProxyHealth {
-        DNSProxyHealth(config: .init(window: window, minSamples: minSamples, failureRateToBypass: failureRate),
+                            failureRate: Double = 0.8,
+                            maxSamples: Int = 256) -> DNSProxyHealth {
+        DNSProxyHealth(config: .init(window: window, minSamples: minSamples, failureRateToBypass: failureRate,
+                                     maxSamples: maxSamples),
                        now: clock.now)
     }
 
@@ -114,6 +117,28 @@ final class DNSProxyHealthTests: XCTestCase {
         clock.advance(31)
         XCTAssertEqual(health.decide(policyActive: false), .init(verdict: .claim, transitioned: true))
         XCTAssertEqual(health.decide(policyActive: false), .init(verdict: .claim, transitioned: false))
+    }
+
+    func testInvalidMinSamplesDoesNotProduceNaN() {
+        let clock = FakeClock()
+        // minSamples == 0 would, without the max(1, ...) clamp, pass the guard on an empty window and divide by zero.
+        let health = makeHealth(clock, minSamples: 0)
+        // Empty window: claim, no crash, no NaN-driven misbehavior.
+        XCTAssertEqual(health.decide(policyActive: false).verdict, .claim)
+        // With real failures the clamped floor still trips bypass exactly as a sane config would.
+        for _ in 0..<5 { health.record(ok: false) }
+        XCTAssertEqual(health.decide(policyActive: false).verdict, .bypass)
+    }
+
+    func testSampleCapBoundsRetainedOutcomes() {
+        let clock = FakeClock()
+        // Cap at 10 within a generous window so the cap (not the window) is what bounds retention.
+        let health = makeHealth(clock, window: 10_000, minSamples: 5, failureRate: 0.8, maxSamples: 10)
+        // 100 successes then 10 failures, all inside the window. Without the cap the rate would be 10/110 = .09 (claim);
+        // with the cap only the last 10 (all failures) are retained -> rate 1.0 -> bypass. Proves the cap drops oldest.
+        for _ in 0..<100 { health.record(ok: true) }
+        for _ in 0..<10 { health.record(ok: false) }
+        XCTAssertEqual(health.decide(policyActive: false).verdict, .bypass)
     }
 
     func testPartialWindowExpiryRecomputesRate() {
