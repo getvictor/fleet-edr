@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/httpserver"
 )
 
 // TestRegisterUIRoutes_SPAFallback locks in the SPA-fallback contract: /ui/{deep-link} must return 200 with the index.html
@@ -211,4 +213,43 @@ func registerUIRoutesWithFS(
 		}
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+// TestMountAuthed_registeredRouteIsProtectedNotSPA locks in the issue #463 contract: a route registered through the authed-route
+// registration callback is mounted on the outer router and reaches the session-protected wrapper (401 / JSON when unauthenticated),
+// rather than falling through to the `/` SPA catch-all (which 302'd / served index.html and broke the UI's JSON fetch). Because
+// mountAuthed derives the mounted set from what is actually registered, a registered route can never be left off the allowlist.
+//
+// spec:server-rest-api/registered-authed-routes-are-reachable-through-the-composed-router/a-registered-authed-route-is-session-protected-not-spa-fall-through
+func TestMountAuthed_registeredRouteIsProtectedNotSPA(t *testing.T) {
+	t.Parallel()
+	outer := http.NewServeMux()
+	// SPA catch-all: what an un-allowlisted /api route used to fall through to (the bug).
+	outer.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<!doctype html>"))
+	})
+	// protect stands in for the session/bearer middleware: an unauthenticated request gets 401 JSON.
+	protect := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid_session"}`))
+		})
+	}
+	mountAuthed(outer, protect, func(r httpserver.Router) {
+		r.HandleFunc("GET /api/probe", func(http.ResponseWriter, *http.Request) {})
+	})
+
+	// A registered authed route reaches the protected wrapper: 401 JSON, NOT the SPA shell.
+	pw := httptest.NewRecorder()
+	outer.ServeHTTP(pw, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/probe", nil))
+	assert.Equal(t, http.StatusUnauthorized, pw.Code)
+	assert.Equal(t, "application/json", pw.Header().Get("Content-Type"))
+	assert.NotContains(t, pw.Body.String(), "<!doctype html>")
+
+	// A route that was never registered still falls through to the SPA (control: derive mounts only what is registered).
+	mw := httptest.NewRecorder()
+	outer.ServeHTTP(mw, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/never-registered", nil))
+	assert.Equal(t, "text/html", mw.Header().Get("Content-Type"))
 }

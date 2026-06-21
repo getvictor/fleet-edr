@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/appconfig"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
@@ -661,7 +662,7 @@ func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
 
 // RegisterAuthedRoutes wires GET /api/session (who-am-i), GET /api/audit-events (operator-action history), the SSO settings API
 // (/api/settings/sso), and the break-glass reauth POST endpoints. Caller wraps in SessionMiddleware + CSRFMiddleware before mounting.
-func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (i *Identity) RegisterAuthedRoutes(mux httpserver.Router) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
 	i.auditHandler.RegisterAuthedRoutes(mux)
 	if i.ssoAdminHandler != nil {

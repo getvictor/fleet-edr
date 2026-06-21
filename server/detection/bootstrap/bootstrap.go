@@ -20,6 +20,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/pipeline"
 	"github.com/fleetdm/edr/server/detection/internal/service"
 	detectionmigrations "github.com/fleetdm/edr/server/detection/migrations"
+	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -256,7 +257,7 @@ func (d *Detection) RegisterHealthRoutes(mux *http.ServeMux) {
 
 // RegisterAuthedRoutes wires the operator-facing read surface
 // (host / alert / tree). ModeIntake skips this.
-func (d *Detection) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (d *Detection) RegisterAuthedRoutes(mux httpserver.Router) {
 	if d.operatorH == nil {
 		return
 	}
