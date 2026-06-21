@@ -729,4 +729,49 @@ func TestSuspiciousExec_LocalResolverDNSDeNoising(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, findings, 1, "non-DNS port must not be de-noised even to a private address")
 	})
+
+	t.Run("outbound DNS to a loopback resolver does not count", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		events := makeEvents("127.0.0.1", 53)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		assert.Empty(t, findings, "DNS to a loopback resolver must not trigger the network arm")
+	})
+
+	t.Run("outbound DNS to a zoned IPv6 link-local resolver does not count", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// Scoped IPv6 literal with a zone suffix, exactly as the agent emits for mDNS on :53 (present in the demo corpus).
+		// net.ParseIP rejects the zone; netip.ParseAddr accepts it, so the de-noiser must still classify it as local.
+		events := makeEvents("fe80::842f:57ff:fe06:1564%en0", 53)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		assert.Empty(t, findings, "zoned IPv6 link-local DNS must be de-noised")
+	})
+
+	t.Run("outbound DNS to an unparseable remote address still fires", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// A remote_address that is not an IP literal cannot be classified as local-resolver-class, so the rule still fires.
+		events := makeEvents("resolver.example.invalid", 53)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		require.Len(t, findings, 1, "an unparseable remote address must not be de-noised")
+	})
 }

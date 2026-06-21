@@ -97,7 +97,8 @@ type Config struct {
 	SudoersWriterAllowlist map[string]struct{}
 
 	// SuspiciousExecParentAllowlist is the set of non-shell parent path patterns the `suspicious_exec` rule should treat as benign roots
-	// even when they sit at the root of a "non-shell -> shell -> /tmp/binary" chain. Populated from EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST
+	// for BOTH of the rule's trigger shapes: "non-shell -> shell -> /tmp/binary" AND "non-shell -> shell -> outbound network_connect".
+	// Populated from EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST
 	// (comma-separated). Empty by default. An entry containing `*` is a glob (a `*` matches any run of characters including `/`); an
 	// entry with no `*` matches the path exactly. The recommended literal value for fleets that allow interactive admin SSH is
 	// `/usr/libexec/sshd-session, /Applications/Terminal.app/Contents/MacOS/Terminal, /Applications/iTerm.app/Contents/MacOS/iTerm2`. For

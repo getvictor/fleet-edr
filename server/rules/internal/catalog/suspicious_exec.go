@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/fleetdm/edr/server/rules/api"
@@ -60,8 +60,8 @@ type SuspiciousExec struct {
 	// shape verbatim but are operationally normal.
 	//
 	// Each entry is matched against the parent process path by
-	// parentPathMatches: an entry containing a `*` is a glob (a `*`
-	// matches any run of characters INCLUDING the path separator), while
+	// parentAllowed (via globMatch): an entry containing a `*` is a glob
+	// (a `*` matches any run of characters INCLUDING the path separator), while
 	// an entry with no `*` keeps exact-string semantics. The glob form
 	// is what makes the allowlist version-agnostic: developer tooling
 	// installs under version-stamped paths (`.../claude/versions/2.1.178`,
@@ -539,7 +539,7 @@ func (r *SuspiciousExec) makeExecFinding(
 
 // parentAllowed reports whether the given non-shell parent process is on the operator's allowlist. A nil parent (shell parented at
 // launchd, or parent not yet materialised) never matches: those are the cases the rule must continue to flag because there's no
-// human-attested entry point. An allowlist entry containing `*` is treated as a glob (see parentPathMatches); a plain entry keeps
+// human-attested entry point. An allowlist entry containing `*` is treated as a glob (see globMatch); a plain entry keeps
 // exact-string semantics, so existing literal-path configurations are unaffected.
 func (r *SuspiciousExec) parentAllowed(parent *api.Process) bool {
 	if r.AllowedNonShellParents == nil || parent == nil {
@@ -596,13 +596,10 @@ func globMatch(pattern, name string) bool {
 // host's own resolver, which the network arm de-noises (see isLocalResolverDest).
 const dnsPort = 53
 
-// cgnatNet is the RFC 6598 carrier-grade-NAT shared address space (100.64.0.0/10). net.IP.IsPrivate does NOT cover it, but it is not
-// publicly routable, and Tailscale's MagicDNS resolver lives at 100.100.100.100 inside it, so a local-resolver classifier must include
-// it. Parsed once at package init; ParseCIDR on a constant literal cannot fail.
-var cgnatNet = func() *net.IPNet {
-	_, n, _ := net.ParseCIDR("100.64.0.0/10")
-	return n
-}()
+// cgnatPrefix is the RFC 6598 carrier-grade-NAT shared address space (100.64.0.0/10). netip.Addr.IsPrivate does NOT cover it (it is
+// RFC1918 + IPv6 ULA only), but it is not publicly routable, and Tailscale's MagicDNS resolver lives at 100.100.100.100 inside it, so a
+// local-resolver classifier must include it explicitly. MustParsePrefix on a constant literal cannot fail.
+var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // isLocalResolverDest reports whether an outbound connection targets the host's own DNS resolver: port 53 to a local-resolver-class
 // address. Such a lookup is not a meaningful "outbound network connection" for suspicious_exec; the connection to the resolved address
@@ -615,15 +612,20 @@ func isLocalResolverDest(remoteAddress string, remotePort int) bool {
 // isLocalResolverIP reports whether addr parses as a non-publicly-routable address of the class a host's local resolver uses: loopback,
 // RFC1918 private (and IPv6 ULA, both via IsPrivate), IPv4/IPv6 link-local, or the CGNAT range Tailscale MagicDNS occupies. A value
 // that does not parse as an IP (a hostname, an empty string) is not classifiable as local and returns false so the rule still fires.
+//
+// netip.ParseAddr (not net.ParseIP) is deliberate: the agent's network telemetry carries scoped IPv6 literals with a zone suffix
+// (e.g. `fe80::1%en0`, present in the demo corpus for mDNS on :53), which net.ParseIP rejects but netip.ParseAddr accepts. Without zone
+// support those link-local DNS lookups would slip past the de-noiser and re-fire the network arm. The CGNAT membership test is IPv4
+// only, so a zoned IPv6 address never reaches it; the link-local branch covers the zoned case.
 func isLocalResolverIP(addr string) bool {
-	ip := net.ParseIP(addr)
-	if ip == nil {
+	ip, err := netip.ParseAddr(addr)
+	if err != nil {
 		return false
 	}
 	return ip.IsLoopback() ||
 		ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() ||
-		cgnatNet.Contains(ip)
+		cgnatPrefix.Contains(ip)
 }
 
 func isSuspiciousPath(path string) bool {
