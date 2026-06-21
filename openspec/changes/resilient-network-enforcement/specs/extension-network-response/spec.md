@@ -55,7 +55,7 @@ The system SHALL monitor upstream-forwarding health and SHALL recover from susta
 
 ### Requirement: Host network containment is declarative and survives provider restart
 
-Host network containment (isolating a compromised endpoint from the network) SHALL be expressed as a declarative ruleset the operating system enforces (content-filter rules), persisted on device and re-applied when the extension restarts, so containment is not lost if the provider process crashes or is restarted. Containment SHALL preserve a management lifeline that permits the endpoint to keep communicating with the EDR server, so an operator can lift containment remotely. This mirrors `extension-application-control`'s persisted snapshot that is restored on extension restart.
+Host network containment (isolating a compromised endpoint from the network) SHALL be expressed as a declarative ruleset the operating system enforces (content-filter rules), persisted on device and re-applied when the extension restarts, so containment is not lost if the provider process crashes or is restarted. Containment SHALL preserve a management lifeline that permits the endpoint to keep communicating with the EDR server, so an operator can lift containment remotely. The lifeline MUST include name resolution of the EDR server: because the DNS proxy does not open-bypass while an enforcement policy is active (see the watchdog requirement), reaching a server identified only by hostname would otherwise deadlock when the proxy is wedged. The system SHALL guarantee the server resolves regardless of DNS proxy health, by a path that does not depend on the proxy forwarding successfully (for example a pinned or cached server address, or a resolution path the containment ruleset routes around the proxy). This mirrors `extension-application-control`'s persisted snapshot that is restored on extension restart.
 
 #### Scenario: Containment persists across an extension restart
 
@@ -68,3 +68,4 @@ Host network containment (isolating a compromised endpoint from the network) SHA
 - **GIVEN** a host is under network containment
 - **WHEN** the agent communicates with the EDR server
 - **THEN** that communication is permitted by the containment ruleset so containment can later be lifted
+- **AND** the EDR server's name resolves even when the DNS proxy is degraded or wedged, by a path that does not depend on the proxy forwarding successfully, so a hostname-identified server does not deadlock the lifeline

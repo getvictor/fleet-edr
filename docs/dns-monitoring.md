@@ -12,7 +12,7 @@ See https://fleetdm.com/guides/monitor-dns-traffic-on-macos for background on ho
 
 Use this runbook when an endpoint can reach IP addresses but cannot resolve names ("I can `ping 8.8.8.8` but `ping google.com` fails", browsers stall on lookups). The brief safety note in `lessons-and-gotchas.md` ("DNS proxy can break all DNS resolution") points here.
 
-### Why our agent can cause this
+### Why our DNS proxy can cause this
 
 `DNSProxyProvider` (`extension/edr/networkextension/DNSProxyProvider.swift`) is an `NEDNSProxyProvider` that is on by default. Its `handleNewFlow` returns `true` for every UDP and TCP DNS flow, so once active it becomes the **sole resolver** for the whole machine: the OS stops sending claimed DNS flows anywhere else. A query is answered only if the proxy's own `NWConnection` to the upstream server reaches `.ready`, sends, receives, and writes the reply back. If that upstream connection fails or the proxy process wedges, every claimed query goes unanswered and all name resolution dies. ICMP and direct-IP traffic are not DNS flows, so they are never claimed and keep working: that asymmetry is the fingerprint of a broken DNS proxy.
 
@@ -51,8 +51,8 @@ Failure signatures, from most to least diagnostic:
 
 The single test that settles causation: **disable our DNS proxy and see if resolution recovers.**
 
-- Fastest: **reboot** the endpoint. This tears down the proxy config and the wedged process; if DNS comes back, our proxy was holding it.
-- Targeted: run the host-app subcommand `disable-dns-proxy`, which flips `NEDNSProxyManager.isEnabled = false` (`extension/edr/edr/main.swift`). Re-enable later with `enable-dns-proxy`.
+- Fastest: **reboot** the endpoint. This restarts the wedged extension process, which clears the wedge; if DNS comes back, our proxy was holding it. Note that reboot does NOT disable the proxy: enablement is persisted via `NEDNSProxyManager.saveToPreferences`, so the proxy comes back enabled after reboot and the same wedge can re-arm. Reboot is a recovery and a causality test, not a config reset.
+- Targeted (and to keep the proxy off): run the host-app subcommand `disable-dns-proxy`, which flips `NEDNSProxyManager.isEnabled = false` (`extension/edr/edr/main.swift`) and persists that. Re-enable later with `enable-dns-proxy`.
 
 ```bash
 '/Applications/Fleet EDR.app/Contents/MacOS/edr' disable-dns-proxy

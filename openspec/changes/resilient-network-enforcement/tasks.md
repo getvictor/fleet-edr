@@ -38,5 +38,5 @@
 ## 7. Follow-ups (out of scope here, tracked separately)
 
 - [ ] Server-side network-response policy plane: blocklist + containment authoring, snapshot wire format, distribution, UI.
-- [ ] New ADR 0014 recording the fail-open-observation / explicit-block-enforcement / declarative-containment principle (no existing ADR covers it; not an amendment).
+- [x] New ADR 0014 recording the fail-open-observation / explicit-block-enforcement / declarative-containment principle (no existing ADR covers it; not an amendment): `docs/adr/0014-inline-enforcement-failure-semantics.md` (Proposed; ratifies to Accepted when this change lands).
 - [ ] Encrypted-DNS (DoH/DoT) interception coverage beyond the current TCP DNS path.
