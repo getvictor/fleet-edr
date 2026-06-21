@@ -749,3 +749,35 @@ export async function rotateServiceAccount(id: number): Promise<{ secret: string
 export async function revokeServiceAccount(id: number): Promise<void> {
   await fetchJSON<{ status: string }>(`/settings/service-accounts/${String(id)}`, { method: "DELETE" });
 }
+
+// --- Users + role management (issue #135) ---------------------------------------
+
+// AdminUser is the read shape from GET /api/settings/users. role is the effective single global role ("" when the user holds none);
+// roles carries every live global role (usually one). status is "active" | "disabled". is_breakglass marks the recovery account, which
+// the server refuses to modify through this surface.
+export type UserStatus = "active" | "disabled";
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  display_name?: string;
+  role: string;
+  roles: string[];
+  status: UserStatus;
+  is_breakglass: boolean;
+}
+
+export async function listUsers(): Promise<AdminUser[]> {
+  const res = await fetchJSON<{ users: AdminUser[] | null }>("/settings/users");
+  return res.users ?? [];
+}
+
+// setUserRole replaces the user's global role binding with the chosen seeded role. super_admin is accepted by the server only when the
+// caller is itself a super_admin; the UI does not offer it.
+export async function setUserRole(id: number, role: string): Promise<AdminUser> {
+  return fetchJSON<AdminUser>(`/settings/users/${String(id)}/role`, { method: "PUT", body: JSON.stringify({ role }) });
+}
+
+export async function setUserStatus(id: number, status: UserStatus): Promise<AdminUser> {
+  return fetchJSON<AdminUser>(`/settings/users/${String(id)}/status`, { method: "PUT", body: JSON.stringify({ status }) });
+}

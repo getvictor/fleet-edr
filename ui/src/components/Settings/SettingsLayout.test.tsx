@@ -18,16 +18,18 @@ function renderLayout(permissions: string[] | undefined, path = "/admin/settings
 }
 
 describe("SettingsLayout", () => {
-  it("renders the section content and both sub-nav links when permitted", () => {
-    renderLayout([PermissionAction.SSOManage, PermissionAction.ServiceAccountRead]);
+  it("renders the section content and all sub-nav links when permitted", () => {
+    renderLayout([PermissionAction.SSOManage, PermissionAction.UserRead, PermissionAction.ServiceAccountRead]);
     expect(screen.getByText("section content")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Single sign-on" })).toHaveAttribute("href", "/admin/settings/sso");
+    expect(screen.getByRole("link", { name: "Users" })).toHaveAttribute("href", "/admin/settings/users");
     expect(screen.getByRole("link", { name: "Service accounts" })).toHaveAttribute("href", "/admin/settings/service-accounts");
   });
 
   it("omits a section the operator lacks permission for", () => {
     renderLayout([PermissionAction.ServiceAccountRead]);
     expect(screen.queryByRole("link", { name: "Single sign-on" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Service accounts" })).toBeInTheDocument();
   });
 

@@ -695,6 +695,9 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		// public route (no session/CSRF) registered via RegisterPublicRoutes.
 		"GET /api/settings/service-accounts", "POST /api/settings/service-accounts",
 		"POST /api/settings/service-accounts/{id}/rotate", "DELETE /api/settings/service-accounts/{id}",
+		// User + role management admin surface (issue #135). Mounted on apiMux via identityCtx.RegisterAuthedRoutes; enumerated here
+		// for the same reason as the surfaces above (else the UI's GET parses the SPA index.html as JSON).
+		"GET /api/settings/users", "PUT /api/settings/users/{id}/role", "PUT /api/settings/users/{id}/status",
 	} {
 		mux.Handle(p, sessionProtected)
 	}

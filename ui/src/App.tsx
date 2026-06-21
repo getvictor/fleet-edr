@@ -8,6 +8,7 @@ import { ApplicationControlRoutes } from "./components/ApplicationControl/Applic
 import { RuleDetail } from "./components/RuleDetail";
 import { SSOSettings } from "./components/SSOSettings/SSOSettings";
 import { ServiceAccounts } from "./components/ServiceAccounts/ServiceAccounts";
+import { Users } from "./components/Users/Users";
 import { SettingsLayout } from "./components/Settings/SettingsLayout";
 import { Login } from "./components/Login";
 import { BreakGlassSetup } from "./components/BreakGlassSetup";
@@ -164,6 +165,14 @@ export function AuthedApp() {
             element={(
               <RequirePermission action={PermissionAction.SSOManage} surface="Single sign-on settings">
                 <SettingsLayout><SSOSettings /></SettingsLayout>
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/admin/settings/users"
+            element={(
+              <RequirePermission action={PermissionAction.UserRead} surface="Users">
+                <SettingsLayout><Users /></SettingsLayout>
               </RequirePermission>
             )}
           />
