@@ -40,6 +40,11 @@ userspace-claimed fields where a kernel-vouched value exists (use audit_token-de
 or PII in log statements, audit-log tampering (audit_events is append-only), weak crypto, and SQL injection.
 Performance on ingestion paths (ES event handling, event upload pipeline, MySQL writes on the ingest path) is a correctness
 concern: flag per-event allocations, N+1 queries, and lock contention there.
+This tree is largely AI-generated, so also flag (secondary to the security and performance findings above): a new helper, type,
+validator, or endpoint that re-implements logic already present in the same bounded context or in shared internal/ or api/
+packages (semantic duplication the lexical SonarCloud gate misses; name the existing symbol to reuse), and defensive branches or
+error paths for states no caller can produce or that the type system already rules out (validate at the boundary, then delete the
+unreachable guard). See best_practices.md "Reuse and simplicity".
 Do not flag: style or formatting that linters own (golangci-lint, SwiftLint, Prettier, dash-lint); Go 1.26 language and stdlib
 features (integer range expressions, strings.SplitSeq) as compile errors; the word "fleet"/"fleets" in docs/fleet-deployment.md
 (Fleet renamed teams to fleets in v4.82, the doc is correct); long Markdown lines (prose is never hard-wrapped, enforced by

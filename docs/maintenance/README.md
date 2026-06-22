@@ -44,7 +44,7 @@ If a finding from a scheduled task could be moved into one of those automated ga
 
 | Cadence | Tasks |
 | --- | --- |
-| **Monthly** | [`doc-accuracy-sweep`](tasks/doc-accuracy-sweep.md), [`stale-implementation-references`](tasks/stale-implementation-references.md), [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md), [`todo-fixme-sweep`](tasks/todo-fixme-sweep.md), [`observability-review`](tasks/observability-review.md) |
+| **Monthly** | [`doc-accuracy-sweep`](tasks/doc-accuracy-sweep.md), [`stale-implementation-references`](tasks/stale-implementation-references.md), [`memory-and-claudemd-audit`](tasks/memory-and-claudemd-audit.md), [`todo-fixme-sweep`](tasks/todo-fixme-sweep.md), [`observability-review`](tasks/observability-review.md), [`consolidation-pass`](tasks/consolidation-pass.md) |
 | **Quarterly** | [`adr-audit`](tasks/adr-audit.md), [`best-practices-refresh`](tasks/best-practices-refresh.md), [`architecture-drift`](tasks/architecture-drift.md), [`dead-code-sweep`](tasks/dead-code-sweep.md), [`config-surface-review`](tasks/config-surface-review.md), [`test-suite-health`](tasks/test-suite-health.md), [`claude-config-audit`](tasks/claude-config-audit.md), [`ai-review-bot-config-audit`](tasks/ai-review-bot-config-audit.md), [`threat-model-and-security-refresh`](tasks/threat-model-and-security-refresh.md) |
 
 Suggested anchor: run monthly tasks on the first Monday, quarterly tasks on the first Monday of the quarter (Jan / Apr / Jul / Oct). A "kick the can" of one week is fine; skipping a quarter twice in a row is not.
@@ -83,6 +83,7 @@ Use any existing task file as a template. Update the cadence calendar above and 
 - [`test-suite-health`](tasks/test-suite-health.md): flaky, skipped, slow, semantically thin
 - [`architecture-drift`](tasks/architecture-drift.md): semantic boundary violations beyond what `arch-go` catches
 - [`config-surface-review`](tasks/config-surface-review.md): dead knobs, wrong-layer knobs, and tuning that should be a fixed constant across server + agent config
+- [`consolidation-pass`](tasks/consolidation-pass.md): semantic duplication and cognitive-complexity hotspots in code that is live (not dead), consolidated one cluster per PR
 
 ### AI tooling hygiene (new domain)
 

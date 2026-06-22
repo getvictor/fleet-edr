@@ -150,6 +150,23 @@ reviews:
         in Playwright, and mocks where an integration test should
         hit the real component.
 
+    - path: "**/*.{go,swift,ts,tsx}"
+      instructions: |
+        Reuse and simplicity. This tree is largely AI-generated, so
+        the two defects below recur and neither the linters nor the
+        lexical SonarCloud duplication gate catch them:
+          - Semantic duplication: a new helper, type, validator, or
+            endpoint that re-implements logic already present in the
+            same bounded context or in shared internal/ or api/
+            packages. Flag it and name the existing symbol to reuse.
+            Renamed-identical logic counts even when the tokens differ.
+          - Speculative edge cases: a defensive branch or error path
+            for a state no caller can produce, or that an upstream
+            validator or the type system already rules out. Ask for
+            the input that reaches the branch; if none exists,
+            recommend deleting it. Validate at the boundary, trust
+            types inward.
+
   # ---- pre-merge checks ----------------------------------------------------
   # All advisory (mode: warning): branch protection + the CI workflow
   # checks own the actual merge decision.

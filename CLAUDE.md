@@ -139,3 +139,10 @@ Layered on the global guide. Project-specific:
   both Copilot and CodeRabbit caught a dispatcher reference on a function whose
   dispatcher argument no longer existed). Treat the comment delta as part of the
   deletion, not a follow-up.
+
+## Reuse and simplicity
+
+This codebase is largely AI-generated, which produces two failure modes no linter catches: code that re-implements helpers, types, or endpoints that already exist (because it was generated without searching the tree), and defensive branches for inputs no caller can produce. Two rules counter this.
+
+- Search before you add. Before writing a new helper, type, validator, constant, SQL query, or HTTP route, search the owning bounded context and the shared `internal/` and `api/` packages for an existing equivalent, and extend it rather than cloning it. The `find-prior-art` skill automates that search; run it before generating non-trivial new code. SonarCloud gates new lexical duplication, but semantic duplication (the same logic renamed) is invisible to it and is the author's and reviewer's responsibility.
+- No speculative edge cases. Every defensive branch and error path needs a real caller that reaches it. If a state is already ruled out by a type or an upstream validator, do not re-handle it: validate once at the boundary and trust the types inward. A guard you cannot produce an input for is dead code, not robustness. New-code cognitive complexity and unused parameters are gated by `task lint:go:newcode`; the existing backlog is paid down by the monthly `consolidation-pass` maintenance task.

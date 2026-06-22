@@ -19,3 +19,10 @@ The `OpenSpec sync` CI gate has a `no-behavior-change` opt-out (label or `[no-be
 
 - Endpoint Security callback threads must never block on the network: any `SecStaticCodeCheckValidity` / code-signing evaluation on the ES path must pass `.noNetworkAccess`.
 - C pointers imported from the ESF SDK that are `_Nonnull` (e.g. `es_event_btm_launch_item_add_t.item`) are non-optional in Swift; an `x?.pointee` guard on them does not compile. `_Nullable` ones (e.g. `instigator`, `app`) do need a guard.
+
+## Flag: duplicated logic and speculative edge cases
+
+This codebase is largely AI-generated. The two defects below recur and are caught by neither the linters nor the SonarCloud duplication gate (which sees only lexical, token-level copies).
+
+- Semantic duplication: a new helper, type, validator, or endpoint that re-implements logic already present in the same bounded context or in the shared `internal/` and `api/` packages. Flag it and name the existing symbol to reuse. Renamed-but-identical logic counts even when the tokens differ.
+- Speculative edge cases: a defensive branch or error path for a state no caller can produce, or that an upstream validator or the type system already rules out. Ask for the input that reaches the branch; if none exists, recommend deleting it. The standard is validate once at the boundary, then trust the types inward.

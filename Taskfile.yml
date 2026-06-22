@@ -472,6 +472,18 @@ tasks:
     cmds:
       - tmp/golangci-lint-custom run --fix ./...
 
+  lint:go:newcode:
+    desc: |
+      NEW-CODE-ONLY strict lint: cognitive complexity (gocognit) + dead parameters
+      (unparam), scoped to lines changed versus origin/main via --new-from-merge-base.
+      Uses the separate .golangci-strict.yml so the whole-repo lint:go run is untouched.
+      Existing AI-generated complexity is grandfathered; new functions cannot add past
+      the gocognit threshold. CI fetches origin/main first; local runs need it present.
+      See docs/maintenance/tasks/consolidation-pass.md for paying down the existing stock.
+    deps: [lint:install]
+    cmds:
+      - tmp/golangci-lint-custom run --config .golangci-strict.yml --new-from-merge-base origin/main ./...
+
   lint:install:
     desc: |
       Build the custom golangci-lint binary at tmp/golangci-lint-custom by running
