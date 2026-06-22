@@ -1,0 +1,44 @@
+# Strict, NEW-CODE-ONLY golangci-lint config. This is NOT the project's main
+# config (.golangci.yml owns the whole-repo correctness sweep). It is run
+# separately by `task lint:go:newcode` with `--new-from-merge-base origin/main`
+# so it reports ONLY on lines changed versus the merge base. Existing code is
+# grandfathered: the 5000+ aggregate cognitive complexity that the AI-generated
+# tree already carries is not retroactively flagged, but new functions cannot
+# add to it past the threshold.
+#
+# Division of labour (see docs/maintenance/tasks/consolidation-pass.md):
+#   * SonarCloud owns DUPLICATION (new_duplicated_lines_density gate, lexical).
+#   * This config owns COGNITIVE COMPLEXITY and DEAD PARAMETERS on new code.
+#   * Semantic duplication (renamed-identical logic) is owned by the
+#     find-prior-art skill plus the AI review bots; no linter sees it.
+#
+# Run with the custom binary so it shares the cache built by `task lint:install`
+# (the commentwrap plugin is compiled in but simply not enabled here).
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - gocognit # cognitive complexity per function; mirrors Sonar's metric
+    - unparam # unused function parameters and always-same return values (speculative flexibility)
+
+  settings:
+    gocognit:
+      # 20 is a deliberate midpoint: Sonar flags functions above 15, gocyclo
+      # conventions sit near 30. Tune in lockstep if the new-code run proves
+      # too tight or too loose; raising it weakens the gate for everyone.
+      min-complexity: 20
+
+  exclusions:
+    generated: strict
+    paths:
+      - tmp
+      - ui/node_modules
+    rules:
+      # Table-driven tests legitimately carry high branching, and test helpers
+      # often take parameters a single caller does not yet use. Neither is the
+      # over-engineering this gate targets, so tests are out of scope.
+      - path: _test\.go
+        linters:
+          - gocognit
+          - unparam

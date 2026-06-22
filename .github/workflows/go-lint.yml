@@ -15,6 +15,7 @@ on:
       - "**/go.mod"
       - "**/go.sum"
       - ".golangci.yml"
+      - ".golangci-strict.yml"
       - ".custom-gcl.yml"
       - "Taskfile.yml"
       - ".github/workflows/go-lint.yml"
@@ -48,7 +49,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          PATTERN='\.go$|(^|/)go\.(mod|sum)$|^\.golangci\.yml$|^\.custom-gcl\.yml$|^Taskfile\.yml$|^\.github/workflows/go-lint\.yml$'
+          PATTERN='\.go$|(^|/)go\.(mod|sum)$|^\.golangci(-strict)?\.yml$|^\.custom-gcl\.yml$|^Taskfile\.yml$|^\.github/workflows/go-lint\.yml$'
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running unconditionally."
@@ -77,6 +78,9 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          # Full history so the new-code strict lint below can compute the
+          # merge base against origin/main (--new-from-merge-base).
+          fetch-depth: 0
 
       - name: Create UI dist placeholder for embed
         run: mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
@@ -163,3 +167,12 @@ jobs:
 
       - name: Run golangci-lint via Taskfile
         run: task lint:go
+
+      # New-code strict gate: cognitive complexity + dead parameters, scoped to
+      # lines changed versus the merge base so existing code is grandfathered.
+      # Populate origin/main first; the PR checkout does not create that ref.
+      # See .golangci-strict.yml and the lint:go:newcode Taskfile target.
+      - name: Run new-code strict lint (complexity + dead parameters)
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          task lint:go:newcode

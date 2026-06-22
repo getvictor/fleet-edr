@@ -27,3 +27,10 @@ The hot paths are the ES event handlers in the extension, the agent's event queu
 - Error handling on the agent and server: errors from the queue, uploader, and store are handled or explicitly logged with context; a swallowed error on the ingest path hides data loss.
 - Re-exec chains and process trees: code walking `previous_exec_id` or building process forests must terminate on cycles and missing parents; assume the input can be adversarial.
 - When a symbol is deleted (function, type, command, XPC message kind, config field), every comment referencing it goes in the same diff. Stale references in IPC-adjacent comments are a recurring review defect in this repo.
+
+## Reuse and simplicity
+
+This codebase is largely AI-generated; both defects below evade the linters and the SonarCloud duplication gate (which sees only lexical, token-level duplication).
+
+- Semantic duplication. A new helper, type, validator, or endpoint that re-implements logic already present in the same bounded context or in the shared `internal/` and `api/` packages is a finding even when the tokens differ. Name the existing symbol to reuse. The `find-prior-art` skill runs this search before code is written.
+- Speculative edge cases. A defensive branch or error path that no caller can reach, or that an upstream validator or the type system already rules out, is dead code, not robustness. The standard is to validate once at the boundary, then trust the types inward. A guard with no producible input is a finding. New-code cognitive complexity and unused parameters are gated by `task lint:go:newcode`.
