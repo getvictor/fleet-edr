@@ -30,6 +30,11 @@ func New(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
+// errNilDB is returned by every entry point when the Store was built without a DB handle, which happens only in minimal test wiring.
+// One sentinel keeps the identical guard message in a single place (the S1192 dedup). It stays unexported because the nil-DB case is a
+// construction-time misuse that no caller branches on; callers in other identity packages reach this Store through server/identity/api.
+var errNilDB = errors.New("rbac: db must not be nil")
+
 // DB returns the underlying executor for callers that need to invoke BindRole outside of a transaction (e.g. seed.Admin's idempotent
 // bootstrap-time bind). JIT + admin-promotion paths thread their own transactional executor and don't need this accessor.
 func (s *Store) DB() Executor {
@@ -90,7 +95,7 @@ var adminTierRoles = []string{"admin", "super_admin"}
 // is single-role, global-scope only. A user with no live global binding is simply absent from the map.
 func (s *Store) AllLiveBindings(ctx context.Context) (map[int64][]string, error) {
 	if s.db == nil {
-		return nil, errors.New("rbac: db must not be nil")
+		return nil, errNilDB
 	}
 	var rows []struct {
 		UserID int64  `db:"user_id"`
@@ -117,7 +122,7 @@ func (s *Store) AllLiveBindings(ctx context.Context) (map[int64][]string, error)
 // admin-tier? does it hold super_admin?), no-op detection, and the audit from-set. Non-global scopes and expired bindings are excluded.
 func (s *Store) LiveGlobalRoles(ctx context.Context, userID int64) ([]string, error) {
 	if s.db == nil {
-		return nil, errors.New("rbac: db must not be nil")
+		return nil, errNilDB
 	}
 	roles := []string{}
 	err := s.db.SelectContext(ctx, &roles, `
@@ -204,6 +209,27 @@ func targetIsActiveAdmin(ctx context.Context, tx *sqlx.Tx, userID int64) (bool, 
 	return ok, nil
 }
 
+// refuseIfLastActiveAdmin returns api.ErrLastAdmin when userID is the last active admin-tier user, so a demote or disable cannot strand
+// the deployment without an administrator. It runs on the caller's locked transaction (after lockAdminSentinel) and reads the committed
+// state under READ COMMITTED. A non-admin or already-inactive target can never be the last admin, so it returns nil.
+func refuseIfLastActiveAdmin(ctx context.Context, tx *sqlx.Tx, userID int64) error {
+	active, err := targetIsActiveAdmin(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return nil
+	}
+	others, err := otherActiveAdmins(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if others == 0 {
+		return api.ErrLastAdmin
+	}
+	return nil
+}
+
 // beginGuarded opens a READ COMMITTED transaction. READ COMMITTED (not InnoDB's default REPEATABLE READ) is required so that, after a
 // guarded mutation blocks on lockAdminSentinel and the holder commits, the waiter's subsequent count reads the committed effect rather
 // than a stale snapshot. The sentinel lock provides the serialization; READ COMMITTED provides the freshness.
@@ -218,7 +244,7 @@ func (s *Store) beginGuarded(ctx context.Context) (*sqlx.Tx, error) {
 // break-glass / self / super_admin guards before calling.
 func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (previous []string, err error) {
 	if s.db == nil {
-		return nil, errors.New("rbac: db must not be nil")
+		return nil, errNilDB
 	}
 	tx, err := s.beginGuarded(ctx)
 	if err != nil {
@@ -239,18 +265,8 @@ func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (p
 	}
 	// Guard: demoting an active admin-tier user to a non-admin role must leave at least one other active admin.
 	if isAdminTier(previous) && !isAdminTier([]string{roleID}) {
-		active, aErr := targetIsActiveAdmin(ctx, tx, userID)
-		if aErr != nil {
-			return nil, aErr
-		}
-		if active {
-			others, cErr := otherActiveAdmins(ctx, tx, userID)
-			if cErr != nil {
-				return nil, cErr
-			}
-			if others == 0 {
-				return nil, api.ErrLastAdmin
-			}
+		if err = refuseIfLastActiveAdmin(ctx, tx, userID); err != nil {
+			return nil, err
 		}
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -274,7 +290,7 @@ func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (p
 // nothing. The caller validates the status value and runs the break-glass / self guards before calling.
 func (s *Store) SetUserStatus(ctx context.Context, userID int64, status string) error {
 	if s.db == nil {
-		return errors.New("rbac: db must not be nil")
+		return errNilDB
 	}
 	if status != "disabled" {
 		if _, err := s.db.ExecContext(ctx, `UPDATE users SET status = ? WHERE id = ?`, status, userID); err != nil {
@@ -291,18 +307,8 @@ func (s *Store) SetUserStatus(ctx context.Context, userID int64, status string) 
 	if err = lockAdminSentinel(ctx, tx); err != nil {
 		return err
 	}
-	active, err := targetIsActiveAdmin(ctx, tx, userID)
-	if err != nil {
+	if err = refuseIfLastActiveAdmin(ctx, tx, userID); err != nil {
 		return err
-	}
-	if active {
-		others, cErr := otherActiveAdmins(ctx, tx, userID)
-		if cErr != nil {
-			return cErr
-		}
-		if others == 0 {
-			return api.ErrLastAdmin
-		}
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE users SET status = 'disabled' WHERE id = ?`, userID); err != nil {
 		return fmt.Errorf("disable user %d: %w", userID, err)
@@ -323,7 +329,7 @@ func (s *Store) SetUserStatus(ctx context.Context, userID int64, status string) 
 // matters.
 func (s *Store) ListLiveBindings(ctx context.Context, userID int64) ([]api.RoleBinding, error) {
 	if s.db == nil {
-		return nil, errors.New("rbac: db must not be nil")
+		return nil, errNilDB
 	}
 	rows := []roleBindingRow{}
 	err := s.db.SelectContext(ctx, &rows, `
