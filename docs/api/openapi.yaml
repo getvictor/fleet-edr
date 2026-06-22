@@ -652,7 +652,8 @@ paths:
                 required: [exclusions]
                 properties:
                   exclusions:
-                    type: array
+                    # The key is always present, but the server marshals an empty Go slice as JSON null, so the array is nullable.
+                    type: [array, "null"]
                     items:
                       $ref: "#/components/schemas/DetectionExclusion"
         "403":
@@ -762,7 +763,8 @@ paths:
                 required: [rule_settings]
                 properties:
                   rule_settings:
-                    type: array
+                    # The key is always present, but the server marshals an empty Go slice as JSON null, so the array is nullable.
+                    type: [array, "null"]
                     items:
                       $ref: "#/components/schemas/DetectionRuleSetting"
         "403":

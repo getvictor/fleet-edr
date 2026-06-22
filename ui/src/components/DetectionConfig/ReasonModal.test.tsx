@@ -51,6 +51,13 @@ describe("ReasonModal", () => {
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
   });
 
+  it("ignores a backdrop click while busy (no dismiss mid-mutation)", () => {
+    const onCancel = vi.fn();
+    render(<ReasonModal title="t" confirmLabel="Save" busy onConfirm={vi.fn()} onCancel={onCancel} />);
+    fireEvent.click(screen.getByRole("dialog"));
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it("surfaces an error message", () => {
     render(<ReasonModal title="t" confirmLabel="Save" error="boom" onConfirm={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByRole("alert")).toHaveTextContent("boom");

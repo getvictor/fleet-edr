@@ -45,8 +45,8 @@ export function ReasonModal({
       ref={dialogRef}
       className="dc-reason-modal"
       aria-labelledby={TITLE_ID}
-      onCancel={(e) => { e.preventDefault(); onCancel(); }}
-      onClick={(e) => { if (e.target === dialogRef.current) onCancel(); }}
+      onCancel={(e) => { e.preventDefault(); if (!busy) onCancel(); }}
+      onClick={(e) => { if (!busy && e.target === dialogRef.current) onCancel(); }}
     >
       <h2 id={TITLE_ID} className="dc-reason-modal__title">{title}</h2>
       {description !== undefined && <p className="dc-reason-modal__desc">{description}</p>}
