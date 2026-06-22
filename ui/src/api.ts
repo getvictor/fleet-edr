@@ -903,7 +903,7 @@ export async function createDetectionExclusion(
 // whitelist rejects, so those are escaped to their %XX hex form too. Used for audit reasons that ride the URL on body-less DELETEs.
 function encodeQueryValue(value: string): string {
   const HEX_RADIX = 16;
-  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(HEX_RADIX).toUpperCase()}`);
+  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${(c.codePointAt(0) ?? 0).toString(HEX_RADIX).toUpperCase()}`);
 }
 
 // deleteDetectionExclusion carries the audit reason as a query parameter (the DELETE has no body).

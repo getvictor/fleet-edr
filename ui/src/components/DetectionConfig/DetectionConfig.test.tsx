@@ -82,9 +82,8 @@ afterEach(() => {
 });
 
 describe("DetectionConfig", () => {
-  // The mode + severity controls render for every rule straight from its fetchRuleDocs entry, with no rule-specific UI; the generic
-  // declared-settings form grows from the same loop when a rule starts declaring a config schema.
-  // spec:web-ui/detection-configuration-admin-views/a-rule-s-settings-render-from-its-declared-schema
+  // The mode + severity controls render for every rule straight from its fetchRuleDocs entry, with no rule-specific UI.
+  // spec:web-ui/detection-configuration-admin-views/per-rule-mode-and-severity-controls-render-for-every-rule
   it("loads and renders exclusions plus the rule-modes table", async () => {
     stubReads({ exclusions: [makeExclusion()], rules: [makeRuleEntry()], settings: [makeSetting()] });
     renderPage();

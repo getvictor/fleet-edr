@@ -32,22 +32,28 @@ export function ReasonModal({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [reason, setReason] = useState("");
 
-  // Mount == open: the parent renders this only when a change is pending, so a one-shot showModal() on mount is all that's needed
-  // (no open-prop sync). Unmounting on confirm/cancel tears the dialog down.
+  // Mount == open: the parent renders this only while a change is pending. showModal() opens it; the backdrop-click + Escape
+  // (cancel event) listeners are attached imperatively rather than as JSX onClick/onCancel, because assigning mouse/keyboard
+  // handlers to the non-interactive <dialog> in JSX trips jsx-a11y (Sonar S6847/S1082). Both dismissals are ignored while busy so
+  // an in-flight confirm can't be dismissed. Re-runs on busy/onCancel change re-bind the closure; showModal is guarded on !open.
   useEffect(() => {
-    dialogRef.current?.showModal();
-  }, []);
+    const dlg = dialogRef.current;
+    if (!dlg) return undefined;
+    if (!dlg.open) dlg.showModal();
+    const onCancelEvt = (e: Event) => { e.preventDefault(); if (!busy) onCancel(); };
+    const onBackdrop = (e: MouseEvent) => { if (!busy && e.target === dlg) onCancel(); };
+    dlg.addEventListener("cancel", onCancelEvt);
+    dlg.addEventListener("click", onBackdrop);
+    return () => {
+      dlg.removeEventListener("cancel", onCancelEvt);
+      dlg.removeEventListener("click", onBackdrop);
+    };
+  }, [busy, onCancel]);
 
   const trimmed = reason.trim();
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="dc-reason-modal"
-      aria-labelledby={TITLE_ID}
-      onCancel={(e) => { e.preventDefault(); if (!busy) onCancel(); }}
-      onClick={(e) => { if (!busy && e.target === dialogRef.current) onCancel(); }}
-    >
+    <dialog ref={dialogRef} className="dc-reason-modal" aria-labelledby={TITLE_ID}>
       <h2 id={TITLE_ID} className="dc-reason-modal__title">{title}</h2>
       {description !== undefined && <p className="dc-reason-modal__desc">{description}</p>}
       {error && <div className="detection-config__error" role="alert">{error}</div>}
