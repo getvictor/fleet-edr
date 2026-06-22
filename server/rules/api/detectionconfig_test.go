@@ -31,6 +31,16 @@ func TestMatchExclusionValue(t *testing.T) {
 		{"domain does not match suffix-only", api.ExclusionMatchDomain, "example.com", "notexample.com", false},
 		{"cdhash exact", api.ExclusionMatchCDHash, "abc123", "abc123", true},
 		{"unknown match type never matches", api.ExclusionMatchType("bogus"), "x", "x", false},
+
+		// macOS /private firmlink aliasing: a path-glob exclusion must match regardless of which form (/etc vs /private/etc) the
+		// event carried. Covers both directions and all three aliasable prefixes, plus a non-aliasable path (no false match).
+		{"etc entry matches private candidate", api.ExclusionMatchPathGlob, "/etc/sudoers", "/private/etc/sudoers", true},
+		{"private entry matches etc candidate", api.ExclusionMatchPathGlob, "/private/etc/sudoers", "/etc/sudoers", true},
+		{"etc glob matches private candidate", api.ExclusionMatchPathGlob, "/etc/*", "/private/etc/sudoers", true},
+		{"var alias", api.ExclusionMatchPathGlob, "/var/db/foo", "/private/var/db/foo", true},
+		{"tmp alias parent path glob", api.ExclusionMatchParentPathGlob, "/private/tmp/build/*", "/tmp/build/run.sh", true},
+		{"alias does not over-match a different path", api.ExclusionMatchPathGlob, "/etc/sudoers", "/private/etc/passwd", false},
+		{"non-aliasable usr path unaffected", api.ExclusionMatchPathGlob, "/usr/bin/python3", "/private/usr/bin/python3", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

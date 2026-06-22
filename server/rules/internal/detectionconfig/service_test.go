@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -125,4 +126,37 @@ func TestService_NilAuditDropsRowWithoutPanic(t *testing.T) {
 func TestService_NewServicePanicsOnNilStore(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { detectionconfig.NewService(nil, nil, nil, nil) })
+}
+
+// TestService_RefreshLoop_ConvergesAcrossReplicas models two replicas (separate Service+Store on one MySQL). A mutation on replica A
+// bumps the shared version counter but only reloads A's own snapshot; B must converge via its periodic RefreshLoop without a restart
+// or a mutation of its own. sudoers_tamper matches the WRITER process path, so the exclusion is a staged-installer writer under
+// `/var`; it is written in the bare form and checked against the `/private/var` form, exercising the macOS firmlink aliasing end-to-end.
+// spec:server-detection-rules-engine/detection-configuration-converges-across-replicas/a-replica-adopts-a-configuration-change-made-on-another-replica
+func TestService_RefreshLoop_ConvergesAcrossReplicas(t *testing.T) {
+	t.Parallel()
+	storeA, db := openStore(t)
+	svcA := detectionconfig.NewService(storeA, nil, nil, nil)
+	require.NoError(t, svcA.Reload(t.Context()))
+
+	// Replica B: its own Service + Store over the same database, started from an empty (boot) snapshot.
+	svcB := detectionconfig.NewService(detectionconfig.NewStore(db), nil, nil, nil)
+	require.NoError(t, svcB.Reload(t.Context()))
+	require.False(t, svcB.Excluded("sudoers_tamper", api.ExclusionMatchPathGlob, "/private/var/db/munki/installer", "host-a"),
+		"baseline: B excludes nothing")
+
+	// t.Context() is cancelled at test cleanup, which stops the refresh-loop goroutine; no manual cancel needed.
+	go svcB.RefreshLoop(t.Context(), 20*time.Millisecond)
+
+	// Replica A creates the exclusion. This bumps detection_config_meta.version; B never sees the mutation directly.
+	_, err := svcA.CreateExclusion(
+		t.Context(), &identityapi.Actor{UserID: 1}, "munki staged installer writes sudoers",
+		detectionconfig.CreateExclusionInput{
+			RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchPathGlob, Value: "/var/db/munki/installer",
+		})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return svcB.Excluded("sudoers_tamper", api.ExclusionMatchPathGlob, "/private/var/db/munki/installer", "host-a")
+	}, 3*time.Second, 20*time.Millisecond, "replica B should converge to the exclusion created on replica A via its refresh loop")
 }

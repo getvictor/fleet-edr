@@ -162,6 +162,9 @@ func run() error {
 
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
+	// Converge this replica's detection-config snapshot with mutations made on other replicas (ADR-0010): a peer's exclusion / rule-mode
+	// edit only bumps the shared version counter, so without this poll a non-mutating replica would serve a stale config until restart.
+	go rulesCtx.Run(ctx)
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty. httpserver.Build skips installing the middleware on a nil
 	// resolver, and httpserver.ClientIP's fallback returns the same peer IP the resolver's empty-list path would return, so this saves

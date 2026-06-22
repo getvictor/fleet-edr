@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
@@ -159,6 +160,51 @@ func (s *Service) Reload(ctx context.Context) error {
 	}
 	s.snap.Store(snap)
 	return nil
+}
+
+// RefreshLoop periodically converges this replica's snapshot with mutations made on OTHER replicas, which only bump the version and
+// reload their own snapshot (ADR-0010: the snapshot is a per-replica cache, so a peer's mutation is invisible here until we re-read).
+// Each tick reads only the cheap single-row version counter; a full LoadSnapshot runs only when the stored version differs from the
+// loaded snapshot's, so a steady state with no config churn is one indexed read per interval. Blocks until ctx is cancelled.
+func (s *Service) RefreshLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if s.refreshTick(ctx) {
+				return
+			}
+		}
+	}
+}
+
+// refreshTick performs one convergence poll: it reads the cheap version counter and reloads the snapshot when the stored version
+// differs from the loaded one (versions are monotonic, so a difference means a peer advanced it). Returns true to stop (ctx cancelled).
+func (s *Service) refreshTick(ctx context.Context) (stop bool) {
+	current, err := s.store.Version(ctx)
+	if err != nil {
+		return s.handleRefreshErr(ctx, "version poll", err)
+	}
+	if current == s.snap.Load().Version() {
+		return false
+	}
+	if err := s.Reload(ctx); err != nil {
+		return s.handleRefreshErr(ctx, "reload", err)
+	}
+	return false
+}
+
+// handleRefreshErr decides what a refresh error means: a cancelled context is shutdown racing the poll, so the error is expected and
+// the loop stops silently; otherwise it is transient (the next tick retries), so log a WARN and continue.
+func (s *Service) handleRefreshErr(ctx context.Context, op string, err error) (stop bool) {
+	if ctx.Err() != nil {
+		return true
+	}
+	s.logger.WarnContext(ctx, "detectionconfig: "+op+" failed; retrying next tick", "err", err)
+	return false
 }
 
 // Excluded implements api.ExclusionResolver against the current snapshot.
