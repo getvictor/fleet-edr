@@ -2,6 +2,7 @@ package uploader
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -56,7 +57,7 @@ func TestUploadBatch(t *testing.T) {
 			return
 		}
 
-		body, _ := io.ReadAll(r.Body)
+		body := readUploadBody(t, r)
 		if err := json.Unmarshal(body, &received); err != nil {
 			t.Errorf("unmarshal: %v", err)
 		}
@@ -267,11 +268,7 @@ func TestUpload_BoundedBatchSize(t *testing.T) {
 	// against the main-goroutine read after drainOnce. int64 avoids the gosec int->int32 overflow lint.
 	var receivedCount atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read body: %v", err)
-			return
-		}
+		body := readUploadBody(t, r)
 		var events []json.RawMessage
 		if err := json.Unmarshal(body, &events); err != nil {
 			t.Errorf("unmarshal: %v", err)
@@ -316,11 +313,7 @@ func TestUpload_DrainUntilCaughtUp(t *testing.T) {
 	// atomic because the httptest handler runs on its own goroutine; int64 avoids the gosec int->int32 lint.
 	var requests, events atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read body: %v", err)
-			return
-		}
+		body := readUploadBody(t, r)
 		var batch []json.RawMessage
 		if err := json.Unmarshal(body, &batch); err != nil {
 			t.Errorf("unmarshal: %v", err)
@@ -451,6 +444,76 @@ func TestUpload_401IsNonRetryableWithinCycle(t *testing.T) {
 	}
 }
 
+// readUploadBody returns the JSON the uploader posted, transparently gunzipping it when the agent set Content-Encoding: gzip
+// (the production path as of #405). Mirrors the server's readBodyWithCap so every test handler sees the raw JSON regardless of
+// the wire encoding. Fails the test on a read or decode error rather than returning one, so call sites stay assertion-focused.
+func readUploadBody(t *testing.T, r *http.Request) []byte {
+	t.Helper()
+	if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
+		zr, err := gzip.NewReader(r.Body)
+		require.NoError(t, err, "request advertised Content-Encoding: gzip but the body is not a valid gzip stream")
+		defer func() { _ = zr.Close() }()
+		body, err := io.ReadAll(zr)
+		require.NoError(t, err, "gunzip request body")
+		return body
+	}
+	body, err := io.ReadAll(r.Body)
+	require.NoError(t, err, "read request body")
+	return body
+}
+
+// TestUpload_GzipWireShape pins the #405 contract: the uploader posts the batch gzip-compressed with Content-Encoding: gzip,
+// and the bytes decompress back to exactly the JSON array it marshalled. This is the wire-shape pin the broader behavioural
+// tests (which decode via readUploadBody) do not assert directly.
+//
+// spec:agent-event-uploader/bounded-request-size/the-upload-body-is-gzip-compressed
+func TestUpload_GzipWireShape(t *testing.T) {
+	q := openTestQueue(t)
+	ctx := t.Context()
+
+	const eventJSON = `{"event_id":"aaa","event_type":"exec"}`
+	require.NoError(t, q.Enqueue(ctx, []byte(eventJSON)))
+
+	// The handler only captures the header and the raw wire bytes (atomically, since httptest serves on its own goroutine);
+	// the gzip decode + assertions run in the test goroutine after the drain, so no require() lands inside the handler.
+	var sawGzipHeader atomic.Bool
+	var rawWire atomic.Value // []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawGzipHeader.Store(strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip"))
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			// t.Errorf (not require) is safe from this handler goroutine; surface an I/O failure directly instead of letting it
+			// masquerade as an empty-body assertion failure downstream.
+			t.Errorf("read request body: %v", err)
+		}
+		rawWire.Store(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.ServerURL = srv.URL
+	cfg.BatchSize = 10
+	u := New(q, cfg, nil, nil)
+	require.NoError(t, u.drainOnce(ctx))
+
+	assert.True(t, sawGzipHeader.Load(), "uploader must set Content-Encoding: gzip")
+	wire, _ := rawWire.Load().([]byte)
+	require.NotEmpty(t, wire, "server must have received a body")
+
+	zr, err := gzip.NewReader(bytes.NewReader(wire))
+	require.NoError(t, err, "the wire body must be a valid gzip stream")
+	decompressed, err := io.ReadAll(zr)
+	require.NoError(t, err)
+	require.NoError(t, zr.Close())
+	assert.NotEqual(t, wire, decompressed, "the wire body must actually be compressed, not raw JSON")
+
+	var arr []json.RawMessage
+	require.NoError(t, json.Unmarshal(decompressed, &arr), "decompressed body must be the JSON array the uploader marshalled")
+	require.Len(t, arr, 1)
+	assert.JSONEq(t, eventJSON, string(arr[0]))
+}
+
 func openTestQueue(t *testing.T) *queue.Queue {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -493,11 +556,7 @@ func tooLarge413Server(t *testing.T, maxEventsPerRequest int) (*httptest.Server,
 	t.Helper()
 	var success, rejected atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "read body", http.StatusInternalServerError)
-			return
-		}
+		body := readUploadBody(t, r)
 		var arr []json.RawMessage
 		if err := json.Unmarshal(body, &arr); err != nil {
 			http.Error(w, "parse body", http.StatusBadRequest)
@@ -678,7 +737,7 @@ func TestUpload_413_TooManyEventsRoutedThroughSplit(t *testing.T) {
 
 	var success, rejected atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body := readUploadBody(t, r)
 		var arr []json.RawMessage
 		_ = json.Unmarshal(body, &arr)
 		if len(arr) > 2 {
@@ -727,7 +786,7 @@ func TestUpload_413_ContextCancelBetweenHalves(t *testing.T) {
 
 	var posts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body := readUploadBody(t, r)
 		var arr []json.RawMessage
 		_ = json.Unmarshal(body, &arr)
 		n := posts.Add(1)
@@ -923,7 +982,7 @@ func TestUpload_PoisonBatchQuarantinesWhileSiblingDelivers(t *testing.T) {
 
 	var goodDelivered atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body := readUploadBody(t, r)
 		if bytes.Contains(body, []byte("poison")) {
 			w.WriteHeader(http.StatusBadRequest) // genuine poison-content 400
 			return

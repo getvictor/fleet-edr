@@ -82,6 +82,20 @@ final class ESFSubscriber: Sendable {
         }
 
         self.client = rawClient
+
+        // Flush the kernel AUTH result cache whenever the application-control snapshot is replaced. The AUTH_EXEC handler
+        // pins decided ALLOWs into the kernel cache (#209) so a fork-exec storm of an allowed binary does not re-enter the
+        // handler; that optimisation is only correct if an updated ruleset invalidates those cached ALLOWs. es_clear_cache is
+        // the supported flush. [weak self] avoids a needless retain of the subscriber by the process-lifetime store singleton;
+        // the closure reads self.client under a guard, and stop() clears this hook before es_delete_client, so it never runs
+        // against a freed or nil client.
+        ApplicationControlStore.shared.onSnapshotApplied = { [weak self] in
+            guard let self, let client = self.client else { return }
+            let clearResult = es_clear_cache(client)
+            if clearResult != ES_CLEAR_CACHE_RESULT_SUCCESS {
+                logger.warning("es_clear_cache after snapshot apply returned \(clearResult.rawValue, privacy: .public)")
+            }
+        }
     }
 
     func start() {
@@ -125,12 +139,17 @@ final class ESFSubscriber: Sendable {
     }
 
     func stop() {
+        // Clear the snapshot-applied hook before tearing down the client: the closure calls es_clear_cache(client), so a
+        // snapshot apply arriving after es_delete_client would dereference a freed client (use-after-free). Clearing it first,
+        // and nil-ing client below, closes that window for tests and any future pre-exit shutdown.
+        ApplicationControlStore.shared.onSnapshotApplied = nil
         es_unsubscribe_all(client)
         // Drain in-flight AUTH decisions before deleting the client: each holds a retained message it must still respond to
         // and release, and es_respond on a deleted client is undefined. Operations are deadline-bounded, so this returns
         // promptly (#298).
         authDecisionQueue.waitUntilAllOperationsAreFinished()
         es_delete_client(client)
+        client = nil
     }
 
     private func handleMessage(_ message: UnsafePointer<es_message_t>) {
@@ -182,7 +201,11 @@ final class ESFSubscriber: Sendable {
         // brick the EDR itself. Match BOTH team_id and the exhaustive Fleet bundle-id set; team_id alone would exempt every binary
         // ever signed by extensionTeamID, which is broader than intended.
         if teamID == extensionTeamID, fleetSelfAllowSigningIDs.contains(signingID) {
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
+            // cache:true is safe here: the answer is a function of the binary's intrinsic identity (extensionTeamID + a Fleet
+            // signing_id), which is stable for the lifetime of the binary on disk, and the kernel keys the AUTH cache on
+            // (dev,inode,mtime) so any binary swap forces a fresh decision. Caching elides the per-exec handler cost during a
+            // fork-exec storm of our own tools (#209).
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, true)
             return
         }
 
@@ -233,8 +256,17 @@ final class ESFSubscriber: Sendable {
         }
 
         let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
+        // Cacheability is computed here, where the lazily-resolved identity state is still in scope: a decided ALLOW is only
+        // pinned into the kernel cache when the BINARY hash was resolved and the leaf cert was warm (or no cert rules exist),
+        // so a cold-miss allow is not cached and the next exec re-evaluates once the hash/cert fill (#209).
+        let cacheable = authResultIsCacheable(
+            decision,
+            hashOutcome: hashOutcome,
+            leafCertResolved: tuple.leafCertSHA256 != nil,
+            snapshotHasCertificateRules: !snapshot.certificateRules.isEmpty
+        )
         dispatchAuthDecision(decision, context: AuthDispatchContext(
-            message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path
+            message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path, cacheable: cacheable
         ))
     }
 
@@ -247,18 +279,24 @@ final class ESFSubscriber: Sendable {
         let fileStat: stat
         let snapshot: ApplicationControlSnapshot
         let path: String
+        let cacheable: Bool
     }
 
     /// dispatchAuthDecision turns the pure-logic AuthDecision into the wire-level kernel response plus any event/notification
     /// emissions the decision implies. Extracted from handleAuthExec so the decision logic stays testable
     /// (AuthExecDeciderTests) and the wire dispatch stays one switch.
     private func dispatchAuthDecision(_ decision: AuthDecision, context: AuthDispatchContext) {
+        // A fully resolved decided ALLOW is pinned into the kernel AUTH cache so a fork-exec storm of an allowed binary does
+        // not re-enter the handler; the undecided fallbacks, cold-miss allows, and every DENY stay uncached. The flag was
+        // computed in decideAndRespond (authResultIsCacheable, unit-tested in the no-ES target) where the hash/cert resolution
+        // state was in scope; the cache stays correct because the store flushes it on every snapshot swap (#209).
+        let cacheResult = context.cacheable
         switch decision {
         case .allow:
-            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, false)
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
         case .allowWithUndecidedAudit(let reason):
             logger.warning("AUTH_EXEC ALLOW (undecided) reason=\(reason.rawValue, privacy: .public)")
-            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, false)
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
             emitUndecidedEvent(
                 target: context.target, fileStat: context.fileStat, verdict: "allow", reason: reason, snapshot: context.snapshot
             )

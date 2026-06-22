@@ -80,9 +80,10 @@ struct AuthTuple: Equatable, Sendable {
 /// of the kernel-cached platform-binary carve-out and the unconditional self-allow failsafe (both short-circuit before the
 /// decider runs).
 enum AuthDecision: Equatable, Sendable {
-    /// Allow the exec; do NOT pin the result into the kernel AUTH cache. Used when no rule matched and the hash either was not
-    /// needed (no BINARY rules) or returned a clean miss against the BINARY map. Uncached because a later rule update could
-    /// turn this exec into a block on the next run; a kernel-cached ALLOW would skip our handler entirely.
+    /// Allow the exec; the result IS pinned into the kernel AUTH cache (see authResultIsCacheable). Used when no rule matched
+    /// and the hash either was not needed (no BINARY rules) or returned a clean miss against the BINARY map. The verdict is a
+    /// pure function of the stable identity tuple and the active snapshot, and ApplicationControlStore flushes the kernel
+    /// cache (es_clear_cache) on every snapshot swap, so a later rule update still takes effect on the next exec (#209).
     case allow
     /// Allow the exec and emit an application_control_undecided event with verdict=allow and the given reason. Fires only
     /// under auditOnly posture when the hash is unavailable.
@@ -92,6 +93,39 @@ enum AuthDecision: Equatable, Sendable {
     /// Deny the exec and emit application_control_undecided with verdict=deny. Fires only under failClosed posture when the
     /// hash is unavailable. Separate from .deny because there is no actual matched rule, only the posture's verdict.
     case denyWithUndecidedAudit(reason: UndecidedReason)
+}
+
+/// authResultIsCacheable reports whether a decided AUTH_EXEC verdict may be pinned into the kernel's per-(dev,inode,mtime)
+/// AUTH cache via `es_respond_auth_result(..., cache: true)`. Pure and ES-free so the no-EndpointSecurity test target can pin
+/// the contract (#209). ApplicationControlStore flushes the kernel cache on every snapshot swap (es_clear_cache via
+/// onSnapshotApplied), so caching is safe against a later rule CHANGE; the remaining hazard this guards is caching a verdict
+/// that a warm re-evaluation under the SAME snapshot could flip.
+///
+/// Only a FULLY RESOLVED `.allow` is cacheable. The `.allow` verdict is returned both for a clean walk that consulted the
+/// whole identity tuple AND for a fall-through where a lazily-resolved identity component was still cold: a deadline/read
+/// failure on the BINARY hash (under a fail-open posture), or a CERTIFICATE rule that silently missed because the leaf cert
+/// was not cached yet. Caching such a cold-miss allow would let the kernel short-circuit the very re-exec that would warm the
+/// cache and let the BINARY/CERTIFICATE block rule fire, so those stay uncached (issue #209). Concretely, `.allow` is
+/// cacheable only when the BINARY hash was computed or not needed AND (the snapshot has no CERTIFICATE rules OR the leaf cert
+/// was resolved). DENY and the undecided audit variants are never cached: DENY so removing a block rule takes effect on the
+/// next exec, undecided because the identity is not yet known.
+func authResultIsCacheable(
+    _ decision: AuthDecision,
+    hashOutcome: HashOutcome,
+    leafCertResolved: Bool,
+    snapshotHasCertificateRules: Bool
+) -> Bool {
+    guard case .allow = decision else {
+        return false
+    }
+    let hashResolved: Bool
+    switch hashOutcome {
+    case .computed, .notNeeded:
+        hashResolved = true
+    case .deadlineExceeded, .readFailed:
+        hashResolved = false
+    }
+    return hashResolved && (!snapshotHasCertificateRules || leafCertResolved)
 }
 
 /// decideAuthExec walks the precedence ladder against the active snapshot and returns the wire-level decision. Pure: no

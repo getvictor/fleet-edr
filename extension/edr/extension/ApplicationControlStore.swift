@@ -161,6 +161,15 @@ final class ApplicationControlStore {
     /// and any non-production embedding that doesn't emit events leave it nil; the gate behaviour does not depend on it.
     var resyncReporter: ((ApplicationControlResyncPayload) -> Void)?
 
+    /// onSnapshotApplied is invoked once after apply() accepts and swaps in a new snapshot (any acceptance: version advance,
+    /// epoch-only re-sync, or a policy_id retarget), so the AUTH_EXEC fast paths that cache ALLOW results at the kernel
+    /// (#209) can flush the stale cache. ESFSubscriber wires this to es_clear_cache(client): without it, a binary that was
+    /// ALLOW-cached under the prior ruleset would never re-consult the handler, so a newly added block rule would never fire.
+    /// Fired on every accepted swap rather than only on a version bump because epoch re-sync and retarget also mutate the
+    /// active rules. Optional so the no-EndpointSecurity test target and any non-enforcing embedding leave it nil; the gate
+    /// behaviour does not depend on it. Invoked outside the lock so the flush never extends the critical section.
+    var onSnapshotApplied: (() -> Void)?
+
     /// defaultStoragePath is the on-disk policy file the production singleton uses. Extracted from the init's default
     /// argument so Sonar S1075 (hardcoded URI in source) lands on the named constant rather than the function signature;
     /// the constant is still in one place and the doc-comment on `.shared` continues to discourage production callers
@@ -257,6 +266,10 @@ final class ApplicationControlStore {
             return
         }
         reportResyncIfRegressed(snapshot: snapshot, prior: prior)
+        // Flush the kernel AUTH cache now that the active ruleset changed: any ALLOW the AUTH_EXEC handler pinned into the
+        // kernel cache under `prior` (#209) must be re-decided against the new snapshot so an added block rule takes effect on
+        // the next exec. Fired here, on every accepted swap, outside the lock.
+        onSnapshotApplied?()
         // Same OSLogMessage / line_length pattern as in loadFromDisk above:
         // build the message as a plain String, then interpolate once.
         let summary = "applied app control snapshot: " +

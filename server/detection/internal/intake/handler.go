@@ -2,6 +2,7 @@ package intake
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -292,24 +294,66 @@ func partitionHeartbeats(events []api.Event) (toStore []api.Event, heartbeats []
 //     json.Unmarshal and surface as `invalid_json`, hiding the real cause. MaxBytesReader's distinguished error is
 //     what makes the 413-vs-400 split honest.
 //
-// HTTP 413 (RFC 9110 §15.5.14) is the canonical status; matches Elastic Fleet, Datadog, Splunk HEC, CrowdStrike.
+// When the agent sends `Content-Encoding: gzip` (#405) the MaxBytesReader cap above bounds the COMPRESSED bytes, which a
+// decompression bomb can still expand past the cap; readGzipBodyWithCap therefore caps the DECOMPRESSED stream as a second,
+// independent stage. The uncompressed path is kept for non-gzip callers (the demo-seed tool, any client that does not
+// compress), so no agent/server version lockstep is required. HTTP 413 (RFC 9110 §15.5.14) is the canonical over-cap status;
+// matches Elastic Fleet, Datadog, Splunk HEC, CrowdStrike.
 func (h *Handler) readBodyWithCap(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	ctx := r.Context()
 	if r.ContentLength > MaxIngestBodyBytes {
 		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
 		return nil, false
 	}
+	// Cap the bytes off the wire first. For a gzip body this is the bomb's first line of defence; readGzipBodyWithCap adds
+	// the decompressed cap as the second.
 	r.Body = http.MaxBytesReader(w, r.Body, MaxIngestBodyBytes)
+
+	if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
+		return h.readGzipBodyWithCap(w, r)
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err == nil {
 		return body, true
 	}
+	return h.writeBodyReadFailure(ctx, w, err, "read_body")
+}
+
+// readGzipBodyWithCap decodes a gzip-encoded request body and enforces the per-request cap on the DECOMPRESSED bytes. The
+// caller has already wrapped r.Body in a MaxBytesReader so the compressed input is bounded too; this guards the expansion a
+// small compressed body can produce (a decompression bomb). A malformed gzip stream (bad header or a truncated/corrupt body)
+// is reported as 400 invalid_gzip, distinct from 413 body_too_large, so the 413-vs-400 split stays honest.
+func (h *Handler) readGzipBodyWithCap(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	ctx := r.Context()
+	zr, err := gzip.NewReader(r.Body)
+	if err != nil {
+		return h.writeBodyReadFailure(ctx, w, err, "invalid_gzip")
+	}
+	defer func() { _ = zr.Close() }()
+	// Read one byte past the cap: an exactly-at-cap decompressed body still succeeds, while an over-cap body is detected
+	// without allocating the whole oversize payload.
+	body, err := io.ReadAll(io.LimitReader(zr, MaxIngestBodyBytes+1))
+	if err != nil {
+		return h.writeBodyReadFailure(ctx, w, err, "invalid_gzip")
+	}
+	if len(body) > MaxIngestBodyBytes {
+		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
+		return nil, false
+	}
+	return body, true
+}
+
+// writeBodyReadFailure maps a body-read error to the wire response and returns the (nil, false) the caller propagates. A
+// *http.MaxBytesError (the compressed-input cap was crossed mid-stream) is 413 body_too_large regardless of encoding; any
+// other error is the supplied 4xx errCode (`read_body` for a raw body, `invalid_gzip` for a malformed gzip stream).
+func (h *Handler) writeBodyReadFailure(ctx context.Context, w http.ResponseWriter, err error, malformedCode string) ([]byte, bool) {
 	var maxErr *http.MaxBytesError
 	if errors.As(err, &maxErr) {
 		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
 		return nil, false
 	}
-	writeErr(ctx, h.logger, w, http.StatusBadRequest, "read_body")
+	writeErr(ctx, h.logger, w, http.StatusBadRequest, malformedCode)
 	return nil, false
 }
 
