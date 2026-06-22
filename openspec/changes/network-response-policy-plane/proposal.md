@@ -6,7 +6,7 @@ The DNS-proxy resilience change (`resilient-network-enforcement`, #471) shipped 
 
 Carrying those requirements in the canonical spec ahead of the code made the spec claim behavior the product does not have. This change holds the deferred requirements as an in-flight proposal until the policy plane (blocklist + containment authoring, snapshot wire format, distribution, UI) and the bounded toggle land, so the canonical spec reflects only shipped behavior in the meantime.
 
-## What Changes
+## What changes
 
 - Re-declare the deferred network-response requirements as a pending change (no behavior change yet):
   - `extension-network-response`: default network action is forward (deny only on explicit match); a blocked DNS query is answered locally without upstream; host network containment is declarative and survives a provider restart.
