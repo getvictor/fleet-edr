@@ -34,6 +34,16 @@ describe("TopNav capability gating", () => {
     expect(screen.getByRole("link", { name: "Application control" })).toBeInTheDocument();
   });
 
+  it("hides the Detection tuning entry without detection_config.read", () => {
+    renderNav([PermissionAction.HostRead, PermissionAction.AlertRead]);
+    expect(screen.queryByRole("link", { name: "Detection tuning" })).not.toBeInTheDocument();
+  });
+
+  it("shows the Detection tuning entry with detection_config.read", () => {
+    renderNav([PermissionAction.HostRead, PermissionAction.DetectionConfigRead]);
+    expect(screen.getByRole("link", { name: "Detection tuning" })).toBeInTheDocument();
+  });
+
   it("always shows the ungated Coverage entry", () => {
     // Even an operator with an empty permission set sees Coverage (no gating action).
     renderNav([]);

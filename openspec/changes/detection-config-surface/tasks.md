@@ -32,14 +32,14 @@
 
 ## UI
 
-- [ ] `ui/src`: detection-config admin views (per-rule mode (alert/monitor/disabled) + severity + settings from the declared schema; exclusion list CRUD with match-type, value, reason, expiry, scope). Generic, schema-driven. Co-located `*.test.tsx`.
+- [x] `ui/src`: detection-config admin views (`components/DetectionConfig/`): per-rule mode (alert/monitor/disabled) + severity override rendered generically per rule from `fetchRuleDocs`, plus exclusion list with add (match-type, value, reason) + delete. Write affordances gate on `detection_config.write`; nav entry + route gate on `detection_config.read`. Co-located `DetectionConfig.test.tsx`. Host-group scope + the declared-settings-schema fields are deferred with the `ConfigKnob` generalization (the form grows from the same loop once a rule declares a schema).
 
 ## Tests + docs
 
 - [x] Store integration tests (real MySQL): CRUD, version bump, resolve-via-snapshot, invalid-input rejection (`store_test.go`). Pure snapshot tests: expiry, group scope, shared-rule, most-specific-wins mode/severity (`snapshot_test.go`).
 - [ ] Catalog tests: each migrated rule suppressed by a DB exclusion at global scope; disabled rule emits nothing but stays listed.
-- [x] `docs/detection-rules.md` (regenerated via `tools/gen-rule-docs`), `docs/operations.md` (new "Detection-rule tuning" section), `docs/install-server.md` (env rows removed + pointer): repointed from env vars to the new surface. OpenAPI for the new endpoints is a follow-up (Stage 4 / UI).
-- [ ] Spectrace markers for the new SHALL/MUST scenarios.
+- [x] `docs/detection-rules.md` (regenerated via `tools/gen-rule-docs`), `docs/operations.md` (new "Detection-rule tuning" section), `docs/install-server.md` (env rows removed + pointer): repointed from env vars to the new surface. OpenAPI for the five `/api/v1/detection-config/*` endpoints is now in `docs/api/openapi.yaml` (the `Detection tuning` tag + request/response/error schemas; embed copy refreshed via `go generate ./server/apidocs/`).
+- [x] Spectrace markers for the new SHALL/MUST scenarios (the two `web-ui/detection-configuration-admin-views/*` scenarios are marked in `DetectionConfig.test.tsx`; `spectrace check --strict` is green at 100%).
 
 ## Gates
 

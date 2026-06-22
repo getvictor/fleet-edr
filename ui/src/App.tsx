@@ -5,6 +5,7 @@ import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertList } from "./components/AlertList";
 import { AttackCoverage } from "./components/AttackCoverage";
 import { ApplicationControlRoutes } from "./components/ApplicationControl/ApplicationControlRoutes";
+import { DetectionConfig } from "./components/DetectionConfig/DetectionConfig";
 import { RuleDetail } from "./components/RuleDetail";
 import { SSOSettings } from "./components/SSOSettings/SSOSettings";
 import { ServiceAccounts } from "./components/ServiceAccounts/ServiceAccounts";
@@ -156,6 +157,14 @@ export function AuthedApp() {
             element={(
               <RequirePermission action={PermissionAction.AppControlRead} surface="Application control">
                 <ApplicationControlRoutes />
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/detection-config"
+            element={(
+              <RequirePermission action={PermissionAction.DetectionConfigRead} surface="Detection tuning">
+                <DetectionConfig />
               </RequirePermission>
             )}
           />

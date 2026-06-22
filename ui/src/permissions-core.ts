@@ -24,6 +24,8 @@ export const PermissionAction = {
   AlertReopen: "alert.reopen",
   HostKillProcess: "host.kill_process",
   AppControlRead: "application_control.read",
+  DetectionConfigRead: "detection_config.read",
+  DetectionConfigWrite: "detection_config.write",
   SSOManage: "sso.manage",
   ServiceAccountRead: "service_account.read",
   UserRead: "user.read",

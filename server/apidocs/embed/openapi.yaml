@@ -39,6 +39,13 @@ tags:
     description: Command queue (UI + Agent)
   - name: Admin
     description: Enrollment + policy management (UI, admin-only)
+  - name: Detection tuning
+    description: |
+      Detection-rule tuning the engine consults at evaluation time
+      (issue #459): per-host false-positive exclusions and per-rule
+      mode/severity. Reads require `detection_config.read` (admin +
+      senior analyst); writes require `detection_config.write` (admin).
+      Every mutation records an audit row carrying the actor + reason.
 
 paths:
   /livez:
@@ -625,6 +632,187 @@ paths:
               schema:
                 $ref: "#/components/schemas/RulesResponse"
 
+  /api/v1/detection-config/exclusions:
+    get:
+      tags: [Detection tuning]
+      summary: List detection exclusions
+      description: |
+        Returns every configured false-positive exclusion the detection
+        engine consults at evaluation time. A `host_group_id` of 0 is a
+        global exclusion (the only scope the Phase A surface accepts).
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Exclusion list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [exclusions]
+                properties:
+                  exclusions:
+                    # The key is always present, but the server marshals an empty Go slice as JSON null, so the array is nullable.
+                    type: [array, "null"]
+                    items:
+                      $ref: "#/components/schemas/DetectionExclusion"
+        "403":
+          description: Caller lacks detection_config.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+    post:
+      tags: [Detection tuning]
+      summary: Create a detection exclusion
+      description: |
+        Adds a false-positive exclusion for a rule. `reason` is required
+        and recorded on the audit row. Group-scoped entries are rejected
+        for now (use the global scope, `host_group_id` 0); the snapshot
+        reloads on this replica so the exclusion takes effect without a
+        restart.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDetectionExclusionRequest"
+      responses:
+        "201":
+          description: Exclusion created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionExclusion"
+        "400":
+          description: |
+            Invalid input: malformed JSON, a blank `reason`, an
+            unsupported `match_type`, or a non-global `host_group_id`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "403":
+          description: Caller lacks detection_config.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+
+  /api/v1/detection-config/exclusions/{id}:
+    delete:
+      tags: [Detection tuning]
+      summary: Delete a detection exclusion
+      description: |
+        Removes an exclusion by id. The audit `reason` rides a query
+        parameter because the DELETE carries no body; it is required.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: reason
+          in: query
+          required: true
+          description: Audit reason recorded on the deletion event.
+          schema: {type: string}
+      responses:
+        "204":
+          description: Exclusion deleted
+        "400":
+          description: Invalid id, or a blank `reason`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "403":
+          description: Caller lacks detection_config.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "404":
+          description: No exclusion with that id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+
+  /api/v1/detection-config/rule-settings:
+    get:
+      tags: [Detection tuning]
+      summary: List per-rule settings
+      description: |
+        Returns the per-(rule, scope) mode + optional severity override.
+        A rule with no row defaults to `alert` at its declared severity.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Rule-setting list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rule_settings]
+                properties:
+                  rule_settings:
+                    # The key is always present, but the server marshals an empty Go slice as JSON null, so the array is nullable.
+                    type: [array, "null"]
+                    items:
+                      $ref: "#/components/schemas/DetectionRuleSetting"
+        "403":
+          description: Caller lacks detection_config.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+    put:
+      tags: [Detection tuning]
+      summary: Upsert a per-rule setting
+      description: |
+        Sets the mode (`alert` / `monitor` / `disabled`) and optional
+        severity override for a rule. The `(rule_id, host_group_id)` pair
+        is the upsert key; `reason` is required and audited. A disabled
+        rule stays registered (it keeps appearing in `GET /api/rules`)
+        and simply emits nothing.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertDetectionRuleSettingRequest"
+      responses:
+        "200":
+          description: Setting upserted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionRuleSetting"
+        "400":
+          description: |
+            Invalid input: malformed JSON, a blank `reason`, an unknown
+            `mode`, or a non-global `host_group_id`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "403":
+          description: Caller lacks detection_config.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+
 components:
   securitySchemes:
     HostToken:
@@ -1014,3 +1202,127 @@ components:
         description:
           type: string
           example: "Comma-separated absolute plist paths the rule should silently accept."
+
+    DetectionExclusion:
+      type: object
+      required: [id, rule_id, match_type, value, host_group_id, reason, enabled, created_by, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        rule_id:
+          type: string
+          description: Rule the exclusion applies to. An empty string is a shared exclusion that applies to every rule.
+          example: suspicious_exec
+        match_type:
+          type: string
+          enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain]
+        value:
+          type: string
+          example: "*/claude/versions/*"
+        host_group_id:
+          type: integer
+          format: int64
+          description: 0 is the global scope (the only scope the Phase A surface accepts).
+          example: 0
+        reason: {type: string, example: "Claude Code CLI"}
+        enabled: {type: boolean}
+        expires_at:
+          type: string
+          format: date-time
+          description: Optional expiry; the resolver stops honouring the entry past this instant.
+        created_by:
+          type: string
+          description: Actor identifier recorded at creation (e.g. `user:42`).
+          example: "user:42"
+        created_at: {type: string, format: date-time}
+
+    DetectionRuleSetting:
+      type: object
+      required: [id, rule_id, host_group_id, mode, updated_by, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        rule_id: {type: string, example: suspicious_exec}
+        host_group_id:
+          type: integer
+          format: int64
+          example: 0
+        mode:
+          type: string
+          enum: [alert, monitor, disabled]
+          description: |
+            `alert` persists an alert (default); `monitor` evaluates the
+            rule but emits an observability signal instead of an alert;
+            `disabled` emits nothing (the rule stays registered).
+        severity_override:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Overrides the rule's declared severity when set.
+        settings:
+          type: object
+          additionalProperties: true
+          description: Reserved for per-rule typed settings; absent until a rule declares a config schema.
+        updated_by: {type: string, example: "user:42"}
+        updated_at: {type: string, format: date-time}
+
+    CreateDetectionExclusionRequest:
+      type: object
+      required: [rule_id, match_type, value, reason]
+      properties:
+        rule_id: {type: string, example: suspicious_exec}
+        match_type:
+          type: string
+          enum: [path_glob, parent_path_glob, team_id, signing_id, cdhash, sha256, command_substring, domain]
+        value: {type: string, example: "*/claude/versions/*"}
+        reason:
+          type: string
+          description: Required; recorded on the audit row.
+          example: "Claude Code CLI"
+        host_group_id:
+          type: integer
+          format: int64
+          default: 0
+          description: Optional; defaults to 0 (global). A non-global scope is rejected with a 400 until editable host groups land.
+        expires_at:
+          type: string
+          format: date-time
+          description: Optional expiry.
+
+    UpsertDetectionRuleSettingRequest:
+      type: object
+      required: [rule_id, mode, reason]
+      properties:
+        rule_id: {type: string, example: suspicious_exec}
+        mode:
+          type: string
+          enum: [alert, monitor, disabled]
+        reason:
+          type: string
+          description: Required; recorded on the audit row.
+          example: "too noisy in the pilot fleet"
+        severity_override:
+          type: string
+          enum: [low, medium, high, critical]
+          description: Optional; clears the override when omitted.
+        host_group_id:
+          type: integer
+          format: int64
+          default: 0
+          description: Optional; defaults to 0 (global). A non-global scope is rejected with a 400 until editable host groups land.
+
+    DetectionConfigError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable code the UI switches on.
+          enum:
+            - detection_config.invalid_json
+            - detection_config.read_body
+            - detection_config.invalid_input
+            - detection_config.invalid_id
+            - detection_config.not_found
+            - internal
+        message:
+          type: string
+          description: Human-readable detail.
+          example: "reason is required"

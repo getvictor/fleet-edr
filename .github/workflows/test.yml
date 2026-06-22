@@ -428,10 +428,11 @@ jobs:
       && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     environment: sonarcloud
-    # The scan (full-history checkout + Go/TS analysis upload) now runs ~9-10 min and was flapping against a 10-min cap:
-    # successful runs landed at 9:12 / 9:45 while any that drifted past 10:00 got killed mid-scan and posted no gate
-    # verdict, which blocks merge because the SonarCloud check is required. 15 gives headroom over the observed worst case.
-    timeout-minutes: 15
+    # The scan (full-history checkout + Go/TS analysis upload) usually runs ~9-12 min, but SonarCloud-side latency
+    # intermittently pushes it past the cap: runs that drift get killed at exactly the limit mid-scan and post no gate
+    # verdict, which blocks merge because the SonarCloud check is required. A 15-min cap still flapped (PR #479 saw two
+    # consecutive 15:00 kills), so 25 gives headroom over the slow-server case while still bounding a genuinely hung scan.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
