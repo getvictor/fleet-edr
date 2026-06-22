@@ -255,8 +255,17 @@ final class ESFSubscriber: Sendable {
         }
 
         let decision = decideAuthExec(tuple: tuple, snapshot: snapshot, hashOutcome: hashOutcome)
+        // Cacheability is computed here, where the lazily-resolved identity state is still in scope: a decided ALLOW is only
+        // pinned into the kernel cache when the BINARY hash was resolved and the leaf cert was warm (or no cert rules exist),
+        // so a cold-miss allow is not cached and the next exec re-evaluates once the hash/cert fill (#209).
+        let cacheable = authResultIsCacheable(
+            decision,
+            hashOutcome: hashOutcome,
+            leafCertResolved: tuple.leafCertSHA256 != nil,
+            snapshotHasCertificateRules: !snapshot.certificateRules.isEmpty
+        )
         dispatchAuthDecision(decision, context: AuthDispatchContext(
-            message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path
+            message: message, target: target, fileStat: fileStat, snapshot: snapshot, path: path, cacheable: cacheable
         ))
     }
 
@@ -269,17 +278,18 @@ final class ESFSubscriber: Sendable {
         let fileStat: stat
         let snapshot: ApplicationControlSnapshot
         let path: String
+        let cacheable: Bool
     }
 
     /// dispatchAuthDecision turns the pure-logic AuthDecision into the wire-level kernel response plus any event/notification
     /// emissions the decision implies. Extracted from handleAuthExec so the decision logic stays testable
     /// (AuthExecDeciderTests) and the wire dispatch stays one switch.
     private func dispatchAuthDecision(_ decision: AuthDecision, context: AuthDispatchContext) {
-        // A decided ALLOW is pinned into the kernel AUTH cache so a fork-exec storm of an allowed binary does not re-enter the
-        // handler; the undecided fallbacks and every DENY stay uncached. The flag is a pure function of the decision
-        // (authResultIsCacheable, unit-tested in the no-ES target) and the cache stays correct because the store flushes it on
-        // every snapshot swap (#209).
-        let cacheResult = authResultIsCacheable(decision)
+        // A fully resolved decided ALLOW is pinned into the kernel AUTH cache so a fork-exec storm of an allowed binary does
+        // not re-enter the handler; the undecided fallbacks, cold-miss allows, and every DENY stay uncached. The flag was
+        // computed in decideAndRespond (authResultIsCacheable, unit-tested in the no-ES target) where the hash/cert resolution
+        // state was in scope; the cache stays correct because the store flushes it on every snapshot swap (#209).
+        let cacheResult = context.cacheable
         switch decision {
         case .allow:
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
