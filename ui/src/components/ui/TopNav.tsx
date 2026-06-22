@@ -19,6 +19,7 @@ const LINKS: NavLink[] = [
   { to: "/", label: "Hosts", action: PermissionAction.HostRead },
   { to: "/alerts", label: "Alerts", action: PermissionAction.AlertRead },
   { to: "/app-control", label: "Application control", action: PermissionAction.AppControlRead },
+  { to: "/detection-config", label: "Detection tuning", action: PermissionAction.DetectionConfigRead },
   { to: "/coverage", label: "Coverage" },
 ];
 

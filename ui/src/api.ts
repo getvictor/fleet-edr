@@ -532,15 +532,16 @@ export interface DeleteAppControlRuleRequest {
   reason: string;
 }
 
-// appControlMutationEndpoint is the shared body of every state-changing app-control endpoint (POST + PATCH + DELETE). All
-// four endpoints have the same auth + reauth + typed-error handling; centralising here keeps the per-verb wrappers thin and
-// avoids the duplicate-function-body trap Sonar's S4144 fires on parallel implementations. Method-widening from
-// "PATCH" | "DELETE" to include "POST" is the only change versus the prior signature.
-async function appControlMutationEndpoint<T>(
-  method: "POST" | "PATCH" | "DELETE",
+// typedMutationEndpoint is the shared body of every state-changing endpoint that emits typed `{error, message}` 4xx codes (the
+// app-control + detection-config admin surfaces). All such endpoints have the same auth + reauth + typed-error handling;
+// centralising here keeps the per-domain wrappers thin and avoids the duplicate-function-body trap Sonar's S4144 fires on parallel
+// implementations. makeError builds the domain's typed error from the wire code/message/status.
+async function typedMutationEndpoint<T>(
+  method: "POST" | "PATCH" | "PUT" | "DELETE",
   path: string,
   body: unknown,
   parseResponse: (res: Response) => Promise<T>,
+  makeError: (code: string, message: string, status: number) => Error,
 ): Promise<T> {
   assertSafeAPIPath(path);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -562,11 +563,22 @@ async function appControlMutationEndpoint<T>(
   if (!res.ok) {
     const errBody = (await res.clone().json().catch((): null => null)) as AppControlErrorBody | null;
     if (errBody?.error) {
-      throw new AppControlApiError(errBody.error, errBody.message ?? errBody.error, res.status);
+      throw makeError(errBody.error, errBody.message ?? errBody.error, res.status);
     }
     throw new Error(`API error: ${String(res.status)} ${res.statusText}`);
   }
   return parseResponse(res);
+}
+
+// appControlMutationEndpoint adapts typedMutationEndpoint to the app-control surface's AppControlApiError.
+async function appControlMutationEndpoint<T>(
+  method: "POST" | "PATCH" | "DELETE",
+  path: string,
+  body: unknown,
+  parseResponse: (res: Response) => Promise<T>,
+): Promise<T> {
+  return typedMutationEndpoint(method, path, body, parseResponse,
+    (code, message, status) => new AppControlApiError(code, message, status));
 }
 
 export async function updateAppControlRule(
@@ -780,4 +792,125 @@ export async function setUserRole(id: number, role: string): Promise<AdminUser> 
 
 export async function setUserStatus(id: number, status: UserStatus): Promise<AdminUser> {
   return fetchJSON<AdminUser>(`/settings/users/${String(id)}/status`, { method: "PUT", body: JSON.stringify({ status }) });
+}
+
+// --- Detection configuration endpoints (issue #459) ---
+//
+// Mirrors the REST surface mounted at /api/v1/detection-config/* by
+// server/rules/internal/operator/detectionconfig_handler.go: per-host false-positive
+// exclusions and per-rule mode/severity the detection engine consults at evaluation
+// time. The handler emits the same typed `{error, message}` 4xx shape as app-control.
+
+// DetectionConfigApiError carries the typed `error` code the detection-config handler
+// writes on its 4xx responses (e.g. detection_config.invalid_input). Callers switch on
+// `.code` to surface a precise inline message.
+export class DetectionConfigApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "DetectionConfigApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+// DetectionExclusion mirrors a row in detection_exclusions. host_group_id is 0 for a
+// global entry (the only scope the Phase A handler accepts).
+export interface DetectionExclusion {
+  id: number;
+  rule_id: string;
+  match_type: string;
+  value: string;
+  host_group_id: number;
+  reason: string;
+  enabled: boolean;
+  expires_at?: string;
+  created_by: string;
+  created_at: string;
+}
+
+// DetectionRuleSetting mirrors a row in detection_rule_settings: the per-(rule, scope)
+// mode + optional severity override.
+export interface DetectionRuleSetting {
+  id: number;
+  rule_id: string;
+  host_group_id: number;
+  mode: string;
+  severity_override?: string;
+  updated_by: string;
+  updated_at: string;
+}
+
+// CreateDetectionExclusionRequest is the POST body. host_group_id defaults to 0 (global);
+// reason is required for the audit row.
+export interface CreateDetectionExclusionRequest {
+  rule_id: string;
+  match_type: string;
+  value: string;
+  reason: string;
+  host_group_id?: number;
+  expires_at?: string;
+}
+
+// UpsertDetectionRuleSettingRequest is the PUT body for a per-rule setting.
+export interface UpsertDetectionRuleSettingRequest {
+  rule_id: string;
+  mode: string;
+  reason: string;
+  severity_override?: string;
+  host_group_id?: number;
+}
+
+function detectionConfigMutationEndpoint<T>(
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  body: unknown,
+  parseResponse: (res: Response) => Promise<T>,
+): Promise<T> {
+  return typedMutationEndpoint(method, path, body, parseResponse,
+    (code, message, status) => new DetectionConfigApiError(code, message, status));
+}
+
+export async function listDetectionExclusions(): Promise<DetectionExclusion[]> {
+  // The server marshals an empty Go slice as JSON `null` (not `[]`), so coalesce to keep callers' `.length` / `.map` safe.
+  const body = await fetchJSON<{ exclusions: DetectionExclusion[] | null }>("/v1/detection-config/exclusions");
+  return body.exclusions ?? [];
+}
+
+export async function listDetectionRuleSettings(): Promise<DetectionRuleSetting[]> {
+  const body = await fetchJSON<{ rule_settings: DetectionRuleSetting[] | null }>("/v1/detection-config/rule-settings");
+  return body.rule_settings ?? [];
+}
+
+export async function createDetectionExclusion(
+  req: CreateDetectionExclusionRequest,
+): Promise<DetectionExclusion> {
+  return detectionConfigMutationEndpoint(
+    "POST",
+    "/v1/detection-config/exclusions",
+    req,
+    (res) => res.json() as Promise<DetectionExclusion>,
+  );
+}
+
+// deleteDetectionExclusion carries the audit reason as a query parameter (the DELETE has no body).
+export async function deleteDetectionExclusion(id: number, reason: string): Promise<void> {
+  await detectionConfigMutationEndpoint(
+    "DELETE",
+    `/v1/detection-config/exclusions/${String(id)}?reason=${encodeURIComponent(reason)}`,
+    undefined,
+    () => Promise.resolve(undefined),
+  );
+}
+
+export async function upsertDetectionRuleSetting(
+  req: UpsertDetectionRuleSettingRequest,
+): Promise<DetectionRuleSetting> {
+  return detectionConfigMutationEndpoint(
+    "PUT",
+    "/v1/detection-config/rule-settings",
+    req,
+    (res) => res.json() as Promise<DetectionRuleSetting>,
+  );
 }
