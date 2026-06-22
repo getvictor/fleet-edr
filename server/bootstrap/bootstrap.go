@@ -18,9 +18,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fleetdm/edr/internal/logging"
 	"github.com/fleetdm/edr/internal/observability"
 	"github.com/fleetdm/edr/server/config"
-	"github.com/fleetdm/edr/server/logging"
 )
 
 // otelFlushTimeout caps the OTel exporter flush so a dead collector cannot
