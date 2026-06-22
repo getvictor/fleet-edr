@@ -11,13 +11,13 @@
 
 ## #405 gzip request compression
 
-- [ ] Agent gzips the body + sets `Content-Encoding: gzip` in `uploader.doUpload`.
-- [ ] Server decompresses on `Content-Encoding: gzip`, caps the decompressed stream, rejects corrupt gzip distinctly; plaintext path preserved.
-- [ ] Unit tests: gzip accepted, plaintext accepted, decompression bomb -> 413, corrupt gzip -> error.
-- [ ] VM QA: agent uploads are gzip on the wire and ingest succeeds.
+- [x] Agent gzips the body + sets `Content-Encoding: gzip` in `uploader.doUpload`.
+- [x] Server decompresses on `Content-Encoding: gzip`, caps the decompressed stream, rejects corrupt gzip distinctly; plaintext path preserved.
+- [x] Unit tests: gzip accepted, plaintext accepted, decompression bomb -> 413, corrupt gzip -> error.
+- [x] VM QA: agent uploads are gzip on the wire and ingest succeeds (edr-dev, 2026-06-22: real agent end-to-end + curl A/B).
 
 ## Gates
 
-- [ ] `go test ./agent/uploader/... ./server/detection/...`
-- [ ] Swift logic tests (EDRExtensionLogicTests).
-- [ ] `task lint:go`, `task lint:dashes`, `openspec validate --all --strict`.
+- [x] `go test ./agent/uploader/... ./server/detection/...`
+- [x] Swift logic tests (EDRExtensionLogicTests).
+- [x] `task lint:go`, `task lint:dashes`, `openspec validate --all --strict`.

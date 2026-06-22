@@ -138,12 +138,17 @@ final class ESFSubscriber: Sendable {
     }
 
     func stop() {
+        // Clear the snapshot-applied hook before tearing down the client: the closure calls es_clear_cache(client), so a
+        // snapshot apply arriving after es_delete_client would dereference a freed client (use-after-free). Clearing it first,
+        // and nil-ing client below, closes that window for tests and any future pre-exit shutdown.
+        ApplicationControlStore.shared.onSnapshotApplied = nil
         es_unsubscribe_all(client)
         // Drain in-flight AUTH decisions before deleting the client: each holds a retained message it must still respond to
         // and release, and es_respond on a deleted client is undefined. Operations are deadline-bounded, so this returns
         // promptly (#298).
         authDecisionQueue.waitUntilAllOperationsAreFinished()
         es_delete_client(client)
+        client = nil
     }
 
     private func handleMessage(_ message: UnsafePointer<es_message_t>) {
