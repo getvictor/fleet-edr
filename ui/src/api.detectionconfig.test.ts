@@ -79,13 +79,18 @@ describe("detection-config API client", () => {
     expect(init.headers).toMatchObject(expectedCsrf);
   });
 
-  it("deleteDetectionExclusion carries the reason as a query parameter on a DELETE", async () => {
+  // The reason rides the URL path, which assertSafeAPIPath validates against a strict whitelist. encodeURIComponent leaves
+  // `!'()*` literal, and those are NOT in the whitelist, so a reason containing them must be fully percent-encoded or the
+  // request throws "unsafe API path". Use a reason with parentheses + bang to pin that the client escapes them.
+  it("deleteDetectionExclusion fully percent-encodes the reason so special characters can't trip path validation", async () => {
     const mock = stubFetch({}, 204);
-    await deleteDetectionExclusion(5, "resolved & done");
+    await deleteDetectionExclusion(5, "resolved (fixed!) & done");
     const [target, init] = mock.mock.calls[0] as [URL, RequestInit];
     const url = target.toString();
     expect(url).toContain("/api/v1/detection-config/exclusions/5");
-    expect(url).toContain(`reason=${encodeURIComponent("resolved & done")}`);
+    // No literal ( ) ! survive into the query string.
+    expect(url).not.toMatch(/[!()]/);
+    expect(url).toContain("reason=resolved%20%28fixed%21%29%20%26%20done");
     expect(init.method).toBe("DELETE");
   });
 

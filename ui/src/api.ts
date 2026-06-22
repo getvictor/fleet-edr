@@ -451,11 +451,11 @@ export class AppControlApiError extends Error {
   }
 }
 
-// AppControlErrorBody is the wire shape every typed 4xx response from
-// the app-control handler carries. Narrow on purpose so unrelated 4xxs
-// (a stray HTML error page from a misconfigured proxy, e.g.) fall
-// through to the plain `API error` path.
-interface AppControlErrorBody {
+// TypedErrorBody is the wire shape every typed 4xx response carries on the
+// shared mutation surfaces (app-control + detection-config). Narrow on purpose
+// so unrelated 4xxs (a stray HTML error page from a misconfigured proxy, e.g.)
+// fall through to the plain `API error` path.
+interface TypedErrorBody {
   error?: string;
   message?: string;
 }
@@ -559,9 +559,14 @@ async function typedMutationEndpoint<T>(
   if (res.status === HTTP_STATUS_FORBIDDEN) {
     const reauth = await readReauthChallenge(res);
     if (reauth) throw new ReauthRequiredError(reauth);
+    // Mirror fetchJSON: a 403 carrying the authz-reason header is a genuine role-based denial, so signal the app to refresh a
+    // possibly-stale permission set. CSRF/other 403s lack the header and must not trigger a spurious /api/session refetch.
+    if (res.headers.get(AUTHZ_REASON_HEADER)) {
+      forbiddenHandler?.();
+    }
   }
   if (!res.ok) {
-    const errBody = (await res.clone().json().catch((): null => null)) as AppControlErrorBody | null;
+    const errBody = (await res.clone().json().catch((): null => null)) as TypedErrorBody | null;
     if (errBody?.error) {
       throw makeError(errBody.error, errBody.message ?? errBody.error, res.status);
     }
@@ -894,11 +899,19 @@ export async function createDetectionExclusion(
   );
 }
 
+// encodeQueryValue fully percent-encodes a query value. encodeURIComponent leaves `!'()*` literal, which assertSafeAPIPath's
+// whitelist rejects, so those are escaped to their %XX hex form too. Used for audit reasons that ride the URL on body-less DELETEs.
+function encodeQueryValue(value: string): string {
+  const HEX_RADIX = 16;
+  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(HEX_RADIX).toUpperCase()}`);
+}
+
 // deleteDetectionExclusion carries the audit reason as a query parameter (the DELETE has no body).
 export async function deleteDetectionExclusion(id: number, reason: string): Promise<void> {
+  const safeReason = encodeQueryValue(reason);
   await detectionConfigMutationEndpoint(
     "DELETE",
-    `/v1/detection-config/exclusions/${String(id)}?reason=${encodeURIComponent(reason)}`,
+    `/v1/detection-config/exclusions/${String(id)}?reason=${safeReason}`,
     undefined,
     () => Promise.resolve(undefined),
   );

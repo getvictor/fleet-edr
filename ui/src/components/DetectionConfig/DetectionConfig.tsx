@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
@@ -62,6 +62,12 @@ export function DetectionConfig() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // mutating serializes write actions: while a create/delete/upsert is in flight (and its reload settles) the form controls and
+  // row buttons disable, so a double-click can't double-submit and a second rule-mode change can't race a stale peer field in.
+  const [mutating, setMutating] = useState(false);
+  // mountedRef gates the state setters in reload() so a response landing after unmount doesn't set state on a dead component.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   // Add-exclusion form state.
   const [formRuleID, setFormRuleID] = useState("");
@@ -75,6 +81,7 @@ export function DetectionConfig() {
       fetchRuleDocs(),
       listDetectionRuleSettings(),
     ]);
+    if (!mountedRef.current) return;
     setExclusions(excl);
     setRules(ruleDocs);
     setSettings(ruleSettings);
@@ -96,38 +103,45 @@ export function DetectionConfig() {
 
   const runMutation = useCallback(async (op: () => Promise<unknown>): Promise<void> => {
     setActionError(null);
+    setMutating(true);
     try {
       await op();
       await reload();
     } catch (err: unknown) {
       setActionError(errMessage(err));
+    } finally {
+      if (mountedRef.current) setMutating(false);
     }
   }, [reload]);
 
   const handleAddExclusion = useCallback(() => {
-    void runMutation(async () => {
+    // Trim before sending: the UI validates on trimmed input, so persisting the raw string would let stray
+    // leading/trailing whitespace into glob/substring matches and the audit reason. runMutation never rejects
+    // (it captures errors into actionError), so the trailing catch is a belt-and-braces no-op for the linters.
+    runMutation(async () => {
       await createDetectionExclusion({
         rule_id: formRuleID,
         match_type: formMatchType,
-        value: formValue,
-        reason: formReason,
+        value: formValue.trim(),
+        reason: formReason.trim(),
       });
       setFormValue("");
       setFormReason("");
-    });
+    }).catch(() => { /* surfaced via actionError */ });
   }, [runMutation, formRuleID, formMatchType, formValue, formReason]);
 
   const handleDelete = useCallback((id: number) => {
-    void runMutation(() => deleteDetectionExclusion(id, "removed via admin UI"));
+    runMutation(() => deleteDetectionExclusion(id, "removed via admin UI"))
+      .catch(() => { /* surfaced via actionError */ });
   }, [runMutation]);
 
   const handleSettingChange = useCallback((ruleID: string, mode: string, severity: string) => {
-    void runMutation(() => upsertDetectionRuleSetting({
+    runMutation(() => upsertDetectionRuleSetting({
       rule_id: ruleID,
       mode,
       severity_override: severity || undefined,
       reason: "updated via admin UI",
-    }));
+    })).catch(() => { /* surfaced via actionError */ });
   }, [runMutation]);
 
   const addDisabled = !formRuleID || !formValue.trim() || !formReason.trim();
@@ -159,7 +173,7 @@ export function DetectionConfig() {
                   placeholder="*/claude/versions/*" />
                 <Input label="Reason" id="dc-reason" value={formReason} onChange={(e) => { setFormReason(e.target.value); }}
                   placeholder="why this is benign" />
-                <Button variant="primary" disabled={addDisabled} onClick={handleAddExclusion}>Add exclusion</Button>
+                <Button variant="primary" disabled={addDisabled || mutating} onClick={handleAddExclusion}>Add exclusion</Button>
               </div>
             )}
             {exclusions.length === 0 ? (
@@ -186,7 +200,7 @@ export function DetectionConfig() {
                       <td>{ex.created_by}</td>
                       {canWrite && (
                         <td>
-                          <Button variant="alert" onClick={() => { handleDelete(ex.id); }}
+                          <Button variant="alert" disabled={mutating} onClick={() => { handleDelete(ex.id); }}
                             title="Delete this exclusion">Delete</Button>
                         </td>
                       )}
@@ -216,14 +230,14 @@ export function DetectionConfig() {
                     <tr key={r.id}>
                       <td>{r.doc.title}<br /><code className="detection-config__rule-id">{r.id}</code></td>
                       <td>
-                        <Select label="" id={`dc-mode-${r.id}`} value={mode} disabled={!canWrite}
+                        <Select label="" id={`dc-mode-${r.id}`} value={mode} disabled={!canWrite || mutating}
                           aria-label={`mode for ${r.id}`}
                           onChange={(e) => { handleSettingChange(r.id, e.target.value, severity); }}>
                           {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
                         </Select>
                       </td>
                       <td>
-                        <Select label="" id={`dc-sev-${r.id}`} value={severity} disabled={!canWrite}
+                        <Select label="" id={`dc-sev-${r.id}`} value={severity} disabled={!canWrite || mutating}
                           aria-label={`severity override for ${r.id}`}
                           onChange={(e) => { handleSettingChange(r.id, mode, e.target.value); }}>
                           {SEVERITIES.map((s) => <option key={s || "none"} value={s}>{s || "(none)"}</option>)}

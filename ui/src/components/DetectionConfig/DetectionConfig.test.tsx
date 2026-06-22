@@ -59,7 +59,9 @@ function stubReads(opts: {
 }
 
 // renderPage mounts the component under a permission set. Default grants write so affordances render; pass [read] for read-only.
-function renderPage(permissions: string[] = [PermissionAction.DetectionConfigRead, PermissionAction.DetectionConfigWrite]) {
+function renderPage(
+  permissions: string[] = [PermissionAction.DetectionConfigRead, PermissionAction.DetectionConfigWrite],
+) {
   return render(
     <MemoryRouter>
       <PermissionsProvider permissions={permissions}>
@@ -181,6 +183,27 @@ describe("DetectionConfig", () => {
         severity_override: "critical",
         reason: "updated via admin UI",
       });
+    });
+  });
+
+  it("disables the delete button while a mutation is in flight, then re-enables it", async () => {
+    stubReads({ exclusions: [makeExclusion()] });
+    // A deferred delete so the mutation stays in flight until we resolve it, letting us observe the disabled window.
+    let resolveDelete: () => void = () => undefined;
+    vi.spyOn(api, "deleteDetectionExclusion").mockReturnValue(
+      new Promise<void>((res) => { resolveDelete = res; }),
+    );
+    renderPage();
+    await waitFor(() => { expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument(); });
+
+    const del = screen.getByRole("button", { name: "Delete" });
+    expect(del).not.toBeDisabled();
+    fireEvent.click(del);
+    await waitFor(() => { expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled(); });
+
+    resolveDelete();
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Delete" })).not.toBeDisabled();
     });
   });
 
