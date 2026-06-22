@@ -39,7 +39,7 @@ The system SHALL emit a `btm_launch_item_add` event when launchd registers a lau
 
 ### Requirement: Sensitive-path file-modification capture
 
-The system SHALL emit a write-mode `open` event when a process creates or writes a file under a fixed set of sensitive target paths (currently `/etc/sudoers` and any direct child of `/etc/sudoers.d/`), carrying the writing process PID, the file path, and write-mode access flags. The system SHALL NOT forward a broad stream of file opens: collection is scoped at the source to those sensitive target paths via a dedicated Endpoint Security client with inverted target-path muting, kept separate from the process-authorization client so the scoping never affects exec authorization (ADR-0008). Writes to paths outside the sensitive set MUST NOT be collected.
+The system SHALL emit a write-mode `open` event when a process creates or writes a file under a fixed set of sensitive target paths (currently `/etc/sudoers` and any direct child of `/etc/sudoers.d/`, and any file under the system LaunchDaemon/LaunchAgent directories `/Library/LaunchDaemons/` and `/Library/LaunchAgents/` and the per-user `~/Library/LaunchAgents/` directory of the active console user), carrying the writing process PID, the file path, and write-mode access flags. The system SHALL NOT forward a broad stream of file opens: collection is scoped at the source to those sensitive target paths via a dedicated Endpoint Security client with inverted target-path muting, kept separate from the process-authorization client so the scoping never affects exec authorization (ADR-0008). Writes to paths outside the sensitive set MUST NOT be collected.
 
 #### Scenario: A write to a sensitive path is captured
 
@@ -47,6 +47,13 @@ The system SHALL emit a write-mode `open` event when a process creates or writes
 - **WHEN** a process writes to `/etc/sudoers` (or a direct child of `/etc/sudoers.d/`)
 - **THEN** a write-mode `open` event is emitted carrying the writing process PID, the file path, and the write-mode access flags
 - **AND** the event reaches the server and is available to the detection pipeline
+
+#### Scenario: A LaunchDaemon plist write is captured for provenance
+
+- **GIVEN** the extension is running with the sensitive-path file-modification client active
+- **WHEN** a process writes a plist under `/Library/LaunchDaemons/` or `/Library/LaunchAgents/`
+- **THEN** a write-mode `open` event is emitted carrying the writing process PID, the plist path, and the write-mode access flags
+- **AND** the event reaches the server so the detection pipeline can correlate the writer to the LaunchDaemon registration
 
 ### Requirement: Process exec authorization
 
@@ -82,6 +89,8 @@ The system SHALL emit a `network_connect` event for every outbound socket flow s
 
 When DNS proxying is enabled, the system SHALL emit a `dns_query` event for each DNS query seen by the DNS proxy and a follow-on `dns_query` event carrying the resolved addresses when the upstream resolver replies. DNS proxying is opt-in (see the host-app extension manager capability), so a host with the DNS proxy disabled emits no `dns_query` events at all and that absence is not a contract violation. The `dns_query` payload SHALL additionally carry the querying process's kernel PID generation (`pidversion`, read from the flow's audit token) when it is available. The `pidversion` field is optional: when the flow carries no usable audit token the event is still emitted without it. Capture failures MUST NOT prevent the query or its response from being forwarded to the originally-intended resolver.
 
+Because an enabled DNS proxy is the sole resolver for every claimed flow, forwarding itself MUST be resilient: each upstream forward SHALL be bounded by a deadline, and on forward failure or deadline expiry for a query that no active enforcement policy blocks the proxy SHALL fail open by releasing the flow cleanly rather than leaving the client's resolution hung. The proxy MUST NOT pin a flow indefinitely waiting on an upstream that never answers. Telemetry remains strictly best-effort and never gates forwarding or the fail-open path. Health-driven recovery from sustained forwarding failure is specified by the network-response capability.
+
 #### Scenario: An application resolves a hostname over UDP
 
 - **GIVEN** DNS proxying is enabled
@@ -97,6 +106,14 @@ When DNS proxying is enabled, the system SHALL emit a `dns_query` event for each
 - **WHEN** an application sends a DNS query whose payload the proxy cannot parse for telemetry
 - **THEN** the system forwards the query to the originally-intended resolver
 - **AND** the system does not emit a `dns_query` event for the unparsed payload
+
+#### Scenario: An upstream that never replies does not hang resolution forever
+
+- **GIVEN** DNS proxying is enabled and no active enforcement policy blocks the query
+- **WHEN** an application sends a DNS query and the upstream resolver does not answer within the forward deadline
+- **THEN** the proxy releases the flow rather than holding it open indefinitely
+- **AND** the client's resolution is free to proceed (retry or roll over to another resolver) instead of being pinned by the proxy
+- **AND** any telemetry for the query is best-effort and its absence is not a contract violation
 
 ### Requirement: Canonical event envelope
 

@@ -119,15 +119,29 @@ The system SHALL exclude `exec` events flagged as snapshot from rule evaluation.
 
 ### Requirement: Operator toggling of individual rules
 
-The system SHALL allow an operator to disable individual rules at startup through configuration. A disabled rule MUST NOT evaluate against any batch and MUST NOT produce alerts until it is re-enabled.
+The system SHALL allow an operator to set an individual rule's mode to one of `alert`, `monitor`, or `disabled` through the durable detection-configuration surface (persisted in MySQL, edited via the admin API/UI), NOT through boot-time environment configuration. The mode MAY be set at global scope or scoped to a host group, and resolves per host most-specific-wins (a host-group setting overrides the global setting for hosts in that group). A rule that resolves to `disabled` for a host MUST NOT produce alerts for that host. A rule that resolves to `monitor` for a host MUST evaluate but MUST NOT persist an alert, emitting an observability signal instead so the would-be detection is visible without alerting. A rule that resolves to `alert` produces alerts as normal. A mode change MUST take effect without a server restart. A rule whose global mode is `disabled` MUST remain visible in the rule catalog surface (`GET /api/rules`) with its mode indicated rather than being removed from the catalog.
 
 #### Scenario: An operator disables a noisy rule for their environment
 
-- **GIVEN** a running engine where one rule has been disabled by configuration
+- **GIVEN** a running engine and an operator who sets a rule's global mode to `disabled` through the detection-configuration API
 - **WHEN** a batch arrives that would otherwise satisfy that rule
-- **THEN** the disabled rule does not evaluate
-- **AND** no alerts are produced for that rule
+- **THEN** no alerts are produced for that rule
 - **AND** the remaining rules continue to evaluate normally
+- **AND** the disabled rule is still listed by `GET /api/rules`, marked disabled
+- **AND** the change took effect without a server restart
+
+#### Scenario: A rule set to monitor evaluates without alerting
+
+- **GIVEN** a rule whose global mode is set to `monitor`
+- **WHEN** a batch arrives that satisfies the rule for a host
+- **THEN** no alert is persisted for that rule and host
+- **AND** an observability signal records that the rule matched
+
+#### Scenario: An operator re-enables a previously disabled rule
+
+- **GIVEN** a rule whose global mode was previously set to `disabled`
+- **WHEN** the operator sets its mode back to `alert` through the API
+- **THEN** subsequent batches that satisfy the rule produce alerts again without a server restart
 
 ### Requirement: DNS-correlated C2 beacon detection
 
@@ -157,3 +171,114 @@ A firing alert SHALL cite the `dns_query` and `network_connect` events that comp
 - **GIVEN** a process exec'd from a temporary path that issued a `dns_query` resolving to `203.0.113.10`
 - **WHEN** the same process emits a `network_connect` to `198.51.100.7`, an address that appears in none of its `dns_query` `response_addresses`
 - **THEN** the engine produces no `dns_c2_beacon` finding, because the resolve-then-connect join is not satisfied
+
+### Requirement: Path exclusions match across the macOS /private firmlink boundary
+
+A detection exclusion of match type `path_glob` or `parent_path_glob` SHALL suppress a matching finding regardless of whether the candidate path is expressed in the public form (`/etc`, `/var`, `/tmp`) or the `/private`-prefixed firmlink form, because macOS resolves the two as the same file and ESF may report either. The operator-entered glob is matched against both macOS forms of the concrete candidate path; the glob itself MUST NOT be rewritten (a glob such as `*/claude/versions/*` cannot be canonicalized), and a candidate path under none of the aliasable prefixes is matched once with no extra cost.
+
+#### Scenario: An exclusion matches the aliased form of the candidate path
+
+- **GIVEN** a `path_glob` exclusion an operator wrote as `/etc/sudoers`
+- **WHEN** a rule evaluates a candidate path that ESF reported as `/private/etc/sudoers`
+- **THEN** the exclusion suppresses the finding
+- **AND** the reverse holds: an exclusion written as `/private/etc/*` suppresses a candidate reported as `/etc/sudoers`
+
+### Requirement: Detection configuration converges across replicas
+
+Each server replica SHALL converge its in-memory detection-config snapshot with mutations made on other replicas without a restart. A mutation bumps a shared monotonic version counter; every replica periodically polls that counter and reloads its snapshot when the stored version has advanced past the loaded snapshot's, so an exclusion or rule-mode change made through one replica takes effect on every replica within the refresh interval. The poll reads only the single-row version counter, so a steady state with no configuration churn costs one indexed read per interval per replica.
+
+#### Scenario: A replica adopts a configuration change made on another replica
+
+- **GIVEN** two replicas sharing one database, each holding a loaded detection-config snapshot that excludes nothing
+- **WHEN** an operator creates an exclusion through one replica
+- **THEN** the other replica reloads its snapshot on a subsequent refresh tick
+- **AND** begins suppressing the matching finding without a restart and without a mutation of its own
+
+### Requirement: Durable detection configuration surface
+
+The system SHALL persist detection-rule configuration (per-rule mode, optional severity override, per-rule settings, and false-positive exclusions) as durable state in MySQL, edited through the authenticated admin API and UI. Detection configuration MUST NOT be sourced from boot-time environment variables. Every mutation MUST pass through the RBAC authorization chokepoint and record an audit entry naming the actor. Each configuration record MAY carry a host-group scope (or be global); records also support an optional expiration after which they no longer apply. A configuration change MUST become effective for subsequent evaluations without a server restart.
+
+#### Scenario: An operator adds a false-positive exclusion without restarting
+
+- **GIVEN** a rule that is currently producing a benign finding for a known-good process
+- **WHEN** an operator adds an exclusion for that rule (by a typed match such as a parent-path glob or a signing team ID) through the detection-configuration API
+- **THEN** the exclusion is persisted in MySQL with the actor recorded in the audit log
+- **AND** subsequent batches no longer produce that finding, without a server restart
+
+#### Scenario: An expired exclusion stops applying
+
+- **GIVEN** an exclusion whose expiration timestamp is in the past
+- **WHEN** the engine evaluates a batch that the exclusion would otherwise suppress
+- **THEN** the exclusion does not apply and the finding is produced
+
+### Requirement: Per-host resolution of exclusions and rule settings
+
+The system SHALL resolve detection exclusions and per-rule settings per host at evaluation time. Before a rule produces a finding for a given host, the engine MUST suppress that finding when an exclusion of the relevant match type applies to the host, where an exclusion applies if its scope is global OR a host group the host belongs to, and it has not expired. An exclusion scoped to a host group MUST NOT suppress findings for hosts outside that group. Per-rule mode and severity override MUST resolve most-specific-wins (host-group scope overrides global scope) for the finding's host.
+
+#### Scenario: A host-group-scoped exclusion does not affect other hosts
+
+- **GIVEN** an exclusion for a rule scoped to a specific host group
+- **WHEN** the rule's pattern is satisfied on a host that is NOT a member of that group
+- **THEN** the finding is still produced for that host
+
+#### Scenario: A global exclusion suppresses the finding on every host
+
+- **GIVEN** an exclusion for a rule at global scope
+- **WHEN** the rule's pattern is satisfied on any host
+- **THEN** the finding is suppressed for that host
+
+### Requirement: Process-optional alert provenance correlation
+
+For an alert that is not attributed to a single process (a process-optional finding such as a LaunchDaemon registration, persisted with `process_id = 0`), the system SHALL, when serving the alert detail, attempt to correlate the alert to the processes genuinely related to the detected artifact and return them as a set of related processes, each tagged with its role. Correlation MUST be performed at read time (alert-detail compose), MUST NOT alter the alert's persisted `process_id` or dedup identity, and MUST degrade gracefully to an empty set when no correlation is found.
+
+For a LaunchDaemon/LaunchAgent registration finding the system SHALL derive related processes from the finding's linked registration event by:
+
+- correlating the registered plist path to the nearest-preceding write-mode `open` event on that path for the same host, resolving the writing PID to a process and tagging it `artifact_writer`; and
+- correlating the registered executable path to that executable's own process runs on the host, tagging them `persisted_executable`.
+
+#### Scenario: Writer is correlated to a LaunchDaemon registration
+
+- **GIVEN** a process-optional `privilege_launchd_plist_write` alert whose plist path was written by an observed process captured as a write-mode `open` event
+- **WHEN** the operator requests the alert detail
+- **THEN** the response includes the writing process among the related processes tagged `artifact_writer`
+
+#### Scenario: No provenance is available
+
+- **GIVEN** a process-optional alert whose plist was not captured as a write-mode `open` event (for example an atomic-rename write) and whose registered executable has no observed process run
+- **WHEN** the operator requests the alert detail
+- **THEN** the response returns an empty related-process set rather than an error
+- **AND** the alert's persisted `process_id` remains zero
+
+### Requirement: Version-agnostic parent allowlist matching
+
+The `suspicious_exec` rule's non-shell parent allowlist (configured by `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST`) SHALL match an allowlist entry against the candidate parent process path treating the `*` character as a wildcard that matches any run of characters including the path separator. An entry that contains no `*` MUST match only by exact string equality, preserving the behavior of existing literal-path configurations. As today, a candidate whose non-shell parent matches an allowlist entry is suppressed for both arms of the rule, and a finding with no resolved non-shell parent is never suppressed by the allowlist.
+
+#### Scenario: A glob allowlist entry suppresses a version-stamped parent
+
+- **GIVEN** a `suspicious_exec` configuration whose parent allowlist contains the entry `*/claude/versions/*`
+- **AND** a chain whose non-shell parent path is `/Users/dev/.local/share/claude/versions/2.1.178/claude` spawns a shell that makes an outbound connection to a public address
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces no `suspicious_exec` finding, because the version-stamped parent path matches the glob entry
+
+#### Scenario: A literal allowlist entry still matches exactly
+
+- **GIVEN** a `suspicious_exec` configuration whose parent allowlist contains the literal entry `/usr/libexec/sshd-session`
+- **AND** an otherwise-identical chain whose non-shell parent path is `/usr/libexec/sshd-session`
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces no `suspicious_exec` finding, because the literal entry matches the parent path exactly
+
+### Requirement: Local-resolver DNS suppression for the network arm
+
+The `suspicious_exec` rule MUST NOT treat an outbound `network_connect` event to remote port 53 as a triggering outbound connection when the event's `remote_address` parses as a local-resolver-class IP address: an IPv4 or IPv6 loopback address, an RFC1918 private address, an IPv4 link-local address, an address in the CGNAT range `100.64.0.0/10`, an IPv6 unique-local address, or an IPv6 link-local address. An outbound connection to port 53 whose `remote_address` is any other (publicly routable) address MUST still be eligible to trigger the network arm. This suppression applies only to the outbound-network arm; it does not affect the temp-path-exec arm.
+
+#### Scenario: Outbound DNS to a local resolver does not count as a network connection
+
+- **GIVEN** a non-shell parent spawns a shell that issues an outbound `network_connect` to `100.100.100.100` on port 53
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces no `suspicious_exec` finding from the network arm, because the destination is the host's local-resolver-class address on the DNS port
+
+#### Scenario: Outbound DNS to a public resolver still fires
+
+- **GIVEN** a non-shell parent spawns a shell that issues an outbound `network_connect` to `8.8.8.8` on port 53
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces a `suspicious_exec` finding from the network arm, because the destination is a publicly routable address

@@ -124,3 +124,36 @@ The host app SHALL report whether each activation completed immediately, complet
 - **WHEN** the operating system reports an error completing the request
 - **THEN** the host app reports the error
 - **AND** the host app exits with a non-zero status
+
+### Requirement: A staged upgrade surfaces a reboot-required signal
+
+When an activation request reports that it will complete after reboot (the operating system is deferring removal of a previous extension version), the host app SHALL surface a distinct operator-facing signal that a reboot is required to finish the upgrade and restore network and DNS coverage. A fresh activation that completes without a deferred reboot SHALL NOT surface this signal.
+
+#### Scenario: Activation will complete after reboot
+
+- **GIVEN** an activate invocation
+- **WHEN** at least one extension request reports it will complete after reboot
+- **THEN** the host app surfaces the reboot-required signal
+- **AND** the host app still exits successfully so the activation is not retried prematurely
+
+#### Scenario: Fresh activation does not prompt for reboot
+
+- **GIVEN** an activate invocation
+- **WHEN** every extension request completes without a deferred reboot
+- **THEN** the host app does not surface the reboot-required signal
+
+### Requirement: The DNS proxy toggle subcommands fail fast instead of hanging
+
+The `enable-dns-proxy` and `disable-dns-proxy` subcommands SHALL bound their preferences operation with a timeout and report a clear, actionable failure when it cannot complete, rather than blocking indefinitely. The operation talks to `nesessionmanager` over XPC, which can never return when the subcommand is invoked from a context without a usable session (for example a non-GUI SSH login), and `disable-dns-proxy` is the operator break-glass recovery for a DNS outage: it must not itself hang exactly when it is needed. The runtime health watchdog (see the network-response capability) is the primary automatic recovery; this requirement keeps the manual lever usable as a bounded backstop.
+
+#### Scenario: Disable times out cleanly when the preferences round-trip cannot complete
+
+- **GIVEN** an operator runs `edr disable-dns-proxy` from a context where the preferences round-trip cannot complete
+- **WHEN** the timeout elapses without the operation completing
+- **THEN** the subcommand exits with a non-zero status and an actionable message rather than blocking indefinitely
+
+#### Scenario: Disable completes normally when the preferences round-trip is available
+
+- **GIVEN** an operator runs `edr disable-dns-proxy` where the preferences round-trip can complete
+- **WHEN** the DNS proxy is toggled off
+- **THEN** the subcommand reports success and exits

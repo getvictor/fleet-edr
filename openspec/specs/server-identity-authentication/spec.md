@@ -8,14 +8,14 @@ This capability defines how operators authenticate to the EDR server. Okta OIDC 
 
 ### Requirement: Okta OIDC is the primary login path
 
-The system SHALL accept operator login via the configured Okta OpenID Connect (OIDC) issuer as the primary authentication path. The login flow MUST start at `GET /api/auth/login`, redirect the browser to the issuer's authorization endpoint with PKCE S256, accept the authorization-code callback at `GET /api/auth/callback`, verify the ID token's signature and standard claims (`iss`, `aud`, `exp`, `iat`, `nonce`), and exchange the resulting identity for a session cookie minted by the existing session capability. A successful callback MUST set the session cookie with `auth_method='oidc'` and redirect the browser to the application's home view.
+The system SHALL accept operator login via the configured OpenID Connect (OIDC) issuer as the primary authentication path. The provider configuration (issuer, client id, client secret, redirect URL, scopes, JIT toggle, default role) SHALL be sourced from the durable OIDC configuration store defined by the `sso-configuration` capability; `EDR_OIDC_*` environment variables act only as a first-boot bootstrap seed for that store and are not read by the login path once a stored record exists. The login flow MUST start at `GET /api/auth/login`, redirect the browser to the issuer's authorization endpoint with PKCE S256, accept the authorization-code callback at `GET /api/auth/callback`, verify the ID token's signature and standard claims (`iss`, `aud`, `exp`, `iat`, `nonce`), and exchange the resulting identity for a session cookie minted by the existing session capability. A successful callback MUST set the session cookie with `auth_method='oidc'` and redirect the browser to the application's home view. The provider/verifier the login path uses MUST reflect the current stored configuration without requiring a server restart.
 
 #### Scenario: Operator initiates SSO login
 
-- **GIVEN** OIDC is enabled for the deployment
+- **GIVEN** OIDC is enabled for the deployment via a stored configuration record
 - **WHEN** the browser issues `GET /api/auth/login`
 - **THEN** the server responds with a 302 to the issuer's authorization endpoint
-- **AND** the redirect carries the configured `client_id`, the deployment's `redirect_url`, the `openid profile email` scope set, a server-generated `state` parameter, and a PKCE `code_challenge` with method `S256`
+- **AND** the redirect carries the `client_id`, `redirect_url`, and scope set from the stored configuration, a server-generated `state` parameter, and a PKCE `code_challenge` with method `S256`
 
 #### Scenario: Successful callback mints a session
 
@@ -31,6 +31,12 @@ The system SHALL accept operator login via the configured Okta OpenID Connect (O
 - **WHEN** the callback handler verifies the state
 - **THEN** the server returns a non-2xx error response without creating a session
 - **AND** an audit row is recorded with decision `error` and reason `oidc.state_mismatch`
+
+#### Scenario: A configuration change applies to the next login without restart
+
+- **GIVEN** OIDC is enabled and an admin updates the stored issuer through the `sso-configuration` API
+- **WHEN** an operator initiates `GET /api/auth/login` after the update succeeds
+- **THEN** the authorization redirect targets the updated issuer's authorization endpoint with no server restart having occurred
 
 ### Requirement: Just-in-time provisioning of unknown SSO users
 
@@ -177,3 +183,25 @@ Because the signing key is derived deterministically from the root, every replic
 - **GIVEN** two server replicas configured with the same `EDR_SECRET_KEY`
 - **WHEN** one replica mints an OIDC state cookie and the matching callback is served by the other replica
 - **THEN** the second replica derives the same signing key and verifies the cookie successfully
+
+### Requirement: The API accepts a bearer access token as a second transport
+
+The system SHALL authenticate an API request that presents a valid service-account access token in the `Authorization: Bearer` header as the bound service-account principal, alongside the existing browser transport (session cookie + CSRF). Both transports SHALL resolve to the same actor abstraction through one verification step before the authorization chokepoint, so that downstream handlers are transport-agnostic. The bearer-authenticated API boundary SHALL NOT require a CSRF token, because a bearer token is not an ambient credential and is not subject to cross-site request forgery. A request that presents neither a valid session cookie nor a valid bearer token SHALL be rejected with `401 Unauthorized`.
+
+#### Scenario: Bearer token authenticates a service-account principal
+
+- **GIVEN** a valid, unexpired service-account access token
+- **WHEN** a request presents it in the `Authorization: Bearer` header to an API route
+- **THEN** the request authenticates as the bound service-account principal
+- **AND** no session cookie or CSRF token is required
+
+#### Scenario: Cookie transport is unchanged for the browser
+
+- **GIVEN** an operator authenticated with a session cookie
+- **WHEN** the operator makes a state-changing request from the browser
+- **THEN** the request still requires a valid CSRF token as before
+
+#### Scenario: Neither credential present is unauthorized
+
+- **WHEN** an API request presents neither a valid session cookie nor a valid bearer access token
+- **THEN** the server returns `401 Unauthorized`

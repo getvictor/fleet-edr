@@ -86,7 +86,7 @@ The system SHALL preserve the full sequence of exec generations on a single PID.
 
 ### Requirement: Network and DNS events are linked to the process at event time
 
-The system SHALL link `network_connect` and `dns_query` events to the process record for the originating host and PID. When the event carries a `pidversion` and a process generation exists with the exact same `(host_id, pid, pidversion)`, the system MUST link the event to that generation by identity, independently of any clock-drift padding, and MUST NOT link it to a different generation merely because of timestamp proximity. When the event carries no `pidversion`, or no generation matches that exact identity, the system MUST fall back to linking the event to the process record that was alive on that host and PID at the event's timestamp, and a network or DNS event MUST NOT be associated with a stale generation that exited before the event or with a future generation that had not yet forked.
+The system SHALL link `network_connect` and `dns_query` events to the process record for the originating host and PID. When the event carries a `pidversion`, the system MUST restrict candidate generations to those matching the exact `(host_id, pid, pidversion)` identity, which immunises the link against PID reuse without clock-drift padding. Because a same-PID re-exec preserves the kernel PID generation, several generations can share one `pidversion`: when the identity matches exactly one generation the system MUST link to it regardless of whether the event timestamp falls inside its lifetime window, and when the identity matches more than one generation the system MUST use the event's timestamp to select the generation that was the running image at the event time, and MUST NOT link the event to a generation carrying a different `pidversion` merely because of timestamp proximity. When the event carries no `pidversion`, or no generation matches that exact identity, the system MUST fall back to linking the event to the process record that was alive on that host and PID at the event's timestamp, and a network or DNS event MUST NOT be associated with a stale generation that exited before the event or with a future generation that had not yet forked.
 
 #### Scenario: A short-lived process opens a connection
 
@@ -100,6 +100,13 @@ The system SHALL link `network_connect` and `dns_query` events to the process re
 - **WHEN** a `network_connect` event carrying the alive generation's `pidversion` is correlated
 - **THEN** the event is linked to the generation whose `pidversion` matches
 - **AND** the link does not depend on the connect timestamp falling inside that generation's lifetime window
+
+#### Scenario: A flow within a re-exec chain links to the generation running at the event time
+
+- **GIVEN** two exec generations on the same host and PID that share one `pidversion` (a re-exec chain), an earlier generation that has exited and a later generation that is alive
+- **WHEN** a `network_connect` event carrying that shared `pidversion` and a timestamp inside the earlier generation's running window is correlated
+- **THEN** the event is linked to the earlier generation, the one that was the running image at the event time, not the later or live generation
+- **AND** a flow carrying the same `pidversion` whose timestamp falls inside the later generation's window links to the later generation
 
 #### Scenario: A flow without pidversion falls back to the event-time window
 
@@ -122,7 +129,9 @@ The system SHALL accept `exec` events flagged as snapshot (events synthesized by
 
 ### Requirement: Snapshot heartbeat events extend the freshness window
 
-The system SHALL accept `snapshot_heartbeat` events and, for each, update the freshness timestamp on the matching snapshot-originated process record. The update MUST be scoped to records that are flagged snapshot-originated AND still live, so a stray heartbeat for a recycled PID cannot resurrect an exited row and cannot apply to a non-snapshot row.
+The system SHALL, for each `snapshot_heartbeat` event, update the freshness timestamp on the matching snapshot-originated process record. The update MUST be scoped to records that are flagged snapshot-originated AND still live, so a stray heartbeat for a recycled PID cannot resurrect an exited row and cannot apply to a non-snapshot row.
+
+The freshness update is applied at ingest time, and the heartbeat is not retained as an `events` row (see the server-event-ingestion capability). The process graph builder retains its heartbeat-handling path only for heartbeat rows that were persisted before this behavior shipped and remain unprocessed at upgrade time; such legacy rows are handled with the identical scoping. The freshness scoping and its no-op cases are unchanged regardless of which path applies the update.
 
 #### Scenario: Heartbeat for a live snapshot row bumps freshness
 
@@ -142,6 +151,13 @@ The system SHALL accept `snapshot_heartbeat` events and, for each, update the fr
 - **GIVEN** a process record that originated from kernel fork/exec events rather than the startup snapshot
 - **WHEN** a `snapshot_heartbeat` event for the same host and PID arrives
 - **THEN** no field on the record changes
+
+#### Scenario: A heartbeat does not create or retain an event row
+
+- **GIVEN** an enrolled host with a live snapshot-originated process record for PID P
+- **WHEN** a `snapshot_heartbeat` for PID P is ingested
+- **THEN** the freshness timestamp is updated
+- **AND** no retained `events` row exists for that heartbeat
 
 ### Requirement: TTL reconciliation respects snapshot freshness
 
