@@ -90,7 +90,7 @@ func NewHandler(
 
 // RegisterAuthedRoutes mounts the SSO settings routes. The mux is expected to be wrapped in the session + CSRF middleware before being
 // mounted; the unsafe methods (PUT/POST) inherit the CSRF check from that wrapper.
-func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterAuthedRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/settings/sso", h.handleGet)
 	mux.HandleFunc("PUT /api/settings/sso", h.handleUpdate)
 	mux.HandleFunc("POST /api/settings/sso/test-connection", h.handleTestConnection)

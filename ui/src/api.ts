@@ -699,3 +699,85 @@ export async function testSSOConnection(issuer: string): Promise<{ ok: boolean; 
     body: JSON.stringify({ issuer }),
   });
 }
+
+// --- Service accounts (issue #376) ----------------------------------------------
+
+// ServiceAccount is the read shape from GET /api/settings/service-accounts. The secret is
+// NEVER returned here: it is shown once at create/rotate (see ServiceAccountSecret). status
+// is "active" | "revoked" | "expired", computed server-side.
+export interface ServiceAccount {
+  id: number;
+  client_id: string;
+  name: string;
+  role: string;
+  status: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at?: string;
+}
+
+// ServiceAccountCreate is the POST body. expires_in_days is optional (server defaults to 90,
+// caps at 365); role must be a bindable seeded role (analyst, senior_analyst, auditor, or admin);
+// super_admin is rejected server-side.
+export interface ServiceAccountCreate {
+  name: string;
+  role: string;
+  expires_in_days?: number;
+}
+
+// ServiceAccountSecret is the create response: the account plus its one-time plaintext secret,
+// returned exactly once and never retrievable again.
+export interface ServiceAccountSecret extends ServiceAccount {
+  secret: string;
+}
+
+export async function listServiceAccounts(): Promise<ServiceAccount[]> {
+  const res = await fetchJSON<{ service_accounts: ServiceAccount[] | null }>("/settings/service-accounts");
+  return res.service_accounts ?? [];
+}
+
+export async function createServiceAccount(req: ServiceAccountCreate): Promise<ServiceAccountSecret> {
+  return fetchJSON<ServiceAccountSecret>("/settings/service-accounts", { method: "POST", body: JSON.stringify(req) });
+}
+
+// rotateServiceAccount issues a fresh secret (and invalidates the old one + any outstanding
+// access tokens). The new secret is returned once.
+export async function rotateServiceAccount(id: number): Promise<{ secret: string }> {
+  return fetchJSON<{ secret: string }>(`/settings/service-accounts/${String(id)}/rotate`, { method: "POST" });
+}
+
+export async function revokeServiceAccount(id: number): Promise<void> {
+  await fetchJSON<{ status: string }>(`/settings/service-accounts/${String(id)}`, { method: "DELETE" });
+}
+
+// --- Users + role management (issue #135) ---------------------------------------
+
+// AdminUser is the read shape from GET /api/settings/users. role is the effective single global role ("" when the user holds none);
+// roles carries every live global role (usually one). status is "active" | "disabled". is_breakglass marks the recovery account, which
+// the server refuses to modify through this surface.
+export type UserStatus = "active" | "disabled";
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  display_name?: string;
+  role: string;
+  roles: string[];
+  status: UserStatus;
+  is_breakglass: boolean;
+}
+
+export async function listUsers(): Promise<AdminUser[]> {
+  const res = await fetchJSON<{ users: AdminUser[] | null }>("/settings/users");
+  return res.users ?? [];
+}
+
+// setUserRole replaces the user's global role binding with the chosen seeded role. super_admin is accepted by the server only when the
+// caller is itself a super_admin; the UI does not offer it.
+export async function setUserRole(id: number, role: string): Promise<AdminUser> {
+  return fetchJSON<AdminUser>(`/settings/users/${String(id)}/role`, { method: "PUT", body: JSON.stringify({ role }) });
+}
+
+export async function setUserStatus(id: number, status: UserStatus): Promise<AdminUser> {
+  return fetchJSON<AdminUser>(`/settings/users/${String(id)}/status`, { method: "PUT", body: JSON.stringify({ status }) });
+}

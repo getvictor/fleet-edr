@@ -50,11 +50,14 @@ func init() {
 // IsBreakglass backs the wave-1 user-management surface; the AuthZ
 // chokepoint reads it when building the per-request Actor.
 type User struct {
-	ID           int64     `db:"id" json:"id"`
-	Email        string    `db:"email" json:"email"`
-	IsBreakglass bool      `db:"is_breakglass" json:"is_breakglass"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
+	ID           int64  `db:"id" json:"id"`
+	Email        string `db:"email" json:"email"`
+	IsBreakglass bool   `db:"is_breakglass" json:"is_breakglass"`
+	// Status is the account status ("active" / "disabled"). LoadActor reads it to lock a disabled account out of every authed request
+	// (#135). Populated by Get; other read paths that don't select it leave it empty, which is treated as active.
+	Status    string    `db:"status" json:"status"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // ErrNotFound is returned by GetByEmail when no row matches.
@@ -280,7 +283,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 func (s *Store) Get(ctx context.Context, id int64) (*User, error) {
 	var u User
 	err := s.db.GetContext(ctx, &u, `
-		SELECT id, email, is_breakglass, created_at, updated_at
+		SELECT id, email, is_breakglass, status, created_at, updated_at
 		FROM users WHERE id = ?
 	`, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -288,6 +291,49 @@ func (s *Store) Get(ctx context.Context, id int64) (*User, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get user %d: %w", id, err)
+	}
+	return &u, nil
+}
+
+// AdminUser is the admin user-management list row (#135). It carries display_name + status, which the lean login-path User row omits.
+// Kept as a separate type so the login / break-glass queries are untouched.
+type AdminUser struct {
+	ID           int64          `db:"id" json:"id"`
+	Email        string         `db:"email" json:"email"`
+	DisplayName  sql.NullString `db:"display_name" json:"-"`
+	Status       string         `db:"status" json:"status"`
+	IsBreakglass bool           `db:"is_breakglass" json:"is_breakglass"`
+	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
+}
+
+// List returns every user as an admin-list row, ordered by id. Backs GET /api/settings/users. The operator population is small (a
+// handful per pilot deployment), so a single unpaginated scan is fine; pagination is a wave-3 concern if a deployment ever grows past
+// it.
+func (s *Store) List(ctx context.Context) ([]AdminUser, error) {
+	rows := []AdminUser{}
+	err := s.db.SelectContext(ctx, &rows, `
+		SELECT id, email, display_name, status, is_breakglass, created_at
+		FROM users ORDER BY id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	return rows, nil
+}
+
+// GetAdmin returns one user as an admin-list row (with status + display_name), or ErrNotFound. The user-management handler loads its
+// target through GetAdmin so it has status + is_breakglass for the guardrails in a single read.
+func (s *Store) GetAdmin(ctx context.Context, id int64) (*AdminUser, error) {
+	var u AdminUser
+	err := s.db.GetContext(ctx, &u, `
+		SELECT id, email, display_name, status, is_breakglass, created_at
+		FROM users WHERE id = ?
+	`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get admin user %d: %w", id, err)
 	}
 	return &u, nil
 }

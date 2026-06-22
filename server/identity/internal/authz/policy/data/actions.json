@@ -15,6 +15,7 @@
     "enrollment.rotate_token",
     "user.read",
     "user.invite",
+    "user.manage",
     "sso.manage",
     "service_account.read",
     "service_account.create",

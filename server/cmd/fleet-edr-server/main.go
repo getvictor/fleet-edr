@@ -632,71 +632,37 @@ func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
 func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 	sessionMW := d.identityCtx.SessionMiddleware()
 	csrfMW := d.identityCtx.CSRFMiddleware()
-	apiMux := http.NewServeMux()
-	d.detectionCtx.RegisterAuthedRoutes(apiMux)
-	d.rulesCtx.RegisterAuthedRoutes(apiMux)
-	d.endpointCtx.RegisterAuthedRoutes(apiMux)
-	d.responseCtx.RegisterAuthedRoutes(apiMux)
-	d.identityCtx.RegisterAuthedRoutes(apiMux)
 	// The operator API accepts two transports (ADR-0013): a service-account bearer token (verified statelessly, CSRF-exempt) or a
 	// browser cookie session + CSRF. APIAuthMiddleware composes both and pins an actor either way. It is nil only in minimal wiring
 	// with no service-account signing key, in which case fall back to the cookie-only chain.
-	var sessionProtected http.Handler
-	if apiAuth := d.identityCtx.APIAuthMiddleware(); apiAuth != nil {
-		sessionProtected = apiAuth(apiMux)
-	} else {
-		sessionProtected = sessionMW(csrfMW(apiMux))
+	protect := func(h http.Handler) http.Handler {
+		if apiAuth := d.identityCtx.APIAuthMiddleware(); apiAuth != nil {
+			return apiAuth(h)
+		}
+		return sessionMW(csrfMW(h))
 	}
-	for _, p := range []string{
-		"GET /api/hosts", "GET /api/hosts/{host_id}/tree", "GET /api/hosts/{host_id}/processes/{pid}",
-		"GET /api/alerts", "GET /api/alerts/{id}", "PUT /api/alerts/{id}",
-		"GET /api/commands/{id}", "POST /api/commands",
-		"GET /api/enrollments", "POST /api/enrollments/{host_id}/revoke", "POST /api/enrollments/{host_id}/rotate",
-		"GET /api/attack-coverage",
-		"GET /api/rules",
-		"GET /api/audit-events",
-		"GET /api/session",
-		// Application Control admin surface. rulesCtx.RegisterAuthedRoutes mounts these on apiMux; the outer router needs each
-		// path enumerated here so requests reach the session-protected wrapper instead of falling through to the `/` catchall
-		// and 302 → /ui/. Surfaced by the step-8 dry-run on PR #158: the list-policies API returned the SPA's index.html,
-		// which the UI fetch parsed as JSON and errored with "Unexpected token '<'". The Phase A close-out follow-on adds the
-		// five mutation routes + bulk upsert + cross-policy GET + host-groups CRUD + assignments are all enumerated here. Phase B
-		// editable host-group + assignment mutations will replace the 405 handlers at the same routes without churning this list.
-		"GET /api/v1/app-control/policies",
-		"GET /api/v1/app-control/policies/{id}",
-		"POST /api/v1/app-control/policies",
-		"PATCH /api/v1/app-control/policies/{id}",
-		"DELETE /api/v1/app-control/policies/{id}",
-		"POST /api/v1/app-control/policies/{id}/rules",
-		"POST /api/v1/app-control/policies/{id}/rules:bulkUpsert",
-		"PATCH /api/v1/app-control/rules/{id}",
-		"DELETE /api/v1/app-control/rules/{id}",
-		"GET /api/v1/app-control/rules",
-		// Host-groups + assignments surface. Read endpoints (GET) serve the real seed row; mutation endpoints (POST/PATCH/DELETE)
-		// are wired so the wire-shape contract is testable today but return 405 application_control.read_only_in_phase_a
-		// (closes tasks 11.4.8 + 11.4.9). Phase B replaces the 405 handlers with real mutation logic without changing routes.
-		"GET /api/v1/app-control/host-groups",
-		"GET /api/v1/app-control/host-groups/{id}",
-		"POST /api/v1/app-control/host-groups",
-		"PATCH /api/v1/app-control/host-groups/{id}",
-		"DELETE /api/v1/app-control/host-groups/{id}",
-		"GET /api/v1/app-control/policies/{id}/assignments",
-		"POST /api/v1/app-control/policies/{id}/assignments",
-		"DELETE /api/v1/app-control/policies/{id}/assignments/{group_id}",
-		// Break-glass reauth ceremony. The handlers are mounted on apiMux via identityCtx.RegisterAuthedRoutes, but the outer
-		// router needs each path enumerated here so the session-protected wrapper actually serves them. Otherwise requests
-		// fall through to the `/` catchall and 302 → /ui/, silently breaking the destructive-action reauth path.
-		"POST /api/auth/reauth/challenge", "POST /api/auth/reauth",
-		// SSO/OIDC configuration admin surface (issue #375). Mounted on apiMux via identityCtx.RegisterAuthedRoutes; enumerated
-		// here for the same reason as the app-control surface above (else the UI's GET parses the SPA index.html as JSON).
-		"GET /api/settings/sso", "PUT /api/settings/sso", "POST /api/settings/sso/test-connection",
-		// Service-account admin surface (issue #376). Mounted on apiMux via identityCtx.RegisterAuthedRoutes; enumerated here for the
-		// same reason as the surfaces above. The credential-exchange token endpoint (POST /api/oauth/token) is NOT here: it is a
-		// public route (no session/CSRF) registered via RegisterPublicRoutes.
-		"GET /api/settings/service-accounts", "POST /api/settings/service-accounts",
-		"POST /api/settings/service-accounts/{id}/rotate", "DELETE /api/settings/service-accounts/{id}",
-	} {
-		mux.Handle(p, sessionProtected)
+	mountAuthed(mux, protect, func(r httpserver.Router) {
+		d.detectionCtx.RegisterAuthedRoutes(r)
+		d.rulesCtx.RegisterAuthedRoutes(r)
+		d.endpointCtx.RegisterAuthedRoutes(r)
+		d.responseCtx.RegisterAuthedRoutes(r)
+		d.identityCtx.RegisterAuthedRoutes(r)
+	})
+}
+
+// mountAuthed derives the session-protected allowlist instead of hand-maintaining it (issue #463). It runs register against a
+// RecordingRouter over a fresh apiMux, wraps apiMux in protect (the session/bearer auth chain), and mounts EXACTLY the recorded
+// patterns on outer. Because the mounted set is whatever register actually registered, a new authed route is allowlisted
+// automatically: a route can no longer be registered-but-not-mounted, so it can never fall through to the `/` SPA catch-all and 302
+// (which the UI then parsed as JSON). The bug bit twice before deriving (app-control #158, SSO #375). The credential-exchange token
+// endpoint (POST /api/oauth/token) is intentionally NOT here; it is a public route registered via RegisterPublicRoutes.
+func mountAuthed(outer *http.ServeMux, protect func(http.Handler) http.Handler, register func(httpserver.Router)) {
+	apiMux := http.NewServeMux()
+	rec := httpserver.NewRecordingRouter(apiMux)
+	register(rec)
+	sessionProtected := protect(apiMux)
+	for _, p := range rec.Patterns() {
+		outer.Handle(p, sessionProtected)
 	}
 }
 

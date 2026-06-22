@@ -53,17 +53,19 @@ The rule fires on the LAST link of the chain (the temp-exec or the network_conne
 
 | Env var | Type | Default | Description |
 | --- | --- | --- | --- |
-| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | `csv-paths` | _(unset)_ | Comma-separated absolute parent-process paths the rule should treat as benign roots (both temp-exec and network arms). Canonical use: `/usr/libexec/sshd-session` on hosts where interactive SSH is normal. |
+| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | `csv-path-globs` | _(unset)_ | Comma-separated parent-process path patterns the rule should treat as benign roots (both temp-exec and network arms). A `*` is a wildcard that matches any run of characters including `/`, so `*/claude/versions/*` survives version churn; an entry with no `*` matches the path exactly. Canonical literal use: `/usr/libexec/sshd-session` on hosts where interactive SSH is normal. Anchor globs to a trusted install root: `*/git` would also match `/tmp/evil/git`. |
 
 ### Known false-positive sources
 
 - Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Use EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST to silence sshd-session if that's a routine workflow on the host class.
+- Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so use a glob allowlist entry such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
 - Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.
 
 ### Limitations
 
 - 30s window is hard-coded; long-tail post-shell activity is missed by design.
 - Allowlisting a parent silences BOTH arms of the rule for that parent. The trade-off is documented on AllowedNonShellParents.
+- An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.
 
 ## persistence_launchagent
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/appconfig"
 	"github.com/fleetdm/edr/server/identity/internal/audit"
@@ -29,6 +30,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/internal/sessions"
 	"github.com/fleetdm/edr/server/identity/internal/ssoadmin"
 	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
+	"github.com/fleetdm/edr/server/identity/internal/useradmin"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 	identitymigrations "github.com/fleetdm/edr/server/identity/migrations"
 	"github.com/fleetdm/edr/server/migrations/runner"
@@ -137,6 +139,8 @@ type Identity struct {
 	saTokenHandler *saadmin.TokenHandler
 	saSnapshot     *serviceaccounts.Snapshot
 	apiAuthMW      func(http.Handler) http.Handler
+	// userAdminHandler serves the admin user-management surface (issue #135). Always built (it needs only the users + rbac stores).
+	userAdminHandler *useradmin.Handler
 }
 
 // New wires the identity context. It does NOT apply the schema (call ApplySchema for that) and does NOT start any goroutines (call
@@ -299,6 +303,7 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		saTokenHandler:    saTokenHandler,
 		saSnapshot:        saSnapshot,
 		apiAuthMW:         apiAuthMW,
+		userAdminHandler:  useradmin.NewHandler(usersStore, rbacStore, authzEngine, auditStore, logger),
 		oidcSeed:          deps.OIDC,
 	}, nil
 }
@@ -657,7 +662,7 @@ func (i *Identity) BreakglassUIMiddleware() func(http.Handler) http.Handler {
 
 // RegisterAuthedRoutes wires GET /api/session (who-am-i), GET /api/audit-events (operator-action history), the SSO settings API
 // (/api/settings/sso), and the break-glass reauth POST endpoints. Caller wraps in SessionMiddleware + CSRFMiddleware before mounting.
-func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (i *Identity) RegisterAuthedRoutes(mux httpserver.Router) {
 	i.loginHandler.RegisterAuthedRoutes(mux)
 	i.auditHandler.RegisterAuthedRoutes(mux)
 	if i.ssoAdminHandler != nil {
@@ -665,6 +670,9 @@ func (i *Identity) RegisterAuthedRoutes(mux *http.ServeMux) {
 	}
 	if i.saAdminHandler != nil {
 		i.saAdminHandler.RegisterAuthedRoutes(mux)
+	}
+	if i.userAdminHandler != nil {
+		i.userAdminHandler.RegisterAuthedRoutes(mux)
 	}
 	if i.breakglassHandler != nil {
 		i.breakglassHandler.RegisterAuthedRoutes(mux)

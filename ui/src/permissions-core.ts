@@ -25,6 +25,9 @@ export const PermissionAction = {
   HostKillProcess: "host.kill_process",
   AppControlRead: "application_control.read",
   SSOManage: "sso.manage",
+  ServiceAccountRead: "service_account.read",
+  UserRead: "user.read",
+  UserManage: "user.manage",
 } as const;
 
 export type PermissionActionValue = (typeof PermissionAction)[keyof typeof PermissionAction];

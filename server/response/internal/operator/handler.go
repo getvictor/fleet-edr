@@ -55,7 +55,7 @@ func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
 // RegisterRoutes wires the two operator routes on the given mux.
 // Caller wraps in identity.Session + identity.CSRF before mounting.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("POST /api/commands", h.handleCreate)
 	mux.HandleFunc("GET /api/commands/{id}", h.handleGet)
 }

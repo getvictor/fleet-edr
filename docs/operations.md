@@ -358,6 +358,10 @@ EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST=/usr/libexec/sshd-session,/Applications/Ter
 
 Add the absolute path of any other terminal emulator your fleet uses (Hyper, kitty, Alacritty, Warp, ...). Tmux and screen don't need to be on the list: they appear as the SHELL in the chain (non-shell → tmux → /tmp/...), and tmux's parent is always one of the entry points already covered.
 
+Allowlist entries may contain `*` wildcards, where a `*` matches any run of characters including the path separator; an entry with no `*` matches the parent path exactly. Use globs for developer tooling that installs under version-stamped paths so the suppression survives upgrades, e.g. `*/claude/versions/*`, `*/lefthook_*`, `/opt/homebrew/Cellar/git/*/bin/git`. Anchor globs to a trusted install root: an over-broad `*/git` would also match `/tmp/evil/git` and blind the rule there.
+
+Independently of the allowlist, the network arm ignores an outbound DNS lookup (port 53) whose destination is a local-resolver-class address (loopback, RFC1918, IPv4 link-local, the CGNAT `100.64.0.0/10` range that Tailscale MagicDNS uses, or IPv6 ULA / link-local): that is name resolution against the host's own resolver, not a meaningful outbound connection. A DNS lookup to a publicly routable resolver still fires. This needs no configuration.
+
 For servers that **shouldn't** see interactive SSH (production databases, build runners with key-based access only), leave this empty. The unsuppressed `suspicious_exec` chain is then a high-confidence attacker indicator.
 
 The trade-off is real: an attacker who pivots into a host via a compromised SSH credential follows the same chain as a legitimate admin, so allowlisting `sshd-session` reduces noise but also blinds the rule to that one attacker path. Other rules (network beaconing, persistence drops, credential access) catch the same actor through different signal, but the residual coverage gap is worth knowing about.

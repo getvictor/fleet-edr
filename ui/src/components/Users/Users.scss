@@ -1,0 +1,63 @@
+@import "../../styles/var/colors.scss";
+
+.users {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+
+  &__status {
+    padding: 24px;
+    text-align: center;
+    color: $ui-fleet-black-50;
+
+    &--error {
+      color: $ui-error;
+    }
+  }
+
+  &__error {
+    margin-top: 12px;
+    color: $ui-error;
+    font-size: 14px;
+  }
+
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: $ui-fleet-black-50;
+      background: $ui-fleet-black-5;
+    }
+
+    td {
+      padding: 12px;
+      border-top: 1px solid $ui-fleet-black-10;
+      vertical-align: middle;
+    }
+  }
+
+  &__name {
+    font-weight: 600;
+    color: $core-fleet-black;
+  }
+
+  &__email {
+    font-size: 12px;
+    color: $ui-fleet-black-50;
+  }
+
+  &__row-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: flex-end;
+  }
+}

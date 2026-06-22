@@ -156,12 +156,6 @@ export function SSOSettings() {
     }
   }
 
-  function handleCancel() {
-    if (config) setForm(toForm(config));
-    setSaveError(null);
-    setSaved(false);
-    setTestResult(null);
-  }
 
   async function handleTest() {
     if (!form) return;
@@ -238,18 +232,20 @@ export function SSOSettings() {
             onChange={(e) => { update("clientID", e.target.value); }}
           />
 
-          <Input
-            id="sso-external-url"
-            label="External URL"
-            type="text"
-            placeholder="https://edr.acme.com"
-            value={form.externalURL}
-            onChange={(e) => { update("externalURL", e.target.value); }}
-            aria-describedby="sso-external-url-help"
-          />
-          <p id="sso-external-url-help" className="sso-settings__help">
-            Your deployment&apos;s externally-reachable base URL. The redirect URI below is derived from it.
-          </p>
+          <div className="sso-settings__field-full">
+            <Input
+              id="sso-external-url"
+              label="External URL"
+              type="text"
+              placeholder="https://edr.acme.com"
+              value={form.externalURL}
+              onChange={(e) => { update("externalURL", e.target.value); }}
+              aria-describedby="sso-external-url-help"
+            />
+            <p id="sso-external-url-help" className="sso-settings__help">
+              Your deployment&apos;s externally-reachable base URL. The redirect URI below is derived from it.
+            </p>
+          </div>
 
           <div className="sso-settings__field-full">
             <span className="field__label">Redirect URL</span>
@@ -333,7 +329,6 @@ export function SSOSettings() {
 
       <div className="sso-settings__footer">
         <Button type="submit" variant="primary" isLoading={saving}>Save changes</Button>
-        <Button type="button" variant="inverse" onClick={handleCancel} disabled={saving}>Cancel</Button>
       </div>
     </form>
   );

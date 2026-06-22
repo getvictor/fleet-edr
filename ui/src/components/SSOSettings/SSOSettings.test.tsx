@@ -219,16 +219,6 @@ describe("SSOSettings", () => {
     expect(screen.queryByText(/Connection verified/)).not.toBeInTheDocument();
   });
 
-  it("reverts edits on Cancel", async () => {
-    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
-    render(<SSOSettings />);
-    await screen.findByLabelText("Issuer URL");
-
-    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://edited.okta.com" } });
-    expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://edited.okta.com");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://acme.okta.com");
-  });
 
   it("surfaces a thrown error from the test-connection endpoint", async () => {
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);

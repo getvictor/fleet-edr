@@ -48,7 +48,7 @@ func NewHandler(reader api.AuditReader, authz api.AuthZ, logger *slog.Logger) *H
 // of this route (audit.read is exempt from the read_sampling gate),
 // so the audit-of-audit invariant holds without any handler-level
 // emission.
-func (h *Handler) RegisterAuthedRoutes(mux *http.ServeMux) {
+func (h *Handler) RegisterAuthedRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/audit-events", h.handleList)
 }
 

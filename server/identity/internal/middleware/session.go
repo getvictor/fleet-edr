@@ -114,6 +114,10 @@ func resolveActor(
 	case errors.Is(err, api.ErrUserNotFound):
 		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "invalid_session")
 		return nil, false
+	case errors.Is(err, api.ErrUserDisabled):
+		// A disabled account is locked out even under a still-valid session; send it to login like any other invalid session (#135).
+		httpserver.WriteCookieAuthFailure(ctx, w, logger, http.StatusUnauthorized, "account_disabled")
+		return nil, false
 	case err != nil:
 		// LoadActor failure can come from the users store, the rbac store, or a future identity-context dependency.
 		// "session_store_unavailable" would be misleading here; "identity_store_unavailable" matches the failure surface so dashboards /
