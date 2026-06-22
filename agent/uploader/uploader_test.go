@@ -480,7 +480,12 @@ func TestUpload_GzipWireShape(t *testing.T) {
 	var rawWire atomic.Value // []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawGzipHeader.Store(strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip"))
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			// t.Errorf (not require) is safe from this handler goroutine; surface an I/O failure directly instead of letting it
+			// masquerade as an empty-body assertion failure downstream.
+			t.Errorf("read request body: %v", err)
+		}
 		rawWire.Store(body)
 		w.WriteHeader(http.StatusOK)
 	}))

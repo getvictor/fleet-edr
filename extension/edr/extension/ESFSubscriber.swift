@@ -87,7 +87,8 @@ final class ESFSubscriber: Sendable {
         // pins decided ALLOWs into the kernel cache (#209) so a fork-exec storm of an allowed binary does not re-enter the
         // handler; that optimisation is only correct if an updated ruleset invalidates those cached ALLOWs. es_clear_cache is
         // the supported flush. [weak self] avoids a needless retain of the subscriber by the process-lifetime store singleton;
-        // the captured client pointer is valid for the rest of the process.
+        // the closure reads self.client under a guard, and stop() clears this hook before es_delete_client, so it never runs
+        // against a freed or nil client.
         ApplicationControlStore.shared.onSnapshotApplied = { [weak self] in
             guard let self, let client = self.client else { return }
             let clearResult = es_clear_cache(client)
