@@ -1,12 +1,15 @@
 package intake
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -158,5 +161,57 @@ func TestHandleReadyz_Draining(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 		assert.Equal(t, "draining", body.Status, "drain must take precedence over the DB check")
+	})
+}
+
+// gzipBytesForTest compresses b so the gzip ingest-decode paths can be exercised with a real gzip stream.
+func gzipBytesForTest(t *testing.T, b []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, err := zw.Write(b)
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+// postGzipToIngest drives the ingest handler with a host_id already pinned on the context (as endpoint.HostToken would) and a
+// Content-Encoding: gzip request whose body is the supplied raw wire bytes. The store is nil: every case here is rejected by
+// readBodyWithCap before the handler reaches the store, so no MySQL is needed. Returns the recorder for status/code asserts.
+func postGzipToIngest(t *testing.T, wire []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	h := New(nil, nil, BuildInfo{})
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", bytes.NewReader(wire))
+	req.Header.Set("Content-Encoding", "gzip")
+	req = req.WithContext(endpointapi.WithHostIDForTest(req.Context(), "host-a"))
+	rec := httptest.NewRecorder()
+	h.IngestHandler().ServeHTTP(rec, req)
+	return rec
+}
+
+// TestIngest_GzipDecodeRejections pins the two failure modes the gzip ingest path adds (#405): a decompression bomb (a small
+// compressed body that expands past the per-request cap) must be 413 body_too_large, and a body that is not a valid gzip
+// stream must be 400 invalid_gzip. Both are rejected before any event is parsed or stored.
+func TestIngest_GzipDecodeRejections(t *testing.T) {
+	t.Parallel()
+
+	// spec:server-event-ingestion/body-size-limit/a-gzip-decompression-bomb-is-rejected
+	t.Run("decompression bomb exceeds the decompressed cap", func(t *testing.T) {
+		t.Parallel()
+		// Over-cap payload of a single repeated byte compresses to a few KB: it slips past the Content-Length and wire-byte
+		// caps, so only the decompressed-stream cap can catch it.
+		bomb := gzipBytesForTest(t, bytes.Repeat([]byte("A"), MaxIngestBodyBytes+1024))
+		require.Less(t, len(bomb), MaxIngestBodyBytes, "the compressed bomb must itself be under the wire cap to test the decompressed cap")
+		rec := postGzipToIngest(t, bomb)
+		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+		assert.Contains(t, rec.Body.String(), "body_too_large")
+	})
+
+	// spec:server-event-ingestion/body-size-limit/a-malformed-gzip-body-is-rejected
+	t.Run("a body that is not a valid gzip stream is invalid_gzip", func(t *testing.T) {
+		t.Parallel()
+		rec := postGzipToIngest(t, []byte("this is plainly not a gzip stream"))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "invalid_gzip")
 	})
 }

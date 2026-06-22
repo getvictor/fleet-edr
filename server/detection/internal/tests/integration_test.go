@@ -10,6 +10,8 @@
 package tests
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -380,6 +382,42 @@ func TestIngest_PersistsEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, hosts, 1)
 	assert.Equal(t, "host-a", hosts[0].HostID)
+	assert.Equal(t, int64(1), hosts[0].EventCount)
+}
+
+// spec:server-event-ingestion/authenticated-batch-event-submission/a-gzip-encoded-batch-is-accepted-and-persisted
+//
+// The agent gzips the batch with Content-Encoding: gzip (#405). The handler must decompress, accept, and persist it
+// identically to the uncompressed path (TestIngest_PersistsEvents above pins the plaintext side, which stays supported). End
+// to end through the real bootstrap + MySQL so the decompress -> parse -> store path is exercised whole.
+func TestIngest_GzipEncodedBatchPersists(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-b"))
+	t.Cleanup(srv.Close)
+
+	body := `[{"event_id":"g1","host_id":"host-b","timestamp_ns":2000,"event_type":"fork","payload":{"child_pid":7,"parent_pid":1}}]`
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, err := zw.Write([]byte(body))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err)
+	require.Len(t, hosts, 1)
+	assert.Equal(t, "host-b", hosts[0].HostID)
 	assert.Equal(t, int64(1), hosts[0].EventCount)
 }
 

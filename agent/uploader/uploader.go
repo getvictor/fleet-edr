@@ -4,6 +4,7 @@ package uploader
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -466,12 +467,37 @@ func (*requestEntityTooLargeError) Error() string {
 	return "server returned 413 (request entity too large)"
 }
 
+// gzipBytes returns body compressed with gzip at the default level. Default level (not BestCompression) is the deliberate
+// pick: the batch is tiny and CPU-bound work runs on the agent's drain tick, so the marginal ratio from a slower level is not
+// worth the cycles on the endpoint. A bytes.Buffer cannot fail to write, so the only error path is the writer Close flushing
+// the trailer, which is surfaced to the caller.
+func gzipBytes(body []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(body); err != nil {
+		return nil, fmt.Errorf("gzip write: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("gzip close: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func (u *Uploader) doUpload(ctx context.Context, url string, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	// gzip the JSON batch on the wire. Event payloads are small, repetitive JSON (shared envelope keys, enum-like fields), so
+	// compression cuts upload bandwidth several-fold on the insert-heavy ingest path (#405). The raw `body` still drives the
+	// caller's 413 split-and-retry (which bisects by event count), so that recovery path is unaffected by the wire encoding.
+	compressed, err := gzipBytes(body)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(compressed))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 	if u.cfg.TokenFn != nil {
 		if tok := u.cfg.TokenFn(); tok != "" {
 			req.Header.Set("Authorization", "Bearer "+tok)
