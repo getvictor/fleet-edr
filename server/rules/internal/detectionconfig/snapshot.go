@@ -114,21 +114,32 @@ func (s *Snapshot) matchAny(ruleID string, matchType api.ExclusionMatchType, val
 	return false
 }
 
-// Mode implements api.RuleModeResolver: the resolved mode for (ruleID, hostID), most-specific-wins. Defaults to alert when no setting
-// applies.
-func (s *Snapshot) Mode(ruleID, hostID string) api.DetectionRuleMode {
-	if w, ok := s.winning(ruleID, hostID); ok && api.IsValidDetectionRuleMode(w.mode) {
-		return w.mode
+// ResolveRuleMode implements api.RuleModeResolver: it resolves the winning setting for (ruleID, hostID) ONCE and returns both the
+// mode and the severity override, so the engine never observes a mode from one snapshot and a severity from another.
+func (s *Snapshot) ResolveRuleMode(ruleID, hostID string) (api.DetectionRuleMode, string) {
+	w, ok := s.winning(ruleID, hostID)
+	if !ok {
+		return api.DetectionRuleModeAlert, ""
 	}
-	return api.DetectionRuleModeAlert
+	mode := w.mode
+	if !api.IsValidDetectionRuleMode(mode) {
+		mode = api.DetectionRuleModeAlert
+	}
+	return mode, w.severity
 }
 
-// SeverityOverride implements api.RuleModeResolver: the override severity for (ruleID, hostID), or "" when none applies.
+// Mode reports the resolved mode for (ruleID, hostID). Retained for direct snapshot unit tests; the engine path goes through
+// ResolveRuleMode.
+func (s *Snapshot) Mode(ruleID, hostID string) api.DetectionRuleMode {
+	mode, _ := s.ResolveRuleMode(ruleID, hostID)
+	return mode
+}
+
+// SeverityOverride reports the resolved severity override for (ruleID, hostID), or "" when none applies. Retained for direct
+// snapshot unit tests.
 func (s *Snapshot) SeverityOverride(ruleID, hostID string) string {
-	if w, ok := s.winning(ruleID, hostID); ok {
-		return w.severity
-	}
-	return ""
+	_, severity := s.ResolveRuleMode(ruleID, hostID)
+	return severity
 }
 
 // winning returns the most-specific setting entry that applies to hostID: a group-scoped entry beats the global entry. When several

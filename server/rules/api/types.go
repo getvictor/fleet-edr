@@ -127,24 +127,6 @@ type ConfigKnob struct {
 	Description string `json:"description"`
 }
 
-// RegistryOptions carries the operator-tunable allowlists the eight production rules consume at construction. Lifted verbatim from
-// today's detection/rules.RegistryOptions; cmd/main threads config.Config values into these fields.
-type RegistryOptions struct {
-	SuspiciousExecParentAllowlist map[string]struct{}
-	LaunchAgentAllowlist          map[string]struct{}
-	LaunchDaemonTeamIDAllowlist   map[string]struct{}
-	SudoersWriterAllowlist        map[string]struct{}
-
-	// DisabledRuleIDs is the boot-time disable list. catalog.New drops any rule whose ID() appears in this slice, so a
-	// disabled rule is gone from the engine's active set AND from Engine.Catalog()'s output: tools/gen-rule-docs no
-	// longer documents it, the GET /api/rules surface does not list it, and the engine never evaluates it against a
-	// batch. Populated from EDR_DISABLED_RULES (comma-separated). Boot-time only: the spec scenario this satisfies
-	// (server-detection-rules-engine/operator-toggling-of-individual-rules) calls for a restart-gated disable; hot
-	// reload is a separate change. Unknown IDs in the list (typos, IDs of rules that have been removed) WARN at boot
-	// via deps.Logger but never fail the boot, so a stale operator config doesn't take a deployment down.
-	DisabledRuleIDs []string
-}
-
 // --- Application Control types -----------------------------------------------
 //
 // The application control subsystem replaces the legacy singleton

@@ -22,10 +22,11 @@ var tracer = otel.Tracer("server/detection/engine")
 // Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
 // api.GraphReader through the same interface and dispatch stays non-allocating.
 type Engine struct {
-	rules   []rulesapi.Rule
-	store   *mysql.Store
-	logger  *slog.Logger
-	metrics api.MetricsRecorder
+	rules        []rulesapi.Rule
+	store        *mysql.Store
+	logger       *slog.Logger
+	metrics      api.MetricsRecorder
+	modeResolver rulesapi.RuleModeResolver
 }
 
 // New creates a detection engine backed by the given store.
@@ -38,6 +39,11 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 
 // SetMetrics installs the OTel counter hook. Safe to call after New.
 func (e *Engine) SetMetrics(m api.MetricsRecorder) { e.metrics = m }
+
+// SetModeResolver installs the per-host rule-mode resolver (issue #459). It routes each finding by the (rule, host) resolved mode:
+// disabled drops it, monitor records an observability signal without persisting an alert, alert persists (applying a severity
+// override). Nil (the default) means every rule alerts with no override, which is the pre-config behavior.
+func (e *Engine) SetModeResolver(m rulesapi.RuleModeResolver) { e.modeResolver = m }
 
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r rulesapi.Rule) {
@@ -117,12 +123,36 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 
 	techniques := rule.Techniques()
 	for _, f := range findings {
-		if err := e.persistFinding(ctx, f, techniques); err != nil {
+		if err := e.routeFinding(ctx, rule.ID(), f, techniques); err != nil {
 			span.RecordError(err)
 			return err
 		}
 	}
 	return nil
+}
+
+// routeFinding applies the per-host resolved mode to a single finding before persistence (issue #459): a `disabled` (rule, host)
+// drops the finding, `monitor` records an observability signal without persisting an alert, and `alert` (the default, and the case
+// when no mode resolver is wired) persists, applying any severity override. Keeping this off persistFinding keeps the mode policy in
+// one place and persistFinding focused on the insert.
+func (e *Engine) routeFinding(ctx context.Context, ruleID string, f api.Finding, techniques []string) error {
+	if e.modeResolver != nil {
+		mode, severityOverride := e.modeResolver.ResolveRuleMode(ruleID, f.HostID)
+		switch mode {
+		case rulesapi.DetectionRuleModeDisabled:
+			return nil
+		case rulesapi.DetectionRuleModeMonitor:
+			e.logger.InfoContext(ctx, "detection rule matched in monitor mode (no alert)",
+				"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+			return nil
+		case rulesapi.DetectionRuleModeAlert:
+			// Fall through to the severity-override + persist path below.
+		}
+		if severityOverride != "" {
+			f.Severity = severityOverride
+		}
+	}
+	return e.persistFinding(ctx, f, techniques)
 }
 
 // persistFinding inserts a single finding as an alert, stamping it

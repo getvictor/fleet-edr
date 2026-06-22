@@ -29,7 +29,7 @@ import (
 // discriminate (ground-truthed on edr-dev). We skip:
 //   - `managed` items (MDM-deployed daemons are operator-legitimate),
 //   - executables Apple signs as platform binaries,
-//   - executables whose team ID is on EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST,
+//   - executables whose team ID matches a team_id exclusion in the detection-config surface,
 //   - registrations whose executable code-signing we cannot read: a
 //     high-precision skip.
 //
@@ -37,9 +37,9 @@ import (
 // process at registration and the instigator is not the attacker, so the
 // finding carries no ProcessID and dedups on the item path.
 type PrivilegeLaunchdPlistWrite struct {
-	// AllowedTeamIDs is the set of code-signing team IDs whose LaunchDaemon registrations are silently accepted. Keep it
-	// small: every entry is a deployment-trusted vendor (Munki, JumpCloud, Kandji, an in-house signing team, etc.).
-	AllowedTeamIDs map[string]struct{}
+	// Exclusions is the per-host false-positive resolver. A registration whose registered-executable team ID matches an exclusion
+	// (match type team_id) is silently accepted, in addition to the always-trusted Apple platform binaries. Nil excludes nothing.
+	Exclusions api.ExclusionResolver
 }
 
 func (r *PrivilegeLaunchdPlistWrite) ID() string { return "privilege_launchd_plist_write" }
@@ -71,20 +71,12 @@ func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"btm_launch_item_add"},
 		FalsePositives: []string{
-			"Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.",
-			"Custom in-house pkg installers signed by a non-allowlisted developer team: allowlist that team ID.",
+			"Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Add a team_id exclusion for the vendor's signing team ID via the detection-config surface.",
+			"Custom in-house pkg installers signed by an unexcluded developer team: add a team_id exclusion for that team ID.",
 		},
 		Limitations: []string{
 			"BTM fires at item registration, not at the raw file-drop moment. A plist dropped on disk but never registered/loaded does not surface until registration (often deferred to reboot).",
 			"Registrations whose executable code-signing cannot be read (executable absent or unreadable at registration) are skipped to stay high-precision.",
-		},
-		Config: []api.ConfigKnob{
-			{
-				EnvVar:      "EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST",
-				Type:        "csv-team-ids",
-				Default:     "",
-				Description: "Comma-separated Apple Developer Program team IDs (10-character strings, e.g. `8VBZ3948LU`) whose LaunchDaemon registrations are accepted silently.",
-			},
 		},
 	}
 }
@@ -142,7 +134,7 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 	if p.ExecutableCodeSigning == nil {
 		return nil, nil
 	}
-	if r.allowed(*p.ExecutableCodeSigning) {
+	if r.allowed(*p.ExecutableCodeSigning, evt.HostID) {
 		return nil, nil
 	}
 
@@ -184,17 +176,13 @@ func launchDaemonSubject(itemPath string) string {
 	return "launchdaemon:sha256:" + hex.EncodeToString(sum[:])
 }
 
-// allowed returns true when the registered executable's code-signing identity is trusted: an Apple platform binary, or a
-// binary signed by a team ID on the operator's allowlist. Either short-circuits the finding. Notarization is deliberately
-// not a trust signal here (Apple notarizes malware, and it is not checkable network-free on the ES thread); operator
-// trust is the team-ID allowlist, and any notarization/reputation scoring belongs server-side off the hot path.
-func (r *PrivilegeLaunchdPlistWrite) allowed(cs codeSigningJSON) bool {
+// allowed returns true when the registered executable's code-signing identity is trusted for hostID: an Apple platform binary, or a
+// binary whose team ID matches a team_id exclusion. Either short-circuits the finding. Notarization is deliberately not a trust
+// signal here (Apple notarizes malware, and it is not checkable network-free on the ES thread); operator trust is the team-ID
+// exclusion list, and any notarization/reputation scoring belongs server-side off the hot path.
+func (r *PrivilegeLaunchdPlistWrite) allowed(cs codeSigningJSON, hostID string) bool {
 	if cs.IsPlatformBinary {
 		return true
 	}
-	if r.AllowedTeamIDs == nil {
-		return false
-	}
-	_, ok := r.AllowedTeamIDs[cs.TeamID]
-	return ok
+	return r.Exclusions != nil && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchTeamID, cs.TeamID, hostID)
 }

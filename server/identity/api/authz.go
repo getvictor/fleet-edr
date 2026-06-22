@@ -86,6 +86,12 @@ const (
 	ActionAppControlPolicyCreate   Action = "application_control.policy_create"
 	ActionAppControlPolicyUpdate   Action = "application_control.policy_update"
 	ActionAppControlPolicyDelete   Action = "application_control.policy_delete"
+
+	// Detection configuration (issue #459). The admin surface manages the per-host false-positive exclusions and per-rule mode
+	// the detection engine consults at evaluation time. Read covers the list views; write gates the create/delete/upsert
+	// mutations. Held by admin (write) and admin + senior_analyst (read), mirroring application_control.
+	ActionDetectionConfigRead  Action = "detection_config.read"
+	ActionDetectionConfigWrite Action = "detection_config.write"
 )
 
 // RegisteredActions returns the set of every Action constant declared
@@ -110,6 +116,7 @@ func RegisteredActions() []Action {
 		ActionAppControlRead,
 		ActionAppControlRuleCreate, ActionAppControlRuleUpdate, ActionAppControlRuleDelete, ActionAppControlRuleBulkUpsert,
 		ActionAppControlPolicyCreate, ActionAppControlPolicyUpdate, ActionAppControlPolicyDelete,
+		ActionDetectionConfigRead, ActionDetectionConfigWrite,
 	}
 }
 

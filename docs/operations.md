@@ -342,39 +342,17 @@ The agent wires the posture through the snapshot payload but does NOT yet persis
 
 The `add-application-control` OpenSpec change deleted the singleton `/api/policy` endpoints and the `set_blocklist` agent command. The new REST surface lives under `/api/v1/app-control/*`.
 
-The `EDR_LAUNCHAGENT_ALLOWLIST` env var is different: it tells the server's `persistence_launchagent` detection rule which LaunchAgent paths are benign and should not trigger alerts. Set it as a comma-separated list of absolute paths.
+### Detection-rule tuning
 
-`EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` is the parallel knob for the `privilege_launchd_plist_write` rule. Apple-signed platform binaries (installd, system_installd, ...) are always allowed; this list is for non-Apple agents that legitimately drop daemons under `/Library/LaunchDaemons/` (Munki, Kandji, JumpCloud, etc.). Set it as a comma-separated list of code-signing team IDs, e.g. `T4SK8ZXCXG,XYZW0KL1Q9`.
+Detection-rule false-positive suppression and per-rule mode are configured through the DB-backed detection-config admin surface (issue #459), not environment variables. Changes take effect without a restart, are audited (who, when, and why via a required reason), and are global in scope today (host-group scoping arrives with editable host groups). Edit them through the admin UI or the REST API.
 
-`EDR_SUDOERS_WRITER_ALLOWLIST` is the parallel knob for the `sudoers_tamper` rule. Direct writes to `/etc/sudoers`, `/etc/sudoers.d/*`, `/private/etc/sudoers`, or `/private/etc/sudoers.d/*` always fire unless the writing process's path is on this list. The two path forms are the same file (`/etc` is a symlink to `/private/etc` on macOS and ES reports whichever path the caller opened), so alerts can surface either, but the allowlist still applies in both cases. visudo / sudoedit don't need to be allowlisted: they write a temp file and atomically rename it, so the rule never sees their open events. The typical use case is allowlisting an MDM agent's binary path. Set it as a comma-separated list of absolute paths, e.g. `/usr/local/bin/munki-managed-installer`.
+**Exclusions** silence a rule for a benign input. Each is a typed match: `path_glob` / `parent_path_glob` (a `*` matches any run of characters including `/`, so `*/claude/versions/*` survives version churn; an entry with no `*` is exact), `team_id`, `signing_id`, `cdhash`, `sha256`, `command_substring`, or `domain`. Anchor path globs to a trusted install root: an over-broad `*/git` would also match `/tmp/evil/git` and blind the rule there. Manage them at `GET` / `POST /api/v1/detection-config/exclusions` and `DELETE /api/v1/detection-config/exclusions/{id}`. The four legacy allowlists map onto exclusions: the launchagent plist path becomes a `path_glob`, the launchdaemon team a `team_id`, the sudoers writer path a `path_glob`, and the suspicious_exec parent a `parent_path_glob`.
 
-`EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` tunes the `suspicious_exec` rule. The rule has two trigger shapes within a 30-second window of the shell's exec: `non-shell → shell → /tmp/binary` (the dropper form), and `non-shell → shell` followed by an outbound network connection from that shell or a descendant (the curl-pipe-sh form). Both shapes capture commodity-attack patterns AND match interactive admin SSH sessions running scripts from `/tmp/` or curling tools (the chain `/usr/libexec/sshd-session → /bin/zsh → /bin/bash /tmp/script.sh` is identical at the syscall level to an attacker pivoting in via a compromised SSH key). The allowlist suppresses the rule when the **non-shell ancestor's path** is on the list, for both trigger shapes. The shell and the temp-binary or outbound connection still need to be there in their normal positions; this knob only changes which root processes count as benign.
+**Per-rule mode** replaces the old whole-rule disable knob. Each rule resolves to `alert` (the default), `monitor` (evaluate but emit an observability log line instead of an alert, to gauge a rule's noise before promoting it), or `disabled` (emit nothing). A disabled rule stays listed in `GET /api/rules` with its mode rather than vanishing. Set it at `PUT /api/v1/detection-config/rule-settings`; an optional `severity_override` rewrites the persisted alert's severity. The `detection_config.read` and `detection_config.write` authz actions gate the surface (admin holds write; admin and senior_analyst hold read).
 
-For developer fleets and admin-managed hosts where interactive SSH is normal, the recommended value is
+Independently of any exclusion, the `suspicious_exec` network arm ignores an outbound DNS lookup (port 53) whose destination is a local-resolver-class address (loopback, RFC1918, IPv4 link-local, the CGNAT `100.64.0.0/10` range that Tailscale MagicDNS uses, or IPv6 ULA / link-local): that is name resolution against the host's own resolver, not a meaningful outbound connection. A DNS lookup to a publicly routable resolver still fires. This needs no configuration.
 
-```sh
-EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST=/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2
-```
-
-Add the absolute path of any other terminal emulator your fleet uses (Hyper, kitty, Alacritty, Warp, ...). Tmux and screen don't need to be on the list: they appear as the SHELL in the chain (non-shell → tmux → /tmp/...), and tmux's parent is always one of the entry points already covered.
-
-Allowlist entries may contain `*` wildcards, where a `*` matches any run of characters including the path separator; an entry with no `*` matches the parent path exactly. Use globs for developer tooling that installs under version-stamped paths so the suppression survives upgrades, e.g. `*/claude/versions/*`, `*/lefthook_*`, `/opt/homebrew/Cellar/git/*/bin/git`. Anchor globs to a trusted install root: an over-broad `*/git` would also match `/tmp/evil/git` and blind the rule there.
-
-Independently of the allowlist, the network arm ignores an outbound DNS lookup (port 53) whose destination is a local-resolver-class address (loopback, RFC1918, IPv4 link-local, the CGNAT `100.64.0.0/10` range that Tailscale MagicDNS uses, or IPv6 ULA / link-local): that is name resolution against the host's own resolver, not a meaningful outbound connection. A DNS lookup to a publicly routable resolver still fires. This needs no configuration.
-
-For servers that **shouldn't** see interactive SSH (production databases, build runners with key-based access only), leave this empty. The unsuppressed `suspicious_exec` chain is then a high-confidence attacker indicator.
-
-The trade-off is real: an attacker who pivots into a host via a compromised SSH credential follows the same chain as a legitimate admin, so allowlisting `sshd-session` reduces noise but also blinds the rule to that one attacker path. Other rules (network beaconing, persistence drops, credential access) catch the same actor through different signal, but the residual coverage gap is worth knowing about.
-
-`EDR_DISABLED_RULES` is the **whole-rule** disable knob. When an allowlist isn't expressive enough to silence a noisy rule for a given environment, set the comma-separated list of `rule_id` values (the IDs printed by `GET /api/rules`) to drop them from the engine at boot. Example: a fleet whose admin workflow runs AppleScript that curls from a vendor URL might disable `osascript_network_exec` outright until a follow-up tunes the rule:
-
-```sh
-EDR_DISABLED_RULES=osascript_network_exec
-```
-
-The rule is then gone from the engine's active set AND from `GET /api/rules`, so dashboards, alerts, and `tools/gen-rule-docs` all stop referencing it. The disable is **boot-time only**: apply a new value by restarting the server; hot reload is intentionally out of scope per the spec contract. Unknown rule IDs in the list log a WARN at boot (`EDR_DISABLED_RULES references unknown rule_id...`) but don't fail the boot, so a stale config doesn't take a deployment down.
-
-Prefer the allowlist knobs above when they're expressive enough: they silence the noise without giving up the rule's coverage for genuinely-malicious inputs. Reach for `EDR_DISABLED_RULES` only when the rule is wrong for the environment and an allowlist would let through too much.
+The trade-off on an exclusion is real: an attacker who pivots into a host via a compromised SSH credential follows the same chain as a legitimate admin, so excluding `sshd-session` reduces noise but also blinds the rule to that one attacker path. Other rules (network beaconing, persistence drops, credential access) catch the same actor through different signal, but the residual coverage gap is worth knowing about. Prefer a narrow exclusion over `disabled` when it is expressive enough: it silences the noise without giving up the rule's coverage for genuinely-malicious inputs.
 
 ## Common troubleshooting
 
@@ -384,7 +362,7 @@ Prefer the allowlist knobs above when they're expressive enough: they silence th
 
 **Admin UI shows a host but `last_seen` is stuck >30 min ago.** Either the host is offline (see above) or its agent is running but failing to post events. SSH to the host, tail `/var/log/fleet-edr-agent.log`; expect TLS / network / 401 errors if the agent is failing to reach the server.
 
-**Alerts appear for a binary you know is benign.** Add its path to `EDR_LAUNCHAGENT_ALLOWLIST` (if it's a LaunchAgent), or add an allow rule in the UI for the rule that fired. Mark the existing alerts as `resolved` once you've confirmed they're false positives.
+**Alerts appear for a binary you know is benign.** Add a detection-config exclusion for it (see [Detection-rule tuning](#detection-rule-tuning) above), or add an allow rule in the UI for the rule that fired. Mark the existing alerts as `resolved` once you've confirmed they're false positives.
 
 **All agents went offline at once.** Check the EDR server first (`/readyz`), then your ingress / LB, then your TLS cert's expiry. If the cert expired, see "Rotate secrets > TLS cert" above; agents will reconnect once the cert is fixed without needing a restart on their end.
 

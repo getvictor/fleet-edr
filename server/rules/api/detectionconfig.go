@@ -168,12 +168,12 @@ type ExclusionResolver interface {
 	Excluded(ruleID string, matchType ExclusionMatchType, value, hostID string) bool
 }
 
-// RuleModeResolver is the narrow read surface the engine consults to route a finding by the resolved per-host mode and to apply a
+// RuleModeResolver is the narrow read surface the engine consults to route a finding by the resolved per-host mode and apply a
 // severity override. A nil resolver behaves as "every rule alerts, no override".
 type RuleModeResolver interface {
-	// Mode returns the resolved mode for (ruleID, hostID), most-specific-wins (a host-group setting overrides global). Returns
-	// DetectionRuleModeAlert when no setting applies.
-	Mode(ruleID, hostID string) DetectionRuleMode
-	// SeverityOverride returns the resolved severity override for (ruleID, hostID), or "" when none applies.
-	SeverityOverride(ruleID, hostID string) string
+	// ResolveRuleMode returns the resolved mode and severity override for (ruleID, hostID) in a single call, most-specific-wins (a
+	// host-group setting overrides global). Returning both from one resolution guarantees the engine observes a consistent
+	// (mode, severity) pair even if a config reload races the call. Mode defaults to DetectionRuleModeAlert and severity to "" when
+	// no setting applies.
+	ResolveRuleMode(ruleID, hostID string) (mode DetectionRuleMode, severityOverride string)
 }

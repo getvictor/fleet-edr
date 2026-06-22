@@ -14,6 +14,7 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
+	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
@@ -24,10 +25,6 @@ import (
 type Deps struct {
 	DB     *sqlx.DB
 	Logger *slog.Logger
-
-	// RegistryOptions threads operator-configured allowlists into the
-	// rule constructors.
-	RegistryOptions api.RegistryOptions
 
 	// Audit is the operator-action recorder. The application-control REST handler records a `application_control.rule_create` row on every
 	// POST so SIEM dashboards can trace which rules an admin authored and which hosts the fan-out reached. Optional: when nil, the service
@@ -50,19 +47,19 @@ type Deps struct {
 
 // Rules is the handle cmd/main holds for the rules bounded context.
 type Rules struct {
-	svc           *service.Service
-	operatorH     *operator.Handler
-	appControlH   *operator.AppControlHandler
-	appControlSt  *appcontrol.Store
-	appControlSvc *appcontrol.Service
-	db            *sqlx.DB
-	logger        *slog.Logger
+	svc                *service.Service
+	operatorH          *operator.Handler
+	appControlH        *operator.AppControlHandler
+	appControlSt       *appcontrol.Store
+	appControlSvc      *appcontrol.Service
+	detectionConfigSvc *detectionconfig.Service
+	detectionConfigH   *operator.DetectionConfigHandler
+	db                 *sqlx.DB
+	logger             *slog.Logger
 }
 
 // New wires the rules context. Does NOT apply the schema (call
 // ApplySchema for that).
-//
-//nolint:contextcheck // boot-time wiring with no request context; context.Background is intentional in the WarnContext below
 func New(deps Deps) (*Rules, error) {
 	if deps.DB == nil {
 		return nil, errors.New("rules bootstrap: DB is required")
@@ -76,20 +73,19 @@ func New(deps Deps) (*Rules, error) {
 		return nil, errors.New("rules bootstrap: AuthZ is required")
 	}
 
-	// Warn at boot for each entry in DisabledRuleIDs that doesn't match a known rule. The boot still succeeds so a stale
-	// config (typo, removed rule reference) does not take a deployment down (per #238 design notes); the warn line is the
-	// operator-visible signal they need to fix the config. context.Background here because we're at bootstrap and have no
-	// request-scoped context; forbidigo requires the Context variant so the structured-log pipeline gets a context handle.
-	for _, unknown := range catalog.UnknownDisabledIDs(deps.RegistryOptions) {
-		logger.WarnContext(context.Background(),
-			"rules bootstrap: EDR_DISABLED_RULES references unknown rule_id (typo or rule has been removed?)",
-			"rule_id", unknown)
-	}
-	rules := catalog.New(deps.RegistryOptions)
+	// Detection configuration (issue #459): per-host false-positive exclusions + per-rule mode/severity, DB-backed. The Service
+	// resolves both for the rules (ExclusionResolver, consulted before a rule fires) and the engine (RuleModeResolver). Built here so
+	// the rule set is constructed against the live resolver; the initial snapshot is loaded in ApplySchema once the tables exist.
+	detectionConfigStore := detectionconfig.NewStore(deps.DB)
+	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
+
+	rules := catalog.New(detectionConfigSvc)
 	svc := service.New(rules, logger)
 
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
+
+	detectionConfigH := operator.NewDetectionConfig(detectionConfigSvc, deps.AuthZ, logger)
 
 	appControlStore := appcontrol.NewStore(deps.DB)
 	var appControlSvc *appcontrol.Service
@@ -105,13 +101,15 @@ func New(deps Deps) (*Rules, error) {
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
 	}
 	return &Rules{
-		svc:           svc,
-		operatorH:     opH,
-		appControlH:   appControlH,
-		appControlSt:  appControlStore,
-		appControlSvc: appControlSvc,
-		db:            deps.DB,
-		logger:        logger,
+		svc:                svc,
+		operatorH:          opH,
+		appControlH:        appControlH,
+		appControlSt:       appControlStore,
+		appControlSvc:      appControlSvc,
+		detectionConfigSvc: detectionConfigSvc,
+		detectionConfigH:   detectionConfigH,
+		db:                 deps.DB,
+		logger:             logger,
 	}, nil
 }
 
@@ -125,6 +123,11 @@ func (r *Rules) ApplySchema(ctx context.Context) error {
 	// Seed the Default policy after the table exists.
 	if err := r.appControlSt.EnsureDefaultPolicy(ctx); err != nil {
 		return fmt.Errorf("rules seed default app control policy: %w", err)
+	}
+	// Load the initial detection-config snapshot now that the tables exist (New seeded an empty one so the resolver was safe to
+	// hold during catalog construction).
+	if err := r.detectionConfigSvc.Reload(ctx); err != nil {
+		return fmt.Errorf("rules load detection config: %w", err)
 	}
 	return nil
 }
@@ -145,6 +148,10 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 // ContentService exposes the public api.RuleProvider. detection.Engine (still living at server/detection/) consumes this to load its
 // rule set at start.
 func (r *Rules) ContentService() api.RuleProvider { return r.svc }
+
+// DetectionConfigModeResolver exposes the per-host rule-mode resolver the detection engine consults to route each finding
+// (alert / monitor / disabled) and apply a severity override. Backed by the live detection-config snapshot.
+func (r *Rules) DetectionConfigModeResolver() api.RuleModeResolver { return r.detectionConfigSvc }
 
 // Catalog exposes the public api.Lister. The operator handler inside rules consumes this internally; nothing outside rules calls it
 // today.
@@ -172,13 +179,14 @@ func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 	if r.appControlH != nil {
 		r.appControlH.RegisterRoutes(mux)
 	}
+	r.detectionConfigH.RegisterRoutes(mux)
 }
 
 // CatalogOnly returns just the rule catalog, without wiring the operator routes. Exposed for tooling that doesn't have a DB handle
-// (notably tools/gen-rule-docs which builds the markdown page from rule documentation at compile time).
-func CatalogOnly(opts api.RegistryOptions) api.Lister {
-	rules := catalog.New(opts)
-	return catalogList(rules)
+// (notably tools/gen-rule-docs which builds the markdown page from rule documentation at compile time). A nil exclusion resolver is
+// passed: tooling renders rule documentation, not live detection, so no configured exclusions apply.
+func CatalogOnly() api.Lister {
+	return catalogList(catalog.New(nil))
 }
 
 // catalogList satisfies api.Lister by reading from a captured rule slice. Avoids dragging the service constructor into the

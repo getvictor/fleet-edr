@@ -10,22 +10,31 @@
 package tests
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
-	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
+
+// withActor injects a session actor onto every request's context, standing in for the identity Session middleware so the
+// detection-config mutation handlers (which require an actor) can be exercised over HTTP in tests.
+func withActor(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{UserID: 1, SessionFresh: true})
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // allowAllAuthZ satisfies identityapi.AuthZ unconditionally for the rules-context integration tests. The chokepoint's per-action
 // role matrix is exercised in server/identity/internal/authz/engine_test.go; here we only need the dependency satisfied so
@@ -39,21 +48,12 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 // newRules wires rules.bootstrap.New against a fresh test DB.
 func newRules(t *testing.T) *rulesbootstrap.Rules {
 	t.Helper()
-	return newRulesWithOptions(t, rulesapi.RegistryOptions{})
-}
-
-// newRulesWithOptions is the same as newRules but threads custom RegistryOptions through, so tests can exercise the
-// operator-tunable knobs (DisabledRuleIDs, allowlists) without copying the bootstrap.Deps wiring.
-func newRulesWithOptions(t *testing.T, opts rulesapi.RegistryOptions) *rulesbootstrap.Rules {
-	t.Helper()
 	s := full.Open(t)
-	deps := rulesbootstrap.Deps{
-		DB:              s,
-		Logger:          slog.Default(),
-		AuthZ:           allowAllAuthZ{},
-		RegistryOptions: opts,
-	}
-	r, err := rulesbootstrap.New(deps)
+	r, err := rulesbootstrap.New(rulesbootstrap.Deps{
+		DB:     s,
+		Logger: slog.Default(),
+		AuthZ:  allowAllAuthZ{},
+	})
 	require.NoError(t, err)
 	require.NoError(t, r.ApplySchema(t.Context()))
 	return r
@@ -83,66 +83,6 @@ func TestCatalog_ListShape(t *testing.T) {
 		assert.NotEmpty(t, catalog[i].Doc.Title, "rule %s missing Doc.Title", catalog[i].ID)
 		assert.NotEmpty(t, catalog[i].Doc.Severity, "rule %s missing Doc.Severity", catalog[i].ID)
 	}
-}
-
-// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-disables-a-noisy-rule-for-their-environment
-//
-// TestCatalog_DisabledRuleIDsHonoredEndToEnd proves the boot-time disable mechanism propagates through every consumer of the
-// catalog: Engine.Catalog() (the operator-facing GET /api/rules surface) AND ContentService().ActiveRules() (the engine's
-// evaluation set) both omit the disabled rule. By construction this satisfies the spec scenario's "MUST NOT evaluate against
-// any batch and MUST NOT produce alerts until it is re-enabled": a rule absent from ActiveRules cannot fire on any batch
-// the engine evaluates.
-//
-// Pairs with the catalog-level unit tests in server/rules/internal/catalog/registry_test.go that pin the filter at the API
-// boundary; this integration test pins the propagation through rulesbootstrap.New.
-func TestCatalog_DisabledRuleIDsHonoredEndToEnd(t *testing.T) {
-	t.Parallel()
-	r := newRulesWithOptions(t, rulesapi.RegistryOptions{
-		DisabledRuleIDs: []string{"suspicious_exec"},
-	})
-	catalog := r.Catalog().List()
-	for _, entry := range catalog {
-		assert.NotEqual(t, "suspicious_exec", entry.ID,
-			"disabled rule MUST NOT appear in Catalog().List()")
-	}
-	active := r.ContentService().ActiveRules()
-	for _, rule := range active {
-		assert.NotEqual(t, "suspicious_exec", rule.ID(),
-			"disabled rule MUST NOT appear in ContentService().ActiveRules() (the engine evaluation set)")
-	}
-	// Sanity: the rest of the catalog still appears so a regression that filtered the wrong subset is caught.
-	assert.Len(t, catalog, 9, "exactly one rule must have been filtered (10 shipped, 1 disabled)")
-	assert.Len(t, active, 9)
-}
-
-// TestBootstrap_WarnsOnUnknownDisabledRuleID covers the boot-time WARN path #238 added to bootstrap.New: a stale operator
-// config that references a rule_id which doesn't exist (typo or removed rule) must emit a WARN log line carrying the
-// offending rule_id as a structured attribute, without failing the boot. The test injects a slog handler that records
-// records into a buffer + asserts the WARN appears with the right attribute. Pairs with the catalog-level
-// TestUnknownDisabledIDs unit test which pins the diagnostic helper's inputs/outputs.
-func TestBootstrap_WarnsOnUnknownDisabledRuleID(t *testing.T) {
-	t.Parallel()
-	s := full.Open(t)
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
-	logger := slog.New(handler)
-	deps := rulesbootstrap.Deps{
-		DB:     s,
-		Logger: logger,
-		AuthZ:  allowAllAuthZ{},
-		RegistryOptions: rulesapi.RegistryOptions{
-			DisabledRuleIDs: []string{"suspicious_exec", "this-rule-does-not-exist", "another-typo"},
-		},
-	}
-	r, err := rulesbootstrap.New(deps)
-	require.NoError(t, err, "unknown rule_id MUST NOT fail boot per #238 design")
-	require.NoError(t, r.ApplySchema(t.Context()))
-	out := buf.String()
-	assert.Contains(t, out, "EDR_DISABLED_RULES references unknown rule_id")
-	assert.Contains(t, out, "rule_id=this-rule-does-not-exist")
-	assert.Contains(t, out, "rule_id=another-typo")
-	assert.NotContains(t, out, "rule_id=suspicious_exec",
-		"a real rule MUST NOT trigger the unknown-rule WARN")
 }
 
 // TestContentService_ActiveRules surfaces every shipped rule through the engine-facing interface. The exact roster lives in
@@ -260,4 +200,93 @@ func TestBootstrap_MissingDeps(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "DB")
 	})
+}
+
+// spec:server-detection-rules-engine/durable-detection-configuration-surface/an-operator-adds-a-false-positive-exclusion-without-restarting
+//
+// TestDetectionConfig_RESTSurface exercises the detection-config admin REST surface end to end through the rules bootstrap: create +
+// list + delete an exclusion, upsert + read a per-rule setting, and the two validation paths (bad match type, unsupported group
+// scope). Mutations flow handler -> service -> store -> DB and reload the in-memory snapshot.
+func TestDetectionConfig_RESTSurface(t *testing.T) {
+	t.Parallel()
+	r := newRules(t)
+	mux := http.NewServeMux()
+	r.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(withActor(mux))
+	t.Cleanup(srv.Close)
+
+	base := srv.URL + "/api/v1/detection-config"
+	do := func(method, path, body string) *http.Response {
+		req, err := http.NewRequestWithContext(t.Context(), method, base+path, strings.NewReader(body))
+		require.NoError(t, err)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	// Create a global parent-path-glob exclusion.
+	resp := do(http.MethodPost, "/exclusions",
+		`{"rule_id":"suspicious_exec","match_type":"parent_path_glob","value":"*/claude/versions/*","reason":"Claude Code CLI"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var created struct {
+		ID    int64  `json:"id"`
+		Value string `json:"value"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	resp.Body.Close()
+	require.NotZero(t, created.ID)
+	assert.Equal(t, "*/claude/versions/*", created.Value)
+
+	// List shows it.
+	resp = do(http.MethodGet, "/exclusions", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var list struct {
+		Exclusions []struct {
+			Value string `json:"value"`
+		} `json:"exclusions"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+	resp.Body.Close()
+	require.Len(t, list.Exclusions, 1)
+	assert.Equal(t, "*/claude/versions/*", list.Exclusions[0].Value)
+
+	// Upsert a per-rule setting (disable suspicious_exec globally), then read it back.
+	resp = do(http.MethodPut, "/rule-settings", `{"rule_id":"suspicious_exec","mode":"disabled","reason":"too noisy"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+	resp = do(http.MethodGet, "/rule-settings", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var settings struct {
+		RuleSettings []struct {
+			RuleID string `json:"rule_id"`
+			Mode   string `json:"mode"`
+		} `json:"rule_settings"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&settings))
+	resp.Body.Close()
+	require.Len(t, settings.RuleSettings, 1)
+	assert.Equal(t, "suspicious_exec", settings.RuleSettings[0].RuleID)
+	assert.Equal(t, "disabled", settings.RuleSettings[0].Mode)
+
+	// Validation: an unknown match type is a 400, not a 500.
+	resp = do(http.MethodPost, "/exclusions", `{"rule_id":"x","match_type":"ip","value":"1.2.3.4","reason":"r"}`)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// A host-group-scoped entry is rejected for now (Phase A): use global scope.
+	resp = do(http.MethodPost, "/exclusions",
+		`{"rule_id":"x","match_type":"team_id","value":"ABC","host_group_id":5,"reason":"r"}`)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	resp.Body.Close()
+
+	// Delete the exclusion (204), then a second delete is a 404.
+	resp = do(http.MethodDelete, "/exclusions/"+strconv.FormatInt(created.ID, 10)+"?reason=resolved", "")
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+	resp.Body.Close()
+	resp = do(http.MethodDelete, "/exclusions/"+strconv.FormatInt(created.ID, 10)+"?reason=again", "")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	resp.Body.Close()
 }

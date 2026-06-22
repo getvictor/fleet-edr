@@ -35,7 +35,7 @@ func repoRoot(t *testing.T) string {
 func TestNavigatorLayerArtifactInSync(t *testing.T) {
 	t.Parallel()
 
-	layer := rulesapi.BuildNavigatorLayer(rulesbootstrap.CatalogOnly(rulesapi.RegistryOptions{}).List())
+	layer := rulesapi.BuildNavigatorLayer(rulesbootstrap.CatalogOnly().List())
 	want, err := rulesapi.MarshalNavigatorLayerIndented(layer)
 	require.NoError(t, err)
 

@@ -19,7 +19,7 @@ import (
 // registry also includes application_control_block which is operator-policy-driven, not part of the spec-named catalog set.
 func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	t.Parallel()
-	got := New(api.RegistryOptions{})
+	got := New(nil)
 	wantIDs := []string{
 		"suspicious_exec",
 		"persistence_launchagent",
@@ -59,7 +59,7 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 		api.SeverityHigh:     {},
 		api.SeverityCritical: {},
 	}
-	for _, r := range New(api.RegistryOptions{}) {
+	for _, r := range New(nil) {
 		t.Run(r.ID(), func(t *testing.T) {
 			t.Parallel()
 			d := r.Doc()
@@ -83,122 +83,18 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 	}
 }
 
-// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-disables-a-noisy-rule-for-their-environment
-//
-// TestAll_DisabledRuleIDsFiltered pins the boot-time disable contract from #238 at the catalog boundary: a rule_id listed in
-// DisabledRuleIDs is gone from the returned slice, so neither the engine (via service.New(rules, ...)) nor the operator-facing
-// catalog (via Engine.Catalog()) sees it. The spec scenario "MUST NOT evaluate against any batch and MUST NOT produce alerts
-// until it is re-enabled" follows by construction: a rule the engine never receives cannot fire.
-func TestAll_DisabledRuleIDsFiltered(t *testing.T) {
+// TestAll_ThreadsExclusionResolver confirms that the four exclusion-aware rules actually thread the supplied resolver onto their
+// Exclusions field. Without this, a refactor of New could silently drop the wiring and every fleet would suddenly see the alerts they
+// thought they'd silenced. The other rules don't consult exclusions, so they have no Exclusions field to check.
+func TestAll_ThreadsExclusionResolver(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name      string
-		disable   []string
-		wantGone  []string
-		wantStill []string
-	}{
-		{
-			name:     "single rule disabled is filtered",
-			disable:  []string{"suspicious_exec"},
-			wantGone: []string{"suspicious_exec"},
-			wantStill: []string{
-				"persistence_launchagent", "dyld_insert", "shell_from_office",
-				"osascript_network_exec", "credential_keychain_dump",
-				"privilege_launchd_plist_write", "sudoers_tamper", "application_control_block",
-			},
-		},
-		{
-			name:      "multiple rules disabled are all filtered",
-			disable:   []string{"suspicious_exec", "sudoers_tamper"},
-			wantGone:  []string{"suspicious_exec", "sudoers_tamper"},
-			wantStill: []string{"dyld_insert", "shell_from_office"},
-		},
-		{
-			name: "all rules disabled returns empty slice",
-			disable: []string{
-				"suspicious_exec", "persistence_launchagent", "dyld_insert", "shell_from_office",
-				"osascript_network_exec", "credential_keychain_dump",
-				"privilege_launchd_plist_write", "sudoers_tamper", "application_control_block", "dns_c2_beacon",
-			},
-			wantGone:  []string{"suspicious_exec", "application_control_block", "dns_c2_beacon"},
-			wantStill: nil,
-		},
-		{
-			name:      "unknown id in disable list leaves the catalog untouched",
-			disable:   []string{"not-a-real-rule"},
-			wantGone:  nil,
-			wantStill: []string{"suspicious_exec", "application_control_block"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := New(api.RegistryOptions{DisabledRuleIDs: tc.disable})
-			gotIDs := make(map[string]struct{}, len(got))
-			for _, r := range got {
-				gotIDs[r.ID()] = struct{}{}
-			}
-			for _, id := range tc.wantGone {
-				_, present := gotIDs[id]
-				assert.False(t, present, "rule %s must be filtered when listed in DisabledRuleIDs", id)
-			}
-			for _, id := range tc.wantStill {
-				_, present := gotIDs[id]
-				assert.True(t, present, "rule %s must remain when not in DisabledRuleIDs", id)
-			}
-		})
-	}
-}
-
-// TestUnknownDisabledIDs covers the diagnostic helper bootstrap.New uses to warn at boot when EDR_DISABLED_RULES references a
-// rule that doesn't exist. Per #238 design notes, a stale operator config (typo or rule has been removed) MUST warn but NOT
-// fail the boot; that policy lives in bootstrap.New, and this test pins the inputs/outputs the warn loop relies on.
-func TestUnknownDisabledIDs(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		in   []string
-		want []string
-	}{
-		{"empty list returns nil", nil, nil},
-		{"all known ids returns nil", []string{"suspicious_exec", "sudoers_tamper"}, nil},
-		{"single unknown id returned", []string{"not-a-real-rule"}, []string{"not-a-real-rule"}},
-		{
-			"mix of known + unknown returns only unknown",
-			[]string{"suspicious_exec", "typo-rule", "another-typo"},
-			[]string{"typo-rule", "another-typo"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := UnknownDisabledIDs(api.RegistryOptions{DisabledRuleIDs: tc.in})
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-// TestAll_AppliesAllowlists confirms that the four configurable rules actually thread the supplied allowlists through onto the rule
-// struct. Without this, a refactor of `All` could silently drop the maps and every fleet would suddenly see the alerts they thought
-// they'd silenced. We only check the rules that have a configurable allowlist; the others have empty Doc().Config.
-func TestAll_AppliesAllowlists(t *testing.T) {
-	t.Parallel()
-	susParents := map[string]struct{}{"/usr/libexec/sshd-session": {}}
-	plists := map[string]struct{}{"/Library/LaunchAgents/com.example.foo.plist": {}}
-	teamIDs := map[string]struct{}{"8VBZ3948LU": {}}
-	writers := map[string]struct{}{"/usr/local/bin/ansible": {}}
-	rs := New(api.RegistryOptions{
-		SuspiciousExecParentAllowlist: susParents,
-		LaunchAgentAllowlist:          plists,
-		LaunchDaemonTeamIDAllowlist:   teamIDs,
-		SudoersWriterAllowlist:        writers,
-	})
+	res := &fakeExclusions{}
 	byID := map[string]api.Rule{}
-	for _, r := range rs {
+	for _, r := range New(res) {
 		byID[r.ID()] = r
 	}
-	assert.Equal(t, susParents, byID["suspicious_exec"].(*SuspiciousExec).AllowedNonShellParents)
-	assert.Equal(t, plists, byID["persistence_launchagent"].(*PersistenceLaunchAgent).AllowedPlists)
-	assert.Equal(t, teamIDs, byID["privilege_launchd_plist_write"].(*PrivilegeLaunchdPlistWrite).AllowedTeamIDs)
-	assert.Equal(t, writers, byID["sudoers_tamper"].(*SudoersTamper).AllowedWriters)
+	assert.Same(t, res, byID["suspicious_exec"].(*SuspiciousExec).Exclusions)
+	assert.Same(t, res, byID["persistence_launchagent"].(*PersistenceLaunchAgent).Exclusions)
+	assert.Same(t, res, byID["privilege_launchd_plist_write"].(*PrivilegeLaunchdPlistWrite).Exclusions)
+	assert.Same(t, res, byID["sudoers_tamper"].(*SudoersTamper).Exclusions)
 }

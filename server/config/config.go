@@ -81,37 +81,10 @@ type Config struct {
 	// don't want MVP's default 30-day window). Default 30.
 	RetentionDays int
 
-	// LaunchAgentAllowlist is the set of plist paths the `persistence_launchagent` rule should silently accept. Populated from
-	// EDR_LAUNCHAGENT_ALLOWLIST (comma-separated absolute paths). Empty by default: every plist load fires.
-	LaunchAgentAllowlist map[string]struct{}
-
-	// LaunchDaemonTeamIDAllowlist is the set of code-signing team IDs the `privilege_launchd_plist_write` rule should silently accept when
-	// they write to /Library/LaunchDaemons. Populated from EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST (comma-separated team IDs). Apple-signed
-	// platform binaries (installd, system_installd, ...) are always allowed; this list is for non-Apple MDM agents that legitimately drop
-	// daemons (Munki, Kandji, JumpCloud, ...). Empty by default.
-	LaunchDaemonTeamIDAllowlist map[string]struct{}
-
-	// SudoersWriterAllowlist is the set of writer-process absolute paths the `sudoers_tamper` rule should silently accept. Populated from
-	// EDR_SUDOERS_WRITER_ALLOWLIST (comma-separated). Empty by default. visudo doesn't need to be here: it writes via temp-file + rename
-	// and never opens /etc/sudoers in write mode, so the rule never sees it.
-	SudoersWriterAllowlist map[string]struct{}
-
-	// SuspiciousExecParentAllowlist is the set of non-shell parent path patterns the `suspicious_exec` rule should treat as benign roots
-	// for BOTH of the rule's trigger shapes: "non-shell -> shell -> /tmp/binary" AND "non-shell -> shell -> outbound network_connect".
-	// Populated from EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST
-	// (comma-separated). Empty by default. An entry containing `*` is a glob (a `*` matches any run of characters including `/`); an
-	// entry with no `*` matches the path exactly. The recommended literal value for fleets that allow interactive admin SSH is
-	// `/usr/libexec/sshd-session, /Applications/Terminal.app/Contents/MacOS/Terminal, /Applications/iTerm.app/Contents/MacOS/iTerm2`. For
-	// developer tooling that churns version-stamped install paths, prefer globs: `*/claude/versions/*`, `*/lefthook_*`. Leave empty on
-	// servers where interactive SSH is unusual: the rule's "non-shell -> shell -> /tmp/" shape is then a clean attacker indicator.
-	SuspiciousExecParentAllowlist map[string]struct{}
-
-	// DisabledRuleIDs is the boot-time list of rule IDs to drop from the detection registry. Populated from EDR_DISABLED_RULES
-	// (comma-separated rule_id values). A disabled rule is gone from the engine's active set AND from Engine.Catalog() so
-	// tools/gen-rule-docs + the GET /api/rules surface stop listing it. Empty by default. Unknown IDs WARN at boot but never
-	// fail the boot, so a stale operator config doesn't take a deployment down. Hot reload is intentionally out of scope --
-	// see spec server-detection-rules-engine/operator-toggling-of-individual-rules for the boot-time contract.
-	DisabledRuleIDs []string
+	// Detection-rule false-positive allowlists and the disabled-rule list moved out of boot-time env to the DB-backed
+	// detection-config surface (issue #459): per-host exclusions + per-rule mode, edited via the admin API/UI and audited.
+	// The former EDR_LAUNCHAGENT_ALLOWLIST / EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST / EDR_SUDOERS_WRITER_ALLOWLIST /
+	// EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST / EDR_DISABLED_RULES env vars are deleted (hard switch, no fallback).
 
 	// TrustedProxies is the set of CIDRs (or bare IPs) the server will trust X-Forwarded-For from. Populated from EDR_TRUSTED_PROXIES
 	// (comma-separated). Empty by default: XFF is ignored and the per-IP rate limiter + audit log see the direct TCP peer (issue #81).
@@ -230,7 +203,7 @@ func Load() (*Config, error) {
 // loadFrom is the testable core of Load; it takes a lookup function so tests can provide a fake env.
 //
 // The function fan-outs to per-section helpers (loadCoreEnv,
-// loadTLSConfig, loadRateLimits, loadAllowlists, loadLogConfig,
+// loadTLSConfig, loadRateLimits, loadLogConfig,
 // loadOIDCConfig, loadBreakglassConfig, loadSessionTimeouts) so the
 // parent stays at a cognitive complexity Sonar's S3776 rule accepts.
 // Order between helpers is preserved: TLS validation depends on the
@@ -243,7 +216,6 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	loadSecretKey(&c, getenv, &errs)
 	loadTLSConfig(&c, &errs)
 	loadRateLimits(&c, getenv, &errs)
-	loadAllowlists(&c, getenv)
 	loadLogConfig(&c, getenv, &errs)
 	loadOIDCConfig(&c, getenv, &errs)
 	loadBreakglassConfig(&c, getenv, &errs)
@@ -334,26 +306,6 @@ func loadTLSConfig(c *Config, errs *[]error) {
 func loadRateLimits(c *Config, getenv func(string) string, errs *[]error) {
 	envparse.PositiveInt(getenv, "EDR_ENROLL_RATE_PER_MIN", &c.EnrollRatePerMin, errs)
 	envparse.NonNegativeInt(getenv, "EDR_RETENTION_DAYS", &c.RetentionDays, errs)
-}
-
-// loadAllowlists reads each detection-rule allowlist env var. Each is
-// optional; nil-or-empty leaves the catalog default in place.
-func loadAllowlists(c *Config, getenv func(string) string) {
-	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHAGENT_ALLOWLIST")); allowlist != nil {
-		c.LaunchAgentAllowlist = allowlist
-	}
-	if allowlist := envparse.Allowlist(getenv("EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST")); allowlist != nil {
-		c.LaunchDaemonTeamIDAllowlist = allowlist
-	}
-	if allowlist := envparse.Allowlist(getenv("EDR_SUDOERS_WRITER_ALLOWLIST")); allowlist != nil {
-		c.SudoersWriterAllowlist = allowlist
-	}
-	if allowlist := envparse.Allowlist(getenv("EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST")); allowlist != nil {
-		c.SuspiciousExecParentAllowlist = allowlist
-	}
-	if disabled := splitCSV(getenv("EDR_DISABLED_RULES")); len(disabled) > 0 {
-		c.DisabledRuleIDs = disabled
-	}
 }
 
 // loadLogConfig reads + validates the slog handler's level + format knobs. Lowercases for downstream consumers regardless of how the

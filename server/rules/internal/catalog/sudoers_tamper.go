@@ -21,8 +21,8 @@ import (
 // platform binaries themselves: `cp`, `tee`, shell redirection, even
 // `sudo vi /etc/sudoers`. Filtering platform binaries would silence
 // every realistic attack while admitting basically nothing else of
-// interest. We fire on any non-allowlisted writer instead, and let
-// operators tune via EDR_SUDOERS_WRITER_ALLOWLIST.
+// interest. We fire on any unexcluded writer instead, and let
+// operators tune with a path-glob exclusion via the detection-config surface.
 //
 // Collection (ADR-0008 / #301): these write-mode `open` events are no longer
 // drawn from a broad NOTIFY_OPEN firehose. The extension watches /etc/sudoers
@@ -45,9 +45,9 @@ import (
 // documented (same class as the privilege_launchd_plist_write atomic-rename
 // gap, which BTM registration now covers).
 type SudoersTamper struct {
-	// AllowedWriters is the set of absolute writer-process paths the rule should silently accept. Populated from
-	// EDR_SUDOERS_WRITER_ALLOWLIST. Empty by default: every direct write to sudoers fires.
-	AllowedWriters map[string]struct{}
+	// Exclusions is the per-host false-positive resolver. The rule silently accepts a write whose writer-process path matches an
+	// exclusion (match type path_glob). Nil excludes nothing (the empty-config default): every direct write to sudoers fires.
+	Exclusions api.ExclusionResolver
 }
 
 func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
@@ -68,24 +68,16 @@ func (r *SudoersTamper) Doc() api.Documentation {
 			"Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: " +
 			"the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, " +
 			"even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while " +
-			"admitting almost nothing of value. Operators tune via EDR_SUDOERS_WRITER_ALLOWLIST instead.\n\n" +
+			"admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.\n\n" +
 			"`visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the " +
 			"rule does not see them at all.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"open"},
 		FalsePositives: []string{
-			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Allowlist their absolute writer paths.",
+			"Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.",
 		},
 		Limitations: []string{
 			"Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.",
-		},
-		Config: []api.ConfigKnob{
-			{
-				EnvVar:      "EDR_SUDOERS_WRITER_ALLOWLIST",
-				Type:        "csv-paths",
-				Default:     "",
-				Description: "Comma-separated absolute writer-process paths to silently accept (e.g. `/usr/local/bin/ansible`).",
-			},
 		},
 	}
 }
@@ -180,7 +172,7 @@ func (r *SudoersTamper) evalEvent(
 	if proc.Path == "/usr/bin/sudo" && p.Flags&sudoersWriteIntentMask == 0 {
 		return nil, nil
 	}
-	if r.allowed(proc.Path) {
+	if r.excluded(proc.Path, evt.HostID) {
 		return nil, nil
 	}
 
@@ -198,10 +190,6 @@ func (r *SudoersTamper) evalEvent(
 	}, nil
 }
 
-func (r *SudoersTamper) allowed(writerPath string) bool {
-	if r.AllowedWriters == nil {
-		return false
-	}
-	_, ok := r.AllowedWriters[writerPath]
-	return ok
+func (r *SudoersTamper) excluded(writerPath, hostID string) bool {
+	return r.Exclusions != nil && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchPathGlob, writerPath, hostID)
 }
