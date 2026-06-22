@@ -30,8 +30,9 @@ func New(db *sqlx.DB) *Store {
 	return &Store{db: db}
 }
 
-// errNilDB is returned by every entry point when the Store was built without a DB handle (minimal test wiring). One sentinel keeps the
-// guard message in a single place and lets callers match it with errors.Is.
+// errNilDB is returned by every entry point when the Store was built without a DB handle, which happens only in minimal test wiring.
+// One sentinel keeps the identical guard message in a single place (the S1192 dedup). It stays unexported because the nil-DB case is a
+// construction-time misuse that no caller branches on; callers in other identity packages reach this Store through server/identity/api.
 var errNilDB = errors.New("rbac: db must not be nil")
 
 // DB returns the underlying executor for callers that need to invoke BindRole outside of a transaction (e.g. seed.Admin's idempotent
@@ -211,7 +212,7 @@ func targetIsActiveAdmin(ctx context.Context, tx *sqlx.Tx, userID int64) (bool, 
 // refuseIfLastActiveAdmin returns api.ErrLastAdmin when userID is the last active admin-tier user, so a demote or disable cannot strand
 // the deployment without an administrator. It runs on the caller's locked transaction (after lockAdminSentinel) and reads the committed
 // state under READ COMMITTED. A non-admin or already-inactive target can never be the last admin, so it returns nil.
-func (s *Store) refuseIfLastActiveAdmin(ctx context.Context, tx *sqlx.Tx, userID int64) error {
+func refuseIfLastActiveAdmin(ctx context.Context, tx *sqlx.Tx, userID int64) error {
 	active, err := targetIsActiveAdmin(ctx, tx, userID)
 	if err != nil {
 		return err
@@ -264,7 +265,7 @@ func (s *Store) SetUserRole(ctx context.Context, userID int64, roleID string) (p
 	}
 	// Guard: demoting an active admin-tier user to a non-admin role must leave at least one other active admin.
 	if isAdminTier(previous) && !isAdminTier([]string{roleID}) {
-		if err = s.refuseIfLastActiveAdmin(ctx, tx, userID); err != nil {
+		if err = refuseIfLastActiveAdmin(ctx, tx, userID); err != nil {
 			return nil, err
 		}
 	}
@@ -306,7 +307,7 @@ func (s *Store) SetUserStatus(ctx context.Context, userID int64, status string) 
 	if err = lockAdminSentinel(ctx, tx); err != nil {
 		return err
 	}
-	if err = s.refuseIfLastActiveAdmin(ctx, tx, userID); err != nil {
+	if err = refuseIfLastActiveAdmin(ctx, tx, userID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE users SET status = 'disabled' WHERE id = ?`, userID); err != nil {
