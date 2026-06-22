@@ -33,6 +33,9 @@ var (
 // (the Phase A norm, since the only host group is the immutable all-hosts group). audit may be nil (a mutation then drops its audit
 // row with a WARN, matching app-control's posture); logger defaults to slog.Default.
 func NewService(store *Store, membership Membership, audit identityapi.AuditRecorder, logger *slog.Logger) *Service {
+	if store == nil {
+		panic("detectionconfig.NewService: store must not be nil")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -112,6 +115,9 @@ func (s *Service) emitAudit(
 	targetType, targetID, reason string, payload map[string]any,
 ) {
 	if s.audit == nil {
+		// No recorder wired (non-production / tests): the mutation still committed, but flag the dropped row so audit loss is
+		// visible rather than silent. Production always wires the recorder.
+		s.logger.WarnContext(ctx, "detectionconfig: audit recorder not configured; mutation not audited", "action", string(action))
 		return
 	}
 	if payload == nil {
@@ -155,23 +161,13 @@ func (s *Service) Reload(ctx context.Context) error {
 	return nil
 }
 
-// Store returns the underlying store so the REST handler can mutate configuration and then call Reload.
-func (s *Service) Store() *Store { return s.store }
-
-// Version returns the snapshot version currently loaded in memory.
-func (s *Service) Version() int64 { return s.snap.Load().Version() }
-
 // Excluded implements api.ExclusionResolver against the current snapshot.
 func (s *Service) Excluded(ruleID string, matchType api.ExclusionMatchType, value, hostID string) bool {
 	return s.snap.Load().Excluded(ruleID, matchType, value, hostID)
 }
 
-// Mode implements api.RuleModeResolver against the current snapshot.
-func (s *Service) Mode(ruleID, hostID string) api.DetectionRuleMode {
-	return s.snap.Load().Mode(ruleID, hostID)
-}
-
-// SeverityOverride implements api.RuleModeResolver against the current snapshot.
-func (s *Service) SeverityOverride(ruleID, hostID string) string {
-	return s.snap.Load().SeverityOverride(ruleID, hostID)
+// ResolveRuleMode implements api.RuleModeResolver against the current snapshot. The single snap.Load() guarantees the engine gets a
+// consistent (mode, severity) pair even if a reload swaps the snapshot concurrently.
+func (s *Service) ResolveRuleMode(ruleID, hostID string) (api.DetectionRuleMode, string) {
+	return s.snap.Load().ResolveRuleMode(ruleID, hostID)
 }

@@ -137,7 +137,8 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 // one place and persistFinding focused on the insert.
 func (e *Engine) routeFinding(ctx context.Context, ruleID string, f api.Finding, techniques []string) error {
 	if e.modeResolver != nil {
-		switch e.modeResolver.Mode(ruleID, f.HostID) {
+		mode, severityOverride := e.modeResolver.ResolveRuleMode(ruleID, f.HostID)
+		switch mode {
 		case rulesapi.DetectionRuleModeDisabled:
 			return nil
 		case rulesapi.DetectionRuleModeMonitor:
@@ -147,8 +148,8 @@ func (e *Engine) routeFinding(ctx context.Context, ruleID string, f api.Finding,
 		case rulesapi.DetectionRuleModeAlert:
 			// Fall through to the severity-override + persist path below.
 		}
-		if sev := e.modeResolver.SeverityOverride(ruleID, f.HostID); sev != "" {
-			f.Severity = sev
+		if severityOverride != "" {
+			f.Severity = severityOverride
 		}
 	}
 	return e.persistFinding(ctx, f, techniques)

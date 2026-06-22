@@ -286,7 +286,7 @@ func TestDetectionConfig_RESTSurface(t *testing.T) {
 	resp = do(http.MethodDelete, "/exclusions/"+strconv.FormatInt(created.ID, 10)+"?reason=resolved", "")
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	resp.Body.Close()
-	resp = do(http.MethodDelete, "/exclusions/"+strconv.FormatInt(created.ID, 10), "")
+	resp = do(http.MethodDelete, "/exclusions/"+strconv.FormatInt(created.ID, 10)+"?reason=again", "")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	resp.Body.Close()
 }

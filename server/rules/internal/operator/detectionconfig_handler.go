@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fleetdm/edr/server/httpserver"
@@ -26,20 +27,36 @@ const (
 	errCodeDCInvalidID    = "detection_config.invalid_id"
 	errCodeDCNotFound     = "detection_config.not_found"
 	errCodeDCInternal     = "internal"
+
+	// msgDCInternal is the body message for every 500 the handler emits; extracted so the literal isn't duplicated (Sonar go:S1192).
+	msgDCInternal = "internal error"
+	// msgDCReasonRequired is returned when a mutation omits the audit reason. A blank reason would leave the audit row's governance
+	// field empty, defeating the surface's accountability intent, so the handler rejects it with a 400.
+	msgDCReasonRequired = "reason is required"
 )
+
+// detectionConfigService is the narrow surface the handler consumes; *detectionconfig.Service satisfies it. An interface so handler
+// tests can inject a fake returning canned results + errors to exercise the success and error branches without a database.
+type detectionConfigService interface {
+	ListExclusions(ctx context.Context) ([]api.DetectionExclusion, error)
+	ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSetting, error)
+	CreateExclusion(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.CreateExclusionInput) (api.DetectionExclusion, error)
+	DeleteExclusion(ctx context.Context, actor *identityapi.Actor, reason string, id int64) error
+	UpsertRuleSetting(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.UpsertSettingInput) (api.DetectionRuleSetting, error)
+}
 
 // DetectionConfigHandler serves the rules-context /api/v1/detection-config/* admin routes (issue #459): the per-host false-positive
 // exclusions and per-rule mode/severity the detection engine consults at evaluation time. Separate from the App Control handler
 // because the surface and dependencies do not overlap.
 type DetectionConfigHandler struct {
-	svc    *detectionconfig.Service
+	svc    detectionConfigService
 	authz  identityapi.AuthZ
 	logger *slog.Logger
 }
 
 // NewDetectionConfig builds the detection-config operator handler. svc + authz are required; logger defaults to slog.Default. A nil
 // authz would bypass the role matrix, so it panics (same posture as the other rules handlers).
-func NewDetectionConfig(svc *detectionconfig.Service, authz identityapi.AuthZ, logger *slog.Logger) *DetectionConfigHandler {
+func NewDetectionConfig(svc detectionConfigService, authz identityapi.AuthZ, logger *slog.Logger) *DetectionConfigHandler {
 	if svc == nil {
 		panic("rules operator.NewDetectionConfig: Service must not be nil")
 	}
@@ -79,7 +96,7 @@ func (h *DetectionConfigHandler) handleListExclusions(w http.ResponseWriter, r *
 	exclusions, err := h.svc.ListExclusions(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "detectionconfig list exclusions", "err", err)
-		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, "internal error")
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"exclusions": exclusions})
@@ -94,7 +111,7 @@ func (h *DetectionConfigHandler) handleListRuleSettings(w http.ResponseWriter, r
 	settings, err := h.svc.ListRuleSettings(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "detectionconfig list rule settings", "err", err)
-		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, "internal error")
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rule_settings": settings})
@@ -119,6 +136,10 @@ func (h *DetectionConfigHandler) handleCreateExclusion(w http.ResponseWriter, r 
 	}
 	var req createExclusionRequest
 	if !h.decode(ctx, w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput, msgDCReasonRequired)
 		return
 	}
 	actor, ok := h.actor(ctx, w)
@@ -159,12 +180,17 @@ func (h *DetectionConfigHandler) handleDeleteExclusion(w http.ResponseWriter, r 
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidID, "invalid exclusion id")
 		return
 	}
+	// The delete reason rides a query parameter (DELETE carries no body by convention here); it is required for the audit row.
+	reason := r.URL.Query().Get("reason")
+	if strings.TrimSpace(reason) == "" {
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput, msgDCReasonRequired)
+		return
+	}
 	actor, ok := h.actor(ctx, w)
 	if !ok {
 		return
 	}
-	// The delete reason rides a query parameter (DELETE carries no body by convention here).
-	if err := h.svc.DeleteExclusion(ctx, actor, r.URL.Query().Get("reason"), id); err != nil {
+	if err := h.svc.DeleteExclusion(ctx, actor, reason, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeDetectionConfigErr(ctx, h.logger, w, http.StatusNotFound, errCodeDCNotFound, "exclusion not found")
 			return
@@ -192,6 +218,10 @@ func (h *DetectionConfigHandler) handleUpsertRuleSetting(w http.ResponseWriter, 
 	}
 	var req upsertRuleSettingRequest
 	if !h.decode(ctx, w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Reason) == "" {
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput, msgDCReasonRequired)
 		return
 	}
 	actor, ok := h.actor(ctx, w)
@@ -237,7 +267,7 @@ func (h *DetectionConfigHandler) actor(ctx context.Context, w http.ResponseWrite
 	actor, ok := identityapi.ActorFromContext(ctx)
 	if !ok {
 		h.logger.ErrorContext(ctx, "detectionconfig handler: no actor on ctx despite session middleware")
-		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, "internal error")
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 		return nil, false
 	}
 	return actor, true
@@ -250,7 +280,7 @@ func (h *DetectionConfigHandler) writeMutationErr(ctx context.Context, w http.Re
 		return
 	}
 	h.logger.ErrorContext(ctx, "detectionconfig "+op, "err", err)
-	writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, "internal error")
+	writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 }
 
 func writeDetectionConfigErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code, message string) {

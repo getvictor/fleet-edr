@@ -19,8 +19,8 @@ import (
 )
 
 // allRegisteredRules delegates to rules.bootstrap.CatalogOnly so this generator and the production server's main.go walk the same
-// set of rules in the same order. Coverage is not a function of a deployment's tuning, so we pass the zero RegistryOptions:
-// allowlists default to empty, which the rule structs treat as "no operator tuning yet."
+// set of rules in the same order. Coverage is not a function of a deployment's tuning: CatalogOnly builds the catalog with a nil
+// exclusion resolver (no configured exclusions), which the rule structs treat as "no operator tuning yet."
 func allRegisteredRules() []rulesapi.RuleMetadata {
 	return rulesbootstrap.CatalogOnly().List()
 }

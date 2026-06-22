@@ -21,8 +21,9 @@ import (
 )
 
 // allRegisteredRules delegates to rules.bootstrap.CatalogOnly so the docs generator and the production server's main.go are guaranteed
-// to walk the same set of rules in the same order. Documentation is not a function of a particular deployment's tuning, so we pass the
-// zero value of RegistryOptions: allowlists default to empty, which is what the rule structs treat as "no operator tuning yet."
+// to walk the same set of rules in the same order. Documentation is not a function of a particular deployment's tuning: CatalogOnly
+// builds the catalog with a nil exclusion resolver (no configured exclusions), which is what the rule structs treat as "no operator
+// tuning yet."
 func allRegisteredRules() []rulesapi.RuleMetadata {
 	return rulesbootstrap.CatalogOnly().List()
 }

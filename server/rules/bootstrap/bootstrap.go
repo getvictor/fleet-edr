@@ -52,7 +52,6 @@ type Rules struct {
 	appControlH        *operator.AppControlHandler
 	appControlSt       *appcontrol.Store
 	appControlSvc      *appcontrol.Service
-	detectionConfigSt  *detectionconfig.Store
 	detectionConfigSvc *detectionconfig.Service
 	detectionConfigH   *operator.DetectionConfigHandler
 	db                 *sqlx.DB
@@ -107,7 +106,6 @@ func New(deps Deps) (*Rules, error) {
 		appControlH:        appControlH,
 		appControlSt:       appControlStore,
 		appControlSvc:      appControlSvc,
-		detectionConfigSt:  detectionConfigStore,
 		detectionConfigSvc: detectionConfigSvc,
 		detectionConfigH:   detectionConfigH,
 		db:                 deps.DB,
