@@ -19,6 +19,8 @@ func (s *stubClient) Exchange(context.Context, string, string, string) (*Claims,
 	return &Claims{Subject: s.id}, nil
 }
 
+// spec:server-identity-authentication/okta-oidc-is-the-primary-login-path/a-configuration-change-applies-to-the-next-login-without-restart
+// spec:sso-configuration/configuration-changes-apply-without-a-server-restart/a-saved-change-takes-effect-on-the-next-login
 func TestResolver_cachesUntilVersionChanges(t *testing.T) {
 	t.Parallel()
 	var cfg atomic.Pointer[ProviderConfig]

@@ -117,6 +117,7 @@ func TestHandleGet_unconfiguredReturnsConfiguredFalse(t *testing.T) {
 	assert.False(t, resp.SecretSet)
 }
 
+// spec:sso-configuration/the-client-secret-is-encrypted-at-rest-and-write-only-over-the-api/read-never-returns-the-secret
 func TestHandleGet_neverReturnsSecret(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{cfg: &ssoconfig.Config{
@@ -146,6 +147,7 @@ func TestHandleGet_deniedIsForbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
+// spec:sso-configuration/every-configuration-mutation-is-audited/saving-a-change-writes-an-audit-row
 func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	t.Parallel()
 	ap := &captureApply{}
@@ -179,6 +181,7 @@ func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	}
 }
 
+// spec:sso-configuration/the-client-secret-is-encrypted-at-rest-and-write-only-over-the-api/update-rotates-the-secret-only-when-provided
 func TestHandleUpdate_secretKeepSemantics(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -219,6 +222,7 @@ func TestHandleUpdate_versionConflictIs409(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "version_conflict")
 }
 
+// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/invalid-configuration-is-rejected
 func TestHandleUpdate_validationRejectsBeforeApply(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -252,6 +256,7 @@ func TestHandleUpdate_validationRejectsBeforeApply(t *testing.T) {
 
 func TestHandleTestConnection(t *testing.T) {
 	t.Parallel()
+	// spec:sso-configuration/test-connection-probes-the-provider-without-persisting/reachable-provider-verifies
 	t.Run("reachable", func(t *testing.T) {
 		t.Parallel()
 		h := NewHandler(&fakeStore{}, &fakeAppCfg{}, noopApply, allowAuthZ{}, &captureAudit{}, okProbe, nil)
@@ -275,6 +280,7 @@ func TestHandleTestConnection(t *testing.T) {
 		assert.False(t, probed, "a malformed issuer must not trigger a network probe")
 	})
 
+	// spec:sso-configuration/test-connection-probes-the-provider-without-persisting/unreachable-provider-fails-with-a-reason
 	t.Run("unreachable returns ok=false with reason", func(t *testing.T) {
 		t.Parallel()
 		failProbe := func(context.Context, string) error { return errors.New("discovery unreachable") }

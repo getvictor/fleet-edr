@@ -62,6 +62,7 @@ func superAdminReq(r *http.Request, uid int64) *http.Request {
 // spec:server-identity-service-accounts/access-tokens-are-validated-statelessly-on-the-api-request-path/valid-token-authenticates-without-a-database-read
 // spec:server-identity-service-accounts/revocation-takes-effect-via-short-ttl-and-a-per-replica-epoch-snapshot/a-revoked-service-account-stops-working-within-the-refresh-window
 // spec:server-identity-authentication/the-api-accepts-a-bearer-access-token-as-a-second-transport/bearer-token-authenticates-a-service-account-principal
+// spec:server-identity-service-accounts/a-service-account-is-a-non-human-principal-bound-to-a-single-role/service-account-binds-to-one-role
 func TestServiceAccounts_endToEnd(t *testing.T) {
 	t.Parallel()
 	id, db := newServiceAccountIdentity(t)

@@ -17,6 +17,7 @@ final class DNSForwardCompletionTests: XCTestCase {
         XCTAssertEqual(outcomes, [true])     // resolved exactly once, as success (not reclassified to failure)
     }
 
+    // spec:endpoint-event-collection/dns-query-capture/an-upstream-that-never-replies-does-not-hang-resolution-forever
     func testDeadlineWinsThenReceiveCannotClaim() {
         var outcomes: [Bool] = []
         let c = DNSForwardCompletion { outcomes.append($0) }

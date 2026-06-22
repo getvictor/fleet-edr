@@ -255,6 +255,7 @@ func TestStore_InsertEvents_ConcurrentReplicaShape(t *testing.T) {
 		"final events table cardinality must equal the distinct-event-id union across replicas")
 }
 
+// spec:server-event-ingestion/event-storage-drops-redundant-indexes/the-unprocessed-event-claim-still-works-after-the-index-diet
 func TestStore_FetchUnprocessedAndUnclaim(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()

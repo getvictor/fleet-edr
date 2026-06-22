@@ -42,11 +42,14 @@ func TestSnapshotExcluded(t *testing.T) {
 		hostID    string
 		want      bool
 	}{
+		// spec:server-detection-rules-engine/per-host-resolution-of-exclusions-and-rule-settings/a-global-exclusion-suppresses-the-finding-on-every-host
 		{"global glob matches version-stamped path", "suspicious_exec", api.ExclusionMatchParentPathGlob, "/Users/dev/.local/share/claude/versions/2.1.178/claude", "host-z", true},
 		{"global team id exact match", "privilege_launchd_plist_write", api.ExclusionMatchTeamID, "EQHXZ8M8AV", "host-z", true},
 		{"team id non-match", "privilege_launchd_plist_write", api.ExclusionMatchTeamID, "OTHERTEAM", "host-z", false},
 		{"group entry applies to member host", "suspicious_exec", api.ExclusionMatchParentPathGlob, "/opt/grp/tool", "host-a", true},
+		// spec:server-detection-rules-engine/per-host-resolution-of-exclusions-and-rule-settings/a-host-group-scoped-exclusion-does-not-affect-other-hosts
 		{"group entry does not apply to non-member host", "suspicious_exec", api.ExclusionMatchParentPathGlob, "/opt/grp/tool", "host-z", false},
+		// spec:server-detection-rules-engine/durable-detection-configuration-surface/an-expired-exclusion-stops-applying
 		{"expired entry does not apply", "suspicious_exec", api.ExclusionMatchParentPathGlob, "/opt/expired/tool", "host-z", false},
 		{"disabled entry is absent from the snapshot", "suspicious_exec", api.ExclusionMatchParentPathGlob, "/opt/disabled/tool", "host-z", false},
 		{"shared (rule_id empty) entry applies to any rule", "sudoers_tamper", api.ExclusionMatchPathGlob, "/a/shared/ok", "host-z", true},

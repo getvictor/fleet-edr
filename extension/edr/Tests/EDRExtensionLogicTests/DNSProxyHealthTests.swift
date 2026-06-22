@@ -56,6 +56,7 @@ final class DNSProxyHealthTests: XCTestCase {
         XCTAssertEqual(health.decide(policyActive: false).verdict, .claim)
     }
 
+    // spec:extension-network-response/dns-proxy-health-watchdog-with-policy-aware-bypass/sustained-failure-with-an-active-blocklist-does-not-open-bypass
     func testActivePolicyNeverBypasses() {
         let clock = FakeClock()
         let health = makeHealth(clock, minSamples: 5)
@@ -67,6 +68,7 @@ final class DNSProxyHealthTests: XCTestCase {
         XCTAssertEqual(health.decide(policyActive: false).verdict, .bypass)
     }
 
+    // spec:extension-network-response/dns-proxy-health-watchdog-with-policy-aware-bypass/sustained-forwarding-failure-with-no-active-policy-bypasses-and-retries
     func testFailuresAgeOutOfWindowEndingBypass() {
         let clock = FakeClock()
         let health = makeHealth(clock, window: 30, minSamples: 5)
