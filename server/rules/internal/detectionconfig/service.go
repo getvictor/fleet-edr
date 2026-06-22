@@ -174,25 +174,37 @@ func (s *Service) RefreshLoop(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			current, err := s.store.Version(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					return // shutdown raced the poll; the cancellation error is expected, not worth a WARN.
-				}
-				s.logger.WarnContext(ctx, "detectionconfig: version poll failed; retrying next tick", "err", err)
-				continue
-			}
-			if current == s.snap.Load().Version() {
-				continue
-			}
-			if err := s.Reload(ctx); err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				s.logger.WarnContext(ctx, "detectionconfig: periodic reload failed; retrying next tick", "err", err)
+			if s.refreshTick(ctx) {
+				return
 			}
 		}
 	}
+}
+
+// refreshTick performs one convergence poll: it reads the cheap version counter and reloads the snapshot only when the stored
+// version has advanced past the loaded one. It returns true when the loop should stop (the context was cancelled).
+func (s *Service) refreshTick(ctx context.Context) (stop bool) {
+	current, err := s.store.Version(ctx)
+	if err != nil {
+		return s.handleRefreshErr(ctx, "version poll", err)
+	}
+	if current == s.snap.Load().Version() {
+		return false
+	}
+	if err := s.Reload(ctx); err != nil {
+		return s.handleRefreshErr(ctx, "reload", err)
+	}
+	return false
+}
+
+// handleRefreshErr decides what a refresh error means: a cancelled context is shutdown racing the poll, so the error is expected and
+// the loop stops silently; otherwise it is transient (the next tick retries), so log a WARN and continue.
+func (s *Service) handleRefreshErr(ctx context.Context, op string, err error) (stop bool) {
+	if ctx.Err() != nil {
+		return true
+	}
+	s.logger.WarnContext(ctx, "detectionconfig: "+op+" failed; retrying next tick", "err", err)
+	return false
 }
 
 // Excluded implements api.ExclusionResolver against the current snapshot.
