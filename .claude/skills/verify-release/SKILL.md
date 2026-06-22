@@ -20,13 +20,15 @@ The final step of the release checklist: confirm a published GitHub Release (`vX
 - `cosign` v3+ (`brew install cosign`).
 - `shasum` and `pkgutil` / `xcrun` / `spctl` (stock macOS) for the pkg checks.
 
-Set the constants used throughout:
+Set the constants used throughout. `TAG` must already be set (see Inputs); the signing identity is pinned to THIS tag's `release.yml` run, not any `v*` tag, so an artifact signed for a different release cannot pass even if assets were swapped between releases:
 
 ```sh
 REPO=getvictor/fleet-edr
 IMAGE=ghcr.io/getvictor/fleet-edr-server
-IDENTITY='^https://github\.com/getvictor/fleet-edr/\.github/workflows/release\.yml@refs/tags/v'
 ISSUER='https://token.actions.githubusercontent.com'
+# Escape regex metacharacters in the tag (the dots), then pin the identity to exactly this tag.
+TAG_RE=$(printf '%s' "$TAG" | sed 's/[.[\*^$()+?{|]/\\&/g')
+IDENTITY="^https://github\.com/getvictor/fleet-edr/\.github/workflows/release\.yml@refs/tags/${TAG_RE}\$"
 ```
 
 ## Step 1: confirm every expected asset is present
@@ -46,27 +48,37 @@ gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | sort
 
 Flag any missing or unexpected asset. A missing `.sigstore.json` for any artifact, or a missing SBOM, is a release defect: stop and report it.
 
-## Step 2: download and verify checksums
+## Step 2: download, then establish trust in SHA256SUMS before using it
+
+Order matters: verify the signature on `SHA256SUMS` itself BEFORE trusting it to validate the other downloads, otherwise a tampered `SHA256SUMS` could report a false `OK`.
 
 ```sh
 workdir=$(mktemp -d) && cd "$workdir"
 gh release download "$TAG" --repo "$REPO"
+
+# 1. Trust SHA256SUMS via its own Sigstore bundle FIRST.
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  SHA256SUMS
+
+# 2. Only now use the trusted SHA256SUMS to checksum every other artifact.
 shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
-Expect every line to print `OK`. Any `FAILED` is a corrupted or tampered artifact: stop and report.
+Expect `Verified OK` for the bundle, then every `shasum` line `OK`. Any `FAILED` is a corrupted or tampered artifact: stop and report.
 
-## Step 3: verify the Sigstore bundle for each blob artifact
+## Step 3: verify the Sigstore bundle for each remaining blob artifact
 
-The same identity/issuer constraints apply to every blob. Loop over the six artifacts:
+`SHA256SUMS` was already verified in step 2. The same identity/issuer constraints apply to every other blob; loop over the remaining five artifacts:
 
 ```sh
 for f in fleet-edr-"$TAG".pkg \
          edr-system-extension.mobileconfig \
          edr-tcc-fda.mobileconfig \
          fleet-edr-"$TAG"-sbom.spdx.json \
-         fleet-edr-"$TAG"-sbom.cdx.json \
-         SHA256SUMS; do
+         fleet-edr-"$TAG"-sbom.cdx.json; do
   echo "== $f =="
   cosign verify-blob \
     --bundle "${f}.sigstore.json" \
@@ -76,7 +88,7 @@ for f in fleet-edr-"$TAG".pkg \
 done
 ```
 
-Expect `Verified OK` for each. The certificate-identity binds the signature to the `release.yml` workflow run on a `refs/tags/v*` ref, so a stolen Developer ID cert alone cannot forge a passing artifact.
+Expect `Verified OK` for each. The certificate-identity binds the signature to this tag's `release.yml` workflow run, so a stolen Developer ID cert alone cannot forge a passing artifact.
 
 ## Step 4: verify the server image signature
 
@@ -88,13 +100,19 @@ cosign verify "$IMAGE:$TAG" \
   --certificate-oidc-issuer "$ISSUER"
 ```
 
-For a stable (non-`-rc`) tag, also confirm `$IMAGE:latest` resolves to the same digest as `$IMAGE:$TAG` (the workflow only advances `:latest` on stable tags):
+For a stable (non-`-rc`) tag, also confirm `$IMAGE:latest` resolves to the SAME digest as `$IMAGE:$TAG` (the workflow only advances `:latest` on stable tags). Capture both digests and compare them; do not just print them (`brew install crane` if needed):
 
 ```sh
-gh api "/users/getvictor/packages/container/fleet-edr-server/versions" --jq \
-  '.[] | select(.metadata.container.tags[]? == "latest") | .name' # digest carrying :latest
-crane digest "$IMAGE:$TAG" 2>/dev/null || cosign triangulate "$IMAGE:$TAG"
+latest_digest=$(crane digest "$IMAGE:latest")
+tag_digest=$(crane digest "$IMAGE:$TAG")
+if [ -n "$tag_digest" ] && [ "$latest_digest" = "$tag_digest" ]; then
+  echo "PASS: :latest matches $TAG ($tag_digest)"
+else
+  echo "FAIL: :latest=$latest_digest does not match $TAG=$tag_digest"
+fi
 ```
+
+Skip this comparison for an `-rc` tag: `:latest` legitimately points at the previous stable release.
 
 ## Step 5: verify build-provenance attestations
 
