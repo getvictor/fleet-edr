@@ -1,5 +1,16 @@
-// Package logging builds the *slog.Logger used by the EDR agent. It mirrors server/logging: multi-handler fans to stderr and the
-// otelslog bridge, plus span-context enrichment so every record carries trace_id+span_id when a span is active.
+// Package logging builds the *slog.Logger used by the EDR server and agent.
+//
+// The returned logger fans records across two handlers:
+//  1. A stderr handler (JSON or text), wrapped in an enricher that stamps trace_id+span_id from
+//     the context span onto every record.
+//  2. An OTel slog bridge handler that exports the same records via the OTel LoggerProvider so
+//     they show up alongside traces in the backend (SigNoz, Tempo, Datadog, etc.).
+//
+// The bridge is wired against the global LoggerProvider installed by observability.Init; when
+// OTel is disabled, the global provider is a no-op and records simply do not leave the process.
+//
+// This package lives under internal/ because both the server and the agent need it and the
+// agent-server import boundary (enforced by depguard) forbids one importing the other.
 package logging
 
 import (
@@ -13,15 +24,19 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Options selects the handler flavor and base attrs.
+// Options selects the handler flavor.
 type Options struct {
-	Level               string
-	Format              string
+	// Level is one of "debug", "info", "warn", "error". Case-insensitive.
+	Level string
+	// Format is "json" or "text". JSON is the production default.
+	Format string
+	// InstrumentationName is the slog "logger name" passed to the OTel bridge. Use your binary name.
 	InstrumentationName string
-	BaseAttrs           []slog.Attr
+	// BaseAttrs are attached to every record from this logger. Useful for host_id on the agent.
+	BaseAttrs []slog.Attr
 }
 
-// New returns a *slog.Logger per Options.
+// New builds a *slog.Logger per Options writing to w (typically os.Stderr) and the OTel bridge.
 func New(w io.Writer, opts Options) (*slog.Logger, error) {
 	lvl, err := parseLevel(opts.Level)
 	if err != nil {
@@ -41,14 +56,18 @@ func New(w io.Writer, opts Options) (*slog.Logger, error) {
 	default:
 		return nil, fmt.Errorf("log format %q must be 'json' or 'text'", opts.Format)
 	}
+
+	// Enrich stderr records with trace context drawn from ctx. The OTel bridge handler below
+	// already adds these fields on its own side, so we only decorate the stderr handler.
 	stderr = &traceEnricher{next: stderr}
 
 	name := opts.InstrumentationName
 	if name == "" {
-		name = "fleet-edr-agent"
+		name = "fleet-edr"
 	}
-	// otelslog.NewHandler's own Enabled() always returns true; without this wrapper DEBUG/INFO
-	// records would reach OTLP even when EDR_LOG_LEVEL is WARN or ERROR.
+	// otelslog.NewHandler reads the global LoggerProvider. When OTel is disabled this becomes a cheap no-op emitter. Upstream's Enabled()
+	// always returns true, so we wrap it in a level filter that matches the stderr handler: otherwise DEBUG and INFO records would be
+	// exported to OTLP even when the configured level is WARN or ERROR.
 	otelHandler := slog.Handler(&levelFilter{level: lvl, next: otelslog.NewHandler(name)})
 
 	h := slog.Handler(&multiHandler{handlers: []slog.Handler{stderr, otelHandler}})
@@ -99,7 +118,11 @@ func (l *levelFilter) WithGroup(name string) slog.Handler {
 	return &levelFilter{level: l.level, next: l.next.WithGroup(name)}
 }
 
-type traceEnricher struct{ next slog.Handler }
+// traceEnricher adds trace_id and span_id attrs from the context span, when present, to every
+// record passing through. It delegates to the wrapped handler for everything else.
+type traceEnricher struct {
+	next slog.Handler
+}
 
 func (t *traceEnricher) Enabled(ctx context.Context, level slog.Level) bool {
 	return t.next.Enabled(ctx, level)
@@ -123,7 +146,10 @@ func (t *traceEnricher) WithGroup(name string) slog.Handler {
 	return &traceEnricher{next: t.next.WithGroup(name)}
 }
 
-type multiHandler struct{ handlers []slog.Handler }
+// multiHandler fans a record to every wrapped handler.
+type multiHandler struct {
+	handlers []slog.Handler
+}
 
 func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	for _, h := range m.handlers {
@@ -140,6 +166,8 @@ func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
 		if !h.Enabled(ctx, r.Level) {
 			continue
 		}
+		// Each handler must get its own copy because Handle is allowed to mutate the record (add
+		// attrs, advance the PC walk, etc.).
 		if err := h.Handle(ctx, r.Clone()); err != nil && firstErr == nil {
 			firstErr = err
 		}

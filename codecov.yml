@@ -93,7 +93,6 @@ ignore:
   - "schema/**"
   - "extension/edr/**"
   - "agent/receiver/**"
-  - "agent/logging/**"
   - "server/bootstrap/**"
   - "server/httpserver/**"
   - "test/**"
