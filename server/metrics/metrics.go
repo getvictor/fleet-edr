@@ -26,6 +26,9 @@ const (
 	// defaultOfflineThreshold is the gauge cutoff used when Options.OfflineThreshold is zero. Mirrored as the UI offline cutoff so SigNoz
 	// numbers match what operators see on the host page.
 	defaultOfflineThreshold = 5 * time.Minute
+
+	// unitEvent is the OTel unit annotation (UCUM "{event}") shared by the event-counting instruments.
+	unitEvent = "{event}"
 )
 
 // httpDurationBuckets is the OTel HTTP semantic-convention default bucket set for http.server.request.duration, in seconds.
@@ -95,12 +98,12 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.eventsIngested, _ = meter.Int64Counter(
 		"edr.events.ingested",
 		metric.WithDescription("Events accepted by POST /api/events, by host_id."),
-		metric.WithUnit("{event}"),
+		metric.WithUnit(unitEvent),
 	)
 	r.heartbeatsDropped, _ = meter.Int64Counter(
 		"edr.ingest.heartbeats_dropped",
 		metric.WithDescription("snapshot_heartbeat events accepted but not persisted as event rows (their freshness side effect is applied at ingest), by host_id."),
-		metric.WithUnit("{event}"),
+		metric.WithUnit(unitEvent),
 	)
 	r.alertsCreated, _ = meter.Int64Counter(
 		"edr.alerts.created",
@@ -125,7 +128,7 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.queueDropped, _ = meter.Int64Counter(
 		"edr.agent.queue.dropped",
 		metric.WithDescription("Events dropped by agent queue cap. Attribute `lossy=true` means data loss; `lossy=false` means already-delivered rows trimmed for space."),
-		metric.WithUnit("{event}"),
+		metric.WithUnit(unitEvent),
 	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
 	// recognizes http.server.request.duration and its standard attributes. The histogram's count gives request rate, a status-code
