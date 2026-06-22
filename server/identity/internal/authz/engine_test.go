@@ -302,17 +302,18 @@ func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
 // spec:server-identity-authorization/a-service-account-actor-is-evaluated-by-the-chokepoint-but-is-never-session-fresh/service-account-actor-authorized-purely-by-role
 // spec:server-identity-authorization/a-service-account-actor-is-evaluated-by-the-chokepoint-but-is-never-session-fresh/role-without-the-action-is-denied-regardless-of-token-validity
 //
-// A service-account actor (AuthMethod=service_account) is evaluated by the same chokepoint as a human. The reauth freshness gate, which
-// the Rego keys on session_fresh, must not block it: the serviceaccounts authenticator mints the actor with SessionFresh=true precisely
-// so whether it may take a destructive, reauth-gated action (host.isolate) turns solely on whether its bound role grants the action.
-// senior_analyst grants host.isolate (allow, granted); analyst does not (deny with no_matching_rule, NOT reauth_required, so the wire
-// response does not leak role information).
+// A service-account actor (AuthMethod=service_account) is evaluated by the same chokepoint as a human. It is NEVER session-fresh (a
+// machine has no interactive session to re-freshen), yet the reauth freshness gate must not block it: the chokepoint exempts a
+// service-account principal by identity (the policy's reauth_satisfied rule), so whether it may take a destructive, reauth-gated action
+// (host.isolate) turns solely on whether its bound role grants the action. Building the actor with SessionFresh=false is what makes this
+// test prove the exemption rather than merely re-testing a fresh session. senior_analyst grants host.isolate (allow, granted); analyst
+// does not (deny with no_matching_rule, NOT reauth_required, so the wire response does not leak role information).
 func TestAllow_ServiceAccountActor_RoleDecidesDestructiveAction(t *testing.T) {
 	e, _ := newEngine(t)
 	serviceAccount := func(roleID string) *api.Actor {
 		return &api.Actor{
 			AuthMethod:   serviceaccounts.AuthMethodServiceAccount,
-			SessionFresh: true,
+			SessionFresh: false,
 			Roles:        []api.RoleBinding{globalBinding(roleID, "default")},
 		}
 	}

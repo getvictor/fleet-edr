@@ -206,6 +206,37 @@ test_admin_run_script_denied_when_stale if {
 	d == {"allow": false, "reason": "reauth_required"}
 }
 
+# --- Service-account exemption: the reauth gate is a human-interactive-session
+#     control and does not apply to a non-interactive service-account actor. A
+#     service account is never session_fresh; the chokepoint exempts it by
+#     identity (auth_method), so a destructive action turns solely on its role.
+
+test_service_account_isolate_host_allowed_without_fresh_session if {
+	d := authz.decision with input as {
+		"actor": {
+			"auth_method": "service_account",
+			"roles": [{"role_id": "senior_analyst", "scope_type": "global", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "host.isolate",
+		"resource": {"type": "host", "id": "abc"},
+	}
+	d == {"allow": true, "reason": "granted"}
+}
+
+test_service_account_without_grant_denied_no_matching_rule if {
+	d := authz.decision with input as {
+		"actor": {
+			"auth_method": "service_account",
+			"roles": [{"role_id": "analyst", "scope_type": "global", "scope_id": "*"}],
+			"session_fresh": false,
+		},
+		"action": "host.isolate",
+		"resource": {"type": "host", "id": "abc"},
+	}
+	d == {"allow": false, "reason": "no_matching_rule"}
+}
+
 # Critical-severity alert.resolve is reauth-gated; lower severities
 # pass through even with a stale session. The handler is responsible
 # for fetching alert.severity before the gate.
