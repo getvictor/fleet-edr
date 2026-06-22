@@ -56,6 +56,8 @@ final class DNSProxyHealthTests: XCTestCase {
         XCTAssertEqual(health.decide(policyActive: false).verdict, .claim)
     }
 
+    // The spec marker ID is a single unwrappable token; disable line_length for it as the other marked suites do.
+    // swiftlint:disable:next line_length
     // spec:extension-network-response/dns-proxy-health-watchdog-with-policy-aware-bypass/sustained-failure-with-an-active-blocklist-does-not-open-bypass
     func testActivePolicyNeverBypasses() {
         let clock = FakeClock()
@@ -68,6 +70,8 @@ final class DNSProxyHealthTests: XCTestCase {
         XCTAssertEqual(health.decide(policyActive: false).verdict, .bypass)
     }
 
+    // The spec marker ID is a single unwrappable token; disable line_length for it as the other marked suites do.
+    // swiftlint:disable:next line_length
     // spec:extension-network-response/dns-proxy-health-watchdog-with-policy-aware-bypass/sustained-forwarding-failure-with-no-active-policy-bypasses-and-retries
     func testFailuresAgeOutOfWindowEndingBypass() {
         let clock = FakeClock()
