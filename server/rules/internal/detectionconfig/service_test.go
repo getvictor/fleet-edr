@@ -149,9 +149,11 @@ func TestService_RefreshLoop_ConvergesAcrossReplicas(t *testing.T) {
 	go svcB.RefreshLoop(t.Context(), 20*time.Millisecond)
 
 	// Replica A creates the exclusion. This bumps detection_config_meta.version; B never sees the mutation directly.
-	_, err := svcA.CreateExclusion(t.Context(), &identityapi.Actor{UserID: 1}, "munki staged installer writes sudoers", detectionconfig.CreateExclusionInput{
-		RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchPathGlob, Value: "/var/db/munki/installer",
-	})
+	_, err := svcA.CreateExclusion(
+		t.Context(), &identityapi.Actor{UserID: 1}, "munki staged installer writes sudoers",
+		detectionconfig.CreateExclusionInput{
+			RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchPathGlob, Value: "/var/db/munki/installer",
+		})
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {

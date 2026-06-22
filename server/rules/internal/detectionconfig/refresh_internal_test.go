@@ -30,16 +30,26 @@ func newInternalStore(t *testing.T) (*Store, *sqlx.DB) {
 func TestHandleRefreshErr(t *testing.T) {
 	t.Parallel()
 	svc := NewService(NewStore(testdb.Open(t)), nil, nil, nil) // store is unused by handleRefreshErr; just satisfies the nil-store guard
-
-	// Live context: the error is transient, so log + continue (stop=false).
-	assert.False(t, svc.handleRefreshErr(context.Background(), "version poll", errors.New("boom")),
-		"a transient error under a live context must not stop the loop")
-
-	// Cancelled context: shutdown raced the poll, so stop silently (stop=true, no WARN).
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	assert.True(t, svc.handleRefreshErr(ctx, "reload", context.Canceled),
-		"a cancelled context must stop the loop")
+	cases := []struct {
+		name     string
+		cancel   bool // cancel the context before the call
+		wantStop bool
+	}{
+		{"live context logs and continues", false, false},
+		{"cancelled context stops silently", true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			if tc.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			assert.Equal(t, tc.wantStop, svc.handleRefreshErr(ctx, "version poll", errors.New("boom")))
+		})
+	}
 }
 
 func TestRefreshTick(t *testing.T) {
@@ -47,12 +57,24 @@ func TestRefreshTick(t *testing.T) {
 	store, _ := newInternalStore(t)
 	svc := NewService(store, nil, nil, nil)
 	require.NoError(t, svc.Reload(t.Context()))
-
-	// Stored version matches the loaded snapshot: nothing to do, keep looping.
-	assert.False(t, svc.refreshTick(t.Context()), "an unchanged version must not stop the loop")
-
-	// Cancelled context makes store.Version(ctx) return a cancellation error, so the tick stops the loop.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	assert.True(t, svc.refreshTick(ctx), "a cancelled context during the poll must stop the loop")
+	cases := []struct {
+		name     string
+		cancel   bool // cancel the context, making store.Version(ctx) return a cancellation error
+		wantStop bool
+	}{
+		{"unchanged version keeps looping", false, false},
+		{"cancelled context during poll stops", true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			if tc.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(context.Background())
+				cancel()
+			}
+			assert.Equal(t, tc.wantStop, svc.refreshTick(ctx))
+		})
+	}
 }
