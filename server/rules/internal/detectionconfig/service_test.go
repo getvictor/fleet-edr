@@ -90,6 +90,33 @@ func TestService_UpsertRuleSetting_ResolvesAndAudits(t *testing.T) {
 	assert.Equal(t, identityapi.AuditDetectionConfigRuleSettingUpdate, audit.events[0].Action)
 }
 
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-re-enables-a-previously-disabled-rule
+//
+// The disable then re-enable transition: an operator disables a rule (the resolver returns disabled), then sets it back to alert on the
+// SAME running Service. The resolver reflects the re-enable without recreating the Service, because each UpsertRuleSetting reloads the
+// in-memory snapshot the resolver reads.
+func TestService_UpsertRuleSetting_ReEnablePreviouslyDisabledRule(t *testing.T) {
+	t.Parallel()
+	svc := newService(t, &fakeAudit{})
+	ctx := context.Background()
+	actor := &identityapi.Actor{UserID: 7}
+
+	_, err := svc.UpsertRuleSetting(ctx, actor, "too noisy", detectionconfig.UpsertSettingInput{
+		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeDisabled,
+	})
+	require.NoError(t, err)
+	mode, _ := svc.ResolveRuleMode("suspicious_exec", "host-a")
+	require.Equal(t, api.DetectionRuleModeDisabled, mode, "rule starts disabled")
+
+	// Re-enable the same rule on the same Service instance: no restart, no new Service.
+	_, err = svc.UpsertRuleSetting(ctx, actor, "false positives resolved", detectionconfig.UpsertSettingInput{
+		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeAlert,
+	})
+	require.NoError(t, err)
+	mode, _ = svc.ResolveRuleMode("suspicious_exec", "host-a")
+	assert.Equal(t, api.DetectionRuleModeAlert, mode, "re-enable takes effect without a restart")
+}
+
 func TestService_DeleteExclusion(t *testing.T) {
 	t.Parallel()
 	audit := &fakeAudit{}
