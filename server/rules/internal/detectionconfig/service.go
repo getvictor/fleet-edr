@@ -181,8 +181,8 @@ func (s *Service) RefreshLoop(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// refreshTick performs one convergence poll: it reads the cheap version counter and reloads the snapshot only when the stored
-// version has advanced past the loaded one. It returns true when the loop should stop (the context was cancelled).
+// refreshTick performs one convergence poll: it reads the cheap version counter and reloads the snapshot when the stored version
+// differs from the loaded one (versions are monotonic, so a difference means a peer advanced it). Returns true to stop (ctx cancelled).
 func (s *Service) refreshTick(ctx context.Context) (stop bool) {
 	current, err := s.store.Version(ctx)
 	if err != nil {

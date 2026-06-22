@@ -1,8 +1,11 @@
 package detectionconfig
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -29,18 +32,22 @@ func newInternalStore(t *testing.T) (*Store, *sqlx.DB) {
 
 func TestHandleRefreshErr(t *testing.T) {
 	t.Parallel()
-	svc := NewService(NewStore(testdb.Open(t)), nil, nil, nil) // store is unused by handleRefreshErr; just satisfies the nil-store guard
 	cases := []struct {
 		name     string
 		cancel   bool // cancel the context before the call
 		wantStop bool
+		wantLog  bool // a WARN is emitted only for a transient (non-cancelled) error
 	}{
-		{"live context logs and continues", false, false},
-		{"cancelled context stops silently", true, true},
+		{"live context logs and continues", false, false, true},
+		{"cancelled context stops silently", true, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			// A buffered logger keeps the expected WARN out of CI output (the service otherwise defaults to slog.Default ->
+			// stderr) and lets us assert the log-vs-silent contract directly.
+			var buf bytes.Buffer
+			svc := NewService(NewStore(testdb.Open(t)), nil, nil, slog.New(slog.NewTextHandler(&buf, nil)))
 			ctx := context.Background()
 			if tc.cancel {
 				var cancel context.CancelFunc
@@ -48,6 +55,7 @@ func TestHandleRefreshErr(t *testing.T) {
 				cancel()
 			}
 			assert.Equal(t, tc.wantStop, svc.handleRefreshErr(ctx, "version poll", errors.New("boom")))
+			assert.Equal(t, tc.wantLog, strings.Contains(buf.String(), "version poll failed"))
 		})
 	}
 }

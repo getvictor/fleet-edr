@@ -6,5 +6,5 @@
 - [x] `detectionconfig.Service.RefreshLoop(ctx, interval)` + rules-context `Run(ctx)` + `cmd/fleet-edr-server` wiring; poll `detection_config_meta.version`, reload on change.
 - [x] Two-replica convergence integration test (separate Service+Store on one DB).
 - [x] OpenSpec delta + spectrace markers for the two new scenarios.
-- [ ] Gates: `go build`, `go test`, `task lint:go`, `task lint:dashes`, `tools/spectrace check --strict`, `openspec validate detection-config-hardening --strict`.
+- [x] Gates: `go build`, `go test`, `task lint:go`, `task lint:dashes`, `tools/spectrace check --strict`, `openspec validate detection-config-hardening --strict`.
 - [ ] Archive at release (batched), not per-merge.
