@@ -46,6 +46,27 @@ func TestSudoersTamper_ExcludedEdgeCases(t *testing.T) {
 		"empty path must not match a non-empty entry")
 }
 
+// TestSudoersTamper_ExcludedCanonicalizesPrivatePaths pins the #482 path-alias fix at the rule layer: /etc, /var, /tmp are macOS
+// symlinks into /private and ESF may report either form, so an exclusion written in one form must suppress an event reported in the
+// other. Exercised through the rule's own excluded() so a future regression in the matcher is caught where operators feel it.
+// spec:server-detection-rules-engine/path-exclusions-match-across-the-macos-private-firmlink-boundary/an-exclusion-matches-the-aliased-form-of-the-candidate-path
+func TestSudoersTamper_ExcludedCanonicalizesPrivatePaths(t *testing.T) {
+	t.Parallel()
+	// Operator excluded the bare /etc form; the rule sees the /private/etc form.
+	rEtc := &SudoersTamper{Exclusions: &fakeExclusions{entries: []fakeExcl{
+		{ruleID: "sudoers_tamper", matchType: api.ExclusionMatchPathGlob, value: "/etc/sudoers"},
+	}}}
+	assert.True(t, rEtc.excluded("/private/etc/sudoers", "host-a"),
+		"a /etc exclusion must suppress the /private/etc form ESF can report")
+
+	// And the reverse: operator excluded the /private form; the rule sees the bare form.
+	rPrivate := &SudoersTamper{Exclusions: &fakeExclusions{entries: []fakeExcl{
+		{ruleID: "sudoers_tamper", matchType: api.ExclusionMatchPathGlob, value: "/private/etc/*"},
+	}}}
+	assert.True(t, rPrivate.excluded("/etc/sudoers", "host-a"),
+		"a /private/etc glob must suppress the bare /etc form")
+}
+
 // TestSudoersTamper_MalformedPayload exercises the unmarshal-failure path: the fast-path bytes.Contains lets it through (the magic
 // substring is present), then unmarshal trips and the rule drops the event silently.
 func TestSudoersTamper_MalformedPayload(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -111,6 +112,18 @@ func New(deps Deps) (*Rules, error) {
 		db:                 deps.DB,
 		logger:             logger,
 	}, nil
+}
+
+// DefaultDetectionConfigRefreshInterval is how often a replica polls the detection-config version counter to pick up a config edit
+// made on another replica. Matches the revocation-snapshot cadence: edits are infrequent + operator-driven and the poll is a single
+// indexed-row read, so a tight interval is cheap and keeps cross-replica convergence far under the alert-evaluation timescale.
+const DefaultDetectionConfigRefreshInterval = 5 * time.Second
+
+// Run drives the rules context's background workers until ctx is cancelled. Today that is just the detection-config snapshot refresh,
+// which converges this replica with config mutations made on other replicas (ADR-0010 stateless server; mutations elsewhere only bump
+// the shared version counter). cmd/main starts this in a goroutine alongside the other contexts' background loops.
+func (r *Rules) Run(ctx context.Context) {
+	r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
 }
 
 // ApplySchema applies the rules context's goose migration corpus and seeds the `Default` application control policy. Idempotent

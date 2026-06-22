@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
@@ -159,6 +160,33 @@ func (s *Service) Reload(ctx context.Context) error {
 	}
 	s.snap.Store(snap)
 	return nil
+}
+
+// RefreshLoop periodically converges this replica's snapshot with mutations made on OTHER replicas, which only bump the version +
+// reload their own snapshot (ADR-0010: the snapshot is a per-replica cache, so a peer's mutation is invisible here until we re-read).
+// Each tick reads only the cheap single-row version counter; a full LoadSnapshot runs only when the stored version differs from the
+// loaded snapshot's, so a steady state with no config churn is one indexed read per interval. Blocks until ctx is cancelled.
+func (s *Service) RefreshLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			current, err := s.store.Version(ctx)
+			if err != nil {
+				s.logger.WarnContext(ctx, "detectionconfig: version poll failed; retrying next tick", "err", err)
+				continue
+			}
+			if current == s.snap.Load().Version() {
+				continue
+			}
+			if err := s.Reload(ctx); err != nil {
+				s.logger.WarnContext(ctx, "detectionconfig: periodic reload failed; retrying next tick", "err", err)
+			}
+		}
+	}
 }
 
 // Excluded implements api.ExclusionResolver against the current snapshot.

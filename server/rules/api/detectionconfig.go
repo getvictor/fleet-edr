@@ -81,7 +81,18 @@ func IsValidExclusionMatchType(mt ExclusionMatchType) bool {
 func MatchExclusionValue(mt ExclusionMatchType, entry, candidate string) bool {
 	switch mt {
 	case ExclusionMatchPathGlob, ExclusionMatchParentPathGlob:
-		return GlobMatch(entry, candidate)
+		// macOS /etc, /var, /tmp are symlinks into /private, and ESF reports a path in either form depending on how it was
+		// resolved, so an operator who excludes `/etc/...` must still match an event reported as `/private/etc/...` (and vice
+		// versa). The exclusion `entry` is a glob (`*/claude/versions/*`), which can't be canonicalized cleanly, so instead of
+		// rewriting the glob we test it against BOTH macOS forms of the concrete candidate path. macOSPathAlias yields the
+		// counterpart form (or "" when the path has no aliasable prefix), so a non-/private path costs one extra GlobMatch at most.
+		if GlobMatch(entry, candidate) {
+			return true
+		}
+		if alias := macOSPathAlias(candidate); alias != "" {
+			return GlobMatch(entry, alias)
+		}
+		return false
 	case ExclusionMatchCommandSubstring:
 		return entry != "" && strings.Contains(candidate, entry)
 	case ExclusionMatchDomain:
@@ -125,6 +136,24 @@ func GlobMatch(pattern, name string) bool {
 		px++
 	}
 	return px == len(pattern)
+}
+
+// macOSPathAlias returns the counterpart macOS form of an absolute path across the /private firmlink boundary, or "" when the path
+// has no aliasable prefix. /etc, /var, /tmp are symlinks into /private, so `/etc/sudoers` and `/private/etc/sudoers` name the same
+// file; ESF may report either. Used by MatchExclusionValue so a path-glob exclusion matches regardless of which form the event
+// carried. Only the leading segment is rewritten (a deeper `/private` is left alone), and a path under none of the three prefixes
+// returns "" so the caller skips the extra match.
+func macOSPathAlias(p string) string {
+	for _, prefix := range []string{"/etc", "/var", "/tmp"} {
+		if p == prefix || strings.HasPrefix(p, prefix+"/") {
+			return "/private" + p
+		}
+		private := "/private" + prefix
+		if p == private || strings.HasPrefix(p, private+"/") {
+			return strings.TrimPrefix(p, "/private")
+		}
+	}
+	return ""
 }
 
 // GlobalScope is the sentinel host-group id meaning "applies to every host" for a detection-config record whose scope is global. The
