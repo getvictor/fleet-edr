@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { DetectionConfig } from "./DetectionConfig";
@@ -71,6 +71,12 @@ function renderPage(
   );
 }
 
+// jsdom doesn't implement HTMLDialogElement.showModal/close; stub them so the reason modal renders.
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function showModal() { this.open = true; };
+  HTMLDialogElement.prototype.close = function close() { this.open = false; };
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -133,6 +139,23 @@ describe("DetectionConfig", () => {
     });
   });
 
+  it("sends an optional expiry as an RFC3339 end-of-day instant when set", async () => {
+    stubReads({ rules: [makeRuleEntry()] });
+    const create = vi.spyOn(api, "createDetectionExclusion").mockResolvedValue(makeExclusion());
+    renderPage();
+    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "*/foo/*" } });
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "benign tool" } });
+    fireEvent.change(screen.getByLabelText(/expires/i), { target: { value: "2026-07-01" } });
+    fireEvent.click(screen.getByRole("button", { name: /add exclusion/i }));
+
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ expires_at: "2026-07-01T23:59:59Z" }));
+    });
+  });
+
   it("disables Add until rule, value, and reason are filled", async () => {
     stubReads({ rules: [makeRuleEntry()] });
     renderPage();
@@ -152,24 +175,63 @@ describe("DetectionConfig", () => {
     });
   });
 
-  it("upserts a rule setting when the mode changes", async () => {
+  // Reducing a rule's alerting (-> disabled/monitor) opens the reason modal; the operator's reason rides the upsert for the audit row.
+  // spec:web-ui/detection-configuration-admin-views/disabling-or-monitoring-a-rule-requires-an-operator-reason
+  it("requires a reason via the modal before disabling a rule", async () => {
     stubReads({ rules: [makeRuleEntry()], settings: [] });
-    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting());
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "disabled" }));
     renderPage();
     await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
 
     fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "disabled" } });
+    // The modal opens and nothing is sent yet.
+    await waitFor(() => { expect(screen.getByText(/Disable "Suspicious execution"/)).toBeInTheDocument(); });
+    expect(upsert).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/required for audit log/i), { target: { value: "noisy in the pilot fleet" } });
+    fireEvent.click(screen.getByRole("button", { name: "Disable rule" }));
     await waitFor(() => {
       expect(upsert).toHaveBeenCalledWith({
         rule_id: "suspicious_exec",
         mode: "disabled",
         severity_override: undefined,
-        reason: "updated via admin UI",
+        reason: "noisy in the pilot fleet",
       });
     });
   });
 
-  it("upserts a rule setting when the severity override changes, preserving the current mode", async () => {
+  it("cancelling the reason modal sends no mutation", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [] });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting());
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "monitor" } });
+    await waitFor(() => { expect(screen.getByText(/Set "Suspicious execution" to monitor/)).toBeInTheDocument(); });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => { expect(screen.queryByText(/to monitor/)).not.toBeInTheDocument(); });
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("re-enabling a rule (mode -> alert) applies immediately with a generated reason and no modal", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "disabled", severity_override: undefined })] });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "alert" } });
+    await waitFor(() => {
+      expect(upsert).toHaveBeenCalledWith({
+        rule_id: "suspicious_exec",
+        mode: "alert",
+        severity_override: undefined,
+        reason: "re-enabled via admin UI",
+      });
+    });
+    expect(screen.queryByRole("button", { name: "Disable rule" })).not.toBeInTheDocument();
+  });
+
+  it("changing only the severity override applies immediately with a generated reason and no modal", async () => {
     stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "monitor", severity_override: undefined })] });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting());
     renderPage();
@@ -181,9 +243,10 @@ describe("DetectionConfig", () => {
         rule_id: "suspicious_exec",
         mode: "monitor",
         severity_override: "critical",
-        reason: "updated via admin UI",
+        reason: "severity override changed via admin UI",
       });
     });
+    expect(screen.queryByText(/to monitor|Disable/)).not.toBeInTheDocument();
   });
 
   it("disables the delete button while a mutation is in flight, then re-enables it", async () => {

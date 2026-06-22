@@ -16,6 +16,7 @@ import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
+import { ReasonModal } from "./ReasonModal";
 import "./DetectionConfig.scss";
 
 // The match types the exclusion editor offers, mirroring api.ExclusionMatchType server-side.
@@ -69,11 +70,17 @@ export function DetectionConfig() {
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  // Add-exclusion form state.
+  // Add-exclusion form state. formExpires is an optional YYYY-MM-DD from a date input; converted to an RFC3339 end-of-day instant.
   const [formRuleID, setFormRuleID] = useState("");
   const [formMatchType, setFormMatchType] = useState<string>(MATCH_TYPES[0]);
   const [formValue, setFormValue] = useState("");
   const [formReason, setFormReason] = useState("");
+  const [formExpires, setFormExpires] = useState("");
+
+  // pendingMode holds a not-yet-applied alerting-reducing rule change (mode -> monitor/disabled) while the reason modal collects an
+  // operator justification. modalError surfaces a failed confirm inside the modal so it stays open for a retry.
+  const [pendingMode, setPendingMode] = useState<{ ruleID: string; ruleTitle: string; mode: string; severity: string } | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const reload = useCallback(async (): Promise<void> => {
     const [excl, ruleDocs, ruleSettings] = await Promise.all([
@@ -124,25 +131,69 @@ export function DetectionConfig() {
         match_type: formMatchType,
         value: formValue.trim(),
         reason: formReason.trim(),
+        // A date input yields YYYY-MM-DD; treat it as "valid through the end of that UTC day" so the exclusion covers the whole day.
+        expires_at: formExpires ? `${formExpires}T23:59:59Z` : undefined,
       });
       setFormValue("");
       setFormReason("");
+      setFormExpires("");
     }).catch(() => { /* surfaced via actionError */ });
-  }, [runMutation, formRuleID, formMatchType, formValue, formReason]);
+  }, [runMutation, formRuleID, formMatchType, formValue, formReason, formExpires]);
 
   const handleDelete = useCallback((id: number) => {
+    // Deleting an exclusion restores detection coverage (a coverage-increasing action), so it carries a generated reason rather
+    // than prompting; the audit row still records the actor, target, and timestamp.
     runMutation(() => deleteDetectionExclusion(id, "removed via admin UI"))
       .catch(() => { /* surfaced via actionError */ });
   }, [runMutation]);
 
-  const handleSettingChange = useCallback((ruleID: string, mode: string, severity: string) => {
+  // handleModeChange splits on whether the new mode reduces alerting. Restoring a rule to `alert` is applied immediately with a
+  // generated reason; reducing it to `monitor` / `disabled` first opens the reason modal so the operator's justification is audited.
+  const handleModeChange = useCallback((ruleID: string, ruleTitle: string, mode: string, severity: string) => {
+    if (mode === "alert") {
+      runMutation(() => upsertDetectionRuleSetting({
+        rule_id: ruleID, mode, severity_override: severity || undefined, reason: "re-enabled via admin UI",
+      })).catch(() => { /* surfaced via actionError */ });
+      return;
+    }
+    setModalError(null);
+    setPendingMode({ ruleID, ruleTitle, mode, severity });
+  }, [runMutation]);
+
+  // handleSeverityChange tweaks only the severity override (the rule's alerting on/off is unchanged), so it applies immediately
+  // with a generated reason.
+  const handleSeverityChange = useCallback((ruleID: string, mode: string, severity: string) => {
     runMutation(() => upsertDetectionRuleSetting({
-      rule_id: ruleID,
-      mode,
-      severity_override: severity || undefined,
-      reason: "updated via admin UI",
+      rule_id: ruleID, mode, severity_override: severity || undefined, reason: "severity override changed via admin UI",
     })).catch(() => { /* surfaced via actionError */ });
   }, [runMutation]);
+
+  // confirmPendingMode applies the pending reducing change with the operator's reason. It keeps its own try/catch (rather than
+  // reusing runMutation) so a failure surfaces inside the still-open modal instead of the page-level banner.
+  const confirmPendingMode = useCallback((reason: string) => {
+    const pending = pendingMode;
+    if (!pending) return;
+    setModalError(null);
+    setMutating(true);
+    (async () => {
+      try {
+        await upsertDetectionRuleSetting({
+          rule_id: pending.ruleID, mode: pending.mode, severity_override: pending.severity || undefined, reason,
+        });
+        await reload();
+        if (mountedRef.current) setPendingMode(null);
+      } catch (err: unknown) {
+        if (mountedRef.current) setModalError(errMessage(err));
+      } finally {
+        if (mountedRef.current) setMutating(false);
+      }
+    })().catch(() => { /* inner try/catch handles all paths */ });
+  }, [pendingMode, reload]);
+
+  const cancelPendingMode = useCallback(() => {
+    setPendingMode(null);
+    setModalError(null);
+  }, []);
 
   const addDisabled = !formRuleID || !formValue.trim() || !formReason.trim();
 
@@ -173,6 +224,8 @@ export function DetectionConfig() {
                   placeholder="*/claude/versions/*" />
                 <Input label="Reason" id="dc-reason" value={formReason} onChange={(e) => { setFormReason(e.target.value); }}
                   placeholder="why this is benign" />
+                <Input label="Expires (optional)" id="dc-expires" type="date" value={formExpires}
+                  onChange={(e) => { setFormExpires(e.target.value); }} />
                 <Button variant="primary" disabled={addDisabled || mutating} onClick={handleAddExclusion}>Add exclusion</Button>
               </div>
             )}
@@ -186,6 +239,7 @@ export function DetectionConfig() {
                     <th>Match type</th>
                     <th>Value</th>
                     <th>Reason</th>
+                    <th>Expires</th>
                     <th>Created by</th>
                     {canWrite && <th aria-label="actions" />}
                   </tr>
@@ -197,6 +251,7 @@ export function DetectionConfig() {
                       <td>{ex.match_type}</td>
                       <td><code>{ex.value}</code></td>
                       <td>{ex.reason}</td>
+                      <td>{ex.expires_at ? ex.expires_at.split("T")[0] : "never"}</td>
                       <td>{ex.created_by}</td>
                       {canWrite && (
                         <td>
@@ -232,14 +287,14 @@ export function DetectionConfig() {
                       <td>
                         <Select label="" id={`dc-mode-${r.id}`} value={mode} disabled={!canWrite || mutating}
                           aria-label={`mode for ${r.id}`}
-                          onChange={(e) => { handleSettingChange(r.id, e.target.value, severity); }}>
+                          onChange={(e) => { handleModeChange(r.id, r.doc.title, e.target.value, severity); }}>
                           {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
                         </Select>
                       </td>
                       <td>
                         <Select label="" id={`dc-sev-${r.id}`} value={severity} disabled={!canWrite || mutating}
                           aria-label={`severity override for ${r.id}`}
-                          onChange={(e) => { handleSettingChange(r.id, mode, e.target.value); }}>
+                          onChange={(e) => { handleSeverityChange(r.id, mode, e.target.value); }}>
                           {SEVERITIES.map((s) => <option key={s || "none"} value={s}>{s || "(none)"}</option>)}
                         </Select>
                       </td>
@@ -250,6 +305,23 @@ export function DetectionConfig() {
             </Table>
           </section>
         </>
+      )}
+
+      {pendingMode && (
+        <ReasonModal
+          title={pendingMode.mode === "disabled"
+            ? `Disable "${pendingMode.ruleTitle}"?`
+            : `Set "${pendingMode.ruleTitle}" to monitor?`}
+          description={pendingMode.mode === "disabled"
+            ? "The rule stays registered but stops producing alerts. This is recorded in the audit log."
+            : "The rule keeps evaluating and emits a monitoring signal, but stops raising alerts. This is recorded in the audit log."}
+          confirmLabel={pendingMode.mode === "disabled" ? "Disable rule" : "Set to monitor"}
+          confirmVariant={pendingMode.mode === "disabled" ? "alert" : "primary"}
+          busy={mutating}
+          error={modalError}
+          onConfirm={confirmPendingMode}
+          onCancel={cancelPendingMode}
+        />
       )}
     </>
   );

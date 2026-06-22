@@ -28,6 +28,60 @@
   color: $ui-fleet-black-50;
 }
 
+.dc-reason-modal {
+  border: none;
+  border-radius: 8px;
+  padding: $pad-large;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+
+.dc-reason-modal::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.dc-reason-modal__title {
+  font-size: $small;
+  font-weight: $bold;
+  margin: 0 0 $pad-small 0;
+}
+
+.dc-reason-modal__desc {
+  color: $ui-fleet-black-75;
+  font-size: $xx-small;
+  margin: 0 0 $pad-medium 0;
+}
+
+.dc-reason-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: $pad-small;
+}
+
+.dc-reason-modal__label {
+  font-size: $xx-small;
+  font-weight: $bold;
+  text-transform: uppercase;
+  color: $ui-fleet-black-75;
+}
+
+.dc-reason-modal__input {
+  width: 100%;
+  padding: $pad-small;
+  border: 1px solid $ui-fleet-black-25;
+  border-radius: 4px;
+  font: inherit;
+  resize: vertical;
+}
+
+.dc-reason-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: $pad-small;
+  margin-top: $pad-small;
+}
+
 .detection-config__error {
   color: $core-vibrant-red;
   background: $ui-light-grey;

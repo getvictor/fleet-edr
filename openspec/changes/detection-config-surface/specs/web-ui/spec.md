@@ -4,7 +4,7 @@
 
 ### Requirement: Detection configuration admin views
 
-The web UI SHALL provide an authenticated admin surface to view and edit detection configuration: per-rule mode (alert / monitor / disabled), optional severity override, per-rule settings, and false-positive exclusions. The per-rule settings form MUST be rendered generically from each rule's declared configuration schema so a newly added rule's settings appear without bespoke UI. The exclusion editor MUST let an operator create, edit, and delete exclusions with a typed match type, a value, a reason, an optional expiration, and a scope (global or a host group), and MUST surface the existing entries with their author and creation time. Mutations MUST go through the authenticated admin API and are subject to the same RBAC the API enforces.
+The web UI SHALL provide an authenticated admin surface to view and edit detection configuration: per-rule mode (alert / monitor / disabled), optional severity override, per-rule settings, and false-positive exclusions. The per-rule settings form MUST be rendered generically from each rule's declared configuration schema so a newly added rule's settings appear without bespoke UI. The exclusion editor MUST let an operator create, edit, and delete exclusions with a typed match type, a value, a reason, an optional expiration, and a scope (global or a host group), and MUST surface the existing entries with their author and creation time. When an operator reduces a rule's alerting (sets its mode to monitor or disabled), the UI MUST capture an operator-supplied reason before the change is submitted, because that reason is recorded in the audit trail; restoring a rule to alert and severity-only edits MAY use a system-generated reason. Mutations MUST go through the authenticated admin API and are subject to the same RBAC the API enforces.
 
 #### Scenario: An operator adds an exclusion from the UI
 
@@ -18,3 +18,10 @@ The web UI SHALL provide an authenticated admin surface to view and edit detecti
 - **GIVEN** a rule that declares configurable settings in its schema
 - **WHEN** an operator opens that rule's detection-configuration view
 - **THEN** the settings form renders the declared fields without UI changes specific to that rule
+
+#### Scenario: Disabling or monitoring a rule requires an operator reason
+
+- **GIVEN** an authenticated operator with permission to edit detection configuration
+- **WHEN** they set a rule's mode to disabled or monitor
+- **THEN** the UI requires them to enter a reason before the change is submitted
+- **AND** the change is sent to the admin API with that operator reason for the audit log
