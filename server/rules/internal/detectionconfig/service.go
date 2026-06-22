@@ -162,7 +162,7 @@ func (s *Service) Reload(ctx context.Context) error {
 	return nil
 }
 
-// RefreshLoop periodically converges this replica's snapshot with mutations made on OTHER replicas, which only bump the version +
+// RefreshLoop periodically converges this replica's snapshot with mutations made on OTHER replicas, which only bump the version and
 // reload their own snapshot (ADR-0010: the snapshot is a per-replica cache, so a peer's mutation is invisible here until we re-read).
 // Each tick reads only the cheap single-row version counter; a full LoadSnapshot runs only when the stored version differs from the
 // loaded snapshot's, so a steady state with no config churn is one indexed read per interval. Blocks until ctx is cancelled.
@@ -176,6 +176,9 @@ func (s *Service) RefreshLoop(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 			current, err := s.store.Version(ctx)
 			if err != nil {
+				if ctx.Err() != nil {
+					return // shutdown raced the poll; the cancellation error is expected, not worth a WARN.
+				}
 				s.logger.WarnContext(ctx, "detectionconfig: version poll failed; retrying next tick", "err", err)
 				continue
 			}
@@ -183,6 +186,9 @@ func (s *Service) RefreshLoop(ctx context.Context, interval time.Duration) {
 				continue
 			}
 			if err := s.Reload(ctx); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				s.logger.WarnContext(ctx, "detectionconfig: periodic reload failed; retrying next tick", "err", err)
 			}
 		}

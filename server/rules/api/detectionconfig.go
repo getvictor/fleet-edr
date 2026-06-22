@@ -144,13 +144,16 @@ func GlobMatch(pattern, name string) bool {
 // carried. Only the leading segment is rewritten (a deeper `/private` is left alone), and a path under none of the three prefixes
 // returns "" so the caller skips the extra match.
 func macOSPathAlias(p string) string {
-	for _, prefix := range []string{"/etc", "/var", "/tmp"} {
-		if p == prefix || strings.HasPrefix(p, prefix+"/") {
+	// Two passes with static literals so the no-match path allocates nothing (the previous single loop computed "/private"+prefix
+	// every iteration). Public -> private form first, then private -> public (slicing off the constant-length "/private" prefix).
+	for _, public := range []string{"/etc", "/var", "/tmp"} {
+		if p == public || strings.HasPrefix(p, public+"/") {
 			return "/private" + p
 		}
-		private := "/private" + prefix
+	}
+	for _, private := range []string{"/private/etc", "/private/var", "/private/tmp"} {
 		if p == private || strings.HasPrefix(p, private+"/") {
-			return strings.TrimPrefix(p, "/private")
+			return p[len("/private"):]
 		}
 	}
 	return ""
