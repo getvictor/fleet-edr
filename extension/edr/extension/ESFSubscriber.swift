@@ -82,6 +82,19 @@ final class ESFSubscriber: Sendable {
         }
 
         self.client = rawClient
+
+        // Flush the kernel AUTH result cache whenever the application-control snapshot is replaced. The AUTH_EXEC handler
+        // pins decided ALLOWs into the kernel cache (#209) so a fork-exec storm of an allowed binary does not re-enter the
+        // handler; that optimisation is only correct if an updated ruleset invalidates those cached ALLOWs. es_clear_cache is
+        // the supported flush. [weak self] avoids a needless retain of the subscriber by the process-lifetime store singleton;
+        // the captured client pointer is valid for the rest of the process.
+        ApplicationControlStore.shared.onSnapshotApplied = { [weak self] in
+            guard let self, let client = self.client else { return }
+            let clearResult = es_clear_cache(client)
+            if clearResult != ES_CLEAR_CACHE_RESULT_SUCCESS {
+                logger.warning("es_clear_cache after snapshot apply returned \(clearResult.rawValue, privacy: .public)")
+            }
+        }
     }
 
     func start() {
@@ -182,7 +195,11 @@ final class ESFSubscriber: Sendable {
         // brick the EDR itself. Match BOTH team_id and the exhaustive Fleet bundle-id set; team_id alone would exempt every binary
         // ever signed by extensionTeamID, which is broader than intended.
         if teamID == extensionTeamID, fleetSelfAllowSigningIDs.contains(signingID) {
-            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, false)
+            // cache:true is safe here: the answer is a function of the binary's intrinsic identity (extensionTeamID + a Fleet
+            // signing_id), which is stable for the lifetime of the binary on disk, and the kernel keys the AUTH cache on
+            // (dev,inode,mtime) so any binary swap forces a fresh decision. Caching elides the per-exec handler cost during a
+            // fork-exec storm of our own tools (#209).
+            es_respond_auth_result(client, message, ES_AUTH_RESULT_ALLOW, true)
             return
         }
 
@@ -253,12 +270,17 @@ final class ESFSubscriber: Sendable {
     /// emissions the decision implies. Extracted from handleAuthExec so the decision logic stays testable
     /// (AuthExecDeciderTests) and the wire dispatch stays one switch.
     private func dispatchAuthDecision(_ decision: AuthDecision, context: AuthDispatchContext) {
+        // A decided ALLOW is pinned into the kernel AUTH cache so a fork-exec storm of an allowed binary does not re-enter the
+        // handler; the undecided fallbacks and every DENY stay uncached. The flag is a pure function of the decision
+        // (authResultIsCacheable, unit-tested in the no-ES target) and the cache stays correct because the store flushes it on
+        // every snapshot swap (#209).
+        let cacheResult = authResultIsCacheable(decision)
         switch decision {
         case .allow:
-            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, false)
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
         case .allowWithUndecidedAudit(let reason):
             logger.warning("AUTH_EXEC ALLOW (undecided) reason=\(reason.rawValue, privacy: .public)")
-            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, false)
+            es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
             emitUndecidedEvent(
                 target: context.target, fileStat: context.fileStat, verdict: "allow", reason: reason, snapshot: context.snapshot
             )
