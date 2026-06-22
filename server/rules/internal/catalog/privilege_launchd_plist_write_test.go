@@ -52,12 +52,10 @@ func (stubGraphReader) GetNetworkEventsForProcess(context.Context, string, int, 
 // Add a new case by dropping a *.json file in that directory; no Go edits needed.
 func TestPrivilegeLaunchdPlistWrite_Fixtures(t *testing.T) {
 	t.Parallel()
-	r := &PrivilegeLaunchdPlistWrite{
-		AllowedTeamIDs: map[string]struct{}{
-			// Synthetic team ID used by the allowlist fixture.
-			"FIXTURE-ALLOW": {},
-		},
-	}
+	r := &PrivilegeLaunchdPlistWrite{Exclusions: &fakeExclusions{entries: []fakeExcl{
+		// Synthetic team ID used by the allowlist fixture.
+		{ruleID: "privilege_launchd_plist_write", matchType: api.ExclusionMatchTeamID, value: "FIXTURE-ALLOW"},
+	}}}
 	detectiontestkit.Replay(t, r, "fixtures/privilege_launchd_plist_write")
 }
 
@@ -75,9 +73,9 @@ func TestPrivilegeLaunchdPlistWrite_TechniquesMapping(t *testing.T) {
 // without fabricating a fixture per branch.
 func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 	t.Parallel()
-	r := &PrivilegeLaunchdPlistWrite{
-		AllowedTeamIDs: map[string]struct{}{"VENDORALLOW": {}},
-	}
+	r := &PrivilegeLaunchdPlistWrite{Exclusions: &fakeExclusions{entries: []fakeExcl{
+		{ruleID: "privilege_launchd_plist_write", matchType: api.ExclusionMatchTeamID, value: "VENDORALLOW"},
+	}}}
 
 	cases := []struct {
 		name string
@@ -85,21 +83,20 @@ func TestPrivilegeLaunchdPlistWrite_AllowedEdgeCases(t *testing.T) {
 		want bool
 	}{
 		{"platform binary", codeSigningJSON{IsPlatformBinary: true}, true},
-		{"allowlisted team", codeSigningJSON{TeamID: "VENDORALLOW", IsPlatformBinary: false}, true},
-		{"unknown team, no allowlist hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
+		{"excluded team", codeSigningJSON{TeamID: "VENDORALLOW", IsPlatformBinary: false}, true},
+		{"unknown team, no exclusion hit", codeSigningJSON{TeamID: "EVILCORP1", IsPlatformBinary: false}, false},
 		{"ad-hoc / unsigned (empty team, not platform)", codeSigningJSON{IsPlatformBinary: false}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, r.allowed(tc.cs))
+			assert.Equal(t, tc.want, r.allowed(tc.cs, "host-a"))
 		})
 	}
 
-	// AllowedTeamIDs=nil branch: any non-platform executable falls through to "not allowed", the rule's
-	// default-construction shape.
+	// Nil resolver branch: any non-platform executable falls through to "not allowed", the rule's default-construction shape.
 	rNoList := &PrivilegeLaunchdPlistWrite{}
-	assert.False(t, rNoList.allowed(codeSigningJSON{TeamID: "X", IsPlatformBinary: false}))
+	assert.False(t, rNoList.allowed(codeSigningJSON{TeamID: "X", IsPlatformBinary: false}, "host-a"))
 }
 
 // TestPrivilegeLaunchdPlistWrite_MalformedPayload exercises the json.Unmarshal failure path inside evalEvent: a btm_launch_item_add

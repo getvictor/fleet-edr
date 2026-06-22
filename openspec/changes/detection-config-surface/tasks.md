@@ -13,11 +13,11 @@
 
 ## Engine + catalog
 
-- [ ] `catalog.New` is built from the DB snapshot instead of `RegistryOptions` env allowlists. Rules consult the injected `ExclusionResolver` per finding/host instead of a baked `map[string]struct{}`.
-- [ ] Rules with allowlists (`suspicious_exec`, `persistence_launchagent`, `privilege_launchd_plist_write`, `sudoers_tamper`) call the resolver; remove their `Allowed*` map fields.
-- [ ] Canonicalize paths consistently between the rule and the resolver for `path_glob` / `parent_path_glob` matches, so an exclusion written against one macOS path form (`/etc/...`) still applies when ESF reports the aliased form (`/private/etc/...`); reuse the existing canonicalization (PR #50 / #290). Deferred from Stage 1 (no path flows through the resolver until rules consume it here).
-- [ ] Engine routes each finding by the `(rule, host)` resolved mode: `disabled` drops it, `monitor` drops the alert but emits an observability signal (a counter + structured log/trace recording the match), `alert` persists. Applies `severity_override`. A globally-disabled rule stays in the catalog surface.
-- [ ] Mutations rebuild the snapshot + call `Engine.LoadActive`; each replica reads MySQL and caches by version (safe-to-lose per-replica cache). No restart.
+- [x] `catalog.New` is built from the DB snapshot (the `detectionconfig.Service` resolver) instead of `RegistryOptions` env allowlists. Rules consult the injected `ExclusionResolver` per finding/host instead of a baked `map[string]struct{}`.
+- [x] Rules with allowlists (`suspicious_exec`, `persistence_launchagent`, `privilege_launchd_plist_write`, `sudoers_tamper`) call the resolver; their `Allowed*` map fields are removed (replaced by `Exclusions api.ExclusionResolver`).
+- [ ] Canonicalize paths consistently between the rule and the resolver for `path_glob` / `parent_path_glob` matches, so an exclusion written against one macOS path form (`/etc/...`) still applies when ESF reports the aliased form (`/private/etc/...`); reuse the existing canonicalization (PR #50 / #290). Still deferred (Qodo #4 on PR #475); does not block the cutover.
+- [x] Engine routes each finding by the `(rule, host)` resolved mode: `disabled` drops it, `monitor` drops the alert but emits an observability signal (a structured log line recording the match), `alert` persists. Applies `severity_override`. A globally-disabled rule stays in the catalog surface. A dedicated monitor counter is a follow-up.
+- [x] Config is resolved against an atomically-swapped in-memory snapshot (the `detectionconfig.Service` holds `atomic.Pointer[Snapshot]`); boot loads it in `ApplySchema`. Per-mutation reload + the periodic multi-replica refresh land with the REST surface. No `Engine.LoadActive` churn is needed since disabled rules stay registered.
 
 ## REST + governance
 
@@ -27,7 +27,7 @@
 
 ## Delete the env surface (hard switch)
 
-- [ ] Remove `EDR_LAUNCHAGENT_ALLOWLIST`, `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST`, `EDR_SUDOERS_WRITER_ALLOWLIST`, `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST`, `EDR_DISABLED_RULES` and their `config.Config` fields + `loadAllowlists` + the `RegistryOptions` allowlist fields. No seeding, no fallback.
+- [x] Remove `EDR_LAUNCHAGENT_ALLOWLIST`, `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST`, `EDR_SUDOERS_WRITER_ALLOWLIST`, `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST`, `EDR_DISABLED_RULES` and their `config.Config` fields + `loadAllowlists` + the `RegistryOptions` type (and `UnknownDisabledIDs`). No seeding, no fallback. The four rules' `Doc()` env-var ConfigKnobs are dropped and `docs/detection-rules.md` regenerated.
 
 ## UI
 

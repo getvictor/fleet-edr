@@ -22,7 +22,7 @@ import (
 // set of rules in the same order. Coverage is not a function of a deployment's tuning, so we pass the zero RegistryOptions:
 // allowlists default to empty, which the rule structs treat as "no operator tuning yet."
 func allRegisteredRules() []rulesapi.RuleMetadata {
-	return rulesbootstrap.CatalogOnly(rulesapi.RegistryOptions{}).List()
+	return rulesbootstrap.CatalogOnly().List()
 }
 
 func main() {

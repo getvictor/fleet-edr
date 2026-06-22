@@ -13,13 +13,13 @@ import (
 // PersistenceLaunchAgent fires when a process calls `launchctl load` or
 // `launchctl bootstrap` referencing a plist under `~/Library/LaunchAgents/` or
 // `/Library/LaunchAgents/`, the canonical macOS persistence mechanism. Operators can
-// silence expected plists via `EDR_LAUNCHAGENT_ALLOWLIST` (comma-separated absolute paths).
+// silence expected plists with a path-glob exclusion via the detection-config surface.
 //
 // MITRE ATT&CK: T1543.001 (Create or Modify System Process: Launch Agent)
 type PersistenceLaunchAgent struct {
-	// AllowedPlists is the set of plist paths the operator has pre-blessed. The rule
-	// skips findings whose target plist matches any entry (exact string match).
-	AllowedPlists map[string]struct{}
+	// Exclusions is the per-host false-positive resolver. The rule skips a finding whose target plist path matches an exclusion
+	// (match type path_glob). Nil excludes nothing (the empty-config default).
+	Exclusions api.ExclusionResolver
 }
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
@@ -43,20 +43,12 @@ func (r *PersistenceLaunchAgent) Doc() api.Documentation {
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
 		FalsePositives: []string{
-			"MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Allowlist their plist paths via EDR_LAUNCHAGENT_ALLOWLIST.",
+			"MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Add a path-glob exclusion for their plist paths via the detection-config surface.",
 			"Developer tools that register helper agents (Docker Desktop, Backblaze, etc.) on first launch.",
 		},
 		Limitations: []string{
 			"Does not cover `launchctl bootout` or `launchctl unload`: those undo persistence rather than create it.",
 			"Does not catch direct plist writes that never get activated; pair with the privilege_launchd_plist_write rule for system-domain coverage.",
-		},
-		Config: []api.ConfigKnob{
-			{
-				EnvVar:      "EDR_LAUNCHAGENT_ALLOWLIST",
-				Type:        "csv-paths",
-				Default:     "",
-				Description: "Comma-separated absolute plist paths the rule should silently accept. Use exact paths; case-sensitive.",
-			},
 		},
 	}
 }
@@ -109,7 +101,7 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	if subcommand != "load" && subcommand != "bootstrap" {
 		return nil, nil
 	}
-	if plistPath == "" || !launchAgentPath.MatchString(plistPath) || r.allowed(plistPath) {
+	if plistPath == "" || !launchAgentPath.MatchString(plistPath) || r.excluded(plistPath, evt.HostID) {
 		return nil, nil
 	}
 	// Look up the process row so the alert can link to the process detail view. If it's not yet materialised we skip; the next batch
@@ -132,12 +124,8 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	}, nil
 }
 
-func (r *PersistenceLaunchAgent) allowed(path string) bool {
-	if r.AllowedPlists == nil {
-		return false
-	}
-	_, ok := r.AllowedPlists[path]
-	return ok
+func (r *PersistenceLaunchAgent) excluded(path, hostID string) bool {
+	return r.Exclusions != nil && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchPathGlob, path, hostID)
 }
 
 // extractLaunchctlSubcommand pulls the subcommand (`load`, `bootstrap`, `unload`, etc.) and

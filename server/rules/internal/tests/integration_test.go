@@ -10,7 +10,6 @@
 package tests
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -22,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
-	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
@@ -39,21 +37,12 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 // newRules wires rules.bootstrap.New against a fresh test DB.
 func newRules(t *testing.T) *rulesbootstrap.Rules {
 	t.Helper()
-	return newRulesWithOptions(t, rulesapi.RegistryOptions{})
-}
-
-// newRulesWithOptions is the same as newRules but threads custom RegistryOptions through, so tests can exercise the
-// operator-tunable knobs (DisabledRuleIDs, allowlists) without copying the bootstrap.Deps wiring.
-func newRulesWithOptions(t *testing.T, opts rulesapi.RegistryOptions) *rulesbootstrap.Rules {
-	t.Helper()
 	s := full.Open(t)
-	deps := rulesbootstrap.Deps{
-		DB:              s,
-		Logger:          slog.Default(),
-		AuthZ:           allowAllAuthZ{},
-		RegistryOptions: opts,
-	}
-	r, err := rulesbootstrap.New(deps)
+	r, err := rulesbootstrap.New(rulesbootstrap.Deps{
+		DB:     s,
+		Logger: slog.Default(),
+		AuthZ:  allowAllAuthZ{},
+	})
 	require.NoError(t, err)
 	require.NoError(t, r.ApplySchema(t.Context()))
 	return r
@@ -83,66 +72,6 @@ func TestCatalog_ListShape(t *testing.T) {
 		assert.NotEmpty(t, catalog[i].Doc.Title, "rule %s missing Doc.Title", catalog[i].ID)
 		assert.NotEmpty(t, catalog[i].Doc.Severity, "rule %s missing Doc.Severity", catalog[i].ID)
 	}
-}
-
-// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-disables-a-noisy-rule-for-their-environment
-//
-// TestCatalog_DisabledRuleIDsHonoredEndToEnd proves the boot-time disable mechanism propagates through every consumer of the
-// catalog: Engine.Catalog() (the operator-facing GET /api/rules surface) AND ContentService().ActiveRules() (the engine's
-// evaluation set) both omit the disabled rule. By construction this satisfies the spec scenario's "MUST NOT evaluate against
-// any batch and MUST NOT produce alerts until it is re-enabled": a rule absent from ActiveRules cannot fire on any batch
-// the engine evaluates.
-//
-// Pairs with the catalog-level unit tests in server/rules/internal/catalog/registry_test.go that pin the filter at the API
-// boundary; this integration test pins the propagation through rulesbootstrap.New.
-func TestCatalog_DisabledRuleIDsHonoredEndToEnd(t *testing.T) {
-	t.Parallel()
-	r := newRulesWithOptions(t, rulesapi.RegistryOptions{
-		DisabledRuleIDs: []string{"suspicious_exec"},
-	})
-	catalog := r.Catalog().List()
-	for _, entry := range catalog {
-		assert.NotEqual(t, "suspicious_exec", entry.ID,
-			"disabled rule MUST NOT appear in Catalog().List()")
-	}
-	active := r.ContentService().ActiveRules()
-	for _, rule := range active {
-		assert.NotEqual(t, "suspicious_exec", rule.ID(),
-			"disabled rule MUST NOT appear in ContentService().ActiveRules() (the engine evaluation set)")
-	}
-	// Sanity: the rest of the catalog still appears so a regression that filtered the wrong subset is caught.
-	assert.Len(t, catalog, 9, "exactly one rule must have been filtered (10 shipped, 1 disabled)")
-	assert.Len(t, active, 9)
-}
-
-// TestBootstrap_WarnsOnUnknownDisabledRuleID covers the boot-time WARN path #238 added to bootstrap.New: a stale operator
-// config that references a rule_id which doesn't exist (typo or removed rule) must emit a WARN log line carrying the
-// offending rule_id as a structured attribute, without failing the boot. The test injects a slog handler that records
-// records into a buffer + asserts the WARN appears with the right attribute. Pairs with the catalog-level
-// TestUnknownDisabledIDs unit test which pins the diagnostic helper's inputs/outputs.
-func TestBootstrap_WarnsOnUnknownDisabledRuleID(t *testing.T) {
-	t.Parallel()
-	s := full.Open(t)
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
-	logger := slog.New(handler)
-	deps := rulesbootstrap.Deps{
-		DB:     s,
-		Logger: logger,
-		AuthZ:  allowAllAuthZ{},
-		RegistryOptions: rulesapi.RegistryOptions{
-			DisabledRuleIDs: []string{"suspicious_exec", "this-rule-does-not-exist", "another-typo"},
-		},
-	}
-	r, err := rulesbootstrap.New(deps)
-	require.NoError(t, err, "unknown rule_id MUST NOT fail boot per #238 design")
-	require.NoError(t, r.ApplySchema(t.Context()))
-	out := buf.String()
-	assert.Contains(t, out, "EDR_DISABLED_RULES references unknown rule_id")
-	assert.Contains(t, out, "rule_id=this-rule-does-not-exist")
-	assert.Contains(t, out, "rule_id=another-typo")
-	assert.NotContains(t, out, "rule_id=suspicious_exec",
-		"a real rule MUST NOT trigger the unknown-rule WARN")
 }
 
 // TestContentService_ActiveRules surfaces every shipped rule through the engine-facing interface. The exact roster lives in

@@ -49,22 +49,16 @@ The rule fires on the LAST link of the chain (the temp-exec or the network_conne
 
 30 seconds is the temporal cap between the shell exec and the trigger event.
 
-### Configuration
-
-| Env var | Type | Default | Description |
-| --- | --- | --- | --- |
-| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | `csv-path-globs` | _(unset)_ | Comma-separated parent-process path patterns the rule should treat as benign roots (both temp-exec and network arms). A `*` is a wildcard that matches any run of characters including `/`, so `*/claude/versions/*` survives version churn; an entry with no `*` matches the path exactly. Canonical literal use: `/usr/libexec/sshd-session` on hosts where interactive SSH is normal. Anchor globs to a trusted install root: `*/git` would also match `/tmp/evil/git`. |
-
 ### Known false-positive sources
 
-- Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Use EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST to silence sshd-session if that's a routine workflow on the host class.
-- Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so use a glob allowlist entry such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
+- Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.
+- Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
 - Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.
 
 ### Limitations
 
 - 30s window is hard-coded; long-tail post-shell activity is missed by design.
-- Allowlisting a parent silences BOTH arms of the rule for that parent. The trade-off is documented on AllowedNonShellParents.
+- A parent-path-glob exclusion silences BOTH arms of the rule for that parent.
 - An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.
 
 ## persistence_launchagent
@@ -85,15 +79,9 @@ Detects the canonical user-domain persistence step on macOS: an attacker drops a
 
 Argument parsing handles launch-domain specifiers (`gui/501`) preceding the plist path and tolerates flag-like args between `load` and the plist (`-w`, `-F`, etc.).
 
-### Configuration
-
-| Env var | Type | Default | Description |
-| --- | --- | --- | --- |
-| `EDR_LAUNCHAGENT_ALLOWLIST` | `csv-paths` | _(unset)_ | Comma-separated absolute plist paths the rule should silently accept. Use exact paths; case-sensitive. |
-
 ### Known false-positive sources
 
-- MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Allowlist their plist paths via EDR_LAUNCHAGENT_ALLOWLIST.
+- MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Add a path-glob exclusion for their plist paths via the detection-config surface.
 - Developer tools that register helper agents (Docker Desktop, Backblaze, etc.) on first launch.
 
 ### Limitations
@@ -235,16 +223,10 @@ The decision keys on the REGISTERED EXECUTABLE's code-signing, not on who regist
 
 Notarization is deliberately NOT a trust signal: it is an automated Apple scan, not an endorsement (Apple has notarized malware), and is not checkable network-free on the ES callback thread. Trust is the operator's team-ID allowlist; notarization, if ever used, belongs in a server-side reputation layer off the hot path.
 
-### Configuration
-
-| Env var | Type | Default | Description |
-| --- | --- | --- | --- |
-| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | `csv-team-ids` | _(unset)_ | Comma-separated Apple Developer Program team IDs (10-character strings, e.g. `8VBZ3948LU`) whose LaunchDaemon registrations are accepted silently. |
-
 ### Known false-positive sources
 
-- Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Allowlist the vendor's signing team ID via EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST.
-- Custom in-house pkg installers signed by a non-allowlisted developer team: allowlist that team ID.
+- Non-Apple vendor app installing its own LaunchDaemon (a niche VPN, an in-house agent). Add a team_id exclusion for the vendor's signing team ID via the detection-config surface.
+- Custom in-house pkg installers signed by an unexcluded developer team: add a team_id exclusion for that team ID.
 
 ### Limitations
 
@@ -267,19 +249,13 @@ Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in 
 
 Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of `/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as root.
 
-Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune via EDR_SUDOERS_WRITER_ALLOWLIST instead.
+Unlike the persistence rules, this one deliberately does NOT key on Apple-signed platform binaries: the canonical attacker tools for sudoers tampering ARE platform binaries (cp, tee, redirected shells, even `sudo vi /etc/sudoers`), so a platform-binary filter would silence every realistic attack while admitting almost nothing of value. Operators tune with a path-glob exclusion via the detection-config surface instead.
 
 `visudo` and `sudoedit` use atomic-rename semantics and never open /etc/sudoers in write mode, so the rule does not see them at all.
 
-### Configuration
-
-| Env var | Type | Default | Description |
-| --- | --- | --- | --- |
-| `EDR_SUDOERS_WRITER_ALLOWLIST` | `csv-paths` | _(unset)_ | Comma-separated absolute writer-process paths to silently accept (e.g. `/usr/local/bin/ansible`). |
-
 ### Known false-positive sources
 
-- Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Allowlist their absolute writer paths.
+- Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.
 
 ### Limitations
 

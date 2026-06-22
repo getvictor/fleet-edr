@@ -8,6 +8,7 @@ import (
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
+	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/testdb"
 )
 
@@ -41,4 +42,26 @@ func (c *catalogStore) ProcessBatch(ctx context.Context, events []detectionapi.E
 // consumes.
 func (c *catalogStore) GraphReader() detectionapi.GraphReader {
 	return c.scenario.Store
+}
+
+// fakeExclusions is an in-memory api.ExclusionResolver for catalog rule tests. It honours the real per-type match semantics
+// (api.MatchExclusionValue) so glob/exact/substring behaviour is exercised, ignores hostID (tests are single-host), and treats an
+// empty entry ruleID as shared across rules. Pointer receiver so a test can assert identity (resolver threading).
+type fakeExclusions struct {
+	entries []fakeExcl
+}
+
+type fakeExcl struct {
+	ruleID    string
+	matchType api.ExclusionMatchType
+	value     string
+}
+
+func (f *fakeExclusions) Excluded(ruleID string, matchType api.ExclusionMatchType, value, _ string) bool {
+	for _, e := range f.entries {
+		if (e.ruleID == "" || e.ruleID == ruleID) && e.matchType == matchType && api.MatchExclusionValue(matchType, e.value, value) {
+			return true
+		}
+	}
+	return false
 }

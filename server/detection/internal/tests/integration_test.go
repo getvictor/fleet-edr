@@ -866,6 +866,72 @@ func TestEngine_EvaluatesAndPersistsAlerts(t *testing.T) {
 	assert.Equal(t, api.JSONStringSlice{"T9999"}, a.Techniques, "alert.techniques = stub rule's declared MITRE list")
 }
 
+// fakeMode is a rules.api.RuleModeResolver for the per-host mode-routing test: per-rule mode + optional severity override, host
+// ignored (single host). An unset rule defaults to alert.
+type fakeMode struct {
+	modes     map[string]rulesapi.DetectionRuleMode
+	overrides map[string]string
+}
+
+func (f fakeMode) Mode(ruleID, _ string) rulesapi.DetectionRuleMode {
+	if m, ok := f.modes[ruleID]; ok {
+		return m
+	}
+	return rulesapi.DetectionRuleModeAlert
+}
+
+func (f fakeMode) SeverityOverride(ruleID, _ string) string { return f.overrides[ruleID] }
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-disables-a-noisy-rule-for-their-environment
+//
+// TestEngine_PerHostModeRouting pins the DB-backed rule-mode contract (issue #459) end to end through the engine: a `disabled`
+// (rule, host) produces no alert, a `monitor` (rule, host) produces no alert, an `alert` rule persists, and a severity override is
+// applied to the persisted alert. The two alert-mode rules act as a barrier: once both their alerts appear, the whole batch has been
+// evaluated, so the absence of the disabled/monitor alerts is a sound assertion rather than a race.
+func TestEngine_PerHostModeRouting(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&stubRule{id: "stub-alert"}, &stubRule{id: "stub-disabled"},
+		&stubRule{id: "stub-monitor"}, &stubRule{id: "stub-override"},
+	}})
+	d.SetModeResolver(fakeMode{
+		modes: map[string]rulesapi.DetectionRuleMode{
+			"stub-disabled": rulesapi.DetectionRuleModeDisabled,
+			"stub-monitor":  rulesapi.DetectionRuleModeMonitor,
+		},
+		overrides: map[string]string{"stub-override": rulesapi.SeverityLow},
+	})
+
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+	events := []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	}
+	insertEventsViaIngest(ctx, t, d, "host-a", events)
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) == 2
+	}, 5*time.Second, 50*time.Millisecond, "exactly the two alert-mode rules must each persist an alert")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	byRule := make(map[string]api.Alert, len(alerts))
+	for _, a := range alerts {
+		byRule[a.RuleID] = a
+	}
+	require.Len(t, byRule, 2)
+	assert.Contains(t, byRule, "stub-alert")
+	assert.Contains(t, byRule, "stub-override")
+	assert.NotContains(t, byRule, "stub-disabled", "disabled mode must not persist an alert")
+	assert.NotContains(t, byRule, "stub-monitor", "monitor mode must not persist an alert")
+	assert.Equal(t, rulesapi.SeverityHigh, byRule["stub-alert"].Severity, "alert mode keeps the rule's declared severity")
+	assert.Equal(t, rulesapi.SeverityLow, byRule["stub-override"].Severity, "severity override must be applied to the persisted alert")
+}
+
 // spec:server-detection-rules-engine/alert-dedup-by-subject/a-rule-re-fires-on-the-same-process-in-a-later-batch
 func TestEngine_DedupSilencesRepeatRuleHits(t *testing.T) {
 	t.Parallel()

@@ -52,35 +52,11 @@ var suspiciousPrefixes = []string{
 //
 // MITRE ATT&CK: T1059 (Command and Scripting Interpreter), T1204 (User Execution).
 type SuspiciousExec struct {
-	// AllowedNonShellParents is the set of non-shell parent path patterns
-	// the rule should treat as benign roots, for BOTH the temp-path-exec
-	// arm AND the outbound-network-connect arm. The canonical case is
-	// `/usr/libexec/sshd-session`: admins SSH in, run a script from
-	// /tmp/ AND/OR curl a tool, leave; both chains match the rule's
-	// shape verbatim but are operationally normal.
-	//
-	// Each entry is matched against the parent process path by
-	// parentAllowed (via globMatch): an entry containing a `*` is a glob
-	// (a `*` matches any run of characters INCLUDING the path separator), while
-	// an entry with no `*` keeps exact-string semantics. The glob form
-	// is what makes the allowlist version-agnostic: developer tooling
-	// installs under version-stamped paths (`.../claude/versions/2.1.178`,
-	// `.../lefthook/1.8.0/lefthook_1.8.0_MacOS_arm64`, Homebrew Cellar),
-	// so a literal entry breaks on the next upgrade. A single
-	// `*/claude/versions/*` or `*/lefthook_*` survives the churn.
-	//
-	// The trade-off is real: an attacker who pivots into the host via
-	// a compromised SSH credential follows the same chain shape on
-	// either arm, so allowlisting sshd-session reduces noise but also
-	// blinds the rule to those attacker patterns from that parent.
-	// Over-broad globs widen that blind spot (`*/git` would also match
-	// `/tmp/evil/git`), so anchor patterns to a trusted install root.
-	// Empty by default: operators opt in via
-	// EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST for fleets where the noise
-	// reduction matters more than the residual attacker coverage. On
-	// servers where interactive SSH is unusual, leaving this empty is
-	// the right call.
-	AllowedNonShellParents map[string]struct{}
+	// Exclusions is the per-host false-positive resolver. The rule consults it (match type parent_path_glob, value = the non-shell
+	// parent path) before firing on EITHER arm, so a trusted parent like `/usr/libexec/sshd-session` or a version-stamped developer
+	// tool (`*/claude/versions/*`) is suppressed. Nil excludes nothing (the empty-config default). The both-arms trade-off and the
+	// over-broad-glob caveat (`*/git` would also match `/tmp/evil/git`) are documented on the detection-config surface (issue #459).
+	Exclusions api.ExclusionResolver
 }
 
 func (r *SuspiciousExec) ID() string { return "suspicious_exec" }
@@ -108,22 +84,14 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec", "network_connect"},
 		FalsePositives: []string{
-			"Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Use EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST to silence sshd-session if that's a routine workflow on the host class.",
-			"Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so use a glob allowlist entry such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.",
+			"Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.",
+			"Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.",
 			"Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.",
 		},
 		Limitations: []string{
 			"30s window is hard-coded; long-tail post-shell activity is missed by design.",
-			"Allowlisting a parent silences BOTH arms of the rule for that parent. The trade-off is documented on AllowedNonShellParents.",
+			"A parent-path-glob exclusion silences BOTH arms of the rule for that parent.",
 			"An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.",
-		},
-		Config: []api.ConfigKnob{
-			{
-				EnvVar:      "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST",
-				Type:        "csv-path-globs",
-				Default:     "",
-				Description: "Comma-separated parent-process path patterns the rule should treat as benign roots (both temp-exec and network arms). A `*` is a wildcard that matches any run of characters including `/`, so `*/claude/versions/*` survives version churn; an entry with no `*` matches the path exactly. Canonical literal use: `/usr/libexec/sshd-session` on hosts where interactive SSH is normal. Anchor globs to a trusted install root: `*/git` would also match `/tmp/evil/git`.",
-			},
 		},
 	}
 }
@@ -284,7 +252,7 @@ func (r *SuspiciousExec) evalExecArm1(
 	if shell == nil {
 		return nil, 0, nil
 	}
-	if !r.shouldFire(in.seenShell, shell, parent, in.evt.TimestampNs) {
+	if !r.shouldFire(in.seenShell, shell, parent, in.evt.TimestampNs, in.evt.HostID) {
 		return nil, 0, nil
 	}
 	return r.makeExecFinding(in.evt, parent, shell, in.tempProc, in.tempPath, in.batch), shell.PID, nil
@@ -314,7 +282,7 @@ func (r *SuspiciousExec) evalExecArm2(
 		if priorParent != nil && shellPaths[priorParent.Path] {
 			continue
 		}
-		if !r.shouldFire(in.seenShell, prior, priorParent, in.evt.TimestampNs) {
+		if !r.shouldFire(in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
 			return nil, 0, nil
 		}
 		return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
@@ -324,10 +292,10 @@ func (r *SuspiciousExec) evalExecArm2(
 
 // shouldFire is the common gate shared by both exec arms (and evalNetwork): a candidate shell only produces a finding when (a) we
 // haven't already fired on it in this batch, (b) the trigger event falls within the shell's 30-second window, and (c) the shell's
-// non-shell parent isn't on the operator's allowlist. Returning false means "skip this candidate, continue / give up"; the callers
-// handle the `nil, 0, nil` reply.
+// non-shell parent isn't excluded for hostID. Returning false means "skip this candidate, continue / give up"; the callers handle
+// the `nil, 0, nil` reply.
 func (r *SuspiciousExec) shouldFire(
-	seenShell map[int]struct{}, shell, parent *api.Process, triggerTS int64,
+	seenShell map[int]struct{}, shell, parent *api.Process, triggerTS int64, hostID string,
 ) bool {
 	if _, dupe := seenShell[shell.PID]; dupe {
 		return false
@@ -335,7 +303,7 @@ func (r *SuspiciousExec) shouldFire(
 	if !shellWithinWindow(shell, triggerTS) {
 		return false
 	}
-	if r.parentAllowed(parent) {
+	if r.parentExcluded(parent, hostID) {
 		return false
 	}
 	return true
@@ -368,7 +336,7 @@ func (r *SuspiciousExec) evalNetwork(
 	if shell == nil {
 		return nil, 0, nil
 	}
-	if !r.shouldFire(seenShell, shell, parent, evt.TimestampNs) {
+	if !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		return nil, 0, nil
 	}
 
@@ -409,7 +377,7 @@ func (r *SuspiciousExec) evalNetwork(
 // a match because launchd is structurally non-shell. PPID > 1 with a missing
 // parent record means "ancestry incomplete, defer rather than fire". This
 // keeps the rule from alerting on partial data and, in particular, keeps the
-// AllowedNonShellParents allowlist effective when the entry-point process
+// parent exclusion effective when the entry-point process
 // hasn't been materialised yet.
 //
 // The walk is "inclusive": startPID itself is the first candidate. Callers
@@ -537,59 +505,14 @@ func (r *SuspiciousExec) makeExecFinding(
 	}
 }
 
-// parentAllowed reports whether the given non-shell parent process is on the operator's allowlist. A nil parent (shell parented at
-// launchd, or parent not yet materialised) never matches: those are the cases the rule must continue to flag because there's no
-// human-attested entry point. An allowlist entry containing `*` is treated as a glob (see globMatch); a plain entry keeps
-// exact-string semantics, so existing literal-path configurations are unaffected.
-func (r *SuspiciousExec) parentAllowed(parent *api.Process) bool {
-	if r.AllowedNonShellParents == nil || parent == nil {
+// parentExcluded reports whether the given non-shell parent process is excluded for hostID (match type parent_path_glob, value = the
+// parent path). A nil parent (shell parented at launchd, or parent not yet materialised) never matches: those are the cases the rule
+// must continue to flag because there's no human-attested entry point. Glob semantics live in the resolver (api.GlobMatch).
+func (r *SuspiciousExec) parentExcluded(parent *api.Process, hostID string) bool {
+	if r.Exclusions == nil || parent == nil {
 		return false
 	}
-	// Exact-membership fast path covers every literal entry in one map lookup.
-	if _, ok := r.AllowedNonShellParents[parent.Path]; ok {
-		return true
-	}
-	// Only entries carrying a wildcard need the per-entry glob walk; literal entries were already handled above.
-	for pattern := range r.AllowedNonShellParents {
-		if strings.Contains(pattern, "*") && globMatch(pattern, parent.Path) {
-			return true
-		}
-	}
-	return false
-}
-
-// globMatch reports whether name matches pattern, where `*` in the pattern matches any run of characters (including the empty run AND
-// the path separator) and every other byte is a literal. No other metacharacters are interpreted, so a pattern with no `*` reduces to
-// exact string equality. `*` deliberately crosses `/` (unlike a shell glob, where it stops at a separator) so one
-// `*/claude/versions/*` survives both the version churn and the install-depth differences that break a literal allowlist entry. The
-// algorithm is the standard linear-time wildcard match with single-star backtracking.
-func globMatch(pattern, name string) bool {
-	var px, nx int
-	lastStar, lastStarNx := -1, 0
-	for nx < len(name) {
-		switch {
-		case px < len(pattern) && pattern[px] == name[nx]:
-			px++
-			nx++
-		case px < len(pattern) && pattern[px] == '*':
-			// Record the star position and the input cursor it was first tried at, then assume it consumes nothing yet.
-			lastStar = px
-			lastStarNx = nx
-			px++
-		case lastStar != -1:
-			// Mismatch after a star: let the most recent star swallow one more input byte and retry from just past it.
-			px = lastStar + 1
-			lastStarNx++
-			nx = lastStarNx
-		default:
-			return false
-		}
-	}
-	// Trailing stars in the pattern match the empty remainder.
-	for px < len(pattern) && pattern[px] == '*' {
-		px++
-	}
-	return px == len(pattern)
+	return r.Exclusions.Excluded(r.ID(), api.ExclusionMatchParentPathGlob, parent.Path, hostID)
 }
 
 // dnsPort is the well-known DNS port. An outbound connection to it to a local-resolver-class address is name resolution against the

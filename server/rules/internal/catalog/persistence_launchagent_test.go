@@ -13,13 +13,13 @@ import (
 func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 	t.Parallel()
 	type fixture struct {
-		name          string
-		args          []string
-		path          string
-		parentPath    string
-		wantFinding   bool
-		wantDescHas   string
-		allowedPlists map[string]struct{}
+		name        string
+		args        []string
+		path        string
+		parentPath  string
+		wantFinding bool
+		wantDescHas string
+		exclusions  *fakeExclusions
 	}
 
 	cases := []fixture{
@@ -73,9 +73,9 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 			path:        "/bin/launchctl",
 			parentPath:  "/bin/bash",
 			wantFinding: false,
-			allowedPlists: map[string]struct{}{
-				"/Library/LaunchAgents/com.okta.agent.plist": {},
-			},
+			exclusions: &fakeExclusions{entries: []fakeExcl{
+				{ruleID: "persistence_launchagent", matchType: api.ExclusionMatchPathGlob, value: "/Library/LaunchAgents/com.okta.agent.plist"},
+			}},
 		},
 		{
 			name:        "load with -w flag still fires (flag ignored during arg walk)",
@@ -125,7 +125,10 @@ func TestPersistenceLaunchAgent_TableDriven(t *testing.T) {
 			require.NoError(t, s.InsertEvents(ctx, events))
 			materialize(t, s, events)
 
-			rule := &PersistenceLaunchAgent{AllowedPlists: tc.allowedPlists}
+			rule := &PersistenceLaunchAgent{}
+			if tc.exclusions != nil {
+				rule.Exclusions = tc.exclusions
+			}
 			findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 			require.NoError(t, err)
 

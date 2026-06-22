@@ -450,14 +450,12 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 		require.NoError(t, s.InsertEvents(ctx, events))
 		materialize(t, s, events)
 
-		rule := &SuspiciousExec{
-			AllowedNonShellParents: map[string]struct{}{
-				"/usr/libexec/sshd-session": {},
-			},
-		}
+		rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+			{ruleID: "suspicious_exec", matchType: api.ExclusionMatchParentPathGlob, value: "/usr/libexec/sshd-session"},
+		}}}
 		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 		require.NoError(t, err)
-		assert.Empty(t, findings, "allowlisted parent must suppress the finding")
+		assert.Empty(t, findings, "excluded parent must suppress the finding")
 	})
 
 	t.Run("without allowlist: fires", func(t *testing.T) {
@@ -526,42 +524,10 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 // TestGlobMatch pins the wildcard matcher behind the version-agnostic parent allowlist. `*` matches any run of characters INCLUDING
 // the path separator (unlike a shell glob), and a pattern with no `*` is exact equality. The evidence-host patterns from issue #391
 // (`*/claude/versions/*`, `*/lefthook_*`, the Homebrew Cellar git path) are pinned as named cases.
-func TestGlobMatch(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name    string
-		pattern string
-		input   string
-		want    bool
-	}{
-		{"exact match", "/usr/libexec/sshd-session", "/usr/libexec/sshd-session", true},
-		{"exact mismatch", "/usr/libexec/sshd-session", "/usr/libexec/sshd", false},
-		{"empty pattern matches empty", "", "", true},
-		{"empty pattern rejects nonempty", "", "/x", false},
-		{"lone star matches anything", "*", "/anything/at/all", true},
-		{"lone star matches empty", "*", "", true},
-		{"trailing star is prefix match", "/opt/tool/*", "/opt/tool/v1/bin/tool", true},
-		{"leading star is suffix match", "*/tool", "/opt/tool/v1/tool", true},
-		{"star crosses path separators", "*/claude/versions/*", "/Users/dev/.local/share/claude/versions/2.1.178/claude", true},
-		{"claude version churn pattern still matches a different version", "*/claude/versions/*", "/Users/dev/.local/share/claude/versions/2.1.999/claude", true},
-		{"lefthook version-stamped binary", "*/lefthook_*", "/Users/dev/.local/share/mise/installs/lefthook/1.8.0/lefthook_1.8.0_MacOS_arm64", true},
-		{"homebrew cellar git with version wildcard", "/opt/homebrew/Cellar/git/*/bin/git", "/opt/homebrew/Cellar/git/2.42.1/bin/git", true},
-		{"embedded star requires the literal tail", "*/claude/versions/*", "/Users/dev/.local/share/claude/2.1.178/claude", false},
-		{"anchored pattern rejects a tmp impostor", "/opt/homebrew/Cellar/git/*/bin/git", "/tmp/evil/git", false},
-		{"multiple stars", "*/a/*/c/*", "/x/a/b/c/d", true},
-		{"multiple stars no match", "*/a/*/c/*", "/x/a/b/d/e", false},
-		{"star matches empty run between literals", "/a*b", "/ab", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tc.want, globMatch(tc.pattern, tc.input))
-		})
-	}
-}
-
-// TestSuspiciousExec_ParentAllowlistGlobMatching covers the version-agnostic parent allowlist: a glob entry suppresses a
-// version-stamped developer-tool parent (the issue #391 noise), while a literal entry keeps exact-match semantics.
+// TestSuspiciousExec_ParentAllowlistGlobMatching covers the version-agnostic parent exclusion: a glob entry suppresses a
+// version-stamped developer-tool parent (the issue #391 noise), while a literal entry keeps exact-match semantics. The glob
+// matching itself lives in the resolver (api.GlobMatch / api.MatchExclusionValue) and is unit-tested in the rules/api package; this
+// test pins the rule -> resolver wiring end to end.
 //
 // spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-glob-allowlist-entry-suppresses-a-version-stamped-parent
 // spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-literal-allowlist-entry-still-matches-exactly
@@ -598,10 +564,12 @@ func TestSuspiciousExec_ParentAllowlistGlobMatching(t *testing.T) {
 		require.NoError(t, s.InsertEvents(ctx, events))
 		materialize(t, s, events)
 
-		rule := &SuspiciousExec{AllowedNonShellParents: map[string]struct{}{"*/claude/versions/*": {}}}
+		rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+			{ruleID: "suspicious_exec", matchType: api.ExclusionMatchParentPathGlob, value: "*/claude/versions/*"},
+		}}}
 		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 		require.NoError(t, err)
-		assert.Empty(t, findings, "version-stamped parent must match the glob allowlist entry")
+		assert.Empty(t, findings, "version-stamped parent must match the glob exclusion entry")
 	})
 
 	t.Run("glob entry does not suppress a non-matching parent", func(t *testing.T) {
@@ -613,7 +581,9 @@ func TestSuspiciousExec_ParentAllowlistGlobMatching(t *testing.T) {
 		materialize(t, s, events)
 
 		// A glob for a DIFFERENT tool must not suppress the claude chain.
-		rule := &SuspiciousExec{AllowedNonShellParents: map[string]struct{}{"*/lefthook_*": {}}}
+		rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+			{ruleID: "suspicious_exec", matchType: api.ExclusionMatchParentPathGlob, value: "*/lefthook_*"},
+		}}}
 		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 		require.NoError(t, err)
 		require.Len(t, findings, 1, "non-matching glob must leave the rule firing")
@@ -629,7 +599,9 @@ func TestSuspiciousExec_ParentAllowlistGlobMatching(t *testing.T) {
 		require.NoError(t, s.InsertEvents(ctx, events))
 		materialize(t, s, events)
 
-		rule := &SuspiciousExec{AllowedNonShellParents: map[string]struct{}{parent: {}}}
+		rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+			{ruleID: "suspicious_exec", matchType: api.ExclusionMatchParentPathGlob, value: parent},
+		}}}
 		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 		require.NoError(t, err)
 		assert.Empty(t, findings, "literal entry must match the parent path exactly")

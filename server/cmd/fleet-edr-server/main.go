@@ -30,7 +30,6 @@ import (
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/metrics"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
-	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/ui"
 )
@@ -239,6 +238,7 @@ func openContexts(
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
+	detectionCtx.SetModeResolver(rulesCtx.DetectionConfigModeResolver())
 	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel))
 	return
 }
@@ -368,15 +368,8 @@ func openRules(
 	responseCtx *responsebootstrap.Response,
 ) (*rulesbootstrap.Rules, error) {
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:     db,
-		Logger: logger,
-		RegistryOptions: rulesapi.RegistryOptions{
-			SuspiciousExecParentAllowlist: cfg.SuspiciousExecParentAllowlist,
-			LaunchAgentAllowlist:          cfg.LaunchAgentAllowlist,
-			LaunchDaemonTeamIDAllowlist:   cfg.LaunchDaemonTeamIDAllowlist,
-			SudoersWriterAllowlist:        cfg.SudoersWriterAllowlist,
-			DisabledRuleIDs:               cfg.DisabledRuleIDs,
-		},
+		DB:              db,
+		Logger:          logger,
 		Audit:           identityCtx.AuditRecorder(),
 		AuthZ:           identityCtx.AuthZ(),
 		CommandInserter: responseCtx.Service().Insert,

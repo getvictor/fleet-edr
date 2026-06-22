@@ -15,11 +15,9 @@ import (
 // fixtures/sudoers_tamper/ as its own sub-test.
 func TestSudoersTamper_Fixtures(t *testing.T) {
 	t.Parallel()
-	r := &SudoersTamper{
-		AllowedWriters: map[string]struct{}{
-			"/usr/local/bin/fixture-allowed-writer": {},
-		},
-	}
+	r := &SudoersTamper{Exclusions: &fakeExclusions{entries: []fakeExcl{
+		{ruleID: "sudoers_tamper", matchType: api.ExclusionMatchPathGlob, value: "/usr/local/bin/fixture-allowed-writer"},
+	}}}
 	detectiontestkit.Replay(t, r, "fixtures/sudoers_tamper")
 }
 
@@ -30,22 +28,22 @@ func TestSudoersTamper_TechniquesMapping(t *testing.T) {
 	assert.Equal(t, []string{"T1548.003"}, r.Techniques())
 }
 
-// TestSudoersTamper_AllowedEdgeCases pins the contract of allowed(): nil allowlist always returns false; populated allowlist hits
-// exact path matches. We don't normalise (no trailing-slash stripping, no case folding): matching is byte-equal.
-func TestSudoersTamper_AllowedEdgeCases(t *testing.T) {
+// TestSudoersTamper_ExcludedEdgeCases pins the contract of excluded(): a nil resolver always returns false; a resolver entry hits
+// per its match-type semantics (here path_glob, which is exact when the entry has no `*`).
+func TestSudoersTamper_ExcludedEdgeCases(t *testing.T) {
 	t.Parallel()
 	rNoList := &SudoersTamper{}
-	assert.False(t, rNoList.allowed("/usr/sbin/visudo"),
-		"nil allowlist must return false for any path")
+	assert.False(t, rNoList.excluded("/usr/sbin/visudo", "host-a"),
+		"nil resolver must return false for any path")
 
-	r := &SudoersTamper{AllowedWriters: map[string]struct{}{
-		"/usr/sbin/visudo": {},
-	}}
-	assert.True(t, r.allowed("/usr/sbin/visudo"))
-	assert.False(t, r.allowed("/usr/local/bin/visudo"),
-		"matching is exact-path; no PATH-walk fallback")
-	assert.False(t, r.allowed(""),
-		"empty path must not accidentally match an empty-key entry")
+	r := &SudoersTamper{Exclusions: &fakeExclusions{entries: []fakeExcl{
+		{ruleID: "sudoers_tamper", matchType: api.ExclusionMatchPathGlob, value: "/usr/sbin/visudo"},
+	}}}
+	assert.True(t, r.excluded("/usr/sbin/visudo", "host-a"))
+	assert.False(t, r.excluded("/usr/local/bin/visudo", "host-a"),
+		"a literal entry is exact-path; no PATH-walk fallback")
+	assert.False(t, r.excluded("", "host-a"),
+		"empty path must not match a non-empty entry")
 }
 
 // TestSudoersTamper_MalformedPayload exercises the unmarshal-failure path: the fast-path bytes.Contains lets it through (the magic

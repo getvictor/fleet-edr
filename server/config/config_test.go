@@ -286,61 +286,6 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name: "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST parsed and trimmed",
-			env: withExtra(minEnv, map[string]string{
-				// Mixed whitespace + an empty entry to exercise envparse.Allowlist's trim/empty-skip behaviour,
-				// same way every other allowlist env var is documented to behave.
-				"EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST": "/usr/libexec/sshd-session, /Applications/Terminal.app/Contents/MacOS/Terminal,,/Applications/iTerm.app/Contents/MacOS/iTerm2",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Len(t, c.SuspiciousExecParentAllowlist, 3,
-					"allowlist must skip the empty entry")
-				for _, want := range []string{
-					"/usr/libexec/sshd-session",
-					"/Applications/Terminal.app/Contents/MacOS/Terminal",
-					"/Applications/iTerm.app/Contents/MacOS/iTerm2",
-				} {
-					_, ok := c.SuspiciousExecParentAllowlist[want]
-					assert.True(t, ok, "allowlist must trim whitespace and contain %q", want)
-				}
-			},
-		},
-		{
-			name: "EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST empty leaves nil map",
-			env:  minEnv,
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Nil(t, c.SuspiciousExecParentAllowlist,
-					"unset env should leave the map nil so the rule treats every parent as not allowlisted")
-			},
-		},
-		{
-			name: "EDR_DISABLED_RULES parsed and trimmed",
-			env: withExtra(minEnv, map[string]string{
-				// Mixed whitespace + an empty entry exercises splitCSV's trim/empty-skip the same way the allowlists above
-				// do. The rule_id values are not validated here: the catalog filter accepts whatever the operator typed
-				// and bootstrap.New warns on unknown IDs at boot.
-				"EDR_DISABLED_RULES": "osascript_network_exec, sudoers_tamper,, suspicious_exec",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Equal(t,
-					[]string{"osascript_network_exec", "sudoers_tamper", "suspicious_exec"},
-					c.DisabledRuleIDs,
-					"EDR_DISABLED_RULES must trim whitespace and skip empty entries while preserving order")
-			},
-		},
-		{
-			name: "EDR_DISABLED_RULES empty leaves nil slice",
-			env:  minEnv,
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Nil(t, c.DisabledRuleIDs,
-					"unset env should leave the slice nil so the catalog ships every shipped rule")
-			},
-		},
-		{
 			name: "EDR_TRUSTED_PROXIES populates and trims",
 			env: withExtra(minEnv, map[string]string{
 				// Mixed CIDR forms + whitespace + an empty entry. CIDR validation is deferred to

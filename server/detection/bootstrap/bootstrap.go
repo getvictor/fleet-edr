@@ -221,6 +221,14 @@ func (d *Detection) SetMetrics(m api.MetricsRecorder) {
 	}
 }
 
+// SetModeResolver wires the per-host rule-mode resolver into the engine AFTER construction (issue #459). cmd/main passes the rules
+// context's detection-config service. No-op in ModeIntake (no engine).
+func (d *Detection) SetModeResolver(m rulesapi.RuleModeResolver) {
+	if d.engine != nil {
+		d.engine.SetModeResolver(m)
+	}
+}
+
 // Store exposes the persistence handle. Used by cmd/main for the
 // retention DB-handle wiring (retention takes a *sqlx.DB directly).
 func (d *Detection) Store() *mysql.Store { return d.store }

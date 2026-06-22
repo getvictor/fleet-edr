@@ -24,7 +24,7 @@ import (
 // to walk the same set of rules in the same order. Documentation is not a function of a particular deployment's tuning, so we pass the
 // zero value of RegistryOptions: allowlists default to empty, which is what the rule structs treat as "no operator tuning yet."
 func allRegisteredRules() []rulesapi.RuleMetadata {
-	return rulesbootstrap.CatalogOnly(rulesapi.RegistryOptions{}).List()
+	return rulesbootstrap.CatalogOnly().List()
 }
 
 func main() {
