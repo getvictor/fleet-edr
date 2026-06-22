@@ -21,7 +21,6 @@ This release retires a number of `EDR_*` environment variables in favor of in-pr
 - **Single sign-on settings screen.** Configure your OIDC identity provider (issuer, client ID and secret, scopes, just-in-time provisioning, and default role), test the connection before saving, and apply changes without a server restart.
 - **API service accounts.** Create non-human principals so automation, CI/release pipelines, and integrations can call the EDR API with a short-lived OAuth client-credentials bearer token instead of a human's browser session. Each account is scoped to a single role, rotated, and revoked from an admin screen, and every lifecycle action and token issuance is audited.
 - **In-product user management.** Promote and demote operator roles and enable or disable accounts from a Users screen instead of editing the database by hand, with anti-lockout guardrails (the last admin cannot be demoted, you cannot change your own role, and break-glass users are protected) and an audit row on every change.
-- **Persistence alerts now name the responsible process.** LaunchDaemon and LaunchAgent persistence alerts identify the process that wrote the persistence file and correlate the persisted executable's own runs, giving analysts the responsible process and its lineage instead of an unattributed finding.
 - **MITRE ATT&CK coverage map.** A ready-to-share ATT&CK Navigator layer, scoped to the macOS techniques the product detects, ships in the repo for handing to a buyer, auditor, or SOC analyst.
 
 ### Changed
