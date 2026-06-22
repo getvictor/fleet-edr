@@ -64,10 +64,16 @@ cosign verify-blob \
   SHA256SUMS
 
 # 2. Only now use the trusted SHA256SUMS to checksum every other artifact.
-shasum -a 256 -c SHA256SUMS --ignore-missing
+#    No --ignore-missing: we downloaded the whole release, so every file listed
+#    in SHA256SUMS (pkg, both profiles, both SBOMs) MUST be present. Omitting
+#    the flag turns a not-downloaded or misnamed artifact into a hard FAILED
+#    instead of a silently skipped line. The extra files on disk (the
+#    .sigstore.json bundles and SHA256SUMS itself) are not listed in
+#    SHA256SUMS, so `-c` simply does not check them.
+shasum -a 256 -c SHA256SUMS
 ```
 
-Expect `Verified OK` for the bundle, then every `shasum` line `OK`. Any `FAILED` is a corrupted or tampered artifact: stop and report.
+Expect `Verified OK` for the bundle, then every `shasum` line `OK`. Any `FAILED` (bad hash) or a `No such file` / missing line is a corrupted, tampered, or absent artifact: stop and report.
 
 ## Step 3: verify the Sigstore bundle for each remaining blob artifact
 
