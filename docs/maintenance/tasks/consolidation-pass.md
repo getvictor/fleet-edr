@@ -28,7 +28,7 @@ Repo-wide: duplicated lines 1.3%, 33 duplicated blocks across 21 files; aggregat
 
 ## Steps
 
-1. Pull the duplication report. Via the SonarQube MCP: `search_duplicated_files` and `get_duplications` for project `getvictor_fleet-edr`. Or the web API:
+1. Pull the duplication report from SonarCloud. If the SonarQube MCP is configured locally (optional), `search_duplicated_files` and `get_duplications` for project `getvictor_fleet-edr` are the quickest path; otherwise use the SonarCloud web API, which always works:
 
    ```bash
    curl -s -u "$SONAR_TOKEN:" \
@@ -58,8 +58,9 @@ One focused PR per consolidation candidate (do not bundle unrelated clusters). T
 Run the consolidation pass defined in docs/maintenance/tasks/consolidation-pass.md.
 
 Step 1: pull the SonarCloud duplication and cognitive-complexity reports for getvictor_fleet-edr
-(via the SonarQube MCP search_duplicated_files / get_duplications, and the component_tree measures API
-in the task file). List the top duplicated files and the top cognitive-complexity files.
+(the SonarQube MCP search_duplicated_files / get_duplications if it is configured, otherwise the
+component_tree measures API shown in the task file). List the top duplicated files and the top
+cognitive-complexity files.
 
 Step 2: for the top few, confirm the copies are live (grep the call sites) and propose a target shape:
 which implementation wins, where it lives (owning bounded context, or internal/ and api/ if shared), and

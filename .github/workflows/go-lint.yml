@@ -15,6 +15,7 @@ on:
       - "**/go.mod"
       - "**/go.sum"
       - ".golangci.yml"
+      - ".golangci-strict.yml"
       - ".custom-gcl.yml"
       - "Taskfile.yml"
       - ".github/workflows/go-lint.yml"
@@ -48,7 +49,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          PATTERN='\.go$|(^|/)go\.(mod|sum)$|^\.golangci\.yml$|^\.custom-gcl\.yml$|^Taskfile\.yml$|^\.github/workflows/go-lint\.yml$'
+          PATTERN='\.go$|(^|/)go\.(mod|sum)$|^\.golangci(-strict)?\.yml$|^\.custom-gcl\.yml$|^Taskfile\.yml$|^\.github/workflows/go-lint\.yml$'
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running unconditionally."
