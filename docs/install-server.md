@@ -214,11 +214,6 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_SHUTDOWN_DRAIN` | no | 30s | On SIGTERM the server reports `/readyz` 503 and keeps serving for this long before closing the listener, so a load balancer drains the replica from rotation first. 0 disables the wait (immediate shutdown) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
 | `EDR_RETENTION_DAYS` | no | 30 | Event TTL, 0 disables retention |
-| `EDR_LAUNCHAGENT_ALLOWLIST` | no | none | Comma-separated absolute paths the `persistence_launchagent` rule treats as benign |
-| `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST` | no | none | Comma-separated code-signing team IDs the `privilege_launchd_plist_write` rule treats as benign |
-| `EDR_SUDOERS_WRITER_ALLOWLIST` | no | none | Comma-separated writer-process absolute paths the `sudoers_tamper` rule treats as benign; alerts may surface either `/etc/sudoers...` or `/private/etc/sudoers...` because `/etc` is a symlink and ES reports the path as opened |
-| `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` | no | none | Comma-separated non-shell parent path patterns the `suspicious_exec` rule treats as benign roots for BOTH trigger shapes: the `parent → shell → /tmp/binary` chain AND the `parent → shell` followed by an outbound network connection. An entry containing `*` is a glob (a `*` matches any run of characters including `/`, so `*/claude/versions/*` survives version churn); an entry with no `*` matches the path exactly. Recommended on fleets with interactive admin SSH: `/usr/libexec/sshd-session,/Applications/Terminal.app/Contents/MacOS/Terminal,/Applications/iTerm.app/Contents/MacOS/iTerm2`. Leave empty on servers where interactive SSH is unusual |
-| `EDR_DISABLED_RULES` | no | none | Comma-separated rule IDs to drop from the detection registry at boot. A disabled rule is gone from the engine's active set AND from `GET /api/rules`, so it never evaluates against any batch and never produces alerts until it is re-enabled (requires a server restart). Unknown IDs WARN at boot but don't fail it, so a stale config doesn't take a deployment down. Use the rule IDs printed by `GET /api/rules` (e.g. `suspicious_exec,osascript_network_exec`) |
 | `EDR_LOG_LEVEL` | no | info | `debug` / `info` / `warn` / `error` |
 | `EDR_LOG_FORMAT` | no | json | `json` or `text` |
 | `EDR_SECRET_KEY` / `EDR_SECRET_KEY_FILE` | yes | none | Deployment root secret (≥ 32 bytes). Every long-lived server-side key derives from it via HKDF: the host-token HMAC pepper and the cookie signing key (OIDC state cookie + WebAuthn registration session). Required on every boot. Rotating it invalidates every host token (fleet-wide re-enroll) plus every session and in-flight ceremony; see [operations.md](operations.md#edr-root-secret) |
@@ -235,6 +230,8 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | none | `host:port` of an OTLP/gRPC collector; unset disables metrics export |
 
 Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`, `EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents become the value. That's how the compose stack delivers secrets.
+
+Detection-rule tuning (false-positive exclusions and per-rule enable/monitor/disable) is no longer an env var. It moved to the DB-backed detection-config surface, edited through the admin API/UI and audited (issue #459); see [operations.md](operations.md#detection-rule-tuning). The former `EDR_LAUNCHAGENT_ALLOWLIST`, `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST`, `EDR_SUDOERS_WRITER_ALLOWLIST`, `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST`, and `EDR_DISABLED_RULES` knobs are removed.
 
 ## OTel metrics and logs
 

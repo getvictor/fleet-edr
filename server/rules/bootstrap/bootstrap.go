@@ -54,6 +54,7 @@ type Rules struct {
 	appControlSvc      *appcontrol.Service
 	detectionConfigSt  *detectionconfig.Store
 	detectionConfigSvc *detectionconfig.Service
+	detectionConfigH   *operator.DetectionConfigHandler
 	db                 *sqlx.DB
 	logger             *slog.Logger
 }
@@ -77,13 +78,15 @@ func New(deps Deps) (*Rules, error) {
 	// resolves both for the rules (ExclusionResolver, consulted before a rule fires) and the engine (RuleModeResolver). Built here so
 	// the rule set is constructed against the live resolver; the initial snapshot is loaded in ApplySchema once the tables exist.
 	detectionConfigStore := detectionconfig.NewStore(deps.DB)
-	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil)
+	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
 
 	rules := catalog.New(detectionConfigSvc)
 	svc := service.New(rules, logger)
 
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
+
+	detectionConfigH := operator.NewDetectionConfig(detectionConfigSvc, deps.AuthZ, logger)
 
 	appControlStore := appcontrol.NewStore(deps.DB)
 	var appControlSvc *appcontrol.Service
@@ -106,6 +109,7 @@ func New(deps Deps) (*Rules, error) {
 		appControlSvc:      appControlSvc,
 		detectionConfigSt:  detectionConfigStore,
 		detectionConfigSvc: detectionConfigSvc,
+		detectionConfigH:   detectionConfigH,
 		db:                 deps.DB,
 		logger:             logger,
 	}, nil
@@ -177,6 +181,7 @@ func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 	if r.appControlH != nil {
 		r.appControlH.RegisterRoutes(mux)
 	}
+	r.detectionConfigH.RegisterRoutes(mux)
 }
 
 // CatalogOnly returns just the rule catalog, without wiring the operator routes. Exposed for tooling that doesn't have a DB handle

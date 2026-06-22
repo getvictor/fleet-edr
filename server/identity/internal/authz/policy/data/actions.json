@@ -29,6 +29,8 @@
     "application_control.rule_bulk_upsert",
     "application_control.policy_create",
     "application_control.policy_update",
-    "application_control.policy_delete"
+    "application_control.policy_delete",
+    "detection_config.read",
+    "detection_config.write"
   ]
 }

@@ -21,9 +21,9 @@
 
 ## REST + governance
 
-- [ ] `server/rules/internal/detectionconfig` (store + service) + `server/rules/internal/operator` routes: list/create/update/delete exclusions; get/update per-rule settings; scoped to host groups. Mirror the App Control handler shape.
-- [ ] Every mutation goes through the existing RBAC chokepoint and writes an audit row (actor + reason).
-- [ ] Register the new `/api/v1/detection-config/*` routes in the session-protected route allowlist.
+- [x] `server/rules/internal/detectionconfig` (store + service) + `server/rules/internal/operator` `DetectionConfigHandler`: list/create/delete exclusions; list/upsert per-rule settings. Mutations go through the service, which writes the row, reloads the snapshot, and emits an audit row. Group scope is rejected for now (Phase A) with a clear 400.
+- [x] Every mutation gates on the new `ActionDetectionConfigRead` / `ActionDetectionConfigWrite` authz actions (added to `authz.go` `RegisteredActions`, `actions.json`, `roles.json`: admin = write, admin + senior_analyst = read) and writes an audit row (`detection_config.*` audit actions, actor + reason).
+- [x] The `/api/v1/detection-config/*` routes register in `Rules.RegisterAuthedRoutes`; the session-protected allowlist auto-derives (RecordingRouter), so no manual allowlist edit is needed.
 
 ## Delete the env surface (hard switch)
 
@@ -37,7 +37,7 @@
 
 - [x] Store integration tests (real MySQL): CRUD, version bump, resolve-via-snapshot, invalid-input rejection (`store_test.go`). Pure snapshot tests: expiry, group scope, shared-rule, most-specific-wins mode/severity (`snapshot_test.go`).
 - [ ] Catalog tests: each migrated rule suppressed by a DB exclusion at global scope; disabled rule emits nothing but stays listed.
-- [ ] `docs/detection-rules.md`, `docs/operations.md`, `docs/install-server.md`: repoint from env vars to the new surface; regenerate `detection-rules.md` via `tools/gen-rule-docs`.
+- [x] `docs/detection-rules.md` (regenerated via `tools/gen-rule-docs`), `docs/operations.md` (new "Detection-rule tuning" section), `docs/install-server.md` (env rows removed + pointer): repointed from env vars to the new surface. OpenAPI for the new endpoints is a follow-up (Stage 4 / UI).
 - [ ] Spectrace markers for the new SHALL/MUST scenarios.
 
 ## Gates

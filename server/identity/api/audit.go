@@ -69,6 +69,12 @@ const (
 	AuditAppControlPolicyCreate   AuditAction = "application_control.policy_create"
 	AuditAppControlPolicyUpdate   AuditAction = "application_control.policy_update"
 	AuditAppControlPolicyDelete   AuditAction = "application_control.policy_delete"
+
+	// Detection configuration (issue #459). Records who created/deleted a false-positive exclusion or changed a rule's mode /
+	// severity, with the operator-supplied reason in the payload so a reviewer can trace tuning decisions.
+	AuditDetectionConfigExclusionCreate   AuditAction = "detection_config.exclusion_create"
+	AuditDetectionConfigExclusionDelete   AuditAction = "detection_config.exclusion_delete"
+	AuditDetectionConfigRuleSettingUpdate AuditAction = "detection_config.rule_setting_update"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller
