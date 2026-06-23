@@ -57,7 +57,7 @@ The system SHALL be free to retransmit any unacknowledged batch in full because 
 
 ### Requirement: Bounded request size
 
-The system MUST cap the size of each upload request and split larger queue contents across multiple requests so that any single HTTP request stays within the server's accepted body size and the network's practical MTU for streaming bodies.
+The system MUST cap the size of each upload request and split larger queue contents across multiple requests so that any single HTTP request stays within the server's accepted body size and the network's practical MTU for streaming bodies. The system SHALL gzip-compress the request body and set `Content-Encoding: gzip`, because event batches are small, repetitive JSON that compress several-fold and the ingest path is bandwidth-bound; the uncompressed batch still drives the over-cap split-and-retry recovery, which bisects by event count and is unaffected by the wire encoding.
 
 #### Scenario: Queue holds more events than fit in one request
 
@@ -65,6 +65,12 @@ The system MUST cap the size of each upload request and split larger queue conte
 - **WHEN** the uploader runs an upload cycle
 - **THEN** the uploader emits one or more requests of bounded size
 - **AND** events that did not fit in the first request remain queued for subsequent requests
+
+#### Scenario: The upload body is gzip-compressed
+
+- **GIVEN** the uploader has a batch to send
+- **WHEN** it posts the batch to the server
+- **THEN** the request carries `Content-Encoding: gzip` and the body is a gzip stream that decompresses to exactly the JSON array of events the uploader marshalled
 
 ### Requirement: Over-cap server responses split-and-retry the batch
 
@@ -124,14 +130,21 @@ The system MUST signal the enrollment subsystem when the server returns 401 so t
 
 ### Requirement: Permanent client errors are not infinitely retained
 
-The system SHALL stop retrying batches that consistently produce non-401 4xx responses after the configured maximum and SHALL emit an audit log entry so the operator can investigate why the server rejected those events.
+The system SHALL stop retrying batches that consistently produce an HTTP 400 (bad request) response after the configured maximum and SHALL emit an audit log entry so the operator can investigate why the server rejected those events. HTTP 400 is the only status the ingestion route emits to signal that a batch's content is bad (`invalid_json`, `host_id_mismatch`, `missing_fields_at_<i>`), so it is the only status that consumes the quarantine budget. A 401 (re-enroll) and a 413 (split-and-retry) keep their own recovery paths and do not consume the quarantine budget; any other status is handled as a blanket endpoint rejection (see "Blanket endpoint rejections keep the queue").
 
 #### Scenario: Server consistently returns 4xx for a malformed event
 
-- **GIVEN** the server returns a non-401 4xx for a batch on every attempt
+- **GIVEN** the server returns HTTP 400 (the only malformed-content 4xx the ingest route emits) for a batch on every attempt
 - **WHEN** the configured maximum retry budget is exhausted
 - **THEN** the uploader records an audit log entry identifying the failure
 - **AND** the batch is not retransmitted indefinitely
+
+#### Scenario: A poison batch quarantines while sibling batches deliver
+
+- **GIVEN** one batch consistently returns HTTP 400 while other batches return 2xx
+- **WHEN** the poison batch crosses the quarantine threshold
+- **THEN** only the poison batch is sealed
+- **AND** the sibling batches are delivered and marked uploaded
 
 ### Requirement: Drain on shutdown
 
@@ -143,3 +156,21 @@ The system SHALL attempt one final upload cycle when the agent receives a shutdo
 - **WHEN** the uploader's run loop observes the cancellation
 - **THEN** the uploader executes one more upload attempt before returning
 - **AND** any events that succeed in that attempt are marked uploaded before exit
+
+### Requirement: Blanket endpoint rejections keep the queue
+
+The ingestion route (`POST /api/events`) emits only 200, 400, 413 (intake handler) and 401, 503 (host-token middleware). Any other status the uploader observes (in particular 403, and likewise 404, 405, 408, 429, 451, and other non-2xx 4xx) is therefore not a per-batch content verdict from the EDR server but a blanket rejection injected by an edge/proxy/WAF or a wrong/unhealthy origin. The system MUST treat such a response as a transient endpoint rejection: it SHALL keep the batch queued (neither sealing it nor consuming the quarantine budget), back off to the next drain cycle, and resume delivery automatically when the endpoint returns 2xx. Retention during the rejection window is bounded only by the queue's `EDR_AGENT_QUEUE_MAX_BYTES` lossy cap. The system MUST emit a distinct WARN log and increment a dedicated counter labelled by status code so an operator can distinguish "the endpoint is rejecting every upload" from a quiet success.
+
+#### Scenario: Sustained 403 preserves the queue and resumes on recovery
+
+- **GIVEN** the endpoint returns HTTP 403 for every upload across many drain cycles
+- **WHEN** the uploader drains repeatedly
+- **THEN** no batch is sealed or dropped and the queued events remain (bounded only by the queue byte cap)
+- **AND** the uploader emits the endpoint-rejection WARN and increments the endpoint-rejected counter
+- **AND** when the endpoint later returns 2xx, the queued events are delivered and marked uploaded
+
+#### Scenario: A non-400 4xx does not consume the quarantine budget
+
+- **GIVEN** the endpoint returns HTTP 429 (or 404) for a batch on every attempt
+- **WHEN** the uploader drains more times than the quarantine threshold
+- **THEN** the batch is not sealed and remains queued for a future cycle

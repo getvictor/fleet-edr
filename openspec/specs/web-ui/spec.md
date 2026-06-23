@@ -50,13 +50,22 @@ The UI SHALL expose a logout control that, when invoked, requests the server to 
 
 ### Requirement: Host list is the home view
 
-The UI SHALL render an enrolled host list as the home view of the authenticated application. Each row MUST identify the host, show whether it is online or offline by comparing the host's last-seen timestamp to the current time, and show the host's running event count. A host MUST be classified online when its last-seen timestamp is within the last 5 minutes and offline otherwise. Activating a row MUST navigate to that host's process tree.
+The UI SHALL render an enrolled host list as the home view of the authenticated application. The page SHALL open with a fleet-overview summary of how many hosts are online, how many are offline, and the total host count, computed from the same online/offline classification used by the rows. Each row MUST identify the host by its enrollment hostname over its full hardware identifier (falling back to the hardware identifier alone when no enrollment hostname is known), show whether it is online or offline by comparing the host's last-seen timestamp to the current time, and show the host's running event count. A host MUST be classified online when its last-seen timestamp is within the last 5 minutes and offline otherwise. Activating a row MUST navigate to that host's process tree.
+
+The change from the prior requirement is the addition of the fleet-overview summary and the enrollment hostname + full hardware identifier in the host cell; the online/offline classification, event count, and row-activation behavior are unchanged.
 
 #### Scenario: Host list renders rows for enrolled hosts
 
 - **GIVEN** the server has at least one enrolled host
-- **WHEN** an authenticated operator opens the home view
-- **THEN** the UI renders a row per host with the host id, an online/offline pill, the event count, and a relative last-seen label
+- **WHEN** the operator opens the home view
+- **THEN** the UI renders a row per host with the host identity, an online/offline pill, the event count, and a relative last-seen label
+
+#### Scenario: Host list shows hostname and a fleet summary
+
+- **GIVEN** the server returns hosts with enrollment hostnames, plus one host with no enrollment hostname
+- **WHEN** the operator opens the home view
+- **THEN** the UI shows a summary of online, offline, and total host counts
+- **AND** each host cell shows the enrollment hostname over the full hardware identifier, and a host with no enrollment hostname shows the hardware identifier alone
 
 #### Scenario: Clicking a host opens its process tree
 
@@ -120,7 +129,9 @@ The UI SHALL provide an alert list page that defaults to open alerts, supports f
 
 ### Requirement: Alert pivots to the host process tree
 
-The UI SHALL provide a control on each alert in the list that pivots into the alerted host's process tree page anchored at the moment the alert fired. The receiving page MUST present the alert's metadata (severity, title, time) as a breadcrumb and MUST default the time window to one wide enough to display historical alerts.
+The UI SHALL provide a control on each alert in the list that pivots into the alerted host's process tree page anchored at the moment the alert fired. The receiving page MUST present the alert's metadata (severity, title, time) as a breadcrumb and MUST default the time window to one wide enough to display historical alerts. The receiving page MUST also render the finding's description and MITRE technique tags so the analyst sees what fired and why independent of the graph state.
+
+When the alert is not attributed to a single process (a process-optional finding, where the attacker has no live process and the alert keys on an artifact such as a LaunchDaemon registration), the page MUST NOT render a silent blank canvas. It MUST instead present an explicit explanation that the detection is not tied to a running process, alongside an opt-in control that widens the view to the surrounding host activity. The page MUST NOT auto-expand to the full host tree. The explanation MUST survive a page reload of the alert link rather than depending on a non-persisted view toggle.
 
 #### Scenario: Operator pivots from an alert to the host context
 
@@ -128,6 +139,14 @@ The UI SHALL provide a control on each alert in the list that pivots into the al
 - **WHEN** the operator activates the alert's primary link
 - **THEN** the UI navigates to the host's process tree pinned to the alert's time
 - **AND** the receiving page renders an alert breadcrumb identifying severity, title, and time
+
+#### Scenario: Operator pivots from a process-optional alert
+
+- **GIVEN** an alert that is not attributed to a single process (its process id is zero)
+- **WHEN** the operator pivots into the host's process tree from that alert
+- **THEN** the page renders the finding's description and MITRE technique tags
+- **AND** the page presents an explicit explanation that the detection is not attributed to a single process instead of a blank canvas
+- **AND** the page offers an opt-in control to widen the view to the surrounding host activity rather than auto-expanding the full host tree
 
 ### Requirement: Policy editor with audit reason gate
 
@@ -240,3 +259,38 @@ The UI SHALL present an authorization denial as a clear, human-readable no-acces
 - **WHEN** multiple of those affordances trigger an authorization denial in quick succession
 - **THEN** the UI issues at most one in-flight refetch of the session permission set rather than one per denial
 - **AND** subsequent renders reflect the refreshed permission set
+
+### Requirement: Detection configuration admin views
+
+The web UI SHALL provide an authenticated admin surface to view and edit detection configuration: per-rule mode (alert / monitor / disabled), an optional severity override, and false-positive exclusions. The per-rule mode and severity controls MUST render uniformly for every registered rule (driven from the rule catalog), so a newly added rule appears without bespoke UI. The exclusion editor MUST let an operator create and delete global-scope exclusions with a typed match type, a value, a reason, and an optional expiration, and MUST surface the existing entries with their author and creation time. When an operator reduces a rule's alerting (sets its mode to monitor or disabled), the UI MUST capture an operator-supplied reason before the change is submitted, because that reason is recorded in the audit trail; restoring a rule to alert and severity-only edits MAY use a system-generated reason. Mutations MUST go through the authenticated admin API and are subject to the same RBAC the API enforces. Per-rule schema-driven settings beyond mode + severity, exclusion editing, and host-group-scoped configuration are deferred to a later change (they land with the editable host groups and per-rule config-schema work).
+
+#### Scenario: An operator adds an exclusion from the UI
+
+- **GIVEN** an authenticated operator with permission to edit detection configuration
+- **WHEN** they open a rule's detection-configuration view and add an exclusion with a match type, value, and reason
+- **THEN** the exclusion is created through the admin API
+- **AND** it appears in the rule's exclusion list with its author and creation time
+
+#### Scenario: Per-rule mode and severity controls render for every rule
+
+- **GIVEN** the detection rule catalog
+- **WHEN** an operator opens the detection-configuration view
+- **THEN** every registered rule shows mode and severity-override controls without UI changes specific to that rule
+
+#### Scenario: Disabling or monitoring a rule requires an operator reason
+
+- **GIVEN** an authenticated operator with permission to edit detection configuration
+- **WHEN** they set a rule's mode to disabled or monitor
+- **THEN** the UI requires them to enter a reason before the change is submitted
+- **AND** the change is sent to the admin API with that operator reason for the audit log
+
+### Requirement: Admin settings exposes a user-management page
+
+The web UI SHALL provide a user-management page in the Admin settings area that lists operators with their role and account status and lets an authorized admin change a user's role and enable or disable a user. The page and its controls SHALL be gated on the operator's permissions: the page requires `user.read`, and the role and status controls require `user.manage`. An operator lacking the grant SHALL NOT be shown the page or its mutation controls.
+
+#### Scenario: The users page lists operators and changes a role
+
+- **GIVEN** an admin viewing the user-management settings page
+- **WHEN** the page loads and the admin selects a new role for a listed user
+- **THEN** the list shows each user with their role and status
+- **AND** the new role is submitted to the user-management API

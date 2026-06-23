@@ -27,7 +27,9 @@ The system SHALL require a valid session cookie on every endpoint defined in thi
 
 ### Requirement: List enrolled hosts
 
-The system SHALL expose `GET /api/hosts` returning a JSON array of enrolled hosts. Each entry SHALL include the host identifier, the count of events seen for that host, and the most recent timestamp at which any event from the host was observed.
+The system SHALL expose `GET /api/hosts` returning a JSON array of enrolled hosts. Each entry SHALL include the host identifier, the count of events seen for that host, the most recent timestamp at which any event from the host was observed, and the host's enrollment hostname and operating-system version. The hostname and OS version SHALL be sourced from the host's enrollment record; a host that has sent events but has no enrollment record SHALL still appear in the array with an empty hostname and an empty OS version rather than being omitted.
+
+The change from the prior requirement is the addition of the enrollment hostname and OS version to each entry, sourced by joining the enrollment record on the shared host identifier, with empty values (not omission) for an un-enrolled host.
 
 #### Scenario: An operator opens the hosts dashboard
 
@@ -35,6 +37,13 @@ The system SHALL expose `GET /api/hosts` returning a JSON array of enrolled host
 - **WHEN** the client calls `GET /api/hosts`
 - **THEN** the system responds with HTTP 200 and a JSON array
 - **AND** every entry contains the host identifier, an event count, and a last-seen timestamp
+
+#### Scenario: Host list rows carry enrollment hostname and OS version
+
+- **GIVEN** one host with an enrollment record (hostname and OS version) and one host that has sent events but has no enrollment record
+- **WHEN** the client calls `GET /api/hosts`
+- **THEN** the enrolled host's entry carries its enrollment hostname and OS version
+- **AND** the un-enrolled host still appears with an empty hostname and an empty OS version
 
 ### Requirement: Per-host process forest
 
@@ -138,3 +147,14 @@ The system SHALL return successful response bodies as `application/json` with a 
 - **GIVEN** any successful call to an endpoint defined in this capability
 - **WHEN** the response body is non-empty
 - **THEN** the `Content-Type` is `application/json` and the body parses as valid JSON
+
+### Requirement: Registered authed routes are reachable through the composed router
+
+Every authed API route a bounded context registers SHALL be reachable through the composed outer router with its session-authentication boundary applied. The set of session-protected routes SHALL be derived from what the contexts register rather than maintained as a separate hand-edited allowlist, so a registered authed route can never be omitted from the protected surface. An unauthenticated request to a registered authed route SHALL receive the session middleware's JSON authentication failure, never a fall-through to the single-page-app HTML catch-all.
+
+#### Scenario: A registered authed route is session-protected, not SPA fall-through
+
+- **GIVEN** a bounded context registers an authed API route
+- **WHEN** an unauthenticated request hits that route through the composed router
+- **THEN** the response is the session-authentication failure as JSON
+- **AND** it is not the single-page-app HTML catch-all

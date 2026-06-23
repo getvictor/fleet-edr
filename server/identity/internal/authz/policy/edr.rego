@@ -11,7 +11,7 @@
 #
 #   input.actor.user_id        int64
 #   input.actor.is_breakglass  bool
-#   input.actor.auth_method    "local_password" | "oidc"
+#   input.actor.auth_method    "local_password" | "oidc" | "service_account"
 #   input.actor.roles[]        list of role bindings; expired bindings
 #                              are filtered out by the Go side, so
 #                              every entry here is a live binding
@@ -53,7 +53,7 @@ decision := {"allow": true, "reason": "granted"} if {
 decision := {"allow": true, "reason": "granted"} if {
 	granted_via_global
 	requires_fresh_auth(input.action, input.resource)
-	input.actor.session_fresh
+	reauth_satisfied
 }
 
 # Reauth-required deny: only fires when the role WOULD have
@@ -65,8 +65,19 @@ decision := {"allow": true, "reason": "granted"} if {
 decision := {"allow": false, "reason": "reauth_required"} if {
 	granted_via_global
 	requires_fresh_auth(input.action, input.resource)
-	not input.actor.session_fresh
+	not reauth_satisfied
 }
+
+# reauth_satisfied is the freshness gate for destructive actions, and it is a human-interactive-session control (NIST 800-63B
+# reauthentication mitigates an unattended, logged-in terminal). It is satisfied either by an interactive session that
+# authenticated within the reauth window (session_fresh), or by a non-interactive service-account principal. A machine has no
+# interactive session to re-freshen and never proves recent interactive possession of credentials; its authority is bounded
+# instead by a short-lived token, a single least-privilege bound role, and revocation (see server-identity-service-accounts), so
+# it is exempt by identity rather than by being marked fresh. Whether it may take the action is decided solely by whether its
+# bound role grants it (granted_via_global above).
+reauth_satisfied if input.actor.session_fresh
+
+reauth_satisfied if input.actor.auth_method == "service_account"
 
 # requires_fresh_auth pins the destructive-action set: host commands
 # always need freshness; alert.resolve needs it only when the alert is

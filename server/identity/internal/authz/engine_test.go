@@ -11,6 +11,7 @@ import (
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/authz"
 	"github.com/fleetdm/edr/server/identity/internal/seed"
+	"github.com/fleetdm/edr/server/identity/internal/serviceaccounts"
 )
 
 // recordingAudit collects every AuditEvent the engine writes so tests can assert "the chokepoint emitted exactly the audit row a Phase
@@ -296,4 +297,69 @@ func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
 	d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "abc"})
 	require.NoError(t, err)
 	assert.True(t, d.Allow)
+}
+
+// spec:server-identity-authorization/a-service-account-actor-is-evaluated-by-the-chokepoint-but-is-never-session-fresh/service-account-actor-authorized-purely-by-role
+// spec:server-identity-authorization/a-service-account-actor-is-evaluated-by-the-chokepoint-but-is-never-session-fresh/role-without-the-action-is-denied-regardless-of-token-validity
+//
+// A service-account actor (AuthMethod=service_account) is evaluated by the same chokepoint as a human. It is NEVER session-fresh (a
+// machine has no interactive session to re-freshen), yet the reauth freshness gate must not block it: the chokepoint exempts a
+// service-account principal by identity (the policy's reauth_satisfied rule), so whether it may take a destructive, reauth-gated action
+// (host.isolate) turns solely on whether its bound role grants the action. Building the actor with SessionFresh=false is what makes this
+// test prove the exemption rather than merely re-testing a fresh session. senior_analyst grants host.isolate (allow, granted); analyst
+// does not (deny with no_matching_rule, NOT reauth_required, so the wire response does not leak role information).
+func TestAllow_ServiceAccountActor_RoleDecidesDestructiveAction(t *testing.T) {
+	e, _ := newEngine(t)
+	serviceAccount := func(roleID string) *api.Actor {
+		return &api.Actor{
+			AuthMethod:   serviceaccounts.AuthMethodServiceAccount,
+			SessionFresh: false,
+			Roles:        []api.RoleBinding{globalBinding(roleID, "default")},
+		}
+	}
+	t.Run("bound role grants host.isolate so the action is allowed without a freshness challenge", func(t *testing.T) {
+		ctx := api.WithActor(t.Context(), serviceAccount("senior_analyst"))
+		d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
+		require.NoError(t, err)
+		assert.True(t, d.Allow, "service account whose bound role grants host.isolate is allowed: %+v", d)
+		assert.Equal(t, api.ReasonGranted, d.Reason)
+	})
+	t.Run("bound role lacks host.isolate so the action is denied by role, not by the freshness gate", func(t *testing.T) {
+		ctx := api.WithActor(t.Context(), serviceAccount("analyst"))
+		d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
+		require.NoError(t, err)
+		assert.False(t, d.Allow)
+		assert.Equal(t, api.ReasonNoMatchingRule, d.Reason, "deny must be no_matching_rule, not reauth_required")
+	})
+}
+
+// spec:server-identity-authorization/five-seeded-roles-bundle-permissions-for-the-deployment/admin-holds-sso-manage-analyst-does-not
+//
+// sso.manage gates reading and mutating the deployment's stored OIDC configuration. The seeded matrix grants it to admin explicitly and
+// to super_admin via the wildcard; senior_analyst, analyst, and auditor must be denied with no_matching_rule (sso.manage is not
+// reauth-gated, so the deny is role-shaped).
+func TestAllow_SSOManage_OnlyAdminAndSuperAdmin(t *testing.T) {
+	e, _ := newEngine(t)
+	cases := []struct {
+		roleID    string
+		wantAllow bool
+	}{
+		{"super_admin", true},
+		{"admin", true},
+		{"senior_analyst", false},
+		{"analyst", false},
+		{"auditor", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.roleID, func(t *testing.T) {
+			actor := actorWithRoles(1, "default", globalBinding(tc.roleID, "default"))
+			ctx := api.WithActor(t.Context(), actor)
+			d, err := e.Allow(ctx, api.ActionSSOManage, api.Resource{Type: "sso_config"})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAllow, d.Allow, "decision %+v", d)
+			if !tc.wantAllow {
+				assert.Equal(t, api.ReasonNoMatchingRule, d.Reason)
+			}
+		})
+	}
 }

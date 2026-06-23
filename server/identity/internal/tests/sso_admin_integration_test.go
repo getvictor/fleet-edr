@@ -91,6 +91,7 @@ func adminActorCtx(r *http.Request, userID int64) *http.Request {
 
 // TestSSOAdmin_loginResolvesSeededProvider drives GET /api/auth/login through the real runtime resolver: the seeded config is read,
 // the provider is built from the discovery server, and the handler 302s to the issuer's authorize endpoint.
+// spec:sso-configuration/oidc-configuration-is-stored-durably-and-is-the-runtime-source-of-truth/login-flow-reads-the-stored-configuration
 func TestSSOAdmin_loginResolvesSeededProvider(t *testing.T) {
 	t.Parallel()
 	idp := oidcDiscoveryServer(t)
@@ -152,6 +153,7 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 }
 
 // TestSSOAdmin_updateDeniedWithoutGrant confirms the real chokepoint rejects an actor lacking sso.manage (analyst).
+// spec:sso-configuration/admin-api-reads-and-updates-the-oidc-configuration-behind-the-chokepoint/unauthorized-caller-cannot-read-or-update
 func TestSSOAdmin_updateDeniedWithoutGrant(t *testing.T) {
 	t.Parallel()
 	idp := oidcDiscoveryServer(t)

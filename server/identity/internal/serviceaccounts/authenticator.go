@@ -36,8 +36,11 @@ func NewAuthenticator(signer verifier, snap allowChecker) *Authenticator {
 
 // Authenticate validates token and returns the actor it represents. ok is false for any invalid, expired, wrong-audience, or revoked
 // token; the caller maps that to 401 without distinguishing the reason (avoiding an oracle). The resolved actor carries the single
-// bound role as a global binding, is marked SessionFresh (a machine has no interactive session to re-freshen, and destructive actions
-// are gated by role alone), and has no user id.
+// bound role as a global binding, is NOT session-fresh (a machine has no interactive session to re-freshen, so it never proves recent
+// interactive possession of credentials), and has no user id. The reauth freshness gate is a human-interactive-session control and does
+// not apply to a service account: the chokepoint exempts AuthMethodServiceAccount by identity (see the policy's reauth_satisfied rule),
+// so whether it may take a destructive action is decided solely by its bound role. We must not mark it fresh: that would falsely
+// satisfy any future rule that reads session_fresh as proof of recent interactive auth.
 func (a *Authenticator) Authenticate(token string, now time.Time) (*api.Actor, bool) {
 	claims, err := a.signer.Verify(token, now)
 	if err != nil {
@@ -48,7 +51,7 @@ func (a *Authenticator) Authenticate(token string, now time.Time) (*api.Actor, b
 	}
 	return &api.Actor{
 		AuthMethod:   AuthMethodServiceAccount,
-		SessionFresh: true,
+		SessionFresh: false,
 		Roles: []api.RoleBinding{{
 			RoleID:    claims.Role,
 			ScopeType: api.RoleBindingScopeGlobal,

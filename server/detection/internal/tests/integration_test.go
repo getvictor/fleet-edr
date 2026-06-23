@@ -915,6 +915,7 @@ func (f fakeMode) ResolveRuleMode(ruleID, hostID string) (rulesapi.DetectionRule
 }
 
 // spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-disables-a-noisy-rule-for-their-environment
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/a-rule-set-to-monitor-evaluates-without-alerting
 //
 // TestEngine_PerHostModeRouting pins the DB-backed rule-mode contract (issue #459) end to end through the engine: a `disabled`
 // (rule, host) produces no alert, a `monitor` (rule, host) produces no alert, an `alert` rule persists, and a severity override is
@@ -1993,6 +1994,8 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 }
 
 // spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-live-snapshot-row-bumps-freshness
+// spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/a-heartbeat-does-not-create-or-retain-an-event-row
+// spec:server-event-ingestion/liveness-heartbeats-are-processed-but-not-persisted/a-heartbeat-bumps-freshness-without-creating-an-event-row
 func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	// Issue #173: a snapshot_heartbeat event for an alive snapshot row UPDATEs
 	// processes.last_seen_ns. Subsequent TTL reconciliation reads

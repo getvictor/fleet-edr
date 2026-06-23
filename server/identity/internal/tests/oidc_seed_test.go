@@ -41,6 +41,9 @@ func newIdentityWithOIDCEnv(t *testing.T, db *sqlx.DB, secretKey []byte, oidc bo
 // TestBootstrap_OIDCEnvSeedsThenStoredGoverns pins the env-seeds / DB-governs precedence (issue #375): the first boot with EDR_OIDC_*
 // set seeds the durable config, and a later boot with different env values leaves the stored config untouched (env is inert once a row
 // exists), so an admin's UI edits are never reverted by a restart.
+// spec:sso-configuration/environment-variables-seed-the-stored-configuration-on-first-boot-only/first-boot-seeds-the-record-from-env
+// spec:sso-configuration/environment-variables-seed-the-stored-configuration-on-first-boot-only/env-values-are-inert-once-a-record-exists
+// spec:sso-configuration/oidc-configuration-is-stored-durably-and-is-the-runtime-source-of-truth/stored-configuration-survives-a-restart
 func TestBootstrap_OIDCEnvSeedsThenStoredGoverns(t *testing.T) {
 	t.Parallel()
 	db := full.Open(t)
