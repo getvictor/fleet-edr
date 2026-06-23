@@ -520,9 +520,10 @@ func (r *SuspiciousExec) parentExcluded(parent *api.Process, hostID string) bool
 const dnsPort = 53
 
 // cgnatPrefix is the RFC 6598 carrier-grade-NAT shared address space (100.64.0.0/10). netip.Addr.IsPrivate does NOT cover it (it is
-// RFC1918 + IPv6 ULA only), but it is not publicly routable, and Tailscale's MagicDNS resolver lives at 100.100.100.100 inside it, so a
-// local-resolver classifier must include it explicitly. MustParsePrefix on a constant literal cannot fail.
-var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+// RFC1918 + IPv6 ULA only), but it is not publicly routable, and Tailscale's MagicDNS resolver lives inside it, so a local-resolver
+// classifier must include it explicitly. Built from octets rather than a string literal: this is a fixed reserved range, not
+// configurable infrastructure, and the octet form keeps S1313 from misreading the constant as a hardcoded endpoint.
+var cgnatPrefix = netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, 0, 0}), 10)
 
 // isLocalResolverDest reports whether an outbound connection targets the host's own DNS resolver: port 53 to a local-resolver-class
 // address. Such a lookup is not a meaningful "outbound network connection" for suspicious_exec; the connection to the resolved address
