@@ -153,17 +153,27 @@ jobs:
           cache: npm
           cache-dependency-path: test/e2e/package-lock.json
 
+      - uses: go-task/setup-task@01a4adf9db2d14c1de7a560f09170b6e0df736aa # v2.1.0
+        with:
+          version: 3.50.0
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install e2e dependencies
         working-directory: test/e2e
         run: npm ci --ignore-scripts
 
       - name: Install Playwright Chromium
         working-directory: test/e2e
-        run: npx playwright install --with-deps chromium
+        # Invoke the locally installed Playwright binary, not `npx` (which can
+        # implicitly fetch executables from the registry and is flagged as a
+        # supply-chain surface, Sonar S6505). Mirrors the e2e job in test.yml.
+        run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Run the demo UI + API smoke test
-        working-directory: test/e2e
-        run: npm run demo
+        # Through the Taskfile entrypoint so the canonical command is the source
+        # of truth (matches the repo's task-centric convention), rather than
+        # invoking Playwright ad-hoc.
+        run: task test:e2e:demo
 
       - name: Notify ntfy.sh on failure
         if: failure()
@@ -174,11 +184,20 @@ jobs:
             | curl -s -H "Title: EDR demo failed (${MODE})" -d @- https://ntfy.sh/fleet-edr-demo
 
       - name: Collect compose logs
-        if: always()
-        run: docker compose logs --no-color > demo-compose-logs.txt 2>&1 || true
+        # Only on failure: the logs are a debugging aid for a broken run, and on
+        # first boot the server prints a break-glass bootstrap banner whose
+        # redemption URL carries a one-shot plaintext setup token. Uploading on
+        # every (mostly green) run would persist that credential in CI artifacts
+        # for no reason. The sed also redacts the token from the failure-case
+        # log so it never lands in the artifact even when we do collect it.
+        if: failure()
+        run: |
+          docker compose logs --no-color 2>&1 \
+            | sed -E 's#(/admin/break-glass/setup\?token=)[^[:space:]]+#\1REDACTED#g' \
+            > demo-compose-logs.txt || true
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: failure()
         with:
           name: demo-compose-logs-${{ matrix.mode }}
           path: demo-compose-logs.txt

@@ -49,7 +49,7 @@ test.describe("demo stack smoke", () => {
 
     // UI check: the home view (HostList) renders both seeded hosts.
     for (const hostname of DEMO_HOSTNAMES) {
-      await expect(page.getByText(hostname, { exact: false })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByText(hostname, { exact: true })).toBeVisible({ timeout: 15_000 });
     }
 
     // API check: the authenticated session (page.request shares the cookie jar)
