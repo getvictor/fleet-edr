@@ -9,7 +9,7 @@ import { openDB, resetDB } from "../../fixtures/db";
 // callback, so it applies without a restart). resetDB() intentionally does not touch oidc_config, so the flag is persistent shared
 // state across specs; beforeAll captures the prior value and afterAll restores it exactly, leaving the suite's SSO posture unchanged.
 
-const dexPassword = "qa-password-123";
+const dexPassword = "qa-password-123"; // NOSONAR(typescript:S2068)
 
 test.describe("OIDC unknown subject rejected when JIT is disabled", () => {
   let originalJIT = 1;

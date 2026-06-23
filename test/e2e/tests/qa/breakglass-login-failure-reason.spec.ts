@@ -23,8 +23,8 @@ import {
 // about the credential). One setup ceremony per file fits comfortably
 // under DefaultSetupRatePerMin (5/min).
 
-const RIGHT_PASSWORD = "qa-precise-reason-password";
-const WRONG_PASSWORD = "definitely-not-the-password";
+const RIGHT_PASSWORD = "qa-precise-reason-password"; // NOSONAR(typescript:S2068)
+const WRONG_PASSWORD = "definitely-not-the-password"; // NOSONAR(typescript:S2068)
 
 let setupCtx: BrowserContext | undefined;
 let setupPage: Page;

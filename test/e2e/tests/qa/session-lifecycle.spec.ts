@@ -35,7 +35,7 @@ import { signInViaDex } from "./_setup";
 // comparably bumped, at which point each test's wall clock
 // approaches 3-5 minutes. Tracked as a follow-up.
 
-const BREAKGLASS_PASSWORD = "qa-session-lifecycle-password";
+const BREAKGLASS_PASSWORD = "qa-session-lifecycle-password"; // NOSONAR(typescript:S2068)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Sleep durations are driven by the server's actual idle-timeout

@@ -9,7 +9,7 @@ import { openDB, resetDB } from "../../fixtures/db";
 // `analyst` per docs/authz.md; the role-matrix specs promote via SQL
 // to exercise the other tiers.
 
-const DEX_PASSWORD = "qa-password-123";
+const DEX_PASSWORD = "qa-password-123"; // NOSONAR(typescript:S2068)
 
 // signInAsAnalystViaDex centralises the dex login ceremony the two tests in this file used to inline
 // separately. The QA-flavoured _setup.ts owns a similar helper for the qa/* suite; pulling a copy into
