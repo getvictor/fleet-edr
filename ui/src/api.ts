@@ -832,6 +832,9 @@ export interface DetectionExclusion {
   enabled: boolean;
   expires_at?: string;
   created_by: string;
+  // created_by_email is the display email the server resolves from created_by ("user:<id>") at read time. Absent when the user
+  // could not be resolved (e.g. deleted); the UI then falls back to created_by.
+  created_by_email?: string;
   created_at: string;
 }
 

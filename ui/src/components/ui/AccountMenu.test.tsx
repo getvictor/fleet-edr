@@ -41,6 +41,26 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("link", { name: "Admin settings" })).not.toBeInTheDocument();
   });
 
+  it("shows Detection tuning when detection_config.read is granted, linking to the page", () => {
+    renderMenu([PermissionAction.DetectionConfigRead]);
+    fireEvent.click(screen.getByRole("button", { name: /mike@fleetdm.com/ }));
+    const link = screen.getByRole("link", { name: "Detection tuning" });
+    expect(link).toHaveAttribute("href", "/detection-config");
+  });
+
+  it("hides Detection tuning when detection_config.read is absent", () => {
+    renderMenu([PermissionAction.HostRead]);
+    fireEvent.click(screen.getByRole("button", { name: /mike@fleetdm.com/ }));
+    expect(screen.queryByRole("link", { name: "Detection tuning" })).not.toBeInTheDocument();
+  });
+
+  it("closes the menu when Detection tuning is clicked", () => {
+    renderMenu([PermissionAction.DetectionConfigRead]);
+    fireEvent.click(screen.getByRole("button", { name: /mike@fleetdm.com/ }));
+    fireEvent.click(screen.getByRole("link", { name: "Detection tuning" }));
+    expect(screen.queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
+  });
+
   it("calls onLogout from the menu", () => {
     const { onLogout } = renderMenu([PermissionAction.SSOManage]);
     fireEvent.click(screen.getByRole("button", { name: /mike@fleetdm.com/ }));

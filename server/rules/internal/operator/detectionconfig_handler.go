@@ -45,13 +45,19 @@ type detectionConfigService interface {
 	UpsertRuleSetting(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.UpsertSettingInput) (api.DetectionRuleSetting, error)
 }
 
+// userEmailResolver resolves a numeric user id to its display email for the exclusions list's created_by column. Optional: a nil
+// resolver (or one that errors / returns "") leaves CreatedByEmail empty so the UI falls back to the raw "user:<id>". cmd/main wires
+// it over identity's Service.GetUser; keeping it a func avoids a cross-context import of the identity internals (ADR-0004).
+type userEmailResolver func(ctx context.Context, userID int64) (string, error)
+
 // DetectionConfigHandler serves the rules-context /api/v1/detection-config/* admin routes (issue #459): the per-host false-positive
 // exclusions and per-rule mode/severity the detection engine consults at evaluation time. Separate from the App Control handler
 // because the surface and dependencies do not overlap.
 type DetectionConfigHandler struct {
-	svc    detectionConfigService
-	authz  identityapi.AuthZ
-	logger *slog.Logger
+	svc       detectionConfigService
+	authz     identityapi.AuthZ
+	userEmail userEmailResolver
+	logger    *slog.Logger
 }
 
 // NewDetectionConfig builds the detection-config operator handler. svc + authz are required; logger defaults to slog.Default. A nil
@@ -67,6 +73,53 @@ func NewDetectionConfig(svc detectionConfigService, authz identityapi.AuthZ, log
 		logger = slog.Default()
 	}
 	return &DetectionConfigHandler{svc: svc, authz: authz, logger: logger}
+}
+
+// SetUserEmailResolver wires the optional directory lookup that resolves an exclusion's created_by ("user:<id>") to a display email.
+// Mirrors SetAudit: set post-construction so non-REST consumers and tests that don't need email resolution can skip it.
+func (h *DetectionConfigHandler) SetUserEmailResolver(r userEmailResolver) {
+	h.userEmail = r
+}
+
+// resolveCreatedByEmails fills CreatedByEmail on each exclusion by resolving its "user:<id>" created_by through the directory. A nil
+// resolver is a no-op (the UI falls back to the raw identifier). Lookups are memoized per call so N exclusions from the same author
+// cost one directory hit; a failed or empty lookup leaves that row's email blank rather than failing the list.
+func (h *DetectionConfigHandler) resolveCreatedByEmails(ctx context.Context, exclusions []api.DetectionExclusion) {
+	if h.userEmail == nil {
+		return
+	}
+	cache := make(map[int64]string)
+	for i := range exclusions {
+		id, ok := parseUserActorID(exclusions[i].CreatedBy)
+		if !ok {
+			continue
+		}
+		email, seen := cache[id]
+		if !seen {
+			resolved, err := h.userEmail(ctx, id)
+			if err != nil {
+				h.logger.WarnContext(ctx, "detectionconfig: resolve created_by email", "user_id", id, "err", err)
+				resolved = ""
+			}
+			email = resolved
+			cache[id] = email
+		}
+		exclusions[i].CreatedByEmail = email
+	}
+}
+
+// parseUserActorID extracts the numeric id from the "user:<id>" actor identifier the service records as created_by. Returns false for
+// any other shape (e.g. a service-account or empty actor) so the caller leaves the email unresolved.
+func parseUserActorID(actor string) (int64, bool) {
+	rest, ok := strings.CutPrefix(actor, "user:")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 // RegisterRoutes wires the detection-config admin routes:
@@ -99,6 +152,7 @@ func (h *DetectionConfigHandler) handleListExclusions(w http.ResponseWriter, r *
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 		return
 	}
+	h.resolveCreatedByEmails(ctx, exclusions)
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"exclusions": exclusions})
 }
 

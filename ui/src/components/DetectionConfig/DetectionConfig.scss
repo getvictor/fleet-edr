@@ -13,19 +13,45 @@
   margin: 0 0 $pad-medium 0;
 }
 
-// The add-exclusion form is a wrapping flex row so the rule / match-type / value / reason controls and the submit button
-// reflow onto a second line on narrow viewports instead of squeezing.
+// The add-exclusion form is a two-column grid: Rule + Match type share the top row (each exactly half), so together they span the
+// same width as the full-width Value and Reason rows below. Expires occupies one column, and the primary action sits on its own
+// full-width row aligned to the right, matching the modal action-row convention (justify-content: flex-end). The capped width keeps
+// the full-width inputs at a comfortable line length on wide viewports.
 .detection-config__form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: $pad-small;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: end;
+  gap: $pad-small $pad-medium;
   margin-bottom: $pad-medium;
+  max-width: 640px;
+
+  // Each field fills its grid cell, so the two top controls are exactly half the form (matching the full-width rows below).
+  .field,
+  .field__input {
+    width: 100%;
+  }
+}
+
+// Value and Reason span both columns.
+.detection-config__form-field--full {
+  grid-column: 1 / -1;
+}
+
+// The action row spans both columns; the primary button is right-aligned, consistent with the reason modal's action row.
+.detection-config__form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .detection-config__rule-id {
   font-size: $xxx-small;
   color: $ui-fleet-black-50;
+}
+
+// The catalog declares severities lowercase ("medium"); present them capitalized so the column reads as a label, not a raw value.
+.detection-config__default-severity {
+  text-transform: capitalize;
 }
 
 .dc-reason-modal {
