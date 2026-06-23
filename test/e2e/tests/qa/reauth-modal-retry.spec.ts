@@ -73,8 +73,8 @@ async function expectAlertResolvedAndAudited(
 // alongside the other default-env qa specs without tripping that
 // rate limit.
 
-const DEX_PASSWORD = "qa-password-123";
-const BG_PASSWORD = "qa-reauth-modal-breakglass-password";
+const DEX_PASSWORD = "qa-password-123"; // NOSONAR(typescript:S2068)
+const BG_PASSWORD = "qa-reauth-modal-breakglass-password"; // NOSONAR(typescript:S2068)
 const TEST_HOST_ID = "qa-reauth-modal-host";
 const TEST_RULE_ID = "qa-reauth-modal-rule-critical";
 

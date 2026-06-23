@@ -16,7 +16,7 @@ import { openDB, resetDB, mintBootstrapToken } from "../../fixtures/db";
 // /ui/ but fail at the next sign-in).
 test.describe("break-glass day-to-day login", () => {
   let va: VirtualAuthenticator;
-  const password = "qa-login-password-12-chars";
+  const password = "qa-login-password-12-chars"; // NOSONAR(typescript:S2068)
 
   test.beforeEach(async ({ page }) => {
     va = await installVirtualAuthenticator(page);
