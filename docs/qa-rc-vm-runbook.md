@@ -15,14 +15,14 @@ Use this when an RC is cut and you need to exercise ESF, XPC, the event wire for
 Check out the RC tag so the server (and its embedded UI) match what is shipping. The working tree returns to detached HEAD; the contributor's branch is untouched.
 
 ```sh
-git checkout v0.3.0-rc.2
+git checkout vX.Y.Z-rc.N          # the RC under validation, e.g. v0.3.0-rc.2
 (cd ui && npm run build)         # server/ui/dist is gitignored, so rebuild for the RC UI
 ```
 
 Launch the server directly (not `task dev:server`, whose Taskfile env pins OTel to a local collector). Pulling the `OTEL_*` exports from the shell profile points telemetry at the remote SigNoz with the `dev-local` tag:
 
 ```sh
-eval "$(grep '^export OTEL_' ~/.zshrc)"     # remote OTLP endpoint + bearer token + deployment.environment=dev-local
+eval "$(grep '^export OTEL_' ~/.zshrc 2>/dev/null)"   # remote OTLP endpoint + bearer token + deployment.environment=dev-local
 export EDR_DSN='root:@tcp(127.0.0.1:33306)/edr?parseTime=true'
 export EDR_ENROLL_SECRET=dev-enroll-secret
 export EDR_TLS_CERT_FILE=tmp/dev.crt EDR_TLS_KEY_FILE=tmp/dev.key
@@ -41,13 +41,16 @@ If a stale dev server already holds `:8088`, the new one fails with `bind: addre
 The dev TLS cert (mkcert) only covers `localhost`, but the agent's fingerprint pin sets `InsecureSkipVerify` and does its own SHA-256 equality check, so pinning bypasses the hostname mismatch. Compute the pin from `tmp/dev.crt`:
 
 ```sh
-openssl x509 -in tmp/dev.crt -noout -fingerprint -sha256
+# Extract just the hex (':' separators are fine; the parser accepts those and an optional
+# 'sha256:' prefix). Do NOT paste the raw output: openssl prefixes it with "SHA256 Fingerprint="
+# which the parser does not strip, so the pin would fail to decode.
+PIN=$(openssl x509 -in tmp/dev.crt -noout -fingerprint -sha256 | cut -d= -f2)
 ```
 
-The agent binds its enrolled token to the exact `server_url`, so changing the URL invalidates the token. Write the conf, delete the token to force a fresh enroll, and restart. Avoid a heredoc that collides with `sudo -S` stdin; stage the file then copy it:
+The agent binds its enrolled token to the exact `server_url`, so changing the URL invalidates the token. Write the conf, delete the token to force a fresh enroll, and restart. `PW` is the edr-qa sudo password: set it once with `read -rs PW`, or drop the `echo "$PW" |` prefix and let `sudo` prompt. Avoid a heredoc that collides with `sudo -S` stdin; stage the file then copy it:
 
 ```sh
-printf 'EDR_SERVER_URL=https://192.168.64.1:8088\nEDR_ENROLL_SECRET=dev-enroll-secret\nEDR_SERVER_FINGERPRINT=<sha256-from-above>\n' > /tmp/fe.conf
+printf 'EDR_SERVER_URL=https://192.168.64.1:8088\nEDR_ENROLL_SECRET=dev-enroll-secret\nEDR_SERVER_FINGERPRINT=%s\n' "$PIN" > /tmp/fe.conf   # $PIN from the previous block (same shell)
 echo "$PW" | sudo -S cp /tmp/fe.conf /etc/fleet-edr.conf
 echo "$PW" | sudo -S rm -f /var/db/fleet-edr/enrolled.plist
 echo "$PW" | sudo -S launchctl kickstart -k system/com.fleetdm.edr.agent
@@ -57,7 +60,7 @@ Confirm `agent enrolled` plus `receiver connected` for both the Endpoint Securit
 
 ## 3. Forge an admin session for the API and UI
 
-Dev auth is break-glass WebAuthn, which a script cannot complete, so mint a session row directly against the seeded super_admin (`user_id=1`). The cookie carries a random token; the stored `sessions.id` is its SHA-256; `csrf_token` is stored raw and the `X-Csrf-Token` header is its base64url form. The seeded role lives in `role_bindings`, not a column on `users`.
+Dev auth is break-glass WebAuthn, which a script cannot complete, so mint a session row directly against the seeded super_admin. Look the user id up by email (the seed auto-increments it via `CreateBreakglass`, so it is not guaranteed to be 1). The cookie carries a random token; the stored `sessions.id` is its SHA-256; `csrf_token` is stored raw and the `X-Csrf-Token` header is its base64url form. The seeded role lives in `role_bindings`, not a column on `users`.
 
 ```python
 import os, hashlib, base64
@@ -68,7 +71,10 @@ print("csrf_hex:", csrf.hex())
 ```
 
 ```sh
-docker exec fleet-edr-mysql mysql -uroot -e "INSERT INTO edr.sessions (id,user_id,identity_id,auth_method,csrf_token,created_at,last_seen_at,last_auth_at,expires_at) VALUES (UNHEX('<id_hex>'),1,NULL,'breakglass',UNHEX('<csrf_hex>'),NOW(6),NOW(6),NOW(6),NOW(6)+INTERVAL 1 DAY);"
+UID=$(docker exec fleet-edr-mysql mysql -uroot -N -e "SELECT id FROM edr.users WHERE email='admin@fleet-edr.local';")
+# auth_method='oidc' lands the session in the normal 8h/24h timeout class. 'local_password' is the
+# break-glass class (15-minute idle / 1-hour absolute) and would expire the session mid-spot-check.
+docker exec fleet-edr-mysql mysql -uroot -e "INSERT INTO edr.sessions (id,user_id,identity_id,auth_method,csrf_token,created_at,last_seen_at,last_auth_at,expires_at) VALUES (UNHEX('<id_hex>'),$UID,NULL,'oidc',UNHEX('<csrf_hex>'),NOW(6),NOW(6),NOW(6),NOW(6)+INTERVAL 1 DAY);"
 ```
 
 Send `Cookie: edr_session=<cookie>` on every call, and `X-Csrf-Token` (read the live value from `GET /api/session`) on every unsafe method. The session is good for the dashboard too, but the cookie is `HttpOnly`, so a browser cannot be seeded by JavaScript; verify feature backends over the API instead and rely on vitest/Playwright for component rendering.
@@ -85,10 +91,11 @@ sudo launchctl kickstart -k "gui/$UID_C/com.fleetdm.edr.activate"
 With NO console user (the usual headless state, console uid 0, no `gui/<uid>` domain), the `user/<uid>` launchd domain still exists. Run the host app's `activate` subcommand in that user context. It uses `dispatchMain()`, not AppKit, so it needs no Aqua session:
 
 ```sh
-sudo launchctl asuser 501 sudo -u <user> "/Applications/Fleet EDR.app/Contents/MacOS/edr" activate &
+U=<login-user>   # the VM's GUI/login user (e.g. victor); asuser needs its uid, computed below
+sudo launchctl asuser "$(id -u "$U")" sudo -u "$U" "/Applications/Fleet EDR.app/Contents/MacOS/edr" activate &
 ```
 
-A same-team version bump auto-approves (no Allow click). The request succeeds from the `user/501` context; `systemextensionsctl list` then shows the new version `activated enabled` and the old one `terminated waiting to uninstall on reboot`. The `activate` subcommand also re-enables the content filter and DNS proxy, so the new Network Extension takes over its Mach service immediately and telemetry stays continuous (no stranding). The SSH session may briefly drop while the filter re-enables; reconnect, the box is fine. Reboot to finish the cutover (old version uninstalls); the activated extension comes back enabled headless.
+A same-team version bump auto-approves (no Allow click). The request succeeds from that `user/<uid>` context; `systemextensionsctl list` then shows the new version `activated enabled` and the old one `terminated waiting to uninstall on reboot`. The `activate` subcommand also re-enables the content filter and DNS proxy, so the new Network Extension takes over its Mach service immediately and telemetry stays continuous (no stranding). The SSH session may briefly drop while the filter re-enables; reconnect, the box is fine. Reboot to finish the cutover (old version uninstalls); the activated extension comes back enabled headless.
 
 ## 5. App-control exec enforcement needs a notarized binary
 
@@ -106,7 +113,7 @@ shasum -a 256 /tmp/qa-gh ; codesign -dvvv /tmp/qa-gh 2>&1 | grep CDHash=
 Tell an app-control DENY apart from an AMFI kill by the extension log line `AUTH_EXEC DENIED` (subsystem `com.fleetdm.edr.securityextension`) with no crash report. Push a block rule by cdhash to the per-policy route (the bare `/api/v1/app-control/rules` is GET only; create lives under the policy, and DELETE wants its `reason` in a JSON body, not a query param):
 
 ```sh
-curl -sk -X POST .../api/v1/app-control/policies/1/rules -H "Cookie: ..." -H "X-Csrf-Token: ..." \
+curl -sk -X POST https://localhost:8088/api/v1/app-control/policies/1/rules -H "Cookie: edr_session=..." -H "X-Csrf-Token: ..." \
   --data '{"rule_type":"CDHASH","identifier":"<cdhash>","reason":"RC QA"}'
 ```
 
