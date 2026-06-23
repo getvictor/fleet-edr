@@ -1,0 +1,189 @@
+name: Demo nightly
+
+# Nightly health check for the README's one-command, Mac-free demo
+# (docker-compose.demo.yml). On any failure it pings ntfy.sh with a link to the
+# run.
+#
+# It runs the demo in TWO modes (matrix), because they verify different things:
+#
+#   - released: `docker compose -f docker-compose.demo.yml up`, exactly what a
+#     reviewer following the README runs today. It pulls the PUBLISHED images
+#     (ghcr fleet-edr-server / fleet-edr-demo-seed at the compose default tag,
+#     `latest`, which release.yml points at the newest non-prerelease release),
+#     so this leg catches the published demo breaking (a bad image pull, infra
+#     drift, an expired dependency) independent of main, and always tracks the
+#     newest release without a workflow edit.
+#
+#   - source: layers docker-compose.demo.build.yml to build the server + seeder
+#     images FROM THE CURRENT CHECKOUT. This leg catches a change on main that
+#     breaks the demo (a failing migration, a detection rule that stops firing,
+#     an ingest wire-format change, a UI/SSO regression) BEFORE it ships in the
+#     next release.
+#
+# Both modes use `up --build`: in released mode no service declares a build
+# section, so --build is a no-op and the pinned images are pulled; in source
+# mode the override adds build sections and --build compiles them.
+#
+# Layers of verification per leg, cheapest first:
+#   1. the compose seeder exits 0 only after it enrolls hosts, replays the
+#      curated corpus through the real ingest + detection pipeline, and verifies
+#      processes + detection alerts + an app-control alert materialised;
+#   2. unauthenticated API/UI probes (/readyz, /livez, /api/openapi.yaml, /ui/);
+#   3. a Playwright smoke that signs in as the demo SSO user and asserts the
+#      seeded hosts + alerts surface through the UI and the operator API.
+
+on:
+  schedule:
+    # 08:27 UTC daily. Off the top of the hour to dodge the cron stampede.
+    - cron: "27 8 * * *"
+  workflow_dispatch:
+
+# Top-level token has no permissions; the job grants only what it needs
+# (satisfies Scorecard Token-Permissions / zizmor excessive-permissions).
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo-smoke:
+    name: Smoke-test the ${{ matrix.mode }} demo stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      # Don't cancel the released leg when source fails (or vice versa); each is
+      # an independent signal we want to see.
+      fail-fast: false
+      matrix:
+        include:
+          - mode: released
+            # README's exact command: base file only. Empty EDR_VERSION falls
+            # through to the compose default tag (`${EDR_VERSION:-latest}`).
+            compose_file: "docker-compose.demo.yml"
+            edr_version: ""
+          - mode: source
+            # Layer the build override to compile the images from the checkout.
+            compose_file: "docker-compose.demo.yml:docker-compose.demo.build.yml"
+            edr_version: demo-nightly
+    env:
+      # COMPOSE_FILE (colon-delimited on Linux) is read by every `docker compose`
+      # below, so no -f flags are needed.
+      COMPOSE_FILE: ${{ matrix.compose_file }}
+      COMPOSE_PROJECT_NAME: fleet-edr-demo
+      EDR_VERSION: ${{ matrix.edr_version }}
+      # Used only by the build override (source mode) to stamp the built image.
+      EDR_COMMIT: ${{ github.sha }}
+      BASE_URL: https://localhost:8088
+      MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Pull released images fresh
+        # --ignore-buildable: in released mode no service is buildable, so this
+        # pulls the current registry `latest` for the EDR images (never a stale
+        # local layer); in source mode the EDR images ARE buildable and are
+        # skipped here, leaving only the digest-pinned mysql/dex to pull. Belt
+        # and suspenders on a hosted runner (clean cache), correct-by-design if a
+        # future runner reuses a layer cache.
+        run: docker compose pull --ignore-buildable
+
+      - name: Start the demo stack
+        # Detached: the seeder is a one-shot (restart: "no") that exits when done;
+        # the rest stay up for the probes below. --build is a no-op in released
+        # mode (no build sections) and compiles from source in source mode.
+        run: docker compose up -d --build
+
+      - name: Wait for the seeder to finish and assert it succeeded
+        # The seeder is the strongest end-to-end gate: it enrolls hosts, replays
+        # the corpus through the real pipeline, and exits non-zero if the process
+        # graph, detection alerts, or app-control alert fail to materialise.
+        # `docker wait` blocks until the one-shot container stops and prints its
+        # exit code (the job timeout bounds a hung seeder).
+        run: |
+          set -euo pipefail
+          seeder_cid="$(docker compose ps -aq seeder)"
+          if [ -z "${seeder_cid}" ]; then
+            echo "::error::seeder container was never created"
+            exit 1
+          fi
+          code="$(docker wait "${seeder_cid}")"
+          echo "seeder exited with code ${code}"
+          if [ "${code}" != "0" ]; then
+            echo "::error::demo seeder failed (exit ${code}); the demo pipeline did not materialise"
+            docker compose logs --no-color seeder || true
+            exit 1
+          fi
+
+      - name: Probe unauthenticated API + UI endpoints
+        # -k: the demo serves the self-signed localhost cert minted by cert-init.
+        run: |
+          set -euo pipefail
+          check() {
+            local path="$1" expected="$2"
+            local code
+            code="$(curl -k -s -o /dev/null -w '%{http_code}' "${BASE_URL}${path}")"
+            if [ "${code}" != "${expected}" ]; then
+              echo "::error::GET ${path} returned ${code}, expected ${expected}"
+              return 1
+            fi
+            echo "GET ${path} -> ${code} (ok)"
+          }
+          check /readyz 200
+          check /livez 200
+          check /api/openapi.yaml 200
+          check /ui/ 200
+          # The operator API must reject an unauthenticated caller (auth enforced).
+          check /api/hosts 401
+          # The UI shell is served and embedded (the SPA index.html).
+          body="$(curl -k -s "${BASE_URL}/ui/")"
+          if ! printf '%s' "${body}" | grep -q '<div id="root">'; then
+            echo "::error::/ui/ did not return the SPA shell (#root missing)"
+            exit 1
+          fi
+          echo "/ui/ served the SPA shell (ok)"
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: test/e2e/package-lock.json
+
+      - name: Install e2e dependencies
+        working-directory: test/e2e
+        run: npm ci --ignore-scripts
+
+      - name: Install Playwright Chromium
+        working-directory: test/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the demo UI + API smoke test
+        working-directory: test/e2e
+        run: npm run demo
+
+      - name: Notify ntfy.sh on failure
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s demo failed: %s\n' "${MODE}" "${RUN_URL}" \
+            | curl -s -H "Title: EDR demo failed (${MODE})" -d @- https://ntfy.sh/fleet-edr-demo
+
+      - name: Collect compose logs
+        if: always()
+        run: docker compose logs --no-color > demo-compose-logs.txt 2>&1 || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: demo-compose-logs-${{ matrix.mode }}
+          path: demo-compose-logs.txt
+          retention-days: 14
+
+      - name: Tear down the demo stack
+        if: always()
+        run: docker compose down -v || true

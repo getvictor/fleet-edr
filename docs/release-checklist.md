@@ -25,12 +25,13 @@ On a release-prep branch off `main`:
 On the same release-prep branch, alongside the archive from step 1:
 
 1. Draft the changelog: move the `CHANGELOG.md` `[Unreleased]` items into a new versioned section (`## [X.Y.Z] (YYYY-MM-DD)`), grouped under Added / Changed / Fixed / Removed, and write the release-notes highlights.
-2. Pass the automated gates locally (they mirror CI; a local run avoids a failed release build):
+2. Bump the pinned `EDR_VERSION` references in the operator docs to the new tag so the copy-paste deploy snippets stay current: `README.md`, `docs/quickstart-vm.md`, `docs/install-server.md`, and the example in `bootstrap.sh`. These are intentionally pinned (a pilot must deploy a known signed tag), so they do not float and must be hand-bumped here. The demo (`docker-compose.demo.yml`) deliberately defaults to `latest` and is NOT bumped.
+3. Pass the automated gates locally (they mirror CI; a local run avoids a failed release build):
    - `task lint:go`, `task lint:nilaway`, `task lint:dashes` clean.
    - `task test:go:server` and `task test:go:agent` green.
    - The cross-context integration and browser-with-fake-agent suites green.
-3. Open the release-prep PR and get it reviewed. The archive is where editing `openspec/specs/**` is expected and legitimate, unlike on a feature branch, so this is the diff a reviewer scrutinizes.
-4. Merge to `main`. Everything downstream tags off the merged commit.
+4. Open the release-prep PR and get it reviewed. The archive is where editing `openspec/specs/**` is expected and legitimate, unlike on a feature branch, so this is the diff a reviewer scrutinizes.
+5. Merge to `main`. Everything downstream tags off the merged commit.
 
 ## 3. Cut a release candidate
 

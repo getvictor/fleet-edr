@@ -9,8 +9,10 @@
 # pipeline so the UI shows a process graph, fired ATT&CK alerts, and an
 # application-control block. No Mac, MDM, or Apple entitlement required.
 #
-# Images are pinned to a released tag. To run from a local source build instead
-# (no published tag needed), layer the build override:
+# Images default to the `latest` released tag so the demo always shows the
+# newest published product; pin a specific release with EDR_VERSION=vX.Y.Z. To
+# run from a local source build instead (no published tag needed), layer the
+# build override:
 #
 #   docker compose -f docker-compose.demo.yml -f docker-compose.demo.build.yml up --build
 #
@@ -81,7 +83,7 @@ services:
       - tls:/tls
 
   server:
-    image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-v0.2.1}
+    image: ghcr.io/getvictor/fleet-edr-server:${EDR_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       mysql:
@@ -115,7 +117,7 @@ services:
       - tls:/tls:ro
 
   seeder:
-    image: ghcr.io/getvictor/fleet-edr-demo-seed:${EDR_VERSION:-v0.2.1}
+    image: ghcr.io/getvictor/fleet-edr-demo-seed:${EDR_VERSION:-latest}
     # One-shot: enrolls hosts, replays the corpus, verifies, then exits 0.
     restart: "no"
     depends_on:
