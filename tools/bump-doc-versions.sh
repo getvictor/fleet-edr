@@ -45,10 +45,10 @@ VERSION_RE='v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
 
-# One reusable temp file with an explicit template (portable across GNU and BSD/macOS mktemp), cleaned up on any exit
-# including an early `set -e` abort mid-loop.
-tmp=$(mktemp "${TMPDIR:-/tmp}/bump-doc-versions.XXXXXX")
-trap 'rm -f "$tmp"' EXIT
+# Each target's temp file is created alongside the target itself, so the final mv is an atomic same-filesystem rename.
+# A trap cleans up the in-flight temp on any exit, including an early `set -e` abort mid-loop.
+tmp=""
+trap 'rm -f "$tmp" || true' EXIT
 
 rc=0
 for f in "${FILES[@]}"; do
@@ -56,19 +56,24 @@ for f in "${FILES[@]}"; do
     echo "error: missing $f" >&2
     exit 2
   fi
+  tmp=$(mktemp "$f.bump.XXXXXX")
   sed -E "s|${VERSION_RE}|${TAG}|g" "$f" >"$tmp"
   if cmp -s "$f" "$tmp"; then
+    rm -f "$tmp"; tmp=""
     continue
   fi
   if [[ "$CHECK" == 1 ]]; then
     echo "::error::$f pins a release tag other than $TAG:"
     diff "$f" "$tmp" || true
+    rm -f "$tmp"; tmp=""
     rc=1
   else
     diff "$f" "$tmp" | grep -E '^[<>]' || true
-    # Copy contents into the existing file rather than mv: this preserves the file's mode and inode. A mv would replace
-    # the file with the temp file's restrictive default mode and drop bootstrap.sh's executable bit.
-    cat "$tmp" >"$f"
+    # Match the destination's mode on the temp, then atomically rename over it: this preserves bootstrap.sh's executable
+    # bit (a bare mv imposes the temp's default mode) and avoids a non-atomic truncate-then-write that an interrupt
+    # could leave half-written. GNU stat uses -c; BSD/macOS stat uses -f.
+    chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp"
+    mv "$tmp" "$f"; tmp=""
     echo "bumped $f"
   fi
 done
