@@ -120,13 +120,18 @@ jobs:
           fi
 
       - name: Probe unauthenticated API + UI endpoints
-        # -k: the demo serves the self-signed localhost cert minted by cert-init.
+        # Validate against the demo's self-signed localhost cert (minted by the
+        # cert-init service into the shared tls volume) rather than disabling
+        # cert validation with `curl -k`: copy the cert off the running server
+        # container and pass it as the CA. The cert's SAN covers localhost, so
+        # the chain verifies and a broken/expired cert is itself caught.
         run: |
           set -euo pipefail
+          docker compose cp server:/tls/dev.crt ./demo-ca.crt
           check() {
             local path="$1" expected="$2"
             local code
-            code="$(curl -k -s -o /dev/null -w '%{http_code}' "${BASE_URL}${path}")"
+            code="$(curl --cacert ./demo-ca.crt -s -o /dev/null -w '%{http_code}' "${BASE_URL}${path}")"
             if [ "${code}" != "${expected}" ]; then
               echo "::error::GET ${path} returned ${code}, expected ${expected}"
               return 1
@@ -140,7 +145,7 @@ jobs:
           # The operator API must reject an unauthenticated caller (auth enforced).
           check /api/hosts 401
           # The UI shell is served and embedded (the SPA index.html).
-          body="$(curl -k -s "${BASE_URL}/ui/")"
+          body="$(curl --cacert ./demo-ca.crt -s "${BASE_URL}/ui/")"
           if ! printf '%s' "${body}" | grep -q '<div id="root">'; then
             echo "::error::/ui/ did not return the SPA shell (#root missing)"
             exit 1

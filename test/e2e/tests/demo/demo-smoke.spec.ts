@@ -58,8 +58,8 @@ test.describe("demo stack smoke", () => {
     expect(hostsResp.status()).toBe(200);
     const hosts = (await hostsResp.json()) as Array<{ host_id: string; hostname: string }>;
     expect(hosts).toHaveLength(2);
-    const hostnames = hosts.map((h) => h.hostname).sort();
-    expect(hostnames).toEqual([...DEMO_HOSTNAMES].sort());
+    const hostnames = hosts.map((h) => h.hostname).sort((a, b) => a.localeCompare(b));
+    expect(hostnames).toEqual([...DEMO_HOSTNAMES].sort((a, b) => a.localeCompare(b)));
 
     // API check: alerts carry both a detection-source set (the four woven
     // ATT&CK detections) and the application_control block.
