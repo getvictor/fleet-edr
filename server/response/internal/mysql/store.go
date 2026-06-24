@@ -88,13 +88,15 @@ func (s *Store) Insert(ctx context.Context, hostID, commandType string, payload 
 // (insertBatchChunkSize rows per round trip) instead of one INSERT per host. It is the application-control fan-out's enqueue
 // path: a policy mutation fans the same snapshot out to the whole assigned host set in a couple of round trips rather than N.
 //
-// Returns the number of rows that landed. A multi-row INSERT is atomic per statement, so a chunk lands entirely or not at all;
-// on the first chunk that fails, InsertBatch returns the count from the chunks that already committed plus the error. The caller
-// treats the shortfall (len(hostIDs) minus inserted) as the failed-host count, preserving the fan-out's best-effort contract: the
-// policy row is authoritative and a host whose command did not land catches up on its next poll. host_ids are inserted in the
-// order given. An empty hostIDs slice is a no-op that returns (0, nil).
+// Returns the number of rows that landed. A multi-row INSERT is atomic per statement, so a chunk lands entirely or not at all.
+// A failed chunk does NOT abort the remaining chunks: InsertBatch keeps going so one transient chunk failure can't strand every
+// host after it, matching the best-effort posture of the per-host loop this replaced. It returns the total rows that committed
+// plus the first chunk error encountered (nil when every chunk succeeded). The caller treats the shortfall (len(hostIDs) minus
+// inserted) as the failed-host count: the policy row is authoritative and a host whose command did not land catches up on its
+// next poll. host_ids are inserted in the order given; the caller orders them deterministically so chunk membership is stable.
 func (s *Store) InsertBatch(ctx context.Context, hostIDs []string, commandType string, payload []byte) (int, error) {
 	inserted := 0
+	var firstErr error
 	for start := 0; start < len(hostIDs); start += insertBatchChunkSize {
 		end := min(start+insertBatchChunkSize, len(hostIDs))
 		chunk := hostIDs[start:end]
@@ -106,11 +108,14 @@ func (s *Store) InsertBatch(ctx context.Context, hostIDs []string, commandType s
 		}
 		stmt := "INSERT INTO commands (host_id, command_type, payload) VALUES " + strings.Join(placeholders, ", ")
 		if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
-			return inserted, fmt.Errorf("insert command batch (chunk of %d): %w", len(chunk), err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("insert command batch (chunk of %d): %w", len(chunk), err)
+			}
+			continue
 		}
 		inserted += len(chunk)
 	}
-	return inserted, nil
+	return inserted, firstErr
 }
 
 // ListForHost returns commands for a host, optionally filtered by status (empty string returns every status). Order: created_at DESC

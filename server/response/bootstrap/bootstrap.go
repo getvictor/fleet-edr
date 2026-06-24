@@ -98,8 +98,9 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	})
 }
 
-// Service exposes the public api.Service for cross-context callers. endpoint and rules consume Service.Insert as a method value
-// satisfying their CommandInserter closure types; cmd/main's metrics adapter consumes Service.CountPending.
+// Service exposes the public api.Service for cross-context callers. endpoint consumes Service.Insert and rules consumes
+// Service.InsertBatch as method values satisfying their command-inserter closure types; cmd/main's metrics adapter consumes
+// Service.CountPending.
 func (r *Response) Service() api.Service { return r.svc }
 
 // RegisterAgentRoutes wires the host-token-gated agent routes:

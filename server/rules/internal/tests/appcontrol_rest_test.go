@@ -36,9 +36,9 @@ type capturedCommand struct {
 
 // recordingInserter is a goroutine-safe CommandBatchInserter stub. The fan-out runs through it instead of
 // response.Service.InsertBatch so the test can assert on the enqueued set without standing up the response context. It records
-// one capturedCommand per host in the batch (so snapshot() stays per-host) and counts batch invocations. failBatch makes the
-// next InsertBatch fail whole, modelling a multi-row INSERT's per-statement atomicity, so the audit-row fanout_failed accounting
-// can be exercised.
+// one capturedCommand per host in the batch (so snapshot() stays per-host) and counts batch invocations. failBatch makes every
+// InsertBatch call fail whole (the flag is sticky, not one-shot), modelling a multi-row INSERT's per-statement atomicity, so the
+// audit-row fanout_failed accounting can be exercised.
 type recordingInserter struct {
 	mu         sync.Mutex
 	calls      []capturedCommand

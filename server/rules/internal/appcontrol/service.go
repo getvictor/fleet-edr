@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"time"
 
@@ -293,13 +294,16 @@ func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (a
 	for h := range seen {
 		hostIDs = append(hostIDs, h)
 	}
+	// Sort so the batch chunk boundaries are deterministic: map iteration order is randomized, which would otherwise make
+	// "which hosts share a failing chunk" vary run-to-run and harder to reproduce.
+	sort.Strings(hostIDs)
 	attempted = len(hostIDs)
-	// One batched multi-row INSERT for the whole host set instead of N round trips. A multi-row INSERT is atomic per chunk, so
-	// the inserter returns the count that landed; the shortfall is the failed-host count. A failure does NOT abort the mutation:
-	// the policy row is authoritative and a host whose command did not land catches up on its next poll.
+	// One batched multi-row INSERT for the whole host set instead of N round trips. The inserter returns the count that landed;
+	// failed is the shortfall whether or not it surfaced an error, so a partial insert is always accounted for. A failure does
+	// NOT abort the mutation: the policy row is authoritative and a host whose command did not land catches up on its next poll.
 	inserted, insErr := s.commands(ctx, hostIDs, api.CommandTypeSetApplicationControl, payload)
+	failed = attempted - inserted
 	if insErr != nil {
-		failed = attempted - inserted
 		s.logger.WarnContext(ctx, "appcontrol: batch command insert failed; missed hosts re-sync on next poll",
 			"policy_id", policyID, "attempted", attempted, "inserted", inserted, "failed", failed, "err", insErr)
 	}
