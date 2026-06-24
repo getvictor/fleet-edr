@@ -111,9 +111,10 @@ func (s *Store) InsertBatch(ctx context.Context, hostIDs []string, commandType s
 			if firstErr == nil {
 				firstErr = fmt.Errorf("insert command batch (chunk of %d): %w", len(chunk), err)
 			}
-			// Continue past an isolated chunk failure (best-effort), but stop once the request context is canceled or past its
-			// deadline: every remaining chunk would fail the same way and only delay the synchronous handler during a timeout
-			// or DB outage.
+			// Continue past an isolated chunk failure (best-effort: one bad chunk must not strand the hosts after it), but stop
+			// once the request context is canceled or past its deadline. On the synchronous mutation path a sustained DB outage
+			// surfaces as the handler's WriteTimeout firing on ctx, which lands here; an isolated failure leaves ctx live and the
+			// loop keeps enqueuing the rest.
 			if ctx.Err() != nil {
 				break
 			}
