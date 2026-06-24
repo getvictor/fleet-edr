@@ -112,7 +112,7 @@ EDR_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
 EDR_AUTH_ALLOW_NO_OIDC=0
 ```
 
-Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). These variables seed the stored configuration on the first boot only; afterward the Single sign-on screen is the source of truth and further `EDR_OIDC_*` changes are inert. The redirect URL must exactly match what your IdP has on file.
+Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). These variables seed the stored configuration the first time the server boots with OIDC set (here, this recreate, since the server had no OIDC config before); afterward the Single sign-on screen is the source of truth and further `EDR_OIDC_*` changes are inert. The redirect URL must exactly match what your IdP has on file.
 
 ## Operations
 

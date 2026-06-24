@@ -65,7 +65,7 @@ After creation, Okta lands on the application's **General** tab. Record three va
 
 The client secret is shown once on creation. Store it in the same secret manager that holds `EDR_SECRET_KEY` (Vault, AWS Secrets Manager, docker-compose `secrets:` mount, etc.); the EDR server reads each `EDR_*` value from a `*_FILE` sibling if the bare env var is empty, so a file-backed mount works without exposing the plaintext in the compose env block.
 
-If the client secret leaks, **rotate immediately**: Okta admin console -> Applications -> the EDR app -> **General** -> **Client Credentials** -> **Generate new secret**. Then re-enter it in the UI (**Admin settings -> Single sign-on**), which applies without a restart, or update `EDR_OIDC_CLIENT_SECRET` (or the secret file) on the EDR server and restart. Existing sessions stay valid (sessions are signed with a key derived from `EDR_SECRET_KEY`, not the client secret); only fresh sign-ins use the new secret.
+If the client secret leaks, **rotate immediately**: Okta admin console -> Applications -> the EDR app -> **General** -> **Client Credentials** -> **Generate new secret**. Then re-enter it in the UI (**Admin settings -> Single sign-on**); the change applies without a restart. Updating `EDR_OIDC_CLIENT_SECRET` (or the secret file) and restarting has no effect once SSO is configured, because the env vars seed only the initial config. Existing sessions stay valid (sessions are signed with a key derived from `EDR_SECRET_KEY`, not the client secret); only fresh sign-ins use the new secret.
 
 ## Configure the EDR server
 
