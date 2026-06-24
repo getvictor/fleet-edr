@@ -33,6 +33,7 @@ func (s *stubAuthZ) Allow(context.Context, api.Action, api.Resource) (api.Decisi
 // response. A non-zero default status code (200) appears only because httptest.NewRecorder defaults that way; the helper itself emits
 // no headers/body.
 func TestHTTPGate_Allow(t *testing.T) {
+	t.Parallel()
 	az := &stubAuthZ{decision: api.Decision{Allow: true, Reason: "granted"}}
 	w := httptest.NewRecorder()
 
@@ -49,6 +50,7 @@ func TestHTTPGate_Allow(t *testing.T) {
 // Deny: 403 + reason on header + JSON `{"error":"forbidden"}` body. The header is the operator UI's signal to surface "forbidden -
 // your role does not allow this action" without parsing a body shape that already varies by failure class.
 func TestHTTPGate_Deny(t *testing.T) {
+	t.Parallel()
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: "no_matching_rule"}}
 	w := httptest.NewRecorder()
 
@@ -68,6 +70,7 @@ func TestHTTPGate_Deny(t *testing.T) {
 // EngineError: 503 (transient) + JSON `{"error":"authz_unavailable"}`. 503 (not 500) so the UI's retry-on-5xx semantics fire instead
 // of the 401-on-403 redirect-to-login that would lose the operator's in-progress work.
 func TestHTTPGate_EngineError(t *testing.T) {
+	t.Parallel()
 	az := &stubAuthZ{err: errors.New("opa exploded")}
 	w := httptest.NewRecorder()
 
@@ -88,6 +91,7 @@ func TestHTTPGate_EngineError(t *testing.T) {
 // The auth_method-derived reauth_url discriminates the per-flow recovery path (break-glass POST vs. OIDC redirect) so the UI can
 // dispatch without reading any other piece of state.
 func TestHTTPGate_ReauthRequired_BreakglassActor(t *testing.T) {
+	t.Parallel()
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: api.ReasonReauthRequired}}
 	w := httptest.NewRecorder()
 	ctx := api.WithActor(t.Context(), &api.Actor{
@@ -115,6 +119,7 @@ func TestHTTPGate_ReauthRequired_BreakglassActor(t *testing.T) {
 }
 
 func TestHTTPGate_ReauthRequired_OIDCActor(t *testing.T) {
+	t.Parallel()
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: api.ReasonReauthRequired}}
 	w := httptest.NewRecorder()
 	ctx := api.WithActor(t.Context(), &api.Actor{
@@ -141,6 +146,7 @@ func TestHTTPGate_ReauthRequired_OIDCActor(t *testing.T) {
 // ReauthChallengeFor builds the per-actor recovery instruction the UI reads from the 403 body. Direct unit test against the helper so
 // the wire-shape stays pinned even if HTTPGate's surrounding error-mapping changes.
 func TestReauthChallengeFor_BreakglassActor(t *testing.T) {
+	t.Parallel()
 	ctx := api.WithActor(context.Background(), &api.Actor{AuthMethod: "local_password"})
 	ch := api.ReauthChallengeFor(ctx)
 	assert.Equal(t, "local_password", ch.AuthMethod)
@@ -148,6 +154,7 @@ func TestReauthChallengeFor_BreakglassActor(t *testing.T) {
 }
 
 func TestReauthChallengeFor_OIDCActor(t *testing.T) {
+	t.Parallel()
 	ctx := api.WithActor(context.Background(), &api.Actor{AuthMethod: "oidc"})
 	ch := api.ReauthChallengeFor(ctx)
 	assert.Equal(t, "oidc", ch.AuthMethod)
@@ -157,6 +164,7 @@ func TestReauthChallengeFor_OIDCActor(t *testing.T) {
 // No actor on ctx → zero challenge. The chokepoint should already have produced no_actor (not reauth_required), so this code path is
 // defensive: guard against a future regression that emits reauth_required without an actor.
 func TestReauthChallengeFor_NoActor(t *testing.T) {
+	t.Parallel()
 	ch := api.ReauthChallengeFor(context.Background())
 	assert.Empty(t, ch.AuthMethod)
 	assert.Empty(t, ch.ReauthURL)

@@ -168,6 +168,7 @@ func TestPrivilegeLaunchdPlistWrite_SkipsWhenExecutableSigningAbsent(t *testing.
 // TestBtmLaunchItemAddPayload_RoundTrip is the wire round-trip PBT (CLAUDE.md: new wire struct → Marshal ∘ Unmarshal == identity)
 // for the btm_launch_item_add payload the rule decodes, including the executable_code_signing decision input.
 func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		in := btmLaunchItemAddPayload{
 			ItemType:       rapid.SampledFrom([]string{"daemon", "agent", "login_item", "app", "user_item"}).Draw(rt, "item_type"),

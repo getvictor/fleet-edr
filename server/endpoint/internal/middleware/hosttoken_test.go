@@ -69,6 +69,7 @@ func downstream(t *testing.T, wantHostID string) http.Handler {
 }
 
 func TestHostToken_ValidToken(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		verifyToken: func(_ context.Context, token string) (string, error) {
 			assert.Equal(t, testToken, token)
@@ -91,6 +92,7 @@ func TestHostToken_ValidToken(t *testing.T) {
 }
 
 func TestHostToken_MissingBearer(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{verifyToken: func(context.Context, string) (string, error) {
 		t.Fatal("VerifyToken must not be called when bearer is missing")
 		return "", nil
@@ -116,6 +118,7 @@ func TestHostToken_MissingBearer(t *testing.T) {
 }
 
 func TestHostToken_EmptyBearerSuffixRejected(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{verifyToken: func(context.Context, string) (string, error) {
 		t.Fatal("VerifyToken must not be called when bearer suffix is empty")
 		return "", nil
@@ -143,6 +146,7 @@ func TestHostToken_EmptyBearerSuffixRejected(t *testing.T) {
 // lands here. The middleware is what the spec's "system MUST reject" clause materialises as; the detection
 // IngestHandler runs only after this middleware has resolved the bearer to a host_id.
 func TestHostToken_InvalidToken(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		verifyToken: func(context.Context, string) (string, error) {
 			return "", api.ErrInvalidToken
@@ -170,6 +174,7 @@ func TestHostToken_InvalidToken(t *testing.T) {
 // TestHostToken_VerifierUnavailable covers the 503 path: any non-ErrInvalidToken error from the service surfaces as
 // verifier_unavailable so the agent doesn't burn its re-enroll throttle on a transient DB blip.
 func TestHostToken_VerifierUnavailable(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		verifyToken: func(context.Context, string) (string, error) {
 			return "", errors.New("db is down")
@@ -197,5 +202,6 @@ func TestHostToken_VerifierUnavailable(t *testing.T) {
 }
 
 func TestHostToken_PanicsOnNilService(t *testing.T) {
+	t.Parallel()
 	assert.Panics(t, func() { _ = middleware.HostToken(nil, slog.Default()) })
 }

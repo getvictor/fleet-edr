@@ -176,9 +176,10 @@ func TestUserAdmin_listSetRoleAndDisable(t *testing.T) {
 	})
 }
 
-// TestUserAdmin_edgeCases shares one env across its subtests (each seeds distinct users), so the subtests run serially and the parent
-// is not marked parallel.
-func TestUserAdmin_edgeCases(t *testing.T) {
+// TestUserAdmin_edgeCases shares one env (db + mux) across its subtests, so the subtests run serially; the parent is parallel only
+// with respect to other top-level tests, which is safe because newUserAdminEnv gives it an isolated database.
+func TestUserAdmin_edgeCases(t *testing.T) { //nolint:tparallel // subtests share one db+mux env; serial by design (see doc comment)
+	t.Parallel()
 	db, mux := newUserAdminEnv(t)
 	operator := seedUser(t, db, "edge-op@ua.local")
 	actor := actorWithRole(operator, "super_admin")

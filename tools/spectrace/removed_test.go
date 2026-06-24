@@ -13,7 +13,9 @@ import (
 // keys from `## REMOVED Requirements` sections of in-flight deltas, ignores ADDED/MODIFIED requirements, skips the archive
 // subtree, and degrades to an empty set when there is no changes tree.
 func TestParseRemovedRequirementKeys(t *testing.T) {
+	t.Parallel()
 	t.Run("collects requirement keys under a REMOVED section and ignores ADDED ones", func(t *testing.T) {
+		t.Parallel()
 		changes := t.TempDir()
 		writeChangeSpec(t, changes, "drop-keyed-hash", "agent-enrollment", `## ADDED Requirements
 
@@ -36,6 +38,7 @@ The server SHALL issue self-validating tokens.
 	})
 
 	t.Run("a REMOVED section other than 'REMOVED Requirements' is not treated as a removal", func(t *testing.T) {
+		t.Parallel()
 		changes := t.TempDir()
 		writeChangeSpec(t, changes, "weird", "agent-enrollment", `## REMOVED Notes
 
@@ -48,6 +51,7 @@ The server SHALL issue self-validating tokens.
 	})
 
 	t.Run("a stray spec.md outside the specs/ subtree contributes no keys", func(t *testing.T) {
+		t.Parallel()
 		changes := t.TempDir()
 		// A spec.md placed directly under the change folder (not under specs/<capability>/) must be ignored so it cannot
 		// derive a bogus capability and exempt scenarios it shouldn't.
@@ -64,6 +68,7 @@ The server SHALL issue self-validating tokens.
 	})
 
 	t.Run("archived removals are not counted (already applied into live specs)", func(t *testing.T) {
+		t.Parallel()
 		changes := t.TempDir()
 		archived := filepath.Join(changes, archiveDirName, "2026-01-01-old", "specs", "agent-enrollment")
 		require.NoError(t, os.MkdirAll(archived, 0o750))
@@ -78,6 +83,7 @@ The server SHALL issue self-validating tokens.
 	})
 
 	t.Run("missing or empty changes dir yields an empty set", func(t *testing.T) {
+		t.Parallel()
 		keys, err := parseRemovedRequirementKeys(filepath.Join(t.TempDir(), "nope"))
 		require.NoError(t, err)
 		assert.Empty(t, keys)
@@ -91,6 +97,7 @@ The server SHALL issue self-validating tokens.
 // TestFilterOutRemovedRequirements pins the gate-set filter: a canonical scenario whose parent requirement is in the
 // removed-keys set is dropped, others are kept, and an empty key set is a no-op pass-through.
 func TestFilterOutRemovedRequirements(t *testing.T) {
+	t.Parallel()
 	scenarios := []Scenario{
 		{ID: "agent-enrollment/fast-keyed-hash/a", SpecDir: "agent-enrollment", Requirement: "Fast keyed hash", Normative: true},
 		{ID: "agent-enrollment/fast-keyed-hash/b", SpecDir: "agent-enrollment", Requirement: "Fast keyed hash", Normative: true},
@@ -98,6 +105,7 @@ func TestFilterOutRemovedRequirements(t *testing.T) {
 	}
 
 	t.Run("drops scenarios under a removed requirement, keeps the rest", func(t *testing.T) {
+		t.Parallel()
 		removed := map[string]struct{}{"agent-enrollment/fast-keyed-hash": {}}
 		got := filterOutRemovedRequirements(scenarios, removed)
 		require.Len(t, got, 1)
@@ -105,6 +113,7 @@ func TestFilterOutRemovedRequirements(t *testing.T) {
 	})
 
 	t.Run("empty key set is a pass-through", func(t *testing.T) {
+		t.Parallel()
 		got := filterOutRemovedRequirements(scenarios, map[string]struct{}{})
 		assert.Len(t, got, 3)
 	})

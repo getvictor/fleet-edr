@@ -12,6 +12,7 @@ import (
 )
 
 func TestRegisterRoutes_IndexServesHTMLReferencingAssets(t *testing.T) {
+	t.Parallel()
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -43,6 +44,7 @@ func TestRegisterRoutes_IndexServesHTMLReferencingAssets(t *testing.T) {
 // vendor time so the page makes zero external requests. If someone re-downloads a fresh Redoc bundle and forgets to re-patch, this
 // test fires.
 func TestRedocBundle_NoExternalURLs(t *testing.T) {
+	t.Parallel()
 	b, err := assets.ReadFile("embed/redoc.standalone.js")
 	require.NoError(t, err)
 	assert.NotContains(t, string(b), "cdn.redoc.ly",
@@ -50,6 +52,7 @@ func TestRedocBundle_NoExternalURLs(t *testing.T) {
 }
 
 func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
+	t.Parallel()
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -67,6 +70,7 @@ func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+tc.path, nil)
 			require.NoError(t, err)
 			resp, err := http.DefaultClient.Do(req)
@@ -93,6 +97,7 @@ func TestRegisterRoutes_SpecAndBundleServedFromEmbed(t *testing.T) {
 // TestETagRevalidation_Returns304 confirms that a conditional GET with a matching If-None-Match skips the body. That is the key win
 // of the ETag strategy for the spec and logo. Saves bandwidth on repeat loads while still guaranteeing a correct spec after a server upgrade.
 func TestETagRevalidation_Returns304(t *testing.T) {
+	t.Parallel()
 	mux := http.NewServeMux()
 	RegisterRoutes(mux)
 	srv := httptest.NewServer(mux)
@@ -101,6 +106,7 @@ func TestETagRevalidation_Returns304(t *testing.T) {
 	paths := []string{"/api/openapi.yaml", "/api/docs/logo-mini.svg"}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			first, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
 			require.NoError(t, err)
 			firstResp, err := http.DefaultClient.Do(first)

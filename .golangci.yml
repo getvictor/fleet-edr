@@ -38,6 +38,7 @@ linters:
     - musttag
     - nilnesserr
     - noctx
+    - paralleltest # tests and their subtests must call t.Parallel() so the suite runs concurrently (issue #172)
     - perfsprint # catches fmt.Sprintf where strconv / string concat would suffice
     - predeclared # warns when a local name shadows a Go predeclared identifier (cap, len, new, ...)
     - revive
@@ -67,6 +68,13 @@ linters:
         settings:
           min-line-len: 120
           min-block: 3
+
+    # Require t.Parallel() on every top-level test (the suite then runs concurrently; see issue #172). Subtests are NOT forced
+    # parallel: the established convention puts t.Parallel() on the parent and keeps range/table subtests serial when they share a
+    # parent-opened DB (a parallel subtest that writes to a shared db would race). testdb.Open keys the DB name on t.Name(), so each
+    # top-level test is already fully isolated and parallel-safe.
+    paralleltest:
+      ignore-missing-subtests: true
 
     forbidigo:
       forbid:

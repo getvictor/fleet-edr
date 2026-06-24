@@ -12,6 +12,7 @@ import (
 // TestErrorSentinelsAreDistinct guards against two errors collapsing to the same value (which would make IsValidationError uselessly
 // broad or errors.Is short-circuit incorrectly).
 func TestErrorSentinelsAreDistinct(t *testing.T) {
+	t.Parallel()
 	require.NotErrorIs(t, api.ErrCommandNotFound, api.ErrInvalidStatusTransition)
 	require.NotErrorIs(t, api.ErrInvalidStatusTransition, api.ErrInvalidInsertRequest)
 	require.NotErrorIs(t, api.ErrCommandNotFound, api.ErrInvalidInsertRequest)
@@ -20,6 +21,7 @@ func TestErrorSentinelsAreDistinct(t *testing.T) {
 // TestIsValidationError covers every branch of the helper plus a
 // negative case for ErrCommandNotFound (a 404, not a 400).
 func TestIsValidationError(t *testing.T) {
+	t.Parallel()
 	assert.True(t, api.IsValidationError(api.ErrInvalidStatusTransition))
 	assert.True(t, api.IsValidationError(api.ErrInvalidInsertRequest))
 	assert.False(t, api.IsValidationError(api.ErrCommandNotFound))
@@ -29,6 +31,7 @@ func TestIsValidationError(t *testing.T) {
 // TestStatusValuesMatchAgentWire locks the four status string values the agent's commander encodes/decodes against. Drifting any of
 // them silently breaks every in-flight agent.
 func TestStatusValuesMatchAgentWire(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "pending", string(api.StatusPending))
 	assert.Equal(t, "acked", string(api.StatusAcked))
 	assert.Equal(t, "completed", string(api.StatusCompleted))

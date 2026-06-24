@@ -8,6 +8,7 @@ import (
 )
 
 func TestEvaluate(t *testing.T) {
+	t.Parallel()
 	t.Run("empty path returns not-ok", testEvaluateEmptyPath)
 	t.Run("absent path returns not-ok", testEvaluateAbsentPath)
 	t.Run("apple platform binary", testEvaluateApplePlatformBinary)
@@ -15,18 +16,21 @@ func TestEvaluate(t *testing.T) {
 }
 
 func testEvaluateEmptyPath(t *testing.T) {
+	t.Parallel()
 	if res, ok := Evaluate(""); ok || res != nil {
 		t.Fatalf("Evaluate(\"\") = (%v, %v), want (nil, false)", res, ok)
 	}
 }
 
 func testEvaluateAbsentPath(t *testing.T) {
+	t.Parallel()
 	if res, ok := Evaluate("/no/such/binary/edr-codesign-test"); ok || res != nil {
 		t.Fatalf("Evaluate(absent) = (%v, %v), want (nil, false)", res, ok)
 	}
 }
 
 func testEvaluateApplePlatformBinary(t *testing.T) {
+	t.Parallel()
 	// /bin/ls is a SIP-protected Apple platform binary on every supported macOS, so this is stable ground truth.
 	res, ok := Evaluate("/bin/ls")
 	if !ok || res == nil {
@@ -47,6 +51,7 @@ func testEvaluateApplePlatformBinary(t *testing.T) {
 }
 
 func testEvaluateNonAppleBinary(t *testing.T) {
+	t.Parallel()
 	// The test binary is a real Mach-O the Go toolchain ad-hoc signs on Apple Silicon: it carries no Developer team
 	// ID and is not Apple-anchored. This is the attacker shape the rule fires on: present and readable, but untrusted.
 	self, err := os.Executable()

@@ -76,6 +76,7 @@ func postEnroll(t *testing.T, srv *httptest.Server, body any) *http.Response {
 }
 
 func TestEnroll_HappyPath(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	svc := fakeService{
 		enroll: func(_ context.Context, req api.EnrollRequest, _ string) (api.EnrollResponse, error) {
@@ -107,6 +108,7 @@ func TestEnroll_HappyPath(t *testing.T) {
 }
 
 func TestEnroll_SecretMismatch(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
 			return api.EnrollResponse{}, api.ErrInvalidSecret
@@ -132,6 +134,7 @@ func TestEnroll_SecretMismatch(t *testing.T) {
 // server/endpoint/internal/tests/integration_test.go:TestEnroll_InvalidHardwareUUID; this test adds the
 // HTTP-layer 400 + JSON error envelope assertions the spec scenario calls for.
 func TestEnroll_InvalidUUID(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
 			return api.EnrollResponse{}, api.ErrInvalidHardwareUUID
@@ -150,6 +153,7 @@ func TestEnroll_InvalidUUID(t *testing.T) {
 }
 
 func TestEnroll_BadBody_MissingFields(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
 			t.Fatal("Enroll must not be called when fields are missing")
@@ -165,6 +169,7 @@ func TestEnroll_BadBody_MissingFields(t *testing.T) {
 }
 
 func TestEnroll_BadBody_NotJSON(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
 			t.Fatal("Enroll must not be called on bad body")
@@ -190,6 +195,7 @@ func TestEnroll_BadBody_NotJSON(t *testing.T) {
 // service's enroll callback is never reached for the 429-status request. The Retry-After header
 // matches the spec scenario's explicit requirement.
 func TestEnroll_RateLimit(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
 			return api.EnrollResponse{}, api.ErrInvalidSecret
@@ -213,10 +219,12 @@ func TestEnroll_RateLimit(t *testing.T) {
 }
 
 func TestEnroll_PanicsOnNilService(t *testing.T) {
+	t.Parallel()
 	assert.Panics(t, func() { _ = New(nil, Options{}) })
 }
 
 func TestEnrollRequest_StringRedactsSecret(t *testing.T) {
+	t.Parallel()
 	req := enrollRequest{EnrollSecret: "hunter2", HardwareUUID: testUUID}
 	s := req.String()
 	assert.NotContains(t, s, "hunter2")
@@ -226,6 +234,7 @@ func TestEnrollRequest_StringRedactsSecret(t *testing.T) {
 // TestEnroll_SecretNeverLogged drives a real HTTP request through the handler with a known-bad secret and asserts the secret string
 // never appears in the captured slog output. Lock-in for the redaction guard.
 func TestEnroll_SecretNeverLogged(t *testing.T) {
+	t.Parallel()
 	const secret = "my-super-secret-not-in-logs"
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

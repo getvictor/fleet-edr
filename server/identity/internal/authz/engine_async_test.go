@@ -56,6 +56,7 @@ func newAsyncEngine(t *testing.T, rate float64) (*authz.Engine, *recordingAudit,
 // before it reaches the async writer or the sync recorder.
 // spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/read-sampling-defaults-skip-non-break-glass-reads
 func TestAllow_ReadAllow_RateZero_DropsEverywhere(t *testing.T) {
+	t.Parallel()
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
 	ctx := api.WithActor(t.Context(), actor)
@@ -69,6 +70,7 @@ func TestAllow_ReadAllow_RateZero_DropsEverywhere(t *testing.T) {
 // rate=1.0 + read action + non-break-glass + Allow → exactly one async submission, zero sync rows. Confirms the chokepoint routes to
 // async (not sync) when sampling includes the event.
 func TestAllow_ReadAllow_RateOne_RoutesAsync(t *testing.T) {
+	t.Parallel()
 	e, syncRec, asyncRec := newAsyncEngine(t, 1.0)
 	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
 	ctx := api.WithActor(t.Context(), actor)
@@ -84,6 +86,7 @@ func TestAllow_ReadAllow_RateOne_RoutesAsync(t *testing.T) {
 // defeat the surface's audit purpose.
 // spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/break-glass-reads-are-always-recorded
 func TestAllow_ReadAllow_BreakGlass_AlwaysSync(t *testing.T) {
+	t.Parallel()
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))
 	actor.IsBreakglass = true
@@ -98,6 +101,7 @@ func TestAllow_ReadAllow_BreakGlass_AlwaysSync(t *testing.T) {
 // audit.read at rate=0.0 always writes the audit-of-audit row. The chokepoint exempts ActionAuditRead from the sampling gate so
 // auditors can always trace who read the audit log.
 func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
+	t.Parallel()
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	actor := actorWithRoles(1, "default", globalBinding("auditor", "default"))
 	ctx := api.WithActor(t.Context(), actor)
@@ -113,6 +117,7 @@ func TestAllow_AuditRead_AlwaysSync(t *testing.T) {
 // would defeat the dashboard.
 // spec:server-identity-authorization/every-privileged-action-funnels-through-one-authorization-chokepoint/unauthorized-action-is-denied-with-a-reason
 func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
+	t.Parallel()
 	e, syncRec, asyncRec := newAsyncEngine(t, 0.0)
 	// analyst has host.read but not enrollment.read; exercise a read
 	// deny against a role that is missing the specific grant.
@@ -130,6 +135,7 @@ func TestAllow_ReadDeny_AlwaysSync(t *testing.T) {
 // spec:server-identity-authorization/every-privileged-action-funnels-through-one-authorization-chokepoint/authorized-action-is-allowed-and-recorded
 // spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/state-changing-allow-is-recorded
 func TestAllow_WriteAllow_AlwaysSync(t *testing.T) {
+	t.Parallel()
 	e, syncRec, asyncRec := newAsyncEngine(t, 1.0)
 	actor := actorWithRoles(1, "default", globalBinding("admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)
@@ -143,6 +149,7 @@ func TestAllow_WriteAllow_AlwaysSync(t *testing.T) {
 // When the async writer reports false (queue full or stopped), the chokepoint falls back to the sync path so the row still lands.
 // Dual-emit guards against losing audit content on transient burst.
 func TestAllow_ReadAllow_AsyncDrop_FallsBackToSync(t *testing.T) {
+	t.Parallel()
 	syncRec := &recordingAudit{}
 	asyncRec := &recordingAsync{dropAt: 1}
 	e, err := authz.New(t.Context(), syncRec, nil, authz.Options{

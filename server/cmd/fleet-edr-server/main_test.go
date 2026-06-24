@@ -19,6 +19,7 @@ import (
 // /ui/index.html and let http.FileServer serve it, but FileServer canonicalises /index.html → ./ and broke every SPA deep link (e.g.
 // /ui/hosts/{host_id}).
 func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
+	t.Parallel()
 	// Synthesise a minimal "dist" tree so the handler doesn't depend on a built UI bundle being present. The real embed.FS has the same
 	// shape (index.html at the root + an assets/ subdirectory).
 	memFS := fstest.MapFS{
@@ -72,6 +73,7 @@ func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+tc.path, nil)
 			require.NoError(t, err)
 
@@ -105,6 +107,7 @@ func TestRegisterUIRoutes_SPAFallback(t *testing.T) {
 // since the goal is to hide the path's existence rather than just the API surface. The regression this guards: registering the React
 // routes BEFORE the /ui/ catch-all (so the more-specific patterns are gated), and applying the gate to BOTH the login and setup paths.
 func TestRegisterUIRoutes_BreakglassGate(t *testing.T) {
+	t.Parallel()
 	memFS := fstest.MapFS{
 		"dist/index.html": &fstest.MapFile{
 			Data: []byte("<!doctype html><html><body>SPA</body></html>"),
@@ -150,6 +153,7 @@ func TestRegisterUIRoutes_BreakglassGate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			mux := http.NewServeMux()
 			registerUIRoutesWithFS(t, mux, memFS, tc.gate)
 			srv := httptest.NewServer(mux)

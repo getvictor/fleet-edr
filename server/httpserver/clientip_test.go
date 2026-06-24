@@ -13,6 +13,7 @@ import (
 )
 
 func TestNewClientIPResolver_Validation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		input   []string
@@ -31,6 +32,7 @@ func TestNewClientIPResolver_Validation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			r, err := httpserver.NewClientIPResolver(tc.input)
 			if tc.wantErr {
 				require.Error(t, err)
@@ -44,6 +46,7 @@ func TestNewClientIPResolver_Validation(t *testing.T) {
 }
 
 func TestClientIPResolver_ResolutionRules(t *testing.T) {
+	t.Parallel()
 	const trustedHop = "10.0.0.5"
 	const trustedHopAlt = "10.0.0.6"
 	const untrustedHop = "203.0.113.99"
@@ -158,6 +161,7 @@ func TestClientIPResolver_ResolutionRules(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			resolver := mustResolver(t, tc.trusted)
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 			req.RemoteAddr = tc.remoteAddr
@@ -171,6 +175,7 @@ func TestClientIPResolver_ResolutionRules(t *testing.T) {
 }
 
 func TestClientIPResolver_NilSafety(t *testing.T) {
+	t.Parallel()
 	var nilResolver *httpserver.ClientIPResolver
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	req.RemoteAddr = "192.168.1.1:5555"
@@ -182,6 +187,7 @@ func TestClientIPResolver_NilSafety(t *testing.T) {
 }
 
 func TestClientIP_FallsBackToRemoteAddrWithoutMiddleware(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", nil)
 	req.RemoteAddr = "203.0.113.1:5555"
 	req.Header.Set("X-Forwarded-For", "1.2.3.4")
@@ -191,10 +197,12 @@ func TestClientIP_FallsBackToRemoteAddrWithoutMiddleware(t *testing.T) {
 }
 
 func TestClientIP_NilRequest(t *testing.T) {
+	t.Parallel()
 	assert.Empty(t, httpserver.ClientIP(nil))
 }
 
 func TestClientIPResolver_MiddlewareStashesIPOnContext(t *testing.T) {
+	t.Parallel()
 	resolver, err := httpserver.NewClientIPResolver([]string{"10.0.0.0/8"})
 	require.NoError(t, err)
 
@@ -214,6 +222,7 @@ func TestClientIPResolver_MiddlewareStashesIPOnContext(t *testing.T) {
 }
 
 func TestClientIPResolver_MiddlewareSurvivesNilRequestContext(t *testing.T) {
+	t.Parallel()
 	// Defensive: pathological middleware ordering could pass an *http.Request with a nil ctx. r.Context() never returns nil per Go's
 	// contract, but exercise the code path anyway.
 	resolver, err := httpserver.NewClientIPResolver(nil)

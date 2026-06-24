@@ -8,6 +8,7 @@ import (
 )
 
 func TestNew_RejectsMissingDB(t *testing.T) {
+	t.Parallel()
 	_, err := New(Deps{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DB")

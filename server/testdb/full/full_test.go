@@ -12,6 +12,7 @@ import (
 // TestOpen_AllContextsSchemaPresent verifies that every bounded context's authoritative table is present after full.Open returns.
 // Catches a future "I added a new context but forgot to wire it into full.Open" regression.
 func TestOpen_AllContextsSchemaPresent(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 
 	// The rules context owns app_control_policies + app_control_rules (demo cut). The remaining two spec'd tables (host_groups +

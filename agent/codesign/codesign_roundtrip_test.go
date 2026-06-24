@@ -11,6 +11,7 @@ import (
 // the identity. Result is the on-the-wire `code_signing` shape (schema/events.json) the agent emits into a
 // btm_launch_item_add payload, so it carries the same PBT round-trip guarantee as the other wire structs (CLAUDE.md).
 func TestResultJSONRoundTrip(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		in := Result{
 			TeamID:           rapid.String().Draw(t, "team_id"),

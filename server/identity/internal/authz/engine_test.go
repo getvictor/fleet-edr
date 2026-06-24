@@ -67,6 +67,7 @@ func globalBinding(roleID, _ string) api.RoleBinding {
 // matrix in a way the table didn't expect; the matching opa-test suite catches the same bug from the policy side.
 // spec:server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking/deployment-wide-binding-grants-the-action
 func TestAllow_RoleActionMatrix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		roleID    string
@@ -116,6 +117,7 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 	e, _ := newEngine(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			actor := actorWithRoles(1, "default", globalBinding(tc.roleID, "default"))
 			ctx := api.WithActor(t.Context(), actor)
 			d, err := e.Allow(ctx, tc.action, api.Resource{Type: "host", ID: "abc"})
@@ -148,6 +150,7 @@ func TestAllow_RoleActionMatrix(t *testing.T) {
 // picks it up automatically (and the test keeps holding the line
 // "every action must reach a non-wildcard role").
 func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
+	t.Parallel()
 	e, _ := newEngine(t)
 	var roles []string
 	for _, r := range seed.BuiltinRoles {
@@ -161,6 +164,7 @@ func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
 			"matrix has changed shape and this test needs a fresh look")
 	for _, action := range api.RegisteredActions() {
 		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
 			granted := false
 			for _, role := range roles {
 				actor := actorWithRoles(1, "default", globalBinding(role, "default"))
@@ -186,6 +190,7 @@ func TestAllow_EveryRegisteredActionGrantedSomewhere(t *testing.T) {
 // is denied with reason action_not_registered before Rego sees it.
 // spec:server-identity-authorization/every-privileged-action-funnels-through-one-authorization-chokepoint/unregistered-action-is-denied-as-defense-in-depth
 func TestAllow_UnregisteredAction_Denied(t *testing.T) {
+	t.Parallel()
 	e, rec := newEngine(t)
 	actor := actorWithRoles(1, "default", globalBinding("super_admin", "default"))
 	ctx := api.WithActor(t.Context(), actor)
@@ -200,6 +205,7 @@ func TestAllow_UnregisteredAction_Denied(t *testing.T) {
 // TestAllow_NoActor_Denied verifies the chokepoint denies anonymous requests with reason no_actor and writes an audit row noting the
 // regression. A handler should have rejected the request earlier; reaching the chokepoint without an actor is itself a signal.
 func TestAllow_NoActor_Denied(t *testing.T) {
+	t.Parallel()
 	e, rec := newEngine(t)
 	d, err := e.Allow(t.Context(), api.ActionHostRead, api.Resource{})
 	require.NoError(t, err)
@@ -213,6 +219,7 @@ func TestAllow_NoActor_Denied(t *testing.T) {
 // resolver and not realise wave-1 deployments expected the deny.
 // spec:server-identity-authorization/role-bindings-carry-a-scope-so-future-scoping-is-non-breaking/host-scoped-binding-does-not-grant-the-action-in-the-current-release
 func TestAllow_HostScope_NotYetSupported(t *testing.T) {
+	t.Parallel()
 	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default", api.RoleBinding{
 		RoleID:    "admin",
@@ -229,6 +236,7 @@ func TestAllow_HostScope_NotYetSupported(t *testing.T) {
 // a host-scope binding for the same role+action, the global grant must win. Otherwise the scope_not_yet_supported branch shadows real
 // authorisations once wave-2 host scopes are mixed in.
 func TestAllow_GlobalGrantWinsOverHostScopeDeny(t *testing.T) {
+	t.Parallel()
 	e, _ := newEngine(t)
 	actor := actorWithRoles(1, "default",
 		globalBinding("admin", "default"),
@@ -247,6 +255,7 @@ func TestAllow_GlobalGrantWinsOverHostScopeDeny(t *testing.T) {
 // (admin) otherwise grants: the chokepoint allows it. SessionFresh=true is the in-window signal the Rego requires_fresh_auth rule
 // reads.
 func TestAllow_FreshSession_ExecutesDestructiveAction(t *testing.T) {
+	t.Parallel()
 	e, _ := newEngine(t)
 	actor := &api.Actor{
 		UserID:       1,
@@ -267,6 +276,7 @@ func TestAllow_FreshSession_ExecutesDestructiveAction(t *testing.T) {
 // reauth_required reason (the UI's signal to prompt for re-authentication), the action is NOT performed (Allow=false), and the
 // chokepoint records an audit row for the deny carrying decision=deny and reason=reauth_required in its payload.
 func TestAllow_StaleSession_ChallengedBeforeDestructiveAction(t *testing.T) {
+	t.Parallel()
 	e, rec := newEngine(t)
 	actor := &api.Actor{
 		UserID:       1,
@@ -290,6 +300,7 @@ func TestAllow_StaleSession_ChallengedBeforeDestructiveAction(t *testing.T) {
 // TestAllow_NilAuditDoesNotPanic guards the test-only path where a caller passes nil for the AuditRecorder. Production callers must
 // supply one; tests sometimes don't.
 func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
+	t.Parallel()
 	e, err := authz.New(t.Context(), nil, nil, authz.Options{})
 	require.NoError(t, err)
 	actor := actorWithRoles(1, "default", globalBinding("super_admin", "default"))
@@ -309,6 +320,7 @@ func TestAllow_NilAuditDoesNotPanic(t *testing.T) {
 // test prove the exemption rather than merely re-testing a fresh session. senior_analyst grants host.isolate (allow, granted); analyst
 // does not (deny with no_matching_rule, NOT reauth_required, so the wire response does not leak role information).
 func TestAllow_ServiceAccountActor_RoleDecidesDestructiveAction(t *testing.T) {
+	t.Parallel()
 	e, _ := newEngine(t)
 	serviceAccount := func(roleID string) *api.Actor {
 		return &api.Actor{
@@ -318,6 +330,7 @@ func TestAllow_ServiceAccountActor_RoleDecidesDestructiveAction(t *testing.T) {
 		}
 	}
 	t.Run("bound role grants host.isolate so the action is allowed without a freshness challenge", func(t *testing.T) {
+		t.Parallel()
 		ctx := api.WithActor(t.Context(), serviceAccount("senior_analyst"))
 		d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
 		require.NoError(t, err)
@@ -325,6 +338,7 @@ func TestAllow_ServiceAccountActor_RoleDecidesDestructiveAction(t *testing.T) {
 		assert.Equal(t, api.ReasonGranted, d.Reason)
 	})
 	t.Run("bound role lacks host.isolate so the action is denied by role, not by the freshness gate", func(t *testing.T) {
+		t.Parallel()
 		ctx := api.WithActor(t.Context(), serviceAccount("analyst"))
 		d, err := e.Allow(ctx, api.ActionHostIsolate, api.Resource{Type: "host", ID: "h-1"})
 		require.NoError(t, err)
@@ -339,6 +353,7 @@ func TestAllow_ServiceAccountActor_RoleDecidesDestructiveAction(t *testing.T) {
 // to super_admin via the wildcard; senior_analyst, analyst, and auditor must be denied with no_matching_rule (sso.manage is not
 // reauth-gated, so the deny is role-shaped).
 func TestAllow_SSOManage_OnlyAdminAndSuperAdmin(t *testing.T) {
+	t.Parallel()
 	e, _ := newEngine(t)
 	cases := []struct {
 		roleID    string
@@ -352,6 +367,7 @@ func TestAllow_SSOManage_OnlyAdminAndSuperAdmin(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.roleID, func(t *testing.T) {
+			t.Parallel()
 			actor := actorWithRoles(1, "default", globalBinding(tc.roleID, "default"))
 			ctx := api.WithActor(t.Context(), actor)
 			d, err := e.Allow(ctx, api.ActionSSOManage, api.Resource{Type: "sso_config"})

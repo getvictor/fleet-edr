@@ -12,7 +12,9 @@ import (
 // Init feeds it into the telemetry resource once, so a stable value here means every span/metric the binary emits carries the
 // same replica identifier for its whole lifetime.
 func TestInstanceID(t *testing.T) {
+	t.Parallel()
 	t.Run("spec:server-availability/replica-identity-is-observable-via-service-instance-id/the-service-instance-id-is-stable-for-the-process-lifetime", func(t *testing.T) {
+		t.Parallel()
 		got := instanceID()
 		require.NotEmpty(t, got)
 

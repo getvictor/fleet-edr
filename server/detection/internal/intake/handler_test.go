@@ -145,7 +145,9 @@ func TestPartitionHeartbeats(t *testing.T) {
 // balancer removes this replica from rotation. The store is nil here, which would otherwise make readyz report "degraded": the
 // assertion on status="draining" proves the drain check takes precedence over the DB check (the contract the LB depends on).
 func TestHandleReadyz_Draining(t *testing.T) {
+	t.Parallel()
 	t.Run("spec:server-availability/sigterm-produces-a-load-balancer-drainable-graceful-shutdown/readiness-reports-not-ready-once-draining-begins", func(t *testing.T) {
+		t.Parallel()
 		h := New(nil, nil, BuildInfo{})
 		h.SetReadinessGate(func() bool { return true })
 

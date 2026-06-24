@@ -16,6 +16,7 @@ import (
 // (potentially looping on a non-transient failure) or never fires when the deadlock shows up wrapped (the production path wraps
 // with fmt.Errorf("insert %s: %w", ...)).
 func TestIsDeadlockErr(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		err  error
@@ -30,6 +31,7 @@ func TestIsDeadlockErr(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, isDeadlockErr(tc.err))
 		})
 	}
@@ -39,10 +41,12 @@ func TestIsDeadlockErr(t *testing.T) {
 // succeed, exhaust-attempts-and-return-last-deadlock, honor-context-cancel-during-backoff. The wall-clock cost of each subtest is
 // bounded by step (1ms here) times the number of retries, so the whole test stays well under 100ms.
 func TestWithDeadlockRetry(t *testing.T) {
+	t.Parallel()
 	deadlockErr := &mysql.MySQLError{Number: 1213, Message: "Deadlock found"}
 	const step = 1 * time.Millisecond
 
 	t.Run("success on first attempt", func(t *testing.T) {
+		t.Parallel()
 		calls := 0
 		err := withDeadlockRetry(t.Context(), 5, step, func() error {
 			calls++
@@ -53,6 +57,7 @@ func TestWithDeadlockRetry(t *testing.T) {
 	})
 
 	t.Run("non-deadlock error returns immediately without retry", func(t *testing.T) {
+		t.Parallel()
 		boom := errors.New("boom")
 		calls := 0
 		err := withDeadlockRetry(t.Context(), 5, step, func() error {
@@ -64,6 +69,7 @@ func TestWithDeadlockRetry(t *testing.T) {
 	})
 
 	t.Run("retries on deadlock then succeeds", func(t *testing.T) {
+		t.Parallel()
 		calls := 0
 		err := withDeadlockRetry(t.Context(), 5, step, func() error {
 			calls++
@@ -77,6 +83,7 @@ func TestWithDeadlockRetry(t *testing.T) {
 	})
 
 	t.Run("exhausts attempts and returns last deadlock error", func(t *testing.T) {
+		t.Parallel()
 		calls := 0
 		err := withDeadlockRetry(t.Context(), 3, step, func() error {
 			calls++
@@ -87,6 +94,7 @@ func TestWithDeadlockRetry(t *testing.T) {
 	})
 
 	t.Run("context cancel during backoff returns ctx.Err", func(t *testing.T) {
+		t.Parallel()
 		ctx, cancel := context.WithCancel(context.Background())
 		calls := 0
 		err := withDeadlockRetry(ctx, 5, 50*time.Millisecond, func() error {
@@ -105,6 +113,7 @@ func TestWithDeadlockRetry(t *testing.T) {
 // White-box tests for package-private helpers. The other test file (store_test.go, package mysql_test) covers the public Store API
 // against a real MySQL via testdb.
 func TestDeduplicateStrings(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   []string
@@ -119,6 +128,7 @@ func TestDeduplicateStrings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			out := deduplicateStrings(tc.in)
 			if tc.want == nil {
 				assert.Nil(t, out)

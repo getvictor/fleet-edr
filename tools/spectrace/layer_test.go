@@ -11,6 +11,7 @@ import (
 // inside ClassifyLayer is what makes `test/integration/agentserver/...` resolve to L3 rather than L2; the two rows that
 // share that prefix are kept adjacent so a reordering bug is immediately visible.
 func TestClassifyLayer(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		path string
@@ -44,6 +45,7 @@ func TestClassifyLayer(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, ClassifyLayer(tc.path), "ClassifyLayer(%q)", tc.path)
 		})
 	}
@@ -53,6 +55,7 @@ func TestClassifyLayer(t *testing.T) {
 // if a future PR renames any of these strings, the Markdown matrix shape changes and downstream tooling (PR summaries, dash-
 // boards that grep `L0` etc.) breaks. Treat any change here as a contract change, not an implementation detail.
 func TestLayerLabel(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		l    Layer
 		want string
@@ -68,6 +71,7 @@ func TestLayerLabel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.want, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, tc.l.Label())
 		})
 	}

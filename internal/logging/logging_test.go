@@ -14,6 +14,7 @@ import (
 )
 
 func TestNew_JSONDefault(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	log, err := New(&buf, Options{Level: "info", Format: "json"})
 	require.NoError(t, err)
@@ -30,6 +31,7 @@ func TestNew_JSONDefault(t *testing.T) {
 }
 
 func TestNew_Text(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	log, err := New(&buf, Options{Level: "info", Format: "text"})
 	require.NoError(t, err)
@@ -49,6 +51,7 @@ func TestNew_Text(t *testing.T) {
 // is the stderr handler that wraps the writer the OTLP-bridge fan-out is layered onto (multiHandler in TestMultiHandler_FanOut),
 // so dropping at this layer transitively prevents export of the dropped record.
 func TestNew_LevelFiltering(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	log, err := New(&buf, Options{Level: "warn", Format: "json"})
 	require.NoError(t, err)
@@ -60,12 +63,14 @@ func TestNew_LevelFiltering(t *testing.T) {
 }
 
 func TestNew_InvalidLevel(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	_, err := New(&buf, Options{Level: "spam", Format: "json"})
 	assert.ErrorContains(t, err, "spam")
 }
 
 func TestNew_InvalidFormat(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	_, err := New(&buf, Options{Level: "info", Format: "xml"})
 	assert.ErrorContains(t, err, "xml")
@@ -79,6 +84,7 @@ func TestNew_InvalidFormat(t *testing.T) {
 // contains the expected trace_id and span_id strings. Together with TestNew_JSONDefault's "no trace id when context has no span"
 // assertion (line 29), the enricher's both-sides contract is pinned.
 func TestNew_TraceEnrichment(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	log, err := New(&buf, Options{Level: "info", Format: "json"})
 	require.NoError(t, err)
@@ -103,6 +109,7 @@ func TestNew_TraceEnrichment(t *testing.T) {
 }
 
 func TestNew_BaseAttrs(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	log, err := New(&buf, Options{
 		Level:     "info",
@@ -119,6 +126,7 @@ func TestNew_BaseAttrs(t *testing.T) {
 }
 
 func TestMultiHandler_FanOut(t *testing.T) {
+	t.Parallel()
 	var a, b bytes.Buffer
 	ha := slog.NewJSONHandler(&a, &slog.HandlerOptions{Level: slog.LevelDebug})
 	hb := slog.NewJSONHandler(&b, &slog.HandlerOptions{Level: slog.LevelDebug})

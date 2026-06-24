@@ -19,7 +19,9 @@ import (
 // attribute lives on the resource, so every span and metric the SDK emits inherits it, which is how an operator tells replicas
 // apart in the backend.
 func TestBuildResource_ServiceInstanceID(t *testing.T) {
+	t.Parallel()
 	t.Run("spec:server-availability/replica-identity-is-observable-via-service-instance-id/every-emitted-span-carries-the-service-instance-id", func(t *testing.T) {
+		t.Parallel()
 		res, err := buildResource(t.Context(), Options{ServiceName: "test-svc", ServiceInstanceID: "instance-abc"})
 		require.NoError(t, err)
 
@@ -53,6 +55,7 @@ func deploymentEnvOf(res *resource.Resource) map[attribute.Key]string {
 // every span / metric / log inherits it, which is what lets the bundled SigNoz dashboards drive a dynamic environment selector. The
 // operator-override path is exercised by TestWithDeploymentEnvironment (the repo forbids t.Setenv in tests, issue #172).
 func TestBuildResource_DeploymentEnvironment(t *testing.T) {
+	t.Parallel()
 	res, err := buildResource(t.Context(), Options{ServiceName: "test-svc"})
 	require.NoError(t, err)
 	got := deploymentEnvOf(res)
@@ -67,6 +70,7 @@ func TestBuildResource_DeploymentEnvironment(t *testing.T) {
 // normalizer with a hand-built resource pins the operator-override contract (either key alone wins, both end up synchronized, an empty
 // resource falls back to "default") without mutating process env, since t.Setenv is forbidden (issue #172).
 func TestWithDeploymentEnvironment(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   []attribute.KeyValue
@@ -82,6 +86,7 @@ func TestWithDeploymentEnvironment(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			out, err := withDeploymentEnvironment(resource.NewSchemaless(tc.in...))
 			require.NoError(t, err)
 			got := deploymentEnvOf(out)
@@ -113,7 +118,7 @@ func restoreGlobals(t *testing.T) {
 // must still return a non-nil shutdown hook, the shutdown call must complete promptly, AND the W3C
 // propagator must be installed so inbound traceparent headers are still parsed (otherwise services
 // behind a no-OTel EDR would lose distributed-trace context for free, which is a regression).
-func TestInit_Disabled(t *testing.T) {
+func TestInit_Disabled(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; serial (issue #172)
 	restoreGlobals(t)
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})
 	require.NoError(t, err)
@@ -137,7 +142,7 @@ func TestInit_Disabled(t *testing.T) {
 // returning a non-nil shutdown hook and the shutdown call respecting the deadline. End-to-end export
 // to a live collector is validated against the dev SigNoz pipeline; that path is out of scope for an
 // in-process unit test because it requires an external service.
-func TestInit_Enabled_BogusEndpoint(t *testing.T) {
+func TestInit_Enabled_BogusEndpoint(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; serial (issue #172)
 	restoreGlobals(t)
 	// Pass a URL pointing at a port we are confident nothing is listening on. The http:// scheme tells the SDK's
 	// WithEndpointURL option to use insecure transport so the connection refused is observed at the TCP layer rather than
@@ -173,7 +178,7 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) {
 // Init wires the propagator at the process level and applies to every binary that consumes this
 // package (server, agent, ingest); the actual parent-child stitching happens at every http.Handler
 // that calls `otel.GetTextMapPropagator().Extract(...)`, which this propagator install makes well-defined.
-func TestInit_PropagatorInstalled(t *testing.T) {
+func TestInit_PropagatorInstalled(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; serial (issue #172)
 	restoreGlobals(t)
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})
 	require.NoError(t, err)

@@ -19,6 +19,7 @@ func newRoot(t *testing.T) []byte {
 }
 
 func TestNew_rejectsShortRoot(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		len  int
@@ -31,6 +32,7 @@ func TestNew_rejectsShortRoot(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			kr, err := keyring.New(make([]byte, tc.len))
 			if tc.ok {
 				require.NoError(t, err)
@@ -48,12 +50,14 @@ func TestNew_rejectsShortRoot(t *testing.T) {
 // exact strings, so changing a value here silently invalidates every issued token and breaks cross-binary validation. Treat a failure
 // as "this is a deliberate key rotation" and update the literal only with that intent.
 func TestLabelConstants_arePinned(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "edr/host-token/sign/v1", keyring.HostTokenSigningLabel)
 	assert.Equal(t, "edr/session/signing/v1", keyring.SessionSigningKeyLabel)
 	assert.Equal(t, "edr/oidc/client-secret/v1", keyring.OIDCClientSecretLabel)
 }
 
 func TestDerive_isDeterministicPerLabel(t *testing.T) {
+	t.Parallel()
 	root := newRoot(t)
 	kr, err := keyring.New(root)
 	require.NoError(t, err)
@@ -65,6 +69,7 @@ func TestDerive_isDeterministicPerLabel(t *testing.T) {
 }
 
 func TestDerive_distinctLabelsAreIndependent(t *testing.T) {
+	t.Parallel()
 	root := newRoot(t)
 	kr, err := keyring.New(root)
 	require.NoError(t, err)
@@ -78,6 +83,7 @@ func TestDerive_distinctLabelsAreIndependent(t *testing.T) {
 }
 
 func TestDerive_differsAcrossRoots(t *testing.T) {
+	t.Parallel()
 	krA, err := keyring.New(newRoot(t))
 	require.NoError(t, err)
 	krB, err := keyring.New(newRoot(t))
@@ -88,6 +94,7 @@ func TestDerive_differsAcrossRoots(t *testing.T) {
 }
 
 func TestNew_copiesRoot(t *testing.T) {
+	t.Parallel()
 	root := newRoot(t)
 	kr, err := keyring.New(root)
 	require.NoError(t, err)

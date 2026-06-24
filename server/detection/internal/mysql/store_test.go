@@ -49,12 +49,14 @@ func newFullSchemaStore(t *testing.T) *mysql.Store {
 }
 
 func TestNew_RejectsNilDB(t *testing.T) {
+	t.Parallel()
 	_, err := mysql.New(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db handle")
 }
 
 func TestStore_DBAndClose(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	assert.NotNil(t, s.DB(), "DB() returns the underlying *sqlx.DB")
 	require.NoError(t, s.Close(), "Close is a no-op (the db handle is shared with cmd/main)")
@@ -62,6 +64,7 @@ func TestStore_DBAndClose(t *testing.T) {
 }
 
 func TestStore_CountEventsAndUnprocessed(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -85,6 +88,7 @@ func TestStore_CountEventsAndUnprocessed(t *testing.T) {
 }
 
 func TestStore_InsertEventsAtPinsTimestamp(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -103,6 +107,7 @@ func TestStore_InsertEventsAtPinsTimestamp(t *testing.T) {
 // INSERT IGNORE) keeps the ingested_at_ns from its FIRST insert, and the caller's slice is stamped with that persisted value, not
 // the current batch's. A genuinely-new row in the same batch still gets the current batch's time.
 func TestStore_InsertEventsAt_DuplicateStampsPersistedIngestedAt(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -126,6 +131,7 @@ func TestStore_InsertEventsAt_DuplicateStampsPersistedIngestedAt(t *testing.T) {
 // TestStore_InsertEventsAt_ChunksLargeBatch inserts more events than eventInsertChunkRows so the multi-row INSERT spans more than
 // one chunk, and asserts every row across the chunk boundary is persisted and stamped.
 func TestStore_InsertEventsAt_ChunksLargeBatch(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -145,6 +151,7 @@ func TestStore_InsertEventsAt_ChunksLargeBatch(t *testing.T) {
 }
 
 func TestStore_InsertEvents_EmptyIsNoOp(t *testing.T) {
+	t.Parallel()
 	// The empty-slice fast path returns nil without touching the DB. Important for the retry wrapper: an empty insert must
 	// not waste a deadlock-retry budget on a no-op transaction.
 	s := newTestStore(t)
@@ -160,6 +167,7 @@ func TestStore_InsertEvents_EmptyIsNoOp(t *testing.T) {
 }
 
 func TestStore_InsertEvents_ClosedDBReturnsError(t *testing.T) {
+	t.Parallel()
 	// Closing the underlying db pool forces BeginTxx to fail on the first attempt. The deadlock-retry wrapper must NOT
 	// retry this class of error (it is not a 1213), so the call should return promptly with the begin-tx error wrapped.
 	s := newTestStore(t)
@@ -257,6 +265,7 @@ func TestStore_InsertEvents_ConcurrentReplicaShape(t *testing.T) {
 
 // spec:server-event-ingestion/event-storage-drops-redundant-indexes/the-unprocessed-event-claim-still-works-after-the-index-diet
 func TestStore_FetchUnprocessedAndUnclaim(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -281,6 +290,7 @@ func TestStore_FetchUnprocessedAndUnclaim(t *testing.T) {
 }
 
 func TestStore_FetchUnprocessedRejectsZeroLimit(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	out, err := s.FetchUnprocessed(t.Context(), 0)
 	require.NoError(t, err)
@@ -288,12 +298,14 @@ func TestStore_FetchUnprocessedRejectsZeroLimit(t *testing.T) {
 }
 
 func TestStore_MarkProcessedNoOpOnEmpty(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	require.NoError(t, s.MarkProcessed(t.Context(), nil))
 	require.NoError(t, s.UnclaimEvents(t.Context(), nil))
 }
 
 func TestStore_CountAlerts(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -340,6 +352,7 @@ func TestStore_CountAlerts(t *testing.T) {
 // Subject) persists with a NULL process_id (no fk_alerts_process violation) and dedups on subject rather than process_id. The same
 // daemon registration dedups; a different one produces a second alert; the row reads back with ProcessID 0 via the read-path COALESCE.
 func TestStore_InsertAlert_ProcessLess(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -385,6 +398,7 @@ func TestStore_InsertAlert_ProcessLess(t *testing.T) {
 }
 
 func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -407,6 +421,7 @@ func TestStore_GetChildProcessesFiltersByPPIDAndWindow(t *testing.T) {
 
 // spec:server-process-graph-builder/ttl-reconciliation-respects-snapshot-freshness/snapshot-row-with-fresh-heartbeats-survives-ttl
 func TestStore_ReconcileStaleProcesses_LeavesFreshSnapshotRow(t *testing.T) {
+	t.Parallel()
 	// Issue #173: a snapshot row whose last_seen_ns is inside the TTL window must NOT be reconciled. The reconciler's predicate uses
 	// COALESCE(last_seen_ns, fork_time_ns) so fresh heartbeats keep the row alive even when fork_time_ns is ancient.
 	s := newTestStore(t)
@@ -439,6 +454,7 @@ func TestStore_ReconcileStaleProcesses_LeavesFreshSnapshotRow(t *testing.T) {
 
 // spec:server-process-graph-builder/ttl-reconciliation-respects-snapshot-freshness/snapshot-row-without-recent-heartbeats-is-closed
 func TestStore_ReconcileStaleProcesses_ClosesStaleSnapshotRow(t *testing.T) {
+	t.Parallel()
 	// Issue #173 negative: a snapshot row with no recent heartbeats (last_seen_ns older than TTL) IS reconciled. Confirms the
 	// predicate doesn't accidentally exempt every snapshot row forever.
 	s := newTestStore(t)
@@ -479,6 +495,7 @@ func TestStore_ReconcileStaleProcesses_ClosesStaleSnapshotRow(t *testing.T) {
 
 // spec:server-process-graph-builder/ttl-reconciliation-respects-snapshot-freshness/non-snapshot-row-with-missing-exit-is-closed-issue-6-regression-guard
 func TestStore_ReconcileStaleProcesses_ClosesStaleLiveRow_NoRegression(t *testing.T) {
+	t.Parallel()
 	// Issue #6 regression guard: a non-snapshot row with an ancient fork_time_ns and last_seen_ns IS NULL is still subject to TTL
 	// reconciliation. The COALESCE predicate degenerates to fork_time_ns for these rows, preserving the original #6 behaviour.
 	s := newTestStore(t)

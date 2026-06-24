@@ -12,6 +12,7 @@ import (
 )
 
 func TestDecodeBatch_HappyPath(t *testing.T) {
+	t.Parallel()
 	body := []byte(`[{"event_id":"e1","host_id":"h","timestamp_ns":100,"event_type":"fork","payload":{"child_pid":1}}]`)
 	out, err := DecodeBatch(body)
 	require.NoError(t, err)
@@ -22,17 +23,20 @@ func TestDecodeBatch_HappyPath(t *testing.T) {
 }
 
 func TestDecodeBatch_Empty(t *testing.T) {
+	t.Parallel()
 	out, err := DecodeBatch([]byte(`[]`))
 	require.NoError(t, err)
 	assert.Empty(t, out)
 }
 
 func TestDecodeBatch_Malformed(t *testing.T) {
+	t.Parallel()
 	_, err := DecodeBatch([]byte(`{not json`))
 	require.Error(t, err)
 }
 
 func TestEncodeBatch_RoundTrip(t *testing.T) {
+	t.Parallel()
 	in := []api.Event{
 		{
 			EventID:     "x",
@@ -60,6 +64,7 @@ func TestEncodeBatch_RoundTrip(t *testing.T) {
 }
 
 func TestEncodeBatch_Empty(t *testing.T) {
+	t.Parallel()
 	out, err := EncodeBatch(nil)
 	require.NoError(t, err)
 	assert.Equal(t, "null", string(out), "nil slice marshals to null")
@@ -97,6 +102,7 @@ func eventGen() *rapid.Generator[api.Event] {
 // invariant for the agent contract: the agent and server must agree on the JSON wire shape, and any drift surfaces as a round-trip
 // mismatch in this property.
 func TestWire_RoundTripProperty(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		batch := rapid.SliceOfN(eventGen(), 0, 8).Draw(rt, "batch")
 		out, err := EncodeBatch(batch)

@@ -34,6 +34,7 @@ func (r *stubRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphRe
 }
 
 func TestEngine_RegisterAccumulates(t *testing.T) {
+	t.Parallel()
 	e := New(nil, nil)
 	e.Register(&stubRule{id: "a"})
 	e.Register(&stubRule{id: "b", techniques: []string{"T1"}})
@@ -48,6 +49,7 @@ func TestEngine_RegisterAccumulates(t *testing.T) {
 // TestEngine_LoadActiveReplacesRuleSet pins the replace (not append) semantics: a hot-reload caller can invoke LoadActive repeatedly
 // without the engine accumulating duplicates.
 func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
+	t.Parallel()
 	e := New(nil, nil)
 	e.Register(&stubRule{id: "old-1"})
 	e.Register(&stubRule{id: "old-2"})
@@ -73,6 +75,7 @@ func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
 // zero findings so persistFinding is never reached (avoids needing a live mysql.Store); the test pins attribute presence and value,
 // not non-zero counts: the alert-count contract is "the attr exists and is countable", and 0 is a valid count.
 func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
+	t.Parallel()
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })

@@ -82,18 +82,21 @@ func newOperatorServer(t *testing.T, svc api.Service) *httptest.Server {
 }
 
 func TestNew_NilServicePanics(t *testing.T) {
+	t.Parallel()
 	assert.PanicsWithValue(t, "response operator.New: api.Service must not be nil", func() {
 		New(nil, allowAllAuthZ{}, slog.Default())
 	})
 }
 
 func TestNew_NilLoggerFallsBackToDefault(t *testing.T) {
+	t.Parallel()
 	h := New(fakeService{}, allowAllAuthZ{}, nil)
 	require.NotNil(t, h)
 	assert.NotNil(t, h.logger)
 }
 
 func TestHandleCreate(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		body       string
@@ -140,6 +143,7 @@ func TestHandleCreate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			svc := fakeService{
 				insert: func(context.Context, string, string, []byte) (int64, error) {
 					return tc.insertID, tc.insertErr
@@ -171,6 +175,7 @@ func TestHandleCreate(t *testing.T) {
 }
 
 func TestHandleCreate_BodyCap(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		insert: func(context.Context, string, string, []byte) (int64, error) {
 			t.Fatal("service should not be called when body decode fails")
@@ -194,6 +199,7 @@ func TestHandleCreate_BodyCap(t *testing.T) {
 }
 
 func TestHandleGet(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		path       string
@@ -231,6 +237,7 @@ func TestHandleGet(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			svc := fakeService{
 				get: func(context.Context, int64) (api.Command, error) {
 					return tc.getCmd, tc.getErr

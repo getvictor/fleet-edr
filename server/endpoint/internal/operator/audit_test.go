@@ -74,6 +74,7 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 // recorder fires exactly once, the action is AuditEnrollmentRevoke, the target is the host, and the
 // payload preserves actor + reason verbatim from the operator's request body.
 func TestHandler_Revoke_EmitsAudit(t *testing.T) {
+	t.Parallel()
 	svc := fakeRevokeService{revoke: func(_ context.Context, _, _, _ string) error { return nil }}
 	rec := &captureRecorder{}
 	h := New(svc, allowAllAuthZ{}, nil)
@@ -103,6 +104,7 @@ func TestHandler_Revoke_EmitsAudit(t *testing.T) {
 
 // Nil recorder must not panic; revoke still applies and audit silently no-ops.
 func TestHandler_Revoke_NilAuditOK(t *testing.T) {
+	t.Parallel()
 	svc := fakeRevokeService{revoke: func(_ context.Context, _, _, _ string) error { return nil }}
 	h := New(svc, allowAllAuthZ{}, nil)
 
@@ -124,6 +126,7 @@ func TestHandler_Revoke_NilAuditOK(t *testing.T) {
 // Successful POST .../rotate returns 204 with no body: under the signed-token model the rotate is an epoch bump with no token or
 // command to hand back. The handler must still pass the operator-supplied actor + reason through to the service for the audit row.
 func TestHandler_Rotate_HappyPath(t *testing.T) {
+	t.Parallel()
 	captured := struct {
 		hostID string
 		actor  string
@@ -159,6 +162,7 @@ func TestHandler_Rotate_HappyPath(t *testing.T) {
 // Missing actor or reason returns 400; rotation is operator-attributed audit material, so silent rotations without attribution would
 // undermine the audit story #87 just shipped.
 func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		body map[string]any
@@ -170,6 +174,7 @@ func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			svc := fakeRevokeService{rotate: func(context.Context, string, string, string) error {
 				t.Fatal("RotateToken must not be called when actor/reason validation fails")
 				return nil
@@ -200,6 +205,7 @@ func TestHandler_Rotate_RequiresActorAndReason(t *testing.T) {
 // every shape the validator must reject; the fakeRevokeService's t.Fatal in the Revoke callback proves
 // the handler stops at validation rather than persisting the empty audit attribution.
 func TestHandler_Revoke_RequiresActorAndReason(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		body map[string]any
@@ -212,6 +218,7 @@ func TestHandler_Revoke_RequiresActorAndReason(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			svc := fakeRevokeService{revoke: func(context.Context, string, string, string) error {
 				t.Fatal("Revoke must not be called when actor/reason validation fails")
 				return nil
@@ -238,6 +245,7 @@ func TestHandler_Revoke_RequiresActorAndReason(t *testing.T) {
 // Missing host returns 404, not 500; the handler must surface api.ErrNotFound from the service as the operator-facing "not_found"
 // code.
 func TestHandler_Rotate_NotFound(t *testing.T) {
+	t.Parallel()
 	svc := fakeRevokeService{rotate: func(context.Context, string, string, string) error {
 		return api.ErrNotFound
 	}}

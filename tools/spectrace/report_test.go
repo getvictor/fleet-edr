@@ -66,6 +66,7 @@ func fixtureMarkers() []Marker {
 // Other column. The assertion uses contains-substring matches rather than full equality because the precise whitespace +
 // summary numbers are content-tested by other cases; this case is about structure.
 func TestRenderMarkdownMatrix(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	renderMarkdownMatrix(&buf, fixtureScenarios(), fixtureMarkers(), false)
 	out := buf.String()
@@ -89,6 +90,7 @@ func TestRenderMarkdownMatrix(t *testing.T) {
 // from the row set AND the Other column is dropped because its only marker was on that scenario. This is the property the
 // matrixHasOtherMarkers helper guards.
 func TestRenderMarkdownMatrix_NormativeOnlyFilter(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	renderMarkdownMatrix(&buf, fixtureScenarios(), fixtureMarkers(), true)
 	out := buf.String()
@@ -105,6 +107,7 @@ func TestRenderMarkdownMatrix_NormativeOnlyFilter(t *testing.T) {
 // TestRenderMarkdownMatrix_MultipleMarkersInCell pins the comma-separated cell rendering when two markers land in the same
 // (scenario, layer) cell.
 func TestRenderMarkdownMatrix_MultipleMarkersInCell(t *testing.T) {
+	t.Parallel()
 	scenarios := []Scenario{
 		{ID: "x/y/z", Normative: true},
 	}
@@ -122,6 +125,7 @@ func TestRenderMarkdownMatrix_MultipleMarkersInCell(t *testing.T) {
 // `swift:` or `swift-ambiguous:` IDs are reported by check, not by report. They must not appear in any matrix cell because
 // they don't belong to any canonical scenario.
 func TestRenderMarkdownMatrix_SwiftInvalidMarkersAreSkipped(t *testing.T) {
+	t.Parallel()
 	scenarios := []Scenario{
 		{ID: "x/y/z", Normative: true},
 	}
@@ -141,12 +145,14 @@ func TestRenderMarkdownMatrix_SwiftInvalidMarkersAreSkipped(t *testing.T) {
 // TestEscapeMarkdownPipe pins the pipe-escape behaviour. A pipe inside a scenario ID would otherwise close the table cell
 // and break the row. Canonical IDs never contain pipes today, but the escape is defensive against future shapes.
 func TestEscapeMarkdownPipe(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "a&#124;b", escapeMarkdownPipe("a|b"))
 	assert.Equal(t, "noop", escapeMarkdownPipe("noop"))
 }
 
 // TestFormatMarkerLink pins the link shape: `[basename:line](path#Lline)`.
 func TestFormatMarkerLink(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		m    Marker
@@ -161,6 +167,7 @@ func TestFormatMarkerLink(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, formatMarkerLink(tc.m))
 		})
 	}
@@ -169,6 +176,7 @@ func TestFormatMarkerLink(t *testing.T) {
 // TestRunReport_UnsupportedFormat pins the only failure path that runReport returns without delegating to the loader. A
 // future `--format=json` will need a corresponding test row.
 func TestRunReport_UnsupportedFormat(t *testing.T) {
+	t.Parallel()
 	code := runReport([]string{"--format", "json"})
 	assert.Equal(t, 2, code)
 }
@@ -177,6 +185,7 @@ func TestRunReport_UnsupportedFormat(t *testing.T) {
 // We point --output at a path inside a NOT-existing directory; os.Create fails, openReportWriter returns the error, and
 // runReport must exit 2. Without the flush check the prior shape returned 0 on any IO failure during render or close.
 func TestRunReport_WriteErrorReturnsExitCodeTwo(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "does-not-exist-dir", "matrix.md")
 	code := runReport([]string{"--output", missing, "--specs-dir", "openspec/specs", "--root", "."})
 	assert.Equal(t, 2, code, "open --output under a missing directory must exit non-zero")
@@ -185,6 +194,7 @@ func TestRunReport_WriteErrorReturnsExitCodeTwo(t *testing.T) {
 // TestMatrixHasOtherMarkers covers the column-on-demand decision. Cases drive both directions: an empty marker set, a set
 // with only test markers, and a set with a single Other marker on a row included by the filter.
 func TestMatrixHasOtherMarkers(t *testing.T) {
+	t.Parallel()
 	scenarios := fixtureScenarios()
 	markers := fixtureMarkers()
 	coverage := indexMarkersByScenario(markers)
@@ -198,6 +208,7 @@ func TestMatrixHasOtherMarkers(t *testing.T) {
 // TestRenderMarkdownMatrix_EmptyScenarios pins the degenerate render: the header still emits, the table has only the column
 // header + divider rows, and no panic.
 func TestRenderMarkdownMatrix_EmptyScenarios(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	renderMarkdownMatrix(&buf, nil, nil, false)
 	out := buf.String()

@@ -59,6 +59,7 @@ func freeAddr(t *testing.T) string {
 // spec:server-availability/sigterm-produces-a-load-balancer-drainable-graceful-shutdown/in-flight-requests-complete-before-the-listener-closes
 // spec:server-availability/sigterm-produces-a-load-balancer-drainable-graceful-shutdown/the-process-exits-within-the-drain-plus-shutdown-deadline
 func TestRunAndShutdown_DrainThenGracefulShutdown(t *testing.T) {
+	t.Parallel()
 	cert := selfSignedTLS(t)
 	addr := freeAddr(t)
 	drain := &httpserver.DrainState{}

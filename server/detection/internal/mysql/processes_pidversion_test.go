@@ -17,6 +17,7 @@ import (
 // spec:server-process-graph-builder/process-records-carry-the-kernel-pid-generation/an-exec-event-carrying-pidversion-stores-it-on-the-record
 // spec:server-process-graph-builder/process-records-carry-the-kernel-pid-generation/an-exec-event-without-pidversion-still-materializes-a-record
 func TestGetProcessByPIDVersion(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -37,6 +38,7 @@ func TestGetProcessByPIDVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("spec:server-process-graph-builder/network-and-dns-events-are-linked-to-the-process-at-event-time/a-flow-with-pidversion-correlates-to-the-exact-generation-across-pid-reuse", func(t *testing.T) {
+		t.Parallel()
 		// Distinct pidversions mean each identity matches a single generation, so the event time must not change the result: v7
 		// resolves to the exited gen1 even at a time long after it exited, and v8 resolves to the alive gen2 even at a time that
 		// falls inside gen1's window (identity beats clock skew).
@@ -54,12 +56,14 @@ func TestGetProcessByPIDVersion(t *testing.T) {
 	})
 
 	t.Run("no matching pidversion returns nil", func(t *testing.T) {
+		t.Parallel()
 		got, err := s.GetProcessByPIDVersion(ctx, host, pid, 999, 150)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
 
 	t.Run("legacy NULL-pidversion row never matches identity but is reachable by window", func(t *testing.T) {
+		t.Parallel()
 		// A present 0 must not collide with a NULL row.
 		got, err := s.GetProcessByPIDVersion(ctx, host, legacyPID, 0, 150)
 		require.NoError(t, err)
@@ -74,6 +78,7 @@ func TestGetProcessByPIDVersion(t *testing.T) {
 	})
 
 	t.Run("spec:server-process-graph-builder/network-and-dns-events-are-linked-to-the-process-at-event-time/a-flow-within-a-re-exec-chain-links-to-the-generation-running-at-the-event-time", func(t *testing.T) {
+		t.Parallel()
 		// A same-PID re-exec chain shares one pidversion across generations (execve keeps the kernel generation), so the identity
 		// matches more than one row. The chain preserves the original fork_time_ns on every generation and records the
 		// image-replacement instant in exec_time_ns, so exec_time_ns is the boundary that orders them. The earlier image ran

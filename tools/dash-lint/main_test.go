@@ -3,6 +3,7 @@ package main
 import "testing"
 
 func TestIsExcluded(t *testing.T) {
+	t.Parallel()
 	cases := map[string]bool{
 		"tools/dash-lint/main.go":                  true,
 		"tools/dash-lint/main_test.go":             true,
@@ -22,6 +23,7 @@ func TestIsExcluded(t *testing.T) {
 }
 
 func TestCheckMarkdown(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -44,6 +46,7 @@ func TestCheckMarkdown(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := len(checkMarkdown("x.md", []byte(tc.in))); got != tc.want {
 				t.Fatalf("checkMarkdown(%q) = %d findings, want %d", tc.in, got, tc.want)
 			}
@@ -52,6 +55,7 @@ func TestCheckMarkdown(t *testing.T) {
 }
 
 func TestCheckGo(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -76,6 +80,7 @@ func TestCheckGo(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := len(checkGo("x.go", []byte(tc.in))); got != tc.want {
 				t.Fatalf("checkGo(%q) = %d findings, want %d", tc.in, got, tc.want)
 			}
@@ -84,6 +89,7 @@ func TestCheckGo(t *testing.T) {
 }
 
 func TestCheckCStyleComments(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -109,6 +115,7 @@ func TestCheckCStyleComments(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := len(checkCStyleComments("x.swift", []byte(tc.in))); got != tc.want {
 				t.Fatalf("checkCStyleComments(%q) = %d findings, want %d", tc.in, got, tc.want)
 			}
@@ -117,6 +124,7 @@ func TestCheckCStyleComments(t *testing.T) {
 }
 
 func TestCheckFile(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		path string
@@ -132,6 +140,7 @@ func TestCheckFile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := len(checkFile(tc.path, []byte(tc.in))); got != tc.want {
 				t.Fatalf("checkFile(%q, %q) = %d findings, want %d", tc.path, tc.in, got, tc.want)
 			}
@@ -140,6 +149,7 @@ func TestCheckFile(t *testing.T) {
 }
 
 func TestCheckHashComments(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -164,6 +174,7 @@ func TestCheckHashComments(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := len(checkHashComments("x.yml", []byte(tc.in))); got != tc.want {
 				t.Fatalf("checkHashComments(%q) = %d findings, want %d", tc.in, got, tc.want)
 			}

@@ -16,6 +16,7 @@ import (
 // ErrAppControlInvalidRuleType. ErrAppControlUnsupportedRuleType is retained on the api package for future use but no validator
 // branch produces it today.
 func TestValidateRuleType_AcceptedAndRejected(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		rt      api.RuleType
@@ -32,6 +33,7 @@ func TestValidateRuleType_AcceptedAndRejected(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			err := appcontrol.ValidateRuleType(tc.rt)
 			if tc.wantErr == nil {
 				assert.NoError(t, err)
@@ -47,6 +49,7 @@ func TestValidateRuleType_AcceptedAndRejected(t *testing.T) {
 // ErrAppControlInvalidIdentifier with a message that includes the "BINARY rule identifier" hint so audit logs can attribute the
 // rejection cleanly.
 func TestValidateIdentifier_Binary(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		id   string
@@ -62,6 +65,7 @@ func TestValidateIdentifier_Binary(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			err := appcontrol.ValidateIdentifier(api.RuleTypeBinary, tc.id)
 			if tc.ok {
 				assert.NoError(t, err)
@@ -82,6 +86,7 @@ func TestValidateIdentifier_Binary(t *testing.T) {
 // "a TeamID with the wrong length is rejected" (typed ErrAppControlInvalidIdentifier); the "signing id platform:bundle accepted"
 // subtest pins "a platform SigningID is accepted".
 func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		rt   api.RuleType
@@ -109,6 +114,7 @@ func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			err := appcontrol.ValidateIdentifier(tc.rt, tc.id)
 			if tc.ok {
 				assert.NoError(t, err)
@@ -125,6 +131,7 @@ func TestValidateIdentifier_AcceptedTypes(t *testing.T) {
 // same way) matches the rule. Every other rule type is returned unchanged. The test covers both: PATH gets the /private
 // rewrite, and BINARY/CDHASH/SIGNINGID/TEAMID/CERTIFICATE pass through verbatim.
 func TestNormalizeIdentifier(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		rt   api.RuleType
@@ -143,6 +150,7 @@ func TestNormalizeIdentifier(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := appcontrol.NormalizeIdentifier(tc.rt, tc.in)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
@@ -155,6 +163,7 @@ func TestNormalizeIdentifier(t *testing.T) {
 // AuthExecDecider.swift MUST stay in lockstep with this table or the persisted rule never matches the AUTH_EXEC walker's
 // canonical form.
 func TestCanonicalizePath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -176,6 +185,7 @@ func TestCanonicalizePath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := appcontrol.CanonicalizePath(tc.in)
 			if !tc.ok {
 				require.Error(t, err)
@@ -190,6 +200,7 @@ func TestCanonicalizePath(t *testing.T) {
 // TestValidateSeverity covers the empty-is-ok + recognized + rejected cases. The REST handler relies on empty → default behavior so
 // the admin can omit the field on Add Rule.
 func TestValidateSeverity(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		s    api.Severity
@@ -205,6 +216,7 @@ func TestValidateSeverity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			err := appcontrol.ValidateSeverity(tc.s)
 			if tc.ok {
 				assert.NoError(t, err)

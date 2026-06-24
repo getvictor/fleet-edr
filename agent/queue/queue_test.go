@@ -18,6 +18,7 @@ import (
 // order and MUST NOT return more than the requested batch size. The scenario's example uses 5/3 but the
 // contract is the same: ordering plus batch-size truncation, both pinned by the assertions below.
 func TestEnqueueDequeue(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -63,6 +64,7 @@ func TestEnqueueDequeue(t *testing.T) {
 // reports the residual. Enqueue 3, MarkUploaded 2, Depth = 1 demonstrates both. The depth scenario's
 // 5-enqueued / 3-acked / depth-2 example is the same contract with different numbers.
 func TestMarkUploaded(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -98,6 +100,7 @@ func TestMarkUploaded(t *testing.T) {
 // delete any pending events" companion is pinned by TestPruneDoesNotDeletePending below; together they
 // cover both clauses of the scenario.
 func TestPrune(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -131,6 +134,7 @@ func TestPrune(t *testing.T) {
 // Companion to TestPrune above: pins the AND clause "Prune MUST NOT delete events that have not yet been
 // uploaded." Together the two tests cover the full scenario contract.
 func TestPruneDoesNotDeletePending(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -159,6 +163,7 @@ func TestPruneDoesNotDeletePending(t *testing.T) {
 // scenario also mentions pending events being present; the contract under test is "zero rows removed when
 // nothing is eligible", which the assertion `pruned == 0` pins regardless of whether pending rows coexist.
 func TestPruneRespectsAge(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -217,6 +222,7 @@ func openCappedQueue(t *testing.T, maxBytes int64) *Queue {
 // TestEnqueue_CapDropsUploadedFirst locks in the queue-cap contract: with a tight cap plus a batch of uploaded-then-unuploaded rows,
 // cap enforcement drops the uploaded rows before it touches the unuploaded ones.
 func TestEnqueue_CapDropsUploadedFirst(t *testing.T) {
+	t.Parallel()
 	// ~1 KiB payload so the SQLite main file grows in predictable ~4 KiB page steps.
 	payload := make([]byte, 1024)
 	for i := range payload {
@@ -278,6 +284,7 @@ func TestEnqueue_CapDropsUploadedFirst(t *testing.T) {
 // TestEnqueue_CapIsNoOpWhenUnbounded proves MaxBytes=0 preserves pre-Phase-4
 // unbounded behaviour. The DB is allowed to grow past any cap.
 func TestEnqueue_CapIsNoOpWhenUnbounded(t *testing.T) {
+	t.Parallel()
 	q := openCappedQueue(t, 0) // explicit zero
 	ctx := t.Context()
 	payload := make([]byte, 1024)
@@ -302,6 +309,7 @@ func TestEnqueue_CapIsNoOpWhenUnbounded(t *testing.T) {
 // TestEnqueue_CapLossyDropWhenOnlyUnuploaded covers the worst case: the server is offline for long enough that EVERY row is
 // non-uploaded, cap is still exceeded, and we must drop lossy. The warn log + metric hook fire.
 func TestEnqueue_CapLossyDropWhenOnlyUnuploaded(t *testing.T) {
+	t.Parallel()
 	q := openCappedQueue(t, 32*1024) // very tight cap so a handful of ~1 KiB rows triggers drop
 	ctx := t.Context()
 	payload := make([]byte, 1024)
@@ -355,6 +363,7 @@ func (s *stubMetrics) hadLossy() bool {
 // state Close+reopen exposes. A bit-exact crash test would need a subprocess + os.Exit; that is filed as
 // follow-up #243's neighbour of cap-eviction-races and disk-full.
 func TestQueue_AgentCrashSurvivesEnqueue(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "durable.db")
 
 	ctx := t.Context()
@@ -395,6 +404,7 @@ func TestQueue_AgentCrashSurvivesEnqueue(t *testing.T) {
 // returns immediately (no blocking, no timeout). Pins the "MUST NOT block waiting for more" half of the
 // FIFO contract that TestEnqueueDequeue does not exercise.
 func TestQueue_DequeueMoreThanAvailable(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -419,6 +429,7 @@ func TestQueue_DequeueMoreThanAvailable(t *testing.T) {
 // dequeue MUST return the same rows so the uploader can retry. Pins the at-least-once delivery shape that
 // makes the queue safe under transient server outages.
 func TestQueue_UploadFailsAndEventsAreRetried(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -458,6 +469,7 @@ func TestQueue_UploadFailsAndEventsAreRetried(t *testing.T) {
 // event_id at enqueue time: server-side dedup is the source of truth. Enqueueing the same payload twice
 // MUST produce two pending rows that both dequeue.
 func TestQueue_DuplicateEventIDIsAccepted(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -492,6 +504,7 @@ func TestQueue_DuplicateEventIDIsAccepted(t *testing.T) {
 // nil naturally, no special-case handling needed. The eviction path is exercised by enqueueing enough rows to push
 // the queue past its byte cap; since none of the rows are uploaded=1 yet, the cap drops oldest pending (lossy).
 func TestQueue_CapEvictionRacesInflightUpload(t *testing.T) {
+	t.Parallel()
 	q := openCappedQueue(t, 32*1024)
 	ctx := t.Context()
 	payload := capRaceTestPayload()
@@ -603,6 +616,7 @@ func capRaceAssertInflightEvicted(t *testing.T, q *Queue, ctx context.Context, i
 // error class the modernc.org/sqlite driver returns for a real ENOSPC on the underlying disk, so the test exercises
 // the production-relevant code path (db.ExecContext's INSERT returning an error from queue.Enqueue).
 func TestQueue_DiskFullDuringEnqueueReturnsError(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -651,6 +665,7 @@ func TestQueue_DiskFullDuringEnqueueReturnsError(t *testing.T) {
 // "name == migrationsClientErrorCount" cover this). A regression that issued ALTER TABLE on every Open would surface here
 // because SQLite would error "duplicate column name: client_error_count" on the second Open.
 func TestQueue_OpenIsIdempotentAfterMigration(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "idem.db")
 	ctx := t.Context()
 	q1, err := Open(ctx, dbPath, Options{})
@@ -671,6 +686,7 @@ func TestQueue_OpenIsIdempotentAfterMigration(t *testing.T) {
 // opening a transaction or touching the DB. Catches a regression that started a write transaction on every drainOnce even when
 // the uploader's batch was empty.
 func TestQueue_RecordClientError_EmptyIDsIsNoOp(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	quarantined, err := q.RecordClientError(ctx, nil, 5)
@@ -686,6 +702,7 @@ func TestQueue_RecordClientError_EmptyIDsIsNoOp(t *testing.T) {
 // bumps but no row is sealed. The caller (uploader DefaultConfig() with the new normalisation in New()) treats 0 as "apply
 // the default 10"; a negative value reaches this branch as "explicitly disabled" so a test can opt out without colliding.
 func TestQueue_RecordClientError_ThresholdDisabled(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	if err := q.Enqueue(ctx, []byte(`{"event_id":"no-quarantine"}`)); err != nil {

@@ -16,7 +16,7 @@ import (
 // than by per-call-site metric code: opening through openInstrumentedDB registers the standard db.sql.connection.* pool gauges
 // against the active meter provider. otelsql.Open is lazy and RegisterDBStatsMetrics only registers observable gauges (db.Stats() reads
 // pool counters, not a live connection), so this needs no MySQL: a bad DSN never connects, yet the gauges still register and report.
-func TestOpenInstrumentedDB_RegistersDriverPoolMetrics(t *testing.T) {
+func TestOpenInstrumentedDB_RegistersDriverPoolMetrics(t *testing.T) { //nolint:paralleltest // installs process-global OTel meter; serial
 	t.Run("spec:observability-instrumentation/db-client-metrics-via-standard-driver-instrumentation/the-pool-is-instrumented-by-the-driver-not-the-call-sites", func(t *testing.T) {
 		reader := sdkmetric.NewManualReader()
 		mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))

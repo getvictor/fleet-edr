@@ -10,6 +10,7 @@ import (
 )
 
 func TestNullRawJSON_Scan(t *testing.T) {
+	t.Parallel()
 	n := NullRawJSON(nil)
 
 	require.NoError(t, n.Scan(nil), "nil scans to empty")
@@ -25,6 +26,7 @@ func TestNullRawJSON_Scan(t *testing.T) {
 }
 
 func TestNullRawJSON_Scan_CopiesDriverBuffer(t *testing.T) {
+	t.Parallel()
 	// The MySQL driver reuses its scratch buffer across rows. Scan must copy or a subsequent scan will mutate the previously captured
 	// payload.
 	buf := []byte(`{"a":1}`)
@@ -37,6 +39,7 @@ func TestNullRawJSON_Scan_CopiesDriverBuffer(t *testing.T) {
 }
 
 func TestNullRawJSON_Value(t *testing.T) {
+	t.Parallel()
 	var nilN NullRawJSON
 	v, err := nilN.Value()
 	require.NoError(t, err)
@@ -54,6 +57,7 @@ func TestNullRawJSON_Value(t *testing.T) {
 }
 
 func TestNullRawJSON_MarshalJSON(t *testing.T) {
+	t.Parallel()
 	var nilN NullRawJSON
 	out, err := nilN.MarshalJSON()
 	require.NoError(t, err)
@@ -66,6 +70,7 @@ func TestNullRawJSON_MarshalJSON(t *testing.T) {
 }
 
 func TestNullRawJSON_UnmarshalJSON(t *testing.T) {
+	t.Parallel()
 	n := NullRawJSON(nil)
 	require.NoError(t, n.UnmarshalJSON([]byte(`null`)))
 	assert.Nil(t, []byte(n))
@@ -102,6 +107,7 @@ func jsonValueGen() *rapid.Generator[json.RawMessage] {
 // TestNullRawJSON_RoundTripProperty: Unmarshal(Marshal(v)) preserves v for every JSON value; the "null" literal collapses to nil per
 // the documented shape.
 func TestNullRawJSON_RoundTripProperty(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		v := jsonValueGen().Draw(rt, "v")
 		n := NullRawJSON(v)
@@ -124,6 +130,7 @@ func TestNullRawJSON_RoundTripProperty(t *testing.T) {
 // TestNullRawJSON_ScanValueProperty: Scan(Value(x)) reproduces x with
 // the same nil/null collapse Value applies.
 func TestNullRawJSON_ScanValueProperty(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		v := jsonValueGen().Draw(rt, "v")
 		original := NullRawJSON(v)

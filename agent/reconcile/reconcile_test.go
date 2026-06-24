@@ -93,6 +93,7 @@ func newRunner(t *testing.T, pt *proctable.Table, q *recorderQueue, k *killer, h
 // observation: "a PID that the kernel says is gone produces an exit event of the documented shape via the
 // standard queue interface, and the PID is removed from the tracking table."
 func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(123, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
 	pt.Update(456, proctable.ProcessInfo{Path: "/bin/alive", StartTime: 0})
@@ -139,6 +140,7 @@ func TestRunOnce_EmitsExitForDeadPID(t *testing.T) {
 // snapshot-originated processes receiving a heartbeat under EPERM is covered by the companion test
 // TestRunOnce_EPERMOnSnapshotPIDEmitsHeartbeat below; this test exercises non-snapshot PIDs only.
 func TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(10, proctable.ProcessInfo{Path: "/bin/perm", StartTime: 0})
 	pt.Update(11, proctable.ProcessInfo{Path: "/bin/other", StartTime: 0})
@@ -167,6 +169,7 @@ func TestRunOnce_EPERMAndOtherErrorsTreatedAsAlive(t *testing.T) {
 // the implicit "reconsidered on a future pass": the proctable entry is preserved, so the next pass with
 // the clock advanced past MinAge would reap it.
 func TestRunOnce_RespectsMinAge(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(0, 1_000_000_000_000)
 	pt := proctable.New()
 	// "young" PID was first seen 5s ago; "old" PID was first seen 5min ago.
@@ -196,6 +199,7 @@ func TestRunOnce_RespectsMinAge(t *testing.T) {
 // mutations. Pinned by the three assertions below (0 exits, 0 heartbeats, queue empty) plus pt.Lookup(1)
 // confirming the entry was not touched.
 func TestRunOnce_NoHostIDSkips(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(1, proctable.ProcessInfo{Path: "/bin/x", StartTime: 0})
 
@@ -220,6 +224,7 @@ func TestRunOnce_NoHostIDSkips(t *testing.T) {
 // TestRunOnce_ExitCapDoesNotGateHeartbeats below; this test pins the pure exit-cap clause with non-snapshot
 // PIDs so the heartbeat path is out of the picture.
 func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	dead := make(map[int]bool, 10)
 	for i := int32(1); i <= 10; i++ {
@@ -238,6 +243,7 @@ func TestRunOnce_CapsAtMaxPerPass(t *testing.T) {
 }
 
 func TestRunOnce_SkipsPID0(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(0, proctable.ProcessInfo{Path: "/zero", StartTime: 0})
 
@@ -265,6 +271,7 @@ func TestRunOnce_SkipsPID0(t *testing.T) {
 // snapshot_heartbeat event (not a duplicate exec or a synthetic exit). The companion test
 // TestRunOnce_NoHeartbeatForLiveNonSnapshotPID pins the negative half on its own.
 func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
+	t.Parallel()
 	// Issue #173: snapshot rows have no recurring kernel events. Without an agent-side liveness ping the server's 6h TTL reconciler
 	// force-exits them. RunOnce emits a snapshot_heartbeat for every alive PID flagged IsSnapshot=true.
 	pt := proctable.New()
@@ -304,6 +311,7 @@ func TestRunOnce_EmitsHeartbeatForLiveSnapshotPID(t *testing.T) {
 //   - The heartbeat scenario asserts the negative case: a non-snapshot live PID emits NOTHING, not even a
 //     heartbeat. The Heartbeats==0 assertion plus the empty queue pin that clause.
 func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
+	t.Parallel()
 	// Regression guard for the issue #173 implementation: only snapshot PIDs heartbeat. A regular live PID must not produce a
 	// heartbeat: the fork/exec/exit stream already keeps the server's row fresh.
 	pt := proctable.New()
@@ -322,6 +330,7 @@ func TestRunOnce_NoHeartbeatForLiveNonSnapshotPID(t *testing.T) {
 // A dead snapshot PID emits a host_reconciled exit AND no heartbeat. The snapshot flag does not change
 // the kill-zero-sweep verdict: kernel says gone, so the PID gets reaped and a synthetic exit fires.
 func TestRunOnce_DeadSnapshotPIDEmitsExitNotHeartbeat(t *testing.T) {
+	t.Parallel()
 	// A snapshot PID that the kernel says is gone emits a host_reconciled exit, not a
 	// heartbeat. Same path as the issue #6 dead-PID flow; snapshot flag doesn't change it.
 	pt := proctable.New()
@@ -346,6 +355,7 @@ func TestRunOnce_DeadSnapshotPIDEmitsExitNotHeartbeat(t *testing.T) {
 }
 
 func TestNew_PanicsOnNilDependencies(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	q := &recorderQueue{}
 	hostFn := func() string { return "h" }
@@ -362,6 +372,7 @@ func TestNew_PanicsOnNilDependencies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Panics(t, func() {
 				_ = New(tc.pt, tc.q, tc.hostFn, Options{})
 			})
@@ -370,6 +381,7 @@ func TestNew_PanicsOnNilDependencies(t *testing.T) {
 }
 
 func TestNew_DefaultsForZeroOptions(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	q := &recorderQueue{}
 	r := New(pt, q, func() string { return "h" }, Options{})
@@ -382,11 +394,13 @@ func TestNew_DefaultsForZeroOptions(t *testing.T) {
 }
 
 func TestNew_NegativeMinAgeNormalisesToDefault(t *testing.T) {
+	t.Parallel()
 	r := New(proctable.New(), &recorderQueue{}, func() string { return "h" }, Options{MinAge: -1 * time.Second})
 	assert.Equal(t, 30*time.Second, r.minAge, "negative MinAge falls back to default")
 }
 
 func TestRun_StopsOnContextCancel(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	q := &recorderQueue{}
 	r := newRunner(t, pt, q, &killer{}, "h", Options{Interval: 50 * time.Millisecond})
@@ -409,6 +423,7 @@ func TestRun_StopsOnContextCancel(t *testing.T) {
 }
 
 func TestRun_EmitsSyntheticExitDuringLoop(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(99, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
 
@@ -439,6 +454,7 @@ func TestRun_EmitsSyntheticExitDuringLoop(t *testing.T) {
 // where one fails and others succeed; that is covered by the companion test
 // TestRunOnce_EnqueueErrorContinuesPass below.
 func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(42, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
 
@@ -454,6 +470,7 @@ func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
 }
 
 func TestEmitSyntheticExit_NewIDError(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(7, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
 
@@ -472,6 +489,7 @@ func TestEmitSyntheticExit_NewIDError(t *testing.T) {
 }
 
 func TestEmitSyntheticExit_MarshalError(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(8, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
 
@@ -497,6 +515,7 @@ func TestEmitSyntheticExit_MarshalError(t *testing.T) {
 // snapshot-heartbeat path as a fully signallable live snapshot PID. Without this clause, snapshot PIDs
 // owned by another user would silently age out of the server's freshness window.
 func TestRunOnce_EPERMOnSnapshotPIDEmitsHeartbeat(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(77, proctable.ProcessInfo{Path: "/sbin/root-owned-snap", StartTime: 0, IsSnapshot: true})
 
@@ -532,6 +551,7 @@ func TestRunOnce_EPERMOnSnapshotPIDEmitsHeartbeat(t *testing.T) {
 // the heartbeat path). Without this guarantee, a host with thousands of stale snapshot rows could
 // starve out heartbeats for the still-alive ones and lose the freshness window.
 func TestRunOnce_ExitCapDoesNotGateHeartbeats(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	dead := make(map[int]bool, 3)
 	for _, pid := range []int32{10, 11, 12} {
@@ -558,6 +578,7 @@ func TestRunOnce_ExitCapDoesNotGateHeartbeats(t *testing.T) {
 // succeeds. Pinning: stats.Exits == 1 (only the successful one is counted) AND the failed PID stays in
 // the proctable for retry while the successful PID is reaped.
 func TestRunOnce_EnqueueErrorContinuesPass(t *testing.T) {
+	t.Parallel()
 	pt := proctable.New()
 	pt.Update(101, proctable.ProcessInfo{Path: "/bin/dead-a", StartTime: 0})
 	pt.Update(102, proctable.ProcessInfo{Path: "/bin/dead-b", StartTime: 0})
@@ -581,6 +602,7 @@ func TestRunOnce_EnqueueErrorContinuesPass(t *testing.T) {
 }
 
 func TestNewUUIDv4_FormatAndUniqueness(t *testing.T) {
+	t.Parallel()
 	seen := make(map[string]bool)
 	for range 100 {
 		u, err := newUUIDv4()

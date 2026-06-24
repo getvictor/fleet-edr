@@ -62,6 +62,7 @@ var gateExceptions = map[string]bool{
 // would weaken the architectural lock the test exists to enforce.
 // False positives are addressed via gateExceptions.
 func TestEveryPrivilegedHandlerCallsHTTPGate(t *testing.T) {
+	t.Parallel()
 	repoRoot := repoRootFromTest(t)
 	var offenders []string
 	handlerFilesScanned := 0

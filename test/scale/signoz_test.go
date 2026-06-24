@@ -65,6 +65,7 @@ func signozResponse(values ...string) []byte {
 // expected aggregation operator and metric key, so a future drift in the query shape (e.g. dropping the resource filter)
 // surfaces here rather than in production when the cross-check silently returns 0.
 func TestQuerySigNozServerP99_HappyPath(t *testing.T) {
+	t.Parallel()
 	// Mock-server uses assert.* exclusively (testifylint go-require): require.* in a handler goroutine would call
 	// t.FailNow which is unsafe outside the test goroutine. assert.* records the failure and lets the handler return
 	// normally so the request still completes.
@@ -103,6 +104,7 @@ func TestQuerySigNozServerP99_HappyPath(t *testing.T) {
 // TestQuerySigNozServerP99_NonOK pins the soft-error contract: a non-200 response from SigNoz returns an error containing
 // the status code so the operator-facing SigNozQueryError field is actionable.
 func TestQuerySigNozServerP99_NonOK(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("upstream gone"))
@@ -118,6 +120,7 @@ func TestQuerySigNozServerP99_NonOK(t *testing.T) {
 // TestQuerySigNozServerP99_EmptyResponse pins the "no series values" branch: a 200 with an empty result array returns the
 // "no series values" error so the runner records a soft error rather than a confusing 0 duration.
 func TestQuerySigNozServerP99_EmptyResponse(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","data":{"result":[]}}`))
@@ -133,6 +136,7 @@ func TestQuerySigNozServerP99_EmptyResponse(t *testing.T) {
 // (e.g. a value-panel that didn't fully collapse to one number), the runner uses the MAX so the cross-check reflects the
 // worst observed p99 in the window, not an arbitrary one.
 func TestQuerySigNozServerP99_MaxAcrossSeries(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(signozResponse("5.0", "20.0", "10.0", "NaN"))
