@@ -4,6 +4,8 @@ The EDR server speaks OIDC with PKCE. Okta is the reference IdP: every other con
 
 SSO covers everyday operator login. The break-glass account at `admin@fleet-edr.local` is the only path in when SSO is unavailable (see [`breakglass.md`](breakglass.md)).
 
+**Changed in v0.3.0:** SSO is configured in the UI (below); the `EDR_OIDC_*` env vars now seed only the first boot. Earlier releases configured SSO entirely through those env vars.
+
 ## Configure SSO in the UI (recommended)
 
 OIDC is configurable in-product under **Admin settings -> Single sign-on** (the account menu, top right; visible to operators with the `sso.manage` permission). An admin sets the issuer, client ID, client secret (write-only: enter a value to rotate, never displayed), the deployment external URL, the JIT toggle, and the default JIT role, then saves. Changes apply at runtime with no restart, and the test-connection button verifies the provider before saving.
@@ -49,11 +51,11 @@ In the **Assignments** step:
 - Pick **Allow everyone in your organization to access** for a small pilot, OR **Limit access to selected groups** and bind a group (typically `edr-operators`) for tighter control.
 - Click **Save**.
 
-The current release does NOT consume Okta groups. Every JIT-provisioned user lands in the lowest-privilege role (`analyst`); see [`authz.md`](authz.md) for the role matrix and the SQL pattern an `admin` uses to promote the new operator. A future release will add a `groups` claim to the scope set and map Okta groups to EDR roles; until then, who can sign in is the only knob.
+The current release does NOT consume Okta groups. Every JIT-provisioned user lands in the lowest-privilege role (`analyst`); see [`authz.md`](authz.md) for the role matrix. An `admin` promotes the new operator from the Users page in **Admin settings -> Users**. A future release will add a `groups` claim to the scope set and map Okta groups to EDR roles; until then, who can sign in is the only knob.
 
 ## Note the client credentials
 
-After creation, Okta lands on the application's **General** tab. Record three values; the EDR server reads each one as an env var:
+After creation, Okta lands on the application's **General** tab. Record three values. Enter them in the SSO form (**Admin settings -> Single sign-on**), or set them as the `EDR_OIDC_*` env vars to seed the first boot:
 
 | Okta field                                                                                  | EDR env var              |
 | ------------------------------------------------------------------------------------------- | ------------------------ |
@@ -63,11 +65,11 @@ After creation, Okta lands on the application's **General** tab. Record three va
 
 The client secret is shown once on creation. Store it in the same secret manager that holds `EDR_SECRET_KEY` (Vault, AWS Secrets Manager, docker-compose `secrets:` mount, etc.); the EDR server reads each `EDR_*` value from a `*_FILE` sibling if the bare env var is empty, so a file-backed mount works without exposing the plaintext in the compose env block.
 
-If the client secret leaks, **rotate immediately**: Okta admin console -> Applications -> the EDR app -> **General** -> **Client Credentials** -> **Generate new secret**. Update `EDR_OIDC_CLIENT_SECRET` (or the secret file) on the EDR server and restart. Existing sessions stay valid (sessions are signed with a key derived from `EDR_SECRET_KEY`, not the client secret); only fresh sign-ins use the new secret.
+If the client secret leaks, **rotate immediately**: Okta admin console -> Applications -> the EDR app -> **General** -> **Client Credentials** -> **Generate new secret**. Then re-enter it in the UI (**Admin settings -> Single sign-on**), which applies without a restart, or update `EDR_OIDC_CLIENT_SECRET` (or the secret file) on the EDR server and restart. Existing sessions stay valid (sessions are signed with a key derived from `EDR_SECRET_KEY`, not the client secret); only fresh sign-ins use the new secret.
 
 ## Configure the EDR server
 
-Set these env vars on the server process (systemd unit, k8s Deployment, docker-compose, whichever shape the deployment uses):
+Configuring SSO in the UI (above) is the recommended path. To seed the configuration from the environment on the first boot instead, set these env vars on the server process (systemd unit, k8s Deployment, docker-compose, whichever shape the deployment uses); they seed the stored config on first boot only, after which the UI is the source of truth:
 
 ```bash
 EDR_OIDC_ISSUER=https://your-tenant.okta.com
@@ -131,5 +133,5 @@ The `payload.reason` column on a failure narrows the cause (`unknown_subject`, `
 
 - [`breakglass.md`](breakglass.md): the recovery path when SSO is unavailable.
 - [`install-server.md`](install-server.md): the rest of the `EDR_*` env vars the server reads at boot.
-- [`authz.md`](authz.md): the role matrix and the role JIT-provisioned OIDC users inherit (currently every new identity lands in `analyst`; admins promote via SQL).
+- [`authz.md`](authz.md): the role matrix and the role JIT-provisioned OIDC users inherit (currently every new identity lands in `analyst`; admins promote from the Users page in Admin settings).
 - [`threat-model.md`](threat-model.md): the threat coverage the OIDC + reauth controls close.
