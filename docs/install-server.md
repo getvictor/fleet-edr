@@ -122,7 +122,7 @@ EDR_TLS_KEY_FILE=/tls/privkey.pem
 
 ```sh
 cat > .env <<'EOF'
-EDR_VERSION=v0.2.0
+EDR_VERSION=v0.2.1
 OTEL_EXPORTER_OTLP_ENDPOINT=
 EOF
 ```

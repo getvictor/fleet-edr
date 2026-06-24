@@ -385,6 +385,18 @@ tasks:
     cmds:
       - npm test
 
+  test:e2e:demo:
+    desc: |
+      Run the Playwright demo smoke test (test/e2e/tests/demo/) against an
+      already-running demo stack. Unlike test:e2e it does NOT auto-start a
+      server or touch the qa dex: it drives the live, seeded demo at
+      https://localhost:8088 via playwright.demo.config.ts. Used by the
+      demo-nightly workflow. Pre-reqs: `docker compose -f docker-compose.demo.yml
+      up` (seeder finished) and a one-time `task test:e2e:install`.
+    dir: test/e2e
+    cmds:
+      - npm run demo
+
   test:e2e:coverage:
     desc: |
       Run the Playwright default-env suite (auth + qa: C/D/F.4 + A.5)

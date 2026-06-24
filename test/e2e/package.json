@@ -13,6 +13,7 @@
     "qa:allowlist": "playwright test tests/qa/breakglass-ip-allowlist.spec.ts --workers=1",
     "qa:jit-off": "playwright test tests/qa/oidc-jit-disabled.spec.ts --workers=1",
     "qa:lifecycle": "playwright test tests/qa/session-lifecycle.spec.ts --workers=1",
+    "demo": "playwright test --config playwright.demo.config.ts",
     "coverage:lcov": "node scripts/coverage-to-lcov.mjs",
     "install:browsers": "playwright install --with-deps chromium",
     "report": "playwright show-report"
