@@ -52,23 +52,23 @@ afterEach(() => {
 });
 
 const mockDocs = (entries: RuleDocEntry[]) =>
-  (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(entries);
+  vi.mocked(api.fetchRuleDocs).mockResolvedValue(entries);
 
 describe("RuleDetail loading and error states", () => {
   it("shows the loading state before the docs resolve", () => {
-    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => { /* never resolves */ }));
+    vi.mocked(api.fetchRuleDocs).mockReturnValue(new Promise<RuleDocEntry[]>(() => { /* never resolves */ }));
     renderAt("suspicious_exec");
     expect(screen.getByText(/loading rule documentation/i)).toBeInTheDocument();
   });
 
   it("surfaces a fetch failure as an alert", async () => {
-    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+    vi.mocked(api.fetchRuleDocs).mockRejectedValue(new Error("boom"));
     renderAt("suspicious_exec");
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/boom/i));
   });
 
   it("falls back to a generic message for a non-Error rejection", async () => {
-    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockRejectedValue("nope");
+    vi.mocked(api.fetchRuleDocs).mockRejectedValue("nope");
     renderAt("suspicious_exec");
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/failed to load rule docs/i));
   });
