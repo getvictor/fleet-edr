@@ -33,7 +33,7 @@ const MATCH_TYPES = [
 
 // The per-rule modes an operator can select: alert (default) and disabled (emit nothing). A legacy `monitor` value may still exist on
 // persisted rows and the engine continues to honor it, but monitor is no longer operator-selectable (it had no review surface). See
-// the drop-monitor-from-detection-tuning openspec change.
+// the detection-tuning-author-and-modes openspec change.
 const MODES = ["alert", "disabled"] as const;
 
 // modeOptions returns the modes shown for a row. It prepends the row's current mode when that mode is not operator-selectable (a
@@ -45,10 +45,14 @@ function modeOptions(current: string): readonly string[] {
 // Severity-override choices; the empty value means "no override" (keep the rule's declared severity).
 const SEVERITIES = ["", "low", "medium", "high", "critical"] as const;
 
-// severityRank orders a declared severity most-severe first for the rule-modes table; an unset or unrecognized severity returns -1
-// and sorts last. Reuses the SEVERITIES list (declared low..critical) as the single source of truth, read high-index-first.
+// SEVERITY_ORDER lists declared severities most- to least-severe; the rule-modes table sorts by it (ascending rank = critical first).
+const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
+
+// severityRank returns a rule's position in SEVERITY_ORDER (0 = critical). A severity that isn't one of the four (an unset "" or an
+// unrecognized value) ranks last, so "(unspecified)" rules fall to the bottom of the table.
 function severityRank(sev: string): number {
-  return SEVERITIES.indexOf(sev as (typeof SEVERITIES)[number]);
+  const i = SEVERITY_ORDER.indexOf(sev as (typeof SEVERITY_ORDER)[number]);
+  return i === -1 ? SEVERITY_ORDER.length : i;
 }
 
 // errMessage renders a typed detection-config API error's message, falling back to a generic string.
@@ -97,8 +101,8 @@ export function DetectionConfig() {
   const [formReason, setFormReason] = useState("");
   const [formExpires, setFormExpires] = useState("");
 
-  // pendingMode holds a not-yet-applied alerting-reducing rule change (mode -> monitor/disabled) while the reason modal collects an
-  // operator justification. modalError surfaces a failed confirm inside the modal so it stays open for a retry.
+  // pendingMode holds a not-yet-applied disable (the alerting-reducing change) while the reason modal collects an operator
+  // justification. modalError surfaces a failed confirm inside the modal so it stays open for a retry.
   const [pendingMode, setPendingMode] = useState<{ ruleID: string; ruleTitle: string; mode: string; severity: string } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
 
@@ -111,7 +115,7 @@ export function DetectionConfig() {
   // alphabetically by title within a severity band.
   const rulesBySeverity = useMemo(
     () => [...rules].sort((a, b) =>
-      severityRank(b.doc.severity) - severityRank(a.doc.severity) || a.doc.title.localeCompare(b.doc.title)),
+      severityRank(a.doc.severity) - severityRank(b.doc.severity) || a.doc.title.localeCompare(b.doc.title)),
     [rules],
   );
 

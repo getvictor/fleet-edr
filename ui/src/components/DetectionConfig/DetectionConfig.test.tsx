@@ -133,10 +133,12 @@ describe("DetectionConfig", () => {
     expect(options).toEqual(["Select a rule...", "Alpha rule", "Mid rule", "Zeta rule"]);
   });
 
-  // The rule-modes table sorts by declared severity (critical first), ties broken alphabetically by title.
+  // The rule-modes table sorts by declared severity (critical first), ties broken alphabetically by title; an unspecified ("")
+  // severity ranks last.
   it("orders the rule-modes table by severity, critical first, then alphabetically", async () => {
     stubReads({
       rules: [
+        makeRuleEntry({ id: "unset_a", doc: makeRuleDoc({ title: "A rule", severity: "" }) }),
         makeRuleEntry({ id: "low_b", doc: makeRuleDoc({ title: "B rule", severity: "low" }) }),
         makeRuleEntry({ id: "crit_z", doc: makeRuleDoc({ title: "Z rule", severity: "critical" }) }),
         makeRuleEntry({ id: "high_a", doc: makeRuleDoc({ title: "A rule", severity: "high" }) }),
@@ -147,7 +149,9 @@ describe("DetectionConfig", () => {
     await waitFor(() => { expect(screen.getByLabelText("mode for crit_a")).toBeInTheDocument(); });
 
     const order = screen.getAllByLabelText(/^mode for /).map((s) => s.getAttribute("aria-label"));
-    expect(order).toEqual(["mode for crit_a", "mode for crit_z", "mode for high_a", "mode for low_b"]);
+    expect(order).toEqual([
+      "mode for crit_a", "mode for crit_z", "mode for high_a", "mode for low_b", "mode for unset_a",
+    ]);
   });
 
   it("shows an empty state when there are no exclusions", async () => {

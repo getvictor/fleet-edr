@@ -98,7 +98,11 @@ func (h *DetectionConfigHandler) resolveCreatedByEmails(ctx context.Context, exc
 		if !seen {
 			resolved, err := h.userEmail(ctx, id)
 			if err != nil {
-				h.logger.WarnContext(ctx, "detectionconfig: resolve created_by email", "user_id", id, "err", err)
+				// A deleted user (ErrUserNotFound) is the expected fallback case: the UI shows the raw "user:<id>". Warning on it
+				// would spam the log on every list render per missing author, so only genuinely unexpected failures get a WARN.
+				if !errors.Is(err, identityapi.ErrUserNotFound) {
+					h.logger.WarnContext(ctx, "detectionconfig: resolve created_by email", "user_id", id, "err", err)
+				}
 				resolved = ""
 			}
 			email = resolved

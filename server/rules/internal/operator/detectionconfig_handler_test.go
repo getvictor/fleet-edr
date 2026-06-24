@@ -112,17 +112,21 @@ func mountDC(t *testing.T, h *DetectionConfigHandler) *httptest.Server {
 
 func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
 	t.Parallel()
-	exclusions := []api.DetectionExclusion{
-		{ID: 1, CreatedBy: "user:8"},                 // resolves
-		{ID: 2, CreatedBy: "user:8"},                 // same author: memoized, no second lookup
-		{ID: 3, CreatedBy: "user:9"},                 // resolver errors: email stays empty
-		{ID: 4, CreatedBy: "service-account:reaper"}, // non-user actor: never looked up
+	// resolveCreatedByEmails fills CreatedByEmail in place, so each subtest needs its own slice (with its own backing array):
+	// sharing one across the parallel subtests would let one run's resolved emails leak into the nil-resolver run.
+	newExclusions := func() []api.DetectionExclusion {
+		return []api.DetectionExclusion{
+			{ID: 1, CreatedBy: "user:8"},                 // resolves
+			{ID: 2, CreatedBy: "user:8"},                 // same author: memoized, no second lookup
+			{ID: 3, CreatedBy: "user:9"},                 // resolver errors: email stays empty
+			{ID: 4, CreatedBy: "service-account:reaper"}, // non-user actor: never looked up
+		}
 	}
 
 	t.Run("fills email, memoizes per id, falls back on error or non-user actor", func(t *testing.T) {
 		t.Parallel()
 		var calls int
-		h := NewDetectionConfig(&fakeDCService{exclusions: exclusions}, allowAllAuthZ{}, slog.Default())
+		h := NewDetectionConfig(&fakeDCService{exclusions: newExclusions()}, allowAllAuthZ{}, slog.Default())
 		h.SetUserEmailResolver(func(_ context.Context, id int64) (string, error) {
 			calls++
 			if id == 8 {
@@ -149,7 +153,7 @@ func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
 
 	t.Run("nil resolver leaves created_by_email empty", func(t *testing.T) {
 		t.Parallel()
-		h := NewDetectionConfig(&fakeDCService{exclusions: exclusions}, allowAllAuthZ{}, slog.Default())
+		h := NewDetectionConfig(&fakeDCService{exclusions: newExclusions()}, allowAllAuthZ{}, slog.Default())
 		srv := mountDC(t, h)
 		resp := dcDo(t, srv, http.MethodGet, "/api/v1/detection-config/exclusions", "")
 		require.Equal(t, http.StatusOK, resp.StatusCode)
