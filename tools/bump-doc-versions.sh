@@ -36,12 +36,19 @@ if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 2
 fi
 
-# A pinned stable version token. The literal placeholder vX.Y.Z (in bootstrap.sh's warning) is not matched, and an rc
-# suffix is never written into the docs because TAG is validated as stable above.
-VERSION_RE='v[0-9]+\.[0-9]+\.[0-9]+'
+# A pinned version token: vMAJOR.MINOR.PATCH with an optional -prerelease suffix. The optional suffix is anchored to a
+# leading hyphen so it matches v1.2.3-rc.1 (normalizing it to the stable TAG) without eating a trailing .pkg / .json
+# extension on filenames like fleet-edr-v1.2.3.pkg. The literal placeholder vX.Y.Z (in bootstrap.sh's warning) is not
+# matched, and TAG itself is validated as a stable release above, so no suffix is ever written into the docs.
+VERSION_RE='v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
+
+# One reusable temp file with an explicit template (portable across GNU and BSD/macOS mktemp), cleaned up on any exit
+# including an early `set -e` abort mid-loop.
+tmp=$(mktemp "${TMPDIR:-/tmp}/bump-doc-versions.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
 
 rc=0
 for f in "${FILES[@]}"; do
@@ -49,20 +56,19 @@ for f in "${FILES[@]}"; do
     echo "error: missing $f" >&2
     exit 2
   fi
-  tmp=$(mktemp)
   sed -E "s|${VERSION_RE}|${TAG}|g" "$f" >"$tmp"
   if cmp -s "$f" "$tmp"; then
-    rm -f "$tmp"
     continue
   fi
   if [[ "$CHECK" == 1 ]]; then
     echo "::error::$f pins a release tag other than $TAG:"
     diff "$f" "$tmp" || true
-    rm -f "$tmp"
     rc=1
   else
     diff "$f" "$tmp" | grep -E '^[<>]' || true
-    mv "$tmp" "$f"
+    # Copy contents into the existing file rather than mv: this preserves the file's mode and inode. A mv would replace
+    # the file with the temp file's restrictive default mode and drop bootstrap.sh's executable bit.
+    cat "$tmp" >"$f"
     echo "bumped $f"
   fi
 done

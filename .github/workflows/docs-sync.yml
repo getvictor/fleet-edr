@@ -14,6 +14,10 @@ name: Docs sync
 
 on:
   pull_request:
+    # Include labeled/unlabeled/edited so adding the no-docs-change label (or editing the title to add the tag) re-runs
+    # the gate without needing a new push. The bare default (opened/synchronize/reopened) would leave a failed check red
+    # until the next commit even after the opt-out is applied.
+    types: [opened, reopened, synchronize, labeled, unlabeled, edited, ready_for_review]
   workflow_dispatch:
 
 permissions: {}
@@ -47,10 +51,11 @@ jobs:
 
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
 
-          # User-facing surfaces: the React UI, HTTP request handlers (where endpoints and request handling live), the
-          # HTTP router, and the detection rule catalog (documented in docs/detection-rules.md). Test files, type
-          # declarations, UI test helpers, and catalog fixtures are excluded: they are not a user-facing change.
-          USER_FACING='^ui/src/.*\.(ts|tsx)$|^server/.*/handler\.go$|^server/httpserver/router\.go$|^server/rules/internal/catalog/.*\.go$'
+          # User-facing surfaces: the React UI, HTTP request handlers (any file ending in handler.go, including the
+          # foo_handler.go form, where endpoints and request handling live), the HTTP router, and the detection rule
+          # catalog (documented in docs/detection-rules.md). Test files, type declarations, UI test helpers, and catalog
+          # fixtures are excluded: they are not a user-facing change.
+          USER_FACING='^ui/src/.*\.(ts|tsx)$|^server/.*handler\.go$|^server/httpserver/router\.go$|^server/rules/internal/catalog/.*\.go$'
           EXCLUDE='\.test\.(ts|tsx)$|\.d\.ts$|^ui/src/test/|_test\.go$|/fixtures/'
           facing_files=$(echo "$files" | grep -E "$USER_FACING" | grep -vE "$EXCLUDE" || true)
 
