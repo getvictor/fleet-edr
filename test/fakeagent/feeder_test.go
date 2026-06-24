@@ -82,6 +82,7 @@ func (sp *stubControlPlane) received() [][]byte {
 }
 
 func TestFeedControlPlane_RoundTrip(t *testing.T) {
+	t.Parallel()
 	sp := newStubControlPlane(t)
 
 	s, err := LoadScenario("scenarios/exec-fork-exit.yaml")
@@ -115,6 +116,7 @@ func TestFeedControlPlane_RoundTrip(t *testing.T) {
 }
 
 func TestFeedControlPlane_PropagatesServerError(t *testing.T) {
+	t.Parallel()
 	// A stub that always 500s: FeedControlPlane should return the error from the FIRST envelope and not call subsequent envelopes.
 	socket := shortSocketPath(t)
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
@@ -143,6 +145,7 @@ func TestFeedControlPlane_PropagatesServerError(t *testing.T) {
 }
 
 func TestFeedControlPlane_RespectsContextCancel(t *testing.T) {
+	t.Parallel()
 	sp := newStubControlPlane(t)
 	s, err := LoadScenario("scenarios/exec-fork-exit.yaml")
 	require.NoError(t, err)
@@ -156,6 +159,7 @@ func TestFeedControlPlane_RespectsContextCancel(t *testing.T) {
 }
 
 func TestPostDirect_RoundTrip(t *testing.T) {
+	t.Parallel()
 	var (
 		received       [][]byte
 		mu             sync.Mutex
@@ -200,6 +204,7 @@ func TestPostDirect_RoundTrip(t *testing.T) {
 }
 
 func TestPostDirect_BatchesAcrossMultipleRequests(t *testing.T) {
+	t.Parallel()
 	var batchCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		batchCount.Add(1)
@@ -214,6 +219,7 @@ func TestPostDirect_BatchesAcrossMultipleRequests(t *testing.T) {
 }
 
 func TestPostDirect_PropagatesNon2xx(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))

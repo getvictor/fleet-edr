@@ -14,6 +14,7 @@ func envMap(pairs map[string]string) func(string) string {
 }
 
 func TestLoad(t *testing.T) {
+	t.Parallel()
 	minEnv := map[string]string{
 		"EDR_SERVER_URL": "https://edr.example.com",
 	}
@@ -155,6 +156,7 @@ func TestLoad(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := loadFrom(envMap(tc.env))
 			if tc.wantErr != "" {
 				require.Error(t, err)

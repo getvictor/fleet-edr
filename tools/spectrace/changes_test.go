@@ -23,7 +23,9 @@ func writeChangeSpec(t *testing.T, changesDir, change, capability, body string) 
 // requirement that repeats a live heading (duplicates collapse, no error), and degrade to an empty set when there is no
 // changes tree.
 func TestParseChangeScenarioIDs(t *testing.T) {
+	t.Parallel()
 	t.Run("collects IDs from a change delta and slugs them canonically", func(t *testing.T) {
+		t.Parallel()
 		changes := t.TempDir()
 		writeChangeSpec(t, changes, "add-widget", "web-ui", `## ADDED Requirements
 
@@ -40,6 +42,7 @@ The UI SHALL gate the widget.
 	})
 
 	t.Run("a MODIFIED requirement repeating a heading collapses without a duplicate error", func(t *testing.T) {
+		t.Parallel()
 		changes := t.TempDir()
 		// Two proposals touch the same capability + scenario heading. buildCanonicalSet would reject this for live
 		// specs; the WIP loader must not, because MODIFIED requirements intentionally repeat live headings.
@@ -60,6 +63,7 @@ The system SHALL return the session.
 	})
 
 	t.Run("scenarios under the archive subtree are excluded", func(t *testing.T) {
+		t.Parallel()
 		changes := t.TempDir()
 		// An in-flight proposal: its scenario IDs ARE valid WIP marker targets.
 		writeChangeSpec(t, changes, "in-flight", "web-ui", `## ADDED Requirements
@@ -91,18 +95,21 @@ The UI SHALL do an old thing.
 	})
 
 	t.Run("missing changes dir yields an empty set, not an error", func(t *testing.T) {
+		t.Parallel()
 		ids, err := parseChangeScenarioIDs(filepath.Join(t.TempDir(), "does-not-exist"))
 		require.NoError(t, err)
 		assert.Empty(t, ids)
 	})
 
 	t.Run("empty changesDir argument yields an empty set", func(t *testing.T) {
+		t.Parallel()
 		ids, err := parseChangeScenarioIDs("")
 		require.NoError(t, err)
 		assert.Empty(t, ids)
 	})
 
 	t.Run("a regular file path is tolerated as empty, not an error", func(t *testing.T) {
+		t.Parallel()
 		f := filepath.Join(t.TempDir(), "not-a-dir")
 		require.NoError(t, os.WriteFile(f, []byte("x"), 0o600))
 		ids, err := parseChangeScenarioIDs(f)

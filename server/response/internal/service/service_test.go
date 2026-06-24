@@ -11,6 +11,7 @@ import (
 // TestCanTransitionMatrix locks the 4x4 lifecycle table. Adding a
 // new state means adding a row + column here.
 func TestCanTransitionMatrix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		from, to api.Status
 		want     bool
@@ -39,6 +40,7 @@ func TestCanTransitionMatrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.from)+"_to_"+string(tc.to), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, canTransition(tc.from, tc.to))
 		})
 	}
@@ -47,6 +49,7 @@ func TestCanTransitionMatrix(t *testing.T) {
 // TestValidTargetStatus locks the agent-supplied input vocabulary. pending is intentionally rejected: the agent never asks the
 // server to "un-ack" a command.
 func TestValidTargetStatus(t *testing.T) {
+	t.Parallel()
 	assert.False(t, validTargetStatus(api.StatusPending))
 	assert.True(t, validTargetStatus(api.StatusAcked))
 	assert.True(t, validTargetStatus(api.StatusCompleted))

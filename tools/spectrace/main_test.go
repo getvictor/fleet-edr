@@ -11,6 +11,7 @@ import (
 // TestSlugify pins the canonical-ID slug rule documented in docs/testing-strategy.md. If this test ever fails, every existing
 // canonical ID may shift; reviewers should treat that as a breaking change to the contract, not an implementation tweak.
 func TestSlugify(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -28,6 +29,7 @@ func TestSlugify(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, slugify(tc.in))
 		})
 	}
@@ -36,6 +38,7 @@ func TestSlugify(t *testing.T) {
 // TestContainsNormativeKeyword guards the SHALL / MUST gate. The matcher is whole-word + uppercase-only (RFC 2119 convention)
 // so casual English use of "must" inside prose does not promote a requirement to normative.
 func TestContainsNormativeKeyword(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -53,6 +56,7 @@ func TestContainsNormativeKeyword(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, containsNormativeKeyword(tc.in))
 		})
 	}
@@ -61,6 +65,7 @@ func TestContainsNormativeKeyword(t *testing.T) {
 // TestParseSpec_HappyPath covers the document shape used across openspec/specs: one Requirement with a SHALL/MUST body and
 // two child Scenarios should produce two normative scenarios with the correctly computed canonical IDs.
 func TestParseSpec_HappyPath(t *testing.T) {
+	t.Parallel()
 	doc := `# Title
 
 ## Purpose
@@ -102,6 +107,7 @@ The system SHALL accept batches.
 // TestParseSpec_RequirementWithoutNormative pins the "advisory" classification: a Requirement whose body uses neither SHALL
 // nor MUST should still produce scenarios but with Normative=false so the strict gate does not fail on them.
 func TestParseSpec_RequirementWithoutNormative(t *testing.T) {
+	t.Parallel()
 	doc := `### Requirement: Operator may inspect the catalog
 
 The catalog is browsable from the admin UI; this is convenient for operators.
@@ -119,6 +125,7 @@ The catalog is browsable from the admin UI; this is convenient for operators.
 // TestParseSpec_HeadingClosesRequirement ensures that a sibling top-level heading (`## Requirements` or `### Other`) closes
 // the active requirement so subsequent scenarios are not falsely attributed to the prior requirement.
 func TestParseSpec_HeadingClosesRequirement(t *testing.T) {
+	t.Parallel()
 	doc := `### Requirement: First
 
 The system SHALL do X.
@@ -143,6 +150,7 @@ The system MUST do Y.
 // Each case documents what dialect / failure surface it exercises so a future contributor adding a sixth dialect adds one
 // row rather than a sixth function.
 func TestScanFile(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		src         string
@@ -316,6 +324,7 @@ echo "uninstalling..."
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			swiftIndex := buildSwiftIndex(tc.canonical)
 			got, err := scanFile(strings.NewReader(tc.src), tc.path, tc.isSwift, tc.canonical, swiftIndex)
 			require.NoError(t, err)
@@ -330,6 +339,7 @@ echo "uninstalling..."
 
 // TestSwiftFormOf pins the canonical-to-Swift dialect translation. Slashes AND dashes both map to underscores.
 func TestSwiftFormOf(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "extension_xpc_server_peer_validation_signing_required",
 		swiftFormOf("extension-xpc-server/peer-validation/signing-required"))
 }
@@ -338,6 +348,7 @@ func TestSwiftFormOf(t *testing.T) {
 // slug to the same canonical ID, buildCanonicalSet must fail fast with both source locations rather than silently
 // collapsing them into a single map entry.
 func TestBuildCanonicalSet_DuplicateIDsAreRejected(t *testing.T) {
+	t.Parallel()
 	scenarios := []Scenario{
 		{ID: "x/foo-bar/baz", SourcePath: "openspec/specs/x/spec.md", SourceLine: 10},
 		{ID: "y/qux/quux", SourcePath: "openspec/specs/y/spec.md", SourceLine: 20},
@@ -352,6 +363,7 @@ func TestBuildCanonicalSet_DuplicateIDsAreRejected(t *testing.T) {
 
 // TestBuildCanonicalSet_NoDuplicatesIsClean confirms the happy path: distinct IDs produce a populated set with no error.
 func TestBuildCanonicalSet_NoDuplicatesIsClean(t *testing.T) {
+	t.Parallel()
 	scenarios := []Scenario{
 		{ID: "a/b/c"}, {ID: "d/e/f"},
 	}

@@ -41,6 +41,7 @@ func insertAlert(t *testing.T, db *sqlx.DB, hostID, ruleID, source, severity str
 }
 
 func TestSeedDemoUser(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	insertRole(t, db, "senior_analyst")
@@ -71,6 +72,7 @@ func TestSeedDemoUser(t *testing.T) {
 }
 
 func TestCountsAndAlreadySeeded(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
@@ -100,6 +102,7 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 }
 
 func TestWaitForProcess(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{pollInterval: time.Millisecond, verifyTimeout: time.Second}, db, testHTTPClient(), discardLogger())
@@ -165,6 +168,7 @@ func appControlTarget(t *testing.T) (string, int) {
 }
 
 func TestRunSeedsEndToEnd(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	insertRole(t, db, "senior_analyst")
@@ -199,6 +203,7 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 // process row lands ~recentTailOffset before now, relative offsets are preserved, NULL exit columns stay NULL, and the alert
 // "fired at" slides with the events so the UI's alert -> tree pivot keeps working.
 func TestRefreshTimestamps(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
@@ -257,6 +262,7 @@ func TestRefreshTimestamps(t *testing.T) {
 // The anchor must ignore the exit columns (else the delta shrinks by maxAge and every fork stays stale), and the synthesized exit
 // must be cleared so the refreshed process reads as still-running rather than landing a future-dated exit.
 func TestRefreshTimestampsIgnoresSynthesizedExit(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
@@ -297,6 +303,7 @@ func TestRefreshTimestampsIgnoresSynthesizedExit(t *testing.T) {
 // TestRefreshTimestampsNoRows is a no-op when no replayed event/process rows exist (an alert alone must not trigger a shift). The
 // before/after compare pins the no-op: the assertion would catch a refresh that shifted alert-only data.
 func TestRefreshTimestampsNoRows(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
@@ -325,6 +332,7 @@ func firstDemoHostID(t *testing.T) string {
 }
 
 func TestRunSkipsWhenAlreadySeeded(t *testing.T) {
+	t.Parallel()
 	db := full.Open(t)
 	ctx := t.Context()
 	insertRole(t, db, "senior_analyst")

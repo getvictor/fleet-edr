@@ -23,6 +23,7 @@ func newTestStore(t *testing.T) *mysql.Store {
 }
 
 func TestInsertAndGet(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -42,6 +43,7 @@ func TestInsertAndGet(t *testing.T) {
 }
 
 func TestListForHost(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -53,12 +55,14 @@ func TestListForHost(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("filter by host", func(t *testing.T) {
+		t.Parallel()
 		commands, err := s.ListForHost(ctx, "host-a", "")
 		require.NoError(t, err)
 		assert.Len(t, commands, 2)
 	})
 
 	t.Run("filter by status", func(t *testing.T) {
+		t.Parallel()
 		commands, err := s.ListForHost(ctx, "host-a", "pending")
 		require.NoError(t, err)
 		assert.Len(t, commands, 2)
@@ -69,13 +73,15 @@ func TestListForHost(t *testing.T) {
 	})
 
 	t.Run("different host", func(t *testing.T) {
+		t.Parallel()
 		commands, err := s.ListForHost(ctx, "host-b", "")
 		require.NoError(t, err)
 		assert.Len(t, commands, 1)
 	})
 }
 
-func TestUpdateStatus(t *testing.T) {
+func TestUpdateStatus(t *testing.T) { //nolint:tparallel // subtests are an ordered state-machine sequence (pending->acked->completed) on one shared command row; they must run serially
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -110,6 +116,7 @@ func TestUpdateStatus(t *testing.T) {
 // for host-a, even via a hand-crafted id. The store collapses "wrong host" + "unknown id" to the same ErrCommandNotFound so a
 // malicious agent can't probe other hosts' command_ids.
 func TestUpdateStatusForeignHostRejected(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
@@ -126,6 +133,7 @@ func TestUpdateStatusForeignHostRejected(t *testing.T) {
 }
 
 func TestUpdateStatusNotFound(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	err := s.UpdateStatus(t.Context(), 99999, "host-a", api.StatusPending, api.StatusAcked, nil)
 	require.ErrorIs(t, err, api.ErrCommandNotFound)
@@ -134,6 +142,7 @@ func TestUpdateStatusNotFound(t *testing.T) {
 // TestUpdateStatusInvalidTarget covers the store-layer reject of a non-terminal status (or a typo). Passing api.StatusPending here is
 // rejected with ErrInvalidStatusTransition so a buggy caller can't reset an in-flight command to pending.
 func TestUpdateStatusInvalidTarget(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
@@ -144,6 +153,7 @@ func TestUpdateStatusInvalidTarget(t *testing.T) {
 }
 
 func TestGetNotFound(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	_, err := s.Get(t.Context(), 99999)
 	require.ErrorIs(t, err, api.ErrCommandNotFound)
@@ -152,6 +162,7 @@ func TestGetNotFound(t *testing.T) {
 // TestUpdateStatusRaceLost simulates the TOCTOU window: caller A's expected-from is stale because caller B already advanced the row.
 // The store must reject A's UPDATE with ErrInvalidStatusTransition (not silently overwrite the newer state).
 func TestUpdateStatusRaceLost(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
@@ -171,6 +182,7 @@ func TestUpdateStatusRaceLost(t *testing.T) {
 }
 
 func TestCountPending(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 

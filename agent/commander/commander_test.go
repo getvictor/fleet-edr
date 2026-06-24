@@ -23,6 +23,7 @@ import (
 // rather than a hard-coded "all" wildcard. If a regression made the commander send no host_id, the server
 // would respond with the wrong scope and the per-host audit trail would silently merge.
 func TestFetchPending(t *testing.T) {
+	t.Parallel()
 	commands := []command{
 		{ID: 1, HostID: "host-a", CommandType: "kill_process", Payload: json.RawMessage(`{"pid":123}`), Status: "pending"},
 	}
@@ -46,6 +47,7 @@ func TestFetchPending(t *testing.T) {
 }
 
 func TestFetchPendingWithAuth(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
@@ -66,6 +68,7 @@ func TestFetchPendingWithAuth(t *testing.T) {
 // "executor does not treat the 401 as a permanent failure for the next cycle"; that clause is implicit in
 // fetchPending returning an error rather than aborting the run loop, exercised by TestRunPolls.
 func TestFetchPending401_CallsOnAuthFail(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid_token"}`))
@@ -109,6 +112,7 @@ func (r *recordingApplicationControlSender) SendApplicationControl(payload []byt
 // "count of paths" framing predates the set_application_control rename (was originally set_blocklist that
 // carried a path list). Filed as #246 to align spec naming.
 func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
+	t.Parallel()
 	var gotStatus string
 	var gotResult []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +163,7 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 // shapes pinned by four tests: InvalidPayload (malformed JSON), InvalidVersion (version=0),
 // MissingPolicyID (policy_id=0), RulesMissingOrInvalid (rules wrong shape).
 func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
+	t.Parallel()
 	var gotStatus string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body statusUpdate
@@ -186,6 +191,7 @@ func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 // server versions start at 1, so a zero or negative payload version is either a hand-queued test command
 // or an out-of-order delivery and the extension must never see it.
 func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
+	t.Parallel()
 	var gotStatus, gotErr string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body statusUpdate
@@ -217,6 +223,7 @@ func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 // Zero policy_id never comes from a healthy server fan-out; fail explicitly rather than hand garbage to
 // the extension.
 func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
+	t.Parallel()
 	var gotStatus, gotErr string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body statusUpdate
@@ -249,6 +256,7 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 // on the extension's typed decode; but by then the commander has already reported `completed`, so the
 // server is wrong about per-host convergence. The commander must reject those shapes BEFORE forwarding.
 func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		payload string
@@ -260,6 +268,7 @@ func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			var gotStatus, gotErr string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body statusUpdate
@@ -289,6 +298,7 @@ func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
 // TestExecuteSetApplicationControl_EmptyRulesAccepted covers the converse: an empty rules array is a legal state (just-after-policy
 // creation, or after every rule is deleted) and the commander must forward it cleanly.
 func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -310,6 +320,7 @@ func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
 // command must fail with a clear reason so the operator's audit log surfaces "no extension" rather than a
 // silent success.
 func TestExecuteSetApplicationControl_NoSenderConfigured(t *testing.T) {
+	t.Parallel()
 	var gotStatus string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body statusUpdate
@@ -333,6 +344,7 @@ func TestExecuteSetApplicationControl_NoSenderConfigured(t *testing.T) {
 // Covers the PUT /commands/{id} path. A token can be revoked between fetchPending and the following
 // ack/complete, and the hook must fire there too or recovery waits for the next poll tick.
 func TestUpdateStatus401_CallsOnAuthFail(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -360,6 +372,7 @@ func TestUpdateStatus401_CallsOnAuthFail(t *testing.T) {
 // the test pins the unknown-command-type clause that a `reboot` payload is rejected with a reason
 // identifying the unknown type, rather than acked-and-silently-dropped.
 func TestDispatchUnknownCommand(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var updates []statusUpdate
 
@@ -394,6 +407,7 @@ func TestDispatchUnknownCommand(t *testing.T) {
 // to pid 0 (which would target the entire process group of the calling process, not what an operator
 // asking to kill "the process with id 0" would expect).
 func TestDispatchKillInvalidPayload(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var updates []statusUpdate
 
@@ -430,6 +444,7 @@ func TestDispatchKillInvalidPayload(t *testing.T) {
 // context.WithTimeout expires; if cancellation between polls didn't work, Run would not return until the
 // inner sleep elapsed and the test would hang past the cleanup deadline.
 func TestRunPolls(t *testing.T) {
+	t.Parallel()
 	var callCount int
 	var mu sync.Mutex
 
@@ -463,6 +478,7 @@ func TestRunPolls(t *testing.T) {
 // suppressed by checking that the ApplicationControlSender was never invoked even though the payload was
 // valid.
 func TestAcknowledgementFailsDoesNotExecute(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var puts int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -497,6 +513,7 @@ func TestAcknowledgementFailsDoesNotExecute(t *testing.T) {
 // (math.MaxInt32) is an upper-bound PID that no real process will ever hold, giving a portable way to
 // induce the not-found path without spawning and reaping a child.
 func TestKillProcessAlreadyGone(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	var updates []statusUpdate
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -533,6 +550,7 @@ func TestKillProcessAlreadyGone(t *testing.T) {
 // *exec.ExitError); the spec-relevant clause is the completed-with-killed_pid status the commander
 // reports to the server, which is what an operator's audit trail will reflect.
 func TestKillProcessSuccessful(t *testing.T) {
+	t.Parallel()
 	// `sleep` is in coreutils on every macOS and standard Linux runner the EDR CI fleet uses, but a minimal/distroless image might not
 	// have it; skip cleanly so the kill_process logic isn't blamed for a missing PATH entry.
 	if _, err := exec.LookPath("sleep"); err != nil {

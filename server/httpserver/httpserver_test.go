@@ -43,7 +43,7 @@ func newLogger(buf io.Writer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-func TestBuild_GeneratesTraceAndEchoesRequestID(t *testing.T) {
+func TestBuild_GeneratesTraceAndEchoesRequestID(t *testing.T) { //nolint:paralleltest // installs/depends on the process-global OTel tracer provider; the Build tests must run serially
 	installTracer(t)
 	var logs bytes.Buffer
 	logger := newLogger(&logs)
@@ -71,7 +71,7 @@ func TestBuild_GeneratesTraceAndEchoesRequestID(t *testing.T) {
 	assert.Len(t, got, 32, "X-Request-ID should be a 32-hex trace id: %q", got)
 }
 
-func TestBuild_HonoursInboundTraceparent(t *testing.T) {
+func TestBuild_HonoursInboundTraceparent(t *testing.T) { //nolint:paralleltest // installs/depends on the process-global OTel tracer provider; the Build tests must run serially
 	installTracer(t)
 	var logs bytes.Buffer
 	logger := newLogger(&logs)
@@ -104,7 +104,7 @@ func TestBuild_HonoursInboundTraceparent(t *testing.T) {
 	assert.True(t, sc.IsValid())
 }
 
-func TestBuild_AccessLogLevels(t *testing.T) {
+func TestBuild_AccessLogLevels(t *testing.T) { //nolint:paralleltest // installs/depends on the process-global OTel tracer provider; the Build tests must run serially
 	installTracer(t)
 	var logs bytes.Buffer
 	logger := newLogger(&logs)
@@ -182,7 +182,7 @@ func (f *fakeRequestMetrics) ObserveHTTPRequest(_ context.Context, method, route
 	f.calls = append(f.calls, metricCall{method: method, route: route, status: status, dur: d})
 }
 
-func TestBuild_RecoversPanic(t *testing.T) {
+func TestBuild_RecoversPanic(t *testing.T) { //nolint:paralleltest // installs/depends on the process-global OTel tracer provider; the Build tests must run serially
 	installTracer(t)
 	var logs bytes.Buffer
 	logger := newLogger(&logs)
@@ -209,7 +209,7 @@ func TestBuild_RecoversPanic(t *testing.T) {
 	assert.Contains(t, logs.String(), "test panic")
 }
 
-func TestBuild_XRequestIDFallbackWithoutTracer(t *testing.T) {
+func TestBuild_XRequestIDFallbackWithoutTracer(t *testing.T) { //nolint:paralleltest // installs/depends on the process-global OTel tracer provider; the Build tests must run serially
 	// Do NOT install a tracer provider; otelhttp will still add a span via the no-op provider,
 	// whose SpanContext is invalid. In that case we must fall back to the inbound X-Request-ID.
 	var logs bytes.Buffer
@@ -245,7 +245,7 @@ func splitLines(t *testing.T, b []byte) [][]byte {
 
 // TestBuild_AccessLog_UnmatchedRouteLabel pins the Gemini + Copilot fix: a request matching no route logs and records the route
 // as "unmatched" (not ""), so the access-log attribute and the metric label agree.
-func TestBuild_AccessLog_UnmatchedRouteLabel(t *testing.T) {
+func TestBuild_AccessLog_UnmatchedRouteLabel(t *testing.T) { //nolint:paralleltest // installs/depends on the process-global OTel tracer provider; the Build tests must run serially
 	installTracer(t)
 	var logs bytes.Buffer
 	logger := newLogger(&logs)

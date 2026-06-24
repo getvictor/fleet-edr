@@ -26,6 +26,7 @@ type btmSigningCase struct {
 }
 
 func TestBtmExecutableSigning(t *testing.T) {
+	t.Parallel()
 	signed := &codesign.Result{TeamID: "ABCDE12345", SigningID: "com.evil.dropper", IsPlatformBinary: false}
 
 	tests := []btmSigningCase{
@@ -87,6 +88,7 @@ func TestBtmExecutableSigning(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			runBtmSigningCase(t, tc)
 		})
 	}
@@ -126,6 +128,7 @@ func runBtmSigningCase(t *testing.T, tc btmSigningCase) {
 // TestBtmExecutableSigningPreservesUnknownFields guards the round-trip: every
 // envelope and payload key the agent does not model must survive enrichment.
 func TestBtmExecutableSigningPreservesUnknownFields(t *testing.T) {
+	t.Parallel()
 	in := `{"event_type":"btm_launch_item_add","host_id":"H1","timestamp_ns":42,` +
 		`"payload":{"item_type":"daemon","item_path":"/Library/LaunchDaemons/x.plist","executable_path":"/tmp/d",` +
 		`"managed":false,"instigator_pid":99,"future_field":{"nested":true}}}`

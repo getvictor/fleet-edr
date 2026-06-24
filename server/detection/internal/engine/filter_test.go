@@ -14,6 +14,7 @@ import (
 // ---- Example-based tests --------------------------------------------------
 
 func TestIsSnapshotExec(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		evt  api.Event
@@ -59,12 +60,14 @@ func TestIsSnapshotExec(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, isSnapshotExec(tc.evt))
 		})
 	}
 }
 
 func TestFilterSnapshotEvents_DropsHeartbeats(t *testing.T) {
+	t.Parallel()
 	// Issue #173: snapshot_heartbeat events are pure liveness plumbing. They must not reach rule evaluation, otherwise rules would
 	// have to remember to skip a no-op event type that carries only a pid and a timestamp.
 	in := []api.Event{
@@ -80,11 +83,13 @@ func TestFilterSnapshotEvents_DropsHeartbeats(t *testing.T) {
 }
 
 func TestFilterSnapshotEvents_Empty(t *testing.T) {
+	t.Parallel()
 	assert.Empty(t, filterSnapshotEvents(nil))
 	assert.Empty(t, filterSnapshotEvents([]api.Event{}))
 }
 
 func TestFilterSnapshotEvents_NoSnapshotsReturnsInputVerbatim(t *testing.T) {
+	t.Parallel()
 	in := []api.Event{
 		{EventID: "1", EventType: "fork", Payload: json.RawMessage(`{}`)},
 		{EventID: "2", EventType: "exec", Payload: json.RawMessage(`{"path":"/bin/ls"}`)},
@@ -153,6 +158,7 @@ func eventForFilterGen() *rapid.Generator[api.Event] {
 // the filter's `isPlumbingEvent` rather than the narrower `isSnapshotExec` so the
 // expected output reflects both kinds of drops.
 func TestFilterSnapshotEvents_PropertyDropsOnlySnapshotsAndPreservesOrder(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		in := rapid.SliceOfN(eventForFilterGen(), 0, 16).Draw(rt, "in")
 		out := filterSnapshotEvents(in)
@@ -177,6 +183,7 @@ func TestFilterSnapshotEvents_PropertyDropsOnlySnapshotsAndPreservesOrder(t *tes
 // pass must not drop anything new (every kept event is non-snapshot by construction) and must not re-add anything (the filter is a
 // projection).
 func TestFilterSnapshotEvents_PropertyIdempotent(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		in := rapid.SliceOfN(eventForFilterGen(), 0, 16).Draw(rt, "in")
 		once := filterSnapshotEvents(in)

@@ -17,6 +17,7 @@ import (
 // Both writers must produce a byte-identical JSON failure body so that scripted clients (the agent, smoke tests, cURL helpers) can
 // match a single response shape regardless of which middleware fired.
 func TestWriteAuthFailure_BodyShape(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		write  func(w http.ResponseWriter, r *http.Request)
@@ -63,6 +64,7 @@ func TestWriteAuthFailure_BodyShape(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			tc.write(rec, req)
@@ -84,6 +86,7 @@ func TestWriteAuthFailure_BodyShape(t *testing.T) {
 // WriteAuthFailure (Bearer-token endpoints) MUST set `WWW-Authenticate: Bearer error="invalid_token"` on 401 per RFC 6750 so the
 // agent's existing client logic continues to recognise an authentication failure distinct from a service outage.
 func TestWriteAuthFailure_Bearer401_SetsChallenge(t *testing.T) {
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	httpserver.WriteAuthFailure(req.Context(), rec, slog.Default(),
@@ -97,8 +100,10 @@ func TestWriteAuthFailure_Bearer401_SetsChallenge(t *testing.T) {
 // On 5xx the Bearer writer must NOT advertise a challenge, since the failure isn't a credential problem and we don't want clients to
 // retry with fresh tokens against an unhealthy server.
 func TestWriteAuthFailure_BearerNon401_OmitsChallenge(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{http.StatusForbidden, http.StatusServiceUnavailable, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			httpserver.WriteAuthFailure(req.Context(), rec, slog.Default(),
@@ -115,8 +120,10 @@ func TestWriteAuthFailure_BearerNon401_OmitsChallenge(t *testing.T) {
 // body and follows the application's redirect-to-login UX; sending Bearer triggers spurious HTTP-Basic dialogs in some clients and
 // confuses scripted callers that prefer Bearer-shaped responses for retries.
 func TestWriteCookieAuthFailure_NoChallenge(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			httpserver.WriteCookieAuthFailure(req.Context(), rec, slog.Default(),
@@ -132,6 +139,7 @@ func TestWriteCookieAuthFailure_NoChallenge(t *testing.T) {
 // Both writers must tolerate a nil logger so handlers that fail before the logger is wired (e.g. boot path) can still produce a clean
 // response. The signature accepts *slog.Logger so passing nil is the natural way to express "no logger".
 func TestWriteAuthFailure_NilLoggerOK(t *testing.T) {
+	t.Parallel()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	assert.NotPanics(t, func() {

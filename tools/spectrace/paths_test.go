@@ -16,6 +16,7 @@ import (
 // at all in this case; we don't want a spectrace invocation against an absolute path to fail on a non-git directory or a hung
 // credential prompt that the underlying git rev-parse subprocess would otherwise trigger.
 func TestResolveRepoPath_AbsoluteIsVerbatim(t *testing.T) {
+	t.Parallel()
 	abs := t.TempDir()
 	assert.Equal(t, abs, resolveRepoPath(abs))
 }
@@ -23,7 +24,7 @@ func TestResolveRepoPath_AbsoluteIsVerbatim(t *testing.T) {
 // TestResolveRepoPath_CwdRelativeShortCircuits pins rule 2: when the path already resolves relative to cwd, the
 // function returns it verbatim. Doing this avoids second-guessing callers who supply `--specs-dir=./local-fixture` from
 // inside a nested package; their literal `./` is what they want, even if the same name also exists at the repo root.
-func TestResolveRepoPath_CwdRelativeShortCircuits(t *testing.T) {
+func TestResolveRepoPath_CwdRelativeShortCircuits(t *testing.T) { //nolint:paralleltest // uses t.Chdir; cannot run in parallel
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "exists"), 0o750))
 	t.Chdir(dir)
@@ -33,7 +34,7 @@ func TestResolveRepoPath_CwdRelativeShortCircuits(t *testing.T) {
 // TestResolveRepoPath_PromotesToRepoRoot pins rule 3: when the path doesn't resolve cwd-relative but exists relative to
 // the repo top-level, return the joined path. We model this by initialising a fake git repo, dropping a file at the
 // root, then cd'ing into a subdirectory and asking the resolver to find the file by its relative name.
-func TestResolveRepoPath_PromotesToRepoRoot(t *testing.T) {
+func TestResolveRepoPath_PromotesToRepoRoot(t *testing.T) { //nolint:paralleltest // uses t.Chdir; cannot run in parallel
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -53,7 +54,7 @@ func TestResolveRepoPath_PromotesToRepoRoot(t *testing.T) {
 // TestResolveRepoPath_UnresolvableReturnsOriginal pins rule 4: when the path doesn't resolve cwd-relative and the repo
 // root either can't be found or doesn't have the path either, the function returns the original. The downstream parser
 // then emits a deterministic "no such file" error against the user's input, which is the right shape for catching typos.
-func TestResolveRepoPath_UnresolvableReturnsOriginal(t *testing.T) {
+func TestResolveRepoPath_UnresolvableReturnsOriginal(t *testing.T) { //nolint:paralleltest // uses t.Chdir; cannot run in parallel
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -66,7 +67,7 @@ func TestResolveRepoPath_UnresolvableReturnsOriginal(t *testing.T) {
 // resolves cwd-relative, so resolveRepoPath would short-circuit at rule 2 and leave a default `--root .` scan scoped to the
 // tools/spectrace subdirectory. The default-only variant skips the cwd check so the scan widens to the whole repo, which is the
 // actual intent of running `spectrace check` from any directory.
-func TestResolveDefaultRepoPath_PromotesDotToRepoRoot(t *testing.T) {
+func TestResolveDefaultRepoPath_PromotesDotToRepoRoot(t *testing.T) { //nolint:paralleltest // uses t.Chdir; cannot run in parallel
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -84,7 +85,7 @@ func TestResolveDefaultRepoPath_PromotesDotToRepoRoot(t *testing.T) {
 // TestResolvePathFlag_HonoursUserExplicitness pins the switch between the two resolvers based on whether the operator supplied the
 // flag. An explicit `--root .` from a subdirectory means "literally cwd" and must not be widened to the repo root; a default
 // `--root .` means "the natural scope" and gets widened.
-func TestResolvePathFlag_HonoursUserExplicitness(t *testing.T) {
+func TestResolvePathFlag_HonoursUserExplicitness(t *testing.T) { //nolint:paralleltest // uses t.Chdir; cannot run in parallel
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -107,6 +108,7 @@ func TestResolvePathFlag_HonoursUserExplicitness(t *testing.T) {
 // TestUserSetFlagNames covers the small helper that wraps fs.Visit. We supply one flag explicitly and confirm only that
 // name appears in the resulting set; the unset flags must NOT appear, which is the property resolvePathFlag depends on.
 func TestUserSetFlagNames(t *testing.T) {
+	t.Parallel()
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String("specs-dir", "default-a", "")
 	fs.String("root", "default-b", "")

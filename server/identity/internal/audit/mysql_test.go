@@ -460,7 +460,7 @@ func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
 // ManualReader-backed MeterProvider as the global before constructing the Store, then collects it after the forced failure. The
 // scenario's "the user request still completes" clause is structural: login handlers mint the session before calling the audit
 // recorder and never propagate Record's error to the user response (the recorder is fire-and-forget on the request's critical path).
-func TestRecord_WriteFailureLogsErrorAndIncrementsMetric(t *testing.T) {
+func TestRecord_WriteFailureLogsErrorAndIncrementsMetric(t *testing.T) { //nolint:paralleltest // installs + reads a process-global OTel MeterProvider; a sibling parallel test that also fails an insert would pollute the shared edr.audit.write_failures counter
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

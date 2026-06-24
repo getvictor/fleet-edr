@@ -28,6 +28,7 @@ import (
 // misconfigured deployment fails fast; this test surfaces the same
 // regression at PR time.
 func TestPolicy_ActionsParity(t *testing.T) {
+	t.Parallel()
 	bundlePath := filepath.Join("policy", "data", "actions.json")
 	bundleBytes, err := os.ReadFile(bundlePath) //nolint:gosec // path is a fixed test fixture
 	require.NoError(t, err, "read actions.json fixture")
@@ -89,6 +90,7 @@ func TestPolicy_ActionsParity(t *testing.T) {
 // initialised with `SetCoverageQueryTracer(nil)` (coverage off) and
 // the comment matches the code.
 func TestPolicy_RegoTestSuite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Load every .rego file under policy/ (both the policy module and the test module). ast.NewModuleLoader-equivalent path: read files,

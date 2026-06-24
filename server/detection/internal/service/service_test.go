@@ -34,6 +34,7 @@ var allowedTransitions = map[api.AlertStatus]map[api.AlertStatus]bool{
 }
 
 func TestCanTransition_ExampleMatrix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		from, to api.AlertStatus
 		want     bool
@@ -51,6 +52,7 @@ func TestCanTransition_ExampleMatrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.from)+"_to_"+string(tc.to), func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, canTransition(tc.from, tc.to))
 		})
 	}
@@ -61,6 +63,7 @@ func TestCanTransition_ExampleMatrix(t *testing.T) {
 // between canTransition's switch and the allowedTransitions reference table fails the property loudly, with a shrunken counter-example
 // naming the exact (from, to) pair.
 func TestCanTransition_MatchesAllowedTransitionsProperty(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		from := rapid.SampledFrom(allStatuses).Draw(rt, "from")
 		to := rapid.SampledFrom(allStatuses).Draw(rt, "to")
@@ -73,6 +76,7 @@ func TestCanTransition_MatchesAllowedTransitionsProperty(t *testing.T) {
 // TestCanTransition_NeverFromUnknownState pins the "every undefined state rejects all transitions" behaviour: passing a status the
 // service has never seen returns false, regardless of target.
 func TestCanTransition_NeverFromUnknownState(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		// "" and any string outside the enum are unknown states.
 		unknown := api.AlertStatus(rapid.StringMatching(`(?:|x[a-z]{0,8}|some_other_state)`).Draw(rt, "unknown"))

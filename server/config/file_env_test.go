@@ -14,6 +14,7 @@ import (
 )
 
 func TestFileBackedGetenv_FileWins(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secret")
 	require.NoError(t, os.WriteFile(path, []byte("real-secret\n"), 0o600))
@@ -33,6 +34,7 @@ func TestFileBackedGetenv_FileWins(t *testing.T) {
 }
 
 func TestFileBackedGetenv_DirectEnvBeatsFile(t *testing.T) {
+	t.Parallel()
 	base := func(k string) string {
 		switch k {
 		case "EDR_ENROLL_SECRET":
@@ -48,12 +50,14 @@ func TestFileBackedGetenv_DirectEnvBeatsFile(t *testing.T) {
 }
 
 func TestFileBackedGetenv_NeitherSetReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	base := func(string) string { return "" }
 	get := FileBackedGetenv(base, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	assert.Empty(t, get("EDR_ENROLL_SECRET"))
 }
 
 func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	// A _FILE pointing at a missing path must not crash the caller; the existing required-var validator then reports "required env var X
 	// is not set" with the canonical error message the operator expects.
 	var buf bytes.Buffer
@@ -74,6 +78,7 @@ func TestFileBackedGetenv_MissingFileLogsAndReturnsEmpty(t *testing.T) {
 // only one that exercises the nil-logger fallback (`logger.WarnContext` would panic on a nil logger if the fallback weren't applied),
 // so a regression there must be observable in this test.
 func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
+	t.Parallel()
 	base := func(k string) string {
 		if k == "EDR_ENROLL_SECRET_FILE" {
 			return filepath.Join(t.TempDir(), "missing")
@@ -88,6 +93,7 @@ func TestFileBackedGetenv_NilLoggerUsesDefault(t *testing.T) {
 // TestWriteSecretFile drives the small helper that compose-fixture tests use to stage a docker-secret-style file. We assert the
 // content is written verbatim and the perms are 0600 (the rest of the security model assumes secrets are not world-readable).
 func TestWriteSecretFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path, err := WriteSecretFile(dir, "enroll-secret", "supersecret\n")
 	require.NoError(t, err)
@@ -103,6 +109,7 @@ func TestWriteSecretFile(t *testing.T) {
 }
 
 func TestWriteSecretFile_BadDir(t *testing.T) {
+	t.Parallel()
 	// Pointing at a path under a non-existent parent surfaces the os.WriteFile error rather than swallowing it. Operators tracing config
 	// issues need to see the path-not-found error verbatim.
 	_, err := WriteSecretFile(filepath.Join(t.TempDir(), "missing-dir"), "x", "v")
@@ -110,6 +117,7 @@ func TestWriteSecretFile_BadDir(t *testing.T) {
 }
 
 func TestFileBackedGetenv_TrimsOnlyOuterWhitespace(t *testing.T) {
+	t.Parallel()
 	// Docker secrets often trail a newline. We strip leading + trailing whitespace but preserve interior characters. A DSN like
 	//   root:pw 1@tcp(mysql:3306)/edr
 	// must survive with its embedded space intact.

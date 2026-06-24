@@ -124,6 +124,7 @@ func (s stubGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
 // (server-side mirror of the agent-side TestRecorder_QueueDropped), and (d) that collect() drives the
 // gauge callbacks and observes their values (stubGauges feeds enrolled=3, offline=1).
 func TestRecorder_RecordsCounters(t *testing.T) {
+	t.Parallel()
 	r, collect := newTestRecorder(t, stubGauges{enrolled: 3, offline: 1}, Options{})
 	ctx := context.Background()
 
@@ -149,6 +150,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 }
 
 func TestRecorder_NilGaugesSkipsGauges(t *testing.T) {
+	t.Parallel()
 	_, collect := newTestRecorder(t, nil, Options{})
 	rm := collect()
 	assert.Equal(t, int64(-1), findGauge(t, rm, "edr.enrolled.hosts"))
@@ -156,6 +158,7 @@ func TestRecorder_NilGaugesSkipsGauges(t *testing.T) {
 }
 
 func TestGauges_UseConfiguredThreshold(t *testing.T) {
+	t.Parallel()
 	var gotThreshold time.Duration
 	gauges := thresholdCapturingGauges{out: &gotThreshold}
 
@@ -179,6 +182,7 @@ func (g thresholdCapturingGauges) OfflineHosts(_ context.Context, t time.Duratio
 // Methods short-circuit on nil so call sites can tolerate "no metrics configured" without defensive
 // checks. Companion agent-side coverage in TestNilRecorder_QueueDropped_Safe.
 func TestNilRecorder_AllMethodsSafe(t *testing.T) {
+	t.Parallel()
 	// Methods short-circuit on nil so call sites can tolerate "no metrics configured"
 	// without defensive checks. Lock that property in as a test.
 	var r *Recorder
@@ -213,6 +217,7 @@ var (
 // OfflineHosts succeeds, then asserting (a) collect() returns without error, (b) the failed gauge has
 // no datapoint, and (c) the offline gauge reports its value.
 func TestRecorder_FailingGaugeCallbackIsContained(t *testing.T) {
+	t.Parallel()
 	gauges := failingGauges{offline: 7}
 	_, collect := newTestRecorder(t, gauges, Options{})
 
@@ -246,6 +251,7 @@ func (g failingGauges) OfflineHosts(context.Context, time.Duration) (int, error)
 // requests sharing method+route+status collapse into one series with count 2, (b) a distinct status is its own series, and
 // (c) the cardinality guards fire: an unknown method collapses to "_OTHER" and an empty route to "unmatched".
 func TestObserveHTTPRequest(t *testing.T) {
+	t.Parallel()
 	r, collect := newTestRecorder(t, nil, Options{})
 	ctx := context.Background()
 	r.ObserveHTTPRequest(ctx, "POST", "/api/events", 200, 50*time.Millisecond)

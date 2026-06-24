@@ -554,12 +554,14 @@ func bufferLogger() (*slog.Logger, *bytes.Buffer) {
 // UpgradeProbe is wired (the NE loop) AND the failure has persisted past the grace threshold AND the probe reports a pending
 // uninstall; otherwise the bare "receiver connect" warning is logged. The hint fires at most once per stale episode.
 func TestLoop_ConnectFailureLog(t *testing.T) {
+	t.Parallel()
 	const distinct = "stale after an upgrade"
 	const bare = "receiver connect"
 	connErr := errors.New("xpc_bridge_connect failed")
 	nilFactory := func() Connector { return nil } // never invoked: these subtests call logConnectFailure directly
 
 	t.Run("no probe (ESF loop) always logs the bare warning", func(t *testing.T) {
+		t.Parallel()
 		logger, buf := bufferLogger()
 		l := NewLoop(nilFactory, LoopConfig{ServiceName: "sys"}, LoopHooks{}, logger)
 		l.consecutiveFailures = staleProbeAfterFailures + 5
@@ -569,6 +571,7 @@ func TestLoop_ConnectFailureLog(t *testing.T) {
 	})
 
 	t.Run("under the grace threshold logs the bare warning", func(t *testing.T) {
+		t.Parallel()
 		logger, buf := bufferLogger()
 		l := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
 			LoopHooks{UpgradeProbe: func() bool { return true }}, logger)
@@ -579,6 +582,7 @@ func TestLoop_ConnectFailureLog(t *testing.T) {
 	})
 
 	t.Run("probe false (not approved) logs the bare warning past the threshold", func(t *testing.T) {
+		t.Parallel()
 		logger, buf := bufferLogger()
 		l := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
 			LoopHooks{UpgradeProbe: func() bool { return false }}, logger)
@@ -589,6 +593,7 @@ func TestLoop_ConnectFailureLog(t *testing.T) {
 	})
 
 	t.Run("upgrade pending past the threshold logs the distinct hint once", func(t *testing.T) {
+		t.Parallel()
 		logger, buf := bufferLogger()
 		var probeCalls int
 		l := NewLoop(nilFactory, LoopConfig{ServiceName: "net"},
@@ -610,6 +615,7 @@ func TestLoop_ConnectFailureLog(t *testing.T) {
 // TestLoop_SuccessResetsStaleTracking verifies a successful connect clears the stale-after-upgrade state so a later upgrade
 // is reported again (#399).
 func TestLoop_SuccessResetsStaleTracking(t *testing.T) {
+	t.Parallel()
 	factory, _ := scriptedFactory([]stubScript{{
 		onConnect: func(c *stubConnector) { c.emitError(1) }, // end the session promptly so runOnce returns
 	}})

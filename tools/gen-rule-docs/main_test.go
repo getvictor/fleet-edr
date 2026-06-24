@@ -15,6 +15,7 @@ import (
 // gated to one of the documented constants so a typo'd value (e.g. "urgent") fails the test instead of silently producing a broken UI
 // severity pill class name and a markdown reference that disagrees with the rest of the codebase.
 func TestEveryRuleHasDocs(t *testing.T) {
+	t.Parallel()
 	allowedSeverities := map[string]struct{}{
 		rulesapi.SeverityLow:      {},
 		rulesapi.SeverityMedium:   {},
@@ -23,6 +24,7 @@ func TestEveryRuleHasDocs(t *testing.T) {
 	}
 	for _, r := range allRegisteredRules() {
 		t.Run(r.ID, func(t *testing.T) {
+			t.Parallel()
 			d := r.Doc
 			assert.NotEmpty(t, d.Title, "Doc.Title must be set")
 			assert.NotEmpty(t, d.Summary, "Doc.Summary must be set (one-line tooltip)")
@@ -38,6 +40,7 @@ func TestEveryRuleHasDocs(t *testing.T) {
 // TestRenderProducesIndexEntryPerRule sanity-checks the markdown structure: the index table at the top of the doc must contain a row
 // for every registered rule. Without this, a missing rule could slip through if the generator's loop somehow short-circuited.
 func TestRenderProducesIndexEntryPerRule(t *testing.T) {
+	t.Parallel()
 	rs := allRegisteredRules()
 	var buf bytes.Buffer
 	require.NoError(t, render(&buf, rs))
@@ -54,6 +57,7 @@ func TestRenderProducesIndexEntryPerRule(t *testing.T) {
 // TestRenderTechniqueLinks checks that every technique in the catalog is rendered as a clickable MITRE link, with sub-technique dots
 // translated to slashes (the URL convention attack.mitre.org expects).
 func TestRenderTechniqueLinks(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, render(&buf, allRegisteredRules()))
 	out := buf.String()
@@ -69,6 +73,7 @@ func TestRenderTechniqueLinks(t *testing.T) {
 // TestRenderConfigKnobsListed confirms that rules with config knobs surface
 // their env var, type, and description in the per-rule Configuration table.
 func TestRenderConfigKnobsListed(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	require.NoError(t, render(&buf, allRegisteredRules()))
 	out := buf.String()

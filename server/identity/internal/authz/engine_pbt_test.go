@@ -52,6 +52,7 @@ const rolesPath = "policy/data/roles.json"
 // list is caught even when no example test happens to name that
 // combination.
 func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
+	t.Parallel()
 	engine := newEnginePBT(t)
 	roleSet := loadRolesFromBundle(t)
 	actionSet := api.RegisteredActions()
@@ -137,6 +138,7 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 // no_matching_rule deny still wins (the scope branch only fires
 // when the role would otherwise have granted).
 func TestEngine_NonGlobalScope_PBT(t *testing.T) {
+	t.Parallel()
 	engine := newEnginePBT(t)
 	roleSet := loadRolesFromBundle(t)
 	actionSet := api.RegisteredActions()

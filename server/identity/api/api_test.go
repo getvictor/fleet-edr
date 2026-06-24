@@ -12,6 +12,7 @@ import (
 )
 
 func TestEncodeToken_RoundTrip(t *testing.T) {
+	t.Parallel()
 	cases := [][]byte{
 		{},
 		{0x00},
@@ -36,6 +37,7 @@ func TestEncodeToken_RoundTrip(t *testing.T) {
 // TestDecodeToken_AcceptsPaddedURLEncoding ensures DecodeToken accepts the padded form some middleboxes emit, in addition to the
 // raw-unpadded form EncodeToken produces.
 func TestDecodeToken_AcceptsPaddedURLEncoding(t *testing.T) {
+	t.Parallel()
 	raw := []byte{0xab, 0xcd, 0xef}
 	// Hand-written padded base64url for those three bytes is "q83v" with no
 	// padding, but for an odd-length payload (4 bytes) it'd need '='.
@@ -48,11 +50,13 @@ func TestDecodeToken_AcceptsPaddedURLEncoding(t *testing.T) {
 }
 
 func TestDecodeToken_RejectsGarbage(t *testing.T) {
+	t.Parallel()
 	_, err := api.DecodeToken("not-valid-base64-@#$%")
 	require.Error(t, err)
 }
 
 func TestUserIDFromContext_RoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := api.WithUserID(context.Background(), 42)
 	got, ok := api.UserIDFromContext(ctx)
 	assert.True(t, ok)
@@ -60,12 +64,14 @@ func TestUserIDFromContext_RoundTrip(t *testing.T) {
 }
 
 func TestUserIDFromContext_Empty(t *testing.T) {
+	t.Parallel()
 	got, ok := api.UserIDFromContext(context.Background())
 	assert.False(t, ok)
 	assert.Zero(t, got)
 }
 
 func TestUserIDFromContext_ZeroUserIDNotAuthenticated(t *testing.T) {
+	t.Parallel()
 	// Pinning user_id 0 should not be reported as authenticated. Guards against a writer accidentally passing a zero-valued int into
 	// WithUserID and silently authenticating a request with no user.
 	ctx := api.WithUserID(context.Background(), 0)
@@ -75,6 +81,7 @@ func TestUserIDFromContext_ZeroUserIDNotAuthenticated(t *testing.T) {
 }
 
 func TestSessionFromContext_RoundTrip(t *testing.T) {
+	t.Parallel()
 	sess := &api.Session{
 		UserID:    7,
 		ExpiresAt: time.Now().Add(time.Hour),
@@ -87,12 +94,14 @@ func TestSessionFromContext_RoundTrip(t *testing.T) {
 }
 
 func TestSessionFromContext_Empty(t *testing.T) {
+	t.Parallel()
 	got, ok := api.SessionFromContext(context.Background())
 	assert.False(t, ok)
 	assert.Nil(t, got)
 }
 
 func TestForTestAliases_DelegateToWithUserID(t *testing.T) {
+	t.Parallel()
 	// WithUserIDForTest + WithSessionForTest are backward-compat aliases;
 	// assert they delegate to the canonical setters.
 	uctx := api.WithUserIDForTest(context.Background(), 11)

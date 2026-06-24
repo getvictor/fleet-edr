@@ -179,11 +179,13 @@ func TestUserAdmin_listSetRoleAndDisable(t *testing.T) {
 // TestUserAdmin_edgeCases shares one env across its subtests (each seeds distinct users), so the subtests run serially and the parent
 // is not marked parallel.
 func TestUserAdmin_edgeCases(t *testing.T) {
+	t.Parallel()
 	db, mux := newUserAdminEnv(t)
 	operator := seedUser(t, db, "edge-op@ua.local")
 	actor := actorWithRole(operator, "super_admin")
 
 	t.Run("invalid role is rejected", func(t *testing.T) {
+		t.Parallel()
 		target := seedUserWithRole(t, db, "edge1@ua.local", "analyst")
 		w := userReq(t, mux, actor, http.MethodPut,
 			"/api/settings/users/"+strconv.FormatInt(target, 10)+"/role", `{"role":"wizard"}`)
@@ -192,6 +194,7 @@ func TestUserAdmin_edgeCases(t *testing.T) {
 	})
 
 	t.Run("invalid status is rejected", func(t *testing.T) {
+		t.Parallel()
 		target := seedUserWithRole(t, db, "edge2@ua.local", "analyst")
 		w := userReq(t, mux, actor, http.MethodPut,
 			"/api/settings/users/"+strconv.FormatInt(target, 10)+"/status", `{"status":"frozen"}`)
@@ -200,17 +203,20 @@ func TestUserAdmin_edgeCases(t *testing.T) {
 	})
 
 	t.Run("unknown user is not found", func(t *testing.T) {
+		t.Parallel()
 		w := userReq(t, mux, actor, http.MethodPut, "/api/settings/users/999999/role", `{"role":"analyst"}`)
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 
 	t.Run("non-numeric id is rejected", func(t *testing.T) {
+		t.Parallel()
 		w := userReq(t, mux, actor, http.MethodPut, "/api/settings/users/abc/role", `{"role":"analyst"}`)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Contains(t, w.Body.String(), "invalid_id")
 	})
 
 	t.Run("setting the role the user already holds is a no-op without an audit row", func(t *testing.T) {
+		t.Parallel()
 		target := seedUserWithRole(t, db, "edge3@ua.local", "auditor")
 		tid := strconv.FormatInt(target, 10)
 		w := userReq(t, mux, actor, http.MethodPut, "/api/settings/users/"+tid+"/role", `{"role":"auditor"}`)
@@ -220,6 +226,7 @@ func TestUserAdmin_edgeCases(t *testing.T) {
 	})
 
 	t.Run("first grant to a user with no binding audits a create", func(t *testing.T) {
+		t.Parallel()
 		target := seedUser(t, db, "edge4@ua.local") // no role binding
 		tid := strconv.FormatInt(target, 10)
 		w := userReq(t, mux, actor, http.MethodPut, "/api/settings/users/"+tid+"/role", `{"role":"analyst"}`)
@@ -229,6 +236,7 @@ func TestUserAdmin_edgeCases(t *testing.T) {
 	})
 
 	t.Run("disabling then enabling audits both transitions", func(t *testing.T) {
+		t.Parallel()
 		target := seedUserWithRole(t, db, "edge5@ua.local", "analyst")
 		tid := strconv.FormatInt(target, 10)
 		dw := userReq(t, mux, actor, http.MethodPut, "/api/settings/users/"+tid+"/status", `{"status":"disabled"}`)

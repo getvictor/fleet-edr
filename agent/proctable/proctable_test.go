@@ -9,6 +9,7 @@ import (
 )
 
 func TestUpdateAndLookup(t *testing.T) {
+	t.Parallel()
 	pt := New()
 
 	pt.Update(100, ProcessInfo{Path: "/usr/bin/ls", UID: 501, StartTime: 1000})
@@ -20,6 +21,7 @@ func TestUpdateAndLookup(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
+	t.Parallel()
 	pt := New()
 
 	pt.Update(200, ProcessInfo{Path: "/usr/bin/cat"})
@@ -30,11 +32,13 @@ func TestRemove(t *testing.T) {
 }
 
 func TestRemoveNonexistent(t *testing.T) {
+	t.Parallel()
 	pt := New()
 	pt.Remove(999) // should not panic
 }
 
 func TestSize(t *testing.T) {
+	t.Parallel()
 	pt := New()
 
 	assert.Equal(t, 0, pt.Size())
@@ -49,6 +53,7 @@ func TestSize(t *testing.T) {
 }
 
 func TestUpdateOverwrites(t *testing.T) {
+	t.Parallel()
 	pt := New()
 
 	pt.Update(100, ProcessInfo{Path: "/usr/bin/ls"})
@@ -60,6 +65,7 @@ func TestUpdateOverwrites(t *testing.T) {
 }
 
 func TestSnapshotIsCopy(t *testing.T) {
+	t.Parallel()
 	pt := New()
 	pt.Update(1, ProcessInfo{Path: "/bin/sh"})
 	pt.Update(2, ProcessInfo{Path: "/bin/bash"})
@@ -79,6 +85,7 @@ func TestSnapshotIsCopy(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
+	t.Parallel()
 	pt := New()
 	var wg sync.WaitGroup
 

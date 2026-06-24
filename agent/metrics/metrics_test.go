@@ -18,6 +18,7 @@ import (
 // distinction on edr.agent.queue.dropped: the assertions on losslessSum (3) and lossySum (5) split the
 // data points by attribute so a regression that dropped the `lossy` attribute would mix the totals.
 func TestRecorder_QueueDropped(t *testing.T) {
+	t.Parallel()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
@@ -66,6 +67,7 @@ func TestRecorder_QueueDropped(t *testing.T) {
 // nil-recorder safety contract. The agent queue drives this directly on every Enqueue cap-eviction path,
 // so the regression bar is real even though the assertion is trivially small.
 func TestNilRecorder_QueueDropped_Safe(t *testing.T) {
+	t.Parallel()
 	var r *Recorder
 	assert.NotPanics(t, func() {
 		r.QueueDropped(context.Background(), 1, false)
@@ -77,6 +79,7 @@ func TestNilRecorder_QueueDropped_Safe(t *testing.T) {
 // the Recorder is shaped correctly and that recording against it does not panic. The no-op SDK swallows the sample when no OTLP
 // endpoint is configured.
 func TestNew(t *testing.T) {
+	t.Parallel()
 	r := New(nil)
 	require.NotNil(t, r)
 	require.NotNil(t, r.queueDropped)
@@ -105,6 +108,7 @@ func (f *fakeDepthSource) Depth(_ context.Context) (int64, error) {
 // TestRecorder_QueueDropped shape: a ManualReader-backed meter so the collect cycle is synchronous, then sum the data
 // points by the documented attribute set (none for this counter, since host identity rides on the OTLP resource).
 func TestRecorder_EventsDroppedTooLarge(t *testing.T) {
+	t.Parallel()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
@@ -141,6 +145,7 @@ func TestRecorder_EventsDroppedTooLarge(t *testing.T) {
 // Companion to TestNilRecorder_QueueDropped_Safe; pins the same nil-safety bar for EventsDroppedTooLarge so call sites
 // in the uploader's recursive split-and-drop path can fire the counter unconditionally.
 func TestNilRecorder_EventsDroppedTooLarge_Safe(t *testing.T) {
+	t.Parallel()
 	var r *Recorder
 	assert.NotPanics(t, func() {
 		r.EventsDroppedTooLarge(context.Background(), 1)
@@ -152,6 +157,7 @@ func TestNilRecorder_EventsDroppedTooLarge_Safe(t *testing.T) {
 // (production code reads the same gauge through the OTel reader's periodic Collect on the OTLP push cadence, which is
 // configured by `observability.Init`).
 func TestRecorder_QueueDepthGauge(t *testing.T) {
+	t.Parallel()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
@@ -198,6 +204,7 @@ func TestRecorder_QueueDepthGauge(t *testing.T) {
 // must NOT propagate the error to the OTel collection cycle (which would drop every other gauge in the same cycle);
 // instead the callback logs and returns nil. The post-condition is that no panic and no propagated error reach Collect.
 func TestQueueDepthGauge_CallbackErrorSwallowed(t *testing.T) {
+	t.Parallel()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
@@ -212,6 +219,7 @@ func TestQueueDepthGauge_CallbackErrorSwallowed(t *testing.T) {
 // TestQueueDepthGauge_NilSourceSkipsRegistration pins the "nil depth source disables the gauge" contract. Callers that have no
 // queue yet (early startup, tests) pass nil; the constructor must not register a gauge that would crash on invocation.
 func TestQueueDepthGauge_NilSourceSkipsRegistration(t *testing.T) {
+	t.Parallel()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })

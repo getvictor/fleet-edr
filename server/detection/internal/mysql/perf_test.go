@@ -19,6 +19,7 @@ import (
 // --- #91: bulk hosts upsert ------------------------------------------------
 
 func TestUpsertHosts_BatchAcrossManyHosts(t *testing.T) {
+	t.Parallel()
 	// Full-schema fixture: this test calls ListHosts, which LEFT JOINs the endpoint enrollments table.
 	s := newFullSchemaStore(t)
 	ctx := t.Context()
@@ -62,6 +63,7 @@ func TestUpsertHosts_BatchAcrossManyHosts(t *testing.T) {
 }
 
 func TestUpsertHosts_EmptyBatchNoOp(t *testing.T) {
+	t.Parallel()
 	// Full-schema fixture: this test calls ListHosts, which LEFT JOINs the endpoint enrollments table.
 	s := newFullSchemaStore(t)
 	require.NoError(t, s.UpsertHosts(t.Context(), nil))
@@ -99,6 +101,7 @@ func BenchmarkUpsertHosts(b *testing.B) {
 // --- #92: indexed PID lookup ----------------------------------------------
 
 func TestGetNetworkEventsForProcess_FiltersByIndexedPID(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -131,6 +134,7 @@ func TestGetNetworkEventsForProcess_FiltersByIndexedPID(t *testing.T) {
 }
 
 func TestGetNetworkEventsForProcess_UsesPIDIndex(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -212,6 +216,7 @@ func BenchmarkGetNetworkEventsForProcess(b *testing.B) {
 // --- #93: bulk alert_events linking ---------------------------------------
 
 func TestInsertAlert_LinksEveryEventInOneStatement(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -240,6 +245,7 @@ func TestInsertAlert_LinksEveryEventInOneStatement(t *testing.T) {
 }
 
 func TestInsertAlert_DedupBranchAlsoLinksAllEvents(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -311,6 +317,7 @@ func BenchmarkInsertAlert_BulkLinkEvents(b *testing.B) {
 // --- #94: recursive CTE for GetExecChain ----------------------------------
 
 func TestGetExecChain_ReturnsOldestFirstAndExcludesCurrent(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -335,6 +342,7 @@ func TestGetExecChain_ReturnsOldestFirstAndExcludesCurrent(t *testing.T) {
 }
 
 func TestGetExecChain_NoPreviousExecReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -347,6 +355,7 @@ func TestGetExecChain_NoPreviousExecReturnsEmpty(t *testing.T) {
 }
 
 func TestGetExecChain_HostScoped(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()
 
@@ -363,6 +372,7 @@ func TestGetExecChain_HostScoped(t *testing.T) {
 }
 
 func TestGetExecChain_CycleGuardCapsAt64(t *testing.T) {
+	t.Parallel()
 	// Synthesise a cycle by post-INSERT updating the oldest row's previous_exec_id to point at itself. Real schema would never produce
 	// this (each generation forks strictly later than its predecessor) but the cycle guard is the safety net for a corrupt FK.
 	s := newTestStore(t)

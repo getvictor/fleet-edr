@@ -31,6 +31,7 @@ import (
 // because doUpload's success predicate is `resp.StatusCode >= 200 && resp.StatusCode < 300`, treating
 // 2xx as a class; the 200 case here exercises that predicate.
 func TestUploadBatch(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -92,6 +93,7 @@ func TestUploadBatch(t *testing.T) {
 // 5xx-mid-batch shape (assertion: the SAME batch is sent each attempt, then marked uploaded once a 2xx
 // arrives) is what the depth==0 assertion below pins.
 func TestUploadRetry(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -136,6 +138,7 @@ func TestUploadRetry(t *testing.T) {
 // retrying after attempt 3 within this cycle, and the batch sits in the queue for a future cycle to try
 // again.
 func TestUploadAllRetriesFail(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -170,6 +173,7 @@ func TestUploadAllRetriesFail(t *testing.T) {
 // (called==1), the batch is not marked uploaded (depth==1), and the next cycle resumes with whatever
 // token enrollment now holds (structural: TokenFn is called fresh on every drainOnce).
 func TestUpload401_CallsOnAuthFail(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -212,6 +216,7 @@ func TestUpload401_CallsOnAuthFail(t *testing.T) {
 // enforcement is server-side; here we exercise the agent-side half (no usable token in the request
 // header, batch stays queued).
 func TestUpload_NoTokenBatchStaysQueued(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -254,6 +259,7 @@ func TestUpload_NoTokenBatchStaysQueued(t *testing.T) {
 // pinned by the depth==7 assertion. Multiple drainOnce calls would empty the queue but the bounded
 // per-request shape is what this test pins.
 func TestUpload_BoundedBatchSize(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -300,6 +306,7 @@ func TestUpload_BoundedBatchSize(t *testing.T) {
 // drained a large backlog at only BatchSize/Interval events per second (~12 minutes for a ~1.5M-event backlog), pushing fresh events
 // behind the backlog in the FIFO queue and past the detection SLA.
 func TestUpload_DrainUntilCaughtUp(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -348,6 +355,7 @@ func TestUpload_DrainUntilCaughtUp(t *testing.T) {
 // loop stops after exactly maxBatchesPerTick batches and leaves the remainder queued for the next tick, so a deep backlog can never starve
 // shutdown or monopolise a degraded link.
 func TestUpload_DrainUntilCaughtUp_RespectsCap(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -388,6 +396,7 @@ func TestUpload_DrainUntilCaughtUp_RespectsCap(t *testing.T) {
 // guard before dequeuing anything, and drainBatch surfaces the dequeue error when the context is already cancelled (SQLite rejects a
 // cancelled context immediately).
 func TestUpload_DrainUntilCaughtUp_CanceledContext(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	if err := q.Enqueue(context.Background(), []byte(`{"event_id":"cancel-1"}`)); err != nil {
 		t.Fatalf("enqueue: %v", err)
@@ -417,6 +426,7 @@ func TestUpload_DrainUntilCaughtUp_CanceledContext(t *testing.T) {
 // retrying a 401 with the SAME (stale) token would be wasteful and would delay the next cycle picking
 // up a refreshed token from the enrollment path.
 func TestUpload_401IsNonRetryableWithinCycle(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	if err := q.Enqueue(ctx, []byte(`{"event_id":"non-retry-401"}`)); err != nil {
@@ -468,6 +478,7 @@ func readUploadBody(t *testing.T, r *http.Request) []byte {
 //
 // spec:agent-event-uploader/bounded-request-size/the-upload-body-is-gzip-compressed
 func TestUpload_GzipWireShape(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 
@@ -581,6 +592,7 @@ func tooLarge413Server(t *testing.T, maxEventsPerRequest int) (*httptest.Server,
 // emits 3 POSTs total (1 rejected at 4 events, 2 succeeded at 2 events each); after the drain, every event is marked
 // uploaded so queue depth is 0. The events_dropped_too_large counter MUST be 0 because no single-event leaf 413'd.
 func TestUpload_413_MultiEventSplit_BothHalvesDeliver(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	for i := range 4 {
@@ -618,6 +630,7 @@ func TestUpload_413_MultiEventSplit_BothHalvesDeliver(t *testing.T) {
 // Total 7 POSTs. queue depth is 0 after the drain because every leaf is marked uploaded. No event was dropped because
 // none of the single-event POSTs 413'd; the counter remains 0.
 func TestUpload_413_RecursesUntilSingleEvents(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	for i := range 4 {
@@ -650,6 +663,7 @@ func TestUpload_413_RecursesUntilSingleEvents(t *testing.T) {
 // MUST mark the row uploaded so it stops being dequeued, emit a WARN-level audit log line tagged
 // audit=uploader.events_dropped_too_large, and increment the events_dropped_too_large counter by exactly 1.
 func TestUpload_413_SingleEventDrops_MetricAndAudit(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"too-large-singleton"}`)))
@@ -695,6 +709,7 @@ func TestUpload_413_SingleEventDrops_MetricAndAudit(t *testing.T) {
 //	events_dropped_too_large==0 because the 413 path was not taken.
 //	The error returned from drainOnce is a *clientError, NOT a *requestEntityTooLargeError.
 func TestUpload_413NotMistakenForGeneric4xx(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"generic-4xx"}`)))
@@ -729,6 +744,7 @@ func TestUpload_413NotMistakenForGeneric4xx(t *testing.T) {
 // count rather than over-cap body bytes: same 413, same recovery. Setup: 4-event batch, server returns 413 with
 // too_many_events when the body has >2 events. Expected: 1 x 413 followed by 2 x 200 on the halves, depth=0 after drain.
 func TestUpload_413_TooManyEventsRoutedThroughSplit(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	for i := range 4 {
@@ -777,6 +793,7 @@ func TestUpload_413_TooManyEventsRoutedThroughSplit(t *testing.T) {
 // the second-half POST fires, we cancel the context. drainOnce should return a context-cancelled error and the second-half
 // event MUST remain in the queue with uploaded=0.
 func TestUpload_413_ContextCancelBetweenHalves(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	parentCtx := t.Context()
 	require.NoError(t, q.Enqueue(parentCtx, []byte(`{"event_id":"first-half"}`)))
@@ -839,7 +856,8 @@ func TestUpload_413_ContextCancelBetweenHalves(t *testing.T) {
 //
 // The assertion that locks in "MUST NOT retransmit indefinitely" is: the server's request counter stops climbing
 // after the 3rd tick. The audit log line is asserted via a buffered slog handler.
-func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) {
+func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) { //nolint:tparallel // subtests share one queue+counter+audit buffer and run as an ordered sequence (3 drains -> quarantine -> audit assertion); they must run serially
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"poison-1"}`)), "enqueue seed event")
@@ -889,6 +907,7 @@ func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) {
 // shutdown actually drains queued events before Run returns. Pinned by depth==0 after Run exits;
 // the prior bug would have left depth==1.
 func TestUpload_GracefulShutdownDrainsRemaining(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	parentCtx := t.Context()
 	if err := q.Enqueue(parentCtx, []byte(`{"event_id":"drain-on-shutdown"}`)); err != nil {
@@ -935,6 +954,7 @@ func TestUpload_GracefulShutdownDrainsRemaining(t *testing.T) {
 // behaviour sealed the batch after 10 ticks). The endpoint-rejected counter fires, labelled with the 403. When the endpoint
 // recovers to 200, the preserved queue drains.
 func TestUpload_Sustained403PreservesQueueAndResumesOnRecovery(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	for i := range 3 {
@@ -974,6 +994,7 @@ func TestUpload_Sustained403PreservesQueueAndResumesOnRecovery(t *testing.T) {
 // siblings: with one event per batch, good-1 delivers, the poison burns its 3-tick budget and is sealed, then good-2
 // delivers. A 400 is content poison, so it must NOT trip the endpoint-rejected counter (that is the blanket-rejection path).
 func TestUpload_PoisonBatchQuarantinesWhileSiblingDelivers(t *testing.T) {
+	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()
 	require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"good-1"}`)))
@@ -1015,8 +1036,10 @@ func TestUpload_PoisonBatchQuarantinesWhileSiblingDelivers(t *testing.T) {
 // Generalises the 403 fix: any non-400 4xx the ingest route never emits itself (404, 429, ...) is a blanket rejection, so
 // it must be kept queued past the quarantine threshold rather than sealed.
 func TestUpload_Non400ClientErrorsKeepQueue(t *testing.T) {
+	t.Parallel()
 	for _, status := range []int{http.StatusNotFound, http.StatusTooManyRequests} {
 		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			t.Parallel()
 			q := openTestQueue(t)
 			ctx := t.Context()
 			require.NoError(t, q.Enqueue(ctx, []byte(`{"event_id":"keep"}`)))

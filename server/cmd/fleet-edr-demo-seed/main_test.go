@@ -30,12 +30,14 @@ func badDB(t *testing.T) *sql.DB {
 }
 
 func TestRealMainMissingDSN(t *testing.T) {
+	t.Parallel()
 	err := realMain(discardLogger(), func(string) string { return "" }, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DSN is required")
 }
 
 func TestRealMainPingFails(t *testing.T) {
+	t.Parallel()
 	getenv := func(k string) string {
 		if k == "EDR_DSN" {
 			return "root:nope@tcp(127.0.0.1:1)/x?timeout=300ms"
@@ -48,11 +50,13 @@ func TestRealMainPingFails(t *testing.T) {
 }
 
 func TestSeedUserIfConfiguredNoSubject(t *testing.T) {
+	t.Parallel()
 	s := newSeeder(config{demoOIDCSubject: ""}, nil, testHTTPClient(), discardLogger())
 	require.NoError(t, s.seedUserIfConfigured(context.Background()))
 }
 
 func TestDBErrorsPropagate(t *testing.T) {
+	t.Parallel()
 	s := newSeeder(config{pollInterval: time.Millisecond, verifyTimeout: 30 * time.Millisecond}, badDB(t), testHTTPClient(), discardLogger())
 	ctx := context.Background()
 
@@ -70,13 +74,16 @@ func TestDBErrorsPropagate(t *testing.T) {
 }
 
 func TestSeedDemoUserError(t *testing.T) {
+	t.Parallel()
 	err := seedDemoUser(context.Background(), badDB(t), "demo@fleet-edr.local", "subject", "senior_analyst")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "seed demo user row")
 }
 
 func TestNewHTTPClient(t *testing.T) {
+	t.Parallel()
 	t.Run("no ca cert keeps default verification", func(t *testing.T) {
+		t.Parallel()
 		c, err := newHTTPClient("")
 		require.NoError(t, err)
 		tr, ok := c.Transport.(*http.Transport)
@@ -90,6 +97,7 @@ func TestNewHTTPClient(t *testing.T) {
 	})
 
 	t.Run("valid ca cert sets a RootCAs pool", func(t *testing.T) {
+		t.Parallel()
 		path := filepath.Join(t.TempDir(), "ca.pem")
 		require.NoError(t, os.WriteFile(path, selfSignedCertPEM(t), 0o600))
 		c, err := newHTTPClient(path)
@@ -101,12 +109,14 @@ func TestNewHTTPClient(t *testing.T) {
 	})
 
 	t.Run("missing ca file errors", func(t *testing.T) {
+		t.Parallel()
 		_, err := newHTTPClient(filepath.Join(t.TempDir(), "nope.pem"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "read ca cert")
 	})
 
 	t.Run("invalid pem errors", func(t *testing.T) {
+		t.Parallel()
 		path := filepath.Join(t.TempDir(), "bad.pem")
 		require.NoError(t, os.WriteFile(path, []byte("not a pem"), 0o600))
 		_, err := newHTTPClient(path)

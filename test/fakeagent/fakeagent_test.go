@@ -14,6 +14,7 @@ import (
 )
 
 func TestLoadScenario_StarterCorpus(t *testing.T) {
+	t.Parallel()
 	// Walk the shipped scenarios under scenarios/ and assert each loads + validates. Catches regressions where a YAML edit drifts
 	// from the schema before any consumer (M4 CI, M10 efficacy) gets there.
 	entries, err := os.ReadDir("scenarios")
@@ -25,6 +26,7 @@ func TestLoadScenario_StarterCorpus(t *testing.T) {
 			continue
 		}
 		t.Run(e.Name(), func(t *testing.T) {
+			t.Parallel()
 			s, err := LoadScenario(filepath.Join("scenarios", e.Name()))
 			require.NoError(t, err)
 			assert.NotEmpty(t, s.Name)
@@ -38,6 +40,7 @@ func TestLoadScenario_StarterCorpus(t *testing.T) {
 }
 
 func TestLoadScenario_ValidationErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		yaml string
@@ -66,6 +69,7 @@ func TestLoadScenario_ValidationErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, "scenario.yaml")
 			require.NoError(t, os.WriteFile(path, []byte(tc.yaml), 0o600))
@@ -77,12 +81,14 @@ func TestLoadScenario_ValidationErrors(t *testing.T) {
 }
 
 func TestLoadScenario_FileNotFound(t *testing.T) {
+	t.Parallel()
 	_, err := LoadScenario(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read ")
 }
 
 func TestLoadScenario_MalformedYAML(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("name: ok\nhost: not-an-object"), 0o600))
@@ -92,6 +98,7 @@ func TestLoadScenario_MalformedYAML(t *testing.T) {
 }
 
 func TestDurationUnmarshal(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want time.Duration
@@ -104,6 +111,7 @@ func TestDurationUnmarshal(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
 			var d Duration
 			require.NoError(t, d.UnmarshalJSON([]byte(tc.in)))
 			assert.Equal(t, tc.want, time.Duration(d))
@@ -112,9 +120,11 @@ func TestDurationUnmarshal(t *testing.T) {
 }
 
 func TestDurationUnmarshal_Invalid(t *testing.T) {
+	t.Parallel()
 	cases := []string{`"not-a-duration"`, `12a`, `"7"`}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
 			var d Duration
 			require.Error(t, d.UnmarshalJSON([]byte(tc)))
 		})
@@ -122,6 +132,7 @@ func TestDurationUnmarshal_Invalid(t *testing.T) {
 }
 
 func TestEnvelopes_DeterministicTimestamps(t *testing.T) {
+	t.Parallel()
 	s, err := LoadScenario("scenarios/exec-fork-exit.yaml")
 	require.NoError(t, err)
 	start := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
@@ -139,6 +150,7 @@ func TestEnvelopes_DeterministicTimestamps(t *testing.T) {
 }
 
 func TestEnvelopes_HostIDOverride(t *testing.T) {
+	t.Parallel()
 	s, err := LoadScenario("scenarios/exec-fork-exit.yaml")
 	require.NoError(t, err)
 
@@ -161,6 +173,7 @@ func TestEnvelopes_HostIDOverride(t *testing.T) {
 // network filter produces is what downstream Go consumers (server detection engine, retention, alert
 // pipeline) parse.
 func TestEnvelopes_PayloadShapePerEventType(t *testing.T) {
+	t.Parallel()
 	// One scenario, one event of each supported type. Build envelopes, then unmarshal each payload back into a generic map and
 	// assert on the required-fields-per-schema. Catches regressions where buildPayload omits a required field.
 	scenario := &Scenario{
@@ -201,6 +214,7 @@ func TestEnvelopes_PayloadShapePerEventType(t *testing.T) {
 }
 
 func TestEnvelopes_PreservesTimelineOrder(t *testing.T) {
+	t.Parallel()
 	// Hand-build a scenario whose At offsets are NOT in ascending order so we know the library emits in timeline order, not sorted.
 	scenario := &Scenario{
 		Name: "order-test",

@@ -122,18 +122,21 @@ func newOperatorServer(t *testing.T, svc api.Service, az identityapi.AuthZ) *htt
 }
 
 func TestNew_NilServicePanics(t *testing.T) {
+	t.Parallel()
 	assert.PanicsWithValue(t, "detection operator.New: api.Service must not be nil", func() {
 		New(nil, allowAllAuthZ{}, slog.Default())
 	})
 }
 
 func TestNew_NilAuthZPanics(t *testing.T) {
+	t.Parallel()
 	assert.PanicsWithValue(t, "detection operator.New: authz must not be nil", func() {
 		New(fakeService{}, nil, slog.Default())
 	})
 }
 
 func TestNew_NilLoggerFallsBackToDefault(t *testing.T) {
+	t.Parallel()
 	h := New(fakeService{}, allowAllAuthZ{}, nil)
 	require.NotNil(t, h)
 	assert.NotNil(t, h.logger)
@@ -173,7 +176,9 @@ func doPut(t *testing.T, srv *httptest.Server, path, body string) *http.Response
 }
 
 func TestHandleListHosts(t *testing.T) {
+	t.Parallel()
 	t.Run("authz deny returns no body from handler", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, denyAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts")
 		defer resp.Body.Close()
@@ -183,6 +188,7 @@ func TestHandleListHosts(t *testing.T) {
 	})
 
 	t.Run("svc error returns 500 with internal code", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{listHosts: func(context.Context) ([]api.HostSummary, error) {
 			return nil, errors.New("db down")
 		}}
@@ -194,6 +200,7 @@ func TestHandleListHosts(t *testing.T) {
 	})
 
 	t.Run("nil hosts normalized to empty array", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{listHosts: func(context.Context) ([]api.HostSummary, error) { return nil, nil }}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts")
@@ -205,7 +212,9 @@ func TestHandleListHosts(t *testing.T) {
 }
 
 func TestHandleProcessTree(t *testing.T) {
+	t.Parallel()
 	t.Run("authz deny short-circuits before svc", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, denyAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/tree")
 		defer resp.Body.Close()
@@ -213,6 +222,7 @@ func TestHandleProcessTree(t *testing.T) {
 	})
 
 	t.Run("svc error returns 500", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int) ([]api.ProcessNode, error) {
 			return nil, errors.New("query failed")
 		}}
@@ -224,6 +234,7 @@ func TestHandleProcessTree(t *testing.T) {
 	})
 
 	t.Run("nil roots normalized to empty array under roots key", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int) ([]api.ProcessNode, error) {
 			return nil, nil
 		}}
@@ -237,6 +248,7 @@ func TestHandleProcessTree(t *testing.T) {
 	})
 
 	t.Run("limit param above max is clamped", func(t *testing.T) {
+		t.Parallel()
 		var sawLimit int
 		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, limit int) ([]api.ProcessNode, error) {
 			sawLimit = limit
@@ -250,7 +262,9 @@ func TestHandleProcessTree(t *testing.T) {
 }
 
 func TestHandleProcessDetail(t *testing.T) {
+	t.Parallel()
 	t.Run("authz deny short-circuits before svc", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, denyAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/processes/1234")
 		defer resp.Body.Close()
@@ -258,6 +272,7 @@ func TestHandleProcessDetail(t *testing.T) {
 	})
 
 	t.Run("svc error returns 500", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{getProcessDetail: func(context.Context, string, int, int64) (*api.ProcessDetail, error) {
 			return nil, errors.New("graph error")
 		}}
@@ -269,6 +284,7 @@ func TestHandleProcessDetail(t *testing.T) {
 	})
 
 	t.Run("happy path returns the detail object", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{getProcessDetail: func(context.Context, string, int, int64) (*api.ProcessDetail, error) {
 			return &api.ProcessDetail{Process: api.Process{HostID: "host-a", PID: 1234}}, nil
 		}}
@@ -280,7 +296,9 @@ func TestHandleProcessDetail(t *testing.T) {
 }
 
 func TestHandleListAlerts(t *testing.T) {
+	t.Parallel()
 	t.Run("authz deny short-circuits before svc", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, denyAllAuthZ{})
 		resp := doGet(t, srv, "/api/alerts")
 		defer resp.Body.Close()
@@ -288,6 +306,7 @@ func TestHandleListAlerts(t *testing.T) {
 	})
 
 	t.Run("svc error returns 500", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{listAlerts: func(context.Context, api.AlertFilter) ([]api.Alert, error) {
 			return nil, errors.New("alerts query failed")
 		}}
@@ -299,6 +318,7 @@ func TestHandleListAlerts(t *testing.T) {
 	})
 
 	t.Run("nil alerts normalized to empty array", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{listAlerts: func(context.Context, api.AlertFilter) ([]api.Alert, error) { return nil, nil }}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/alerts")
@@ -310,7 +330,9 @@ func TestHandleListAlerts(t *testing.T) {
 }
 
 func TestHandleGetAlert(t *testing.T) {
+	t.Parallel()
 	t.Run("bad id returns 400 with invalid_alert_id", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/alerts/not-a-number")
 		defer resp.Body.Close()
@@ -319,6 +341,7 @@ func TestHandleGetAlert(t *testing.T) {
 	})
 
 	t.Run("authz deny short-circuits before svc", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, denyAllAuthZ{})
 		resp := doGet(t, srv, "/api/alerts/42")
 		defer resp.Body.Close()
@@ -326,6 +349,7 @@ func TestHandleGetAlert(t *testing.T) {
 	})
 
 	t.Run("not found returns 404 with not_found", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 			return api.Alert{}, nil, api.ErrAlertNotFound
 		}}
@@ -337,6 +361,7 @@ func TestHandleGetAlert(t *testing.T) {
 	})
 
 	t.Run("svc error returns 500", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 			return api.Alert{}, nil, errors.New("db read failed")
 		}}
@@ -348,6 +373,7 @@ func TestHandleGetAlert(t *testing.T) {
 	})
 
 	t.Run("happy path includes event_ids", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 			return api.Alert{HostID: "host-a", RuleID: "r"}, []string{"evt-1", "evt-2"}, nil
 		}}
@@ -364,7 +390,9 @@ func TestHandleGetAlert(t *testing.T) {
 }
 
 func TestHandleUpdateAlertStatus(t *testing.T) {
+	t.Parallel()
 	t.Run("bad id returns invalid_alert_id", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, allowAllAuthZ{})
 		resp := doPut(t, srv, "/api/alerts/abc", `{"status":"acknowledged"}`)
 		defer resp.Body.Close()
@@ -373,6 +401,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("bad json body returns invalid_json", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, allowAllAuthZ{})
 		resp := doPut(t, srv, "/api/alerts/42", `{not valid`)
 		defer resp.Body.Close()
@@ -384,6 +413,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("body exceeding cap maps to invalid_json (MaxBytesReader)", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, allowAllAuthZ{})
 		bigPayload := `{"status":"acknowledged","filler":"` + strings.Repeat("x", updateAlertStatusBodyCap+1) + `"}`
 		resp := doPut(t, srv, "/api/alerts/42", bigPayload)
@@ -393,6 +423,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("unknown status returns invalid_status", func(t *testing.T) {
+		t.Parallel()
 		srv := newOperatorServer(t, fakeService{}, allowAllAuthZ{})
 		resp := doPut(t, srv, "/api/alerts/42", `{"status":"banana"}`)
 		defer resp.Body.Close()
@@ -401,6 +432,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("pre-gate not-found returns 404", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 			return api.Alert{}, nil, api.ErrAlertNotFound
 		}}
@@ -412,6 +444,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("pre-gate svc error returns 500", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 			return api.Alert{}, nil, errors.New("db down")
 		}}
@@ -423,6 +456,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("update returns ErrInvalidAlertTransition -> invalid_status_transition", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 				return api.Alert{Severity: "low"}, nil, nil
@@ -439,6 +473,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("update returns ErrInvalidUserUpdater -> invalid_user", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) { return api.Alert{}, nil, nil },
 			updateAlertStatus: func(context.Context, int64, api.AlertStatus, int64) (api.Alert, error) {
@@ -453,6 +488,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("update returns generic error -> internal 500", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) { return api.Alert{}, nil, nil },
 			updateAlertStatus: func(context.Context, int64, api.AlertStatus, int64) (api.Alert, error) {
@@ -467,6 +503,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 	})
 
 	t.Run("happy path returns 204 and emits an audit row", func(t *testing.T) {
+		t.Parallel()
 		svc := fakeService{
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 				return api.Alert{Severity: "medium"}, nil, nil

@@ -87,18 +87,21 @@ func newAgentServer(t *testing.T, svc api.Service, hostID string) *httptest.Serv
 }
 
 func TestNew_NilServicePanics(t *testing.T) {
+	t.Parallel()
 	assert.PanicsWithValue(t, "response agent.New: api.Service must not be nil", func() {
 		New(nil, slog.Default())
 	})
 }
 
 func TestNew_NilLoggerFallsBackToDefault(t *testing.T) {
+	t.Parallel()
 	h := New(fakeService{}, nil)
 	require.NotNil(t, h)
 	assert.NotNil(t, h.logger)
 }
 
 func TestHandleList_MissingHostContext(t *testing.T) {
+	t.Parallel()
 	srv := newAgentServer(t, fakeService{}, "")
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/commands", nil)
@@ -114,6 +117,7 @@ func TestHandleList_MissingHostContext(t *testing.T) {
 }
 
 func TestHandleList_StatusFilter(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		query      string
@@ -135,6 +139,7 @@ func TestHandleList_StatusFilter(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			var capturedStatus api.Status
 			svc := fakeService{
 				listForHost: func(_ context.Context, _ string, status api.Status) ([]api.Command, error) {
@@ -167,6 +172,7 @@ func TestHandleList_StatusFilter(t *testing.T) {
 // `?host_id=host-b`, and capturing the hostID passed to the service: must be host-a regardless of the
 // query string. A regression that swapped the priority would surface here.
 func TestHandleList_TokenHostIDIsAuthoritative(t *testing.T) {
+	t.Parallel()
 	// Channel rather than a shared variable so the test/handler goroutines synchronize cleanly under `go test -race`. Buffered=1 so
 	// the handler closure doesn't block if the test happens to read after the channel was sent into.
 	capturedHostID := make(chan string, 1)
@@ -192,6 +198,7 @@ func TestHandleList_TokenHostIDIsAuthoritative(t *testing.T) {
 }
 
 func TestHandleList_ServiceError(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{
 		listForHost: func(context.Context, string, api.Status) ([]api.Command, error) {
 			return nil, errors.New("db down")
@@ -209,6 +216,7 @@ func TestHandleList_ServiceError(t *testing.T) {
 }
 
 func TestHandleUpdate(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		hostID     string
@@ -280,6 +288,7 @@ func TestHandleUpdate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			svc := fakeService{
 				updateStatus: func(_ context.Context, _ api.UpdateStatusRequest) error {
 					return tc.updateErr
@@ -305,6 +314,7 @@ func TestHandleUpdate(t *testing.T) {
 }
 
 func TestHandleUpdate_BodyCap(t *testing.T) {
+	t.Parallel()
 	// A body just over 64 KiB should be rejected by MaxBytesReader.
 	svc := fakeService{
 		updateStatus: func(context.Context, api.UpdateStatusRequest) error {

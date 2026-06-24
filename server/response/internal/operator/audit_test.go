@@ -33,6 +33,7 @@ func (c *captureRecorder) Record(_ context.Context, e identityapi.AuditEvent) er
 // pulled from ctx by the handler, and the host as the target. Without this row a customer asking "who issued kill_process for host X
 // on 2026-Q2" has no record.
 func TestHandler_CommandIssue_EmitsAudit(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{insert: func(_ context.Context, _ string, _ string, _ []byte) (int64, error) {
 		return 99, nil
 	}}
@@ -69,6 +70,7 @@ func TestHandler_CommandIssue_EmitsAudit(t *testing.T) {
 // A nil recorder is the documented "audit-disabled" mode (e.g. unit tests that don't care about audit). The handler must still process
 // the request and return 201 without panicking.
 func TestHandler_CommandIssue_NilAuditOK(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{insert: func(_ context.Context, _ string, _ string, _ []byte) (int64, error) {
 		return 100, nil
 	}}
@@ -92,6 +94,7 @@ func TestHandler_CommandIssue_NilAuditOK(t *testing.T) {
 // Insert errors on the underlying service must NOT emit an audit row; audit records "what happened", not "what was attempted." A
 // failed insert flows through the existing error response path; the recorder should remain untouched.
 func TestHandler_CommandIssue_InsertErrorSkipsAudit(t *testing.T) {
+	t.Parallel()
 	svc := fakeService{insert: func(_ context.Context, _ string, _ string, _ []byte) (int64, error) {
 		return 0, api.ErrInvalidInsertRequest
 	}}

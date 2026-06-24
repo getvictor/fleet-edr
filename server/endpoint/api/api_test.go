@@ -11,6 +11,7 @@ import (
 )
 
 func TestHostIDFromContext_RoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := api.WithHostID(context.Background(), "host-abc")
 	got, ok := api.HostIDFromContext(ctx)
 	assert.True(t, ok)
@@ -18,12 +19,14 @@ func TestHostIDFromContext_RoundTrip(t *testing.T) {
 }
 
 func TestHostIDFromContext_Empty(t *testing.T) {
+	t.Parallel()
 	got, ok := api.HostIDFromContext(context.Background())
 	assert.False(t, ok)
 	assert.Empty(t, got)
 }
 
 func TestHostIDFromContext_EmptyStringNotAuthenticated(t *testing.T) {
+	t.Parallel()
 	// Pinning an empty host id should not be reported as authenticated. Guards against a writer accidentally passing "" and silently
 	// authenticating a request without a real host id.
 	ctx := api.WithHostID(context.Background(), "")
@@ -33,6 +36,7 @@ func TestHostIDFromContext_EmptyStringNotAuthenticated(t *testing.T) {
 }
 
 func TestWithHostIDForTest_DelegatesToWithHostID(t *testing.T) {
+	t.Parallel()
 	ctx := api.WithHostIDForTest(context.Background(), "host-xyz")
 	got, ok := api.HostIDFromContext(ctx)
 	assert.True(t, ok)
@@ -42,6 +46,7 @@ func TestWithHostIDForTest_DelegatesToWithHostID(t *testing.T) {
 // TestErrorWrapChain verifies the error sentinels are not accidentally
 // the same value (errors.Is would short-circuit incorrectly).
 func TestErrorSentinelsAreDistinct(t *testing.T) {
+	t.Parallel()
 	require.NotErrorIs(t, api.ErrInvalidSecret, api.ErrInvalidToken)
 	require.NotErrorIs(t, api.ErrInvalidToken, api.ErrInvalidHardwareUUID)
 	require.NotErrorIs(t, api.ErrInvalidHardwareUUID, api.ErrNotFound)

@@ -16,6 +16,7 @@ import (
 // validation errors).
 
 func TestJSONStringSlice_RoundTrip(t *testing.T) {
+	t.Parallel()
 	s := JSONStringSlice{"T1059", "T1105"}
 	v, err := s.Value()
 	require.NoError(t, err)
@@ -53,6 +54,7 @@ func TestJSONStringSlice_RoundTrip(t *testing.T) {
 }
 
 func TestIsValidationError(t *testing.T) {
+	t.Parallel()
 	assert.True(t, IsValidationError(ErrInvalidAlertTransition))
 	assert.True(t, IsValidationError(ErrInvalidUserUpdater))
 	assert.True(t, IsValidationError(fmt.Errorf("wrapped: %w", ErrInvalidAlertTransition)))
@@ -62,6 +64,7 @@ func TestIsValidationError(t *testing.T) {
 }
 
 func TestEvent_RoundTripJSON(t *testing.T) {
+	t.Parallel()
 	// The agent depends on byte-identical wire shape for Event. Round-
 	// trip an Event through json to pin the field set.
 	in := Event{
@@ -85,6 +88,7 @@ func TestEvent_RoundTripJSON(t *testing.T) {
 }
 
 func TestAlertStatus_Constants(t *testing.T) {
+	t.Parallel()
 	// Pin the wire-visible status strings so a future refactor can't
 	// silently change the UI's expected values.
 	assert.Equal(t, "open", string(AlertStatusOpen))
@@ -93,6 +97,7 @@ func TestAlertStatus_Constants(t *testing.T) {
 }
 
 func TestSeverity_Constants(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "low", SeverityLow)
 	assert.Equal(t, "medium", SeverityMedium)
 	assert.Equal(t, "high", SeverityHigh)
@@ -100,6 +105,7 @@ func TestSeverity_Constants(t *testing.T) {
 }
 
 func TestExitReason_Constants(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "event", ExitReasonEvent)
 	assert.Equal(t, "ttl_reconciliation", ExitReasonTTLReconciliation)
 	assert.Equal(t, "pid_reuse", ExitReasonPIDReuse)
@@ -112,6 +118,7 @@ func TestExitReason_Constants(t *testing.T) {
 // TestJSONStringSlice_RoundTripProperty: for any []string s,
 // Scan(Value(s)) == s (with the empty-slice collapse to nil).
 func TestJSONStringSlice_RoundTripProperty(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(rt *rapid.T) {
 		// Build a string slice from rapid's generator. Cap length so
 		// pathological cases don't dominate runtime.
@@ -135,6 +142,7 @@ func TestJSONStringSlice_RoundTripProperty(t *testing.T) {
 // TestIsValidationError_Property: for any error wrapped any number of times around one of the validation sentinels, IsValidationError
 // must return true. For any error not derived from a validation sentinel, it returns false.
 func TestIsValidationError_Property(t *testing.T) {
+	t.Parallel()
 	validationSentinels := []error{ErrInvalidAlertTransition, ErrInvalidUserUpdater}
 	notValidationErrs := []error{
 		ErrAlertNotFound,

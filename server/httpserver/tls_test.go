@@ -56,6 +56,7 @@ func writeSelfSignedPEM(t *testing.T) (certFile, keyFile string) {
 //
 // spec:server-configuration/the-server-configuration-surface-is-intentionally-minimal/tls-1-2-cannot-be-enabled
 func TestConfigureTLS_MinVersionIsTLS13(t *testing.T) {
+	t.Parallel()
 	certFile, keyFile := writeSelfSignedPEM(t)
 	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second}
 

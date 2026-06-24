@@ -65,6 +65,7 @@ func fakeEnrollServer(t *testing.T, secret, wantToken string, hits *atomic.Int64
 // call: same TokenFile path, NO EnrollSecret in opts; the function loads the persisted token without
 // re-hitting the server, and tp2.HostID/tp2.Token equal the first-boot values.
 func TestEnsure_FirstBootEnrolls(t *testing.T) {
+	t.Parallel()
 	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", nil)
 	defer srv.Close()
 
@@ -111,6 +112,7 @@ func TestEnsure_FirstBootEnrolls(t *testing.T) {
 // permissions". The "agent does not transmit the token" AND clause is structural: Ensure returns an
 // error before constructing the Authorization header, so the token never leaves the process.
 func TestEnsure_RefusesWorldReadableTokenFile(t *testing.T) {
+	t.Parallel()
 	tokenFile := filepath.Join(t.TempDir(), "enrolled.plist")
 	require.NoError(t, os.WriteFile(tokenFile, []byte(`<plist></plist>`), 0o644))
 
@@ -124,6 +126,7 @@ func TestEnsure_RefusesWorldReadableTokenFile(t *testing.T) {
 }
 
 func TestEnsure_FailsWithoutSecretAndNoFile(t *testing.T) {
+	t.Parallel()
 	tokenFile := filepath.Join(t.TempDir(), "enrolled.plist")
 	_, err := Ensure(t.Context(), Options{
 		ServerURL: "http://unused",
@@ -147,6 +150,7 @@ func TestEnsure_FailsWithoutSecretAndNoFile(t *testing.T) {
 // previously-valid token starts getting 401s, the agent's re-enroll path engages on the next request, which
 // the hits=2 assertion proves.
 func TestOnUnauthorized_Throttles(t *testing.T) {
+	t.Parallel()
 	var hits atomic.Int64
 	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", &hits)
 	defer srv.Close()
@@ -179,6 +183,7 @@ func TestOnUnauthorized_Throttles(t *testing.T) {
 // burn through retry attempts. The "logs an actionable error" clause is observable via the logger;
 // "does not loop on doomed re-enroll attempts" is pinned by hits staying at 1 after OnUnauthorized fires.
 func TestOnUnauthorized_EmptySecretRefuses(t *testing.T) {
+	t.Parallel()
 	var hits atomic.Int64
 	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", &hits)
 	defer srv.Close()
@@ -217,6 +222,7 @@ func TestOnUnauthorized_EmptySecretRefuses(t *testing.T) {
 // failure as an error AND MUST NOT persist a token file. The "audit log" and "no enrollment row" clauses
 // are server-side and belong to a server-admin-surface test of the enroll endpoint.
 func TestEnsure_RejectsBadEnrollSecret(t *testing.T) {
+	t.Parallel()
 	srv := fakeEnrollServer(t, "the-real-secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", nil)
 	defer srv.Close()
 
@@ -244,6 +250,7 @@ func TestEnsure_RejectsBadEnrollSecret(t *testing.T) {
 // world-readable refusal path tested by TestEnsure_RefusesWorldReadableTokenFile so we exercise the
 // malformed-schema branch in isolation.
 func TestEnsure_RefusesMalformedTokenFile(t *testing.T) {
+	t.Parallel()
 	tokenFile := filepath.Join(t.TempDir(), "enrolled.plist")
 	require.NoError(t, os.WriteFile(tokenFile, []byte("definitely not a plist"), 0o600))
 
@@ -269,6 +276,7 @@ func TestEnsure_RefusesMalformedTokenFile(t *testing.T) {
 // repointed EDR_SERVER_URL would silently leak the old host_token to whatever server answers at the new
 // address.
 func TestEnsure_RefusesServerURLMismatch(t *testing.T) {
+	t.Parallel()
 	srv1 := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", nil)
 	defer srv1.Close()
 	srv2 := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", nil)

@@ -30,9 +30,11 @@ import (
 // handlers). New operator packages SHALL be added to
 // privilegedHandlerFiles.
 func TestPrivilegedHandlersGateOnAllow(t *testing.T) {
+	t.Parallel()
 	repoRoot := repoRoot(t)
 	for _, file := range privilegedHandlerFiles {
 		t.Run(filepath.Base(filepath.Dir(file)), func(t *testing.T) {
+			t.Parallel()
 			path := filepath.Join(repoRoot, file)
 			fset := token.NewFileSet()
 			astFile, err := parser.ParseFile(fset, path, nil, parser.AllErrors)

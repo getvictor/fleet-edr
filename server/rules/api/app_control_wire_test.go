@@ -15,6 +15,7 @@ import (
 // TestMarshalSetApplicationControlPayload_RoundTrip pins the wire shape every agent sees. The byte-exact form is the contract the
 // extension's Swift decoder parses; field rename / reorder here breaks every deployed agent at the same instant.
 func TestMarshalSetApplicationControlPayload_RoundTrip(t *testing.T) {
+	t.Parallel()
 	msg := "Blocked: corporate policy"
 	url := "https://help.example.com/blocked"
 	rules := []api.ApplicationControlRule{
@@ -63,6 +64,7 @@ func TestMarshalSetApplicationControlPayload_RoundTrip(t *testing.T) {
 // spec scenario "disabled rules are not pushed": a policy with one enabled + one disabled rule fans out a payload carrying only the
 // enabled rule.
 func TestMarshalSetApplicationControlPayload_FiltersDisabled(t *testing.T) {
+	t.Parallel()
 	rules := []api.ApplicationControlRule{
 		{RuleType: api.RuleTypeBinary, Identifier: "a", Enabled: true},
 		{RuleType: api.RuleTypeBinary, Identifier: "b", Enabled: false},
@@ -80,6 +82,7 @@ func TestMarshalSetApplicationControlPayload_FiltersDisabled(t *testing.T) {
 // TestMarshalSetApplicationControlPayload_FiltersExpired covers the expires_at filter when the caller passes a non-zero `now`.
 // The agent should never see rules whose TTL has passed.
 func TestMarshalSetApplicationControlPayload_FiltersExpired(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	past := now.Add(-time.Hour)
 	future := now.Add(time.Hour)
@@ -100,6 +103,7 @@ func TestMarshalSetApplicationControlPayload_FiltersExpired(t *testing.T) {
 // TestMarshalSetApplicationControlPayload_EmptyRules confirms the empty-rules case round-trips cleanly. An empty payload is a valid
 // state (just-after-policy-creation, or after every rule is deleted) and the agent + extension must handle it without erroring.
 func TestMarshalSetApplicationControlPayload_EmptyRules(t *testing.T) {
+	t.Parallel()
 	raw, err := api.MarshalSetApplicationControlPayload(api.ApplicationControlPolicy{ID: 1, Version: 1}, nil, time.Time{})
 	require.NoError(t, err)
 	var decoded api.SetApplicationControlPayload
@@ -112,6 +116,7 @@ func TestMarshalSetApplicationControlPayload_EmptyRules(t *testing.T) {
 // TestSetApplicationControlPayload_JSONKeys pins the JSON field names that the extension's Swift Decodable reads. Renames here
 // silently break the extension at decode time; this test fails loudly when a rename happens.
 func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
+	t.Parallel()
 	msg := "blocked"
 	raw, err := api.MarshalSetApplicationControlPayload(
 		api.ApplicationControlPolicy{ID: 1, Version: 2},
@@ -143,7 +148,9 @@ func TestSetApplicationControlPayload_JSONKeys(t *testing.T) {
 // "unknown epoch" sentinel a pre-fix caller leaks and the extension treats as "never advances". A later mutation's larger
 // updated_at MUST produce a larger epoch even when policy_version is lower, which is exactly the post-DB-restore case.
 func TestMarshalSetApplicationControlPayload_PolicyEpoch(t *testing.T) {
+	t.Parallel()
 	t.Run("non-zero updated_at marshals to UnixMicro", func(t *testing.T) {
+		t.Parallel()
 		updated := time.Date(2026, 6, 16, 12, 0, 0, 123456000, time.UTC)
 		raw, err := api.MarshalSetApplicationControlPayload(
 			api.ApplicationControlPolicy{ID: 1, Version: 7, UpdatedAt: updated}, nil, time.Time{},
@@ -155,6 +162,7 @@ func TestMarshalSetApplicationControlPayload_PolicyEpoch(t *testing.T) {
 	})
 
 	t.Run("zero updated_at marshals to 0 sentinel", func(t *testing.T) {
+		t.Parallel()
 		raw, err := api.MarshalSetApplicationControlPayload(
 			api.ApplicationControlPolicy{ID: 1, Version: 1}, nil, time.Time{},
 		)
@@ -165,6 +173,7 @@ func TestMarshalSetApplicationControlPayload_PolicyEpoch(t *testing.T) {
 	})
 
 	t.Run("regressed version with advanced updated_at yields a larger epoch", func(t *testing.T) {
+		t.Parallel()
 		// Pre-restore: high version, earlier updated_at. Post-restore: low version, but a later wall-clock updated_at.
 		preRestore := api.ApplicationControlPolicy{ID: 1, Version: 25, UpdatedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 		postRestore := api.ApplicationControlPolicy{ID: 1, Version: 2, UpdatedAt: time.Date(2026, 6, 16, 0, 0, 0, 0, time.UTC)}
@@ -269,6 +278,7 @@ func genRule(t *rapid.T, idx int) api.ApplicationControlRule {
 // Bounded rule-list size: rapid.SliceOfN caps each generated batch
 // so each property iteration stays under a few milliseconds.
 func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		policyID := rapid.Int64Range(1, 1_000_000).Draw(t, "policy_id")
 		policyVersion := rapid.Int64Range(1, 1_000_000).Draw(t, "policy_version")
@@ -370,6 +380,7 @@ func TestMarshalSetApplicationControlPayload_RapidRoundTrip(t *testing.T) {
 // against the new ApplicationControlPolicy shape will leak that zero value through, and the extension snapshot must still
 // receive a safe-by-default posture.
 func TestMarshalSetApplicationControlPayload_DeadlineFallbackDefault(t *testing.T) {
+	t.Parallel()
 	raw, err := api.MarshalSetApplicationControlPayload(
 		api.ApplicationControlPolicy{ID: 1, Version: 1},
 		nil,
@@ -387,6 +398,7 @@ func TestMarshalSetApplicationControlPayload_DeadlineFallbackDefault(t *testing.
 // the marshal verbatim. Drives the v0.1.x follow-up that will start carrying real values through ApplicationControlPolicy
 // once the DB column lands; the test guarantees the wire path is ready to accept whatever value the REST surface validates.
 func TestMarshalSetApplicationControlPayload_DeadlineFallbackPassthrough(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		posture api.FallbackPosture
@@ -397,6 +409,7 @@ func TestMarshalSetApplicationControlPayload_DeadlineFallbackPassthrough(t *test
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			raw, err := api.MarshalSetApplicationControlPayload(
 				api.ApplicationControlPolicy{ID: 1, Version: 1, DeadlineFallback: tc.posture},
 				nil,
@@ -414,9 +427,11 @@ func TestMarshalSetApplicationControlPayload_DeadlineFallbackPassthrough(t *test
 // substituted with DefaultFallbackPosture before it reaches the wire. The extension's FallbackPosture enum is strict; an
 // unknown literal would deactivate Application Control until the next valid push, so the marshal MUST never emit one.
 func TestMarshalSetApplicationControlPayload_DeadlineFallbackNormalizesInvalid(t *testing.T) {
+	t.Parallel()
 	cases := []string{"fail-close", "FAIL-CLOSED", "audit_only", "garbage", "FAIL-OPEN"}
 	for _, bad := range cases {
 		t.Run(bad, func(t *testing.T) {
+			t.Parallel()
 			raw, err := api.MarshalSetApplicationControlPayload(
 				api.ApplicationControlPolicy{ID: 1, Version: 1, DeadlineFallback: api.FallbackPosture(bad)},
 				nil,
@@ -434,6 +449,7 @@ func TestMarshalSetApplicationControlPayload_DeadlineFallbackNormalizesInvalid(t
 // TestMarshalSetApplicationControlPayload_DeadlineFallbackWireKey pins the JSON key Swift's Decodable reads. A rename here
 // silently breaks the extension's snapshot decode; this test fails loudly when a rename happens.
 func TestMarshalSetApplicationControlPayload_DeadlineFallbackWireKey(t *testing.T) {
+	t.Parallel()
 	raw, err := api.MarshalSetApplicationControlPayload(
 		api.ApplicationControlPolicy{ID: 1, Version: 1, DeadlineFallback: api.FallbackPostureAuditOnly},
 		nil,
@@ -450,6 +466,7 @@ func TestMarshalSetApplicationControlPayload_DeadlineFallbackWireKey(t *testing.
 // supplied posture. Pinning the enum membership here keeps the validator honest if the enum ever picks up a new value (the
 // invalid-case lines below must be updated to include the new constant).
 func TestIsValidFallbackPosture(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		posture api.FallbackPosture
@@ -464,6 +481,7 @@ func TestIsValidFallbackPosture(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, api.IsValidFallbackPosture(tc.posture))
 		})
 	}

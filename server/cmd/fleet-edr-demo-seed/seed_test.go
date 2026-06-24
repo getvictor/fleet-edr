@@ -35,7 +35,9 @@ func httpSeeder(serverURL string) *seeder {
 }
 
 func TestResolveConfig(t *testing.T) {
+	t.Parallel()
 	t.Run("defaults with dsn from env", func(t *testing.T) {
+		t.Parallel()
 		env := map[string]string{"EDR_DSN": "root@tcp(localhost:3306)/edr"}
 		c, err := resolveConfig(func(k string) string { return env[k] }, nil)
 		require.NoError(t, err)
@@ -50,6 +52,7 @@ func TestResolveConfig(t *testing.T) {
 	})
 
 	t.Run("flags override env defaults", func(t *testing.T) {
+		t.Parallel()
 		env := map[string]string{"EDR_DSN": "from-env"}
 		args := []string{
 			"--server-url=https://demo.example:9000",
@@ -72,6 +75,7 @@ func TestResolveConfig(t *testing.T) {
 	})
 
 	t.Run("trims trailing slash from server-url", func(t *testing.T) {
+		t.Parallel()
 		env := map[string]string{"EDR_DSN": "d", "EDR_DEMO_SERVER_URL": "https://localhost:8088/"}
 		c, err := resolveConfig(func(k string) string { return env[k] }, nil)
 		require.NoError(t, err)
@@ -79,6 +83,7 @@ func TestResolveConfig(t *testing.T) {
 	})
 
 	t.Run("missing dsn is an error", func(t *testing.T) {
+		t.Parallel()
 		_, err := resolveConfig(func(string) string { return "" }, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "DSN is required")
@@ -86,6 +91,7 @@ func TestResolveConfig(t *testing.T) {
 }
 
 func TestEnvHelpers(t *testing.T) {
+	t.Parallel()
 	get := func(m map[string]string) func(string) string {
 		return func(k string) string { return m[k] }
 	}
@@ -135,7 +141,9 @@ func TestWovenAttacksLoadAndValidate(t *testing.T) {
 // TestReplayHostErrors covers replayHost's two HTTP failure branches (enroll and the events POST) against a real captured host
 // from the manifest, with no DB: an error at either step must abort the replay.
 func TestReplayHostErrors(t *testing.T) {
+	t.Parallel()
 	t.Run("enroll failure aborts replay", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden) // enroll -> 403
 		}))
@@ -145,6 +153,7 @@ func TestReplayHostErrors(t *testing.T) {
 	})
 
 	t.Run("events POST failure aborts replay", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/api/enroll" {
 				_ = json.NewEncoder(w).Encode(map[string]any{"host_id": "H", "host_token": "tok"})
@@ -159,6 +168,7 @@ func TestReplayHostErrors(t *testing.T) {
 }
 
 func TestFirstExec(t *testing.T) {
+	t.Parallel()
 	withExec := &fakeagent.Scenario{Timeline: []fakeagent.Event{
 		{Type: "fork", ChildPID: 10, ParentPID: 1},
 		{Type: "exec", PID: 10, Path: "/bin/zsh"},
@@ -174,6 +184,7 @@ func TestFirstExec(t *testing.T) {
 }
 
 func TestBuildBlockEnvelope(t *testing.T) {
+	t.Parallel()
 	env := buildBlockEnvelope("HOST-1", 6123, "/Applications/CoinMiner.app/Contents/MacOS/CoinMiner", 1700000000000000000)
 	assert.Equal(t, "HOST-1", env.HostID)
 	assert.Equal(t, appControlEventType, env.EventType)
@@ -194,7 +205,9 @@ func TestBuildBlockEnvelope(t *testing.T) {
 }
 
 func TestEnroll(t *testing.T) {
+	t.Parallel()
 	t.Run("returns the issued token and echoes host id", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/enroll", r.URL.Path)
 			assert.Equal(t, http.MethodPost, r.Method)
@@ -211,6 +224,7 @@ func TestEnroll(t *testing.T) {
 	})
 
 	t.Run("non-200 is an error", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 		}))
@@ -221,6 +235,7 @@ func TestEnroll(t *testing.T) {
 	})
 
 	t.Run("missing token is an error", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"host_id": "HOST-9", "host_token": ""})
 		}))
@@ -232,7 +247,9 @@ func TestEnroll(t *testing.T) {
 }
 
 func TestPostEnvelopes(t *testing.T) {
+	t.Parallel()
 	t.Run("2xx succeeds and sends bearer token", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/events", r.URL.Path)
 			assert.Equal(t, "Bearer tok", r.Header.Get("Authorization"))
@@ -248,6 +265,7 @@ func TestPostEnvelopes(t *testing.T) {
 	})
 
 	t.Run("non-2xx is an error", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
@@ -259,7 +277,9 @@ func TestPostEnvelopes(t *testing.T) {
 }
 
 func TestWaitReady(t *testing.T) {
+	t.Parallel()
 	t.Run("becomes ready after initial 503s", func(t *testing.T) {
+		t.Parallel()
 		var calls atomic.Int32
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			if calls.Add(1) < 3 {
@@ -274,6 +294,7 @@ func TestWaitReady(t *testing.T) {
 	})
 
 	t.Run("times out while never ready", func(t *testing.T) {
+		t.Parallel()
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))

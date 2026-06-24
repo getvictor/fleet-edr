@@ -24,6 +24,7 @@ const (
 )
 
 func TestArchitecture(t *testing.T) {
+	t.Parallel()
 	cfg, err := configuration.LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("load %s: %v", configPath, err)

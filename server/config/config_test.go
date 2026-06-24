@@ -66,6 +66,7 @@ func writeTestCert(tb testing.TB) (certFile, keyFile string) {
 }
 
 func TestLoad(t *testing.T) {
+	t.Parallel()
 	// Minimal env: every dev + prod deployment must supply TLS cert + key (issue #140 removed the EDR_ALLOW_INSECURE_HTTP opt-out).
 	// EDR_AUTH_ALLOW_NO_OIDC stays as the deliberate break-glass-only dev opt-out; the OIDC-required interaction is covered in
 	// TestLoad_OIDCConfig below.
@@ -324,6 +325,7 @@ func TestLoad(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := loadFrom(envMap(tc.env))
 			if tc.wantErr != "" {
 				require.Error(t, err)
@@ -344,6 +346,7 @@ func TestLoad(t *testing.T) {
 // TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a production deployment without OIDC config refuses to start;
 // dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER without the rest produces focused per-field errors.
 func TestLoad_OIDCConfig(t *testing.T) {
+	t.Parallel()
 	certFile, keyFile := writeTestCert(t)
 	prodLikeEnv := map[string]string{
 		"EDR_DSN":           "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
@@ -500,6 +503,7 @@ func TestLoad_OIDCConfig(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := loadFrom(envMap(tc.env))
 			if tc.wantErr != "" {
 				require.Error(t, err)
@@ -525,6 +529,7 @@ func withExtra(base, extra map[string]string) map[string]string {
 // TestDefaultOIDCScopes pins the fixed OIDC scope set wired at boot (EDR_OIDC_SCOPES was removed) and confirms each call returns a
 // fresh slice so a caller can't mutate a shared backing array.
 func TestDefaultOIDCScopes(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, []string{"openid", "email", "profile"}, DefaultOIDCScopes())
 	a := DefaultOIDCScopes()
 	a[0] = "mutated"
@@ -536,6 +541,7 @@ func TestDefaultOIDCScopes(t *testing.T) {
 // EDR_TLS_CERT_FILE used to escape Config validation and only failed inside configureTLS, long after the first-boot admin
 // password had been printed to the log.
 func TestLoad_TLSCertFailFast(t *testing.T) {
+	t.Parallel()
 	certFile, keyFile := writeTestCert(t)
 	base := map[string]string{
 		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
@@ -544,6 +550,7 @@ func TestLoad_TLSCertFailFast(t *testing.T) {
 	}
 
 	t.Run("nonexistent cert file rejected at Load time", func(t *testing.T) {
+		t.Parallel()
 		env := withExtra(base, map[string]string{
 			"EDR_TLS_CERT_FILE": filepath.Join(t.TempDir(), "does-not-exist.crt"),
 			"EDR_TLS_KEY_FILE":  keyFile,
@@ -554,6 +561,7 @@ func TestLoad_TLSCertFailFast(t *testing.T) {
 	})
 
 	t.Run("mismatched cert + key rejected at Load time", func(t *testing.T) {
+		t.Parallel()
 		// Swap in a fresh key that doesn't match the cert.
 		_, mismatchKey := writeTestCert(t)
 		env := withExtra(base, map[string]string{
@@ -566,6 +574,7 @@ func TestLoad_TLSCertFailFast(t *testing.T) {
 	})
 
 	t.Run("valid cert + key passes", func(t *testing.T) {
+		t.Parallel()
 		env := withExtra(base, map[string]string{
 			"EDR_TLS_CERT_FILE": certFile,
 			"EDR_TLS_KEY_FILE":  keyFile,

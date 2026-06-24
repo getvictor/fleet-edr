@@ -15,6 +15,7 @@ import (
 // TestParseUnifiedDiffNewRanges pins the hunk-header parse. Each row exercises one shape the parser will see in the wild:
 // implicit count (just `+a`), explicit count (`+a,b`), pure-deletion (`+a,0`, which is skipped), and a multi-hunk diff.
 func TestParseUnifiedDiffNewRanges(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		diff string
@@ -48,6 +49,7 @@ func TestParseUnifiedDiffNewRanges(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, parseUnifiedDiffNewRanges(tc.diff))
 		})
 	}
@@ -57,6 +59,7 @@ func TestParseUnifiedDiffNewRanges(t *testing.T) {
 // body overlaps any diff hunk. Adjacency-not-overlap is a separate case row because off-by-one bugs here would silently drop or
 // include scenarios at the boundary; the deepest-prefix ordering inside the renderer would not catch it.
 func TestAnyOverlap(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name               string
 		scenStart, scenEnd int
@@ -73,6 +76,7 @@ func TestAnyOverlap(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, anyOverlap(tc.scenStart, tc.scenEnd, tc.hunks))
 		})
 	}
@@ -82,6 +86,7 @@ func TestAnyOverlap(t *testing.T) {
 // to the parent requirement heading (so a SHALL edit upstream of the scenario heading promotes the scenario into the new-
 // code set), and End must extend to the line BEFORE the next subheading or EOF.
 func TestParseSpecScenarioRanges(t *testing.T) {
+	t.Parallel()
 	doc := `# Title
 
 ## Requirements
@@ -134,6 +139,7 @@ The system MUST do Y.
 // The function must short-circuit before invoking git so an attacker controlling the flag can't force `git merge-base
 // HEAD --help` (which opens a pager and could hang CI) or `--exec=<command>`-style abuses.
 func TestComputeNewCodeScenarioIDs_RejectsDashBaseRef(t *testing.T) {
+	t.Parallel()
 	_, err := computeNewCodeScenarioIDs(context.Background(), "openspec/specs", "-help")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid --base-ref")
@@ -143,7 +149,7 @@ func TestComputeNewCodeScenarioIDs_RejectsDashBaseRef(t *testing.T) {
 // a baseline spec, then add one new requirement+scenario and modify a SHALL line under an existing requirement; the gate
 // must surface both the new scenario AND every scenario under the modified requirement (because a SHALL edit promotes the
 // entire requirement's scenario set).
-func TestComputeNewCodeScenarioIDs_E2E(t *testing.T) {
+func TestComputeNewCodeScenarioIDs_E2E(t *testing.T) { //nolint:paralleltest // uses t.Chdir; cannot run in parallel
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -229,6 +235,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 // looking refs (a branch name, a SHA) must pass; anything starting with `-` must be rejected because git would parse it
 // as an option flag. Git itself refuses to create refs starting with `-`, so this check has no false-positive surface.
 func TestValidateBaseRef(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		baseRef string
@@ -242,6 +249,7 @@ func TestValidateBaseRef(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			err := validateBaseRef(tc.baseRef)
 			if tc.wantErr {
 				require.Error(t, err)
@@ -255,13 +263,16 @@ func TestValidateBaseRef(t *testing.T) {
 
 // TestFilterByIDSet covers the small helper that scopes the gate's uncovered set to a subset by ID.
 func TestFilterByIDSet(t *testing.T) {
+	t.Parallel()
 	in := []Scenario{
 		{ID: "a/b/c"}, {ID: "d/e/f"}, {ID: "g/h/i"},
 	}
 	t.Run("empty set drops everything", func(t *testing.T) {
+		t.Parallel()
 		assert.Empty(t, filterByIDSet(in, map[string]struct{}{}))
 	})
 	t.Run("partial set keeps only matching ids", func(t *testing.T) {
+		t.Parallel()
 		got := filterByIDSet(in, map[string]struct{}{"a/b/c": {}, "g/h/i": {}})
 		require.Len(t, got, 2)
 		assert.Equal(t, "a/b/c", got[0].ID)
