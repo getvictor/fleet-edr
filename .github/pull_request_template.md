@@ -15,6 +15,10 @@
 - [ ] Tests added/updated for the change (unit / integration / efficacy / UI as applicable).
 - [ ] Agent/extension change touching ESF, XPC, or the event wire format: exercised on a live macOS VM before RC
       (flagged below).
+- [ ] **Docs updated for user-facing changes.** If this PR changes a user-facing surface (the React UI, an HTTP
+      handler, or a detection rule), `docs/` or `CHANGELOG.md` is updated in the same PR. Only if nothing a user sees
+      changed (an internal refactor, a non-visible UI tweak) may you assert `no-docs-change` (label or
+      `[no-docs-change]` in the title) to clear the Docs-sync gate. The model is in `docs/doc-versioning.md`.
 
 ## VM / RC notes (if applicable)
 

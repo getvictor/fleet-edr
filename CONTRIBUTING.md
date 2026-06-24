@@ -28,6 +28,7 @@ CI is the backstop, not the floor. If a check fails locally, fix it before pushi
 | C bridge | [`.clang-tidy`](.clang-tidy), [`.clang-format`](.clang-format) |
 | GitHub Actions | `actionlint` + `zizmor` (security audit) |
 | Markdown / prose | [`.markdownlint-cli2.yaml`](.markdownlint-cli2.yaml) (run with `task lint:md`); sentence case headings, wrap at 140 chars, no em-dashes |
+| Docs and versioning | [`docs/doc-versioning.md`](docs/doc-versioning.md): a user-facing change updates docs in the same PR (enforced by the `Docs sync` gate) |
 | Commits | Imperative mood, focused scope, one logical change per commit |
 
 If a linter disagrees with a specific change, prefer fixing the code over disabling the rule. Suppression with a `nolint` / `eslint-disable` / `swiftlint:disable` directive needs a one-line justification on the same line.
