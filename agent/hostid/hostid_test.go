@@ -72,7 +72,7 @@ func TestParseIORegOutput(t *testing.T) {
 // TestGet_FromFakeIOReg drives the Get() shell-out path. Real ioreg only runs on macOS and emits non-deterministic data, so we point
 // ioregPath at a tiny shell wrapper that prints a known IOPlatformUUID line. This is the only way to cover the success path of Get
 // without making the test host-dependent.
-func TestGet_FromFakeIOReg(t *testing.T) { //nolint:paralleltest // mutates the package-level ioregPath seam; the Get tests must run serially (issue #172)
+func TestGet_FromFakeIOReg(t *testing.T) { //nolint:paralleltest // mutates package-level ioregPath; Get tests serial (issue #172)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-ioreg.sh")
 	body := "#!/bin/sh\ncat <<'EOF'\n  \"IOPlatformUUID\" = \"FAKE-UUID-1234\"\nEOF\n"
@@ -92,7 +92,7 @@ func TestGet_FromFakeIOReg(t *testing.T) { //nolint:paralleltest // mutates the 
 
 // TestGet_ExecError exercises the failure-wrapping branch when ioreg cannot be launched at all (missing binary). The error must
 // mention "run ioreg" so log readers can diagnose.
-func TestGet_ExecError(t *testing.T) { //nolint:paralleltest // mutates the package-level ioregPath seam; the Get tests must run serially (issue #172)
+func TestGet_ExecError(t *testing.T) { //nolint:paralleltest // mutates package-level ioregPath; Get tests serial (issue #172)
 	orig := ioregPath
 	ioregPath = filepath.Join(t.TempDir(), "does-not-exist")
 	t.Cleanup(func() { ioregPath = orig })
@@ -122,7 +122,7 @@ func FuzzParseIORegOutput(f *testing.F) {
 
 // TestGet_NoUUIDInOutput covers the case where ioreg ran but its output is
 // missing the IOPlatformUUID line: Get bubbles up the parse error verbatim.
-func TestGet_NoUUIDInOutput(t *testing.T) { //nolint:paralleltest // mutates the package-level ioregPath seam; the Get tests must run serially (issue #172)
+func TestGet_NoUUIDInOutput(t *testing.T) { //nolint:paralleltest // mutates package-level ioregPath; Get tests serial (issue #172)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-ioreg-empty.sh")
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\necho 'no uuid here'\n"), 0o600))

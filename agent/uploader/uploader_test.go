@@ -856,7 +856,7 @@ func TestUpload_413_ContextCancelBetweenHalves(t *testing.T) {
 //
 // The assertion that locks in "MUST NOT retransmit indefinitely" is: the server's request counter stops climbing
 // after the 3rd tick. The audit log line is asserted via a buffered slog handler.
-func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) { //nolint:tparallel // subtests share one queue+counter+audit buffer and run as an ordered sequence (3 drains -> quarantine -> audit assertion); they must run serially
+func TestUpload_4xxExhaustsQuarantineAndAudits(t *testing.T) { //nolint:tparallel // subtests share queue+counter+buffer; ordered, serial
 	t.Parallel()
 	q := openTestQueue(t)
 	ctx := t.Context()

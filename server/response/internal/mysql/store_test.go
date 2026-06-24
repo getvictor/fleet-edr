@@ -80,7 +80,7 @@ func TestListForHost(t *testing.T) {
 	})
 }
 
-func TestUpdateStatus(t *testing.T) { //nolint:tparallel // subtests are an ordered state-machine sequence (pending->acked->completed) on one shared command row; they must run serially
+func TestUpdateStatus(t *testing.T) { //nolint:tparallel // subtests are an ordered pending->acked->completed sequence on one shared row
 	t.Parallel()
 	s := newTestStore(t)
 	ctx := t.Context()

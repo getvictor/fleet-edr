@@ -118,7 +118,7 @@ func restoreGlobals(t *testing.T) {
 // must still return a non-nil shutdown hook, the shutdown call must complete promptly, AND the W3C
 // propagator must be installed so inbound traceparent headers are still parsed (otherwise services
 // behind a no-OTel EDR would lose distributed-trace context for free, which is a regression).
-func TestInit_Disabled(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; restoreGlobals serializes via t.Cleanup (issue #172)
+func TestInit_Disabled(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; serial (issue #172)
 	restoreGlobals(t)
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})
 	require.NoError(t, err)
@@ -142,7 +142,7 @@ func TestInit_Disabled(t *testing.T) { //nolint:paralleltest // Init mutates pro
 // returning a non-nil shutdown hook and the shutdown call respecting the deadline. End-to-end export
 // to a live collector is validated against the dev SigNoz pipeline; that path is out of scope for an
 // in-process unit test because it requires an external service.
-func TestInit_Enabled_BogusEndpoint(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; restoreGlobals serializes via t.Cleanup (issue #172)
+func TestInit_Enabled_BogusEndpoint(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; serial (issue #172)
 	restoreGlobals(t)
 	// Pass a URL pointing at a port we are confident nothing is listening on. The http:// scheme tells the SDK's
 	// WithEndpointURL option to use insecure transport so the connection refused is observed at the TCP layer rather than
@@ -178,7 +178,7 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) { //nolint:paralleltest // Ini
 // Init wires the propagator at the process level and applies to every binary that consumes this
 // package (server, agent, ingest); the actual parent-child stitching happens at every http.Handler
 // that calls `otel.GetTextMapPropagator().Extract(...)`, which this propagator install makes well-defined.
-func TestInit_PropagatorInstalled(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; restoreGlobals serializes via t.Cleanup (issue #172)
+func TestInit_PropagatorInstalled(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; serial (issue #172)
 	restoreGlobals(t)
 	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: ""})
 	require.NoError(t, err)
