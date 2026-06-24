@@ -40,14 +40,14 @@ type Deps struct {
 	// rules context free of an identity-internal import (ADR-0004), same posture as detection's UserExists dep.
 	UserEmailByID func(ctx context.Context, userID int64) (string, error)
 
-	// CommandInserter is the closure that enqueues a response.Command to a host. The application-control fan-out path consults it on
-	// every rule-create so every enrolled host in the deployment receives one `set_application_control` command per mutation. Optional:
-	// when nil, the application-control REST routes are not mounted (the rules context still constructs cleanly so non-REST consumers like
-	// tools/gen-rule-docs keep working).
-	CommandInserter appcontrol.CommandInserter
+	// CommandBatchInserter is the closure that enqueues `set_application_control` commands to a set of hosts in one batched
+	// multi-row INSERT. The application-control fan-out path consults it on every rule mutation so every assigned host receives one
+	// command per mutation in a couple of round trips rather than one per host. Optional: when nil, the application-control REST
+	// routes are not mounted (the rules context still constructs cleanly so non-REST consumers like tools/gen-rule-docs keep working).
+	CommandBatchInserter appcontrol.CommandBatchInserter
 	// HostLister enumerates the deployment's enrolled hosts for the fan-out. cmd/main passes a wrapper over
 	// detection.api.Service.ListHosts that projects each HostSummary down to its host_id. Same optional-when-nil contract as
-	// CommandInserter; nil disables the REST surface.
+	// CommandBatchInserter; nil disables the REST surface.
 	HostLister appcontrol.HostLister
 }
 
@@ -99,10 +99,10 @@ func New(deps Deps) (*Rules, error) {
 	appControlStore := appcontrol.NewStore(deps.DB)
 	var appControlSvc *appcontrol.Service
 	var appControlH *operator.AppControlHandler
-	if deps.CommandInserter != nil && deps.HostLister != nil {
+	if deps.CommandBatchInserter != nil && deps.HostLister != nil {
 		appControlSvc = appcontrol.NewService(appcontrol.ServiceDeps{
 			Store:    appControlStore,
-			Commands: deps.CommandInserter,
+			Commands: deps.CommandBatchInserter,
 			Hosts:    deps.HostLister,
 			Audit:    deps.Audit,
 			Logger:   logger,
@@ -188,9 +188,9 @@ func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r
 //
 //	GET  /api/rules
 //	GET  /api/attack-coverage
-//	GET  /api/v1/app-control/policies                    (when CommandInserter + HostLister are wired)
-//	GET  /api/v1/app-control/policies/{id}               (when CommandInserter + HostLister are wired)
-//	POST /api/v1/app-control/policies/{id}/rules         (when CommandInserter + HostLister are wired)
+//	GET  /api/v1/app-control/policies                    (when CommandBatchInserter + HostLister are wired)
+//	GET  /api/v1/app-control/policies/{id}               (when CommandBatchInserter + HostLister are wired)
+//	POST /api/v1/app-control/policies/{id}/rules         (when CommandBatchInserter + HostLister are wired)
 //
 // Caller wraps in identity Session + CSRF middleware before mounting.
 // rules has no public agent-facing routes, so RegisterPublicRoutes

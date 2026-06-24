@@ -59,6 +59,28 @@ func (s *Service) Insert(ctx context.Context, hostID, commandType string, payloa
 	return s.store.Insert(ctx, hostID, commandType, payload)
 }
 
+// InsertBatch validates the shared commandType + payload once, then enqueues one command row per host via the store's chunked
+// multi-row INSERT. It is the application-control fan-out's enqueue path; returns the number of rows that landed.
+//
+// An empty hostIDs slice, an empty commandType, or an empty payload all wrap ErrInvalidInsertRequest so callers can errors.Is +
+// map to 400. commandType is trimmed once at the boundary, matching Insert. Unlike Insert, the individual host_ids are NOT
+// trimmed: the only caller sources them from the host store's primary keys (already clean), so trimming each would be dead
+// defensive work; a malformed entry surfaces as a store error rather than being silently dropped, which would understate the
+// fan-out count.
+func (s *Service) InsertBatch(ctx context.Context, hostIDs []string, commandType string, payload []byte) (int, error) {
+	if len(hostIDs) == 0 {
+		return 0, fmt.Errorf("%w: at least one host_id is required", api.ErrInvalidInsertRequest)
+	}
+	commandType = strings.TrimSpace(commandType)
+	if commandType == "" {
+		return 0, fmt.Errorf("%w: command_type is required", api.ErrInvalidInsertRequest)
+	}
+	if len(payload) == 0 {
+		return 0, fmt.Errorf("%w: payload is required", api.ErrInvalidInsertRequest)
+	}
+	return s.store.InsertBatch(ctx, hostIDs, commandType, payload)
+}
+
 // Get returns a single command by id.
 func (s *Service) Get(ctx context.Context, id int64) (api.Command, error) {
 	return s.store.Get(ctx, id)

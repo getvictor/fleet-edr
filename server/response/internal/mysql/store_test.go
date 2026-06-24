@@ -2,6 +2,7 @@ package mysql_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -205,4 +206,55 @@ func TestCountPending(t *testing.T) {
 	count, err = s.CountPending(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
+}
+
+// TestInsertBatch covers the application-control fan-out's enqueue path: one command row per host_id in a chunked multi-row
+// INSERT. The batch crosses the 256-row chunk boundary so the chunk loop itself is exercised, and every row must carry the
+// byte-identical shared payload + command_type the fan-out passes once.
+func TestInsertBatch(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	// 600 hosts forces three chunks (256 + 256 + 88) so the chunk boundary is crossed, not just the single-statement path.
+	const hostCount = 600
+	hostIDs := make([]string, hostCount)
+	for i := range hostIDs {
+		hostIDs[i] = "host-" + strconv.Itoa(i)
+	}
+	payload := json.RawMessage(`{"policy_id":1,"policy_version":2,"rules":[{"rule_type":"binary","identifier":"deadbeef"}]}`)
+
+	inserted, err := s.InsertBatch(ctx, hostIDs, "set_application_control", payload)
+	require.NoError(t, err)
+	assert.Equal(t, hostCount, inserted, "every host in the batch must land")
+
+	count, err := s.CountPending(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, hostCount, count, "every batched row is enqueued pending")
+
+	// Spot-check the first + last host: same command_type, byte-identical payload, pending status.
+	for _, hostID := range []string{"host-0", "host-599"} {
+		cmds, err := s.ListForHost(ctx, hostID, "")
+		require.NoError(t, err)
+		require.Len(t, cmds, 1, "each host gets exactly one command")
+		assert.Equal(t, "set_application_control", cmds[0].CommandType)
+		assert.Equal(t, api.StatusPending, cmds[0].Status)
+		assert.JSONEq(t, string(payload), string(cmds[0].Payload), "every row carries the shared fan-out payload byte-for-byte")
+	}
+}
+
+// TestInsertBatch_Empty: an empty host set is a no-op that enqueues nothing and returns (0, nil). The fan-out reaches this when a
+// policy resolves to zero hosts (the no_hosts_resolved skip path guards it upstream, but the store must be safe regardless).
+func TestInsertBatch_Empty(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	inserted, err := s.InsertBatch(ctx, nil, "set_application_control", json.RawMessage(`{}`))
+	require.NoError(t, err)
+	assert.Equal(t, 0, inserted)
+
+	count, err := s.CountPending(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 }

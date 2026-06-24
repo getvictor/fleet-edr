@@ -24,16 +24,19 @@ import (
 // nil-actor/empty-tenant validation guards, and the host-lister skip-reason on the audit row. These exercise the orchestrator directly
 // so the REST tests can stay focused on HTTP behaviour.
 
+// captureInserter is a batch CommandBatchInserter stub. calls counts how many times the fan-out invoked the batch insert (one
+// per mutation, not one per host). Returns the chunk's host count as the inserted total so the service computes fanout_failed=0
+// on the happy path.
 type captureInserter struct {
 	mu    sync.Mutex
 	calls int
 }
 
-func (c *captureInserter) Insert(_ context.Context, _, _ string, _ []byte) (int64, error) {
+func (c *captureInserter) InsertBatch(_ context.Context, hostIDs []string, _ string, _ []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
-	return int64(c.calls), nil
+	return len(hostIDs), nil
 }
 
 type captureAudit struct {
@@ -72,7 +75,7 @@ func newService(t *testing.T) (*appcontrol.Service, *appcontrol.Store, *captureI
 	audit := &captureAudit{}
 	svc := appcontrol.NewService(appcontrol.ServiceDeps{
 		Store:    store,
-		Commands: inserter.Insert,
+		Commands: inserter.InsertBatch,
 		Hosts:    func(_ context.Context) ([]string, error) { return []string{"host-a"}, nil },
 		Audit:    audit,
 		Logger:   slog.Default(),
@@ -134,7 +137,7 @@ func TestService_NilDeps_Panics(t *testing.T) {
 		{
 			name: "nil store",
 			deps: appcontrol.ServiceDeps{
-				Commands: func(context.Context, string, string, []byte) (int64, error) { return 0, nil },
+				Commands: func(context.Context, []string, string, []byte) (int, error) { return 0, nil },
 				Hosts:    func(context.Context) ([]string, error) { return nil, nil },
 			},
 		},
@@ -149,7 +152,7 @@ func TestService_NilDeps_Panics(t *testing.T) {
 			name: "nil hosts",
 			deps: appcontrol.ServiceDeps{
 				Store:    &appcontrol.Store{},
-				Commands: func(context.Context, string, string, []byte) (int64, error) { return 0, nil },
+				Commands: func(context.Context, []string, string, []byte) (int, error) { return 0, nil },
 			},
 		},
 	}
@@ -170,7 +173,7 @@ func TestService_NilAudit_RuleStillCreates(t *testing.T) {
 	inserter := &captureInserter{}
 	svc := appcontrol.NewService(appcontrol.ServiceDeps{
 		Store:    store,
-		Commands: inserter.Insert,
+		Commands: inserter.InsertBatch,
 		Hosts:    func(_ context.Context) ([]string, error) { return []string{"host-a"}, nil },
 		Logger:   slog.Default(),
 	})
@@ -233,7 +236,7 @@ func newServiceWithHostsAndAudit(t *testing.T, hosts func(context.Context) ([]st
 	audit := &captureAudit{}
 	svc := appcontrol.NewService(appcontrol.ServiceDeps{
 		Store:    store,
-		Commands: inserter.Insert,
+		Commands: inserter.InsertBatch,
 		Hosts:    hosts,
 		Audit:    audit,
 		Logger:   slog.Default(),

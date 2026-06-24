@@ -371,13 +371,13 @@ func openRules(
 	responseCtx *responsebootstrap.Response,
 ) (*rulesbootstrap.Rules, error) {
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:              db,
-		Logger:          logger,
-		Audit:           identityCtx.AuditRecorder(),
-		AuthZ:           identityCtx.AuthZ(),
-		UserEmailByID:   userEmailByIDFromIdentity(identityCtx.Service()),
-		CommandInserter: responseCtx.Service().Insert,
-		HostLister:      hostListerFromDetection(detectionCtx.Service()),
+		DB:                   db,
+		Logger:               logger,
+		Audit:                identityCtx.AuditRecorder(),
+		AuthZ:                identityCtx.AuthZ(),
+		UserEmailByID:        userEmailByIDFromIdentity(identityCtx.Service()),
+		CommandBatchInserter: responseCtx.Service().InsertBatch,
+		HostLister:           hostListerFromDetection(detectionCtx.Service()),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open rules", "err", err)

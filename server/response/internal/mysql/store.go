@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -13,6 +14,11 @@ import (
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/sqlhelpers"
 )
+
+// insertBatchChunkSize caps the number of command rows per multi-row INSERT. The fan-out repeats the SAME payload across every
+// host in the batch, so a chunk's wire size is roughly chunkSize * len(payload); 256 keeps a chunk well under MySQL's default
+// max_allowed_packet even for a large set_application_control snapshot, while collapsing a 500-host fan-out into two round trips.
+const insertBatchChunkSize = 256
 
 // Store owns the commands table. All public methods take the row's fields directly (rather than a pre-constructed struct) so callers
 // don't need to import a row type.
@@ -76,6 +82,35 @@ func (s *Store) Insert(ctx context.Context, hostID, commandType string, payload 
 		return 0, fmt.Errorf("insert command last id: %w", err)
 	}
 	return id, nil
+}
+
+// InsertBatch appends one command row per host_id, all sharing commandType + payload, using chunked multi-row INSERTs
+// (insertBatchChunkSize rows per round trip) instead of one INSERT per host. It is the application-control fan-out's enqueue
+// path: a policy mutation fans the same snapshot out to the whole assigned host set in a couple of round trips rather than N.
+//
+// Returns the number of rows that landed. A multi-row INSERT is atomic per statement, so a chunk lands entirely or not at all;
+// on the first chunk that fails, InsertBatch returns the count from the chunks that already committed plus the error. The caller
+// treats the shortfall (len(hostIDs) minus inserted) as the failed-host count, preserving the fan-out's best-effort contract: the
+// policy row is authoritative and a host whose command did not land catches up on its next poll. host_ids are inserted in the
+// order given. An empty hostIDs slice is a no-op that returns (0, nil).
+func (s *Store) InsertBatch(ctx context.Context, hostIDs []string, commandType string, payload []byte) (int, error) {
+	inserted := 0
+	for start := 0; start < len(hostIDs); start += insertBatchChunkSize {
+		end := min(start+insertBatchChunkSize, len(hostIDs))
+		chunk := hostIDs[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]any, 0, len(chunk)*3)
+		for i, hostID := range chunk {
+			placeholders[i] = "(?, ?, ?)"
+			args = append(args, hostID, commandType, payload)
+		}
+		stmt := "INSERT INTO commands (host_id, command_type, payload) VALUES " + strings.Join(placeholders, ", ")
+		if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
+			return inserted, fmt.Errorf("insert command batch (chunk of %d): %w", len(chunk), err)
+		}
+		inserted += len(chunk)
+	}
+	return inserted, nil
 }
 
 // ListForHost returns commands for a host, optionally filtered by status (empty string returns every status). Order: created_at DESC

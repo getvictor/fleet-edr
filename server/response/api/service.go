@@ -10,18 +10,24 @@ import "context"
 //     GET /api/commands/{id};
 //   - endpoint/internal/service: Insert at enroll-fan-out time,
 //     via a method-value closure;
-//   - rules/internal/appcontrol: Insert at app-control policy
+//   - rules/internal/appcontrol: InsertBatch at app-control policy
 //     fan-out time, via a method-value closure;
 //   - cmd/main metrics adapter: CountPending for the
 //     PendingCommands gauge.
 //
-// Endpoint and rules consume the Insert method as a method value
-// satisfying their existing CommandInserter closure types; neither
-// imports response/api directly.
+// Endpoint consumes the single-row Insert and rules consumes the
+// batched InsertBatch as method values satisfying their closure
+// types; neither imports response/api directly.
 type Service interface {
 	// Insert appends a command row. Returns the new id. Validation errors (empty hostID/commandType, empty payload) wrap
 	// ErrInvalidInsertRequest.
 	Insert(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
+
+	// InsertBatch appends one command row per host_id, all sharing commandType + payload, via a chunked multi-row INSERT.
+	// Returns the number of rows that landed. The application-control fan-out consumes this as a method value so a policy
+	// mutation enqueues the whole assigned host set in a couple of round trips rather than one per host. Validation errors
+	// (empty hostIDs, commandType, or payload) wrap ErrInvalidInsertRequest.
+	InsertBatch(ctx context.Context, hostIDs []string, commandType string, payload []byte) (int, error)
 
 	// Get returns a single command by id. Operator-only path: agents should use ListForHost. Returns ErrCommandNotFound for an unknown
 	// id.
