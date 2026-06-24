@@ -52,19 +52,38 @@ func TestApplyOnce_noReapplyWhenUnchanged(t *testing.T) {
 	assert.Same(t, last, got)
 }
 
-func TestStartSettingsPoller_appliesFirstReadThenStopsOnCancel(t *testing.T) {
+func TestPrimeSampler_appliesSynchronously(t *testing.T) {
 	t.Parallel()
 	s := NewRouteTierSampler(NewRegistry())
 	reader := &fakeReader{settings: &Settings{HighVolumeRatio: 0.5, StandardRatio: 0.6, ForceFull: true}}
 
-	// Pre-cancel: StartSettingsPoller performs its immediate first read, then the loop's ctx.Done branch returns at once (no 60s wait).
+	got := PrimeSampler(context.Background(), s, reader, discard)
+
+	require.NotNil(t, got, "a successful prime returns the applied settings to seed the poller")
+	assert.Equal(t, 1, reader.calls, "prime reads exactly once")
+	assert.Contains(t, s.Description(), "highVolume=0.5", "the persisted settings are applied before serving")
+	assert.Contains(t, s.Description(), "forceFull=true")
+}
+
+func TestPrimeSampler_readErrorKeepsDefaultsAndReturnsNil(t *testing.T) {
+	t.Parallel()
+	s := NewRouteTierSampler(NewRegistry())
+	defaultDesc := s.Description()
+	got := PrimeSampler(context.Background(), s, &fakeReader{err: errors.New("db down")}, discard)
+	assert.Nil(t, got, "a failed prime returns nil so the poller retries on its next tick")
+	assert.Equal(t, defaultDesc, s.Description(), "the sampler keeps its compile-time defaults; startup is not blocked")
+}
+
+func TestStartSettingsPoller_stopsOnCancelWithoutRereading(t *testing.T) {
+	t.Parallel()
+	s := NewRouteTierSampler(NewRegistry())
+	reader := &fakeReader{settings: &Settings{HighVolumeRatio: 0.5, StandardRatio: 0.6}}
+
+	// Pre-cancel: the loop returns on its ctx.Done branch without a tick, so it does no read (priming already did the first read).
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	StartSettingsPoller(ctx, s, reader, discard)
-
-	assert.GreaterOrEqual(t, reader.calls, 1, "the poller does one synchronous read before entering the loop")
-	assert.Contains(t, s.Description(), "highVolume=0.5", "the first read is applied to the sampler")
-	assert.Contains(t, s.Description(), "forceFull=true")
+	StartSettingsPoller(ctx, s, reader, discard, nil)
+	assert.Equal(t, 0, reader.calls, "the loop reads only on a tick; the synchronous first read is PrimeSampler's job")
 }
 
 func TestStartSettingsPoller_nilLoggerDoesNotPanic(t *testing.T) {
@@ -74,7 +93,7 @@ func TestStartSettingsPoller_nilLoggerDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// nil logger must be defaulted internally (production passes a real logger, but the guard matters).
-	assert.NotPanics(t, func() { StartSettingsPoller(ctx, s, reader, nil) })
+	assert.NotPanics(t, func() { StartSettingsPoller(ctx, s, reader, nil, nil) })
 }
 
 // spec:observability-instrumentation/sampler-ratios-are-runtime-adjustable-without-redeploy/settings-record-is-unreadable-at-startup

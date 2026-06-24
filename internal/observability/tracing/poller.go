@@ -20,17 +20,26 @@ const settingsReadTimeout = 5 * time.Second
 // pollTracer instruments the poll loop. When OTLP export is off the global provider returns a no-op tracer, so this costs nothing.
 var pollTracer = otel.Tracer("github.com/fleetdm/edr/internal/observability/tracing")
 
-// StartSettingsPoller runs the polling loop until ctx is cancelled. It does one immediate read at startup so the sampler picks up the
-// row's current values without waiting a full interval, then re-reads on each tick and applies only when something changed. If a read
-// fails, the sampler keeps its previously applied values (its compile-time defaults on the first read) and the next tick retries.
-//
-// Intended to run as `go StartSettingsPoller(ctx, sampler, reader, logger)`; it returns when ctx is cancelled.
-func StartSettingsPoller(ctx context.Context, sampler *RouteTierSampler, reader SettingsReader, logger *slog.Logger) {
+// PrimeSampler performs one synchronous settings read and applies it to the sampler, so a replica serves with the persisted settings
+// from its very first request rather than the compile-time defaults (which would otherwise apply until the background poller's first
+// read landed). cmd/main calls this BEFORE the server starts serving, then hands the returned value to StartSettingsPoller to seed its
+// change detection. On a read failure it returns nil: the sampler keeps its compile-time defaults and the poller retries on its next
+// tick (so a transient DB blip at boot does not block startup).
+func PrimeSampler(ctx context.Context, sampler *RouteTierSampler, reader SettingsReader, logger *slog.Logger) *Settings {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	last := applyOnce(ctx, sampler, nil, reader, logger)
+	return applyOnce(ctx, sampler, nil, reader, logger)
+}
 
+// StartSettingsPoller re-reads the settings on a fixed interval and applies any change, until ctx is cancelled. `last` is the settings
+// already applied by PrimeSampler (pass nil if the caller did not prime); it seeds change detection so an unchanged row is not
+// re-applied, and a primed value means the loop does no redundant read at startup. Intended to run as
+// `go StartSettingsPoller(ctx, sampler, reader, logger, primed)` after a synchronous PrimeSampler; it returns when ctx is cancelled.
+func StartSettingsPoller(ctx context.Context, sampler *RouteTierSampler, reader SettingsReader, logger *slog.Logger, last *Settings) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	ticker := time.NewTicker(settingsPollInterval)
 	defer ticker.Stop()
 	for {

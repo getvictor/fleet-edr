@@ -178,9 +178,12 @@ func run() error {
 
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
-	// Poll the trace-sampler settings row so an operator's ratio / force-full change propagates to this replica without a restart
+	// Prime the sampler from the DB synchronously before serving so request #1 honors any persisted override (e.g. an active
+	// force_full or emergency downsample), not the compile-time defaults; then poll so later changes propagate without a restart
 	// (issue #374). The applied state is a per-replica cache, safe to lose (ADR-0010).
-	go tracing.StartSettingsPoller(ctx, traceSampler, observabilityCtx.TraceSamplerSettingsReader(), logger)
+	samplerReader := observabilityCtx.TraceSamplerSettingsReader()
+	primedSampler := tracing.PrimeSampler(ctx, traceSampler, samplerReader, logger)
+	go tracing.StartSettingsPoller(ctx, traceSampler, samplerReader, logger, primedSampler)
 	// Converge this replica's detection-config snapshot with mutations made on other replicas (ADR-0010): a peer's exclusion / rule-mode
 	// edit only bumps the shared version counter, so without this poll a non-mutating replica would serve a stale config until restart.
 	go rulesCtx.Run(ctx)

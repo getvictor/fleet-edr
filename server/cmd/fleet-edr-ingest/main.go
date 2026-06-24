@@ -124,8 +124,11 @@ func run() error {
 		logger.ErrorContext(ctx, "observability schema", "err", err)
 		return err
 	}
-	// The applied state is a per-replica cache, safe to lose (ADR-0010).
-	go tracing.StartSettingsPoller(ctx, traceSampler, observabilityCtx.TraceSamplerSettingsReader(), logger)
+	// Prime the sampler synchronously before serving so the ingest tier's first request honors any persisted override rather than the
+	// compile-time defaults; then poll for later changes. The applied state is a per-replica cache, safe to lose (ADR-0010).
+	samplerReader := observabilityCtx.TraceSamplerSettingsReader()
+	primedSampler := tracing.PrimeSampler(ctx, traceSampler, samplerReader, logger)
+	go tracing.StartSettingsPoller(ctx, traceSampler, samplerReader, logger, primedSampler)
 
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:     db,
