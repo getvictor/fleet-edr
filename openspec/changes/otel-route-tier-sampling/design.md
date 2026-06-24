@@ -27,9 +27,9 @@ One EDR-specific constraint: `otelhttp.NewHandler` is the outermost middleware (
 
 `Tier` is `Full | Standard | HighVolume | Drop`, with `Full` as the zero value so any unregistered span is safe-by-default at 100% until someone deliberately downsamples it.
 
-- **HighVolume**: agent data-plane routes that dominate volume without being individually interesting: `POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh`, `POST /api/enroll`.
+- **HighVolume**: high-frequency agent data-plane routes that dominate volume without being individually interesting: `POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh`.
 - **Standard**: operator/UI read traffic (the dashboard `GET` endpoints).
-- **Full**: everything else (writes, admin mutations, unclassified).
+- **Full**: everything else (writes, admin mutations, unclassified) including low-frequency load-bearing agent routes like `POST /api/enroll`, which stay at 100% so enrollment traces are never sampled away.
 - **Drop**: liveness/health/version probes. Classified to `NeverSample`, and this check runs before the force-full branch so probe spans are never exported even during a debug window. Pure load-balancer noise with zero diagnostic value, matching Fleet's `TierNever`.
 
 The `Registry` maps `"METHOD /path"` to a tier; `Lookup` returns `Full` for misses. Because the HighVolume routes are all literal paths (no `{param}` segments), the existing raw-path span name matches the registry exactly; no path normalizer is needed. Param-bearing routes (`/api/commands/{id}`, `/api/enrollments/{host_id}/revoke`) are operator/low-volume and correctly fall to Full.

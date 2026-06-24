@@ -32,9 +32,9 @@ func PrimeSampler(ctx context.Context, sampler *RouteTierSampler, reader Setting
 	return applyOnce(ctx, sampler, nil, reader, logger)
 }
 
-// StartSettingsPoller re-reads the settings on a fixed interval and applies any change, until ctx is cancelled. `last` is the settings
-// already applied by PrimeSampler (pass nil if the caller did not prime); it seeds change detection so an unchanged row is not
-// re-applied, and a primed value means the loop does no redundant read at startup. Intended to run as
+// StartSettingsPoller re-reads the settings on each tick and applies any change, until ctx is cancelled. It does NOT read on startup
+// (that is PrimeSampler's job); the first read happens on the first tick. `last` is the settings already applied by PrimeSampler (pass
+// nil if the caller did not prime); it seeds change detection so the first tick does not re-apply an unchanged row. Intended to run as
 // `go StartSettingsPoller(ctx, sampler, reader, logger, primed)` after a synchronous PrimeSampler; it returns when ctx is cancelled.
 func StartSettingsPoller(ctx context.Context, sampler *RouteTierSampler, reader SettingsReader, logger *slog.Logger, last *Settings) {
 	if logger == nil {

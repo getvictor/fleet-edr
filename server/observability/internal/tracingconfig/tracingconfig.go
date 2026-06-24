@@ -16,8 +16,8 @@ import (
 )
 
 // ErrVersionConflict is returned by Update when the row's version no longer matches the expected version (a concurrent write landed
-// between the caller's Get and Update). The handler maps it to 409 so the operator re-reads and retries. This is the optimistic-
-// concurrency guard the version column exists for, mirroring appconfig.
+// between the caller's Get and Update). The handler maps it to 409 so the operator re-reads and retries. This is the guard the version
+// column exists for (optimistic concurrency), mirroring appconfig.
 var ErrVersionConflict = errors.New("tracingconfig: version conflict")
 
 // Store owns the singleton trace_sampler_settings row.

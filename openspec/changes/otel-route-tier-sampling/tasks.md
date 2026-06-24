@@ -3,7 +3,7 @@
 - [x] 1.1 Add `Tier` (Full=zero-value catch-all, Standard, HighVolume, Drop) and `Registry` (map of `"METHOD /path"` to tier; `Lookup` returns Full on miss) with `Register`/`Lookup`.
 - [x] 1.2 Add `RouteTierSampler` implementing `sdktrace.Sampler`: `atomic.Pointer` state, `TraceIDRatioBased` per ratio tier + `AlwaysSample` for Full + `NeverSample` for Drop, `Apply(highVolume, standard, forceFull)` with `[0,1]` clamp, `Description()`. Drop is checked before the force-full branch so probes stay dropped under force-full.
 - [x] 1.3 Add compile-time default consts (`DefaultHighVolumeRatio = 0.01`, `DefaultStandardRatio = 0.1`) and construct the sampler seeded with them.
-- [x] 1.4 Add `Settings` struct and `StartSettingsPoller` (immediate first read, 60s tick, apply-on-change, keep defaults on read failure, internal poll span).
+- [x] 1.4 Add `Settings` struct, `PrimeSampler` (synchronous first read+apply, called before serving), and `StartSettingsPoller` (60s tick, apply-on-change, keep defaults on read failure, internal poll span).
 - [x] 1.5 Add `doc.go` describing the mechanism/policy split.
 
 ## 2. Tracer provider wiring
