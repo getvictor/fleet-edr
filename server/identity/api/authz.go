@@ -92,6 +92,12 @@ const (
 	// mutations. Held by admin (write) and admin + senior_analyst (read), mirroring application_control.
 	ActionDetectionConfigRead  Action = "detection_config.read"
 	ActionDetectionConfigWrite Action = "detection_config.write"
+
+	// Trace-sampler management (issue #374). Gates reading and updating the deployment's runtime OTel trace-sampling settings (the
+	// per-tier ratios and the force-full incident toggle). Held by admin + super_admin, mirroring sso.manage: it is an operational
+	// telemetry-cost lever, peer to the other deployment-settings actions, and not granted to the analyst/auditor roles. The settings
+	// read/update handlers funnel through the chokepoint on this action.
+	ActionTracingManage Action = "tracing.manage"
 )
 
 // RegisteredActions returns the set of every Action constant declared
@@ -117,6 +123,7 @@ func RegisteredActions() []Action {
 		ActionAppControlRuleCreate, ActionAppControlRuleUpdate, ActionAppControlRuleDelete, ActionAppControlRuleBulkUpsert,
 		ActionAppControlPolicyCreate, ActionAppControlPolicyUpdate, ActionAppControlPolicyDelete,
 		ActionDetectionConfigRead, ActionDetectionConfigWrite,
+		ActionTracingManage,
 	}
 }
 

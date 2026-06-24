@@ -57,6 +57,25 @@ test_admin_cannot_read_audit if {
 	d == {"allow": false, "reason": "no_matching_rule"}
 }
 
+# tracing.manage is held by admin + super_admin (issue #374), mirroring sso.manage; analysts/auditors do not get it.
+test_admin_can_manage_tracing if {
+	d := authz.decision with input as {
+		"actor": {"roles": [{"role_id": "admin", "scope_type": "global", "scope_id": "*"}]},
+		"action": "tracing.manage",
+		"resource": {"type": "tracing_config"},
+	}
+	d.allow == true
+}
+
+test_analyst_cannot_manage_tracing if {
+	d := authz.decision with input as {
+		"actor": {"roles": [{"role_id": "analyst", "scope_type": "global", "scope_id": "*"}]},
+		"action": "tracing.manage",
+		"resource": {"type": "tracing_config"},
+	}
+	d == {"allow": false, "reason": "no_matching_rule"}
+}
+
 # --- senior_analyst: destructive actions allowed, audit.read denied. -
 
 test_senior_analyst_can_kill_process if {

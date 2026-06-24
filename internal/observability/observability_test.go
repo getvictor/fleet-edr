@@ -12,7 +12,10 @@ import (
 	otellog "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
+
+	"github.com/fleetdm/edr/internal/observability/tracing"
 )
 
 // TestBuildResource_ServiceInstanceID pins that a replica's telemetry resource carries service.instance.id when one is set. The
@@ -168,6 +171,32 @@ func TestInit_Enabled_BogusEndpoint(t *testing.T) { //nolint:paralleltest // Ini
 	assert.Less(t, time.Since(shutdownStart), 3*time.Second, "Shutdown should respect deadline")
 	// If Init succeeded, err is nil; if it errored, so be it. The assertion is about latency.
 	_ = err
+}
+
+// TestInit_SamplerWired exercises the Options.Sampler branch: the no-op path (empty endpoint) must ignore the sampler and still
+// return cleanly, and the enabled path must build the TracerProvider with the sampler installed (pointed at a dead port to avoid a
+// live collector). End-to-end head-sampling behavior is covered by the internal/observability/tracing unit tests.
+func TestInit_SamplerWired(t *testing.T) { //nolint:paralleltest // Init mutates process-global OTel providers; serial (issue #172)
+	restoreGlobals(t)
+	sampler := sdktrace.ParentBased(tracing.NewRouteTierSampler(tracing.NewRegistry()))
+
+	// No-op path: the sampler is accepted and ignored without error.
+	shutdown, err := Init(t.Context(), Options{ServiceName: "test-svc", Endpoint: "", Sampler: sampler})
+	require.NoError(t, err)
+	require.NotNil(t, shutdown)
+	require.NoError(t, shutdown(t.Context()))
+
+	// Enabled path: NewTracerProvider builds with WithSampler set. A dead endpoint keeps the test hermetic.
+	shutdown2, _ := Init(t.Context(), Options{
+		ServiceName: "test-svc",
+		InitTimeout: 2 * time.Second,
+		Endpoint:    "http://127.0.0.1:1",
+		Sampler:     sampler,
+	})
+	require.NotNil(t, shutdown2)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	_ = shutdown2(ctx)
 }
 
 // spec:observability-instrumentation/trace-propagation-through-the-request-pipeline/inbound-traceparent-is-honoured

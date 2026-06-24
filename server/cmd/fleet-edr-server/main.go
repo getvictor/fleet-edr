@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/fleetdm/edr/internal/keyring"
+	"github.com/fleetdm/edr/internal/observability/tracing"
 	"github.com/fleetdm/edr/server/apidocs"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
@@ -29,8 +31,10 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	"github.com/fleetdm/edr/server/metrics"
+	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
+	"github.com/fleetdm/edr/server/tracingpolicy"
 	"github.com/fleetdm/edr/server/ui"
 )
 
@@ -81,7 +85,18 @@ func main() {
 }
 
 func run() error {
-	ctx, env, err := bootstrap.Init(bootstrap.Options{ServiceName: serviceName, ServiceVersion: version})
+	// Build the route-tier trace sampler before bootstrap.Init so it can be installed on the TracerProvider at OTel init. The registry
+	// is read live on every span, so registering the policy now (before any context exists) is fine; the poller below later swaps the
+	// ratios from the DB. Wrapped in ParentBased so a sampled parent forces its children sampled (issue #374).
+	samplerRegistry := tracing.NewRegistry()
+	tracingpolicy.Register(samplerRegistry)
+	traceSampler := tracing.NewRouteTierSampler(samplerRegistry)
+
+	ctx, env, err := bootstrap.Init(bootstrap.Options{
+		ServiceName:    serviceName,
+		ServiceVersion: version,
+		TraceSampler:   sdktrace.ParentBased(traceSampler),
+	})
 	if err != nil {
 		return err
 	}
@@ -114,7 +129,7 @@ func run() error {
 	// spare connection.
 	coord := leader.NewMySQL(db, logger)
 
-	identityCtx, detectionCtx, responseCtx, rulesCtx, endpointCtx, err := openContexts(ctx, logger, db, cfg, coord, drain)
+	identityCtx, detectionCtx, responseCtx, rulesCtx, endpointCtx, observabilityCtx, err := openContexts(ctx, logger, db, cfg, coord, drain)
 	if err != nil {
 		return err
 	}
@@ -151,17 +166,21 @@ func run() error {
 	seedAdmin(ctx, logger, cfg, identityCtx, coord)
 
 	mux := buildMux(muxDeps{
-		detectionCtx: detectionCtx,
-		endpointCtx:  endpointCtx,
-		identityCtx:  identityCtx,
-		rulesCtx:     rulesCtx,
-		responseCtx:  responseCtx,
-		logger:       logger,
+		detectionCtx:     detectionCtx,
+		endpointCtx:      endpointCtx,
+		identityCtx:      identityCtx,
+		rulesCtx:         rulesCtx,
+		responseCtx:      responseCtx,
+		observabilityCtx: observabilityCtx,
+		logger:           logger,
 	})
 	registerUIRoutes(mux, identityCtx.BreakglassUIMiddleware(), logger)
 
 	go runDetection(ctx, detectionCtx, logger)
 	go runIdentity(ctx, identityCtx, logger)
+	// Poll the trace-sampler settings row so an operator's ratio / force-full change propagates to this replica without a restart
+	// (issue #374). The applied state is a per-replica cache, safe to lose (ADR-0010).
+	go tracing.StartSettingsPoller(ctx, traceSampler, observabilityCtx.TraceSamplerSettingsReader(), logger)
 	// Converge this replica's detection-config snapshot with mutations made on other replicas (ADR-0010): a peer's exclusion / rule-mode
 	// edit only bumps the shared version counter, so without this poll a non-mutating replica would serve a stale config until restart.
 	go rulesCtx.Run(ctx)
@@ -208,13 +227,14 @@ func openContexts(
 	responseCtx *responsebootstrap.Response,
 	rulesCtx *rulesbootstrap.Rules,
 	endpointCtx *endpointbootstrap.Endpoint,
+	observabilityCtx *observabilitybootstrap.Observability,
 	err error,
 ) {
 	// One root secret seeds every long-lived server-side key. Build the keyring before acquiring the migration lock so a malformed
 	// EDR_SECRET_KEY fails boot fast (config already enforces the >=32-byte floor, so New errors only as a defensive invariant).
 	kr, err := keyring.New(cfg.SecretKey)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("build keyring: %w", err)
+		return nil, nil, nil, nil, nil, nil, fmt.Errorf("build keyring: %w", err)
 	}
 	// keyring.New holds its own copy of the root, and cfg.SecretKey is not read past this point, so zero the config's copy to
 	// minimize how long the raw root secret lives in memory (heap dumps, core files).
@@ -222,7 +242,7 @@ func openContexts(
 
 	release, err := coord.Lock(ctx, migrationLockName)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 	defer release()
 
@@ -242,8 +262,36 @@ func openContexts(
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
 	detectionCtx.SetModeResolver(rulesCtx.DetectionConfigModeResolver())
-	endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel))
+	if endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel)); err != nil {
+		return
+	}
+	// The observability context owns the runtime trace-sampler settings (issue #374); it consumes identity's chokepoint + audit
+	// recorder for its admin endpoint. Built + migrated under the same lock as the others.
+	observabilityCtx, err = openObservability(ctx, logger, db, identityCtx)
 	return
+}
+
+func openObservability(
+	ctx context.Context,
+	logger *slog.Logger,
+	db *sqlx.DB,
+	identityCtx *identitybootstrap.Identity,
+) (*observabilitybootstrap.Observability, error) {
+	observabilityCtx, err := observabilitybootstrap.New(observabilitybootstrap.Deps{
+		DB:     db,
+		Logger: logger,
+		AuthZ:  identityCtx.AuthZ(),
+		Audit:  identityCtx.AuditRecorder(),
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open observability", "err", err)
+		return nil, err
+	}
+	if err := observabilityCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "observability schema", "err", err)
+		return nil, err
+	}
+	return observabilityCtx, nil
 }
 
 func openIdentity(
@@ -602,12 +650,13 @@ func newHTTPServer(
 }
 
 type muxDeps struct {
-	detectionCtx *detectionbootstrap.Detection
-	endpointCtx  *endpointbootstrap.Endpoint
-	identityCtx  *identitybootstrap.Identity
-	rulesCtx     *rulesbootstrap.Rules
-	responseCtx  *responsebootstrap.Response
-	logger       *slog.Logger
+	detectionCtx     *detectionbootstrap.Detection
+	endpointCtx      *endpointbootstrap.Endpoint
+	identityCtx      *identitybootstrap.Identity
+	rulesCtx         *rulesbootstrap.Rules
+	responseCtx      *responsebootstrap.Response
+	observabilityCtx *observabilitybootstrap.Observability
+	logger           *slog.Logger
 }
 
 func buildMux(d muxDeps) *http.ServeMux {
@@ -657,6 +706,7 @@ func registerSessionRoutes(mux *http.ServeMux, d muxDeps) {
 		d.endpointCtx.RegisterAuthedRoutes(r)
 		d.responseCtx.RegisterAuthedRoutes(r)
 		d.identityCtx.RegisterAuthedRoutes(r)
+		d.observabilityCtx.RegisterAuthedRoutes(r)
 	})
 }
 

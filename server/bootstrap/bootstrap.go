@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/fleetdm/edr/internal/logging"
 	"github.com/fleetdm/edr/internal/observability"
@@ -54,6 +55,10 @@ type Env struct {
 type Options struct {
 	ServiceName    string
 	ServiceVersion string
+	// TraceSampler, when non-nil, becomes the TracerProvider's head sampler. The HTTP server binaries pass a route-tier sampler here
+	// (wrapped in sdktrace.ParentBased) so trace export volume is capped; binaries that do not classify routes leave it nil and keep
+	// the SDK default (always-on).
+	TraceSampler sdktrace.Sampler
 }
 
 // Init runs the daemon prelude. On any error the partial state is torn down before returning so the caller only has to check err.
@@ -72,6 +77,7 @@ func Init(opts Options) (context.Context, *Env, error) {
 		ServiceName:       opts.ServiceName,
 		ServiceVersion:    opts.ServiceVersion,
 		ServiceInstanceID: instanceID(),
+		Sampler:           opts.TraceSampler,
 	}))
 	if err != nil {
 		cancel()
