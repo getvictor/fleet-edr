@@ -78,9 +78,40 @@ jobs:
           fi
           echo "::warning::Dry-run from a non-tag ref: archive gate is advisory, not failing."
 
+  # The operator deploy docs pin an explicit release tag (docs/doc-versioning.md). This gate fails a stable release whose
+  # pinned snippets were not bumped to the tag being published, so a forgotten bump cannot ship. It is a no-op on rc /
+  # prerelease tags (the docs are bumped to the stable tag in the release-prep PR, before the rc is cut) and on dry-runs.
+  # Every publishing job depends on this via needs:, alongside openspec-archived, so a stale doc fails before any signing.
+  docs-version-pinned:
+    name: Operator docs pinned to release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # checkout only: the gate reads the pinned docs
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Check pinned deploy snippets equal the release tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_RELEASE_TAG" != "true" ]; then
+            echo "Not a v* tag (dry-run); pinned-version check is advisory, skipping."
+            exit 0
+          fi
+          case "$REF_NAME" in
+            *-*)
+              echo "Prerelease tag $REF_NAME; the docs pin the stable tag, skipping."
+              exit 0
+              ;;
+          esac
+          tools/bump-doc-versions.sh --check "$REF_NAME"
+
   macos-pkg:
     name: Build + sign + notarize pkg
-    needs: openspec-archived
+    needs: [openspec-archived, docs-version-pinned]
     runs-on: macos-15  # pin: needs Xcode 16.3+ (project objectVersion 77)
     environment: release-signing
     permissions:
@@ -330,7 +361,7 @@ jobs:
 
   docker-server:
     name: Build + push server image
-    needs: openspec-archived
+    needs: [openspec-archived, docs-version-pinned]
     runs-on: ubuntu-latest
     permissions:
       contents: read      # checkout source for the build context
@@ -448,7 +479,7 @@ jobs:
 
   docker-demo-seed:
     name: Build + push demo-seed image
-    needs: openspec-archived
+    needs: [openspec-archived, docs-version-pinned]
     runs-on: ubuntu-latest
     # Separate job (not a matrix with docker-server) so the proven server-release
     # path stays byte-identical. This is the one-shot seeder for the Mac-free

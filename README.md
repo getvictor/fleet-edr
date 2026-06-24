@@ -39,8 +39,10 @@ Two steps. Stand up a server, then push the agent to your Macs.
 - **Single VM with your own domain (recommended).** One Linux VM, one script: Caddy gets a Let's Encrypt certificate automatically and reverse-proxies to the server, so you manage no certificates and no content-inspecting edge WAF flags your agents' telemetry as attacks. Full walkthrough: [docs/quickstart-vm.md](docs/quickstart-vm.md).
 
   ```sh
-  EDR_DOMAIN=edr.example.com EDR_VERSION=v0.2.1 ./bootstrap.sh
+  EDR_DOMAIN=edr.example.com EDR_VERSION=latest ./bootstrap.sh
   ```
+
+  For production, pin a specific signed release instead of `latest`: see [docs/quickstart-vm.md](docs/quickstart-vm.md).
 
 - **Or self-host the container** on any container host (Docker, Kubernetes, AWS ECS/EKS, GCP, Azure, or your own VM). The server is a standard multi-arch Linux image. Setup, secrets, and TLS: [docs/install-server.md](docs/install-server.md).
 
@@ -111,6 +113,8 @@ Operator and reference docs live in [`docs/`](docs/):
 | Detection rules: behavior, ATT&CK mapping, configuration | [`detection-rules.md`](docs/detection-rules.md)                       |
 | HTTP API reference                                       | [`api.md`](docs/api.md) + [`api/openapi.yaml`](docs/api/openapi.yaml) |
 | Architecture decisions (the "why")                       | [`adr/`](docs/adr/)                                                   |
+
+The docs in this tree track the development build. For documentation matching a specific release, browse the repository at that release's tag (the [releases page](https://github.com/getvictor/fleet-edr/releases) lists them). How docs are versioned with the code: [`doc-versioning.md`](docs/doc-versioning.md).
 
 Repository layout:
 

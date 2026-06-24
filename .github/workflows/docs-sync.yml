@@ -1,0 +1,97 @@
+name: Docs sync
+
+# User-facing changes MUST update the docs. This gate fails a PR that touches a user-facing surface (the React UI, an
+# HTTP request handler, or a detection rule) without also touching docs/ or CHANGELOG.md. It is the docs-as-code sibling
+# of the OpenSpec sync gate (.github/workflows/openspec-sync.yml); the full model is in docs/doc-versioning.md.
+#
+# The gate fires on PATH, not on actual behavior, so it has false positives: an internal refactor of a handler, a
+# non-visible UI tweak, a comment fix. The opt-out exists ONLY for that case. It is NOT a way to skip documenting a real
+# user-facing change. To make that unambiguous (and auditable), the opt-out is an explicit assertion that the PR changes
+# nothing a user sees: the `no-docs-change` label or a `[no-docs-change]` tag in the title. When used, the gate emits a
+# ::notice:: naming the flagged files so a reviewer MUST confirm the assertion.
+#
+# The trigger set is deliberately conservative (the highest-signal user-facing surfaces) and can be widened over time.
+
+on:
+  pull_request:
+    # Include labeled/unlabeled/edited so adding the no-docs-change label (or editing the title to add the tag) re-runs
+    # the gate without needing a new push. The bare default (opened/synchronize/reopened) would leave a failed check red
+    # until the next commit even after the opt-out is applied.
+    types: [opened, reopened, synchronize, labeled, unlabeled, edited, ready_for_review]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-sync:
+    name: Docs updated for user-facing changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "Not a pull_request event; nothing to enforce."
+            exit 0
+          fi
+
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')
+
+          # User-facing surfaces: the React UI, HTTP request handlers (any file ending in handler.go, including the
+          # foo_handler.go form, where endpoints and request handling live), the HTTP router, and the detection rule
+          # catalog (documented in docs/detection-rules.md). Test files, type declarations, UI test helpers, and catalog
+          # fixtures are excluded: they are not a user-facing change.
+          USER_FACING='^ui/src/.*\.(ts|tsx)$|^server/.*handler\.go$|^server/httpserver/router\.go$|^server/rules/internal/catalog/.*\.go$'
+          EXCLUDE='\.test\.(ts|tsx)$|\.d\.ts$|^ui/src/test/|_test\.go$|/fixtures/'
+          facing_files=$(echo "$files" | grep -E "$USER_FACING" | grep -vE "$EXCLUDE" || true)
+
+          if [[ -z "$facing_files" ]]; then
+            echo "No user-facing files changed; nothing to enforce."
+            exit 0
+          fi
+
+          if echo "$files" | grep -qE '^docs/|^CHANGELOG\.md$'; then
+            echo "User-facing change accompanied by a docs/ or CHANGELOG.md update. OK. User-facing files:"
+            echo "$facing_files"
+            exit 0
+          fi
+
+          # User-facing files changed with NO docs update. This is a violation UNLESS the PR explicitly asserts it
+          # changes nothing a user sees. The assertion is auditable: the ::notice:: below names the files so a reviewer
+          # must confirm there is truly no user-facing delta.
+          if [[ ",$PR_LABELS," == *",no-docs-change,"* ]] || [[ "$PR_TITLE" == *"[no-docs-change]"* ]]; then
+            {
+              echo "::notice::Docs gate: PR asserts 'no-docs-change' for these user-facing files. A reviewer MUST confirm nothing a user sees changed; if it did, a docs/ or CHANGELOG.md update is required."
+              echo "Files asserted non-user-facing:"
+              echo "$facing_files"
+            }
+            exit 0
+          fi
+
+          echo "::error::User-facing files changed without any docs/ or CHANGELOG.md update."
+          {
+            echo "These files change a user-facing surface:"
+            echo "$facing_files"
+            echo
+            echo "Update the operator or reference docs under docs/ (or add a CHANGELOG.md entry) in the same PR."
+            echo "The doc-versioning model is in docs/doc-versioning.md."
+            echo
+            echo "ONLY if this PR changes nothing a user sees (an internal refactor, a non-visible UI tweak), assert"
+            echo "that with the 'no-docs-change' label or [no-docs-change] in the PR title. Do NOT use that to skip"
+            echo "documenting a real user-facing change."
+          } >&2
+          exit 1
