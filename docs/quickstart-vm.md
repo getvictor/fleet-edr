@@ -92,10 +92,12 @@ docker inspect "$(docker compose -f docker-compose.quickstart.yml ps -q server)"
 
 ### Single sign-on (OIDC)
 
-The quickstart boots with break-glass sign-in only (`EDR_AUTH_ALLOW_NO_OIDC=1`). To add your identity provider, set the OIDC variables together (the server rejects a partial config) and switch off break-glass-only mode, keeping the client secret in a Docker secret rather than `.env`:
+The quickstart boots with break-glass sign-in only (`EDR_AUTH_ALLOW_NO_OIDC=1`). Configure your identity provider in the UI: sign in with the break-glass admin (step 5), open **Admin settings -> Single sign-on**, and enter the issuer, client ID, client secret, and external URL. The form derives the redirect URI from the external URL and shows it read-only; register that exact value at your IdP. A test-connection button verifies the provider before you save, and changes apply at runtime with no restart. See [okta-setup.md](okta-setup.md) for the IdP-side steps.
+
+Alternatively, seed the configuration from the environment on the server's first boot (useful for unattended provisioning), keeping the client secret in a Docker secret rather than `.env`:
 
 ```sh
-# 1. Client secret as a file secret (secrets/ is 0700; the file is 0644 so the nonroot server container can read it).
+# Client secret as a file secret (secrets/ is 0700; the file is 0644 so the nonroot server container can read it).
 printf '%s' 'YOUR_OIDC_CLIENT_SECRET' > secrets/oidc_client_secret
 chmod 0644 secrets/oidc_client_secret
 ```
@@ -110,7 +112,7 @@ EDR_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
 EDR_AUTH_ALLOW_NO_OIDC=0
 ```
 
-Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). The redirect URL must exactly match what your IdP has on file. See [okta-setup.md](okta-setup.md) for the IdP-side steps and the optional knobs (`EDR_OIDC_DEFAULT_ROLE`, `EDR_OIDC_ALLOW_JIT_PROVISIONING`).
+Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). These variables seed the stored configuration the first time the server boots with OIDC set (here, this recreate, since the server had no OIDC config before); afterward the Single sign-on screen is the source of truth and further `EDR_OIDC_*` changes are inert. The redirect URL must exactly match what your IdP has on file.
 
 ## Operations
 
@@ -125,7 +127,7 @@ Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d serv
 
 - **Rotate the enroll secret.** Overwrite `secrets/enroll_secret` and `docker compose -f docker-compose.quickstart.yml restart server`. Existing host tokens are unaffected (they were derived at enroll time).
 
-- **Add single sign-on, change other settings.** See [Set server configuration](#set-server-configuration) above for the env-var mechanism and the OIDC walkthrough.
+- **Add single sign-on, change other settings.** Configure SSO in the UI (**Admin settings -> Single sign-on**); see the [Single sign-on (OIDC)](#single-sign-on-oidc) section above. For other settings, see [Set server configuration](#set-server-configuration).
 
 ## Send telemetry to a collector
 
