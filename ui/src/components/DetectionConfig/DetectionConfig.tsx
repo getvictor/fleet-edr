@@ -70,7 +70,14 @@ function globalSetting(settings: DetectionRuleSetting[], ruleID: string): Detect
 // chain (non-shell → shell → temp/network)") which, paired with the rule id, made each option long and noisy. Top EDR consoles list
 // the short rule name only, so we drop the aside and the id; the id still rides as the option value.
 function ruleLabel(title: string): string {
-  return title.replace(/\s*\([^)]*\)\s*$/, "").trim() || title;
+  // Drop a trailing " (...)" aside with linear string ops rather than a regex: the equivalent /\s*\([^)]*\)\s*$/ has super-linear
+  // backtracking (Sonar S8786) because .replace retries the greedy leading \s* at every start position.
+  const trimmed = title.trimEnd();
+  if (trimmed.endsWith(")")) {
+    const open = trimmed.lastIndexOf("(");
+    if (open > 0) return trimmed.slice(0, open).trim() || title;
+  }
+  return title;
 }
 
 // DetectionConfig is the admin surface for detection-rule tuning (issue #459): per-host false-positive exclusions and per-rule
