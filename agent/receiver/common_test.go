@@ -18,8 +18,7 @@ import (
 // subsequent events), MUST drop the affected event, and MUST emit a warning identifying the affected service so
 // operators see the loss in SigNoz. The production CGo onEvent callback (receiver.go) delegates to this helper so
 // the test exercises exactly the production drop path without standing up a Mach service.
-func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
-	t.Parallel()
+func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) { //nolint:paralleltest // swaps the package-level logger and asserts on its own buffer; a sibling parallel test that also swaps the logger would capture each other's lines
 	// Reset the package logger after the test so concurrent tests don't see our buffer logger.
 	prev := logger.Load()
 	t.Cleanup(func() { logger.Store(prev) })
@@ -79,8 +78,7 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) {
 
 // Happy-path companion: when the channel has space, tryDeliverEvent delivers the event and emits no warning. Pins the "no spurious
 // log lines under steady-state load" half of the contract; a regression that logged on every successful delivery would surface here.
-func TestTryDeliverEvent_DeliversWhenChannelHasSpace(t *testing.T) {
-	t.Parallel()
+func TestTryDeliverEvent_DeliversWhenChannelHasSpace(t *testing.T) { //nolint:paralleltest // swaps the package-level logger and asserts on its own buffer; a sibling parallel test that also swaps the logger would capture each other's lines
 	prev := logger.Load()
 	t.Cleanup(func() { logger.Store(prev) })
 
