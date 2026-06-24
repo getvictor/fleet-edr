@@ -16,13 +16,14 @@ type route struct {
 	path   string
 }
 
-// highVolume is the agent data plane: it dominates request volume and is downsampled hardest. GET /api/commands is the agent's
-// command poll (the operator detail read GET /api/commands/{id} carries a path param and is not classified here, so it stays Full).
+// highVolume is the agent data plane that dominates request volume and is downsampled hardest: event ingest, the agent's command poll
+// (GET /api/commands), and the periodic per-host token refresh. POST /api/enroll is deliberately NOT here: enrollment happens roughly
+// once per host lifetime, so it carries negligible volume and is load-bearing for debugging onboarding, so it stays Full (100%). The
+// operator detail read GET /api/commands/{id} carries a path param and is not classified here, so it also stays Full.
 var highVolume = []route{
 	{"POST", "/api/events"},
 	{"GET", "/api/commands"},
 	{"POST", "/api/token/refresh"},
-	{"POST", "/api/enroll"},
 }
 
 // standard is operator/UI read traffic: the parameter-free dashboard and settings GET endpoints. Sampled at the standard ratio.

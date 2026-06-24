@@ -7,21 +7,25 @@ package tracingadmin
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 
 	"github.com/fleetdm/edr/internal/observability/tracing"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/observability/internal/tracingconfig"
 )
 
 // updateBodyLimit caps the PATCH body. The payload is three short fields; 64 KiB is generous.
 const updateBodyLimit = 1 << 16
 
-// store is the subset of *tracingconfig.Store the handler needs. Narrowed to an interface so tests inject a fake.
+// store is the subset of *tracingconfig.Store the handler needs. Narrowed to an interface so tests inject a fake. Get returns the row
+// version so Update can apply optimistic concurrency; Update returns tracingconfig.ErrVersionConflict when a concurrent write landed.
 type store interface {
-	GetTraceSamplerSettings(ctx context.Context) (*tracing.Settings, error)
-	Update(ctx context.Context, settings tracing.Settings, updatedBy *int64) error
+	Get(ctx context.Context) (*tracing.Settings, int64, error)
+	Update(ctx context.Context, settings tracing.Settings, expectedVersion int64, updatedBy *int64) error
 }
 
 // Handler serves the /api/settings/tracing routes. Construct via NewHandler; mount with RegisterAuthedRoutes behind the session + CSRF
@@ -67,7 +71,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionTracingManage, api.Resource{Type: "tracing_config"}) {
 		return
 	}
-	got, err := h.store.GetTraceSamplerSettings(ctx)
+	got, _, err := h.store.Get(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "tracing settings get", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
@@ -91,12 +95,20 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	var req updateRequest
 	r.Body = http.MaxBytesReader(w, r.Body, updateBodyLimit)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// DisallowUnknownFields rejects misspelled keys (e.g. {"forcefull":true}) instead of silently no-op'ing a 200; the trailing
+	// Decode(&struct{}) != io.EOF check rejects extra JSON after the object so a garbage suffix can't ride along on a valid body.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_json")
 		return
 	}
-	// Read-modify-write so an absent field keeps its stored value.
-	cur, err := h.store.GetTraceSamplerSettings(ctx)
+	if dec.Decode(&struct{}{}) != io.EOF {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	// Read-modify-write so an absent field keeps its stored value; the row version drives the optimistic-concurrency check on Update.
+	cur, version, err := h.store.Get(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "tracing settings read for update", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
@@ -123,14 +135,18 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	if err := h.store.Update(ctx, next, &actor.UserID); err != nil {
+	if err := h.store.Update(ctx, next, version, &actor.UserID); err != nil {
+		if errors.Is(err, tracingconfig.ErrVersionConflict) {
+			writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
+			return
+		}
 		h.logger.ErrorContext(ctx, "tracing settings update", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
 	h.recordUpdate(ctx, r, actor.UserID, next)
 
-	got, err := h.store.GetTraceSamplerSettings(ctx)
+	got, _, err := h.store.Get(ctx)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "tracing settings re-read after update", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")

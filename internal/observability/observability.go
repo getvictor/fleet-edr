@@ -129,7 +129,7 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 		sdktrace.WithResource(res),
 	}
 	// A nil sampler leaves the SDK default (ParentBased(AlwaysSample)) in place; the server passes a route-tier head sampler here to
-	// cap export volume. WithSampler must precede WithBatcher's effect, but option order is irrelevant to NewTracerProvider, so append.
+	// cap export volume. TracerProviderOption order is irrelevant to NewTracerProvider, so appending WithSampler after WithBatcher is fine.
 	if opts.Sampler != nil {
 		tpOpts = append(tpOpts, sdktrace.WithSampler(opts.Sampler))
 	}

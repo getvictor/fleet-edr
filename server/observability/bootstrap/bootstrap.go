@@ -24,7 +24,8 @@ type Deps struct {
 	// AuthZ is the authorization chokepoint the trace-settings admin endpoints gate on (api.ActionTracingManage). Required.
 	// cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
-	// Audit is the operator-action recorder. Optional: nil disables audit emission for sampler-settings updates. cmd/main wires
+	// Audit is the operator-action recorder for sampler-settings updates. Required: these runtime knobs materially change incident
+	// visibility, so a wiring mistake must fail fast rather than silently expose the endpoints with no audit trail. cmd/main wires
 	// identityCtx.AuditRecorder().
 	Audit identityapi.AuditRecorder
 }
@@ -44,6 +45,9 @@ func New(deps Deps) (*Observability, error) {
 	}
 	if deps.AuthZ == nil {
 		return nil, errors.New("observability bootstrap: AuthZ is required")
+	}
+	if deps.Audit == nil {
+		return nil, errors.New("observability bootstrap: Audit is required")
 	}
 	logger := deps.Logger
 	if logger == nil {

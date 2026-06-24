@@ -2,7 +2,7 @@
 
 ### Requirement: Route-tier head sampling of exported traces
 
-When OTLP export is enabled, the system SHALL apply head sampling to traces, classifying each inbound HTTP request span into a sampling tier and sampling each ratio-bearing tier at its configured ratio: a high-volume tier for agent data-plane traffic, a standard tier for operator and UI read traffic, and a full tier for everything else. The full tier SHALL be sampled at 100% and SHALL be the default for any span not explicitly classified, so a newly added route is captured at full fidelity until it is deliberately downsampled. Sampling SHALL be parent-based: a span whose parent was sampled MUST itself be sampled, so a distributed trace is never partially captured. The agent data-plane routes `POST /api/events`, the agent command poll `GET /api/commands`, `POST /api/token/refresh`, and `POST /api/enroll` SHALL be classified high-volume.
+When OTLP export is enabled, the system SHALL apply head sampling to traces, classifying each inbound HTTP request span into a sampling tier and sampling each ratio-bearing tier at its configured ratio: a high-volume tier for high-frequency agent data-plane traffic, a standard tier for operator and UI read traffic, and a full tier for everything else. The full tier SHALL be sampled at 100% and SHALL be the default for any span not explicitly classified, so a newly added route is captured at full fidelity until it is deliberately downsampled. Sampling SHALL be parent-based: a span whose parent was sampled MUST itself be sampled, so a distributed trace is never partially captured. The high-frequency agent routes `POST /api/events`, the agent command poll `GET /api/commands`, and `POST /api/token/refresh` SHALL be classified high-volume; low-frequency load-bearing agent routes such as `POST /api/enroll` SHALL remain in the full tier so they are captured at full fidelity.
 
 #### Scenario: Agent ingest traffic is downsampled
 
@@ -46,7 +46,7 @@ The system SHALL persist the high-volume ratio, the standard ratio, and a force-
 
 ### Requirement: Force-full override restores complete tracing
 
-The system SHALL provide a force-full override that, when enabled, causes every tier to be sampled at 100% regardless of its configured ratio, so an operator can capture complete traces during an incident debug window and disable it afterward, in both cases without a redeploy.
+The system SHALL provide a force-full override that, when enabled, causes every non-drop tier to be sampled at 100% regardless of its configured ratio, so an operator can capture complete traces during an incident debug window and disable it afterward, in both cases without a redeploy. The drop tier is exempt: probe spans stay dropped even under force-full (see the probe requirement below).
 
 #### Scenario: Force-full lifts all tiers to full sampling
 

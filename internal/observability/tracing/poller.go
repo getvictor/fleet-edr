@@ -13,6 +13,10 @@ import (
 // runtime config: an operator's change lands across the fleet within a minute, and the per-replica single-row read is negligible.
 const settingsPollInterval = 60 * time.Second
 
+// settingsReadTimeout bounds a single settings read so a stalled DB connection cannot park the poll goroutine indefinitely (which would
+// freeze runtime sampler updates until process shutdown). Well above a healthy single-row read; the next tick retries on timeout.
+const settingsReadTimeout = 5 * time.Second
+
 // pollTracer instruments the poll loop. When OTLP export is off the global provider returns a no-op tracer, so this costs nothing.
 var pollTracer = otel.Tracer("github.com/fleetdm/edr/internal/observability/tracing")
 
@@ -49,7 +53,10 @@ func applyOnce(ctx context.Context, sampler *RouteTierSampler, last *Settings, r
 	)
 	defer span.End()
 
-	got, err := reader.GetTraceSamplerSettings(spanCtx)
+	// Bound each read so one stalled DB query can't park this goroutine forever and freeze runtime sampler updates.
+	readCtx, cancel := context.WithTimeout(spanCtx, settingsReadTimeout)
+	defer cancel()
+	got, err := reader.GetTraceSamplerSettings(readCtx)
 	if err != nil {
 		logger.ErrorContext(spanCtx, "trace sampler settings poll failed", "err", err)
 		return last

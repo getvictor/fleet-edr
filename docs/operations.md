@@ -289,7 +289,7 @@ Traces are head-sampled so trace export volume stays bounded at fleet scale. Eve
 
 | Tier | Routes | Default ratio |
 | --- | --- | --- |
-| High-volume | Agent data plane: `POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh`, `POST /api/enroll` | 0.01 (1%) |
+| High-volume | High-frequency agent data plane: `POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh` | 0.01 (1%) |
 | Standard | Operator/UI read traffic: the dashboard and settings `GET` endpoints | 0.1 (10%) |
 | Full | Everything else: writes, admin mutations, any unclassified route | 1.0 (100%) |
 | Drop | Liveness/health probes (`/livez`, `/readyz`, `/health`) | never exported |

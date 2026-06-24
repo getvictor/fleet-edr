@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS trace_sampler_settings (
 	high_volume_ratio DOUBLE       NOT NULL DEFAULT 0.01,
 	standard_ratio    DOUBLE       NOT NULL DEFAULT 0.1,
 	force_full        BOOLEAN      NOT NULL DEFAULT FALSE,
+	version           BIGINT       NOT NULL DEFAULT 1,
 	updated_at        TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
 	                              ON UPDATE CURRENT_TIMESTAMP(6),
 	updated_by        BIGINT       NULL,

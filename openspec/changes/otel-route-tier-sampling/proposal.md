@@ -6,11 +6,11 @@ OTel trace export is unbounded: no sampler is configured, so the SDK default (pa
 
 - Add a route-aware head sampler (`ParentBased(RouteTierSampler)`) to the server and ingest TracerProviders, replacing the implicit always-on SDK default.
 - Classify every HTTP span into a sampling tier:
-  - **HighVolume**: agent data-plane traffic (`POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh`, `POST /api/enroll`). Heavily sampled.
+  - **HighVolume**: high-frequency agent data-plane traffic (`POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh`). Heavily sampled. (Rare load-bearing agent routes like `POST /api/enroll` stay Full.)
   - **Standard**: API/user read traffic (operator and UI `GET` endpoints). Moderately sampled.
   - **Full**: everything else (writes, admin mutations, unclassified routes). Sampled at 100%, safe-by-default.
   - **Drop**: liveness/health/version probes. Never recorded or exported, and this wins over `force_full`.
-- Add a `force_full` incident toggle that lifts all tiers to 100% for a debug window without a redeploy.
+- Add a `force_full` incident toggle that lifts every non-drop tier to 100% for a debug window without a redeploy (probes stay dropped).
 - Persist the two ratios plus `force_full` in a dedicated `trace_sampler_settings` singleton MySQL table with `CHECK` constraints bounding each ratio to `[0, 1]`. Seed the row with the sampler's compile-time defaults. No new environment variables.
 - Each replica polls the row every 60s and atomically swaps the live sampler state, so changes propagate across the stateless app tier without a restart (ADR-0010).
 - Expose `GET` and `PATCH /api/settings/tracing` (admin + super_admin, like the SSO settings API) to read and update the settings.

@@ -186,14 +186,21 @@ func TestInit_SamplerWired(t *testing.T) { //nolint:paralleltest // Init mutates
 	require.NotNil(t, shutdown)
 	require.NoError(t, shutdown(t.Context()))
 
-	// Enabled path: NewTracerProvider builds with WithSampler set. A dead endpoint keeps the test hermetic.
-	shutdown2, _ := Init(t.Context(), Options{
+	// Enabled path: NewTracerProvider builds with WithSampler set and is published as the global provider. A dead endpoint keeps the
+	// test hermetic. Capture the global before/after so we prove Init actually swapped in a real provider rather than early-returning on
+	// the no-op path (which would leave the global untouched and pass a weaker nil-only assertion).
+	before := otel.GetTracerProvider()
+	shutdown2, err := Init(t.Context(), Options{
 		ServiceName: "test-svc",
 		InitTimeout: 2 * time.Second,
 		Endpoint:    "http://127.0.0.1:1",
 		Sampler:     sampler,
 	})
+	require.NoError(t, err)
 	require.NotNil(t, shutdown2)
+	after := otel.GetTracerProvider()
+	assert.NotSame(t, before, after, "Init with a non-empty endpoint must publish a new TracerProvider, not no-op")
+	assert.IsType(t, &sdktrace.TracerProvider{}, after, "the published provider is the SDK provider built with WithSampler")
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	_ = shutdown2(ctx)

@@ -52,6 +52,31 @@ func TestApplyOnce_noReapplyWhenUnchanged(t *testing.T) {
 	assert.Same(t, last, got)
 }
 
+func TestStartSettingsPoller_appliesFirstReadThenStopsOnCancel(t *testing.T) {
+	t.Parallel()
+	s := NewRouteTierSampler(NewRegistry())
+	reader := &fakeReader{settings: &Settings{HighVolumeRatio: 0.5, StandardRatio: 0.6, ForceFull: true}}
+
+	// Pre-cancel: StartSettingsPoller performs its immediate first read, then the loop's ctx.Done branch returns at once (no 60s wait).
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	StartSettingsPoller(ctx, s, reader, discard)
+
+	assert.GreaterOrEqual(t, reader.calls, 1, "the poller does one synchronous read before entering the loop")
+	assert.Contains(t, s.Description(), "highVolume=0.5", "the first read is applied to the sampler")
+	assert.Contains(t, s.Description(), "forceFull=true")
+}
+
+func TestStartSettingsPoller_nilLoggerDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	s := NewRouteTierSampler(NewRegistry())
+	reader := &fakeReader{settings: &Settings{HighVolumeRatio: 0.1, StandardRatio: 0.2}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// nil logger must be defaulted internally (production passes a real logger, but the guard matters).
+	assert.NotPanics(t, func() { StartSettingsPoller(ctx, s, reader, nil) })
+}
+
 // spec:observability-instrumentation/sampler-ratios-are-runtime-adjustable-without-redeploy/settings-record-is-unreadable-at-startup
 func TestApplyOnce_readErrorKeepsDefaults(t *testing.T) {
 	t.Parallel()
