@@ -91,6 +91,20 @@ dependenciesRules:
         - "**.coordination.leader"  # MySQL-advisory-lock leader coordinator: pipeline.Runner gates retention + process-TTL on it
         - "**.testdb"
 
+  # observability context internals (issue #374). A sixth bounded context (an amendment to ADR-0004's
+  # original five) that owns the runtime trace-sampler settings: its store + admin handler. It imports
+  # the shared sampler infra (internal/observability/tracing) for the Settings domain type, and
+  # identity.api for the authz chokepoint + audit recorder its admin endpoint funnels through.
+  - package: "**.server.observability.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.server.observability.internal.**"
+        - "**.observability.tracing"
+        - "**.identity.api"
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.testdb"
+
   # ----- testkit packages -----------------------------------------------------
   #
   # testkit is a curated test-fixture surface for each bounded context.
@@ -161,6 +175,16 @@ dependenciesRules:
         - "**.attrkeys"
         - "**.httpserver"
         - "**.sqlhelpers"
+        - "**.testdb"
+
+  - package: "**.server.observability.testkit"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.server.observability.bootstrap"
+        - "**.server.observability.internal.**"
+        - "**.observability.tracing"
+        - "**.attrkeys"
+        - "**.httpserver"
         - "**.testdb"
 
   # ----- api/ packages: pure-types, no cross-context internals ----------------

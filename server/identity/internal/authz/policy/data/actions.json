@@ -31,6 +31,7 @@
     "application_control.policy_update",
     "application_control.policy_delete",
     "detection_config.read",
-    "detection_config.write"
+    "detection_config.write",
+    "tracing.manage"
   ]
 }

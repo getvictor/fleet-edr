@@ -11,13 +11,18 @@ import (
 	"os"
 	"time"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
 	"github.com/fleetdm/edr/internal/keyring"
+	"github.com/fleetdm/edr/internal/observability/tracing"
 	"github.com/fleetdm/edr/server/bootstrap"
 	"github.com/fleetdm/edr/server/config"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	"github.com/fleetdm/edr/server/httpserver"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
+	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
+	"github.com/fleetdm/edr/server/tracingpolicy"
 )
 
 var (
@@ -44,7 +49,18 @@ func main() {
 }
 
 func run() error {
-	ctx, env, err := bootstrap.Init(bootstrap.Options{ServiceName: serviceName, ServiceVersion: version})
+	// Build the route-tier trace sampler before bootstrap.Init so it is installed on the TracerProvider at OTel init. The ingest binary
+	// serves the highest-volume route (POST /api/events), so capping its trace export is the main win of issue #374. Wrapped in
+	// ParentBased so a sampled parent forces its children sampled.
+	samplerRegistry := tracing.NewRegistry()
+	tracingpolicy.Register(samplerRegistry)
+	traceSampler := tracing.NewRouteTierSampler(samplerRegistry)
+
+	ctx, env, err := bootstrap.Init(bootstrap.Options{
+		ServiceName:    serviceName,
+		ServiceVersion: version,
+		TraceSampler:   sdktrace.ParentBased(traceSampler),
+	})
 	if err != nil {
 		return err
 	}
@@ -90,6 +106,29 @@ func run() error {
 		logger.ErrorContext(ctx, "identity schema", "err", err)
 		return err
 	}
+
+	// The observability context owns the runtime trace-sampler settings (issue #374). The ingest tier serves the highest-volume route
+	// (POST /api/events), so it polls the same row to honor an operator's ratio / force-full change without a restart. It does NOT mount
+	// the admin endpoint (ingest serves no operator routes), but it still needs the schema + read accessor.
+	observabilityCtx, err := observabilitybootstrap.New(observabilitybootstrap.Deps{
+		DB:     db,
+		Logger: logger,
+		AuthZ:  identityCtx.AuthZ(),
+		Audit:  identityCtx.AuditRecorder(),
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "open observability", "err", err)
+		return err
+	}
+	if err := observabilityCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "observability schema", "err", err)
+		return err
+	}
+	// Prime the sampler synchronously before serving so the ingest tier's first request honors any persisted override rather than the
+	// compile-time defaults; then poll for later changes. The applied state is a per-replica cache, safe to lose (ADR-0010).
+	samplerReader := observabilityCtx.TraceSamplerSettingsReader()
+	primedSampler := tracing.PrimeSampler(ctx, traceSampler, samplerReader, logger)
+	go tracing.StartSettingsPoller(ctx, traceSampler, samplerReader, logger, primedSampler)
 
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:     db,

@@ -123,6 +123,10 @@ func (s stubGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
 // edr.alerts.created, (c) the lossy=true vs lossy=false distinction on edr.agent.queue.dropped
 // (server-side mirror of the agent-side TestRecorder_QueueDropped), and (d) that collect() drives the
 // gauge callbacks and observes their values (stubGauges feeds enrolled=3, offline=1).
+//
+// spec:observability-instrumentation/aggregate-latency-and-alerting-derive-from-metrics-not-sampled-spans/event-counts-are-unaffected-by-the-sample-ratio
+// The recorder counts every ingested event with no reference to the trace sampler, so counts are authoritative regardless of the
+// trace sample ratio in effect.
 func TestRecorder_RecordsCounters(t *testing.T) {
 	t.Parallel()
 	r, collect := newTestRecorder(t, stubGauges{enrolled: 3, offline: 1}, Options{})
@@ -246,6 +250,10 @@ func (g failingGauges) OfflineHosts(context.Context, time.Duration) (int, error)
 }
 
 // spec:observability-instrumentation/http-server-request-duration/inbound-requests-are-timed-by-route-method-and-status
+// spec:observability-instrumentation/aggregate-latency-and-alerting-derive-from-metrics-not-sampled-spans/latency-percentiles-are-unaffected-by-the-sample-ratio
+//
+// The duration histogram records every request with no reference to the trace sampler, so latency percentiles reflect the full
+// request population regardless of the trace sample ratio.
 //
 // ObserveHTTPRequest records on the OTel-semantic-convention http.server.request.duration histogram. The test pins: (a) two
 // requests sharing method+route+status collapse into one series with count 2, (b) a distinct status is its own series, and

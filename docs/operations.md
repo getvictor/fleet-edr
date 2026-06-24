@@ -283,6 +283,39 @@ Recommended alerts (SigNoz, Grafana, wherever your OTel backend lives):
 
 Server logs go through the same OTLP pipeline (via `otelslog`) with `service.name=fleet-edr-server`. Use them for audit-style queries like "who resolved alert X" (look for `edr.admin.action=alert_update` log events with `user.id`).
 
+### Trace sampling
+
+Traces are head-sampled so trace export volume stays bounded at fleet scale. Every inbound HTTP request span is classified into a tier and sampled at that tier's ratio:
+
+| Tier | Routes | Default ratio |
+| --- | --- | --- |
+| High-volume | High-frequency agent data plane: `POST /api/events`, the agent `GET /api/commands` poll, `POST /api/token/refresh` | 0.01 (1%) |
+| Standard | Operator/UI read traffic: the dashboard and settings `GET` endpoints | 0.1 (10%) |
+| Full | Everything else: writes, admin mutations, any unclassified route | 1.0 (100%) |
+| Drop | Liveness/health probes (`/livez`, `/readyz`, `/health`) | never exported |
+
+Sampling is parent-based: a sampled parent forces its children sampled, so a trace is never partially captured. Operator detail reads that carry a path parameter (e.g. `GET /api/alerts/{id}`) are not classified and fall to Full.
+
+Because traces are sampled, **read p99 / error-rate / request-rate from metrics, not from spans.** The `http.server.request.duration` histogram and the `edr.*` counters record every request and event regardless of the sample ratio; the RED dashboard above is built on that histogram and is unaffected by sampling. Spans are for exemplar drill-down, not aggregates.
+
+The ratios and an incident `force_full` toggle are stored in MySQL and polled by every replica each 60s, so changes apply across the deployment without a redeploy. Read and update them with an admin or super_admin session (the `tracing.manage` grant):
+
+```bash
+# Read the current settings.
+curl --cacert ca.pem -b cookies.txt https://edr.example.com/api/settings/tracing
+
+# Raise sampling fleet-wide during an investigation, then drop it back.
+curl --cacert ca.pem -b cookies.txt -X PATCH https://edr.example.com/api/settings/tracing \
+  -H "X-Csrf-Token: $CSRF" -H 'Content-Type: application/json' \
+  -d '{"high_volume_ratio":0.5,"standard_ratio":1.0}'
+
+# force_full lifts every tier to 100% for a debug window (probes stay dropped). Disable it when done.
+curl --cacert ca.pem -b cookies.txt -X PATCH https://edr.example.com/api/settings/tracing \
+  -H "X-Csrf-Token: $CSRF" -H 'Content-Type: application/json' -d '{"force_full":true}'
+```
+
+`PATCH` is partial: omit a field to keep its stored value. Ratios must be in `[0, 1]` (rejected by both the API and a DB `CHECK` constraint). A change reaches every replica within one 60s poll interval.
+
 ### HTTP server (RED) dashboard
 
 A starter SigNoz dashboard for the inbound HTTP surface lives at `config/observability/edr-http-server-dashboard.json`. It covers six panels (Rate / Errors / Duration): request rate by route, 5xx error rate by route, p95 and p99 latency by route, request rate by status code, and request rate by method. Import via the SigNoz UI: **Dashboards -> New Dashboard -> Import JSON** -> paste the file contents -> save. Because the access-log middleware no longer logs healthy 2xx/3xx at INFO, this dashboard (not log grep) is the volume + latency signal. All panels read the OTel `http.server.request.duration` histogram, which SigNoz stores under Prometheus-style suffixes: rate/volume panels query `http.server.request.duration.count`, latency quantiles query `http.server.request.duration.bucket`.

@@ -10,11 +10,11 @@
 // X → testdb/full → ctx/bootstrap → X.
 //
 // Schemas are applied in dependency order: identity first (owns
-// users + sessions), then endpoint, rules, response, detection. With
-// no cross-context FKs in the current schema the remaining four are
-// independent; the order is preserved for readability and so future
-// cross-context FKs (e.g. an audit log keyed by user_id) Just Work
-// without re-shuffling the call sites.
+// users + sessions), then endpoint, rules, response, detection, and
+// observability. With no cross-context FKs in the current schema the
+// remaining contexts are independent; the order is preserved for
+// readability and so future cross-context FKs (e.g. an audit log keyed
+// by user_id) Just Work without re-shuffling the call sites.
 //
 // full imports each context's testkit rather than its bootstrap so
 // the rule "production wiring (bootstrap) and test fixtures (testkit)
@@ -30,6 +30,7 @@ import (
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	endpointtestkit "github.com/fleetdm/edr/server/endpoint/testkit"
 	identitytestkit "github.com/fleetdm/edr/server/identity/testkit"
+	observabilitytestkit "github.com/fleetdm/edr/server/observability/testkit"
 	responsetestkit "github.com/fleetdm/edr/server/response/testkit"
 	rulestestkit "github.com/fleetdm/edr/server/rules/testkit"
 	"github.com/fleetdm/edr/server/testdb"
@@ -56,6 +57,9 @@ func Open(t *testing.T) *sqlx.DB {
 	}
 	if err := detectiontestkit.ApplySchema(ctx, db); err != nil {
 		t.Fatalf("apply detection schema: %v", err)
+	}
+	if err := observabilitytestkit.ApplySchema(ctx, db); err != nil {
+		t.Fatalf("apply observability schema: %v", err)
 	}
 	return db
 }

@@ -63,6 +63,10 @@ type Options struct {
 	// Endpoint is the resolved OTLP target (e.g. "http://localhost:4317"). Empty puts Init on the no-op path so offline dev,
 	// CI, and unit tests do not need a running collector. OptionsFromEnv populates this from OTEL_EXPORTER_OTLP_ENDPOINT.
 	Endpoint string
+	// Sampler, when non-nil, is installed as the TracerProvider's head sampler (WithSampler). Callers pass an already-wrapped
+	// sampler (e.g. sdktrace.ParentBased(routeTierSampler)) so this package stays agnostic about the sampling policy. Nil leaves the
+	// SDK default sampler (ParentBased(AlwaysSample)) in place, which is the right behavior for binaries that do not classify routes.
+	Sampler sdktrace.Sampler
 }
 
 // OptionsFromEnv resolves the env-derived fields on o from the process environment and returns the result. The only place
@@ -120,10 +124,16 @@ func Init(ctx context.Context, opts Options) (ShutdownFunc, error) {
 	if err != nil {
 		return noopShutdown, fmt.Errorf("create trace exporter: %w", err)
 	}
-	tp := sdktrace.NewTracerProvider(
+	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithBatcher(traceExp),
 		sdktrace.WithResource(res),
-	)
+	}
+	// A nil sampler leaves the SDK default (ParentBased(AlwaysSample)) in place; the server passes a route-tier head sampler here to
+	// cap export volume. TracerProviderOption order is irrelevant to NewTracerProvider, so appending WithSampler after WithBatcher is fine.
+	if opts.Sampler != nil {
+		tpOpts = append(tpOpts, sdktrace.WithSampler(opts.Sampler))
+	}
+	tp := sdktrace.NewTracerProvider(tpOpts...)
 
 	logExp, err := otlploggrpc.New(initCtx, otlploggrpc.WithEndpointURL(opts.Endpoint))
 	if err != nil {
