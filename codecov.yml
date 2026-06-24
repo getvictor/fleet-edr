@@ -77,9 +77,11 @@ flag_management:
 # Path fixes. vitest's v8 provider writes the UI LCOV (ui/coverage/lcov.info) with paths relative to ui/, e.g.
 # `SF:src/components/ProcessTree.tsx`, NOT repo-relative. The `ui` flag above is scoped to `ui/src/` and PR diff paths are
 # `ui/src/...`, so without a fix codecov can't map the LCOV onto the diff and reports changed UI lines as 0% (issue #468).
-# This prefix map re-roots those `src/` paths to repo paths. Codecov path fixes are prefix-anchored, so it does NOT touch
-# the Playwright E2E LCOV (already `ui/src/`-rooted) or the Go profiles (`agent/`, `server/`). Sonar reads the same vitest
-# LCOV via sonar.javascript.lcov.reportPaths and resolves the `src/` root itself, so it needs no equivalent mapping.
+# This prefix map re-roots those `src/` paths to repo paths. Codecov anchors the prefix at the start of the path (the
+# config validator normalizes `src/` to `^src/`), so it does NOT touch the Playwright E2E LCOV (already `ui/src/`-rooted,
+# does not start with `src/`) or the Go profiles (`agent/`, `server/`). Do NOT write the `^` yourself: codecov re-anchors
+# the input, so an explicit `^src/` becomes the dead regex `^^src/` and the fix silently stops matching. Sonar reads the
+# same vitest LCOV via sonar.javascript.lcov.reportPaths and resolves the `src/` root itself, so it needs no equivalent.
 fixes:
   - "src/::ui/src/"
 
