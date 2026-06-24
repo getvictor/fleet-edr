@@ -16,7 +16,8 @@ function authMethodLabel(authMethod?: string): string | null {
 }
 
 // AccountMenu is the top-right avatar dropdown: it carries the entry point to the Admin
-// settings area (gated on sso.manage so only admins see it) plus Documentation and Log
+// settings area (gated on sso.manage so only admins see it), Detection tuning (gated on
+// detection_config.read, so admins and senior analysts see it), Documentation, and Log
 // out. The "Admin settings" link is the only way into the settings area, matching the
 // design. Closes on outside-click and Escape. Implemented as a disclosure (trigger carries
 // aria-expanded) rather than the ARIA menu pattern: the items are plain links/buttons, so
@@ -72,6 +73,15 @@ export function AccountMenu({ user, authMethod, onLogout }: AccountMenuProps) {
               onClick={() => { setOpen(false); }}
             >
               Admin settings
+            </Link>
+          )}
+          {can(PermissionAction.DetectionConfigRead) && (
+            <Link
+              to="/detection-config"
+              className="account-menu__item"
+              onClick={() => { setOpen(false); }}
+            >
+              Detection tuning
             </Link>
           )}
           <a

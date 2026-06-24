@@ -26,7 +26,9 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     proxy: {
-      "/api": "http://localhost:8088",
+      // The dev server (task dev:server) serves HTTPS on :8088 with a mkcert-signed local cert, so the proxy target is https and
+      // secure:false skips cert verification for the self-signed dev chain. Dev/preview only; vite build ignores server.proxy.
+      "/api": { target: "https://localhost:8088", secure: false, changeOrigin: true },
     },
   },
   test: {

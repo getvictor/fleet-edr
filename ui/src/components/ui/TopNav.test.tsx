@@ -34,14 +34,10 @@ describe("TopNav capability gating", () => {
     expect(screen.getByRole("link", { name: "Application control" })).toBeInTheDocument();
   });
 
-  it("hides the Detection tuning entry without detection_config.read", () => {
-    renderNav([PermissionAction.HostRead, PermissionAction.AlertRead]);
-    expect(screen.queryByRole("link", { name: "Detection tuning" })).not.toBeInTheDocument();
-  });
-
-  it("shows the Detection tuning entry with detection_config.read", () => {
+  it("never renders Detection tuning in the top nav (it lives in the account menu)", () => {
+    // Even with detection_config.read, Detection tuning is not a top-nav tab; it moved into the account dropdown.
     renderNav([PermissionAction.HostRead, PermissionAction.DetectionConfigRead]);
-    expect(screen.getByRole("link", { name: "Detection tuning" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Detection tuning" })).not.toBeInTheDocument();
   });
 
   it("always shows the ungated Coverage entry", () => {

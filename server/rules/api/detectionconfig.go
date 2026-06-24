@@ -175,7 +175,11 @@ type DetectionExclusion struct {
 	Enabled     bool               `db:"enabled" json:"enabled"`
 	ExpiresAt   *time.Time         `db:"expires_at" json:"expires_at,omitempty"`
 	CreatedBy   string             `db:"created_by" json:"created_by"`
-	CreatedAt   time.Time          `db:"created_at" json:"created_at"`
+	// CreatedByEmail is the display email resolved from CreatedBy ("user:<id>") at read time. Not persisted (db:"-"); the operator
+	// handler fills it from the identity directory so the UI can show an email instead of the raw principal id. Empty when the user
+	// could not be resolved (e.g. deleted), in which case the UI falls back to CreatedBy.
+	CreatedByEmail string    `db:"-" json:"created_by_email,omitempty"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at"`
 }
 
 // DetectionRuleSetting mirrors a row in detection_rule_settings: the per-(rule, scope) mode + optional severity override + JSON

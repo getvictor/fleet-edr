@@ -35,6 +35,11 @@ type Deps struct {
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
+	// UserEmailByID resolves a user id to its display email for the detection-config exclusions list's created_by column. Optional:
+	// when nil the handler returns the raw "user:<id>" identifier. cmd/main wires it over identity's Service.GetUser; a func keeps the
+	// rules context free of an identity-internal import (ADR-0004), same posture as detection's UserExists dep.
+	UserEmailByID func(ctx context.Context, userID int64) (string, error)
+
 	// CommandInserter is the closure that enqueues a response.Command to a host. The application-control fan-out path consults it on
 	// every rule-create so every enrolled host in the deployment receives one `set_application_control` command per mutation. Optional:
 	// when nil, the application-control REST routes are not mounted (the rules context still constructs cleanly so non-REST consumers like
@@ -87,6 +92,9 @@ func New(deps Deps) (*Rules, error) {
 	opH.SetAudit(deps.Audit)
 
 	detectionConfigH := operator.NewDetectionConfig(detectionConfigSvc, deps.AuthZ, logger)
+	if deps.UserEmailByID != nil {
+		detectionConfigH.SetUserEmailResolver(deps.UserEmailByID)
+	}
 
 	appControlStore := appcontrol.NewStore(deps.DB)
 	var appControlSvc *appcontrol.Service

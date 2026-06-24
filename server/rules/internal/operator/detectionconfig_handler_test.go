@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -93,6 +94,78 @@ func dcDo(t *testing.T, srv *httptest.Server, method, path, body string) *http.R
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	return resp
+}
+
+// mountDC mounts the handler behind allow-all authz + an actor-injecting middleware so the list path runs with an actor on ctx.
+func mountDC(t *testing.T, h *DetectionConfigHandler) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{UserID: 7, SessionFresh: true})
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
+	t.Parallel()
+	// resolveCreatedByEmails fills CreatedByEmail in place, so each subtest needs its own slice (with its own backing array):
+	// sharing one across the parallel subtests would let one run's resolved emails leak into the nil-resolver run.
+	newExclusions := func() []api.DetectionExclusion {
+		return []api.DetectionExclusion{
+			{ID: 1, CreatedBy: "user:8"},                 // resolves
+			{ID: 2, CreatedBy: "user:8"},                 // same author: memoized, no second lookup
+			{ID: 3, CreatedBy: "user:9"},                 // resolver errors: email stays empty
+			{ID: 4, CreatedBy: "service-account:reaper"}, // non-user actor: never looked up
+		}
+	}
+
+	t.Run("fills email, memoizes per id, falls back on error or non-user actor", func(t *testing.T) {
+		t.Parallel()
+		var calls int
+		h := NewDetectionConfig(&fakeDCService{exclusions: newExclusions()}, allowAllAuthZ{}, slog.Default())
+		h.SetUserEmailResolver(func(_ context.Context, id int64) (string, error) {
+			calls++
+			if id == 8 {
+				return "ops@fleetdm.com", nil
+			}
+			return "", errors.New("user not found")
+		})
+		srv := mountDC(t, h)
+		resp := dcDo(t, srv, http.MethodGet, "/api/v1/detection-config/exclusions", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var out struct {
+			Exclusions []api.DetectionExclusion `json:"exclusions"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		resp.Body.Close()
+
+		require.Len(t, out.Exclusions, 4)
+		assert.Equal(t, "ops@fleetdm.com", out.Exclusions[0].CreatedByEmail)
+		assert.Equal(t, "ops@fleetdm.com", out.Exclusions[1].CreatedByEmail)
+		assert.Empty(t, out.Exclusions[2].CreatedByEmail, "errored lookup leaves email blank")
+		assert.Empty(t, out.Exclusions[3].CreatedByEmail, "non-user actor is not looked up")
+		assert.Equal(t, 2, calls, "user:8 resolved once (memoized) + user:9 once; service-account skipped")
+	})
+
+	t.Run("nil resolver leaves created_by_email empty", func(t *testing.T) {
+		t.Parallel()
+		h := NewDetectionConfig(&fakeDCService{exclusions: newExclusions()}, allowAllAuthZ{}, slog.Default())
+		srv := mountDC(t, h)
+		resp := dcDo(t, srv, http.MethodGet, "/api/v1/detection-config/exclusions", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var out struct {
+			Exclusions []api.DetectionExclusion `json:"exclusions"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+		resp.Body.Close()
+		for _, ex := range out.Exclusions {
+			assert.Empty(t, ex.CreatedByEmail)
+		}
+	})
 }
 
 func TestDetectionConfigHandler_Reads(t *testing.T) {

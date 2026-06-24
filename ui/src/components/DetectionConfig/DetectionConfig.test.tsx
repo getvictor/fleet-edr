@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { DetectionConfig } from "./DetectionConfig";
 import { PermissionsProvider } from "../../permissions";
@@ -96,6 +96,62 @@ describe("DetectionConfig", () => {
     // The rule-modes table reflects the persisted setting (monitor + high).
     expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("monitor");
     expect(screen.getByLabelText("severity override for suspicious_exec")).toHaveValue("high");
+    // The rule-modes table surfaces each rule's declared (default) severity from its catalog doc. Queried as a cell so the
+    // "medium" option in the severity-override select doesn't make the match ambiguous.
+    expect(screen.getByText("Default severity")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "medium" })).toBeInTheDocument();
+  });
+
+  // The rule picker shows a concise rule name: the descriptive parenthetical and the rule id are dropped from the option text,
+  // while the id still rides as the option value the form submits.
+  it("renders a concise rule name in the picker, dropping the descriptive aside and id", async () => {
+    const verbose = makeRuleEntry({
+      id: "suspicious_exec",
+      doc: makeRuleDoc({ title: "Suspicious exec chain (non-shell → shell → temp/network)" }),
+    });
+    stubReads({ rules: [verbose] });
+    renderPage();
+    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+
+    const option = screen.getByRole("option", { name: "Suspicious exec chain" });
+    expect(option).toHaveValue("suspicious_exec");
+    expect(screen.queryByRole("option", { name: /\(suspicious_exec\)/ })).not.toBeInTheDocument();
+  });
+
+  it("orders the rule picker alphabetically by display name", async () => {
+    stubReads({
+      rules: [
+        makeRuleEntry({ id: "zeta", doc: makeRuleDoc({ title: "Zeta rule" }) }),
+        makeRuleEntry({ id: "alpha", doc: makeRuleDoc({ title: "Alpha rule" }) }),
+        makeRuleEntry({ id: "mid", doc: makeRuleDoc({ title: "Mid rule" }) }),
+      ],
+    });
+    renderPage();
+    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+
+    const options = within(screen.getByLabelText("Rule")).getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["Select a rule...", "Alpha rule", "Mid rule", "Zeta rule"]);
+  });
+
+  // The rule-modes table sorts by declared severity (critical first), ties broken alphabetically by title; an unspecified ("")
+  // severity ranks last.
+  it("orders the rule-modes table by severity, critical first, then alphabetically", async () => {
+    stubReads({
+      rules: [
+        makeRuleEntry({ id: "unset_a", doc: makeRuleDoc({ title: "A rule", severity: "" }) }),
+        makeRuleEntry({ id: "low_b", doc: makeRuleDoc({ title: "B rule", severity: "low" }) }),
+        makeRuleEntry({ id: "crit_z", doc: makeRuleDoc({ title: "Z rule", severity: "critical" }) }),
+        makeRuleEntry({ id: "high_a", doc: makeRuleDoc({ title: "A rule", severity: "high" }) }),
+        makeRuleEntry({ id: "crit_a", doc: makeRuleDoc({ title: "A rule", severity: "critical" }) }),
+      ],
+    });
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("mode for crit_a")).toBeInTheDocument(); });
+
+    const order = screen.getAllByLabelText(/^mode for /).map((s) => s.getAttribute("aria-label"));
+    expect(order).toEqual([
+      "mode for crit_a", "mode for crit_z", "mode for high_a", "mode for low_b", "mode for unset_a",
+    ]);
   });
 
   it("shows an empty state when there are no exclusions", async () => {
@@ -174,7 +230,7 @@ describe("DetectionConfig", () => {
     });
   });
 
-  // Reducing a rule's alerting (-> disabled/monitor) opens the reason modal; the operator's reason rides the upsert for the audit row.
+  // Reducing a rule's alerting opens the reason modal; the operator's reason rides the upsert for the audit row.
   // spec:web-ui/detection-configuration-admin-views/disabling-or-monitoring-a-rule-requires-an-operator-reason
   it("requires a reason via the modal before disabling a rule", async () => {
     stubReads({ rules: [makeRuleEntry()], settings: [] });
@@ -205,11 +261,47 @@ describe("DetectionConfig", () => {
     renderPage();
     await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
 
-    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "monitor" } });
-    await waitFor(() => { expect(screen.getByText(/Set "Suspicious execution" to monitor/)).toBeInTheDocument(); });
+    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "disabled" } });
+    await waitFor(() => { expect(screen.getByText(/Disable "Suspicious execution"/)).toBeInTheDocument(); });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => { expect(screen.queryByText(/to monitor/)).not.toBeInTheDocument(); });
+    await waitFor(() => { expect(screen.queryByText(/Disable "Suspicious execution"/)).not.toBeInTheDocument(); });
     expect(upsert).not.toHaveBeenCalled();
+  });
+
+  // monitor is no longer operator-selectable: a rule with no persisted setting offers only alert and disabled.
+  // spec:web-ui/detection-configuration-admin-views/monitor-is-not-an-operator-selectable-mode
+  it("does not offer monitor as a selectable mode", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [] });
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
+
+    const modes = within(screen.getByLabelText("mode for suspicious_exec")).getAllByRole("option").map((o) => o.textContent);
+    expect(modes).toEqual(["alert", "disabled"]);
+  });
+
+  // A legacy persisted `monitor` row still displays correctly (monitor is shown so the controlled select matches), letting the
+  // operator migrate it to alert/disabled.
+  it("still displays a legacy monitor setting so it can be migrated", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "monitor" })] });
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("monitor"); });
+
+    const modes = within(screen.getByLabelText("mode for suspicious_exec")).getAllByRole("option").map((o) => o.textContent);
+    expect(modes).toEqual(["monitor", "alert", "disabled"]);
+  });
+
+  // created_by shows the server-resolved email when present, falling back to the raw "user:<id>" identifier otherwise.
+  // spec:web-ui/detection-configuration-admin-views/exclusion-author-is-shown-as-a-resolved-email
+  it("renders created_by_email when the server resolves it, else the raw identifier", async () => {
+    stubReads({
+      exclusions: [
+        makeExclusion({ id: 1, created_by: "user:8", created_by_email: "ops@fleetdm.com" }),
+        makeExclusion({ id: 2, created_by: "user:9" }),
+      ],
+    });
+    renderPage();
+    await waitFor(() => { expect(screen.getByText("ops@fleetdm.com")).toBeInTheDocument(); });
+    expect(screen.getByText("user:9")).toBeInTheDocument();
   });
 
   it("re-enabling a rule (mode -> alert) applies immediately with a generated reason and no modal", async () => {
