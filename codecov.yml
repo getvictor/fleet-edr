@@ -65,14 +65,23 @@ flag_management:
     - name: server
       paths:
         - server/
-    # The `ui` flag covers ui/src/**. Vitest doesn't ship UI tests
-    # today, but the Playwright E2E run captures V8 coverage of the
-    # running React bundle and emits an LCOV via monocart-coverage-
-    # reports. The same flag accumulates that LCOV; when vitest tests
-    # land they upload to the same flag and Codecov takes the union.
+    # The `ui` flag covers ui/src/**. Two LCOVs upload under it: the
+    # vitest unit-test LCOV (ui/coverage/lcov.info) and the Playwright
+    # E2E LCOV (test/e2e/coverage/lcov-e2e.info, V8 coverage of the
+    # running React bundle via monocart-coverage-reports). Codecov takes
+    # the union per flag, so a line hit by either suite counts as covered.
     - name: ui
       paths:
         - ui/src/
+
+# Path fixes. vitest's v8 provider writes the UI LCOV (ui/coverage/lcov.info) with paths relative to ui/, e.g.
+# `SF:src/components/ProcessTree.tsx`, NOT repo-relative. The `ui` flag above is scoped to `ui/src/` and PR diff paths are
+# `ui/src/...`, so without a fix codecov can't map the LCOV onto the diff and reports changed UI lines as 0% (issue #468).
+# This prefix map re-roots those `src/` paths to repo paths. Codecov path fixes are prefix-anchored, so it does NOT touch
+# the Playwright E2E LCOV (already `ui/src/`-rooted) or the Go profiles (`agent/`, `server/`). Sonar reads the same vitest
+# LCOV via sonar.javascript.lcov.reportPaths and resolves the `src/` root itself, so it needs no equivalent mapping.
+fixes:
+  - "src/::ui/src/"
 
 comment:
   layout: "header, diff, flags, components, files"
