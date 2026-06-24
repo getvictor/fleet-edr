@@ -111,6 +111,12 @@ func (s *Store) InsertBatch(ctx context.Context, hostIDs []string, commandType s
 			if firstErr == nil {
 				firstErr = fmt.Errorf("insert command batch (chunk of %d): %w", len(chunk), err)
 			}
+			// Continue past an isolated chunk failure (best-effort), but stop once the request context is canceled or past its
+			// deadline: every remaining chunk would fail the same way and only delay the synchronous handler during a timeout
+			// or DB outage.
+			if ctx.Err() != nil {
+				break
+			}
 			continue
 		}
 		inserted += len(chunk)

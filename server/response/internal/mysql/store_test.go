@@ -235,17 +235,22 @@ func TestInsertBatch(t *testing.T) {
 	// Spot-check the first + last host (across the chunk boundary): same command_type, pending status, and a payload that
 	// semantically matches the input. The commands.payload column is MySQL JSON, which normalizes key order + whitespace on
 	// storage, so compare against the input with JSONEq (a raw byte compare would be testing MySQL's serializer, not us) and
-	// separately assert the two hosts' stored bytes are identical to each other: that IS the fan-out guarantee every host gets
-	// the same snapshot.
-	var stored [][]byte
-	for _, hostID := range []string{"host-0", "host-599"} {
+	// separately assert each host's stored bytes match the first host's: that IS the fan-out guarantee every host gets the same
+	// snapshot. firstStored is captured from host-0 and every later host is compared against it.
+	var firstStored []byte
+	for i, hostID := range []string{"host-0", "host-599"} {
 		cmds, err := s.ListForHost(ctx, hostID, "")
 		require.NoError(t, err)
 		require.Len(t, cmds, 1, "each host gets exactly one command")
 		assert.Equal(t, "set_application_control", cmds[0].CommandType)
 		assert.Equal(t, api.StatusPending, cmds[0].Status)
 		assert.JSONEq(t, string(payload), string(cmds[0].Payload), "every row carries the shared fan-out payload")
-		stored = append(stored, cmds[0].Payload)
+		if i == 0 {
+			firstStored = cmds[0].Payload
+			continue
+		}
+		// Compare as []byte on both sides: cmds[0].Payload is a json.RawMessage, and assert.Equal treats []byte and
+		// json.RawMessage as unequal on the dynamic type even when the bytes match.
+		assert.Equal(t, firstStored, []byte(cmds[0].Payload), "every host in one fan-out receives byte-identical payload bytes")
 	}
-	assert.Equal(t, stored[0], stored[1], "every host in one fan-out receives byte-identical payload bytes")
 }
