@@ -219,7 +219,10 @@ export function SSOSettings() {
         </div>
 
         {testResult !== null && (
-          <output className={testResult.ok ? "sso-settings__test sso-settings__test--ok" : "sso-settings__test sso-settings__test--fail"}>
+          <output
+            className={testResult.ok ? "sso-settings__test sso-settings__test--ok" : "sso-settings__test sso-settings__test--fail"}
+            aria-live="polite"
+          >
             {testResult.ok
               ? "Connection verified: discovery and token endpoint reachable."
               : `Connection failed: ${testResult.reason ?? "unreachable"}`}
@@ -360,7 +363,11 @@ export function SSOSettings() {
           {saveError}
         </div>
       )}
-      {saved && <output className="sso-settings__saved">Settings saved.</output>}
+      {saved && (
+        <output className="sso-settings__saved" aria-live="polite">
+          Settings saved.
+        </output>
+      )}
 
       <div className="sso-settings__footer">
         <Button type="submit" variant="primary" isLoading={saving}>
