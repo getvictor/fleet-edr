@@ -237,6 +237,15 @@ dependenciesRules:
     shouldOnlyDependsOn:
       internal:
         - "**.detection.api.**"
+        - "**.visibility.api"          # Event envelope alias: the canonical type lives in visibility (ADR-0015)
+        - "**.attrkeys"
+        - "**.httpserver"
+        - "**.sqlhelpers"
+
+  - package: "**.visibility.api"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.visibility.api.**"
         - "**.attrkeys"
         - "**.httpserver"
         - "**.sqlhelpers"
