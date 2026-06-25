@@ -1,6 +1,6 @@
 # 0005. MySQL is the only supported RDBMS for the data plane
 
-- Status: Accepted
+- Status: Accepted; narrowed by [0015](0015-clickhouse-visibility-store.md) (the raw `events` archive moves to ClickHouse; MySQL remains the sole RDBMS for the process graph and control plane)
 - Date: 2026-05-15
 - Deciders: getvictor
 
