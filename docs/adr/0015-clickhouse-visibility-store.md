@@ -4,7 +4,7 @@
 - Date: 2026-06-25
 - Deciders: getvictor
 
-This narrows [0005](0005-mysql-only-data-plane.md) (the raw `events` archive leaves MySQL) and amends [0004](0004-modular-monolith-bounded-contexts.md) (a sixth context, `visibility`, is carved out of `detection`).
+This proposes to narrow [0005](0005-mysql-only-data-plane.md) (the raw `events` archive leaves MySQL) and to amend [0004](0004-modular-monolith-bounded-contexts.md) (a seventh context, `visibility`, carved out of `detection`; `observability` was the sixth).
 
 ## Context
 
@@ -31,7 +31,7 @@ The forces:
 
 Adopt the streaming-pipeline **shape**, choose components that collapse to a single binary at small scale, and keep the seams as interfaces so growth is additive rather than a rewrite. Concretely:
 
-1. **ClickHouse is the event lake.** The raw event archive (today's `events` payloads) lives only in ClickHouse: `MergeTree`, time-partitioned, `ORDER BY (host_id, event_type, ingested_at_ns)`, native TTL for retention, the native `JSON` payload type plus typed columns for the hot fields detections filter on (host, pid, ppid, event_type, signing identity, hashes, remote address). A tiered storage policy (hot local disk → S3 cold volume) is designed in from the start, disabled by default at pilot scale.
+1. **ClickHouse is the event lake.** The raw event archive (today's `events` payloads) lives only in ClickHouse: `ReplacingMergeTree(ingested_at_ns)` for dedup, time-partitioned, sorting key `(host_id, event_type, timestamp_ns, event_id)` (the leading `(host_id, event_type, time)` prefix serves per-process correlation; the trailing `event_id` makes the key unique so an at-least-once re-delivery of the same immutable event collapses on merge to the latest-ingested version), native TTL for retention, the native `JSON` payload type plus typed columns for the hot fields detections filter on (host, pid, ppid, event_type, signing identity, hashes, remote address). A tiered storage policy (hot local disk to an S3 cold volume) is designed in from the start, disabled by default at pilot scale.
 
 2. **Ingest and detection are decoupled by an `EventLog` interface** (`Append`, `Claim`, `Ack`, per-host ordering, idempotent by `event_id`). The first implementation is a small, ephemeral MySQL `event_queue` table that preserves the exact `FOR UPDATE SKIP LOCKED` claim of [0011](0011-ha-architecture.md). When scale demands it (ingest backing up detection, rule replay/backfill, a single ClickHouse node insufficient), the implementation is swapped for **Redpanda** (Kafka API, single binary, no ZooKeeper/JVM) partitioned by `host_id`. Detection code does not change across that swap.
 
@@ -63,7 +63,7 @@ The first increment (v0.4.0, #427) is a hard switch with **no data migration**: 
 - UI-synchronous reads (process-detail network/DNS table) now hit ClickHouse; cold-partition reads can spike. Must be validated under the #203 500-agent load before #427 closes.
 - The hard switch discards pilot event history. Acceptable because alerts and their evidence survive, but it is a real loss and must be communicated to any pilot operator.
 - This narrows [0005](0005-mysql-only-data-plane.md) within a year of its acceptance. The "one store" simplicity that ADR bought is partially spent.
-- A sixth bounded context is added (amending [0004](0004-modular-monolith-bounded-contexts.md)): more `api/` packages, a new arch-go block, and a `rules` dependency on `visibility.api`. Staging the extraction leaves a transitional state where the process graph and the event store sit in different contexts, so `detection`'s `GraphReader` splits (process reads stay, the network/DNS event read moves to `visibility.api`) and the eventual `alerts.process_id -> processes.id` cross-context reference must move to app-level enforcement (precedent: `alerts.updated_by -> users` already has no FK, enforced by a `UserExists` closure).
+- A seventh bounded context is added (amending [0004](0004-modular-monolith-bounded-contexts.md); `observability` was the sixth): more `api/` packages, a new arch-go block, and a `rules` dependency on `visibility.api`. Staging the extraction leaves a transitional state where the process graph and the event store sit in different contexts, so `detection`'s `GraphReader` splits (process reads stay, the network/DNS event read moves to `visibility.api`) and the eventual `alerts.process_id -> processes.id` cross-context reference must move to app-level enforcement (precedent: `alerts.updated_by -> users` already has no FK, enforced by a `UserExists` closure).
 
 ## Alternatives considered
 
@@ -92,5 +92,5 @@ The first increment (v0.4.0, #427) is a hard switch with **no data migration**: 
 - [Issue #415](https://github.com/getvictor/fleet-edr/issues/415) (v0.5.0 hunting epic that this store decision sequences before).
 - [Issue #203](https://github.com/getvictor/fleet-edr/issues/203) (500-agent scale harness; the acceptance gate for #427).
 - [0004](0004-modular-monolith-bounded-contexts.md) (bounded contexts this amends with `visibility`), [0005](0005-mysql-only-data-plane.md) (the MySQL-only decision this narrows), [0010](0010-stateless-server.md) (stateless server), [0011](0011-ha-architecture.md) (multi-replica `SKIP LOCKED` claim preserved by the MySQL `event_queue`), [0009](0009-migrations-via-goose.md) (goose, whose v3 ClickHouse dialect carries the lake migrations).
-- `ai/clickhouse/plan.md` (the implementation plan and phased PR breakdown).
+- The OpenSpec change `clickhouse-event-store` (`openspec/changes/clickhouse-event-store/`): the proposal, design (with the phased PR breakdown), and spec deltas.
 - ClickHouse native `JSON` type, `MergeTree` TTL, tiered storage policies (hot/cold S3 volumes), `async_insert`, Kafka table engine / ClickPipes.

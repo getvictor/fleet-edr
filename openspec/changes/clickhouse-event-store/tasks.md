@@ -15,7 +15,7 @@
 ## 3. Functional hard switch (events move to ClickHouse)
 
 - [ ] 3.1 Create the `visibility` context: move `intake/` in; the `fleet-edr-ingest` binary wires the `visibility` context
-- [ ] 3.2 ClickHouse `events` archive: `MergeTree`/`ReplacingMergeTree` by `event_id`, ordering key `(host_id, event_type, ingested_at_ns)`, native `JSON` payload + typed `pid`/`ppid`, TTL; storage policy hot-disk to S3 cold tier (disabled by default)
+- [ ] 3.2 ClickHouse `events` archive: `ReplacingMergeTree(ingested_at_ns)`, ordering key `(host_id, event_type, timestamp_ns, event_id)` (event_id makes the key unique so re-deliveries dedup to the latest version), `ingested_date` via `toDate(ingested_at_ns / 1000000000)`, native `JSON` payload + typed `pid`/`ppid`, TTL; storage policy hot-disk to S3 cold tier (disabled by default)
 - [ ] 3.3 MySQL migration: `event_queue` (`event_id` PK, claim index `(processed, host_id, timestamp_ns)`); drop the `events` table
 - [ ] 3.4 Ingest fans out to `EventArchive.Insert` (batched, `async_insert` with `wait_for_async_insert=1`) + `EventLog.Append`; 200 only after both succeed
 - [ ] 3.5 Processor claims from `EventLog` (`event_queue`); the ADR-0011 `FOR UPDATE SKIP LOCKED` claim is unchanged; entries removed after processing

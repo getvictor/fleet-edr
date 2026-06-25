@@ -1,6 +1,6 @@
 ## Context
 
-The full decision record, with alternatives, is ADR-0015 (`docs/adr/0015-clickhouse-visibility-store.md`); the phased implementation plan is `ai/clickhouse/plan.md`. This document is the implementation-facing summary.
+The full decision record, with alternatives, is ADR-0015 (`docs/adr/0015-clickhouse-visibility-store.md`). This document is the implementation-facing summary; the phased PR breakdown lives in the Migration Plan below.
 
 Today the MySQL `events` table does two incompatible jobs: a durable work queue (a `processed` state machine claimed by every replica via `FOR UPDATE SKIP LOCKED`, ADR-0011) and an append-mostly telemetry archive (read for correlation and, soon, hunting, swept by a retention `DELETE`). A columnar store handles the archive well and cannot do the lock-claimed queue at all. The change splits those two roles.
 
@@ -13,21 +13,22 @@ Agent (mTLS, batched, gzip)
    |
    v
 Ingest API  (stateless, multi-replica; ADR-0010/0011)
-   |   validate -> fan out
+   |   validate -> fan out; ack 200 only after BOTH writes below succeed
+   +--> EventArchive interface -> ClickHouse event lake   (v0.4.0: async_insert at ingest)
    +--> EventLog interface  { Append, Claim, Ack; per-host order; idempotent by event_id }
    |       v0.4.0  : MySQL event_queue  (FOR UPDATE SKIP LOCKED, ADR-0011 verbatim)
    |       at scale: Redpanda topic, partitioned by host_id   (swap a driver, not the callers)
    v
-Detection consumers  (idempotent, per-host ordered)
+Detection consumers  (claim from EventLog; idempotent, per-host ordered)
    |   - maintain process graph     -> MySQL processes  (OLTP: mutation, recursion, FK)
    |   - real-time rules -> alerts    -> MySQL  (+ copy triggering-event payloads as evidence)
-   |   - batch-write raw events      -> EventArchive interface
-   |                                     v0.4.0  : ClickHouse async_insert
-   |                                     at scale: log-consumer batch writer / CH Kafka engine
    v
 ClickHouse event lake   (MergeTree; native JSON + typed hot columns; native TTL; hot disk -> S3 cold tier)
    v
 Hunting / retro-detection / investigation = queries   (v0.5.0+)
+
+At scale the archive write migrates from the ingest fan-out to a log consumer
+(ClickHouse Kafka engine / batch writer); the EventArchive interface is unchanged.
 
 Control plane (identity, endpoint, rules, response, detection) = MySQL, unchanged
 ```
@@ -50,7 +51,7 @@ Control plane (identity, endpoint, rules, response, detection) = MySQL, unchange
 
 ## Decisions
 
-- **ClickHouse is the event archive.** `MergeTree`, time-partitioned, `ORDER BY (host_id, event_type, ingested_at_ns)` (mirrors the load-bearing composite index and serves per-process correlation), native `JSON` payload plus typed columns for the hot fields (host, pid, ppid, event_type), `ReplacingMergeTree` keyed on `event_id` so at-least-once delivery dedups on merge and reads stay duplicate-free. Native TTL replaces the retention `DELETE`; a hot-disk to S3 cold-tier storage policy is designed in, disabled at pilot. Rationale and alternatives (Elasticsearch, Druid/Pinot, lakehouse): ADR-0015. Schema sketch:
+- **ClickHouse is the event archive.** `MergeTree`, time-partitioned, native `JSON` payload plus typed columns for the hot fields (host, pid, ppid, event_type). The sorting key leads with `(host_id, event_type, timestamp_ns)` to serve per-process correlation and ends with `event_id` so each event is a distinct key. Dedup uses `ReplacingMergeTree(ingested_at_ns)`: rows that share the full sorting key (the same immutable event re-delivered) collapse on merge to the latest-ingested version, so at-least-once delivery never surfaces a duplicate, while two genuinely different events never collide. Reads that must not double-count pre-merge use `FINAL` or dedup-aware aggregation. Native TTL replaces the retention `DELETE`; a hot-disk to S3 cold-tier storage policy is designed in, disabled at pilot. Rationale and alternatives (Elasticsearch, Druid/Pinot, lakehouse): ADR-0015. Schema sketch:
 
   ```sql
   CREATE TABLE events (
@@ -62,14 +63,16 @@ Control plane (identity, endpoint, rules, response, detection) = MySQL, unchange
     pid             Int64,                         -- typed hot columns extracted at ingest
     ppid            Int64,
     payload         JSON,                          -- native JSON for the long tail
-    ingested_date   Date MATERIALIZED toDate(toDateTime64(ingested_at_ns / 1e9, 9)),
+    ingested_date   Date MATERIALIZED toDate(ingested_at_ns / 1000000000),  -- ns -> s -> Date
     INDEX idx_event_id event_id TYPE bloom_filter GRANULARITY 4
   )
-  ENGINE = ReplacingMergeTree
+  ENGINE = ReplacingMergeTree(ingested_at_ns)      -- ingested_at_ns = version; latest re-delivery wins on merge
   PARTITION BY toYYYYMM(ingested_date)
-  ORDER BY (host_id, event_type, ingested_at_ns)
+  ORDER BY (host_id, event_type, timestamp_ns, event_id)  -- event_id makes the key unique per event
   TTL ingested_date + INTERVAL 30 DAY;             -- + storage policy: hot disk -> S3 cold (disabled at pilot)
   ```
+
+  The correlation read filters a host's events by `event_type` and a time window; whether it keys on `timestamp_ns` or the server-stamped `ingested_at_ns` (today's `GetNetworkEventsForProcess` uses the latter for clock-drift tolerance) is settled at implementation and validated under the #203 load.
 
 - **`EventLog` interface decouples ingest from processing.** `Append` (ingest), `Claim`/`Ack` (processor), per-host ordering, idempotent by `event_id`. v0.4.0 implementation is an ephemeral MySQL `event_queue` carrying the same `FOR UPDATE SKIP LOCKED` claim; the future Redpanda implementation (Kafka API, single binary, no ZooKeeper/JVM, partitioned by `host_id`) is additive and changes no caller. Triggers to introduce Redpanda later: ingest backing up detection, rule replay/backfill needed, or a single ClickHouse node insufficient. Queue rows are deleted after `Ack` plus a short safety expiry, so the queue holds only the in-flight working set.
 - **`EventArchive` interface is the lake writer/reader.** Writes are batched, never synchronous-per-request: `async_insert` with `wait_for_async_insert=1` at pilot scale (the 200 OK still waits for the flush ack), a log-consumer batch writer at scale. Reads serve correlation and hunting.
@@ -82,12 +85,12 @@ Control plane (identity, endpoint, rules, response, detection) = MySQL, unchange
 - **Two datastores to operate** → documented as an ADR-0015 consequence; ClickHouse ships in the single-VM compose and deployment docs; healthchecks and backups extended.
 - **Synchronous archive insert durability** → `wait_for_async_insert=1` waits for the flush ack before acknowledging the batch; validated against the #203 chaos (no-event-loss) tests. At scale the durability concern moves to the log.
 - **UI-synchronous reads now hit ClickHouse** (process-detail network/DNS) → validate p99 under the #203 500-agent load; the ordering key keeps these reads index-served. Cold-partition spikes are the watch item.
-- **At-least-once duplicates before merge** → `ReplacingMergeTree` by `event_id`; reads that must not double-count use `FINAL` or dedup-aware aggregation.
+- **At-least-once duplicates before merge** → `ReplacingMergeTree` collapses re-deliveries that share the sorting key (which includes `event_id`) to the latest-ingested version; reads that must not double-count use `FINAL` or dedup-aware aggregation.
 - **Hard switch discards pilot history** → acceptable because alerts and self-contained evidence survive; communicated as a release note.
 
 ## Migration Plan
 
-Phased PRs (see `ai/clickhouse/plan.md`):
+Phased PRs:
 
 1. ADR-0015 + this proposal (decision gate, no code).
 2. Interfaces + infra: `EventLog`/`EventArchive` in `visibility/api`, docker-compose ClickHouse, goose ClickHouse dialect, bootstrap wiring (connection opened, unused). No behavior change.
