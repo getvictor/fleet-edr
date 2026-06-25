@@ -69,23 +69,28 @@ test.describe("demo stack smoke", () => {
       expect(host.host_id, "every host row carries a host_id").toBeTruthy();
     }
 
-    // Capability-detect the post-v0.2.1 hostname column (see the file header). The
-    // source build must expose it; an older released image is allowed to omit it.
-    const hasHostnames = hosts.every((host) => typeof host.hostname === "string" && host.hostname.length > 0);
+    // Capability-detect the post-v0.2.1 hostname column (see the file header) by
+    // field PRESENCE, not by value: /api/hosts emits the key unconditionally once
+    // the column exists, so a present-but-empty hostname is a regression to catch,
+    // not a reason to fall back (the UI renders host_id when hostname is empty).
+    // The source build must expose it; an older released image is allowed to omit it.
+    const supportsHostnameField = hosts.every((host) => "hostname" in host);
     if (STRICT_BUILD) {
-      expect(hasHostnames, "the source build must expose hostnames on /api/hosts").toBe(true);
+      expect(supportsHostnameField, "the source build must expose hostnames on /api/hosts").toBe(true);
     }
 
-    if (hasHostnames) {
-      // API + UI: the hostnames match the seeded set and render in the host list.
+    if (supportsHostnameField) {
+      // API + UI: the hostnames are populated, match the seeded set, and render in
+      // the host list. Empty or incorrect values fail here in both legs rather
+      // than silently degrading to the host_id fallback below.
       const hostnames = hosts.map((host) => host.hostname ?? "").sort((a, b) => a.localeCompare(b));
       expect(hostnames).toEqual([...DEMO_HOSTNAMES].sort((a, b) => a.localeCompare(b)));
       for (const hostname of DEMO_HOSTNAMES) {
         await expect(page.getByText(hostname, { exact: true })).toBeVisible({ timeout: 15_000 });
       }
     } else {
-      // Older released image: the host list renders rows by host_id. Assert both
-      // seeded rows surfaced through the authenticated UI.
+      // Older released image: the field is absent and the host list renders rows
+      // by host_id. Assert both seeded rows surfaced through the authenticated UI.
       for (const host of hosts) {
         await expect(page.getByText(host.host_id, { exact: true })).toBeVisible({ timeout: 15_000 });
       }
