@@ -212,6 +212,12 @@ The script tears down everything the pkg installed + deletes the runtime state u
 sudo rm /etc/fleet-edr.conf
 ```
 
+The script deactivates both system extensions by invoking the host app's `deactivate` request in the logged-in user's GUI session (the same Apple-sanctioned path the installer uses to activate them), so a user must be logged in at the console when you run it. It prints what actually happened:
+
+- **"Fleet EDR removed."** Both extensions were removed.
+- **"staged for removal ... REBOOT to finish"** macOS removes a system extension on the next reboot. Reboot, then confirm `systemextensionsctl list` shows no `com.fleetdm.edr` entries.
+- **"WARNING: ... system extension(s) are still active"** The extensions could not be removed locally. The script keeps the host app so you can retry, and prints the cause. The usual cause on a managed Mac is an MDM configuration profile (`com.fleetdm.edr.profile.system-extension`) that approved the extensions: macOS refuses to remove a profile-approved extension, so remove that profile via your MDM (see [mdm-deployment.md](mdm-deployment.md)) and macOS removes the extensions automatically. On an unmanaged Mac, make sure a user is logged in at the console and re-run the script.
+
 After uninstall, the host disappears from the admin UI only after its `last_seen` threshold (default 5 min) elapses. You can also revoke the enrollment manually via `POST /api/enrollments/{host_id}/revoke` (see [api.md](api.md)).
 
 ## Troubleshoot
