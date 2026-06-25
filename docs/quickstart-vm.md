@@ -49,7 +49,7 @@ A full data disk stops MySQL writes (ingest returns 5xx and the server logs the 
 3. Run the bootstrap, passing your domain and a pinned release version:
 
    ```sh
-   EDR_DOMAIN=edr.example.com EDR_VERSION=v0.2.1 ./bootstrap.sh
+   EDR_DOMAIN=edr.example.com EDR_VERSION=v0.3.0 ./bootstrap.sh
    ```
 
    It generates the secrets (`secrets/`), writes `.env`, and starts the stack. It is safe to re-run; it never overwrites an existing secret.

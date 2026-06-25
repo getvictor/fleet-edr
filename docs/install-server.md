@@ -32,8 +32,8 @@ How it reaches that: a replica can crash, drain, or roll to a new version withou
 Three caveats on the SLA:
 
 1. **It is the control plane, not your infrastructure.** The 99.9% target is the EDR server tier. It is conditional on the load balancer and MySQL you operate being available; the EDR does not monitor or guarantee those.
-2. **MySQL is a single point of failure in the reference stack.** v0.2.0 ships a single MySQL; the customer brings a replicated or managed MySQL for a fully HA datastore. A MySQL outage takes the control plane down regardless of how many server replicas are running (endpoint enforcement still continues, per above).
-3. **Single region, single MySQL writer.** There is no multi-region or active-active deployment in v0.2.0; geo-distribution and read-routing are deferred to a later release.
+2. **MySQL is a single point of failure in the reference stack.** v0.3.0 ships a single MySQL; the customer brings a replicated or managed MySQL for a fully HA datastore. A MySQL outage takes the control plane down regardless of how many server replicas are running (endpoint enforcement still continues, per above).
+3. **Single region, single MySQL writer.** There is no multi-region or active-active deployment in v0.3.0; geo-distribution and read-routing are deferred to a later release.
 
 ## Prerequisites
 
@@ -122,7 +122,7 @@ EDR_TLS_KEY_FILE=/tls/privkey.pem
 
 ```sh
 cat > .env <<'EOF'
-EDR_VERSION=v0.2.1
+EDR_VERSION=v0.3.0
 OTEL_EXPORTER_OTLP_ENDPOINT=
 EOF
 ```
@@ -162,7 +162,7 @@ Expect:
 ```json
 {
   "status": "ok",
-  "version": "v0.2.0",
+  "version": "v0.3.0",
   "uptime_seconds": 12,
   "checks": {
     "db": { "status": "ok", "latency_ms": 2 }

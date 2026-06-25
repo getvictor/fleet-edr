@@ -35,10 +35,10 @@ Download all four, verify checksums, then upload the three artifacts into your M
 
 ```sh
 cd ~/Downloads
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/fleet-edr-v0.2.0.pkg
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/edr-system-extension.mobileconfig
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/edr-tcc-fda.mobileconfig
-curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.2.0/SHA256SUMS
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.3.0/fleet-edr-v0.3.0.pkg
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.3.0/edr-system-extension.mobileconfig
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.3.0/edr-tcc-fda.mobileconfig
+curl -fLO https://github.com/getvictor/fleet-edr/releases/download/v0.3.0/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
 # All three artifacts should print "OK".
 ```
@@ -102,7 +102,7 @@ EOF
 
 ## Step 4: push the pkg
 
-Upload `fleet-edr-<version>.pkg` to your MDM as a software installer and scope to the same Macs. The release tag is part of the filename verbatim (e.g., tag `v0.2.0` ships as `fleet-edr-v0.2.0.pkg`).
+Upload `fleet-edr-<version>.pkg` to your MDM as a software installer and scope to the same Macs. The release tag is part of the filename verbatim (e.g., tag `v0.3.0` ships as `fleet-edr-v0.3.0.pkg`).
 
 The pkg's install flow:
 
