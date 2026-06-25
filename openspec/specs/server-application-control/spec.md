@@ -128,7 +128,9 @@ The system SHALL emit an audit event for every create, update, or delete of a po
 
 ### Requirement: Command fan-out on policy mutation
 
-The system SHALL enqueue at most one `set_application_control` command per unique host that belongs to any host group assigned to a mutated policy; hosts that match through multiple groups SHALL NOT receive duplicate commands. The command payload SHALL carry `{policy_id, policy_version, policy_epoch, rules: [...]}` where each rule entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url, severity}`. `policy_epoch` SHALL be the policy's server-assigned `updated_at` timestamp expressed in Unix microseconds (or `0` when the policy carries no timestamp), composed from the same post-mutation policy read that supplies `policy_version`; it is the restore-surviving recency marker the extension uses to re-sync after a database restore regresses `policy_version`. Disabled rules and expired rules SHALL be omitted from the payload. The system SHALL record the count of unique hosts the command was successfully enqueued for and the count of unique hosts the enqueue failed for, and SHALL include those counts on the audit event for the mutation.
+The system SHALL enqueue at most one `set_application_control` command per unique host that belongs to any host group assigned to a mutated policy; hosts that match through multiple groups SHALL NOT receive duplicate commands. The command payload SHALL carry `{policy_id, policy_version, policy_epoch, rules: [...]}` where each rule entry includes `{rule_type, identifier, action, enforcement, custom_msg, custom_url, severity}`. `policy_epoch` SHALL be the policy's server-assigned `updated_at` timestamp expressed in Unix microseconds (or `0` when the policy carries no timestamp), composed from the same post-mutation policy read that supplies `policy_version`; it is the restore-surviving recency marker the extension uses to re-sync after a database restore regresses `policy_version`. Disabled rules and expired rules SHALL be omitted from the payload.
+
+The enqueue SHALL be performed in bulk, as a bounded-size multi-row insert rather than one database round trip per host, so that fan-out to the full enrolled fleet completes within a single synchronous operator request even at the deployment's host-count ceiling. The system SHALL record on the mutation's audit event the total count of unique hosts the command was enqueued for (`fanout_hosts`) and the count of those unique hosts whose command did not land (`fanout_failed`). Because a multi-row insert is atomic per statement, when a bulk insert of a set of hosts fails, every unique host in that set SHALL be counted in `fanout_failed`. A fan-out failure SHALL NOT fail the operator's mutation: the policy row is authoritative and any host whose command did not land re-syncs on its next poll.
 
 #### Scenario: A new rule fans out only to assigned hosts
 
@@ -156,6 +158,13 @@ The system SHALL enqueue at most one `set_application_control` command per uniqu
 - **WHEN** the system composes the `set_application_control` payload after a mutation
 - **THEN** the payload's `policy_epoch` equals the policy's post-mutation `updated_at` in Unix microseconds
 - **AND** a later mutation produces a payload whose `policy_epoch` is greater, even across a database restore that regressed `policy_version`
+
+#### Scenario: A failed enqueue batch counts every host in it as failed
+
+- **GIVEN** a policy assigned to a host group matching two hosts
+- **WHEN** the operator mutates the policy and the bulk command enqueue for that batch fails
+- **THEN** the HTTP mutation still succeeds
+- **AND** the audit event records `fanout_failed` equal to the number of hosts in the failed batch
 
 ### Requirement: Application control block event contract
 

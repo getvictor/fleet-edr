@@ -7,7 +7,7 @@
 #
 # Usage:
 #   EDR_DOMAIN=edr.example.com ./bootstrap.sh
-#   EDR_DOMAIN=edr.example.com EDR_VERSION=v0.2.1 ./bootstrap.sh
+#   EDR_DOMAIN=edr.example.com EDR_VERSION=v0.3.0 ./bootstrap.sh
 #
 # Prerequisites: Docker Engine 24+ with Compose v2, ports 80 and 443 open to the
 # internet, and a DNS A/AAAA record for EDR_DOMAIN pointing at this host.
