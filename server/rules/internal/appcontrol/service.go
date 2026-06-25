@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"time"
 
@@ -20,10 +21,12 @@ const (
 	errSvcSnapshotComposeFmt = "appcontrol snapshot compose: %w"
 )
 
-// CommandInserter is the closure cmd/main supplies so the application-control fan-out can enqueue `set_application_control` commands
-// per host. Method-value shape matches response.Service.Insert so cmd/main passes `responseCtx.Service().Insert` directly without an
-// adapter.
-type CommandInserter func(ctx context.Context, hostID, commandType string, payload []byte) (int64, error)
+// CommandBatchInserter is the closure cmd/main supplies so the application-control fan-out can enqueue one
+// `set_application_control` command per host across the whole assigned host set in a couple of round trips rather than one INSERT
+// per host. Method-value shape matches response.Service.InsertBatch so cmd/main passes `responseCtx.Service().InsertBatch`
+// directly without an adapter. Returns the number of rows that landed; the fan-out treats the shortfall against the host count as
+// the failed-host total.
+type CommandBatchInserter func(ctx context.Context, hostIDs []string, commandType string, payload []byte) (int, error)
 
 // HostLister returns the set of host_ids to fan a rule mutation out to. In the demo cut this is every enrolled host in the deployment
 // (host-groups + assignments are post-demo); cmd/main passes a thin wrapper over detection.api.Service.ListHosts that projects
@@ -42,7 +45,7 @@ type HostLister func(ctx context.Context) ([]string, error)
 // constructor takes are wired to goroutine-safe services in cmd/main.
 type Service struct {
 	store    *Store
-	commands CommandInserter
+	commands CommandBatchInserter
 	hosts    HostLister
 	audit    identityapi.AuditRecorder
 	clock    func() time.Time
@@ -54,7 +57,7 @@ type Service struct {
 // wiring readable).
 type ServiceDeps struct {
 	Store    *Store
-	Commands CommandInserter
+	Commands CommandBatchInserter
 	Hosts    HostLister
 	Audit    identityapi.AuditRecorder
 	// Clock is optional. Defaults to time.Now. Tests pin a deterministic value so MarshalSetApplicationControlPayload's expires_at filter
@@ -235,13 +238,14 @@ const (
 	fanoutSkipReasonNoHosts        = "no_hosts_resolved"
 )
 
-// fanout enqueues exactly one set_application_control command per unique host the policy's assigned host groups cover. Phase A's
-// only host-group criteria is `{"type":"all"}` (the seed `all-hosts` group) which resolves to every enrolled host via the
-// HostLister; Phase B grows the resolver to honor tag / hostname / OS predicates without changing this loop's shape.
+// fanout enqueues exactly one set_application_control command per unique host the policy's assigned host groups cover, in a single
+// batched multi-row INSERT rather than one round trip per host. Phase A's only host-group criteria is `{"type":"all"}` (the seed
+// `all-hosts` group) which resolves to every enrolled host via the HostLister; Phase B grows the resolver to honor tag / hostname
+// / OS predicates without changing this shape.
 //
-// Returns (hosts_attempted, hosts_failed, skip_reason). Per-host failures are logged but do NOT abort the loop; the policy is
-// already on disk and a missed host will catch up on its next agent poll (the version-monotonic apply in the extension is
-// idempotent).
+// Returns (hosts_attempted, hosts_failed, skip_reason). The batch insert is atomic per chunk, so hosts_failed is the count that
+// did not land (attempted minus inserted); a failure does NOT abort the mutation: the policy is already on disk and a missed host
+// catches up on its next agent poll (the version-monotonic apply in the extension is idempotent).
 //
 // A non-empty skip_reason distinguishes failure modes that would all otherwise audit as fanout_hosts=0:
 //   - `host_lister_error`: at least one assigned host group's resolver returned an error (e.g. the HostLister itself failed).
@@ -286,12 +290,22 @@ func (s *Service) fanout(ctx context.Context, policyID int64, payload []byte) (a
 		}
 		return 0, 0, fanoutSkipReasonNoHosts
 	}
+	hostIDs := make([]string, 0, len(seen))
 	for h := range seen {
-		attempted++
-		if _, err := s.commands(ctx, h, api.CommandTypeSetApplicationControl, payload); err != nil {
-			failed++
-			s.logger.WarnContext(ctx, "appcontrol: command insert failed", "host_id", h, "err", err)
-		}
+		hostIDs = append(hostIDs, h)
+	}
+	// Sort so the batch chunk boundaries are deterministic: map iteration order is randomized, which would otherwise make
+	// "which hosts share a failing chunk" vary run-to-run and harder to reproduce.
+	sort.Strings(hostIDs)
+	attempted = len(hostIDs)
+	// One batched multi-row INSERT for the whole host set instead of N round trips. The inserter returns the count that landed;
+	// failed is the shortfall whether or not it surfaced an error, so a partial insert is always accounted for. A failure does
+	// NOT abort the mutation: the policy row is authoritative and a host whose command did not land catches up on its next poll.
+	inserted, insErr := s.commands(ctx, hostIDs, api.CommandTypeSetApplicationControl, payload)
+	failed = attempted - inserted
+	if insErr != nil {
+		s.logger.WarnContext(ctx, "appcontrol: batch command insert failed; missed hosts re-sync on next poll",
+			"policy_id", policyID, "attempted", attempted, "inserted", inserted, "failed", failed, "err", insErr)
 	}
 	// Partial-failure surfacing: even when some hosts were enqueued, signal host_lister_error if any group's resolver failed.
 	// Otherwise an operator scanning the audit log sees a "successful" fan-out while one of the policy's assigned groups

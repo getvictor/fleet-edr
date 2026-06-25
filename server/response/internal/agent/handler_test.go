@@ -35,6 +35,10 @@ func (f fakeService) Insert(ctx context.Context, hostID, commandType string, pay
 	return f.insert(ctx, hostID, commandType, payload)
 }
 
+func (f fakeService) InsertBatch(_ context.Context, _ []string, _ string, _ []byte) (int, error) {
+	panic("fakeService.InsertBatch not set") // agent handlers never fan out; batch insert is the rules-context fan-out path
+}
+
 func (f fakeService) Get(ctx context.Context, id int64) (api.Command, error) {
 	if f.get == nil {
 		panic("fakeService.Get not set")

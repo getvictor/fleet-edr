@@ -7,7 +7,7 @@
 // descriptive (caller-facing) while the interface names follow Effective
 // Go's "method-name + er" convention internally.
 //
-// HostLister and CommandInserter are closure types Deps takes so cmd/main
+// HostLister and CommandBatchInserter are closure types Deps takes so cmd/main
 // can supply late-bound implementations of the app-control fan-out without
 // rules taking a hard dependency on detection or response.
 package bootstrap

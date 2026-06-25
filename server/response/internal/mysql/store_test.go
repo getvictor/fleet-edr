@@ -2,6 +2,7 @@ package mysql_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -205,4 +206,51 @@ func TestCountPending(t *testing.T) {
 	count, err = s.CountPending(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
+}
+
+// TestInsertBatch covers the application-control fan-out's enqueue path: one command row per host_id in a chunked multi-row
+// INSERT. The batch crosses the 256-row chunk boundary so the chunk loop itself is exercised, and every host must receive the
+// same command_type + payload the fan-out passes once.
+func TestInsertBatch(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	// 600 hosts forces three chunks (256 + 256 + 88) so the chunk boundary is crossed, not just the single-statement path.
+	const hostCount = 600
+	hostIDs := make([]string, hostCount)
+	for i := range hostIDs {
+		hostIDs[i] = "host-" + strconv.Itoa(i)
+	}
+	payload := json.RawMessage(`{"policy_id":1,"policy_version":2,"rules":[{"rule_type":"binary","identifier":"deadbeef"}]}`)
+
+	inserted, err := s.InsertBatch(ctx, hostIDs, "set_application_control", payload)
+	require.NoError(t, err)
+	assert.Equal(t, hostCount, inserted, "every host in the batch must land")
+
+	count, err := s.CountPending(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, hostCount, count, "every batched row is enqueued pending")
+
+	// Spot-check the first + last host (across the chunk boundary): same command_type, pending status, and a payload that
+	// semantically matches the input. The commands.payload column is MySQL JSON, which normalizes key order + whitespace on
+	// storage, so compare against the input with JSONEq (a raw byte compare would be testing MySQL's serializer, not us) and
+	// separately assert each host's stored bytes match the first host's: that IS the fan-out guarantee every host gets the same
+	// snapshot. firstStored is captured from host-0 and every later host is compared against it.
+	var firstStored []byte
+	for i, hostID := range []string{"host-0", "host-599"} {
+		cmds, err := s.ListForHost(ctx, hostID, "")
+		require.NoError(t, err)
+		require.Len(t, cmds, 1, "each host gets exactly one command")
+		assert.Equal(t, "set_application_control", cmds[0].CommandType)
+		assert.Equal(t, api.StatusPending, cmds[0].Status)
+		assert.JSONEq(t, string(payload), string(cmds[0].Payload), "every row carries the shared fan-out payload")
+		if i == 0 {
+			firstStored = cmds[0].Payload
+			continue
+		}
+		// Compare as []byte on both sides: cmds[0].Payload is a json.RawMessage, and assert.Equal treats []byte and
+		// json.RawMessage as unequal on the dynamic type even when the bytes match.
+		assert.Equal(t, firstStored, []byte(cmds[0].Payload), "every host in one fan-out receives byte-identical payload bytes")
+	}
 }

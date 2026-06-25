@@ -129,11 +129,11 @@ func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
 	require.NoError(t, err, "open response")
 
 	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:              db,
-		Logger:          logger,
-		AuthZ:           identityCtx.AuthZ(),
-		Audit:           identityCtx.AuditRecorder(),
-		CommandInserter: responseCtx.Service().Insert,
+		DB:                   db,
+		Logger:               logger,
+		AuthZ:                identityCtx.AuthZ(),
+		Audit:                identityCtx.AuditRecorder(),
+		CommandBatchInserter: responseCtx.Service().InsertBatch,
 		HostLister: func(ctx context.Context) ([]string, error) {
 			hosts, err := detectionCtx.Service().ListHosts(ctx)
 			if err != nil {

@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -35,36 +34,47 @@ type capturedCommand struct {
 	Payload []byte
 }
 
-// recordingInserter is a goroutine-safe CommandInserter stub. The fan-out runs through it instead of response.Service.Insert so the
-// test can assert on the enqueued set without standing up the response context. Failures are returned for the host_ids listed in
-// FailHost so the audit-row fanout_failed accounting can be exercised.
+// recordingInserter is a goroutine-safe CommandBatchInserter stub. The fan-out runs through it instead of
+// response.Service.InsertBatch so the test can assert on the enqueued set without standing up the response context. It records
+// one capturedCommand per host in the batch (so snapshot() stays per-host) and counts batch invocations. failBatch makes every
+// InsertBatch call fail whole (the flag is sticky, not one-shot), modelling a multi-row INSERT's per-statement atomicity, so the
+// audit-row fanout_failed accounting can be exercised.
 type recordingInserter struct {
-	mu        sync.Mutex
-	calls     []capturedCommand
-	nextID    atomic.Int64
-	failHosts map[string]error
+	mu         sync.Mutex
+	calls      []capturedCommand
+	batchCalls int
+	failErr    error
 }
 
 func newRecordingInserter() *recordingInserter {
-	return &recordingInserter{failHosts: map[string]error{}}
+	return &recordingInserter{}
 }
 
-func (r *recordingInserter) failFor(hostID string, err error) {
+func (r *recordingInserter) failBatch(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.failHosts[hostID] = err
+	r.failErr = err
 }
 
-func (r *recordingInserter) Insert(_ context.Context, hostID, commandType string, payload []byte) (int64, error) {
+func (r *recordingInserter) InsertBatch(_ context.Context, hostIDs []string, commandType string, payload []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err, ok := r.failHosts[hostID]; ok {
-		return 0, err
+	r.batchCalls++
+	if r.failErr != nil {
+		return 0, r.failErr
 	}
-	copyPayload := make([]byte, len(payload))
-	copy(copyPayload, payload)
-	r.calls = append(r.calls, capturedCommand{HostID: hostID, Type: commandType, Payload: copyPayload})
-	return r.nextID.Add(1), nil
+	for _, hostID := range hostIDs {
+		copyPayload := make([]byte, len(payload))
+		copy(copyPayload, payload)
+		r.calls = append(r.calls, capturedCommand{HostID: hostID, Type: commandType, Payload: copyPayload})
+	}
+	return len(hostIDs), nil
+}
+
+func (r *recordingInserter) batchCallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.batchCalls
 }
 
 func (r *recordingInserter) snapshot() []capturedCommand {
@@ -117,11 +127,11 @@ func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 	audit := &recordingAudit{}
 	hostList := append([]string(nil), hosts...)
 	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:              db,
-		Logger:          slog.Default(),
-		AuthZ:           allowAllAuthZ{},
-		Audit:           audit,
-		CommandInserter: inserter.Insert,
+		DB:                   db,
+		Logger:               slog.Default(),
+		AuthZ:                allowAllAuthZ{},
+		Audit:                audit,
+		CommandBatchInserter: inserter.InsertBatch,
 		HostLister: func(_ context.Context) ([]string, error) {
 			return append([]string(nil), hostList...), nil
 		},
@@ -263,6 +273,7 @@ func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 
 	calls := r.inserter.snapshot()
 	require.Len(t, calls, 3, "fan-out must dedup duplicate host_ids")
+	assert.Equal(t, 1, r.inserter.batchCallCount(), "the whole host set enqueues in a single batched insert, not one call per host")
 	seen := map[string]struct{}{}
 	for _, c := range calls {
 		seen[c.HostID] = struct{}{}
@@ -359,12 +370,14 @@ func TestAppControlREST_CreateRule_FanOutDedupsAcrossOverlappingAssignments(t *t
 	assert.Equal(t, 2, fetched.AssignmentCount, "two assignment rows must show as count=2")
 }
 
-// TestAppControl_CreateRule_RecordsFanoutFailures: a per-host CommandInserter failure must not abort the loop AND must surface on the
-// audit row as fanout_failed > 0.
+// spec:server-application-control/command-fan-out-on-policy-mutation/a-failed-enqueue-batch-counts-every-host-in-it-as-failed
+//
+// TestAppControlREST_CreateRule_RecordsFanoutFailures: a fan-out batch-insert failure must not fail the HTTP create AND must
+// surface on the audit row. Because the enqueue is one atomic multi-row INSERT, a failed batch counts every host in it as failed.
 func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 	t.Parallel()
-	r := newAppControlRig(t, []string{"host-a", "host-bad"})
-	r.inserter.failFor("host-bad", errors.New("synthetic insert failure"))
+	r := newAppControlRig(t, []string{"host-a", "host-b"})
+	r.inserter.failBatch(errors.New("synthetic batch insert failure"))
 	policyID := r.defaultPolicyID(t)
 
 	resp := r.do(t, http.MethodPost,
@@ -377,12 +390,13 @@ func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 		})
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode,
-		"per-host fan-out failure must NOT fail the HTTP create")
+		"fan-out failure must NOT fail the HTTP create")
 
 	events := r.audit.snapshot()
 	require.Len(t, events, 1)
-	assert.Equal(t, 2, events[0].Payload["fanout_hosts"])
-	assert.Equal(t, 1, events[0].Payload["fanout_failed"], "host-bad's failure must show in fanout_failed")
+	assert.Equal(t, 2, events[0].Payload["fanout_hosts"], "fanout_hosts is the total unique assigned-host count")
+	assert.Equal(t, 2, events[0].Payload["fanout_failed"], "a failed batch counts every host in it as failed")
+	assert.Empty(t, r.inserter.snapshot(), "a failed batch enqueues nothing")
 }
 
 // spec:server-application-control/rule-lifecycle-audit-events/creating-a-rule-emits-an-audit-event
@@ -559,11 +573,11 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	inserter := newRecordingInserter()
 	audit := &recordingAudit{}
 	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:              db,
-		Logger:          slog.Default(),
-		AuthZ:           allowAllAuthZ{},
-		Audit:           audit,
-		CommandInserter: inserter.Insert,
+		DB:                   db,
+		Logger:               slog.Default(),
+		AuthZ:                allowAllAuthZ{},
+		Audit:                audit,
+		CommandBatchInserter: inserter.InsertBatch,
 		HostLister: func(_ context.Context) ([]string, error) {
 			return []string{"host-a"}, nil
 		},
@@ -612,11 +626,11 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	inserter := newRecordingInserter()
 	audit := &recordingAudit{}
 	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
-		DB:              db,
-		Logger:          slog.Default(),
-		AuthZ:           allowAllAuthZ{},
-		Audit:           audit,
-		CommandInserter: inserter.Insert,
+		DB:                   db,
+		Logger:               slog.Default(),
+		AuthZ:                allowAllAuthZ{},
+		Audit:                audit,
+		CommandBatchInserter: inserter.InsertBatch,
 		HostLister: func(_ context.Context) ([]string, error) {
 			return nil, errors.New("synthetic host lister failure")
 		},
