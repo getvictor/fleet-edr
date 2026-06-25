@@ -278,18 +278,18 @@ The web UI SHALL provide an authenticated admin surface to view and edit detecti
 - **THEN** every registered rule shows mode and severity-override controls without UI changes specific to that rule
 - **AND** each rule's declared default severity is shown alongside its optional override
 
-#### Scenario: Disabling or monitoring a rule requires an operator reason
+#### Scenario: Disabling a rule requires an operator reason
 
 - **GIVEN** an authenticated operator with detection-config write access
-- **WHEN** they reduce a rule's alerting (set its mode to disabled, or keep an existing monitor row reduced)
+- **WHEN** they set a rule's mode to disabled
 - **THEN** the UI captures an operator-supplied reason before submitting the change
-- **AND** restoring the rule to alert or editing only its severity override does not prompt for a reason
+- **AND** restoring the rule to alert or editing only its severity override does not require an operator-supplied reason (a system-generated reason is recorded instead)
 
 #### Scenario: Monitor is not an operator-selectable mode
 
 - **GIVEN** an authenticated operator viewing the rule-modes table
-- **WHEN** a rule has no persisted monitor setting
-- **THEN** its mode control offers only alert and disabled
+- **WHEN** they open a rule's mode control
+- **THEN** a rule with no persisted monitor setting offers only alert and disabled
 - **AND** a rule with a legacy persisted monitor value still displays monitor so the operator can migrate it to alert or disabled
 
 #### Scenario: Exclusion author is shown as a resolved email
