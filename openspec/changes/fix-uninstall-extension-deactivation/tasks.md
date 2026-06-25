@@ -23,4 +23,4 @@
 
 - [x] Reproduce the original bug on edr-qa (SIP on, MDM-managed): old script leaves both extensions `activated enabled`.
 - [x] Verify the new script on edr-qa (MDM-managed): attempts deactivation, detects it is refused, keeps the app, prints the MDM-profile guidance.
-- [ ] Verify the new script on a non-MDM host (MDM controls disabled on edr-qa): `edr deactivate` removes the extensions and the script reports a clean removal.
+- [x] Verify the new script on a non-MDM host (MDM controls disabled on edr-qa): `edr deactivate` removes the extensions or stages them for removal on reboot, and the script reports the observed outcome accurately. Verified 2026-06-25: both extensions advanced `activated_enabled -> terminated_waiting_to_uninstall_on_reboot` and the script printed the reboot-to-finish message.

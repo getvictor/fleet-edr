@@ -49,14 +49,24 @@ SYSEXT_PROFILE=com.fleetdm.edr.profile.system-extension
 # case the host app cannot deactivate the extensions and we fall back to guidance.
 CONSOLE_UID=$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)
 
-# count_active_exts / count_pending_exts read the live systemextensionsctl state so the script reports what actually
-# happened, not what a command's exit code claimed. "activated enabled" means still installed; a "uninstall on reboot"
-# state means the OS staged the removal and a reboot will finish it.
-count_active_exts() {
-    /usr/bin/systemextensionsctl list 2>/dev/null | /usr/bin/grep "com.fleetdm.edr" | /usr/bin/grep -c "activated enabled" || true
-}
-count_pending_exts() {
-    /usr/bin/systemextensionsctl list 2>/dev/null | /usr/bin/grep "com.fleetdm.edr" | /usr/bin/grep -c "uninstall on reboot" || true
+# read_sysext_state reads the live systemextensionsctl list ONCE and classifies the Fleet EDR extensions, so the script
+# reports what actually happened rather than what a command's exit code claimed. It sets three globals:
+#   STATE_UNKNOWN  1 when `systemextensionsctl list` itself failed, so the state cannot be trusted (stay conservative).
+#   PENDING_EXTS   count of extensions the OS staged for removal on the next reboot ("...waiting to uninstall on reboot").
+#   ACTIVE_EXTS    count of extensions still present in ANY non-staged state (activated enabled, activated waiting for
+#                  user, activating, ...): anything that is NOT staged-for-reboot counts as "still here".
+# Treating "still present" as "any fleetdm line that is not staged for reboot" (rather than only "activated enabled")
+# means a half-approved state, an unexpected state string, or a failed listing can never be misread as a clean removal.
+read_sysext_state() {
+    if ! sysext_list=$(/usr/bin/systemextensionsctl list 2>/dev/null); then
+        STATE_UNKNOWN=1
+        ACTIVE_EXTS=0
+        PENDING_EXTS=0
+        return
+    fi
+    STATE_UNKNOWN=0
+    PENDING_EXTS=$(printf '%s\n' "$sysext_list" | /usr/bin/grep "com.fleetdm.edr" | /usr/bin/grep -c "uninstall on reboot" || true)
+    ACTIVE_EXTS=$(printf '%s\n' "$sysext_list" | /usr/bin/grep "com.fleetdm.edr" | /usr/bin/grep -vc "uninstall on reboot" || true)
 }
 mdm_sysext_profile_present() {
     /usr/bin/profiles list -all 2>/dev/null | /usr/bin/grep -q "$SYSEXT_PROFILE"
@@ -102,16 +112,16 @@ elif [ "$CONSOLE_UID" -le 0 ]; then
     echo "uninstall: no user logged in at the console; cannot submit a deactivation request" >&2
 fi
 
-ACTIVE_EXTS=$(count_active_exts)
-PENDING_EXTS=$(count_pending_exts)
+read_sysext_state
 
 echo "==> removing binaries"
 rm -f "$AGENT_BIN"
 
-# Only delete the host app once the extensions are gone or staged for removal on reboot. If they are still active the app
-# is the only thing that can tear them down, so we keep it and tell the operator what to do.
+# Only delete the host app once the extensions are gone or staged for removal on reboot. If they are still active, or if
+# their state could not be verified, the app is the only thing that can tear them down, so we keep it and tell the
+# operator what to do.
 APP_REMOVED=no
-if [ "$ACTIVE_EXTS" -eq 0 ]; then
+if [ "$STATE_UNKNOWN" -eq 0 ] && [ "$ACTIVE_EXTS" -eq 0 ]; then
     rm -rf "$APP"
     APP_REMOVED=yes
 fi
@@ -119,13 +129,14 @@ fi
 echo "==> removing runtime state"
 rm -rf "$VAR_DB"
 rm -f "$LOG"
-# Keep the support dir (and this script) only when we kept the app, so the operator still has a working uninstall to retry.
-if [ "$APP_REMOVED" = yes ]; then
-    rm -rf "$SUPPORT"
-fi
 
 echo ""
-if [ "$ACTIVE_EXTS" -eq 0 ] && [ "$PENDING_EXTS" -eq 0 ]; then
+if [ "$STATE_UNKNOWN" -ne 0 ]; then
+    echo "WARNING: could not read the system extension state ('systemextensionsctl list' failed)."
+    echo "The agent binaries are gone, but the extensions may still be present. The host app at"
+    echo "'$APP' was kept so you can retry. Check 'systemextensionsctl list', then re-run:"
+    echo "     sudo $SUPPORT/uninstall.sh"
+elif [ "$ACTIVE_EXTS" -eq 0 ] && [ "$PENDING_EXTS" -eq 0 ]; then
     echo "Fleet EDR removed."
 elif [ "$ACTIVE_EXTS" -eq 0 ] && [ "$PENDING_EXTS" -gt 0 ]; then
     echo "Fleet EDR removed. The system extensions are staged for removal:"
@@ -162,4 +173,11 @@ echo ""
 echo "/etc/fleet-edr.conf preserved so a future re-install picks up the existing enroll config."
 echo "Delete it manually if you want a clean slate:"
 echo "   sudo rm /etc/fleet-edr.conf"
+
+# Delete the support dir (which contains THIS script) as the very last action. Removing it earlier risks the shell
+# failing to read the rest of the script once its own file is gone; `exec` replaces the shell with `rm`, so there is no
+# further script read after the file disappears. Only when the app was removed; otherwise we keep uninstall.sh to retry.
+if [ "$APP_REMOVED" = yes ]; then
+    exec rm -rf "$SUPPORT"
+fi
 exit 0

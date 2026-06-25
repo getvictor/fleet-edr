@@ -1,4 +1,4 @@
-# release-packaging (delta)
+# Release packaging: uninstall deactivates extensions via the host app delta
 
 ## MODIFIED Requirements
 
