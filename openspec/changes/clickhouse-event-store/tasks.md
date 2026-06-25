@@ -33,7 +33,7 @@
 - [ ] 5.1 PBT: ClickHouse event-row round-trip; `EventLog` claim invariants (disjoint batches, per-host order, idempotent re-append)
 - [ ] 5.2 Integration (new `clickhouse_test` container): intake -> archive + `event_queue` -> processor -> alert + evidence, end to end
 - [ ] 5.3 Add spectrace markers tying tests to the new/modified scenarios in `server-event-ingestion` and `server-detection-rules-engine`
-- [ ] 5.4 Observability: OTel spans + a query/insert-latency metric for the archive; SigNoz dashboard panel (OTel only, ADR-0006)
+- [ ] 5.4 Observability parity with MySQL: open the ClickHouse `database/sql` connection through the same `otelsql` wrapper as `server/bootstrap/db.go` (`db.system=clickhouse`, `otelsql.RegisterDBStatsMetrics`) so every archive query/insert gets a span plus the connection-pool / `db.sql.*` RED metrics with no bespoke code; add archive-specific signals (`async_insert` flush-ack latency, batch row counts); SigNoz dashboard panel (OTel only, ADR-0006)
 
 ## 6. Acceptance gate
 
