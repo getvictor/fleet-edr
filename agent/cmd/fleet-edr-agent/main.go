@@ -180,10 +180,22 @@ func run() error {
 	go coalescer.Run(ctx)
 
 	pidTable := proctable.New()
-	go startReceiverLoop(ctx, logger, cfg.XPCService, coalescer.Handle, pidTable, true, esfDispatcher, nil)
+	go startReceiverLoop(ctx, receiverLoopParams{
+		logger:      logger,
+		xpcService:  cfg.XPCService,
+		enqueue:     coalescer.Handle,
+		pt:          pidTable,
+		updateTable: true,
+		dispatcher:  esfDispatcher,
+	})
 	if cfg.NetXPCService != "" {
-		go startReceiverLoop(ctx, logger, cfg.NetXPCService, coalescer.Handle, pidTable, false, nil,
-			func() bool { return receiver.NEUpgradePending(ctx) })
+		go startReceiverLoop(ctx, receiverLoopParams{
+			logger:       logger,
+			xpcService:   cfg.NetXPCService,
+			enqueue:      coalescer.Handle,
+			pt:           pidTable,
+			upgradeProbe: func() bool { return receiver.NEUpgradePending(ctx) },
+		})
 	}
 	go runUploader(ctx, up, logger)
 
@@ -387,18 +399,21 @@ func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logg
 // application_control Dispatcher into OnConnected / OnDisconnected. dispatcher may be nil for non-ESF services that do not receive
 // outbound pushes. enqueue is the coalescer's Handle: network_connect / dns_query are coalesced before reaching the queue, every
 // other event passes straight through.
-func startReceiverLoop(
-	ctx context.Context,
-	logger *slog.Logger,
-	xpcService string,
-	enqueue func(context.Context, []byte) error,
-	pt *proctable.Table,
-	updateTable bool,
-	dispatcher *receiver.Dispatcher,
-	upgradeProbe func() bool,
-) {
+// receiverLoopParams configures startReceiverLoop. ctx is passed separately so the call sites read like a normal context-first
+// function; everything else is grouped here. dispatcher may be nil for non-ESF services that do not receive outbound pushes.
+type receiverLoopParams struct {
+	logger       *slog.Logger
+	xpcService   string
+	enqueue      func(context.Context, []byte) error
+	pt           *proctable.Table
+	updateTable  bool
+	dispatcher   *receiver.Dispatcher
+	upgradeProbe func() bool
+}
+
+func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	factory := func() receiver.Connector {
-		return receiver.New(xpcService, receiverEventBuffer)
+		return receiver.New(p.xpcService, receiverEventBuffer)
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
@@ -406,27 +421,27 @@ func startReceiverLoop(
 			// executable: the sandboxed extension cannot read it on a SIP-enabled host, so the agent (unsandboxed root,
 			// off the ES callback thread) computes it here. No-op for every other event and on the linux headless build.
 			data := enrich.BtmExecutableSigning(evt.Data, codesign.Evaluate)
-			if updateTable {
-				updateProcTable(pt, data)
+			if p.updateTable {
+				updateProcTable(p.pt, data)
 			}
-			if err := enqueue(ctx, data); err != nil {
-				logger.WarnContext(ctx, "enqueue", "err", err)
+			if err := p.enqueue(ctx, data); err != nil {
+				p.logger.WarnContext(ctx, "enqueue", "err", err)
 			}
 		},
 	}
-	if dispatcher != nil {
-		hooks.OnConnected = dispatcher.Set
-		hooks.OnDisconnected = dispatcher.Clear
+	if p.dispatcher != nil {
+		hooks.OnConnected = p.dispatcher.Set
+		hooks.OnDisconnected = p.dispatcher.Clear
 	}
 	// Only the network-extension loop wires UpgradeProbe (nil for ESF): after a staged upgrade the NE's nesessionmanager-owned
 	// Mach service stays bound to the terminated old version until reboot, so a sustained NE connect failure paired with a
 	// pending-uninstall old version means "reboot required", not "needs approval" (#399).
-	hooks.UpgradeProbe = upgradeProbe
+	hooks.UpgradeProbe = p.upgradeProbe
 	loop := receiver.NewLoop(factory, receiver.LoopConfig{
-		ServiceName:       xpcService,
+		ServiceName:       p.xpcService,
 		HeartbeatInterval: xpcHeartbeatInterval,
 		HeartbeatTimeout:  xpcHeartbeatPingTimeout,
-	}, hooks, logger)
+	}, hooks, p.logger)
 	loop.Run(ctx)
 }
 

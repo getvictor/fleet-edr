@@ -150,41 +150,17 @@ func readPathsFromStdin() ([]string, error) {
 // " -- " (e.g. a `task ... -- scenario` end-of-options separator) commonly lives in one.
 func checkMarkdown(path string, data []byte) []string {
 	var findings []string
-	inFence := false
-	inIndentCode := false
-	prevBlank := true // start of document is set off like a blank line, so a leading indented block counts as code
+	// prevBlank starts true: the start of document is set off like a blank line, so a leading indented block counts as code.
+	state := mdCodeState{prevBlank: true}
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 	lineNo := 0
 	for sc.Scan() {
 		lineNo++
 		raw := sc.Text()
-		if fenceLine.MatchString(raw) {
-			inFence = !inFence
-			inIndentCode = false
-			prevBlank = false
-			continue
+		if state.step(raw) {
+			continue // line is inside a fenced or indented code block (or blank), not prose
 		}
-		if inFence {
-			continue
-		}
-		if strings.TrimSpace(raw) == "" {
-			prevBlank = true // a blank line does not close an indented block; interior blanks belong to it
-			continue
-		}
-		indented := strings.HasPrefix(raw, "    ") || strings.HasPrefix(raw, "\t")
-		if inIndentCode {
-			if indented {
-				prevBlank = false
-				continue // still inside the indented code block
-			}
-			inIndentCode = false // a dedented line ends the block; fall through and scan this line as prose
-		} else if prevBlank && indented {
-			inIndentCode = true // a blank line then a 4-space/tab indent opens an indented code block
-			prevBlank = false
-			continue
-		}
-		prevBlank = false
 		if strings.Contains(raw, ignoreDirective) {
 			continue
 		}
@@ -194,6 +170,44 @@ func checkMarkdown(path string, data []byte) []string {
 		}
 	}
 	return findings
+}
+
+// mdCodeState tracks Markdown fenced/indented code-block state across lines so checkMarkdown can skip code when scanning prose.
+type mdCodeState struct {
+	inFence      bool
+	inIndentCode bool
+	prevBlank    bool
+}
+
+// step advances the state for one raw line and reports whether that line is code/blank (skip it) rather than prose.
+func (s *mdCodeState) step(raw string) (skip bool) {
+	if fenceLine.MatchString(raw) {
+		s.inFence = !s.inFence
+		s.inIndentCode = false
+		s.prevBlank = false
+		return true
+	}
+	if s.inFence {
+		return true
+	}
+	if strings.TrimSpace(raw) == "" {
+		s.prevBlank = true // a blank line does not close an indented block; interior blanks belong to it
+		return true
+	}
+	indented := strings.HasPrefix(raw, "    ") || strings.HasPrefix(raw, "\t")
+	if s.inIndentCode {
+		if indented {
+			s.prevBlank = false
+			return true // still inside the indented code block
+		}
+		s.inIndentCode = false // a dedented line ends the block; fall through and scan this line as prose
+	} else if s.prevBlank && indented {
+		s.inIndentCode = true // a blank line then a 4-space/tab indent opens an indented code block
+		s.prevBlank = false
+		return true
+	}
+	s.prevBlank = false
+	return false
 }
 
 // checkGo lexes the file and flags em-dash use inside comment, string, and char tokens only (never bare code).
@@ -222,35 +236,46 @@ func goTokenFindings(path string, startLine int, tok token.Token, lit string, ig
 	// An if-ladder, not a switch on tok: token.Token has ~80 members and the exhaustive linter (configured here so a default
 	// case does not satisfy it) would demand every one be listed.
 	if tok == token.STRING || tok == token.CHAR {
-		if ignored[startLine] {
-			return nil
-		}
-		// Match on the unquoted value so an escape like "\n - x" (an embedded newline before a list-ish " - ") is not
-		// misread as an em dash; the raw literal would show `n - ` and false-positive. A multi-line raw string is reported
-		// at its start line.
-		val := lit
-		if unquoted, err := strconv.Unquote(lit); err == nil {
-			val = unquoted
-		}
-		if emDashUse.MatchString(val) {
-			return []string{fmt.Sprintf(findingFmt, path, startLine, strings.TrimSpace(firstLine(lit)))}
-		}
-		return nil
+		return goStringTokenFinding(path, startLine, lit, ignored)
 	}
 	if tok == token.COMMENT {
-		var out []string
-		for offset, line := range strings.Split(lit, "\n") {
-			lineNo := startLine + offset
-			if ignored[lineNo] {
-				continue
-			}
-			if emDashUse.MatchString(commentProse(line)) {
-				out = append(out, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(line)))
-			}
-		}
-		return out
+		return goCommentTokenFindings(path, startLine, lit, ignored)
 	}
 	return nil
+}
+
+// goStringTokenFinding reports a finding for a STRING/CHAR literal whose unquoted value contains em-dash use. Matching on the
+// unquoted value keeps an escape like "\n - x" (an embedded newline before a list-ish " - ") from being misread as an em dash;
+// the raw literal would show `n - ` and false-positive. A multi-line raw string is reported at its start line.
+func goStringTokenFinding(path string, startLine int, lit string, ignored map[int]bool) []string {
+	if ignored[startLine] {
+		return nil
+	}
+	val := lit
+	if unquoted, err := strconv.Unquote(lit); err == nil {
+		val = unquoted
+	}
+	if emDashUse.MatchString(val) {
+		return []string{fmt.Sprintf(findingFmt, path, startLine, strings.TrimSpace(firstLine(lit)))}
+	}
+	return nil
+}
+
+// goCommentTokenFindings scans a COMMENT token line by line so the per-line `dash-lint:ignore` directive and the reported line
+// number match the line-based scanners exactly: a directive on line N suppresses only line N, and a violation on a later line of
+// a /* ... */ block is still reported at that line.
+func goCommentTokenFindings(path string, startLine int, lit string, ignored map[int]bool) []string {
+	var out []string
+	for offset, line := range strings.Split(lit, "\n") {
+		lineNo := startLine + offset
+		if ignored[lineNo] {
+			continue
+		}
+		if emDashUse.MatchString(commentProse(line)) {
+			out = append(out, fmt.Sprintf(findingFmt, path, lineNo, strings.TrimSpace(line)))
+		}
+	}
+	return out
 }
 
 // checkCStyleComments flags em-dash use inside // line comments and /* block comments */, ignoring code and string literals.

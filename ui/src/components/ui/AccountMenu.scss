@@ -44,7 +44,8 @@
     padding: 2px 6px;
     border-radius: 4px;
     background: rgba(235, 188, 67, 0.2);
-    color: #ebbc43;
+    // Darkened from #ebbc43 to clear WCAG AA (4.5:1) against the light-gold background; matches the amber used elsewhere.
+    color: #7a5e12;
     font-size: 11px;
   }
 
