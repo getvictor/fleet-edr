@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  listServiceAccounts,
-  createServiceAccount,
-  rotateServiceAccount,
-  revokeServiceAccount,
-  type ServiceAccount,
-} from "../../api";
+import { listServiceAccounts, createServiceAccount, rotateServiceAccount, revokeServiceAccount, type ServiceAccount } from "../../api";
 import { PageHeader } from "../ui/PageHeader";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -84,16 +78,30 @@ export function ServiceAccounts() {
   function reload(): void {
     listServiceAccounts()
       // Clear any prior error on success so the page recovers after a transient failure (the render gates on error === null).
-      .then((rows) => { setAccounts(rows); setError(null); })
-      .catch((err: unknown) => { setError(err instanceof Error ? err.message : "Failed to load service accounts"); });
+      .then((rows) => {
+        setAccounts(rows);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Failed to load service accounts");
+      });
   }
 
   useEffect(() => {
     let cancelled = false;
     listServiceAccounts()
-      .then((rows) => { if (!cancelled) { setAccounts(rows); setError(null); } })
-      .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load service accounts"); });
-    return () => { cancelled = true; };
+      .then((rows) => {
+        if (!cancelled) {
+          setAccounts(rows);
+          setError(null);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load service accounts");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleCreate() {
@@ -119,7 +127,7 @@ export function ServiceAccounts() {
       const created = await createServiceAccount({
         name: trimmed,
         role,
-        ...(days !== undefined ? { expires_in_days: days } : {}),
+        ...(days === undefined ? {} : { expires_in_days: days }),
       });
       setIssued({ name: created.name, clientID: created.client_id, secret: created.secret });
       setName("");
@@ -168,7 +176,13 @@ export function ServiceAccounts() {
         title="Service accounts"
         subtitle="Non-human identities (CI, integrations, scripts) that authenticate to the API with a client credential and carry a role."
         actions={
-          <Button type="button" variant="primary" onClick={() => { setShowCreate((v) => !v); }}>
+          <Button
+            type="button"
+            variant="primary"
+            onClick={() => {
+              setShowCreate((v) => !v);
+            }}
+          >
             Create service account
           </Button>
         }
@@ -184,13 +198,7 @@ export function ServiceAccounts() {
           <div className="field">
             <span className="field__label">Client ID</span>
             <div className="service-accounts__credential">
-              <input
-                className="field__input service-accounts__mono"
-                type="text"
-                readOnly
-                aria-label="Client ID"
-                value={issued.clientID}
-              />
+              <input className="field__input service-accounts__mono" type="text" readOnly aria-label="Client ID" value={issued.clientID} />
               <CopyButton value={issued.clientID} label="Copy client ID" />
             </div>
           </div>
@@ -208,7 +216,14 @@ export function ServiceAccounts() {
             </div>
           </div>
           <div className="service-accounts__footer">
-            <Button type="button" variant="primary" size="small" onClick={() => { setIssued(null); }}>
+            <Button
+              type="button"
+              variant="primary"
+              size="small"
+              onClick={() => {
+                setIssued(null);
+              }}
+            >
               Done
             </Button>
           </div>
@@ -226,10 +241,24 @@ export function ServiceAccounts() {
               placeholder="ci-pipeline"
               maxLength={255}
               value={name}
-              onChange={(e) => { setName(e.target.value); }}
+              onChange={(e) => {
+                setName(e.target.value);
+              }}
             />
-            <Select id="sa-role" label="Role" value={role} onChange={(e) => { setRole(e.target.value); }} inline={false}>
-              {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            <Select
+              id="sa-role"
+              label="Role"
+              value={role}
+              onChange={(e) => {
+                setRole(e.target.value);
+              }}
+              inline={false}
+            >
+              {ROLES.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
             </Select>
             <Input
               id="sa-expires"
@@ -239,25 +268,50 @@ export function ServiceAccounts() {
               max={365}
               placeholder="90"
               value={expiresInDays}
-              onChange={(e) => { setExpiresInDays(e.target.value); }}
+              onChange={(e) => {
+                setExpiresInDays(e.target.value);
+              }}
             />
           </div>
           <p className="service-accounts__help">
             Defaults to 90 days, capped at 365. Admin grants full control (including managing service accounts); super admin is not allowed.
           </p>
-          {formError !== null && <div className="service-accounts__error" role="alert">{formError}</div>}
+          {formError !== null && (
+            <div className="service-accounts__error" role="alert">
+              {formError}
+            </div>
+          )}
           <div className="service-accounts__footer">
-            <Button type="button" variant="primary" isLoading={creating} onClick={() => { void handleCreate(); }}>
+            <Button
+              type="button"
+              variant="primary"
+              isLoading={creating}
+              onClick={() => {
+                void handleCreate();
+              }}
+            >
               Create
             </Button>
-            <Button type="button" variant="inverse" disabled={creating} onClick={() => { setShowCreate(false); setFormError(null); }}>
+            <Button
+              type="button"
+              variant="inverse"
+              disabled={creating}
+              onClick={() => {
+                setShowCreate(false);
+                setFormError(null);
+              }}
+            >
               Cancel
             </Button>
           </div>
         </Card>
       )}
 
-      {actionError !== null && <div className="service-accounts__error" role="alert">{actionError}</div>}
+      {actionError !== null && (
+        <div className="service-accounts__error" role="alert">
+          {actionError}
+        </div>
+      )}
 
       <Card padding="large">
         {error !== null && <div className="service-accounts__status service-accounts__status--error">Error: {error}</div>}
@@ -269,7 +323,12 @@ export function ServiceAccounts() {
           <table className="service-accounts__table">
             <thead>
               <tr>
-                <th>Name</th><th>Role</th><th>Status</th><th>Created</th><th>Last used</th><th aria-label="Actions" />
+                <th>Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Last used</th>
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
@@ -279,24 +338,37 @@ export function ServiceAccounts() {
                     <div className="service-accounts__name">{sa.name}</div>
                     <div className="service-accounts__mono service-accounts__client-id">{sa.client_id}</div>
                   </td>
-                  <td><Badge variant={roleVariant(sa.role)}>{roleLabel(sa.role)}</Badge></td>
-                  <td><Badge variant={statusVariant(sa.status)}>{sa.status}</Badge></td>
+                  <td>
+                    <Badge variant={roleVariant(sa.role)}>{roleLabel(sa.role)}</Badge>
+                  </td>
+                  <td>
+                    <Badge variant={statusVariant(sa.status)}>{sa.status}</Badge>
+                  </td>
                   <td>{formatDate(sa.created_at)}</td>
                   <td>{formatDate(sa.last_used_at)}</td>
                   <td className="service-accounts__row-actions">
                     {sa.status !== "revoked" && confirmRevokeID !== sa.id && (
                       <>
                         <Button
-                          type="button" variant="inverse" size="small"
+                          type="button"
+                          variant="inverse"
+                          size="small"
                           isLoading={busyID === sa.id}
-                          onClick={() => { void handleRotate(sa); }}
+                          onClick={() => {
+                            void handleRotate(sa);
+                          }}
                         >
                           Rotate
                         </Button>
                         <Button
-                          type="button" variant="alert" size="small"
+                          type="button"
+                          variant="alert"
+                          size="small"
                           disabled={busyID === sa.id}
-                          onClick={() => { setConfirmRevokeID(sa.id); setActionError(null); }}
+                          onClick={() => {
+                            setConfirmRevokeID(sa.id);
+                            setActionError(null);
+                          }}
                         >
                           Revoke
                         </Button>
@@ -306,13 +378,24 @@ export function ServiceAccounts() {
                       <>
                         <span className="service-accounts__confirm">Revoke {sa.name}?</span>
                         <Button
-                          type="button" variant="alert" size="small"
+                          type="button"
+                          variant="alert"
+                          size="small"
                           isLoading={busyID === sa.id}
-                          onClick={() => { void handleRevoke(sa); }}
+                          onClick={() => {
+                            void handleRevoke(sa);
+                          }}
                         >
                           Confirm
                         </Button>
-                        <Button type="button" variant="inverse" size="small" onClick={() => { setConfirmRevokeID(null); }}>
+                        <Button
+                          type="button"
+                          variant="inverse"
+                          size="small"
+                          onClick={() => {
+                            setConfirmRevokeID(null);
+                          }}
+                        >
                           Cancel
                         </Button>
                       </>

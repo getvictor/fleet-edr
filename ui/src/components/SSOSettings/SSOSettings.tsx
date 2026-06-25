@@ -96,7 +96,9 @@ export function SSOSettings() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (loading) return <div className="sso-settings__status">Loading...</div>;
@@ -140,7 +142,7 @@ export function SSOSettings() {
         issuer: form.issuer.trim(),
         client_id: form.clientID.trim(),
         // Omit the secret unless the operator entered a new value (write-only rotate).
-        ...(secret !== "" ? { client_secret: secret } : {}),
+        ...(secret === "" ? {} : { client_secret: secret }),
         external_url: form.externalURL.trim(),
         scopes,
         jit_enabled: form.jitEnabled,
@@ -155,7 +157,6 @@ export function SSOSettings() {
       setSaving(false);
     }
   }
-
 
   async function handleTest() {
     if (!form) return;
@@ -188,30 +189,44 @@ export function SSOSettings() {
   }
 
   return (
-    <form className="sso-settings" onSubmit={(e) => { e.preventDefault(); void handleSave(); }}>
+    <form
+      className="sso-settings"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void handleSave();
+      }}
+    >
       <PageHeader
         title="Single sign-on"
         subtitle="Operators sign in through your OpenID Connect provider. One identity provider is configured per deployment."
-        actions={config.configured
-          ? <Badge variant="success">Configured</Badge>
-          : <Badge variant="neutral">Not configured</Badge>}
+        actions={config.configured ? <Badge variant="success">Configured</Badge> : <Badge variant="neutral">Not configured</Badge>}
       />
 
       <Card padding="large">
         <div className="sso-settings__card-head">
           <h2 className="sso-settings__card-title">OpenID Connect</h2>
-          <Button type="button" variant="inverse" size="small" onClick={() => { void handleTest(); }} isLoading={testing}>
+          <Button
+            type="button"
+            variant="inverse"
+            size="small"
+            onClick={() => {
+              void handleTest();
+            }}
+            isLoading={testing}
+          >
             Test connection
           </Button>
         </div>
 
         {testResult !== null && (
-          <div
+          <output
             className={testResult.ok ? "sso-settings__test sso-settings__test--ok" : "sso-settings__test sso-settings__test--fail"}
-            role="status"
+            aria-live="polite"
           >
-            {testResult.ok ? "Connection verified: discovery and token endpoint reachable." : `Connection failed: ${testResult.reason ?? "unreachable"}`}
-          </div>
+            {testResult.ok
+              ? "Connection verified: discovery and token endpoint reachable."
+              : `Connection failed: ${testResult.reason ?? "unreachable"}`}
+          </output>
         )}
 
         <div className="sso-settings__grid">
@@ -221,7 +236,9 @@ export function SSOSettings() {
             type="text"
             placeholder="https://acme.okta.com"
             value={form.issuer}
-            onChange={(e) => { update("issuer", e.target.value); }}
+            onChange={(e) => {
+              update("issuer", e.target.value);
+            }}
           />
           <Input
             id="sso-client-id"
@@ -229,7 +246,9 @@ export function SSOSettings() {
             type="text"
             placeholder="0oa8x2k4mWq1ZpL5d7"
             value={form.clientID}
-            onChange={(e) => { update("clientID", e.target.value); }}
+            onChange={(e) => {
+              update("clientID", e.target.value);
+            }}
           />
 
           <div className="sso-settings__field-full">
@@ -239,7 +258,9 @@ export function SSOSettings() {
               type="text"
               placeholder="https://edr.acme.com"
               value={form.externalURL}
-              onChange={(e) => { update("externalURL", e.target.value); }}
+              onChange={(e) => {
+                update("externalURL", e.target.value);
+              }}
               aria-describedby="sso-external-url-help"
             />
             <p id="sso-external-url-help" className="sso-settings__help">
@@ -250,14 +271,16 @@ export function SSOSettings() {
           <div className="sso-settings__field-full">
             <span className="field__label">Redirect URL</span>
             <div className="sso-settings__readonly-row">
-              <input
-                className="field__input sso-settings__readonly"
-                type="text"
-                readOnly
-                aria-label="Redirect URL"
-                value={redirectURL}
-              />
-              <Button type="button" variant="inverse" size="small" onClick={() => { void handleCopyRedirect(); }} disabled={redirectURL === ""}>
+              <input className="field__input sso-settings__readonly" type="text" readOnly aria-label="Redirect URL" value={redirectURL} />
+              <Button
+                type="button"
+                variant="inverse"
+                size="small"
+                onClick={() => {
+                  void handleCopyRedirect();
+                }}
+                disabled={redirectURL === ""}
+              >
                 Copy
               </Button>
             </div>
@@ -274,7 +297,9 @@ export function SSOSettings() {
               autoComplete="new-password"
               placeholder={config.secret_set ? "•••••• enter a new value to rotate" : "enter the client secret"}
               value={form.secret}
-              onChange={(e) => { update("secret", e.target.value); }}
+              onChange={(e) => {
+                update("secret", e.target.value);
+              }}
             />
             <p className="sso-settings__help">Write-only. Enter a new value to rotate; leave blank to keep the current secret.</p>
           </div>
@@ -282,7 +307,11 @@ export function SSOSettings() {
           <div className="sso-settings__field-full">
             <span className="field__label">Scopes</span>
             <div className="sso-settings__chips">
-              {scopes.map((s) => <span key={s} className="sso-settings__chip">{s}</span>)}
+              {scopes.map((s) => (
+                <span key={s} className="sso-settings__chip">
+                  {s}
+                </span>
+              ))}
             </div>
             <p className="sso-settings__help">Group-to-role mapping (the groups scope) ships in a future release.</p>
           </div>
@@ -294,14 +323,17 @@ export function SSOSettings() {
           <div>
             <h2 className="sso-settings__card-title">Just-in-time provisioning</h2>
             <p className="sso-settings__help">
-              When on, anyone who signs in through the provider is auto-created and given the default role. When off, an operator must be invited first.
+              When on, anyone who signs in through the provider is auto-created and given the default role. When off, an operator must be
+              invited first.
             </p>
           </div>
           <Toggle
             id="sso-jit"
             aria-label="Just-in-time provisioning"
             checked={form.jitEnabled}
-            onChange={(e) => { update("jitEnabled", e.target.checked); }}
+            onChange={(e) => {
+              update("jitEnabled", e.target.checked);
+            }}
           />
         </div>
         <div className="sso-settings__jit-role">
@@ -309,7 +341,9 @@ export function SSOSettings() {
             id="sso-default-role"
             label="Default role for new SSO users"
             value={form.defaultRole}
-            onChange={(e) => { update("defaultRole", e.target.value); }}
+            onChange={(e) => {
+              update("defaultRole", e.target.value);
+            }}
             inline
           >
             <option value="analyst">Analyst</option>
@@ -320,15 +354,25 @@ export function SSOSettings() {
       </Card>
 
       <div className="sso-settings__callout" role="note">
-        <strong>Break-glass account stays available.</strong> If the provider is unreachable, the break-glass admin can still sign in via the
-        Break-glass login link on the login page. The surface is IP-allowlist gated, so off-network callers never see it.
+        <strong>Break-glass account stays available.</strong> If the provider is unreachable, the break-glass admin can still sign in via
+        the Break-glass login link on the login page. The surface is IP-allowlist gated, so off-network callers never see it.
       </div>
 
-      {saveError !== null && <div className="sso-settings__save-error" role="alert">{saveError}</div>}
-      {saved && <div className="sso-settings__saved" role="status">Settings saved.</div>}
+      {saveError !== null && (
+        <div className="sso-settings__save-error" role="alert">
+          {saveError}
+        </div>
+      )}
+      {saved && (
+        <output className="sso-settings__saved" aria-live="polite">
+          Settings saved.
+        </output>
+      )}
 
       <div className="sso-settings__footer">
-        <Button type="submit" variant="primary" isLoading={saving}>Save changes</Button>
+        <Button type="submit" variant="primary" isLoading={saving}>
+          Save changes
+        </Button>
       </div>
     </form>
   );
