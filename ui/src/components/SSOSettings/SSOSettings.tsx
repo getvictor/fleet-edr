@@ -4,7 +4,6 @@ import { PageHeader } from "../ui/PageHeader";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Input, Select } from "../ui/Input";
-import { Toggle } from "../ui/Toggle";
 import { Badge } from "../ui/Badge";
 import "./SSOSettings.scss";
 
@@ -52,7 +51,6 @@ interface FormState {
   clientID: string;
   externalURL: string;
   secret: string;
-  jitEnabled: boolean;
   defaultRole: string;
 }
 
@@ -62,7 +60,6 @@ function toForm(cfg: SSOConfig): FormState {
     clientID: cfg.client_id,
     externalURL: cfg.external_url,
     secret: "",
-    jitEnabled: cfg.jit_enabled,
     defaultRole: cfg.default_role || "analyst",
   };
 }
@@ -145,7 +142,9 @@ export function SSOSettings() {
         ...(secret === "" ? {} : { client_secret: secret }),
         external_url: form.externalURL.trim(),
         scopes,
-        jit_enabled: form.jitEnabled,
+        // JIT is always on: operators who sign in are auto-created with the default role. The invite flow that would let
+        // an admin disable JIT and pre-provision operators is not built yet, so there is no UI to turn this off.
+        jit_enabled: true,
         default_role: form.defaultRole,
       });
       setConfig(updated);
@@ -290,11 +289,22 @@ export function SSOSettings() {
           </div>
 
           <div className="sso-settings__field-full">
+            {/*
+              This is an OIDC client secret (deployment config), not an account credential. type="password" only masks it.
+              Without these opt-outs, password managers classify any form with a password field as a login and pop a
+              "Save login" prompt on submit. Each manager reads its own attribute, so suppress them all: data-1p-ignore +
+              data-form-type="other" (1Password, Dashlane), data-lpignore (LastPass), data-bwignore (Bitwarden), and
+              autoComplete="off" for Chrome's built-in manager.
+            */}
             <Input
               id="sso-secret"
               label="Client secret"
               type="password"
-              autoComplete="new-password"
+              autoComplete="off"
+              data-1p-ignore=""
+              data-lpignore="true"
+              data-bwignore="true"
+              data-form-type="other"
               placeholder={config.secret_set ? "•••••• enter a new value to rotate" : "enter the client secret"}
               value={form.secret}
               onChange={(e) => {
@@ -319,22 +329,9 @@ export function SSOSettings() {
       </Card>
 
       <Card padding="large">
-        <div className="sso-settings__jit">
-          <div>
-            <h2 className="sso-settings__card-title">Just-in-time provisioning</h2>
-            <p className="sso-settings__help">
-              When on, anyone who signs in through the provider is auto-created and given the default role. When off, an operator must be
-              invited first.
-            </p>
-          </div>
-          <Toggle
-            id="sso-jit"
-            aria-label="Just-in-time provisioning"
-            checked={form.jitEnabled}
-            onChange={(e) => {
-              update("jitEnabled", e.target.checked);
-            }}
-          />
+        <div>
+          <h2 className="sso-settings__card-title">Just-in-time provisioning</h2>
+          <p className="sso-settings__help">Anyone who signs in through the provider is auto-created and given the default role.</p>
         </div>
         <div className="sso-settings__jit-role">
           <Select

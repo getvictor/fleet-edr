@@ -71,6 +71,18 @@ describe("SSOSettings", () => {
     expect(upd.mock.calls[0][0]).toMatchObject({ client_secret: "rotated-secret" });
   });
 
+  it("marks the client-secret field so password managers skip it", async () => {
+    vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
+    render(<SSOSettings />);
+    const secret = await screen.findByLabelText("Client secret");
+    // The secret is deployment config, not an account credential: keep password managers from offering to save a "login".
+    expect(secret).toHaveAttribute("data-1p-ignore");
+    expect(secret).toHaveAttribute("data-lpignore", "true");
+    expect(secret).toHaveAttribute("data-bwignore", "true");
+    expect(secret).toHaveAttribute("data-form-type", "other");
+    expect(secret).toHaveAttribute("autocomplete", "off");
+  });
+
   it("blocks save and shows an error on an invalid issuer", async () => {
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
     const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
@@ -112,20 +124,20 @@ describe("SSOSettings", () => {
     expect(await screen.findByText(/discovery unreachable/)).toBeInTheDocument();
   });
 
-  it("toggles JIT and selects the default role", async () => {
+  it("has no JIT toggle and always saves with JIT enabled", async () => {
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
     const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
     render(<SSOSettings />);
     await screen.findByLabelText("Issuer URL");
 
-    const jit = screen.getByRole("switch", { name: "Just-in-time provisioning" });
-    expect(jit).toBeChecked();
-    fireEvent.click(jit);
+    // The on/off switch was removed: JIT is always on because the invite flow that would let an admin disable it is not built yet.
+    expect(screen.queryByRole("switch", { name: "Just-in-time provisioning" })).not.toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText("Default role for new SSO users"), { target: { value: "auditor" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => { expect(upd).toHaveBeenCalledTimes(1); });
-    expect(upd.mock.calls[0][0]).toMatchObject({ jit_enabled: false, default_role: "auditor" });
+    expect(upd.mock.calls[0][0]).toMatchObject({ jit_enabled: true, default_role: "auditor" });
   });
 
   it("shows Not configured when no provider is set up", async () => {
