@@ -56,7 +56,7 @@ Event telemetry dominates storage and a busy host can add many GB per day, so si
 
    Store it with your other deployment secrets; you put it on each Mac in step 7. It lives in `secrets/` alongside the deployment secret key and database credentials, so back that directory up.
 
-7. Deploy the agent. Using the enroll secret from previous and your server URL, put them on each Mac (`EDR_SERVER_URL` and `EDR_ENROLL_SECRET` in `/etc/fleet-edr.conf`); see [install-agent-manual.md](install-agent-manual.md) for a single Mac or [mdm-deployment.md](mdm-deployment.md) to deploy through your MDM. Once hosts start reporting, common developer and admin tooling will raise some benign alerts; see [recommended-exclusions.md](recommended-exclusions.md) for the exclusions we suggest seeding to quiet them.
+7. Deploy the agent. Using the enroll secret from the previous step and your server URL, put them on each Mac (`EDR_SERVER_URL` and `EDR_ENROLL_SECRET` in `/etc/fleet-edr.conf`); see [install-agent-manual.md](install-agent-manual.md) for a single Mac or [mdm-deployment.md](mdm-deployment.md) to deploy through your MDM. Once hosts start reporting, common developer and admin tooling will raise some benign alerts; see [recommended-exclusions.md](recommended-exclusions.md) for the exclusions we suggest seeding to quiet them.
 
 ## Set server configuration
 

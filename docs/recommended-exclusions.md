@@ -2,7 +2,7 @@
 
 Detection rules fire on behavioral shapes, not on reputation, so a handful of legitimate tools on a real endpoint will match a rule's shape and raise a benign alert. This page lists a small, universal set of exclusions we recommend seeding, then explains how to handle the environment-specific tooling exclusions you add yourself. Each entry is a true positive (the activity really happened) that is not malicious in context, so the right response is a scoped exclusion rather than muting the rule.
 
-Add these on the detection-config exclusions surface in the console (sign in as an admin). Each exclusion needs a `reason`; the value is audited. Exclusions are global today (host-group scoping is not yet honored).
+Add these on the detection-config exclusions surface in the console (sign in as an admin). Each exclusion needs a `reason`; the value is audited. Exclusions are global today (host-group scoping is not yet honored). Service accounts cannot write exclusions yet (see [getvictor/fleet-edr#518](https://github.com/getvictor/fleet-edr/issues/518)), so add these as a human admin in the UI, not through an automated token.
 
 ## How matching works
 
@@ -25,7 +25,7 @@ Which rule consumes which match type is fixed by the rule:
 
 - A `suspicious_exec` `parent_path_glob` exclusion silences BOTH arms of the rule for that parent (the temp-path exec arm and the outbound-network arm). You are trusting everything that parent does, not just the one connection you saw.
 - Never start a path glob with `*`, and minimize interior wildcards. Because `*` matches any run of characters including `/`, a leading-wildcard pattern like `*/claude/versions/*` matches that fragment anywhere on disk, so an attacker who can write to `/tmp` creates `/tmp/claude/versions/payload` and runs it to land inside the exclusion. Anchor to the full absolute install path instead; the longer the literal prefix, the less an attacker can spoof.
-- A path exclusion is only as trustworthy as the write permissions on the directory it points at. Anchor to a root-owned install root (`/usr/bin`, `/usr/local/bin`, `/opt/homebrew/...`) that an unprivileged attacker cannot write to. A path under a user home or any world-writable location can be recreated by the attacker, so it carries real residual risk even when anchored.
+- A path exclusion is only as trustworthy as the write permissions on the directory it points at. Anchor to a root-owned install root (`/usr/bin`, `/usr/local/bin`, `/opt/homebrew/...`) that an unprivileged attacker cannot write to. A path under a user home or any world-writable location can be recreated by the attacker, so it carries real residual risk even when anchored. This is sharper on multi-user hosts: a home-anchored glob with a wildcarded user segment (`/Users/*/...`) matches every user's home, so any local user, not just the intended one, can plant a binary at the excluded path and evade the rule.
 - For `team_id`, notarization is deliberately not a trust signal (Apple has notarized malware, and it is not checkable network-free on the event thread). The team-ID allowlist is the operator's explicit trust decision. Confirm the exact team before allowlisting it: `codesign -dv <binary>` prints `TeamIdentifier`.
 
 ## Workstations vs servers
