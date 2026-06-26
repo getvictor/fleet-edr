@@ -105,6 +105,18 @@ dependenciesRules:
         - "**.httpserver"
         - "**.testdb"
 
+  # visibility context internals (ADR-0015): ingestion + the event store. The
+  # MySQL event_queue (EventLog) store depends only on visibility.api; the
+  # ClickHouse EventArchive lands later and will add httpserver (TimeRange).
+  - package: "**.visibility.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.visibility.api"
+        - "**.visibility.api.**"
+        - "**.visibility.internal.**"
+        - "**.visibility.testkit"
+        - "**.testdb"
+
   # ----- testkit packages -----------------------------------------------------
   #
   # testkit is a curated test-fixture surface for each bounded context.
@@ -185,6 +197,15 @@ dependenciesRules:
         - "**.observability.tracing"
         - "**.attrkeys"
         - "**.httpserver"
+        - "**.testdb"
+
+  - package: "**.visibility.testkit"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.visibility.api"
+        - "**.visibility.api.**"
+        - "**.visibility.bootstrap"
+        - "**.visibility.internal.**"
         - "**.testdb"
 
   # ----- api/ packages: pure-types, no cross-context internals ----------------
