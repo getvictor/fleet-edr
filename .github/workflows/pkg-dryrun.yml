@@ -193,3 +193,16 @@ jobs:
           # shellcheck disable=SC2016  # literal text to find in the script, not expansions
           grep -qF '"$APP_BIN" deactivate' "$UNINSTALL"
           echo OK
+          # spec:release-packaging/uninstall-path-is-deliverable/uninstall-on-an-mdm-managed-host-reports-the-profile-must-be-removed
+          #
+          # On an MDM-managed host macOS refuses the local deactivation (authorizationRequired), so the
+          # shipped uninstall.sh must detect the system-extension profile and tell the operator to remove
+          # it via their MDM, keep the host app bundle, and not claim a clean removal. Assert against the
+          # payload the support component actually ships.
+          echo "=== shipped uninstall.sh reports the MDM profile must be removed ==="
+          # shellcheck disable=SC2016  # literal text to find in the script, not expansions
+          grep -qF 'mdm_sysext_profile_present' "$UNINSTALL"
+          grep -qF 'com.fleetdm.edr.profile.system-extension' "$UNINSTALL"
+          grep -qi 'remove that profile via your MDM' "$UNINSTALL"
+          grep -qi 'kept so you can retry' "$UNINSTALL"
+          echo OK
