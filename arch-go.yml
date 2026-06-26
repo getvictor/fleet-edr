@@ -246,9 +246,7 @@ dependenciesRules:
     shouldOnlyDependsOn:
       internal:
         - "**.visibility.api.**"
-        - "**.attrkeys"
-        - "**.httpserver"
-        - "**.sqlhelpers"
+        - "**.httpserver"          # TimeRange on the EventArchive read; api is pure types/interfaces (no attrkeys/sqlhelpers)
 
   # ----- platform packages: allow-list of acceptable internal deps ------------
   #

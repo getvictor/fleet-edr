@@ -22,11 +22,13 @@ type EventLog interface {
 	// concurrent claimers. The claimed events are hidden from other claimers until Ack or Nack.
 	Claim(ctx context.Context, limit int) ([]Event, error)
 
-	// Ack marks claimed events fully processed; they leave the queue.
-	Ack(ctx context.Context, events []Event) error
+	// Ack marks the claimed events (identified by EventID) fully processed; they leave the queue. Acknowledgment needs only identity,
+	// so it takes IDs rather than whole events: the caller need not retain the (potentially large) payloads until ack.
+	Ack(ctx context.Context, eventIDs []string) error
 
-	// Nack returns claimed events to the not-yet-processed state for a later Claim (retry after a processing failure).
-	Nack(ctx context.Context, events []Event) error
+	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later Claim (retry after a
+	// processing failure).
+	Nack(ctx context.Context, eventIDs []string) error
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)
