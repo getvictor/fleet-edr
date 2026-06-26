@@ -289,7 +289,7 @@ func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
 		return nil
 	}
 	oidcHTTPClient := in.deps.OIDC.HTTPClient
-	apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy int64) error {
+	apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy *int64) error {
 		tx, err := in.deps.DB.BeginTxx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
@@ -303,7 +303,7 @@ func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
 		if err := in.ssoStore.UpsertTx(ctx, tx, oidcIn); err != nil {
 			return err
 		}
-		if err := in.appConfig.PutTx(ctx, tx, appCfg, expectedAppVersion, &updatedBy); err != nil {
+		if err := in.appConfig.PutTx(ctx, tx, appCfg, expectedAppVersion, updatedBy); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {

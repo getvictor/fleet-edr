@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -150,6 +151,66 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 	// The response carries the derived read-only redirect, never the secret.
 	assert.Contains(t, w.Body.String(), "https://edr.updated.example.com/api/auth/callback")
 	assert.NotContains(t, w.Body.String(), "new-secret-value")
+}
+
+// serviceAccountActorCtx pins an actor shaped exactly like the one serviceaccounts.Authenticator produces: a machine caller with no
+// user id (UserID == 0), AuthMethod "service_account", not session-fresh, carrying its bound role as a global binding. The role is
+// "admin" (which holds sso.manage): service accounts are forbidden from binding super_admin, so admin reflects a real SA token.
+func serviceAccountActorCtx(r *http.Request) *http.Request {
+	actor := &api.Actor{
+		UserID:       0,
+		AuthMethod:   "service_account",
+		SessionFresh: false,
+		Roles: []api.RoleBinding{{
+			RoleID: "admin", ScopeType: api.RoleBindingScopeGlobal, ScopeID: api.RoleBindingScopeWildcard,
+		}},
+	}
+	return r.WithContext(api.WithActor(r.Context(), actor))
+}
+
+// TestSSOAdmin_updateByServiceAccountRecordsNullUpdatedBy is a regression test: a service-account actor has no user id, so the update
+// path must record oidc_config.updated_by as NULL rather than 0. Binding 0 violates the updated_by FK to users(id) and previously
+// failed the write with a 500, blocking service-account-driven SSO configuration.
+func TestSSOAdmin_updateByServiceAccountRecordsNullUpdatedBy(t *testing.T) {
+	t.Parallel()
+	idp := oidcDiscoveryServer(t)
+	id, db, ssoStore, _ := newIdentityWithDiscovery(t, idp)
+
+	mux := http.NewServeMux()
+	id.RegisterAuthedRoutes(mux)
+
+	// Held in a non-credential-named local so the map literal's value is an identifier, not a string literal under a "client_secret"
+	// key, which gosec G101 flags as a hardcoded credential.
+	rotated := "sa-rotated-secret"
+	body := map[string]any{
+		"issuer":        idp.URL,
+		"client_id":     "edr-sa-updated",
+		"client_secret": rotated,
+		"external_url":  "https://edr.sa.example.com",
+		"scopes":        []string{"openid", "email", "profile"},
+		"jit_enabled":   true,
+		"default_role":  "analyst",
+	}
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := serviceAccountActorCtx(httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/settings/sso", strings.NewReader(string(raw))))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// The write committed with the rotated values.
+	cfg, err := ssoStore.GetDecrypted(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "edr-sa-updated", cfg.ClientID)
+	assert.Equal(t, rotated, cfg.ClientSecret)
+
+	// Both rows the transaction writes record updated_by NULL (no operator), the same semantics as env-seeding, never 0. app_config
+	// carries the same updated_by FK as oidc_config, so it would 500 the write too if a service account stamped 0.
+	var oidcUpdatedBy, appUpdatedBy sql.NullInt64
+	require.NoError(t, db.GetContext(t.Context(), &oidcUpdatedBy, "SELECT updated_by FROM oidc_config WHERE id = 1"))
+	require.NoError(t, db.GetContext(t.Context(), &appUpdatedBy, "SELECT updated_by FROM app_config WHERE id = 1"))
+	assert.False(t, oidcUpdatedBy.Valid, "oidc_config: service-account write must record updated_by NULL, not %d", oidcUpdatedBy.Int64)
+	assert.False(t, appUpdatedBy.Valid, "app_config: service-account write must record updated_by NULL, not %d", appUpdatedBy.Int64)
 }
 
 // TestSSOAdmin_updateDeniedWithoutGrant confirms the real chokepoint rejects an actor lacking sso.manage (analyst).

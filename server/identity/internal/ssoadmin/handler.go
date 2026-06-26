@@ -43,7 +43,7 @@ type appConfigStore interface {
 // a new issuer/client paired with a stale derived redirect. expectedAppVersion drives the app-config optimistic-concurrency check;
 // implementations return appconfig.ErrVersionConflict on a concurrent edit. Injected so the handler stays unit-testable without a DB.
 type applyUpdate func(
-	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy int64,
+	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy *int64,
 ) error
 
 // prober verifies a candidate issuer is reachable. Production wraps oidc.Probe with the deployment HTTP client; tests inject a fake.
@@ -175,7 +175,12 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	in.UpdatedBy = &actor.UserID
+	// A service-account actor has no user id (UserID == 0), so leave UpdatedBy nil and record NULL on both writes below, the same "no
+	// operator" semantics the env-seed path uses. Binding 0 would violate the updated_by FKs (fk_oidc_config_updated_by /
+	// fk_app_config_updated_by; no users row has id 0) and fail the transaction with a 500.
+	if actor.UserID != 0 {
+		in.UpdatedBy = &actor.UserID
+	}
 	// Read the app-config document (read-modify-write preserves unrelated settings) and capture its version for the optimistic-
 	// concurrency check inside the transactional apply.
 	appCfg, appVersion, err := h.appCfg.Get(ctx)
@@ -186,7 +191,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	appCfg.ExternalURL = externalURL
 	// One transaction writes oidc_config + app_config together: a partial write can never pair a new issuer with a stale redirect.
-	if err := h.apply(ctx, in, appCfg, appVersion, actor.UserID); err != nil {
+	if err := h.apply(ctx, in, appCfg, appVersion, in.UpdatedBy); err != nil {
 		if errors.Is(err, appconfig.ErrVersionConflict) {
 			writeErr(ctx, h.logger, w, http.StatusConflict, "version_conflict")
 			return
