@@ -4,7 +4,7 @@ The EDR server speaks OIDC with PKCE. Okta is the reference IdP: every other con
 
 SSO covers everyday operator login. The break-glass account at `admin@fleet-edr.local` is the only path in when SSO is unavailable (see [`breakglass.md`](breakglass.md)).
 
-**Changed in v0.3.0:** SSO is configured in the UI (below); the `EDR_OIDC_*` env vars now seed only the first boot. Earlier releases configured SSO entirely through those env vars.
+SSO is configured in the UI (below); the `EDR_OIDC_*` env vars seed only the first boot, after which the stored configuration is the source of truth.
 
 ## Configure SSO in the UI (recommended)
 

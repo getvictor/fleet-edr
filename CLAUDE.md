@@ -100,7 +100,7 @@ ADR-0004 carved `server/` into five bounded contexts: `identity`, `endpoint`,
 
 - Local MySQL: `task db:up` brings up `127.0.0.1:33306` (dev) and `:33307` (test).
   Empty password (`MYSQL_ALLOW_EMPTY_PASSWORD=yes` in `docker-compose.yml`).
-- Dev server: `task dev:server` serves HTTPS on `0.0.0.0:8088` (issue #140; it binds all
+- Dev server: `task dev:server` serves HTTPS on `0.0.0.0:8088` (it binds all
   interfaces so a VM agent on the bridge can reach it, override `EDR_LISTEN_ADDR=127.0.0.1:8088`
   on an untrusted LAN) against `127.0.0.1:33306/edr`. Real-tool QA must use this; never fall
   back to curl or unit tests when the user asks for a Chrome / VM / dev-server check.
@@ -131,13 +131,11 @@ Layered on the global guide. Project-specific:
 - The project builds on Go 1.26+ (see `go.mod`); modern language and standard-library features through 1.26 are in-bounds.
   Integer range expressions (`for i := range N` where `N` is an `int`) are valid project style and the modernize linter
   prefers them over `for i := 0; i < N; i++`; the same applies to newer stdlib like `strings.SplitSeq` / `bytes.SplitSeq`.
-  Copilot and CodeRabbit have re-flagged these as "doesn't compile" or "breaks Go 1.22+" on multiple PRs (#239,
-  #344); the claim is false and the finding should be skipped.
+  Copilot and CodeRabbit have re-flagged these as "doesn't compile" or "breaks Go 1.22+" on multiple PRs;
+  the claim is false and the finding should be skipped.
 - When you delete a symbol (function, type, command name, XPC message kind, config field),
   scrub every doc comment that still references it before committing. Stale comments
-  in IPC-adjacent code are a recurring class of footgun in review (see PR #151 where
-  both Copilot and CodeRabbit caught a dispatcher reference on a function whose
-  dispatcher argument no longer existed). Treat the comment delta as part of the
+  in IPC-adjacent code are a recurring class of footgun in review. Treat the comment delta as part of the
   deletion, not a follow-up.
 
 ## Reuse and simplicity

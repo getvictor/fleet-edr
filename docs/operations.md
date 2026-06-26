@@ -239,13 +239,13 @@ Alerts are NOT deleted by retention. They stay until you delete them via the adm
 
 ### Curbing event volume at the source
 
-Retention bounds how long events live; two levers reduce how many are written in the first place (issue #408):
+Retention bounds how long events live; three levers reduce how many are written in the first place:
 
 - **`snapshot_heartbeat` events are no longer persisted.** The server applies their freshness side effect (the `processes.last_seen_ns` bump that exempts a live snapshot row from the 6h TTL force-exit) at ingest and drops them, so they never occupy an `events` row. Watch `edr.ingest.heartbeats_dropped` to see the row-count savings.
 - **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats no longer cost an `events` row, but they still cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under the 6h stale-process TTL so a live snapshot row is always re-freshened before the TTL would force-exit it.
 - **Repetitive network/DNS telemetry is coalesced automatically** (agent-side, fixed `10s` window). Within each window the agent collapses repeated identical connection 5-tuples and repeated DNS lookups into one representative event plus a `coalesced_count`, preserving the earliest timestamp and (for DNS) the union of resolved addresses. The window is a fixed constant, deliberately well under the 30s DNS-to-connect beacon-correlation window so coalescing can never push a representative outside it.
 
-## Process-tree freshness (issue #6)
+## Process-tree freshness
 
 ESF is best-effort and exit events go missing under kernel back-pressure, sysext crashes, and agent restarts. Two reconcilers cooperate to keep the process tree from filling with forever-green ghost rows.
 
@@ -357,7 +357,7 @@ Two unconditional carve-outs run before any rule:
 
 ### BINARY rules and the deadline-fallback posture
 
-A BINARY rule matches the file's SHA-256. The hash is computed synchronously on the AUTH_EXEC callback thread, with the budget bounded by the kernel-supplied `es_message_t.deadline` minus a 500 ms safety margin for the post-hash work. The agent closes the pre-RC bypass primitive where the first exec of any binary slipped past BINARY rules while the cache filled asynchronously (#208).
+A BINARY rule matches the file's SHA-256. The hash is computed synchronously on the AUTH_EXEC callback thread, with the budget bounded by the kernel-supplied `es_message_t.deadline` minus a 500 ms safety margin for the post-hash work. The agent closes the pre-RC bypass primitive where the first exec of any binary slipped past BINARY rules while the cache filled asynchronously.
 
 If the hash cannot finish in time (large binary, slow disk, or the file is unreadable due to a TOCTOU replace between AUTH and read), the snapshot's `deadline_fallback` field drives the verdict:
 
@@ -377,7 +377,7 @@ The `add-application-control` OpenSpec change deleted the singleton `/api/policy
 
 ### Detection-rule tuning
 
-Detection-rule false-positive suppression and per-rule mode are configured through the DB-backed detection-config admin surface (issue #459), not environment variables. Changes take effect without a restart, are audited (who, when, and why via a required reason), and are global in scope today (host-group scoping arrives with editable host groups). Edit them through the admin UI or the REST API.
+Detection-rule false-positive suppression and per-rule mode are configured through the DB-backed detection-config admin surface, not environment variables. Changes take effect without a restart, are audited (who, when, and why via a required reason), and are global in scope today (host-group scoping arrives with editable host groups). Edit them through the admin UI or the REST API.
 
 **Exclusions** silence a rule for a benign input. Each is a typed match: `path_glob` / `parent_path_glob` (a `*` matches any run of characters including `/`, so a glob is broader than shell globbing; an entry with no `*` is exact), `team_id`, `signing_id`, `cdhash`, `sha256`, `command_substring`, or `domain`. Not every rule consumes every match type (for example `suspicious_exec` reads only `parent_path_glob`), so pick the type the target rule actually uses. Anchor path globs to a full, root-owned install root and never start one with `*`: a leading-wildcard or over-broad pattern like `*/git` also matches `/tmp/evil/git`, which an attacker can plant to land inside the exclusion and blind the rule there. Manage them at `GET` / `POST /api/v1/detection-config/exclusions` and `DELETE /api/v1/detection-config/exclusions/{id}`. The four legacy allowlists map onto exclusions: the launchagent plist path becomes a `path_glob`, the launchdaemon team a `team_id`, the sudoers writer path a `path_glob`, and the suspicious_exec parent a `parent_path_glob`. For the per-rule match-type mapping, a universal starting set (the agent's own LaunchDaemon registration and interactive-login noise on workstations), and guidance on excluding environment-specific developer tooling, see [recommended-exclusions.md](recommended-exclusions.md).
 

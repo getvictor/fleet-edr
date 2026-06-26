@@ -116,7 +116,7 @@ EDR_TLS_CERT_FILE=/tls/fullchain.pem
 EDR_TLS_KEY_FILE=/tls/privkey.pem
 ```
 
-**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint. By default the proxy-to-EDR hop also runs over TLS (issue #140 makes the server terminate TLS itself): issue the proxy-to-backend cert from your internal CA or reuse the public cert, mount it under `./tls/`, and the env-var shape is identical to Option A. If your platform cannot present a backend certificate (most PaaS edges proxy plaintext to the service), set `EDR_TLS_TERMINATED_BY_PROXY=1` instead and omit the cert files: the server then listens plaintext HTTP on the assumption that the proxy terminates TLS in front of it. The flag and cert files are mutually exclusive.
+**Option B: terminate TLS upstream (nginx, Caddy, an ALB, Cloudflare Tunnel).** The proxy is the external HTTPS endpoint. By default the proxy-to-EDR hop also runs over TLS (the server terminates TLS itself): issue the proxy-to-backend cert from your internal CA or reuse the public cert, mount it under `./tls/`, and the env-var shape is identical to Option A. If your platform cannot present a backend certificate (most PaaS edges proxy plaintext to the service), set `EDR_TLS_TERMINATED_BY_PROXY=1` instead and omit the cert files: the server then listens plaintext HTTP on the assumption that the proxy terminates TLS in front of it. The flag and cert files are mutually exclusive.
 
 ### 5. Pin a version in .env
 
@@ -149,7 +149,7 @@ curl -s https://edr.example.com/readyz | jq .
 
 If you're running with a self-signed cert (lab / air-gapped pilot), either add the CA to the local trust store, pass `--cacert /path/to/ca.pem`, or temporarily use `-k` for this probe. Don't paper over a trust failure with `-k` in an automation script.
 
-Local dev deployment (`task dev:server`, issue #140: TLS by default with the self-signed cert from `task dev:certs`):
+Local dev deployment (`task dev:server`: TLS by default with the self-signed cert from `task dev:certs`):
 
 ```sh
 curl -sk https://localhost:8088/readyz | jq .
@@ -209,7 +209,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_DSN` / `EDR_DSN_FILE` | yes | none | MySQL DSN, `user:pass@tcp(host:port)/db?parseTime=true` |
 | `EDR_ENROLL_SECRET` / `EDR_ENROLL_SECRET_FILE` | yes | none | Shared secret agents present at enrollment |
 | `EDR_LISTEN_ADDR` | no | `:8088` | TCP address the HTTPS server binds |
-| `EDR_TLS_CERT_FILE` | **yes** | none | PEM cert. Required unless `EDR_TLS_TERMINATED_BY_PROXY=1`; the server has no _unguarded_ plaintext-HTTP mode (issue #140) |
+| `EDR_TLS_CERT_FILE` | **yes** | none | PEM cert. Required unless `EDR_TLS_TERMINATED_BY_PROXY=1`; the server has no _unguarded_ plaintext-HTTP mode |
 | `EDR_TLS_KEY_FILE` | **yes** | none | PEM key (pair with cert) |
 | `EDR_SHUTDOWN_DRAIN` | no | 30s | On SIGTERM the server reports `/readyz` 503 and keeps serving for this long before closing the listener, so a load balancer drains the replica from rotation first. 0 disables the wait (immediate shutdown) |
 | `EDR_ENROLL_RATE_PER_MIN` | no | 30 | Per-IP enroll rate limit |
@@ -231,7 +231,7 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 
 Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`, `EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents become the value. That's how the compose stack delivers secrets.
 
-Detection-rule tuning (false-positive exclusions and per-rule enable/monitor/disable) is no longer an env var. It moved to the DB-backed detection-config surface, edited through the admin API/UI and audited (issue #459); see [operations.md](operations.md#detection-rule-tuning). The former `EDR_LAUNCHAGENT_ALLOWLIST`, `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST`, `EDR_SUDOERS_WRITER_ALLOWLIST`, `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST`, and `EDR_DISABLED_RULES` knobs are removed.
+Detection-rule tuning (false-positive exclusions and per-rule enable/monitor/disable) is no longer an env var. It moved to the DB-backed detection-config surface, edited through the admin API/UI and audited; see [operations.md](operations.md#detection-rule-tuning). The former `EDR_LAUNCHAGENT_ALLOWLIST`, `EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST`, `EDR_SUDOERS_WRITER_ALLOWLIST`, `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST`, and `EDR_DISABLED_RULES` knobs are removed.
 
 ## OTel metrics and logs
 
@@ -336,7 +336,7 @@ docker compose -f docker-compose.prod.yml restart server
 
 **Server keeps exiting with "EDR_DSN is required"**: the `edr_dsn` secret file is missing or unreadable. Re-run the secrets step in Setup.
 
-**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required"**: either cert path is unset or unreadable. The server has no unguarded plaintext-HTTP mode (issue #140); mount fullchain.pem + privkey.pem under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE` env vars before retrying. (Behind a TLS-terminating proxy that cannot present a backend cert, set `EDR_TLS_TERMINATED_BY_PROXY=1` and omit the cert files instead.)
+**Server exits with "EDR_TLS_CERT_FILE and EDR_TLS_KEY_FILE are both required"**: either cert path is unset or unreadable. The server has no unguarded plaintext-HTTP mode; mount fullchain.pem + privkey.pem under `./tls/` and re-export the `EDR_TLS_CERT_FILE` / `EDR_TLS_KEY_FILE` env vars before retrying. (Behind a TLS-terminating proxy that cannot present a backend cert, set `EDR_TLS_TERMINATED_BY_PROXY=1` and omit the cert files instead.)
 
 **Agents see "enrollment failed: unauthorized"**: the `enroll_secret` on the server and the `EDR_ENROLL_SECRET` the agent reads from `/etc/fleet-edr.conf` are different. Confirm the MDM install-script writes the exact value from `secrets/enroll_secret`.
 
