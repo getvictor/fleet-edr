@@ -108,7 +108,7 @@ cosign verify "${IMAGE}:${TAG}" \
   --certificate-oidc-issuer "$ISSUER"
 ```
 
-For a stable (non-`-rc`) tag, also confirm `$IMAGE:latest` resolves to the SAME digest as `$IMAGE:$TAG` (the workflow only advances `:latest` on stable tags). Capture both digests and compare them; do not just print them (`brew install crane` if needed):
+For a stable (non-`-rc`) tag, also confirm `${IMAGE}:latest` resolves to the SAME digest as `${IMAGE}:${TAG}` (the workflow only advances `:latest` on stable tags). Capture both digests and compare them; do not just print them (`brew install crane` if needed):
 
 ```sh
 latest_digest=$(crane digest "${IMAGE}:latest")
@@ -128,7 +128,7 @@ The workflow attests the pkg, both profiles, both SBOMs, `SHA256SUMS`, and the i
 
 ```sh
 gh attestation verify fleet-edr-"$TAG".pkg --owner getvictor
-gh attestation verify oci://"$IMAGE:$TAG" --owner getvictor
+gh attestation verify "oci://${IMAGE}:${TAG}" --owner getvictor
 ```
 
 Expect a verified provenance summary tying each artifact to the workflow run.

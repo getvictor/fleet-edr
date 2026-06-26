@@ -108,7 +108,7 @@ First stable release. The product ships as two components, released together for
 - **Flexible deployment.** The server is a standard Linux container image, so it runs on any container host (a Docker VM, Kubernetes, AWS ECS/EKS, GCP, Azure, or on-prem), with a one-click Render blueprint for the fastest start. Agents reach Macs through any MDM (Fleet, Jamf, Kandji, Intune, mosyle).
 - **Supply-chain-hardened releases.** Every release ships a Developer ID-signed, Apple-notarized package alongside SBOMs, cosign signatures, and build provenance attestations.
 
-[0.3.0]: https://github.com/getvictor/fleet-edr/compare/v0.2.1...HEAD
+[0.3.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.3.0
 [0.2.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.1
 [0.2.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.0
 [0.1.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.1.1
