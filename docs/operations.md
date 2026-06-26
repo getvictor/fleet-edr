@@ -239,7 +239,7 @@ Alerts are NOT deleted by retention. They stay until you delete them via the adm
 
 ### Curbing event volume at the source
 
-Retention bounds how long events live; two levers reduce how many are written in the first place:
+Retention bounds how long events live; three levers reduce how many are written in the first place:
 
 - **`snapshot_heartbeat` events are no longer persisted.** The server applies their freshness side effect (the `processes.last_seen_ns` bump that exempts a live snapshot row from the 6h TTL force-exit) at ingest and drops them, so they never occupy an `events` row. Watch `edr.ingest.heartbeats_dropped` to see the row-count savings.
 - **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats no longer cost an `events` row, but they still cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under the 6h stale-process TTL so a live snapshot row is always re-freshened before the TTL would force-exit it.
