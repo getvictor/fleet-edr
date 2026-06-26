@@ -72,27 +72,7 @@ docker inspect "$(docker compose -f docker-compose.quickstart.yml ps -q server)"
 
 ### Single sign-on (OIDC)
 
-The quickstart boots with break-glass sign-in only (`EDR_AUTH_ALLOW_NO_OIDC=1`). Configure your identity provider in the UI: sign in with the break-glass admin (step 5), open **Admin settings -> Single sign-on**, and enter the issuer, client ID, client secret, and external URL. The form derives the redirect URI from the external URL and shows it read-only; register that exact value at your IdP. A test-connection button verifies the provider before you save, and changes apply at runtime with no restart. See [okta-setup.md](okta-setup.md) for the IdP-side steps.
-
-Alternatively, seed the configuration from the environment on the server's first boot (useful for unattended provisioning), keeping the client secret in a Docker secret rather than `.env`:
-
-```sh
-# Client secret as a file secret (secrets/ is 0700; the file is 0644 so the nonroot server container can read it).
-printf '%s' 'YOUR_OIDC_CLIENT_SECRET' > secrets/oidc_client_secret
-chmod 0644 secrets/oidc_client_secret
-```
-
-Add an `oidc_client_secret` entry under both the top-level `secrets:` and the `server` service's `secrets:` in `docker-compose.quickstart.yml` (pointing at `./secrets/oidc_client_secret`), then in `.env`:
-
-```sh
-EDR_OIDC_ISSUER=https://your-idp.example.com
-EDR_OIDC_CLIENT_ID=your-client-id
-EDR_OIDC_REDIRECT_URL=https://edr.example.com/api/auth/callback
-EDR_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
-EDR_AUTH_ALLOW_NO_OIDC=0
-```
-
-Recreate the server (`docker compose -f docker-compose.quickstart.yml up -d server`). These variables seed the stored configuration the first time the server boots with OIDC set (here, this recreate, since the server had no OIDC config before); afterward the Single sign-on screen is the source of truth and further `EDR_OIDC_*` changes are inert. The redirect URL must exactly match what your IdP has on file.
+The quickstart boots with break-glass sign-in only (`EDR_AUTH_ALLOW_NO_OIDC=1`). Configure your identity provider in the UI: sign in with the break-glass admin (step 5), open **Admin settings -> Single sign-on**, and enter the issuer, client ID, client secret, and external URL. The form derives the redirect URI from the external URL and shows it read-only; register that exact value at your IdP. A test-connection button verifies the provider before you save, and changes apply at runtime with no restart. The stored configuration is the source of truth and survives restarts. See [okta-setup.md](okta-setup.md) for the IdP-side steps.
 
 ## Operations
 
