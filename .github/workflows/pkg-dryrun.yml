@@ -74,7 +74,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
@@ -175,3 +175,34 @@ jobs:
           grep -F 'launchctl bootstrap "gui/$CONSOLE_UID" "$ACTIVATE_LA"' \
             /tmp/expanded/agent.pkg/Scripts/postinstall && \
             echo OK
+          # spec:release-packaging/uninstall-path-is-deliverable/uninstall-deactivates-both-extensions-via-the-host-app
+          #
+          # The shipped uninstall.sh must deactivate the extensions through the host app in the console
+          # user's GUI session, NOT via `systemextensionsctl deactivate` (no such subcommand; blocked
+          # under SIP), which silently removed nothing and orphaned the extensions. Assert against the
+          # payload the support component actually ships.
+          echo "=== shipped uninstall.sh deactivates via the host app, not systemextensionsctl ==="
+          pkgutil --expand-full dist/fleet-edr-*.pkg /tmp/expanded-full
+          UNINSTALL="/tmp/expanded-full/support.pkg/Payload/Library/Application Support/com.fleetdm.edr/uninstall.sh"
+          test -f "$UNINSTALL"
+          if grep -nE 'systemextensionsctl[[:space:]]+deactivate' "$UNINSTALL"; then
+            echo "FAIL: uninstall.sh still calls the bogus 'systemextensionsctl deactivate'"; exit 1
+          fi
+          # shellcheck disable=SC2016  # literal text to find in the script, not expansions
+          grep -qF 'launchctl asuser' "$UNINSTALL"
+          # shellcheck disable=SC2016  # literal text to find in the script, not expansions
+          grep -qF '"$APP_BIN" deactivate' "$UNINSTALL"
+          echo OK
+          # spec:release-packaging/uninstall-path-is-deliverable/uninstall-on-an-mdm-managed-host-reports-the-profile-must-be-removed
+          #
+          # On an MDM-managed host macOS refuses the local deactivation (authorizationRequired), so the
+          # shipped uninstall.sh must detect the system-extension profile and tell the operator to remove
+          # it via their MDM, keep the host app bundle, and not claim a clean removal. Assert against the
+          # payload the support component actually ships.
+          echo "=== shipped uninstall.sh reports the MDM profile must be removed ==="
+          # shellcheck disable=SC2016  # literal text to find in the script, not expansions
+          grep -qF 'mdm_sysext_profile_present' "$UNINSTALL"
+          grep -qF 'com.fleetdm.edr.profile.system-extension' "$UNINSTALL"
+          grep -qi 'remove that profile via your MDM' "$UNINSTALL"
+          grep -qi 'kept so you can retry' "$UNINSTALL"
+          echo OK

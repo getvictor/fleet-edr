@@ -53,11 +53,11 @@ type captureApply struct {
 	oidcIn          ssoconfig.UpsertInput
 	appCfg          appconfig.AppConfig
 	expectedVersion int64
-	updatedBy       int64
+	updatedBy       *int64
 	err             error
 }
 
-func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedVersion int64, updatedBy int64) error {
+func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedVersion int64, updatedBy *int64) error {
 	c.called = true
 	c.oidcIn = oidcIn
 	c.appCfg = appCfg
@@ -66,7 +66,7 @@ func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCf
 	return c.err
 }
 
-func noopApply(context.Context, ssoconfig.UpsertInput, appconfig.AppConfig, int64, int64) error {
+func noopApply(context.Context, ssoconfig.UpsertInput, appconfig.AppConfig, int64, *int64) error {
 	return nil
 }
 
@@ -167,7 +167,8 @@ func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	require.True(t, ap.called, "the transactional apply must be invoked")
 	require.NotNil(t, ap.oidcIn.NewSecret)
 	assert.Equal(t, "rotate-me", *ap.oidcIn.NewSecret)
-	assert.Equal(t, int64(42), ap.updatedBy)
+	require.NotNil(t, ap.updatedBy, "a human actor stamps updated_by with its user id")
+	assert.Equal(t, int64(42), *ap.updatedBy)
 	assert.Equal(t, "https://edr.example.com", ap.appCfg.ExternalURL)
 	assert.Equal(t, int64(3), ap.expectedVersion, "the read app-config version must flow into the OCC check")
 

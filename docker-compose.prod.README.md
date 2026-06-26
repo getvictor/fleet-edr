@@ -7,7 +7,7 @@ This stack runs the fleet-edr-server + MySQL on a single host. It's the simplest
 ```sh
 # 1. Pin a released version. `latest` works for dev but is not safe for prod
 #    because image digests drift silently.
-echo 'EDR_VERSION=v0.1.0' > .env
+echo 'EDR_VERSION=v0.3.0' > .env
 echo 'OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317' >> .env
 
 # 2. Generate the secret files. The MySQL root password + the full DSN that
@@ -36,9 +36,8 @@ printf 'pilot-enroll-secret-rotate-me' > secrets/enroll_secret
 chmod 0644 secrets/*
 
 # 3. TLS. Put fullchain.pem + privkey.pem under ./tls (Let's Encrypt output via
-#    certbot works directly). TLS is unconditionally required (issue #140
-#    removed the plaintext-HTTP opt-out); the server refuses to boot when
-#    either cert path is unreadable.
+#    certbot works directly). TLS is unconditionally required; the server
+#    refuses to boot when either cert path is unreadable.
 
 docker compose -f docker-compose.prod.yml up -d
 ```

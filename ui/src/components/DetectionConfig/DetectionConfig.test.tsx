@@ -230,8 +230,8 @@ describe("DetectionConfig", () => {
     });
   });
 
-  // Reducing a rule's alerting opens the reason modal; the operator's reason rides the upsert for the audit row.
-  // spec:web-ui/detection-configuration-admin-views/disabling-or-monitoring-a-rule-requires-an-operator-reason
+  // Disabling a rule opens the reason modal; the operator's reason rides the upsert for the audit row.
+  // spec:web-ui/detection-configuration-admin-views/disabling-a-rule-requires-an-operator-reason
   it("requires a reason via the modal before disabling a rule", async () => {
     stubReads({ rules: [makeRuleEntry()], settings: [] });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "disabled" }));

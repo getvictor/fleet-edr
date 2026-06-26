@@ -23,8 +23,8 @@ case "$MODE" in
   *) echo "usage: $0 [critical|high]" >&2; exit 2 ;;
 esac
 
-say() { printf '\n\033[1;36m==> %s\033[0m\n' "$1"; }   # cyan step banner
-sub() { printf '    %s\n' "$1"; }                       # indented detail
+say() { local msg="$1"; printf '\n\033[1;36m==> %s\033[0m\n' "$msg"; }   # cyan step banner
+sub() { local msg="$1"; printf '    %s\n' "$msg"; }                       # indented detail
 
 # Stage the payload at a UNIQUE temp path and guarantee it is removed on ANY exit. mktemp gives a name we own, so two
 # concurrent runs never collide and the cleanup never clobbers a pre-existing /tmp/beacon the script did not create. The
@@ -70,7 +70,7 @@ sub "a binary running out of /tmp does. This is the 'dropped payload' shape."
 # --- Step 2: choose the command-and-control domain ----------------------------------
 say "Step 2/4  Pick the command-and-control (C2) domain"
 SINK_IP=1.1.1.1   # any routable IP; the outbound TCP SYN alone emits network_connect
-if [ "$MODE" = "critical" ]; then
+if [[ "$MODE" = "critical" ]]; then
   # high-entropy 18-char label -> looksLikeDGADomain() -> Critical + ATT&CK T1568.002.
   # Read a finite chunk of /dev/urandom and slice in bash; piping urandom into `head -c`
   # closes the pipe early and kills `tr` with SIGPIPE (exit 141) under `set -o pipefail`.
@@ -104,7 +104,7 @@ sub "filter emits network_connect). Resolve-then-connect, same PID, inside the 3
 # NO alert fires. Warn instead of the misleading "Beacon sent"; any other result still emitted the connect SYN signal.
 beacon_rc=0
 "$BEACON" -4 -s -m 5 -o /dev/null "https://${DOMAIN}/" || beacon_rc=$?
-if [ "$beacon_rc" -eq 6 ]; then
+if [[ "$beacon_rc" -eq 6 ]]; then
   echo "WARNING: DNS resolution failed for ${DOMAIN} (curl exit 6); no connection was attempted." >&2
   echo "         No dns_query/network_connect was emitted, so the EDR alert will NOT fire." >&2
   echo "         Check this host's internet/DNS connectivity and re-run." >&2
@@ -120,7 +120,7 @@ sub "Removed ${BEACON} (typical of malware covering its tracks)."
 say "Done. Now watch Fleet EDR."
 sub "Within a few seconds an alert should appear in the EDR UI:"
 sub "  Title:    DNS C2 beacon"
-if [ "$MODE" = "critical" ]; then
+if [[ "$MODE" = "critical" ]]; then
   sub "  Severity: Critical   ATT&CK: T1071.004 + T1568.002"
 else
   sub "  Severity: High       ATT&CK: T1071.004"

@@ -207,60 +207,22 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	}
 
 	// The SSO admin API (read/update/test-connection) shares the config + app-config stores with the resolver; built only when the
-	// OIDC config store exists (i.e. keys were supplied).
-	var ssoAdminHandler *ssoadmin.Handler
-	if ssoStore != nil {
-		oidcHTTPClient := deps.OIDC.HTTPClient
-		// apply writes oidc_config and app_config in ONE transaction so a partial failure can't pair a new issuer with a stale
-		// derived redirect; app_config carries the optimistic-concurrency version check.
-		apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy int64) error {
-			tx, err := deps.DB.BeginTxx(ctx, nil)
-			if err != nil {
-				return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
-			}
-			committed := false
-			defer func() {
-				if !committed {
-					_ = tx.Rollback()
-				}
-			}()
-			if err := ssoStore.UpsertTx(ctx, tx, oidcIn); err != nil {
-				return err
-			}
-			if err := appConfigStore.PutTx(ctx, tx, appCfg, expectedAppVersion, &updatedBy); err != nil {
-				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return fmt.Errorf("identity bootstrap: commit sso update tx: %w", err)
-			}
-			committed = true
-			return nil
-		}
-		ssoAdminHandler = ssoadmin.NewHandler(ssoStore, appConfigStore, apply, authzEngine, auditStore,
-			func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, logger)
-	}
+	// OIDC config store exists (i.e. keys were supplied), else nil and the surface is not mounted.
+	ssoAdminHandler := buildSSOAdminHandler(ssoAdminHandlerDeps{
+		deps:      deps,
+		logger:    logger,
+		ssoStore:  ssoStore,
+		appConfig: appConfigStore,
+		authz:     authzEngine,
+		audit:     auditStore,
+	})
 
-	// Service-account surface (issue #376, ADR-0013). Built only when a signing key was provided (omitted in minimal test wiring). The
-	// snapshot is a per-replica revocation cache (ADR-0010 safe-to-lose); cmd/main starts its refresh loop.
-	var (
-		saAdminHandler *saadmin.Handler
-		saTokenHandler *saadmin.TokenHandler
-		saSnapshot     *serviceaccounts.Snapshot
-		apiAuthMW      func(http.Handler) http.Handler
-	)
+	// Service-account surface (issue #376, ADR-0013). Built only when a signing key was provided (zero-valued in minimal test wiring).
 	sessionMW := middleware.Session(svc, logger)
 	csrfMW := middleware.CSRF(logger)
-	if len(deps.ServiceAccountTokenSigningKey) > 0 {
-		saStore := serviceaccounts.New(deps.DB)
-		saSigner, sErr := satoken.New(deps.ServiceAccountTokenSigningKey, serviceAccountTokenKeyID, serviceAccountTokenAudience)
-		if sErr != nil {
-			return nil, fmt.Errorf("identity bootstrap: service-account token signer: %w", sErr)
-		}
-		saSnapshot = serviceaccounts.NewSnapshot(saStore, logger)
-		saAuthenticator := serviceaccounts.NewAuthenticator(saSigner, saSnapshot)
-		apiAuthMW = middleware.APIAuth(saAuthenticator, sessionMW, csrfMW, logger)
-		saAdminHandler = saadmin.NewHandler(saStore, authzEngine, auditStore, logger)
-		saTokenHandler = saadmin.NewTokenHandler(saStore, saSigner, auditStore, logger)
+	saSurface, err := buildServiceAccountSurface(deps, authzEngine, auditStore, sessionMW, csrfMW, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	bgService, bgHandler, err := buildBreakglass(breakglassDeps{
@@ -299,12 +261,90 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		ssoStore:          ssoStore,
 		appConfigStore:    appConfigStore,
 		ssoAdminHandler:   ssoAdminHandler,
-		saAdminHandler:    saAdminHandler,
-		saTokenHandler:    saTokenHandler,
-		saSnapshot:        saSnapshot,
-		apiAuthMW:         apiAuthMW,
+		saAdminHandler:    saSurface.adminHandler,
+		saTokenHandler:    saSurface.tokenHandler,
+		saSnapshot:        saSurface.snapshot,
+		apiAuthMW:         saSurface.apiAuthMW,
 		userAdminHandler:  useradmin.NewHandler(usersStore, rbacStore, authzEngine, auditStore, logger),
 		oidcSeed:          deps.OIDC,
+	}, nil
+}
+
+// ssoAdminHandlerDeps bundles the per-call inputs to buildSSOAdminHandler. Same shape pattern as oidcHandlerDeps so future field
+// additions don't widen the function signature.
+type ssoAdminHandlerDeps struct {
+	deps      Deps
+	logger    *slog.Logger
+	ssoStore  *ssoconfig.Store
+	appConfig *appconfig.Store
+	authz     *authz.Engine
+	audit     *audit.Store
+}
+
+// buildSSOAdminHandler builds the SSO admin API (read/update/test-connection). It returns nil when no OIDC config store exists (no
+// keys supplied), in which case the surface is simply not mounted. apply writes oidc_config and app_config in ONE transaction so a
+// partial failure can't pair a new issuer with a stale derived redirect; app_config carries the optimistic-concurrency version check.
+func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
+	if in.ssoStore == nil {
+		return nil
+	}
+	oidcHTTPClient := in.deps.OIDC.HTTPClient
+	apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy *int64) error {
+		tx, err := in.deps.DB.BeginTxx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback()
+			}
+		}()
+		if err := in.ssoStore.UpsertTx(ctx, tx, oidcIn); err != nil {
+			return err
+		}
+		if err := in.appConfig.PutTx(ctx, tx, appCfg, expectedAppVersion, updatedBy); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("identity bootstrap: commit sso update tx: %w", err)
+		}
+		committed = true
+		return nil
+	}
+	return ssoadmin.NewHandler(in.ssoStore, in.appConfig, apply, in.authz, in.audit,
+		func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, in.logger)
+}
+
+// serviceAccountSurface bundles the optional service-account handlers plus the API-auth middleware. All fields are nil/zero in
+// minimal test wiring (no signing key supplied).
+type serviceAccountSurface struct {
+	adminHandler *saadmin.Handler
+	tokenHandler *saadmin.TokenHandler
+	snapshot     *serviceaccounts.Snapshot
+	apiAuthMW    func(http.Handler) http.Handler
+}
+
+// buildServiceAccountSurface builds the service-account surface (issue #376, ADR-0013) when a token signing key was provided,
+// returning a zero surface otherwise. The snapshot is a per-replica revocation cache (ADR-0010 safe-to-lose); cmd/main starts its
+// refresh loop. apiAuthMW chains the SA authenticator ahead of the session + CSRF middleware.
+func buildServiceAccountSurface(deps Deps, authzEngine *authz.Engine, auditStore *audit.Store,
+	sessionMW, csrfMW func(http.Handler) http.Handler, logger *slog.Logger) (serviceAccountSurface, error) {
+	if len(deps.ServiceAccountTokenSigningKey) == 0 {
+		return serviceAccountSurface{}, nil
+	}
+	saStore := serviceaccounts.New(deps.DB)
+	saSigner, err := satoken.New(deps.ServiceAccountTokenSigningKey, serviceAccountTokenKeyID, serviceAccountTokenAudience)
+	if err != nil {
+		return serviceAccountSurface{}, fmt.Errorf("identity bootstrap: service-account token signer: %w", err)
+	}
+	snapshot := serviceaccounts.NewSnapshot(saStore, logger)
+	authenticator := serviceaccounts.NewAuthenticator(saSigner, snapshot)
+	return serviceAccountSurface{
+		adminHandler: saadmin.NewHandler(saStore, authzEngine, auditStore, logger),
+		tokenHandler: saadmin.NewTokenHandler(saStore, saSigner, auditStore, logger),
+		snapshot:     snapshot,
+		apiAuthMW:    middleware.APIAuth(authenticator, sessionMW, csrfMW, logger),
 	}, nil
 }
 

@@ -96,7 +96,7 @@ func TestCoalescer_MergesIdenticalConnections(t *testing.T) {
 	s := &sink{}
 	c := New(time.Minute, s.enqueue, nil)
 	for i, ts := range []int64{30, 10, 20} { // out of order on purpose: earliest must win
-		ev := mkConnect(t, "nc-"+string(rune('a'+i)), ts, 42, "tcp", "outbound", "1.2.3.4", 443, nil)
+		ev := mkConnect(t, "nc-"+string(rune('a'+i)), ts, 42, 443, nil)
 		require.NoError(t, c.Handle(context.Background(), ev))
 	}
 	assert.Empty(t, s.events(), "buffered, nothing enqueued until flush")
@@ -118,9 +118,9 @@ func TestCoalescer_DistinctTuplesDoNotMerge(t *testing.T) {
 	t.Parallel()
 	s := &sink{}
 	c := New(time.Minute, s.enqueue, nil)
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "a", 1, 42, "tcp", "outbound", "1.2.3.4", 443, nil)))
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "b", 2, 42, "tcp", "outbound", "1.2.3.4", 8080, nil))) // diff port
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "c", 3, 99, "tcp", "outbound", "1.2.3.4", 443, nil)))  // diff pid
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "a", 1, 42, 443, nil)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "b", 2, 42, 8080, nil))) // diff port
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "c", 3, 99, 443, nil)))  // diff pid
 	c.Flush(context.Background())
 	assert.Len(t, s.events(), 3, "different identity keys stay separate")
 }
@@ -130,8 +130,8 @@ func TestCoalescer_PIDVersionDistinguishesKeys(t *testing.T) {
 	s := &sink{}
 	c := New(time.Minute, s.enqueue, nil)
 	v1, v2 := 7, 8
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "a", 1, 42, "tcp", "outbound", "1.2.3.4", 443, &v1)))
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "b", 2, 42, "tcp", "outbound", "1.2.3.4", 443, &v2)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "a", 1, 42, 443, &v1)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "b", 2, 42, 443, &v2)))
 	c.Flush(context.Background())
 	assert.Len(t, s.events(), 2, "a recycled PID with a new generation must not merge into the prior one")
 }
@@ -182,7 +182,7 @@ func TestCoalescer_SingletonIsByteIdentical(t *testing.T) {
 	t.Parallel()
 	s := &sink{}
 	c := New(time.Minute, s.enqueue, nil)
-	ev := mkConnect(t, "solo", 5, 42, "tcp", "outbound", "1.2.3.4", 443, nil)
+	ev := mkConnect(t, "solo", 5, 42, 443, nil)
 	require.NoError(t, c.Handle(context.Background(), ev))
 	c.Flush(context.Background())
 	got := s.events()
@@ -196,7 +196,7 @@ func TestCoalescer_WindowZeroIsPassthrough(t *testing.T) {
 	s := &sink{}
 	c := New(0, s.enqueue, nil)
 	assert.False(t, c.Enabled())
-	ev := mkConnect(t, "x", 5, 42, "tcp", "outbound", "1.2.3.4", 443, nil)
+	ev := mkConnect(t, "x", 5, 42, 443, nil)
 	require.NoError(t, c.Handle(context.Background(), ev))
 	got := s.events()
 	require.Len(t, got, 1, "with coalescing disabled the event is enqueued immediately")
@@ -213,7 +213,7 @@ func TestCoalescer_FlushesOnShutdown(t *testing.T) {
 	go func() { c.Run(ctx); close(done) }()
 
 	for i, ts := range []int64{1, 2} {
-		require.NoError(t, c.Handle(ctx, mkConnect(t, "s"+string(rune('a'+i)), ts, 42, "tcp", "outbound", "1.2.3.4", 443, nil)))
+		require.NoError(t, c.Handle(ctx, mkConnect(t, "s"+string(rune('a'+i)), ts, 42, 443, nil)))
 	}
 	assert.Empty(t, s.events(), "nothing emitted before shutdown")
 
@@ -241,7 +241,7 @@ func TestCoalescer_PropertyConnectionMerge(t *testing.T) {
 			if ts > maxTS {
 				maxTS = ts
 			}
-			require.NoError(rt, c.Handle(context.Background(), mkConnect(rt, "e"+string(rune(i)), ts, 42, "tcp", "outbound", "1.2.3.4", 443, nil)))
+			require.NoError(rt, c.Handle(context.Background(), mkConnect(rt, "e"+string(rune(i)), ts, 42, 443, nil)))
 		}
 		c.Flush(context.Background())
 		got := s.events()
@@ -300,9 +300,9 @@ func TestCoalescer_BufferCapEarlyFlush(t *testing.T) {
 	c.maxEntries = 2 // white-box: shrink the cap so the test doesn't have to push 10k keys
 
 	// Three distinct 5-tuples (different ports) => three identity keys. The third trips the cap and flushes the first two.
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "a", 1, 42, "tcp", "outbound", "1.2.3.4", 1, nil)))
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "b", 2, 42, "tcp", "outbound", "1.2.3.4", 2, nil)))
-	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "c", 3, 42, "tcp", "outbound", "1.2.3.4", 3, nil)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "a", 1, 42, 1, nil)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "b", 2, 42, 2, nil)))
+	require.NoError(t, c.Handle(context.Background(), mkConnect(t, "c", 3, 42, 3, nil)))
 	assert.Len(t, s.events(), 2, "reaching the cap flushes the buffered representatives early")
 
 	c.Flush(context.Background())
@@ -326,9 +326,12 @@ func FuzzCoalescer_Handle(f *testing.F) {
 	})
 }
 
-func mkConnect(t require.TestingT, id string, ts int64, pid int, proto, dir, remote string, port int, pidversion *int) []byte {
+// mkConnect builds a network_connect envelope. protocol / direction / remote_address are fixed fixtures (tcp / outbound /
+// 1.2.3.4): the coalescing tests vary only pid, port, and pidversion, so the connection tuple's constant fields stay constant.
+// Pass pidversion=nil to omit the field.
+func mkConnect(t require.TestingT, id string, ts int64, pid, port int, pidversion *int) []byte {
 	payload := map[string]any{
-		"pid": pid, "protocol": proto, "direction": dir, "remote_address": remote, "remote_port": port,
+		"pid": pid, "protocol": "tcp", "direction": "outbound", "remote_address": "1.2.3.4", "remote_port": port,
 	}
 	if pidversion != nil {
 		payload["pidversion"] = *pidversion

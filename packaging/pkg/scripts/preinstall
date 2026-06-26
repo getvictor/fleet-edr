@@ -12,7 +12,6 @@ set -e
 
 LABEL=com.fleetdm.edr.agent
 PLIST=/Library/LaunchDaemons/${LABEL}.plist
-SYSEXT_BUNDLE=/Applications/Fleet\ EDR.app/Contents/Library/SystemExtensions/com.fleetdm.edr.securityextension.systemextension
 
 # Stop + unload the LaunchDaemon if it exists. `bootout` replaces the
 # deprecated `unload`; both return non-zero when the target is not loaded, so
@@ -30,18 +29,9 @@ if [ -f "$ACTIVATE_LA" ] && [ "$CONSOLE_UID" -gt 0 ]; then
     /bin/launchctl bootout "gui/$CONSOLE_UID" "$ACTIVATE_LA" 2>/dev/null || true
 fi
 
-# Deactivate the running system extension so the bundle can be replaced.
-# Derive the team ID from the installed host app's codesign output so this
-# script tracks whatever team ID the previous install was signed under,
-# even when that differs from the team ID of the incoming pkg (e.g. a
-# fork operator switched teams between releases). A fresh install or a
-# corrupted sysext state returns non-zero; treat that as "nothing to do".
-if [ -d "$SYSEXT_BUNDLE" ]; then
-    TEAM_ID=$(/usr/bin/codesign -dv --verbose=4 "/Applications/Fleet EDR.app" 2>&1 \
-        | /usr/bin/awk -F= '/^TeamIdentifier=/{print $2; exit}')
-    if [ -n "$TEAM_ID" ]; then
-        /usr/bin/systemextensionsctl deactivate "$TEAM_ID" com.fleetdm.edr.securityextension 2>/dev/null || true
-    fi
-fi
+# The system extension is NOT deactivated on upgrade: the post-upgrade activation LaunchAgent re-runs `edr activate`,
+# and the host app replaces the existing extension with the new bundle (OSSystemExtensionRequest .replace). Deactivating
+# here would needlessly tear telemetry down and force a reboot. (The previous `systemextensionsctl deactivate` call here
+# was a no-op anyway: systemextensionsctl has no `deactivate` subcommand.)
 
 exit 0

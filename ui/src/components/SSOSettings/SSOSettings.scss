@@ -77,6 +77,7 @@
   }
 
   &__test {
+    display: block;
     margin-bottom: 16px;
     padding: 10px 12px;
     border-radius: 4px;
@@ -84,20 +85,14 @@
 
     &--ok {
       background: rgba(61, 182, 123, 0.15);
-      color: #2b7f56;
+      // Darkened from #2b7f56 to clear WCAG AA (4.5:1) against the tinted-green background.
+      color: #1f6e48;
     }
 
     &--fail {
       background: #fff0f3;
       color: #cb3559;
     }
-  }
-
-  &__jit {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 24px;
   }
 
   &__jit-role {
@@ -129,8 +124,9 @@
   }
 
   &__saved {
+    display: block;
     margin-bottom: 12px;
-    color: #2b7f56;
+    color: #1f6e48;
     font-size: 14px;
   }
 

@@ -4,11 +4,11 @@ The EDR server speaks OIDC with PKCE. Okta is the reference IdP: every other con
 
 SSO covers everyday operator login. The break-glass account at `admin@fleet-edr.local` is the only path in when SSO is unavailable (see [`breakglass.md`](breakglass.md)).
 
-**Changed in v0.3.0:** SSO is configured in the UI (below); the `EDR_OIDC_*` env vars now seed only the first boot. Earlier releases configured SSO entirely through those env vars.
+SSO is configured in the UI (below); the `EDR_OIDC_*` env vars seed only the first boot, after which the stored configuration is the source of truth.
 
 ## Configure SSO in the UI (recommended)
 
-OIDC is configurable in-product under **Admin settings -> Single sign-on** (the account menu, top right; visible to operators with the `sso.manage` permission). An admin sets the issuer, client ID, client secret (write-only: enter a value to rotate, never displayed), the deployment external URL, the JIT toggle, and the default JIT role, then saves. Changes apply at runtime with no restart, and the test-connection button verifies the provider before saving.
+OIDC is configurable in-product under **Admin settings -> Single sign-on** (the account menu, top right; visible to operators with the `sso.manage` permission). An admin sets the issuer, client ID, client secret (write-only: enter a value to rotate, never displayed), the deployment external URL, and the default JIT role, then saves. The settings page does not expose a JIT on/off toggle: just-in-time provisioning is always on, so anyone who signs in through the provider is auto-created with the default role (the operator-invite flow that would let an admin pre-provision users and turn JIT off is not built yet). Changes apply at runtime with no restart, and the test-connection button verifies the provider before saving.
 
 Precedence is env-seeds / DB-governs: the `EDR_OIDC_*` env vars below seed the stored config on first boot only; once a stored config exists the UI is the source of truth and env changes are inert. To configure SSO purely from the UI (no env), boot break-glass-only (`EDR_AUTH_ALLOW_NO_OIDC=1`), sign in via break-glass, and fill in the form. The redirect URI is derived from the external URL (`<external-url>/api/auth/callback`) and shown read-only; register that exact value at the IdP.
 

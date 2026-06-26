@@ -24,7 +24,7 @@
 # `docker manifest inspect node:20 --verbose` and copying the manifest digest.
 # Dependabot's docker ecosystem keeps these current; do not strip the digest
 # during a tag bump.
-FROM --platform=$BUILDPLATFORM node:26@sha256:3c05c2cf0f6a5795dfb7abefb2a4e31a78d6271a99962531c48315ced17d618a AS ui-build
+FROM --platform=$BUILDPLATFORM node:26@sha256:b46a10d964ad15136ebdf9012142131481caa0697d7a4d4eafe4bbabd818f876 AS ui-build
 # package*.json first for layer-cache reuse: npm ci only reruns when
 # dependencies change, not every source edit.
 WORKDIR /src/ui
@@ -41,7 +41,7 @@ RUN npm run build
 # ---------------------------------------------------------------
 # Stage 2: Go binary
 # ---------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.26.4@sha256:792443b89f65105abba56b9bd5e97f680a80074ac62fc844a584212f8c8102c3 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.4@sha256:32c0e6e5c4f6707717051091b4d0b077464a679eaab563e11474efc5328e2aa5 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev

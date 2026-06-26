@@ -100,21 +100,23 @@ Expect `Verified OK` for each. The certificate-identity binds the signature to t
 
 The image signature and its SBOM attestation are stored as OCI 1.1 referring artifacts (cosign v3), not as release assets:
 
+Brace every image reference (`"${IMAGE}:${TAG}"`, not `"$IMAGE:$TAG"`): under zsh, an unbraced `"$IMAGE:latest"` is parsed as the `:l` (lowercase) history modifier on `$IMAGE` followed by the literal `atest`, which queries a mangled repository name and makes the digest check below false-FAIL. Bracing disables the modifier.
+
 ```sh
-cosign verify "$IMAGE:$TAG" \
+cosign verify "${IMAGE}:${TAG}" \
   --certificate-identity-regexp "$IDENTITY" \
   --certificate-oidc-issuer "$ISSUER"
 ```
 
-For a stable (non-`-rc`) tag, also confirm `$IMAGE:latest` resolves to the SAME digest as `$IMAGE:$TAG` (the workflow only advances `:latest` on stable tags). Capture both digests and compare them; do not just print them (`brew install crane` if needed):
+For a stable (non-`-rc`) tag, also confirm `${IMAGE}:latest` resolves to the SAME digest as `${IMAGE}:${TAG}` (the workflow only advances `:latest` on stable tags). Capture both digests and compare them; do not just print them (`brew install crane` if needed):
 
 ```sh
-latest_digest=$(crane digest "$IMAGE:latest")
-tag_digest=$(crane digest "$IMAGE:$TAG")
+latest_digest=$(crane digest "${IMAGE}:latest")
+tag_digest=$(crane digest "${IMAGE}:${TAG}")
 if [ -n "$tag_digest" ] && [ "$latest_digest" = "$tag_digest" ]; then
-  echo "PASS: :latest matches $TAG ($tag_digest)"
+  echo "PASS: :latest matches ${TAG} (${tag_digest})"
 else
-  echo "FAIL: :latest=$latest_digest does not match $TAG=$tag_digest"
+  echo "FAIL: :latest=${latest_digest} does not match ${TAG}=${tag_digest}"
 fi
 ```
 
@@ -126,7 +128,7 @@ The workflow attests the pkg, both profiles, both SBOMs, `SHA256SUMS`, and the i
 
 ```sh
 gh attestation verify fleet-edr-"$TAG".pkg --owner getvictor
-gh attestation verify oci://"$IMAGE:$TAG" --owner getvictor
+gh attestation verify "oci://${IMAGE}:${TAG}" --owner getvictor
 ```
 
 Expect a verified provenance summary tying each artifact to the workflow run.

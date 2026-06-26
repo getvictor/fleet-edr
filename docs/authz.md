@@ -66,7 +66,7 @@ The audit-log row's `payload` carries `reason` matching the header. The granting
 
 ## Binding a role to a user
 
-The primary path is the Users page in Admin settings (`/admin/settings/users`, issue #135): an `admin` lists operators, sets each one's role, and enables or disables access, all audited (`authz.role_binding.*` / `user.disabled` / `user.enabled`). The API behind it is `GET /api/settings/users`, `PUT /api/settings/users/{id}/role`, and `PUT /api/settings/users/{id}/status`, gated on `user.read` / `user.manage`. The UI enforces the same guardrails the server does: the last admin cannot be demoted or disabled, an operator cannot change their own role, break-glass accounts are immutable here, and only a `super_admin` may grant `super_admin`.
+The primary path is the Users page in Admin settings (`/admin/settings/users`): an `admin` lists operators, sets each one's role, and enables or disables access, all audited (`authz.role_binding.*` / `user.disabled` / `user.enabled`). The API behind it is `GET /api/settings/users`, `PUT /api/settings/users/{id}/role`, and `PUT /api/settings/users/{id}/status`, gated on `user.read` / `user.manage`. The UI enforces the same guardrails the server does: the last admin cannot be demoted or disabled, an operator cannot change their own role, break-glass accounts are immutable here, and only a `super_admin` may grant `super_admin`.
 
 The SQL pattern below remains as a break-glass alternative (for example, recovering a deployment that has no usable admin session). The shape mirrors `server/identity/bootstrap/schema.go`:
 
