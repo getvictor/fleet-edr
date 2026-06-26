@@ -29,4 +29,4 @@ The system SHALL present a Single sign-on settings page within the Admin setting
 
 - **GIVEN** an admin on the Single sign-on page
 - **WHEN** the client-secret field renders
-- **THEN** it carries the password-manager opt-out attributes so no manager offers to save it as a login: `data-1p-ignore` and `data-form-type="other"` (1Password, Dashlane), `data-lpignore` (LastPass), `data-bwignore` (Bitwarden), and `autocomplete` set to off (the browser's built-in manager)
+- **THEN** it carries the password-manager opt-out attributes so no manager offers to save it as a login: `data-1p-ignore` and `data-form-type="other"` (1Password, Dashlane), `data-lpignore` (LastPass), `data-bwignore` (Bitwarden), and `autocomplete="off"` (the browser's built-in manager)
