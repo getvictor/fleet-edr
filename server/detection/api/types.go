@@ -9,6 +9,7 @@ import (
 
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/sqlhelpers"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // NullRawJSON is the canonical nullable JSON column scanner. The authoritative type lives in server/sqlhelpers; detection/api keeps
@@ -28,20 +29,11 @@ var (
 	} = (*NullRawJSON)(nil)
 )
 
-// Event mirrors a row in the events table. The agent posts these to
-// /api/events; the engine evaluates rules over batches of these.
-//
-// Wire shape MUST stay byte-identical with what earlier server
-// versions produced: agents in the field decode server-emitted Events
-// for /api/commands result payloads.
-type Event struct {
-	EventID      string          `db:"event_id" json:"event_id"`
-	HostID       string          `db:"host_id" json:"host_id"`
-	TimestampNs  int64           `db:"timestamp_ns" json:"timestamp_ns"`
-	IngestedAtNs int64           `db:"ingested_at_ns" json:"ingested_at_ns,omitempty"`
-	EventType    string          `db:"event_type" json:"event_type"`
-	Payload      json.RawMessage `db:"payload" json:"payload"`
-}
+// Event is the raw endpoint telemetry envelope. Its canonical definition moved to the visibility bounded context (ADR-0015), which
+// owns ingestion and the event store; detection/api keeps the name as a type alias so existing callers (and the rules.api re-export)
+// stay byte-identical while the dependency points the right way (detection -> visibility). The wire shape and db tags live on
+// visibilityapi.Event.
+type Event = visibilityapi.Event
 
 // Process represents a materialized process record built from
 // fork/exec/exit events. Wire shape preserved from server/store.Process.
