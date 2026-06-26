@@ -48,7 +48,15 @@ Event telemetry dominates storage and a busy host can add many GB per day, so si
 
    Open that URL in a browser within its TTL and register a passkey to become admin. Then open the console at `https://edr.example.com/ui/`.
 
-6. Deploy the agent. The bootstrap output prints your enroll secret and server URL. Put them on each Mac (`EDR_SERVER_URL` and `EDR_ENROLL_SECRET` in `/etc/fleet-edr.conf`); see [install-agent-manual.md](install-agent-manual.md) for a single Mac or [mdm-deployment.md](mdm-deployment.md) to deploy through your MDM. To keep telemetry volume down on this disk-bounded pilot, also set `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf` (default is 60s): it cuts the agent's per-process liveness heartbeats roughly fivefold with no detection impact. This is an interim setting pending the storage rework in [getvictor/fleet-edr#408](https://github.com/getvictor/fleet-edr/issues/408); revert to the default once that lands.
+6. Save your enroll secret. The bootstrap output printed it, and you can re-read it any time from the host (the container is distroless and has no shell, so read the host file, not the container):
+
+   ```sh
+   cat secrets/enroll_secret
+   ```
+
+   Store it with your other deployment secrets; you put it on each Mac in step 7. It lives in `secrets/` alongside the deployment secret key and database credentials, so back that directory up.
+
+7. Deploy the agent. Using the enroll secret from previous and your server URL, put them on each Mac (`EDR_SERVER_URL` and `EDR_ENROLL_SECRET` in `/etc/fleet-edr.conf`); see [install-agent-manual.md](install-agent-manual.md) for a single Mac or [mdm-deployment.md](mdm-deployment.md) to deploy through your MDM. Once hosts start reporting, common developer and admin tooling will raise some benign alerts; see [recommended-exclusions.md](recommended-exclusions.md) for the exclusions we suggest seeding to quiet them.
 
 ## Set server configuration
 
