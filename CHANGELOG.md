@@ -2,7 +2,7 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
-## [0.3.0] (unreleased)
+## [0.3.0] (2026-06-26)
 
 Feature release on top of 0.2.1. The headline is operator self-service: detection tuning, single sign-on, API service accounts, and user management all move from boot-time environment variables into governed, audited admin screens that apply without a server restart. Also in this release: a clearer Hosts page, sharper persistence-attribution in alerts, several telemetry-delivery and on-device DNS reliability fixes, and a simpler, safer configuration surface.
 
@@ -108,7 +108,7 @@ First stable release. The product ships as two components, released together for
 - **Flexible deployment.** The server is a standard Linux container image, so it runs on any container host (a Docker VM, Kubernetes, AWS ECS/EKS, GCP, Azure, or on-prem), with a one-click Render blueprint for the fastest start. Agents reach Macs through any MDM (Fleet, Jamf, Kandji, Intune, mosyle).
 - **Supply-chain-hardened releases.** Every release ships a Developer ID-signed, Apple-notarized package alongside SBOMs, cosign signatures, and build provenance attestations.
 
-[0.3.0]: https://github.com/getvictor/fleet-edr/compare/v0.2.1...HEAD
+[0.3.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.3.0
 [0.2.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.1
 [0.2.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.0
 [0.1.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.1.1
