@@ -71,6 +71,7 @@ describe("SSOSettings", () => {
     expect(upd.mock.calls[0][0]).toMatchObject({ client_secret: "rotated-secret" });
   });
 
+  // spec:sso-configuration/the-single-sign-on-admin-settings-page/client-secret-field-opts-out-of-password-manager-capture
   it("marks the client-secret field so password managers skip it", async () => {
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
     render(<SSOSettings />);
@@ -124,6 +125,7 @@ describe("SSOSettings", () => {
     expect(await screen.findByText(/discovery unreachable/)).toBeInTheDocument();
   });
 
+  // spec:sso-configuration/the-single-sign-on-admin-settings-page/no-jit-toggle-and-jit-is-always-enabled-on-save
   it("has no JIT toggle and always saves with JIT enabled", async () => {
     vi.spyOn(api, "getSSOConfig").mockResolvedValue(baseConfig);
     const upd = vi.spyOn(api, "updateSSOConfig").mockResolvedValue(baseConfig);
