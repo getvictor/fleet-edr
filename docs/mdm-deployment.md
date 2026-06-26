@@ -107,7 +107,7 @@ Upload `fleet-edr-<version>.pkg` to your MDM as a software installer and scope t
 The pkg's install flow:
 
 1. `installationCheck()` validates the Mac is Apple Silicon + macOS 13+.
-2. Preinstall script stops any existing `com.fleetdm.edr.agent` LaunchDaemon and deactivates any prior sysext (idempotent; no-op on fresh installs).
+2. Preinstall script stops any existing `com.fleetdm.edr.agent` LaunchDaemon and boots out the activation LaunchAgent (idempotent; no-op on fresh installs). It does not deactivate the system extension: the post-upgrade activation replaces the old bundle in place.
 3. Payload lands under `/usr/local/bin`, `/Applications`, `/Library/LaunchDaemons`, `/Library/LaunchAgents`, `/Library/Application Support/com.fleetdm.edr`.
 4. Postinstall script loads the LaunchDaemon (`launchctl bootstrap system ...`) and kickstarts it. The agent reads `/etc/fleet-edr.conf`, enrolls, starts polling.
 5. Postinstall also starts the activation LaunchAgent (`com.fleetdm.edr.activate`) in the console user's GUI session, which runs the host app's `activate` and brings up the system extensions. Thanks to Step 1's profile this is silent. If nobody is logged in at install time (loginwindow, ADE), activation happens at the next login instead: the LaunchAgent runs at every login, which also re-activates the new bundle after upgrades. Until activation, the agent runs and enrolls but logs `receiver connect` warnings; that's the expected pre-activation state, not a failure.
@@ -159,9 +159,9 @@ fi
 
 The uninstaller removes all binaries, LaunchDaemons, `/var/db/fleet-edr`, and `/var/log/fleet-edr-agent.log`. It preserves `/etc/fleet-edr.conf` so a future reinstall picks up the same enroll config. If you want a truly clean slate, add `rm -f /etc/fleet-edr.conf` to the script above.
 
-The sysext deactivation happens automatically via the uninstaller, which reads the installed app's team ID from its codesign output. This keeps the uninstaller working even if you re-signed the pkg with a different team ID in a fork.
+On a managed Mac the uninstall script cannot remove the system extensions by itself. The extensions were approved by the `com.fleetdm.edr.profile.system-extension` profile (`AllowedSystemExtensions`, `AllowUserOverrides=false`), and macOS refuses any local deactivation of a profile-approved extension (`OSSystemExtensionErrorDomain` `authorizationRequired`). The script detects this, keeps the host app so a later attempt can succeed, and tells you to remove the profile. **Removing the extensions is a two-part teardown:** run the uninstall script (removes the agent, LaunchDaemons, and runtime state, and keeps the host app while the extensions remain active so you can retry) AND remove the Fleet EDR MDM profiles from your MDM's custom-settings scope. When the `com.fleetdm.edr.profile.system-extension` profile leaves the host the extensions are no longer authorized, so the OS removes them (and the TCC grants from the FDA profile) within minutes. Order does not matter; do both.
 
-To also remove the MDM profiles, delete them from your MDM's custom settings scope; the OS tears down the TCC grants + sysext allow-list within minutes.
+For an unmanaged Mac (no profile), the script removes the extensions itself by submitting the host app's `deactivate` request in the logged-in user's GUI session, so leave a user logged in at the console while the run-script action executes.
 
 ## Vendor-specific notes
 

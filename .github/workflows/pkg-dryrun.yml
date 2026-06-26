@@ -175,3 +175,21 @@ jobs:
           grep -F 'launchctl bootstrap "gui/$CONSOLE_UID" "$ACTIVATE_LA"' \
             /tmp/expanded/agent.pkg/Scripts/postinstall && \
             echo OK
+          # spec:release-packaging/uninstall-path-is-deliverable/uninstall-deactivates-both-extensions-via-the-host-app
+          #
+          # The shipped uninstall.sh must deactivate the extensions through the host app in the console
+          # user's GUI session, NOT via `systemextensionsctl deactivate` (no such subcommand; blocked
+          # under SIP), which silently removed nothing and orphaned the extensions. Assert against the
+          # payload the support component actually ships.
+          echo "=== shipped uninstall.sh deactivates via the host app, not systemextensionsctl ==="
+          pkgutil --expand-full dist/fleet-edr-*.pkg /tmp/expanded-full
+          UNINSTALL="/tmp/expanded-full/support.pkg/Payload/Library/Application Support/com.fleetdm.edr/uninstall.sh"
+          test -f "$UNINSTALL"
+          if grep -nE 'systemextensionsctl[[:space:]]+deactivate' "$UNINSTALL"; then
+            echo "FAIL: uninstall.sh still calls the bogus 'systemextensionsctl deactivate'"; exit 1
+          fi
+          # shellcheck disable=SC2016  # literal text to find in the script, not expansions
+          grep -qF 'launchctl asuser' "$UNINSTALL"
+          # shellcheck disable=SC2016  # literal text to find in the script, not expansions
+          grep -qF '"$APP_BIN" deactivate' "$UNINSTALL"
+          echo OK
