@@ -26,8 +26,8 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0001](0001-single-go-module-with-internal.md) | Single Go module with `internal/` for shared code | Accepted |
 | [0002](0002-macos-apple-silicon-mvp-only.md) | MVP ships macOS on Apple Silicon only | Accepted |
 | [0003](0003-standalone-product-not-fleet-integrated.md) | EDR is a standalone product, Fleet is a deployment channel | Accepted |
-| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Implemented |
-| [0005](0005-mysql-only-data-plane.md) | MySQL is the only supported RDBMS for the data plane | Accepted |
+| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Implemented; amendment proposed in [0015](0015-clickhouse-visibility-store.md) (`visibility` context) |
+| [0005](0005-mysql-only-data-plane.md) | MySQL is the only supported RDBMS for the data plane | Accepted; narrowing proposed in [0015](0015-clickhouse-visibility-store.md) |
 | [0006](0006-otel-only-metrics.md) | OpenTelemetry is the only metrics pipeline; no Prometheus /metrics | Accepted |
 | [0007](0007-xpc-peer-validation-libxpc-only.md) | XPC peer validation via libxpc code-signing requirement; no audit_token layer | Accepted |
 | [0008](0008-selective-esf-subscription.md) | Selective Endpoint Security subscription; BTM for persistence, no broad NOTIFY_OPEN | Accepted |
@@ -37,6 +37,7 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0012](0012-capability-based-ui-gating.md) | Capability-based UI gating from a server-provided permission set | Accepted |
 | [0013](0013-service-account-and-api-authentication.md) | Service-account and API authentication: client-credentials with short-lived self-validating tokens | Accepted |
 | [0014](0014-inline-enforcement-failure-semantics.md) | Inline network enforcement: observation fails open, enforcement is explicit and resilient | Proposed |
+| [0015](0015-clickhouse-visibility-store.md) | ClickHouse event store in a new `visibility` bounded context | Proposed |
 
 ## Tooling
 
