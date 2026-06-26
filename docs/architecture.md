@@ -78,7 +78,7 @@ Key files:
 
 ### Network extension (`extension/edr/networkextension/`)
 
-A Swift system extension implementing `NEFilterDataProvider` for network connection monitoring. Captures outbound TCP/UDP socket flows with process attribution via audit tokens: the PID plus the kernel PID generation (`pidversion`), so the server can correlate a flow to the exact process generation by identity rather than a time window, immune to PID reuse (issue #403).
+A Swift system extension implementing `NEFilterDataProvider` for network connection monitoring. Captures outbound TCP/UDP socket flows with process attribution via audit tokens: the PID plus the kernel PID generation (`pidversion`), so the server can correlate a flow to the exact process generation by identity rather than a time window, immune to PID reuse.
 
 Events produced:
 

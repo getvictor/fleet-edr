@@ -234,7 +234,7 @@ Scenarios declared in in-flight change proposals (`openspec/changes/<change>/spe
 
 `tools/spectrace list-ids [--normative-only]` prints every canonical scenario ID so contributors can copy a marker without typing the slug.
 
-`tools/spectrace report --format=md [--output FILE]` (M13 v2, issue #233) renders the Markdown coverage matrix: one row per scenario, one column per layer (L0..L6), each cell linking to every marker that covers the scenario at that layer. An `Other` column appears when at least one row has a non-test enforcement marker (workflow YAML, packaging shell). `report` never gates; it is for humans and PR comments.
+`tools/spectrace report --format=md [--output FILE]` (M13 v2) renders the Markdown coverage matrix: one row per scenario, one column per layer (L0..L6), each cell linking to every marker that covers the scenario at that layer. An `Other` column appears when at least one row has a non-test enforcement marker (workflow YAML, packaging shell). `report` never gates; it is for humans and PR comments.
 
 `check --by-layer` annotates the gap report with the layer coverage profile per scenario; `check --new-code` scopes the gate to scenarios added or modified in the current PR (diff against the merge base, default `origin/main`), matching SonarCloud's "new code" framing.
 

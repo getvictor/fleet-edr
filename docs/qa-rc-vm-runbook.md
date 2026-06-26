@@ -1,6 +1,6 @@
 # RC validation runbook (live edr-qa + dev server)
 
-How to execute the agent/extension RC gate (the [QA: v0.3.0 RC validation](https://github.com/getvictor/fleet-edr/issues/450) style checklist) against the real `edr-qa` VM and a local dev server, including the headless techniques that let it run from an SSH-only / remote dev environment with no GUI access to the VM. This is the hands-on companion to the System / VM (L5) layer in [testing-strategy.md](testing-strategy.md).
+How to execute the agent/extension RC gate (the RC validation checklist) against the real `edr-qa` VM and a local dev server, including the headless techniques that let it run from an SSH-only / remote dev environment with no GUI access to the VM. This is the hands-on companion to the System / VM (L5) layer in [testing-strategy.md](testing-strategy.md).
 
 Use this when an RC is cut and you need to exercise ESF, XPC, the event wire format, and app control end to end on a SIP-on, Gatekeeper-on host. None of the steps below require code changes; they drive the shipped binaries plus the server API.
 
@@ -119,11 +119,11 @@ curl -sk -X POST https://localhost:8088/api/v1/app-control/policies/1/rules -H "
 
 Adding a rule bumps the policy version and fans out a `set_application_control` command. Watch `commander set_application_control ... policy_version=N` in the agent log and `applied app control snapshot: ... version=N ... rules=K` in the extension log to confirm propagation.
 
-### #209 kernel-cached ALLOW + es_clear_cache
+### Kernel-cached ALLOW + es_clear_cache
 
 Exec the notarized binary a few times so the decided ALLOW is pinned into the kernel cache, then push a cdhash block. The next exec must be DENIED: that proves `es_clear_cache` fired on the snapshot swap so the cached ALLOW did not outlive the rule. Delete the rule and confirm it runs again. The cache-hit count itself (handler entered far fewer times than execs) is not observable at a persisted log level because a decided ALLOW is silent; it is covered by the `authResultIsCacheable` unit tests.
 
-### #402 / #322 re-sync after a policy-version regression
+### Re-sync after a policy-version regression
 
 Simulate a server DB restore: force the version down, then add a rule so the next mutation stamps a newer `updated_at` epoch.
 
@@ -134,7 +134,7 @@ docker exec fleet-edr-mysql mysql -uroot -e "UPDATE edr.app_control_policies SET
 
 The extension logs `version regressed (X -> Y) but epoch advanced ...; re-syncing (likely server DB restore)` and applies the regressed snapshot, so the new block takes effect rather than freezing on the stale higher version. Restore the version counter afterward.
 
-## 6. Edge-rejection resilience (#398)
+## 6. Edge-rejection resilience
 
 The agent must keep telemetry queued on a blanket edge rejection (a 4xx the server never emits itself) rather than quarantining it. Front the dev server with a small toggleable TLS reverse proxy that reuses `tmp/dev.crt` (so the existing fingerprint pin still matches) and returns 403 only on `POST /api/events` while forwarding enroll and commands. Point the agent at the proxy (this needs a fresh enroll, since the token is bound to the URL), then:
 
@@ -148,8 +148,8 @@ The agent only exports its own metrics if `OTEL_*` is set in its LaunchDaemon pl
 
 For wire-format and ingest behavior that does not depend on a specific extension build, enroll a synthetic host and POST crafted events (plain JSON, no gzip, `Authorization: Bearer <host_token>` from `POST /api/enroll`; `hardware_uuid` must be a real UUID). Examples:
 
-- #408 heartbeat drop: send a batch with an exec plus a `snapshot_heartbeat`; the heartbeat is accepted but not persisted as a row, `edr.ingest.heartbeats_dropped` climbs, and a snapshot exec (`"snapshot": true`) seeds `last_seen_ns`.
-- #403 / #425 / #414: send exec and network_connect carrying `pidversion`; confirm the process row stores `pidversion` and the flow resolves to the process by pid plus pidversion.
+- Heartbeat drop: send a batch with an exec plus a `snapshot_heartbeat`; the heartbeat is accepted but not persisted as a row, `edr.ingest.heartbeats_dropped` climbs, and a snapshot exec (`"snapshot": true`) seeds `last_seen_ns`.
+- Pidversion resolution: send exec and network_connect carrying `pidversion`; confirm the process row stores `pidversion` and the flow resolves to the process by pid plus pidversion.
 
 Clean up the synthetic host rows when done.
 

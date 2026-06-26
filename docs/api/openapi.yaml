@@ -41,8 +41,8 @@ tags:
     description: Enrollment + policy management (UI, admin-only)
   - name: Detection tuning
     description: |
-      Detection-rule tuning the engine consults at evaluation time
-      (issue #459): per-host false-positive exclusions and per-rule
+      Detection-rule tuning the engine consults at evaluation time:
+      per-host false-positive exclusions and per-rule
       mode/severity. Reads require `detection_config.read` (admin +
       senior analyst); writes require `detection_config.write` (admin).
       Every mutation records an audit row carrying the actor + reason.

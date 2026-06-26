@@ -43,7 +43,7 @@ Go through these candidate decision domains and ask: is there an ADR for it? If 
 | Co-Authored-By trailers policy                             | not yet   | possibly (it's in MEMORY/CLAUDE.md only) |
 | AI-tooling-as-code (CLAUDE.md, skills, commands committed) | not yet   | possibly                                 |
 | MySQL-only data plane (no PostgreSQL)                      | ADR-0005  | yes                                      |
-| In-product auto-update: MDM-only by design                 | not yet   | yes (issue #145; best-practices.md §11)  |
+| In-product auto-update: MDM-only by design                 | not yet   | yes (best-practices.md §11)              |
 
 For each gap that's worth recording, file an issue tagged `adr` describing the decision, the constraints behind it, and the alternatives. Don't write the ADR during this audit unless it's trivial: it's a separate piece of writing that benefits from a focused session.
 

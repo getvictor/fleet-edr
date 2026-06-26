@@ -105,7 +105,7 @@ Path strings and other dynamic values show as `<private>` in log output. Use `.p
 
 ### Ad-hoc-signed host extension causes ESF to redact team_id + force is_platform_binary
 
-When the ESF host extension itself is not Developer-ID-signed + notarized, ESF applies a per-client redaction: `target.team_id` returns `""` and `target.is_platform_binary` returns `true` for **every** exec the client sees, including unambiguously third-party Developer ID-signed binaries (issue #187 quantified 393/393 exec events redacted on edr-dev). It is NOT a per-binary `CS_PLATFORM_BINARY` classification. The dev VM extension is ad-hoc-signed (`codesign -d` reports `adhoc, linker-signed`), which trips the redaction.
+When the ESF host extension itself is not Developer-ID-signed + notarized, ESF applies a per-client redaction: `target.team_id` returns `""` and `target.is_platform_binary` returns `true` for **every** exec the client sees, including unambiguously third-party Developer ID-signed binaries (393/393 exec events redacted on edr-dev). It is NOT a per-binary `CS_PLATFORM_BINARY` classification. The dev VM extension is ad-hoc-signed (`codesign -d` reports `adhoc, linker-signed`), which trips the redaction.
 
 Effect on app-control rules:
 
