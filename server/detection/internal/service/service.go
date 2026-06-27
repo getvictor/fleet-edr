@@ -83,6 +83,11 @@ func (s *Service) GetAlert(ctx context.Context, id int64) (api.Alert, []string, 
 	return alert, eventIDs, nil
 }
 
+// GetAlertEvidence returns the self-contained triggering-event envelopes captured for an alert at creation time (ADR-0015).
+func (s *Service) GetAlertEvidence(ctx context.Context, id int64) ([]api.Event, error) {
+	return s.store.GetAlertEventPayloads(ctx, id)
+}
+
 // UpdateAlertStatus enforces the lifecycle matrix and validates
 // updated_by via the UserExists closure (the FK-replacement check).
 //

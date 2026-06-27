@@ -28,7 +28,16 @@ type fakeService struct {
 	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error)
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
 	getAlert          func(ctx context.Context, id int64) (api.Alert, []string, error)
+	getAlertEvidence  func(ctx context.Context, id int64) ([]api.Event, error)
 	updateAlertStatus func(ctx context.Context, id int64, status api.AlertStatus, userID int64) (api.Alert, error)
+}
+
+// GetAlertEvidence returns nil (no payloads) when unset, so existing GetAlert handler tests keep passing without wiring evidence.
+func (f fakeService) GetAlertEvidence(ctx context.Context, id int64) ([]api.Event, error) {
+	if f.getAlertEvidence == nil {
+		return nil, nil
+	}
+	return f.getAlertEvidence(ctx, id)
 }
 
 func (f fakeService) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
@@ -386,6 +395,46 @@ func TestHandleGetAlert(t *testing.T) {
 		ids, ok := parsed["event_ids"].([]any)
 		require.True(t, ok, "event_ids MUST be a JSON array")
 		assert.Len(t, ids, 2)
+	})
+
+	// spec:server-detection-rules-engine/alert-evidence-is-self-contained/evidence-survives-event-archive-expiry
+	t.Run("happy path includes self-contained event payloads", func(t *testing.T) {
+		t.Parallel()
+		svc := fakeService{
+			getAlert: func(context.Context, int64) (api.Alert, []string, error) {
+				return api.Alert{HostID: "host-a", RuleID: "r"}, []string{"evt-1"}, nil
+			},
+			getAlertEvidence: func(context.Context, int64) ([]api.Event, error) {
+				return []api.Event{{EventID: "evt-1", HostID: "host-a", EventType: "network_connect", Payload: json.RawMessage(`{"pid":9}`)}}, nil
+			},
+		}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/alerts/42")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var parsed map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&parsed))
+		events, ok := parsed["events"].([]any)
+		require.True(t, ok, "events MUST be a JSON array")
+		require.Len(t, events, 1)
+		assert.Equal(t, "network_connect", events[0].(map[string]any)["event_type"])
+	})
+
+	t.Run("evidence read error returns 500", func(t *testing.T) {
+		t.Parallel()
+		svc := fakeService{
+			getAlert: func(context.Context, int64) (api.Alert, []string, error) {
+				return api.Alert{HostID: "host-a", RuleID: "r"}, []string{"evt-1"}, nil
+			},
+			getAlertEvidence: func(context.Context, int64) ([]api.Event, error) {
+				return nil, errors.New("evidence read failed")
+			},
+		}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/alerts/42")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+		assert.Equal(t, errInternal, readErrorEnvelope(t, resp))
 	})
 }
 

@@ -50,11 +50,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, status 
 	httpserver.NoStoreJSON(ctx, h.logger, w, status, map[string]string{"error": code})
 }
 
-// alertDetailResponse extends Alert with linked event IDs for the
-// detail endpoint.
+// alertDetailResponse extends Alert with the linked event IDs and the self-contained triggering-event payloads (ADR-0015) for the
+// detail endpoint. Events is best-effort evidence that survives event-store retention; EventIDs is the full correlated set.
 type alertDetailResponse struct {
 	api.Alert
-	EventIDs []string `json:"event_ids"`
+	EventIDs []string    `json:"event_ids"`
+	Events   []api.Event `json:"events"`
 }
 
 // Handler serves the operator-facing detection routes.
@@ -226,7 +227,16 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	if eventIDs == nil {
 		eventIDs = []string{}
 	}
-	h.writeJSON(w, r, alertDetailResponse{Alert: alert, EventIDs: eventIDs})
+	events, err := h.svc.GetAlertEvidence(ctx, id)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "get alert evidence", "id", id, "err", err)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
+		return
+	}
+	if events == nil {
+		events = []api.Event{}
+	}
+	h.writeJSON(w, r, alertDetailResponse{Alert: alert, EventIDs: eventIDs, Events: events})
 }
 
 func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request) {

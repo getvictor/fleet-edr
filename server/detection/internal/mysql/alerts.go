@@ -79,6 +79,9 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if err := bulkInsertAlertEvents(ctx, tx, alertID, eventIDs, false /* not dedup */); err != nil {
 		return 0, false, err
 	}
+	if err := copyEventPayloads(ctx, tx, alertID, eventIDs); err != nil {
+		return 0, false, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, false, fmt.Errorf("commit insert alert: %w", err)
@@ -143,10 +146,52 @@ func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a 
 	if err := bulkInsertAlertEvents(ctx, tx, existingID, eventIDs, true /* dedup */); err != nil {
 		return 0, err
 	}
+	if err := copyEventPayloads(ctx, tx, existingID, eventIDs); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit duplicate alert lookup: %w", err)
 	}
 	return existingID, nil
+}
+
+// copyEventPayloads makes the alert's evidence self-contained: it reads the full envelopes of the triggering events from the event
+// store and copies them into alert_event_payloads, so the alert detail view resolves them even after the raw events age out (ADR-0015).
+// INSERT IGNORE keeps it idempotent across the dedup re-link path. An event_id with no matching row (already aged out) is skipped
+// rather than failing the alert. Runs inside the alert-insert transaction. The cutover repoints the source read from the MySQL events
+// table to the ClickHouse archive.
+func copyEventPayloads(ctx context.Context, tx *sqlx.Tx, alertID int64, eventIDs []string) error {
+	for start := 0; start < len(eventIDs); start += alertEventsBatchSize {
+		end := min(start+alertEventsBatchSize, len(eventIDs))
+		chunk := eventIDs[start:end]
+
+		selectQuery, selectArgs, err := sqlx.In(
+			"SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload FROM events WHERE event_id IN (?)", chunk)
+		if err != nil {
+			return fmt.Errorf("build event-payload select for alert %d: %w", alertID, err)
+		}
+		var events []api.Event
+		if err := tx.SelectContext(ctx, &events, selectQuery, selectArgs...); err != nil {
+			return fmt.Errorf("select event payloads for alert %d: %w", alertID, err)
+		}
+		if len(events) == 0 {
+			continue
+		}
+
+		placeholders := make([]string, len(events))
+		args := make([]any, 0, len(events)*7)
+		for i := range events {
+			placeholders[i] = "(?, ?, ?, ?, ?, ?, ?)"
+			args = append(args, alertID, events[i].EventID, events[i].HostID, events[i].TimestampNs,
+				events[i].IngestedAtNs, events[i].EventType, []byte(events[i].Payload))
+		}
+		stmt := "INSERT IGNORE INTO alert_event_payloads (alert_id, event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES " +
+			strings.Join(placeholders, ", ")
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+			return fmt.Errorf("copy event payloads for alert %d: %w", alertID, err)
+		}
+	}
+	return nil
 }
 
 // ListAlerts returns alerts matching the given filter, ordered by
@@ -218,6 +263,20 @@ func (s *Store) GetAlertEventIDs(ctx context.Context, alertID int64) ([]string, 
 		return nil, fmt.Errorf("get alert event ids %d: %w", alertID, err)
 	}
 	return eventIDs, nil
+}
+
+// GetAlertEventPayloads returns the self-contained triggering-event envelopes captured for an alert (ADR-0015), independent of the
+// event store's retention. Alerts created before this capture landed (or whose events were not in the store at creation) return
+// fewer rows than GetAlertEventIDs; callers treat the payloads as best-effort evidence and still have the full event-id list.
+func (s *Store) GetAlertEventPayloads(ctx context.Context, alertID int64) ([]api.Event, error) {
+	var events []api.Event
+	err := s.db.SelectContext(ctx, &events,
+		`SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
+		 FROM alert_event_payloads WHERE alert_id = ? ORDER BY timestamp_ns, event_id`, alertID)
+	if err != nil {
+		return nil, fmt.Errorf("get alert event payloads %d: %w", alertID, err)
+	}
+	return events, nil
 }
 
 // UpdateAlertStatus changes the status of an alert. If the new
