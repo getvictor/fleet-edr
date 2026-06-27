@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	// insertMaxAttempts / insertBackoffStep bound the deadlock-retry loop. Concurrent multi-replica appends to event_queue can deadlock
-	// on secondary-index gap locks under INSERT IGNORE (MySQL 1213); a few linear-backoff retries clear it.
-	insertMaxAttempts = 5
-	insertBackoffStep = 5 * time.Millisecond
+	// deadlockMaxAttempts / deadlockBackoffStep bound the deadlock-retry loop shared by the append and prune paths. Concurrent
+	// multi-replica writes to event_queue can deadlock on secondary-index gap locks (MySQL 1213) under INSERT IGNORE or a batched
+	// DELETE; a few linear-backoff retries clear it.
+	deadlockMaxAttempts = 5
+	deadlockBackoffStep = 5 * time.Millisecond
 
 	// appendChunkRows caps a single multi-row INSERT at 500 events (6 placeholders each, well under MySQL's 65535-placeholder and
 	// 4 MB max_allowed_packet ceilings).
@@ -59,7 +60,7 @@ func (s *Store) Append(ctx context.Context, events []api.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	return sqlhelpers.WithDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
+	return sqlhelpers.WithDeadlockRetry(ctx, deadlockMaxAttempts, deadlockBackoffStep, func() error {
 		return s.appendOnce(ctx, events)
 	})
 }
@@ -140,7 +141,7 @@ func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
 	return events, nil
 }
 
-// Ack marks claimed events fully processed (-> 1); they will not be claimed again. A separate retention sweep removes acknowledged
+// Ack marks claimed events fully processed (-> 1); they will not be claimed again. A separate PruneProcessed sweep removes acknowledged
 // rows so the queue stays small (the archive holds the retained history).
 func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
 	if len(eventIDs) == 0 {
@@ -198,7 +199,7 @@ func (s *Store) PruneProcessed(ctx context.Context, batchSize int) (int64, error
 	var total int64
 	for {
 		var affected int64
-		if err := sqlhelpers.WithDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
+		if err := sqlhelpers.WithDeadlockRetry(ctx, deadlockMaxAttempts, deadlockBackoffStep, func() error {
 			res, err := s.db.ExecContext(ctx,
 				"DELETE FROM event_queue WHERE processed = 1 ORDER BY host_id, timestamp_ns LIMIT ?", batchSize)
 			if err != nil {

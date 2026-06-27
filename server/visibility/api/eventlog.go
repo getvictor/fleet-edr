@@ -22,8 +22,9 @@ type EventLog interface {
 	// concurrent claimers. The claimed events are hidden from other claimers until Ack or Nack.
 	Claim(ctx context.Context, limit int) ([]Event, error)
 
-	// Ack marks the claimed events (identified by EventID) fully processed; they leave the queue. Acknowledgment needs only identity,
-	// so it takes IDs rather than whole events: the caller need not retain the (potentially large) payloads until ack.
+	// Ack marks the claimed events (identified by EventID) fully processed: they are excluded from future claims but stay in the queue
+	// until PruneProcessed removes them, so Ack is a cheap index update off the delete path. Acknowledgment needs only identity, so it
+	// takes IDs rather than whole events: the caller need not retain the (potentially large) payloads until ack.
 	Ack(ctx context.Context, eventIDs []string) error
 
 	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later Claim (retry after a
@@ -33,9 +34,10 @@ type EventLog interface {
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)
 
-	// PruneProcessed removes fully-processed (acked) events from the queue in batches of at most batchSize, returning the total
-	// removed. It is the sweep that keeps the queue to its in-flight working set (the archive holds the durable history); a high-volume
-	// deployment runs it on a cadence off the hot path rather than deleting on each Ack. Removing only acked events never affects a
-	// not-yet-processed or in-flight claim.
+	// PruneProcessed removes fully-processed (acked) events from the queue in batches of at most batchSize (a non-positive batchSize
+	// uses the implementation's default), returning the total removed. The count is meaningful even when err != nil: a sweep that fails
+	// mid-run still removed the returned rows. It is the sweep that keeps the queue to its in-flight working set (the archive holds the
+	// durable history); a high-volume deployment runs it on a cadence off the hot path rather than deleting on each Ack. Removing only
+	// acked events never affects a not-yet-processed or in-flight claim.
 	PruneProcessed(ctx context.Context, batchSize int) (int64, error)
 }

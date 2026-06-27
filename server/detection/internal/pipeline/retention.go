@@ -99,21 +99,7 @@ func (r *RetentionRunner) Loop(ctx context.Context) {
 		r.logger.InfoContext(ctx, "retention disabled", attrRetentionDays, 0)
 		return
 	}
-	t := time.NewTicker(r.interval)
-	defer t.Stop()
-	if _, err := r.Run(ctx); err != nil {
-		r.logger.WarnContext(ctx, "retention initial run failed", "err", err)
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if _, err := r.Run(ctx); err != nil {
-				r.logger.WarnContext(ctx, "retention run failed", "err", err)
-			}
-		}
-	}
+	runPeriodic(ctx, r.interval, r.logger, "retention", r.Run)
 }
 
 // Run executes one retention pass and returns the number of process records pruned. Event retention is ClickHouse-native TTL now

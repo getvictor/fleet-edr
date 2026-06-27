@@ -31,7 +31,8 @@ type QueuePruneOptions struct {
 	// Interval between sweeps. Default 1 minute: frequent enough to keep the queue small at a high ingest rate, cheap because the
 	// DELETE is index-driven (the claim index leads with processed) and a no-op when nothing is acked.
 	Interval time.Duration
-	// BatchSize is the per-statement DELETE cap. Default 10_000, matching the process-retention sweep.
+	// BatchSize is the per-statement DELETE cap. Zero lets the EventLog apply its own default, keeping that default in one place
+	// (eventlog.Store owns it) rather than restating it here where the two could drift.
 	BatchSize int
 	Logger    *slog.Logger
 	Metrics   api.MetricsRecorder
@@ -41,9 +42,6 @@ type QueuePruneOptions struct {
 func NewQueuePrune(eventLog visibilityapi.EventLog, opts QueuePruneOptions) *QueuePruneRunner {
 	if opts.Interval <= 0 {
 		opts.Interval = time.Minute
-	}
-	if opts.BatchSize <= 0 {
-		opts.BatchSize = 10_000
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
@@ -63,28 +61,14 @@ func (r *QueuePruneRunner) SetMetrics(m api.MetricsRecorder) { r.metrics = m }
 // Loop runs a sweep immediately and then every interval until ctx is cancelled. A failed sweep logs and is retried on the next tick;
 // nothing is lost because the rows stay acked (processed = 1) until a later sweep removes them.
 func (r *QueuePruneRunner) Loop(ctx context.Context) {
-	t := time.NewTicker(r.interval)
-	defer t.Stop()
-	if _, err := r.Run(ctx); err != nil {
-		r.logger.WarnContext(ctx, "queue-prune initial run failed", "err", err)
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if _, err := r.Run(ctx); err != nil {
-				r.logger.WarnContext(ctx, "queue-prune run failed", "err", err)
-			}
-		}
-	}
+	runPeriodic(ctx, r.interval, r.logger, "queue-prune", r.Run)
 }
 
 // Run executes one sweep and returns the number of rows pruned. PruneProcessed batches the DELETEs internally; this records the total.
 func (r *QueuePruneRunner) Run(ctx context.Context) (int64, error) {
 	pruned, err := r.eventLog.PruneProcessed(ctx, r.batchSize)
 	// Record what was removed before checking the error: a mid-batch failure still removed `pruned` rows, and reporting them keeps the
-	// gauge honest (the same emit-then-check discipline the retention sweep uses).
+	// rows_pruned counter honest (the same emit-then-check discipline the retention sweep uses).
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Int64("edr.event_queue.rows_pruned", pruned))
 	if r.metrics != nil {
 		r.metrics.QueueRowsPruned(ctx, pruned)
