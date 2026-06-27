@@ -115,6 +115,7 @@ dependenciesRules:
         - "**.visibility.api.**"
         - "**.visibility.internal.**"
         - "**.visibility.testkit"
+        - "**.httpserver"          # TimeRange on the EventArchive correlation read
         - "**.sqlhelpers"
         - "**.testdb"
 

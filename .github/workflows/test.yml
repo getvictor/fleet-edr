@@ -168,6 +168,8 @@ jobs:
       contents: read
     env:
       EDR_TEST_DSN: "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
+      # Visibility event-archive integration tests (server/visibility/internal/tests) connect here; unset would skip them.
+      EDR_CLICKHOUSE_TEST_DSN: "clickhouse://default:@127.0.0.1:9000/edr_test"
     # Service container avoids the 45s brew-install MySQL dance the macos
     # runner used to pay. The image starts in parallel with checkout/setup-go
     # and is health-checked before the first step runs. Empty root password
@@ -185,6 +187,22 @@ jobs:
           --health-interval=5s
           --health-timeout=3s
           --health-retries=10
+      # ClickHouse event archive (ADR-0015). Native protocol on 9000 is what clickhouse-go uses; the per-test DB the archive test
+      # creates needs CREATE DATABASE, which the default user has. Mirrors the docker-compose clickhouse_test service.
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+        env:
+          CLICKHOUSE_DB: edr_test
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 9000:9000
+          - 8123:8123
+        options: >-
+          --health-cmd="clickhouse-client --query 'SELECT 1'"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+          --ulimit nofile=262144:262144
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

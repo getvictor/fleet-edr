@@ -17,3 +17,8 @@ func TestApplySchema_NilDB(t *testing.T) {
 	t.Parallel()
 	require.Error(t, ApplySchema(context.Background(), nil))
 }
+
+func TestApplyClickHouseSchema_NilDB(t *testing.T) {
+	t.Parallel()
+	require.Error(t, ApplyClickHouseSchema(context.Background(), nil))
+}

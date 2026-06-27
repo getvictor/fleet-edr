@@ -56,11 +56,12 @@ func DefaultOIDCScopes() []string { return []string{"openid", "email", "profile"
 
 // Config is the resolved server configuration.
 type Config struct {
-	DSN          string
-	ListenAddr   string
-	EnrollSecret string
-	TLSCertFile  string
-	TLSKeyFile   string
+	DSN           string
+	ClickHouseDSN string
+	ListenAddr    string
+	EnrollSecret  string
+	TLSCertFile   string
+	TLSKeyFile    string
 	// TLSTerminatedByProxy lets the server listen plaintext HTTP when a TLS-terminating proxy (a PaaS edge, an ALB, nginx, or
 	// Cloudflare) sits in front. It is the gated exception to the mandatory-TLS default (issue #140): the default still refuses
 	// to boot without certs, but an operator who sets EDR_TLS_TERMINATED_BY_PROXY=1 asserts that something in front terminates
@@ -234,6 +235,9 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	// docker-secret mounts). go-sql-driver does not URL-decode the DSN, so a password containing DSN metacharacters (@, :, /, ?)
 	// is not supported in the raw DSN string and must be avoided.
 	optionalStr(&c.DSN, "EDR_DSN", getenv)
+	// EDR_CLICKHOUSE_DSN points the visibility event archive at ClickHouse (clickhouse-go DSN form). Optional: the archive is wired in
+	// at the cutover, so an unset value leaves the server on the MySQL-only path (use EDR_CLICKHOUSE_DSN_FILE for docker-secret mounts).
+	optionalStr(&c.ClickHouseDSN, "EDR_CLICKHOUSE_DSN", getenv)
 	if c.DSN == "" {
 		*errs = append(*errs, errors.New("EDR_DSN is required (use EDR_DSN_FILE for docker-secret mounts)"))
 	}

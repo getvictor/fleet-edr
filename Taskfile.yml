@@ -157,6 +157,7 @@ tasks:
       truncate tables. CI sets its own DSN.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
+      EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
     cmds:
       - go test -race -count=1 -timeout=10m ./server/... ./agent/... ./internal/...
 
@@ -215,6 +216,7 @@ tasks:
       those use test:go:server:integration.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
+      EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
     cmds:
       - go test -race -count=1 -timeout=10m ./server/... ./internal/...
 
@@ -225,6 +227,7 @@ tasks:
       test/integration/). Requires a real MySQL via $EDR_TEST_DSN.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
+      EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
     cmds:
       - go test -race -count=1 -timeout=10m -tags=integration ./server/... ./internal/... ./test/integration/...
 
@@ -249,6 +252,7 @@ tasks:
       under the recursive ./test/integration/... glob on the ubuntu runner.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
+      EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
       CGO_ENABLED: 0
     cmds:
       - go test -count=1 -timeout=5m -tags=integration ./test/integration/agentserver/...
@@ -270,6 +274,7 @@ tasks:
       for local iteration.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
+      EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
       CGO_ENABLED: 0
     cmds:
       - go test -count=1 -timeout=5m -tags=integration ./test/efficacy/...
@@ -338,6 +343,7 @@ tasks:
       service.go files (which the integration tests exercise) would report 0%.
     env:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
+      EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
     cmds:
       # -coverpkg=./server/...,./internal/... attributes coverage from one
       # package's tests back to symbols in any other package they exercise.
@@ -723,9 +729,9 @@ tasks:
   # -------- database --------
 
   db:up:
-    desc: Start local MySQL (dev + test) via docker-compose
+    desc: Start local MySQL + ClickHouse (dev + test) via docker-compose
     cmds:
-      - docker compose up -d mysql mysql_test
+      - docker compose up -d mysql mysql_test clickhouse clickhouse_test
 
   db:down:
     desc: Stop local MySQL

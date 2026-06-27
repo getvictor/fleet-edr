@@ -50,5 +50,49 @@ services:
       timeout: 5s
       retries: 10
 
+  # ClickHouse event archive (ADR-0015). Two services mirror the MySQL split: clickhouse (dev, :19000 native / :18123 HTTP, persisted)
+  # and clickhouse_test (test, :19001 / :18124, disposable). Native protocol (9000) is what clickhouse-go uses; HTTP (8123) is for
+  # clickhouse-client / curl. DEFAULT_ACCESS_MANAGEMENT lets the default user CREATE DATABASE (the test helper makes a DB per test).
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    container_name: fleet-edr-clickhouse
+    environment:
+      CLICKHOUSE_DB: edr
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:18123:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - edr-clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clickhouse_test:
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    container_name: fleet-edr-clickhouse_test
+    environment:
+      CLICKHOUSE_DB: edr_test
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:19001:9000"
+      - "127.0.0.1:18124:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   edr-mysql-data:
+  edr-clickhouse-data:
