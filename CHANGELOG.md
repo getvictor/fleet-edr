@@ -4,9 +4,17 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [0.4.0] (unreleased)
 
+### Upgrade notes (action required)
+
+- **The event store is now ClickHouse.** The server stores raw events in a ClickHouse archive (durable history + per-process correlation) and a small MySQL work queue (the processing backlog), instead of a single MySQL `events` table. `EDR_CLICKHOUSE_DSN` (or `EDR_CLICKHOUSE_DSN_FILE`) is now **required**: the server and the standalone ingest service refuse to start without it. Stand up a ClickHouse instance alongside MySQL and point both binaries at it. This is a hard cutover with no data migration: pre-upgrade event history is not carried over (alerts and their self-contained evidence are preserved). MySQL still holds the control plane (process graph, alerts, hosts, settings).
+
 ### Added
 
 - **Self-contained alert evidence.** An alert now captures the full envelopes of its triggering events at creation time, so the evidence stays readable even after the underlying events age out of retention. The alert-detail API response gains an `events` array alongside `event_ids` (see `docs/api/openapi.yaml`).
+
+### Changed
+
+- **Events move to a ClickHouse archive + a MySQL work queue.** Ingestion durably writes each accepted event to the ClickHouse archive and enqueues it on the MySQL queue, returning success only after both; the detection processor claims from the queue. Per-process network/DNS correlation and alert evidence read the archive. Event retention is now ClickHouse-native time-based expiry rather than a periodic MySQL delete (process-record pruning is unchanged).
 
 ## [0.3.0] (2026-06-26)
 

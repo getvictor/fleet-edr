@@ -676,6 +676,8 @@ tasks:
     deps: [dev:certs]
     env:
       EDR_DSN: "root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
+      # ClickHouse event store (ADR-0015), required to boot: the dev clickhouse service on native port 19000 (see docker-compose.yml).
+      EDR_CLICKHOUSE_DSN: '{{.EDR_CLICKHOUSE_DSN | default "clickhouse://default:@127.0.0.1:19000/edr"}}'
       EDR_ENROLL_SECRET: dev-enroll-secret
       EDR_TLS_CERT_FILE: tmp/dev.crt
       EDR_TLS_KEY_FILE: tmp/dev.key
@@ -873,6 +875,8 @@ tasks:
     deps: [dev:certs]
     env:
       EDR_DSN: "root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
+      # ClickHouse event store (ADR-0015), required to boot: the dev clickhouse service on native port 19000 (see docker-compose.yml).
+      EDR_CLICKHOUSE_DSN: '{{.EDR_CLICKHOUSE_DSN | default "clickhouse://default:@127.0.0.1:19000/edr"}}'
       EDR_ENROLL_SECRET: dev-enroll-secret
       EDR_TLS_CERT_FILE: tmp/dev.crt
       EDR_TLS_KEY_FILE: tmp/dev.key
