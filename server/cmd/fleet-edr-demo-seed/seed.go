@@ -47,8 +47,11 @@ const (
 // seeder drives the demo seed end to end: wait for readiness, replay the curated corpus, fabricate the app-control block, verify the
 // processor materialised everything, and optionally provision the SSO demo user.
 type seeder struct {
-	cfg    config
-	db     dbExecQuerier
+	cfg config
+	db  dbExecQuerier
+	// chDB is the optional ClickHouse event-archive connection (ADR-0015). Only the restart timestamp-slide uses it; nil when
+	// EDR_CLICKHOUSE_DSN is unset (the seeder still enrolls, replays, and verifies against MySQL + the HTTP API).
+	chDB   *sql.DB
 	client *http.Client
 	logger *slog.Logger
 }
@@ -291,16 +294,17 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 	// deliberately excluded because the process-TTL reconciler (pipeline.ProcessTTLRunner) force-exits long-running processes at
 	// fork + maxAge, so a stale demo's synthesized exit_time_ns sits ~maxAge PAST the real tail. Anchoring on it would shrink the
 	// delta by maxAge and leave every fork that-much stale, which is exactly the empty-1h-window symptom this guards against.
+	// Anchor on the process graph's device-clock tail. Events live in the ClickHouse archive now (ADR-0015), not a MySQL table, but
+	// the process rows are materialized from those events: fork_time_ns tracks the event timestamp tail and fork_ingested_at_ns the
+	// server ingest-stamp tail, so the processes columns carry the same anchor the events MAX used to provide.
 	newestQuery := `
 		SELECT GREATEST(
-			COALESCE((SELECT MAX(timestamp_ns) FROM events WHERE ` + inClause + `), 0),
-			COALESCE((SELECT MAX(ingested_at_ns) FROM events WHERE ` + inClause + `), 0),
 			COALESCE((SELECT MAX(fork_time_ns) FROM processes WHERE ` + inClause + `), 0),
 			COALESCE((SELECT MAX(fork_ingested_at_ns) FROM processes WHERE ` + inClause + `), 0),
 			COALESCE((SELECT MAX(exec_time_ns) FROM processes WHERE ` + inClause + `), 0)
 		)`
-	anchorArgs := make([]any, 0, len(hostArgs)*5) // newestQuery references inClause five times
-	for range 5 {
+	anchorArgs := make([]any, 0, len(hostArgs)*3) // newestQuery references inClause three times
+	for range 3 {
 		anchorArgs = append(anchorArgs, hostArgs...)
 	}
 	if err := s.db.QueryRowContext(ctx, newestQuery, anchorArgs...).Scan(&newestNs); err != nil {
@@ -330,8 +334,6 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 		query string
 		args  []any
 	}{
-		{`UPDATE events SET timestamp_ns = timestamp_ns + ?, ingested_at_ns = ingested_at_ns + ? WHERE ` + inClause,
-			append([]any{deltaNs, deltaNs}, hostArgs...)},
 		{`UPDATE processes SET fork_time_ns = fork_time_ns + ?, fork_ingested_at_ns = fork_ingested_at_ns + ?,
 			exec_time_ns = exec_time_ns + ?, exit_time_ns = exit_time_ns + ?, exit_ingested_at_ns = exit_ingested_at_ns + ?,
 			last_seen_ns = last_seen_ns + ? WHERE ` + inClause,
@@ -355,6 +357,22 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit timestamp refresh: %w", err)
 	}
+
+	// Slide the archived events by the same delta so per-process network/DNS correlation stays aligned with the shifted process graph
+	// (the correlation read windows on ingested_at_ns). ClickHouse has no transactional UPDATE: ALTER ... UPDATE is a mutation, and
+	// mutations_sync = 1 makes the seeder wait for it to finish so a follow-up demo read sees the shift. The demo dataset is tiny, so
+	// the mutation completes quickly. Skipped when no archive connection was configured (the MySQL-only / released-image path).
+	if s.chDB != nil {
+		chPrefix := "ALTER TABLE events UPDATE timestamp_ns = timestamp_ns + ?, ingested_at_ns = ingested_at_ns + ? WHERE "
+		// inClause is a generated "?,?,..." placeholder list, never user input, and the host ids bind as ? args; same shape as the
+		// MySQL UPDATEs above (gosec does not flag those only because they pass through the updates slice).
+		chQuery := chPrefix + inClause + " SETTINGS mutations_sync = 1" //nolint:gosec // G202: placeholder concat, args bound as ?
+		chArgs := append([]any{deltaNs, deltaNs}, hostArgs...)
+		if _, err := s.chDB.ExecContext(ctx, chQuery, chArgs...); err != nil {
+			return fmt.Errorf("slide demo event timestamps in clickhouse: %w", err)
+		}
+	}
+
 	s.logger.InfoContext(ctx, "refreshed demo timestamps to recent", "delta_ns", deltaNs)
 	return nil
 }
