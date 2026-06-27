@@ -187,6 +187,8 @@ dependenciesRules:
         - "**.detection.bootstrap"
         - "**.detection.internal.**"
         - "**.rules.api"              # Replay runs rulesapi.Rule against fixtures
+        - "**.visibility.api"         # ADR-0015: the detection store now requires an EventArchive (correlation + evidence reads)
+        - "**.visibility.testkit"     # MemArchive: the in-memory EventArchive the fixtures seed instead of the dropped MySQL events table
         - "**.attrkeys"
         - "**.httpserver"
         - "**.sqlhelpers"
@@ -209,6 +211,7 @@ dependenciesRules:
         - "**.visibility.api.**"
         - "**.visibility.bootstrap"
         - "**.visibility.internal.**"
+        - "**.httpserver"          # MemArchive mirrors the EventArchive correlation read (TimeRange)
         - "**.testdb"
 
   # ----- api/ packages: pure-types, no cross-context internals ----------------

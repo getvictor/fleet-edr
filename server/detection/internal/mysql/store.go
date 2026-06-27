@@ -2,34 +2,34 @@ package mysql
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
-	"time"
 
 	"github.com/jmoiron/sqlx"
 
-	"github.com/fleetdm/edr/server/detection/api"
-	"github.com/fleetdm/edr/server/sqlhelpers"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // Store is the persistence handle for the detection bounded context. Holds the shared *sqlx.DB pool that cmd/main opens once via
-// server/bootstrap.OpenDB and shares across every context.
+// server/bootstrap.OpenDB and shares across every context, plus the visibility EventArchive the detection read paths delegate event
+// lookups to (ADR-0015): per-process network correlation and self-contained alert evidence both read the durable archive, not MySQL.
 type Store struct {
-	db *sqlx.DB
+	db      *sqlx.DB
+	archive visibilityapi.EventArchive
 }
 
-// New returns a Store wrapping the provided db handle. Schema is
-// applied separately via detection/bootstrap.ApplySchema; New just
-// hands back the read/write surface.
+// New returns a Store wrapping the provided db handle and event archive. Schema is applied separately via detection/bootstrap.ApplySchema;
+// New just hands back the read/write surface. archive is required: post-cutover the detection store has no MySQL events table to read, so
+// correlation and evidence reads delegate to it. Tests pass an in-memory archive (visibility/testkit.MemArchive).
 //
 // Closing the db handle is cmd/main's responsibility, not Store's.
-func New(db *sqlx.DB) (*Store, error) {
+func New(db *sqlx.DB, archive visibilityapi.EventArchive) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("detection mysql.New: db handle must not be nil")
 	}
-	return &Store{db: db}, nil
+	if archive == nil {
+		return nil, errors.New("detection mysql.New: event archive must not be nil")
+	}
+	return &Store{db: db, archive: archive}, nil
 }
 
 // DB returns the underlying *sqlx.DB. Used by integration tests that
@@ -45,270 +45,3 @@ func (s *Store) PingContext(ctx context.Context) error {
 // Close is a no-op. The db handle is shared across bounded contexts and owned by cmd/main; closing it here would yank the pool out
 // from under sibling contexts.
 func (s *Store) Close() error { return nil }
-
-// InsertEvents upserts a batch of events. Duplicates (by event_id) are ignored. Each row is stamped with a server-controlled
-// ingested_at_ns; the caller's Event.IngestedAtNs is ignored so agents can't set it.
-func (s *Store) InsertEvents(ctx context.Context, events []api.Event) error {
-	return s.insertEventsAt(ctx, events, time.Now().UnixNano())
-}
-
-// InsertEventsAt is a test-only variant that takes a deterministic ingest timestamp. Production callers go through InsertEvents. This
-// path exists so cross-source correlation tests can simulate the ES/NE clock-drift scenario (issue #7) without relying on wall-clock
-// timing.
-func (s *Store) InsertEventsAt(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
-	return s.insertEventsAt(ctx, events, ingestedAtNs)
-}
-
-// insertMaxAttempts and insertBackoffStep size the deadlock-retry loop. Five attempts at 5ms*attempt linear backoff is short on
-// purpose: MySQL deadlock detection fires in sub-millisecond windows, and waiting longer just bottlenecks throughput under the
-// concurrent-batch shape that the 25-host enrollHostsBatch e2e fixture exercises.
-const (
-	insertMaxAttempts = 5
-	insertBackoffStep = 5 * time.Millisecond
-
-	// eventInsertChunkRows caps rows per multi-row INSERT so we stay well under MySQL's 65535-placeholder limit (6 cols/row) and
-	// the default 4MB max_allowed_packet once JSON payloads are included.
-	eventInsertChunkRows = 500
-	// eventStampChunkRows caps event_ids per SELECT-back IN(...) clause on the duplicate path.
-	eventStampChunkRows = 1000
-)
-
-func (s *Store) insertEventsAt(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
-	if len(events) == 0 {
-		return nil
-	}
-	// INSERT IGNORE on the events table can deadlock under concurrent batch load: each transaction takes gap locks on the secondary
-	// indexes (idx_events_host_id, idx_events_host_type_ingested, etc.) and unrelated concurrent inserts on different host_ids can
-	// still hit lock-order inversion. The transaction is fully idempotent (INSERT IGNORE skips duplicates and we re-stamp
-	// ingested_at_ns only on rows actually inserted), so we retry on error 1213.
-	return sqlhelpers.WithDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
-		return s.insertEventsAtOnce(ctx, events, ingestedAtNs)
-	})
-}
-
-func (s *Store) insertEventsAtOnce(ctx context.Context, events []api.Event, ingestedAtNs int64) error {
-	tx, err := s.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
-
-	allInserted, err := insertEventChunks(ctx, tx, events, ingestedAtNs)
-	if err != nil {
-		return err
-	}
-
-	// Resolve the persisted ingested_at_ns to stamp back onto the caller's slice (the graph builder reads it). Fast path: when
-	// every row was newly inserted they all carry this batch's ingestedAtNs, so no extra query is needed and persisted stays nil.
-	// Slow path: a duplicate event_id keeps the ingested_at_ns from its first insert, so read the real values back. Resolve inside
-	// the tx but write to the slice only after a successful commit, so a rolled-back / retried attempt never half-stamps it.
-	var persisted map[string]int64
-	if !allInserted {
-		persisted, err = selectIngestedAt(ctx, tx, events)
-		if err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
-
-	stampIngestedAt(events, ingestedAtNs, persisted)
-	return nil
-}
-
-// insertEventChunks writes the batch as a handful of multi-row INSERT IGNORE statements rather than one statement per event. At
-// fleet scale a batch carries hundreds of events, and one round-trip per event dominated ingest latency (a ~100-event batch was
-// ~100 sequential round-trips, seconds of wall time). Chunked to stay under MySQL's placeholder + max_allowed_packet limits.
-// INSERT IGNORE keeps the statement idempotent, so withDeadlockRetry can re-run it safely. Returns false if any chunk dropped a
-// duplicate event_id (which the caller resolves via selectIngestedAt).
-func insertEventChunks(ctx context.Context, tx *sqlx.Tx, events []api.Event, ingestedAtNs int64) (bool, error) {
-	allInserted := true
-	for start := 0; start < len(events); start += eventInsertChunkRows {
-		end := min(start+eventInsertChunkRows, len(events))
-		chunk := events[start:end]
-		placeholders, args, err := eventInsertArgs(chunk, ingestedAtNs)
-		if err != nil {
-			return false, err
-		}
-		res, err := tx.ExecContext(ctx, `INSERT IGNORE INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES `+
-			strings.Join(placeholders, ", "), args...)
-		if err != nil {
-			return false, fmt.Errorf("insert events chunk [%d:%d]: %w", start, end, err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return false, fmt.Errorf("rows affected: %w", err)
-		}
-		if int(affected) != len(chunk) {
-			allInserted = false // at least one duplicate event_id was IGNOREd in this chunk
-		}
-	}
-	return allInserted, nil
-}
-
-// eventInsertArgs builds the placeholder rows and flattened args for one INSERT chunk, marshaling each payload to JSON.
-func eventInsertArgs(chunk []api.Event, ingestedAtNs int64) ([]string, []any, error) {
-	placeholders := make([]string, len(chunk))
-	args := make([]any, 0, len(chunk)*6)
-	for i := range chunk {
-		payloadBytes, err := json.Marshal(chunk[i].Payload)
-		if err != nil {
-			return nil, nil, fmt.Errorf("marshal payload for %s: %w", chunk[i].EventID, err)
-		}
-		placeholders[i] = "(?, ?, ?, ?, ?, ?)"
-		args = append(args, chunk[i].EventID, chunk[i].HostID, chunk[i].TimestampNs, ingestedAtNs, chunk[i].EventType, payloadBytes)
-	}
-	return placeholders, args, nil
-}
-
-// stampIngestedAt writes the persisted ingest time onto the caller's slice. persisted is nil on the fast path (every row newly
-// inserted with this batch's ingestedAtNs); otherwise it maps event_id to the value read back for the duplicate path.
-func stampIngestedAt(events []api.Event, ingestedAtNs int64, persisted map[string]int64) {
-	if persisted == nil {
-		for i := range events {
-			events[i].IngestedAtNs = ingestedAtNs
-		}
-		return
-	}
-	for i := range events {
-		if ts, ok := persisted[events[i].EventID]; ok {
-			events[i].IngestedAtNs = ts
-		}
-	}
-}
-
-// selectIngestedAt reads the persisted ingested_at_ns for each event_id, chunked to stay under MySQL's placeholder limit. Used on
-// the duplicate path, where a row that already existed retains the ingested_at_ns from its first insert and so no longer matches
-// this batch's ingestedAtNs.
-func selectIngestedAt(ctx context.Context, tx *sqlx.Tx, events []api.Event) (map[string]int64, error) {
-	persisted := make(map[string]int64, len(events))
-	for start := 0; start < len(events); start += eventStampChunkRows {
-		end := min(start+eventStampChunkRows, len(events))
-		if err := scanIngestedAtChunk(ctx, tx, events[start:end], persisted); err != nil {
-			return nil, err
-		}
-	}
-	return persisted, nil
-}
-
-// scanIngestedAtChunk reads one IN(...) chunk into out. Split from selectIngestedAt so `defer rows.Close()` fires per chunk
-// rather than accumulating until the whole batch is read.
-func scanIngestedAtChunk(ctx context.Context, tx *sqlx.Tx, chunk []api.Event, out map[string]int64) error {
-	placeholders := make([]string, len(chunk))
-	ids := make([]any, len(chunk))
-	for i := range chunk {
-		placeholders[i] = "?"
-		ids[i] = chunk[i].EventID
-	}
-	rows, err := tx.QueryxContext(ctx, `SELECT event_id, ingested_at_ns FROM events WHERE event_id IN (`+
-		strings.Join(placeholders, ", ")+`)`, ids...)
-	if err != nil {
-		return fmt.Errorf("select ingested_at_ns: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		var ts int64
-		if err := rows.Scan(&id, &ts); err != nil {
-			return fmt.Errorf("scan ingested_at_ns: %w", err)
-		}
-		out[id] = ts
-	}
-	return rows.Err()
-}
-
-// CountEvents returns the total number of events.
-func (s *Store) CountEvents(ctx context.Context) (int64, error) {
-	var count int64
-	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events")
-	return count, err
-}
-
-// CountUnprocessed returns the number of events that have not been fully processed (state 0 or 2). Used by the OTel unprocessed-events
-// gauge.
-func (s *Store) CountUnprocessed(ctx context.Context) (int64, error) {
-	var count int64
-	err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM events WHERE processed != 1")
-	return count, err
-}
-
-// FetchUnprocessed atomically claims up to limit unprocessed events for the graph builder. Uses SELECT ... FOR UPDATE SKIP LOCKED
-// to prevent concurrent processors from claiming the same rows, and transitions events from state 0 (unprocessed) to 2 (processing)
-// within the same transaction. Events are ordered by host_id and timestamp to ensure correct per-host ordering.
-func (s *Store) FetchUnprocessed(ctx context.Context, limit int) ([]api.Event, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-
-	tx, err := s.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin tx for fetch unprocessed: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback after commit is a no-op.
-
-	var events []api.Event
-	err = tx.SelectContext(ctx, &events, `
-		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
-		FROM events
-		WHERE processed = 0
-		ORDER BY host_id, timestamp_ns
-		LIMIT ?
-		FOR UPDATE SKIP LOCKED`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("fetch unprocessed select: %w", err)
-	}
-
-	if len(events) == 0 {
-		return events, tx.Commit()
-	}
-
-	eventIDs := make([]string, len(events))
-	for i, e := range events {
-		eventIDs[i] = e.EventID
-	}
-
-	claimQuery, args, err := sqlx.In("UPDATE events SET processed = 2 WHERE event_id IN (?)", eventIDs)
-	if err != nil {
-		return nil, fmt.Errorf("fetch unprocessed build claim query: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, claimQuery, args...); err != nil {
-		return nil, fmt.Errorf("fetch unprocessed claim: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit fetch unprocessed tx: %w", err)
-	}
-	return events, nil
-}
-
-// MarkProcessed marks the given events as fully processed (state 2 -> 1).
-func (s *Store) MarkProcessed(ctx context.Context, eventIDs []string) error {
-	if len(eventIDs) == 0 {
-		return nil
-	}
-	query, args, err := sqlx.In("UPDATE events SET processed = 1 WHERE event_id IN (?)", eventIDs)
-	if err != nil {
-		return fmt.Errorf("mark processed build query: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("mark processed: %w", err)
-	}
-	return nil
-}
-
-// UnclaimEvents transitions events from processing (state 2) back
-// to unprocessed (state 0) so they can be retried.
-func (s *Store) UnclaimEvents(ctx context.Context, eventIDs []string) error {
-	if len(eventIDs) == 0 {
-		return nil
-	}
-	query, args, err := sqlx.In("UPDATE events SET processed = 0 WHERE processed = 2 AND event_id IN (?)", eventIDs)
-	if err != nil {
-		return fmt.Errorf("unclaim events build query: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("unclaim events: %w", err)
-	}
-	return nil
-}

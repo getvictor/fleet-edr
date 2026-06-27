@@ -12,6 +12,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // alertEventsBatchSize caps the number of (alert_id, event_id) rows per INSERT. Today's rules cap their output at ~10 events per
@@ -79,7 +80,7 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if err := bulkInsertAlertEvents(ctx, tx, alertID, eventIDs, false /* not dedup */); err != nil {
 		return 0, false, err
 	}
-	if err := copyEventPayloads(ctx, tx, alertID, eventIDs); err != nil {
+	if err := copyEventPayloads(ctx, tx, s.archive, alertID, eventIDs); err != nil {
 		return 0, false, err
 	}
 
@@ -146,7 +147,7 @@ func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a 
 	if err := bulkInsertAlertEvents(ctx, tx, existingID, eventIDs, true /* dedup */); err != nil {
 		return 0, err
 	}
-	if err := copyEventPayloads(ctx, tx, existingID, eventIDs); err != nil {
+	if err := copyEventPayloads(ctx, tx, s.archive, existingID, eventIDs); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -160,30 +161,25 @@ func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a 
 // INSERT IGNORE keeps it idempotent across the dedup re-link path. An event_id with no matching row (already aged out) is skipped
 // rather than failing the alert. Runs inside the alert-insert transaction. The cutover repoints the source read from the MySQL events
 // table to the ClickHouse archive.
-func copyEventPayloads(ctx context.Context, tx *sqlx.Tx, alertID int64, eventIDs []string) error {
-	for start := 0; start < len(eventIDs); start += alertEventsBatchSize {
-		end := min(start+alertEventsBatchSize, len(eventIDs))
-		chunk := eventIDs[start:end]
+func copyEventPayloads(ctx context.Context, tx *sqlx.Tx, archive visibilityapi.EventArchive, alertID int64, eventIDs []string) error {
+	// Read the triggering events' envelopes from the durable archive (ADR-0015): ingestion writes the archive before it enqueues for
+	// processing, so by the time a finding fires here the archive holds them, including cross-batch correlations the event_queue has
+	// already acked. A best-effort read (an aged-out id is simply absent) keeps evidence capture non-fatal.
+	events, err := archive.EventsByIDs(ctx, eventIDs)
+	if err != nil {
+		return fmt.Errorf("read event payloads for alert %d: %w", alertID, err)
+	}
+	// Batch the INSERT into alert_event_payloads by row count so a large evidence set stays under MySQL's placeholder / packet limits.
+	for start := 0; start < len(events); start += alertEventsBatchSize {
+		end := min(start+alertEventsBatchSize, len(events))
+		chunk := events[start:end]
 
-		selectQuery, selectArgs, err := sqlx.In(
-			"SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload FROM events WHERE event_id IN (?)", chunk)
-		if err != nil {
-			return fmt.Errorf("build event-payload select for alert %d: %w", alertID, err)
-		}
-		var events []api.Event
-		if err := tx.SelectContext(ctx, &events, selectQuery, selectArgs...); err != nil {
-			return fmt.Errorf("select event payloads for alert %d: %w", alertID, err)
-		}
-		if len(events) == 0 {
-			continue
-		}
-
-		placeholders := make([]string, len(events))
-		args := make([]any, 0, len(events)*7)
-		for i := range events {
+		placeholders := make([]string, len(chunk))
+		args := make([]any, 0, len(chunk)*7)
+		for i := range chunk {
 			placeholders[i] = "(?, ?, ?, ?, ?, ?, ?)"
-			args = append(args, alertID, events[i].EventID, events[i].HostID, events[i].TimestampNs,
-				events[i].IngestedAtNs, events[i].EventType, []byte(events[i].Payload))
+			args = append(args, alertID, chunk[i].EventID, chunk[i].HostID, chunk[i].TimestampNs,
+				chunk[i].IngestedAtNs, chunk[i].EventType, []byte(chunk[i].Payload))
 		}
 		stmt := "INSERT IGNORE INTO alert_event_payloads (alert_id, event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES " +
 			strings.Join(placeholders, ", ")

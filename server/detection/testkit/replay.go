@@ -18,7 +18,8 @@ package testkit
 //  1. Spin up an isolated MySQL test DB via testdb.Open.
 //  2. Apply detection's schema + migrations via testkit's own helpers
 //     (no bootstrap import needed at the call site).
-//  3. s.InsertEvents(events): server stamps ingested_at_ns here.
+//  3. archive.Insert(events): seeds the in-memory event archive the
+//     rule's correlation + evidence reads delegate to (ADR-0015).
 //  4. graph.Builder.ProcessBatch(events): materialises the process
 //     rows the rule depends on (fork/exec/exit).
 //  5. rule.Evaluate(events, store) and check the findings shape against
@@ -45,6 +46,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/testdb"
+	visibilitytestkit "github.com/fleetdm/edr/server/visibility/testkit"
 )
 
 // FixtureCase is one named scenario loaded from a fixture JSON file.
@@ -116,9 +118,10 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	db := testdb.Open(t)
 	ctx := t.Context()
 	require.NoError(t, ApplySchema(ctx, db), "apply detection schema")
-	mysqlStore, err := mysql.New(db)
+	archive := visibilitytestkit.NewMemArchive()
+	mysqlStore, err := mysql.New(db, archive)
 	require.NoError(t, err, "wrap test store")
-	require.NoError(t, mysqlStore.InsertEvents(ctx, c.Events), "insert events")
+	require.NoError(t, archive.Insert(ctx, c.Events), "seed archive")
 
 	builder := graph.NewBuilder(mysqlStore, slog.Default())
 	require.NoError(t, builder.ProcessBatch(ctx, c.Events), "materialize")

@@ -24,6 +24,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -34,7 +35,7 @@ func discardLogger() *slog.Logger {
 func newBuilder(t *testing.T) (*graph.Builder, *sqlx.DB) {
 	t.Helper()
 	db := full.Open(t)
-	store, err := mysql.New(db)
+	store, err := mysql.New(db, detectiontestkit.NewMemArchive())
 	require.NoError(t, err)
 	return graph.NewBuilder(store, discardLogger()), db
 }

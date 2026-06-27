@@ -98,121 +98,6 @@ func BenchmarkUpsertHosts(b *testing.B) {
 	}
 }
 
-// --- #92: indexed PID lookup ----------------------------------------------
-
-func TestGetNetworkEventsForProcess_FiltersByIndexedPID(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	// Six events split across two pids on the same host, plus one on a different host (must be excluded), one with the wrong event_type
-	// (must be excluded), and one outside the time window.
-	require.NoError(t, s.InsertEventsAt(ctx, []api.Event{
-		{EventID: "n1", HostID: "h", TimestampNs: 100, EventType: "network_connect", Payload: json.RawMessage(`{"pid":1234,"dst":"a"}`)},
-		{EventID: "n2", HostID: "h", TimestampNs: 200, EventType: "dns_query", Payload: json.RawMessage(`{"pid":1234,"name":"b"}`)},
-		{EventID: "n3", HostID: "h", TimestampNs: 300, EventType: "network_connect", Payload: json.RawMessage(`{"pid":9999}`)},
-		{EventID: "n4", HostID: "other", TimestampNs: 400, EventType: "network_connect", Payload: json.RawMessage(`{"pid":1234}`)},
-		{EventID: "n5", HostID: "h", TimestampNs: 500, EventType: "fork", Payload: json.RawMessage(`{"pid":1234}`)},
-	}, 1000))
-	require.NoError(t, s.InsertEventsAt(ctx, []api.Event{
-		{EventID: "n6", HostID: "h", TimestampNs: 600, EventType: "network_connect", Payload: json.RawMessage(`{"pid":1234}`)},
-	}, 9999))
-
-	got, err := s.GetNetworkEventsForProcess(ctx, "h", 1234, api.TimeRange{FromNs: 0, ToNs: 5000})
-	require.NoError(t, err)
-	require.Len(t, got, 2, "only n1 + n2 match host=h, type∈{network_connect,dns_query}, pid=1234, ingested in [0,5000]")
-
-	// Ordered by timestamp_ns; n1 (100) before n2 (200).
-	ids := []string{got[0].EventID, got[1].EventID}
-	assert.Equal(t, []string{"n1", "n2"}, ids)
-
-	// n6 was ingested at 9999; widening the window must surface it. The query filters on ingested_at_ns (not timestamp_ns); the index
-	// column ordering puts payload_pid before ingested_at_ns so the pid equality is consumed first, then the ingest range scans.
-	got2, err := s.GetNetworkEventsForProcess(ctx, "h", 1234, api.TimeRange{FromNs: 0, ToNs: 50000})
-	require.NoError(t, err)
-	require.Len(t, got2, 3, "widening the ingested_at_ns window picks up n6")
-}
-
-func TestGetNetworkEventsForProcess_UsesPIDIndex(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	// Seed enough rows that the optimiser would prefer a scan over an
-	// index lookup if the predicate weren't index-backed.
-	for i := range 50 {
-		require.NoError(t, s.InsertEvents(ctx, []api.Event{{
-			EventID:     "seed-" + strconv.Itoa(i),
-			HostID:      "h",
-			TimestampNs: int64(i),
-			EventType:   "network_connect",
-			Payload:     json.RawMessage(`{"pid":` + strconv.Itoa(i%5) + `}`),
-		}}))
-	}
-	// EXPLAIN's column set varies by MySQL version; we only care about the key column. Use a dynamic scan so the test isn't sensitive to
-	// MySQL adding/renaming sibling columns.
-	rows, err := s.DB().QueryxContext(ctx, `EXPLAIN
-		SELECT event_id FROM events
-		WHERE host_id = ? AND event_type IN ('network_connect','dns_query')
-		  AND payload_pid = ?
-		  AND ingested_at_ns >= ? AND ingested_at_ns <= ?`,
-		"h", 3, 0, int64(1<<62))
-	require.NoError(t, err)
-	defer rows.Close()
-	require.True(t, rows.Next(), "EXPLAIN must return at least one row")
-	cols, err := rows.SliceScan()
-	require.NoError(t, err)
-	colNames, err := rows.Columns()
-	require.NoError(t, err)
-	var keyVal string
-	for i, name := range colNames {
-		if name != "key" {
-			continue
-		}
-		if cols[i] == nil {
-			break
-		}
-		switch v := cols[i].(type) {
-		case []byte:
-			keyVal = string(v)
-		case string:
-			keyVal = v
-		}
-	}
-	assert.Equal(t, "idx_events_host_type_pid_ingested", keyVal,
-		"EXPLAIN must show the new composite index, not idx_events_host_type_ingested")
-}
-
-func BenchmarkGetNetworkEventsForProcess(b *testing.B) {
-	for _, eventCount := range []int{500, 5000} {
-		b.Run(fmt.Sprintf("events=%d", eventCount), func(b *testing.B) {
-			s := newTestStore(b)
-			ctx := b.Context()
-
-			// Most events are noise (different pids); the target pid hits just a few rows. The win is "no full table
-			// scan", which is why the bench scales with rows in events, not result-set size.
-			batch := make([]api.Event, eventCount)
-			for i := range batch {
-				batch[i] = api.Event{
-					EventID:     "ne-" + strconv.Itoa(i),
-					HostID:      "h",
-					TimestampNs: int64(i),
-					EventType:   "network_connect",
-					Payload:     json.RawMessage(`{"pid":` + strconv.Itoa(i) + `}`),
-				}
-			}
-			require.NoError(b, s.InsertEvents(ctx, batch))
-			b.ResetTimer()
-			for range b.N {
-				_, err := s.GetNetworkEventsForProcess(ctx, "h", 7, api.TimeRange{FromNs: 0, ToNs: 1 << 62})
-				if err != nil {
-					b.Fatalf("query: %v", err)
-				}
-			}
-		})
-	}
-}
-
 // --- #93: bulk alert_events linking ---------------------------------------
 
 func TestInsertAlert_LinksEveryEventInOneStatement(t *testing.T) {
@@ -223,14 +108,13 @@ func TestInsertAlert_LinksEveryEventInOneStatement(t *testing.T) {
 	procID, err := s.InsertProcess(ctx, api.Process{HostID: "h", PID: 1, ForkTimeNs: 1})
 	require.NoError(t, err)
 
+	// alert_events links event_ids directly; post-cutover (ADR-0015) it carries no FK to an events table, so the link rows need no
+	// backing event rows to exist.
 	const n = 50
 	eventIDs := make([]string, n)
-	events := make([]api.Event, n)
-	for i := range events {
+	for i := range eventIDs {
 		eventIDs[i] = "ae-" + strconv.Itoa(i)
-		events[i] = api.Event{EventID: eventIDs[i], HostID: "h", TimestampNs: int64(i), EventType: "fork", Payload: json.RawMessage(`{}`)}
 	}
-	require.NoError(t, s.InsertEvents(ctx, events))
 
 	alertID, created, err := s.InsertAlert(ctx, api.Alert{
 		HostID: "h", RuleID: "r", Severity: api.SeverityHigh,
@@ -254,12 +138,6 @@ func TestInsertAlert_DedupBranchAlsoLinksAllEvents(t *testing.T) {
 
 	first := []string{"d1", "d2"}
 	second := []string{"d2", "d3", "d4"} // overlap with `first`; INSERT IGNORE must absorb.
-	allIDs := []string{"d1", "d2", "d3", "d4"}
-	events := make([]api.Event, len(allIDs))
-	for i, id := range allIDs {
-		events[i] = api.Event{EventID: id, HostID: "h", TimestampNs: 1, EventType: "fork", Payload: json.RawMessage(`{}`)}
-	}
-	require.NoError(t, s.InsertEvents(ctx, events))
 
 	alertID1, created1, err := s.InsertAlert(ctx, api.Alert{
 		HostID: "h", RuleID: "r", Severity: api.SeverityHigh,
@@ -291,12 +169,9 @@ func BenchmarkInsertAlert_BulkLinkEvents(b *testing.B) {
 			require.NoError(b, err)
 
 			eventIDs := make([]string, eventsPerAlert)
-			batch := make([]api.Event, eventsPerAlert)
-			for i := range batch {
+			for i := range eventIDs {
 				eventIDs[i] = "be-" + strconv.Itoa(i)
-				batch[i] = api.Event{EventID: eventIDs[i], HostID: "h", TimestampNs: 1, EventType: "fork", Payload: json.RawMessage(`{}`)}
 			}
-			require.NoError(b, s.InsertEvents(ctx, batch))
 			b.ResetTimer()
 			for i := range b.N {
 				// Vary rule_id so each iteration creates a fresh alert

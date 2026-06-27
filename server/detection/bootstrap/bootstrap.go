@@ -124,7 +124,7 @@ func New(deps Deps) (*Detection, error) {
 		return nil, errors.New("detection bootstrap: EventArchive is required")
 	}
 
-	store, err := mysql.New(deps.DB)
+	store, err := mysql.New(deps.DB, deps.EventArchive)
 	if err != nil {
 		return nil, fmt.Errorf("detection bootstrap: %w", err)
 	}
@@ -152,7 +152,7 @@ func New(deps Deps) (*Detection, error) {
 			det.engine.SetMetrics(deps.Metrics)
 		}
 		query := graph.NewQuery(store)
-		det.svc = service.New(store, query, intakeH, deps.UserExists, logger)
+		det.svc = service.New(store, query, intakeH, deps.EventLog, deps.UserExists, logger)
 		if deps.AuthZ == nil {
 			return nil, errors.New("detection bootstrap: AuthZ is required in ModeFull")
 		}
@@ -187,7 +187,7 @@ func New(deps Deps) (*Detection, error) {
 	} else {
 		// Intake-only: still expose a service with the intake handler
 		// so RegisterIngestRoutes works.
-		det.svc = service.New(store, nil, intakeH, deps.UserExists, logger)
+		det.svc = service.New(store, nil, intakeH, deps.EventLog, deps.UserExists, logger)
 	}
 
 	return det, nil

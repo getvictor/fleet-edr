@@ -11,6 +11,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/intake"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // UserExists is the closure cmd/main wires from identity.api.Service.UserExists. PUT /api/alerts/{id} calls it before persisting
@@ -23,6 +24,7 @@ type Service struct {
 	store      *mysql.Store
 	query      *graph.Query
 	intakeH    *intake.Handler
+	eventLog   visibilityapi.EventLog
 	userExists UserExists
 	logger     *slog.Logger
 }
@@ -33,6 +35,7 @@ func New(
 	s *mysql.Store,
 	q *graph.Query,
 	intakeH *intake.Handler,
+	eventLog visibilityapi.EventLog,
 	userExists UserExists,
 	logger *slog.Logger,
 ) *Service {
@@ -43,6 +46,7 @@ func New(
 		store:      s,
 		query:      q,
 		intakeH:    intakeH,
+		eventLog:   eventLog,
 		userExists: userExists,
 		logger:     logger,
 	}
@@ -156,9 +160,10 @@ func (s *Service) CountOfflineHosts(ctx context.Context, threshold time.Duration
 	return s.store.CountOfflineHosts(ctx, threshold)
 }
 
-// CountUnprocessed counts events with processed != 1.
+// CountUnprocessed counts events not yet fully processed: the visibility EventLog work-queue backlog (ADR-0015). Backs the OTel
+// unprocessed-events gauge so SOC dashboards alert on a stuck processor; the queue, not the durable archive, is the backlog.
 func (s *Service) CountUnprocessed(ctx context.Context) (int64, error) {
-	return s.store.CountUnprocessed(ctx)
+	return s.eventLog.CountPending(ctx)
 }
 
 // IngestHandler returns the POST /api/events handler. cmd/main mounts
