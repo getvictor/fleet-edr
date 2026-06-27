@@ -12,7 +12,6 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
-	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // alertEventsBatchSize caps the number of (alert_id, event_id) rows per INSERT. Today's rules cap their output at ~10 events per
@@ -51,6 +50,16 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 		a.Subject = strconv.FormatInt(a.ProcessID, 10)
 	}
 
+	// Read the triggering events' envelopes from the durable archive BEFORE opening the MySQL transaction. ingestion writes the
+	// archive before it enqueues for processing, so by the time a finding fires the archive holds them (including cross-batch
+	// correlations the queue has already acked). Reading here keeps the external ClickHouse call off the transaction's critical
+	// section, so a slow archive never holds alerts / alert_events row locks (Gemini, CodeRabbit, Qodo). A best-effort read (an
+	// aged-out id is simply absent) keeps evidence capture non-fatal.
+	evidence, err := s.archive.EventsByIDs(ctx, eventIDs)
+	if err != nil {
+		return 0, false, fmt.Errorf("read event payloads: %w", err)
+	}
+
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return 0, false, fmt.Errorf("begin tx for insert alert: %w", err)
@@ -66,7 +75,7 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	)
 	if err != nil {
 		if isDuplicateKeyErr(err) {
-			existingID, attachErr := s.attachEventsToExistingAlert(ctx, tx, a, eventIDs)
+			existingID, attachErr := s.attachEventsToExistingAlert(ctx, tx, a, eventIDs, evidence)
 			return existingID, false, attachErr // dedup branch never creates a row
 		}
 		return 0, false, fmt.Errorf("insert alert: %w", err)
@@ -80,7 +89,7 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if err := bulkInsertAlertEvents(ctx, tx, alertID, eventIDs, false /* not dedup */); err != nil {
 		return 0, false, err
 	}
-	if err := copyEventPayloads(ctx, tx, s.archive, alertID, eventIDs); err != nil {
+	if err := insertEventPayloads(ctx, tx, alertID, evidence); err != nil {
 		return 0, false, err
 	}
 
@@ -132,7 +141,7 @@ func isDuplicateKeyErr(err error) bool {
 // attachEventsToExistingAlert handles the dedup branch when (source, host_id, rule_id, subject) already has an alert row. Extracted
 // from InsertAlert to keep the main path under the cognitive complexity limit. Returns the existing alert's id; the caller reports
 // created=false (this branch never creates a row).
-func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string) (int64, error) {
+func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string, evidence []api.Event) (int64, error) {
 	var existingID int64
 	// FOR UPDATE makes this a locking (current) read rather than a consistent snapshot read. We only reach here after the
 	// INSERT hit a duplicate-key error, i.e. a concurrent transaction inserted and committed this (source, host_id,
@@ -147,7 +156,7 @@ func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a 
 	if err := bulkInsertAlertEvents(ctx, tx, existingID, eventIDs, true /* dedup */); err != nil {
 		return 0, err
 	}
-	if err := copyEventPayloads(ctx, tx, s.archive, existingID, eventIDs); err != nil {
+	if err := insertEventPayloads(ctx, tx, existingID, evidence); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -156,19 +165,11 @@ func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a 
 	return existingID, nil
 }
 
-// copyEventPayloads makes the alert's evidence self-contained: it reads the full envelopes of the triggering events from the event
-// store and copies them into alert_event_payloads, so the alert detail view resolves them even after the raw events age out (ADR-0015).
-// INSERT IGNORE keeps it idempotent across the dedup re-link path. An event_id with no matching row (already aged out) is skipped
-// rather than failing the alert. Runs inside the alert-insert transaction. The cutover repoints the source read from the MySQL events
-// table to the ClickHouse archive.
-func copyEventPayloads(ctx context.Context, tx *sqlx.Tx, archive visibilityapi.EventArchive, alertID int64, eventIDs []string) error {
-	// Read the triggering events' envelopes from the durable archive (ADR-0015): ingestion writes the archive before it enqueues for
-	// processing, so by the time a finding fires here the archive holds them, including cross-batch correlations the event_queue has
-	// already acked. A best-effort read (an aged-out id is simply absent) keeps evidence capture non-fatal.
-	events, err := archive.EventsByIDs(ctx, eventIDs)
-	if err != nil {
-		return fmt.Errorf("read event payloads for alert %d: %w", alertID, err)
-	}
+// insertEventPayloads makes the alert's evidence self-contained: it copies the given triggering-event envelopes (already read from the
+// durable archive by the caller, before the transaction) into alert_event_payloads, so the alert detail view resolves them even after
+// the raw events age out of the archive (ADR-0015). INSERT IGNORE keeps it idempotent across the dedup re-link path. Runs inside the
+// alert-insert transaction, but does no external I/O of its own: the ClickHouse read happened off the critical section.
+func insertEventPayloads(ctx context.Context, tx *sqlx.Tx, alertID int64, events []api.Event) error {
 	// Batch the INSERT into alert_event_payloads by row count so a large evidence set stays under MySQL's placeholder / packet limits.
 	for start := 0; start < len(events); start += alertEventsBatchSize {
 		end := min(start+alertEventsBatchSize, len(events))

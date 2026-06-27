@@ -53,6 +53,8 @@ COV_OUT="$REPO_ROOT/coverage-server-e2e.out"
 task dev:certs > /dev/null
 COMMON_ENV=(
   EDR_DSN="root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
+  # ClickHouse event store (ADR-0015), required to boot. `task qa:up` brings up the dev clickhouse on the native port 19000.
+  EDR_CLICKHOUSE_DSN="clickhouse://default:@127.0.0.1:19000/edr"
   EDR_ENROLL_SECRET=dev-enroll-secret
   EDR_TLS_CERT_FILE="$REPO_ROOT/tmp/dev.crt"
   EDR_TLS_KEY_FILE="$REPO_ROOT/tmp/dev.key"

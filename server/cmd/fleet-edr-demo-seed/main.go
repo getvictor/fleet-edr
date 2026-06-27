@@ -74,6 +74,13 @@ func realMain(logger *slog.Logger, getenv func(string) string, args []string) er
 	if err := pingUntilReady(ctx, db, cfg.readyTimeout, cfg.pollInterval); err != nil {
 		return err
 	}
+	// Fail fast if the archive is unreachable, before the seeder mutates any MySQL state (refreshTimestamps slides MySQL rows and then
+	// the ClickHouse events): a dead archive discovered mid-run would leave the demo split across the two stores.
+	if chDB != nil {
+		if err := pingUntilReady(ctx, chDB, cfg.readyTimeout, cfg.pollInterval); err != nil {
+			return fmt.Errorf("clickhouse not ready: %w", err)
+		}
+	}
 
 	s := newSeeder(cfg, db, client, logger)
 	s.chDB = chDB

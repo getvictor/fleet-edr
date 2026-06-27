@@ -25,6 +25,7 @@ import (
 // perf_test.go); *testing.T and *testing.B both satisfy the
 // interface.
 func newTestStore(tb testing.TB) *mysql.Store {
+	tb.Helper()
 	s, _ := newTestStoreWithArchive(tb)
 	return s
 }
