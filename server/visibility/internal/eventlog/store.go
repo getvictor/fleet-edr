@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/server/sqlhelpers"
 	"github.com/fleetdm/edr/server/visibility/api"
 )
 
 const (
 	// insertMaxAttempts / insertBackoffStep bound the deadlock-retry loop. Concurrent multi-replica appends to event_queue can deadlock
-	// on secondary-index gap locks under INSERT IGNORE (MySQL 1213); a few linear-backoff retries clear it. Mirrors the detection store.
+	// on secondary-index gap locks under INSERT IGNORE (MySQL 1213); a few linear-backoff retries clear it.
 	insertMaxAttempts = 5
 	insertBackoffStep = 5 * time.Millisecond
 
@@ -27,7 +27,12 @@ const (
 	// 4 MB max_allowed_packet ceilings).
 	appendChunkRows = 500
 
-	mysqlErrDeadlock = 1213
+	// claimLeaseNs is the visibility timeout on a claim. A worker that claims events (processed = 2) but crashes before Ack/Nack leaves
+	// them in-flight; once their claim is older than the lease, a later Claim re-offers them, honoring the EventLog at-least-once
+	// contract. Set well above the longest expected per-batch processing time so a live worker is never double-served.
+	claimLeaseNs = int64(5 * time.Minute)
+
+	insertPrefix = `INSERT IGNORE INTO event_queue (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES `
 )
 
 // Store is the MySQL-backed EventLog. It holds the shared *sqlx.DB pool cmd/main opens once via server/bootstrap.OpenDB; closing the
@@ -54,7 +59,7 @@ func (s *Store) Append(ctx context.Context, events []api.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
-	return withDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
+	return sqlhelpers.WithDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
 		return s.appendOnce(ctx, events)
 	})
 }
@@ -67,9 +72,7 @@ func (s *Store) appendOnce(ctx context.Context, events []api.Event) error {
 		if err != nil {
 			return err
 		}
-		_, err = s.db.ExecContext(ctx, `INSERT IGNORE INTO event_queue (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES `+
-			strings.Join(placeholders, ", "), args...)
-		if err != nil {
+		if _, err := s.db.ExecContext(ctx, insertPrefix+strings.Join(placeholders, ", "), args...); err != nil {
 			return fmt.Errorf("append events chunk [%d:%d]: %w", start, end, err)
 		}
 	}
@@ -90,9 +93,10 @@ func appendArgs(chunk []api.Event) ([]string, []any, error) {
 	return placeholders, args, nil
 }
 
-// Claim atomically claims up to limit not-yet-processed events for this worker, ordered per host by timestamp, without blocking
-// concurrent claimers (FOR UPDATE SKIP LOCKED, ADR-0011). Claimed rows transition 0 -> 2 in the same transaction so other claimers
-// skip them until Ack or Nack.
+// Claim atomically claims up to limit events for this worker, ordered per host by timestamp, without blocking concurrent claimers
+// (FOR UPDATE SKIP LOCKED, ADR-0011). It offers both never-claimed rows (processed = 0) and rows whose prior claim has expired past
+// claimLeaseNs (processed = 2 with a stale claimed_at_ns), so a worker that crashed between Claim and Ack has its events re-delivered.
+// Claimed rows are stamped processed = 2 with a fresh claimed_at_ns in the same transaction.
 func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -103,14 +107,15 @@ func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	cutoff := time.Now().UnixNano() - claimLeaseNs
 	var events []api.Event
 	err = tx.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
 		FROM event_queue
-		WHERE processed = 0
+		WHERE processed = 0 OR (processed = 2 AND claimed_at_ns < ?)
 		ORDER BY host_id, timestamp_ns
 		LIMIT ?
-		FOR UPDATE SKIP LOCKED`, limit)
+		FOR UPDATE SKIP LOCKED`, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim select: %w", err)
 	}
@@ -122,7 +127,7 @@ func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
 	for i, e := range events {
 		ids[i] = e.EventID
 	}
-	query, args, err := sqlx.In("UPDATE event_queue SET processed = 2 WHERE event_id IN (?)", ids)
+	query, args, err := sqlx.In("UPDATE event_queue SET processed = 2, claimed_at_ns = ? WHERE event_id IN (?)", time.Now().UnixNano(), ids)
 	if err != nil {
 		return nil, fmt.Errorf("claim build update: %w", err)
 	}
@@ -135,7 +140,7 @@ func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
 	return events, nil
 }
 
-// Ack marks claimed events fully processed (2 -> 1); they will not be claimed again. A separate retention sweep removes acknowledged
+// Ack marks claimed events fully processed (-> 1); they will not be claimed again. A separate retention sweep removes acknowledged
 // rows so the queue stays small (the archive holds the retained history).
 func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
 	if len(eventIDs) == 0 {
@@ -151,13 +156,13 @@ func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
 	return nil
 }
 
-// Nack returns claimed events to the not-yet-processed state for a later Claim. Scoped to processed = 2 so it only reverts in-flight
-// rows and never resurrects an already-acknowledged event.
+// Nack returns claimed events to the not-yet-processed state for an immediate later Claim, clearing the claim timestamp. Scoped to
+// processed = 2 so it only reverts in-flight rows and never resurrects an already-acknowledged event.
 func (s *Store) Nack(ctx context.Context, eventIDs []string) error {
 	if len(eventIDs) == 0 {
 		return nil
 	}
-	query, args, err := sqlx.In("UPDATE event_queue SET processed = 0 WHERE processed = 2 AND event_id IN (?)", eventIDs)
+	query, args, err := sqlx.In("UPDATE event_queue SET processed = 0, claimed_at_ns = 0 WHERE processed = 2 AND event_id IN (?)", eventIDs)
 	if err != nil {
 		return fmt.Errorf("nack build query: %w", err)
 	}
@@ -175,33 +180,4 @@ func (s *Store) CountPending(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("count pending: %w", err)
 	}
 	return count, nil
-}
-
-// withDeadlockRetry retries fn on a MySQL deadlock (1213) up to maxAttempts with linear backoff, honoring ctx cancellation. Any
-// non-deadlock error returns immediately.
-func withDeadlockRetry(ctx context.Context, maxAttempts int, step time.Duration, fn func() error) error {
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		lastErr = fn()
-		if lastErr == nil {
-			return nil
-		}
-		if !isDeadlockErr(lastErr) {
-			return lastErr
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Duration(attempt) * step):
-		}
-	}
-	return lastErr
-}
-
-func isDeadlockErr(err error) bool {
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) {
-		return false
-	}
-	return mysqlErr.Number == mysqlErrDeadlock
 }

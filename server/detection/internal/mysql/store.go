@@ -8,26 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/sqlhelpers"
 )
-
-// mysqlErrDeadlock is MySQL error 1213: "Deadlock found when trying to get lock; try restarting transaction". The server-error
-// documentation explicitly tells callers to retry, and INSERT IGNORE under concurrent batch load can trip gap locks on secondary
-// indexes even when primary keys do not collide.
-const mysqlErrDeadlock = 1213
-
-// isDeadlockErr reports whether err wraps a MySQL deadlock (error 1213). Surface-level signal only: the caller decides whether
-// retrying is safe (which depends on whether the transaction is idempotent).
-func isDeadlockErr(err error) bool {
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) {
-		return false
-	}
-	return mysqlErr.Number == mysqlErrDeadlock
-}
 
 // Store is the persistence handle for the detection bounded context. Holds the shared *sqlx.DB pool that cmd/main opens once via
 // server/bootstrap.OpenDB and shares across every context.
@@ -96,31 +81,9 @@ func (s *Store) insertEventsAt(ctx context.Context, events []api.Event, ingested
 	// indexes (idx_events_host_id, idx_events_host_type_ingested, etc.) and unrelated concurrent inserts on different host_ids can
 	// still hit lock-order inversion. The transaction is fully idempotent (INSERT IGNORE skips duplicates and we re-stamp
 	// ingested_at_ns only on rows actually inserted), so we retry on error 1213.
-	return withDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
+	return sqlhelpers.WithDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
 		return s.insertEventsAtOnce(ctx, events, ingestedAtNs)
 	})
-}
-
-// withDeadlockRetry runs fn up to maxAttempts times, retrying on MySQL deadlock errors (1213) with a linear backoff of attempt*step.
-// Returns immediately on success or on a non-deadlock error. Respects ctx cancellation during backoff. Callers must guarantee fn is
-// idempotent (running it after a rolled-back attempt must produce the same final state); this helper does not enforce that property.
-func withDeadlockRetry(ctx context.Context, maxAttempts int, step time.Duration, fn func() error) error {
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		lastErr = fn()
-		if lastErr == nil {
-			return nil
-		}
-		if !isDeadlockErr(lastErr) {
-			return lastErr
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Duration(attempt) * step):
-		}
-	}
-	return lastErr
 }
 
 func (s *Store) insertEventsAtOnce(ctx context.Context, events []api.Event, ingestedAtNs int64) error {

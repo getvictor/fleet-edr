@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS event_queue (
     event_type      VARCHAR(64)  NOT NULL,
     payload         JSON         NOT NULL,
     processed       TINYINT(1)   NOT NULL DEFAULT 0,
+    claimed_at_ns   BIGINT       NOT NULL DEFAULT 0,
     created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_event_queue_claim (processed, host_id, timestamp_ns)
 );

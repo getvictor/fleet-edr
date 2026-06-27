@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,11 +21,17 @@ import (
 
 func newEventLog(t *testing.T) visibilityapi.EventLog {
 	t.Helper()
+	log, _ := newEventLogWithDB(t)
+	return log
+}
+
+func newEventLogWithDB(t *testing.T) (visibilityapi.EventLog, *sqlx.DB) {
+	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, visibilitytestkit.ApplySchema(t.Context(), db))
 	vis, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db})
 	require.NoError(t, err)
-	return vis.EventLog()
+	return vis.EventLog(), db
 }
 
 func ev(id, host string, ts int64, etype string) visibilityapi.Event {
@@ -119,6 +126,32 @@ func TestEventLog_ClaimOrderingAndDisjoint(t *testing.T) {
 	second, err := log.Claim(ctx, 2)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"b1", "b2"}, ids(second), "second claim is disjoint from the first")
+}
+
+func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log, db := newEventLogWithDB(t)
+
+	require.NoError(t, log.Append(ctx, []visibilityapi.Event{ev("e1", "h1", 100, "exec")}))
+
+	claimed, err := log.Claim(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1, "the event is claimed and now in-flight")
+
+	// A fresh claim does not re-offer the in-flight event (its lease has not expired).
+	again, err := log.Claim(ctx, 10)
+	require.NoError(t, err)
+	assert.Empty(t, again, "an unexpired in-flight claim is not re-offered")
+
+	// Simulate a worker that crashed between Claim and Ack: backdate the claim past the lease.
+	_, err = db.ExecContext(ctx, "UPDATE event_queue SET claimed_at_ns = 1 WHERE event_id = ?", "e1")
+	require.NoError(t, err)
+
+	// The stale claim is now re-offered, so a crashed worker's events are not lost (at-least-once).
+	reclaimed, err := log.Claim(ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"e1"}, ids(reclaimed), "an expired claim is re-delivered on a later Claim")
 }
 
 func TestEventLog_EmptyOps(t *testing.T) {

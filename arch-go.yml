@@ -115,6 +115,7 @@ dependenciesRules:
         - "**.visibility.api.**"
         - "**.visibility.internal.**"
         - "**.visibility.testkit"
+        - "**.sqlhelpers"
         - "**.testdb"
 
   # ----- testkit packages -----------------------------------------------------
