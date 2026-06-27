@@ -1010,6 +1010,14 @@ components:
             event_ids:
               type: array
               items: {type: string, format: uuid}
+            events:
+              type: array
+              description: >-
+                Self-contained evidence: the full envelopes of the alert's triggering events, captured at alert creation so the
+                evidence survives event-store retention (ADR-0015). Best-effort; an event already aged out at creation time is
+                omitted. event_ids remains the full correlated set.
+              items:
+                $ref: "#/components/schemas/EventEnvelope"
 
     Command:
       type: object

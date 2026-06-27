@@ -26,13 +26,14 @@
 - [ ] 4.1 `GetNetworkEventsForProcess` correlation read moves to `visibility/api` (ClickHouse archive); process reads stay in `detection`
 - [ ] 4.2 Process-detail network/DNS UI read serves from the archive
 - [ ] 4.3 Event retention switches to ClickHouse native TTL; remove the events `DELETE` sweep (process-record pruning unchanged)
-- [ ] 4.4 MySQL `alert_event_payloads` (`alert_id`, `event_id`, payload) migration; alert creation copies triggering-event payloads; alert detail resolves evidence from it; drop the `alert_events -> events` FK
+- [x] 4.4a MySQL `alert_event_payloads` migration; alert creation copies the triggering-event envelopes; alert detail resolves evidence from it (`GetAlertEvidence`). Done in the alert-evidence PR (pre-cutover; reads the source events from MySQL `events`, which the cutover repoints to the archive).
+- [ ] 4.4b Drop the `alert_events -> events` FK (part of the cutover, when the `events` table is dropped).
 
 ## 5. Tests and spec traceability
 
 - [ ] 5.1 PBT: ClickHouse event-row round-trip; `EventLog` claim invariants (disjoint batches, per-host order, idempotent re-append)
 - [ ] 5.2 Integration (new `clickhouse_test` container): intake -> archive + `event_queue` -> processor -> alert + evidence, end to end
-- [ ] 5.3 Add spectrace markers tying tests to the new/modified scenarios in `server-event-ingestion` and `server-detection-rules-engine`
+- [ ] 5.3 Add spectrace markers tying tests to the new/modified scenarios in `server-event-ingestion` and `server-detection-rules-engine`. (Done for `server-detection-rules-engine/alert-evidence-is-self-contained` in the alert-evidence PR; `server-event-ingestion` markers land with the cutover.)
 - [ ] 5.4 Observability parity with MySQL: open the ClickHouse `database/sql` connection through the same `otelsql` wrapper as `server/bootstrap/db.go` (`db.system=clickhouse`, `otelsql.RegisterDBStatsMetrics`) so every archive query/insert gets a span plus the connection-pool / `db.sql.*` RED metrics with no bespoke code; add archive-specific signals (`async_insert` flush-ack latency, batch row counts); SigNoz dashboard panel (OTel only, ADR-0006)
 
 ## 6. Acceptance gate

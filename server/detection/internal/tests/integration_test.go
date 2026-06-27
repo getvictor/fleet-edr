@@ -1440,6 +1440,11 @@ func TestOperator_GetAlert_ReturnsCorrelatedEventIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, alertID, alert.ID)
 	assert.NotEmpty(t, eventIDs, "alert must surface its triggering event ids")
+
+	// spec:server-detection-rules-engine/alert-evidence-is-self-contained/triggering-event-payloads-are-captured-at-alert-creation
+	evidence, err := d.Service().GetAlertEvidence(ctx, alertID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, evidence, "alert must surface the self-contained payloads of its triggering events")
 }
 
 func TestOperator_GetAlert_NotFound(t *testing.T) {

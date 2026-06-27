@@ -24,6 +24,10 @@ type Service interface {
 	GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*ProcessDetail, error)
 	ListAlerts(ctx context.Context, filter AlertFilter) ([]Alert, error)
 	GetAlert(ctx context.Context, id int64) (Alert, []string, error) // alert + correlated event IDs
+	// GetAlertEvidence returns the self-contained triggering-event envelopes captured for an alert at creation time (ADR-0015), so the
+	// detail view resolves them even after the raw events age out of the event store. Best-effort: an alert may carry fewer payloads
+	// than event IDs (alerts created before capture landed, or events already aged out at creation).
+	GetAlertEvidence(ctx context.Context, id int64) ([]Event, error)
 	UpdateAlertStatus(ctx context.Context, id int64, status AlertStatus, userID int64) (Alert, error)
 
 	// RecordHostSeen advances hosts.last_seen_ns. Called by response
