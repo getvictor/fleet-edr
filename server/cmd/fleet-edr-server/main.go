@@ -282,7 +282,9 @@ func openContexts(
 		logger.ErrorContext(ctx, "visibility schema", "err", err)
 		return
 	}
-	if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord, visibilityCtx); err != nil {
+	if detectionCtx, err = openDetection(ctx, logger, db, cfg, detectionWiring{
+		identity: identityCtx, visibility: visibilityCtx, isDraining: drain.IsDraining, coord: coord,
+	}); err != nil {
 		return
 	}
 	if responseCtx, err = openResponse(ctx, logger, db, detectionCtx, identityCtx); err != nil {
@@ -374,15 +376,21 @@ func openIdentity(
 	return identityCtx, nil
 }
 
+// detectionWiring bundles the cross-context handles openDetection threads into the detection bootstrap, keeping its signature under the
+// parameter-count limit.
+type detectionWiring struct {
+	identity   *identitybootstrap.Identity
+	visibility *visibilitybootstrap.Visibility
+	isDraining func() bool
+	coord      leader.Coordinator
+}
+
 func openDetection(
 	ctx context.Context,
 	logger *slog.Logger,
 	db *sqlx.DB,
 	cfg *config.Config,
-	identityCtx *identitybootstrap.Identity,
-	isDraining func() bool,
-	coord leader.Coordinator,
-	visibilityCtx *visibilitybootstrap.Visibility,
+	w detectionWiring,
 ) (*detectionbootstrap.Detection, error) {
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:     db,
@@ -399,13 +407,13 @@ func openDetection(
 		StaleProcessInterval: config.DefaultStaleProcessInterval,
 		RetentionDays:        cfg.RetentionDays,
 		RetentionInterval:    config.DefaultRetentionInterval,
-		UserExists:           identityCtx.Service().UserExists,
-		Audit:                identityCtx.AuditRecorder(),
-		AuthZ:                identityCtx.AuthZ(),
-		IsDraining:           isDraining,
-		Coordinator:          coord,
-		EventLog:             visibilityCtx.EventLog(),
-		EventArchive:         visibilityCtx.EventArchive(),
+		UserExists:           w.identity.Service().UserExists,
+		Audit:                w.identity.AuditRecorder(),
+		AuthZ:                w.identity.AuthZ(),
+		IsDraining:           w.isDraining,
+		Coordinator:          w.coord,
+		EventLog:             w.visibility.EventLog(),
+		EventArchive:         w.visibility.EventArchive(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)

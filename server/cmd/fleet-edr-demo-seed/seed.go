@@ -358,22 +358,30 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 		return fmt.Errorf("commit timestamp refresh: %w", err)
 	}
 
-	// Slide the archived events by the same delta so per-process network/DNS correlation stays aligned with the shifted process graph
-	// (the correlation read windows on ingested_at_ns). ClickHouse has no transactional UPDATE: ALTER ... UPDATE is a mutation, and
-	// mutations_sync = 1 makes the seeder wait for it to finish so a follow-up demo read sees the shift. The demo dataset is tiny, so
-	// the mutation completes quickly. Skipped when no archive connection was configured (the MySQL-only / released-image path).
-	if s.chDB != nil {
-		chPrefix := "ALTER TABLE events UPDATE timestamp_ns = timestamp_ns + ?, ingested_at_ns = ingested_at_ns + ? WHERE "
-		// inClause is a generated "?,?,..." placeholder list, never user input, and the host ids bind as ? args; same shape as the
-		// MySQL UPDATEs above (gosec does not flag those only because they pass through the updates slice).
-		chQuery := chPrefix + inClause + " SETTINGS mutations_sync = 1" //nolint:gosec // G202: placeholder concat, args bound as ?
-		chArgs := append([]any{deltaNs, deltaNs}, hostArgs...)
-		if _, err := s.chDB.ExecContext(ctx, chQuery, chArgs...); err != nil {
-			return fmt.Errorf("slide demo event timestamps in clickhouse: %w", err)
-		}
+	if err := s.slideArchiveEvents(ctx, inClause, hostArgs, deltaNs); err != nil {
+		return err
 	}
 
 	s.logger.InfoContext(ctx, "refreshed demo timestamps to recent", "delta_ns", deltaNs)
+	return nil
+}
+
+// slideArchiveEvents slides the archived events' timestamps by deltaNs so per-process network/DNS correlation stays aligned with the
+// shifted process graph (the correlation read windows on ingested_at_ns). No-op when no archive connection was configured (the
+// MySQL-only / released-image path). ClickHouse has no transactional UPDATE: ALTER ... UPDATE is a mutation, and mutations_sync = 1
+// makes the seeder wait for it to finish so a follow-up demo read sees the shift. The demo dataset is tiny, so it completes quickly.
+func (s *seeder) slideArchiveEvents(ctx context.Context, inClause string, hostArgs []any, deltaNs int64) error {
+	if s.chDB == nil {
+		return nil
+	}
+	chPrefix := "ALTER TABLE events UPDATE timestamp_ns = timestamp_ns + ?, ingested_at_ns = ingested_at_ns + ? WHERE "
+	// inClause is a generated "?,?,..." placeholder list, never user input, and the host ids bind as ? args; same shape as the MySQL
+	// UPDATEs above (gosec does not flag those only because they pass through the updates slice).
+	chQuery := chPrefix + inClause + " SETTINGS mutations_sync = 1" //nolint:gosec // G202: placeholder concat, args bound as ?
+	chArgs := append([]any{deltaNs, deltaNs}, hostArgs...)
+	if _, err := s.chDB.ExecContext(ctx, chQuery, chArgs...); err != nil {
+		return fmt.Errorf("slide demo event timestamps in clickhouse: %w", err)
+	}
 	return nil
 }
 
