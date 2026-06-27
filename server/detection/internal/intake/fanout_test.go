@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,5 +97,28 @@ func TestHandleIngest_FanOut(t *testing.T) {
 		require.Len(t, archive.inserted, 1, "the archive is written first, before the queue append is attempted")
 		require.Len(t, archive.inserted[0], 1, "heartbeats are partitioned out before the fan-out; only the fork is stored")
 		assert.Equal(t, "e-fork", archive.inserted[0][0].EventID)
+	})
+
+	t.Run("ingested_at_ns is server-stamped, not agent-controlled", func(t *testing.T) {
+		t.Parallel()
+		archive := &fakeEventArchive{}
+		queue := &fakeEventLog{}
+		h := New(nil, nil, BuildInfo{}, queue, archive)
+
+		// The agent supplies a bogus far-future ingested_at_ns; the server must overwrite it with its own arrival clock.
+		before := time.Now().UnixNano()
+		const agentSpoofed = int64(1) << 62
+		spoofed := `[{"event_id":"e-spoof","host_id":"host-a","timestamp_ns":1000,"ingested_at_ns":` +
+			strconv.FormatInt(agentSpoofed, 10) + `,"event_type":"fork","payload":{"child_pid":42,"parent_pid":1}}]`
+		// The store is reached on the happy path (host-summary write), so this case needs a store; assert via the archive instead by
+		// failing the queue after the archive captured the stamped event.
+		queue.appendErr = errors.New("stop before the store write")
+		rec := postBatch(t, h, spoofed)
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
+		require.Len(t, archive.inserted, 1)
+		require.Len(t, archive.inserted[0], 1)
+		got := archive.inserted[0][0].IngestedAtNs
+		assert.NotEqual(t, agentSpoofed, got, "the agent-supplied ingested_at_ns must be overwritten")
+		assert.GreaterOrEqual(t, got, before, "ingested_at_ns is stamped from the server clock at ingest")
 	})
 }

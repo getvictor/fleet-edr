@@ -204,6 +204,15 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// rule evaluation. Everything else is persisted exactly as before.
 	toStore, heartbeats := partitionHeartbeats(events)
 
+	// Stamp the server-controlled arrival time on every storable event before the fan-out. ingested_at_ns is the clock-drift-tolerant
+	// ordering + correlation key (cross-stream rules and the process-detail read window on it), so it MUST come from the server clock,
+	// not the agent's: an agent cannot set or skew it. Both stores persist exactly what we stamp here. (Pre-cutover this lived in the
+	// MySQL InsertEvents path; the fan-out moved it up to the handler so both the archive and the queue see the same value.)
+	ingestedAtNs := time.Now().UnixNano()
+	for i := range toStore {
+		toStore[i].IngestedAtNs = ingestedAtNs
+	}
+
 	// Fan out to the two event stores (ADR-0015), archive FIRST so the durable lake has every event before it is enqueued for
 	// processing: the alert-evidence copy reads the archive, and a partial failure leaves nothing queued. Both writes are idempotent by
 	// event_id (ReplacingMergeTree on the archive, INSERT IGNORE on the queue), so the agent's retry of a 200-less batch is safe. We
