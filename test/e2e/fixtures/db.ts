@@ -22,6 +22,25 @@ export async function openDB(): Promise<Connection> {
   });
 }
 
+// Dev ClickHouse archive HTTP endpoint, matching docker-compose.yml's clickhouse service (8123 published on 18123). The default user
+// has an empty password (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT), so no auth header is needed.
+const CLICKHOUSE_HTTP = "http://127.0.0.1:18123";
+
+// queryClickHouse runs a read-only query against the dev ClickHouse event archive (ADR-0015: events live here, not MySQL) over its HTTP
+// interface and returns the rows as parsed objects. No extra npm dependency: the HTTP interface speaks plain SQL. count() and other
+// UInt64 columns arrive as JSON strings (JSONEachRow quotes them to preserve precision), so callers wrap them in Number().
+export async function queryClickHouse<T = Record<string, unknown>>(sql: string): Promise<T[]> {
+  const res = await fetch(`${CLICKHOUSE_HTTP}/`, { method: "POST", body: `${sql} FORMAT JSONEachRow` });
+  if (!res.ok) {
+    throw new Error(`clickhouse query failed (${res.status}): ${await res.text()}`);
+  }
+  const text = await res.text();
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as T);
+}
+
 // Wipe every operator-side table so the next test starts from a known
 // shape. Leaves the schema in place (faster than DROP DATABASE +
 // re-bootstrap) and PRESERVES the seeded admin user + its
@@ -55,9 +74,7 @@ export async function mintBootstrapToken(db: Connection): Promise<string> {
   const plaintext = raw.toString("base64url");
   const hash = crypto.createHash("sha256").update(plaintext).digest();
   // Find the seeded admin's id.
-  const [rows] = await db.query<mysql.RowDataPacket[]>(
-    "SELECT id FROM users WHERE email = 'admin@fleet-edr.local' LIMIT 1",
-  );
+  const [rows] = await db.query<mysql.RowDataPacket[]>("SELECT id FROM users WHERE email = 'admin@fleet-edr.local' LIMIT 1");
   if (rows.length === 0) {
     throw new Error("mintBootstrapToken: admin@fleet-edr.local not seeded yet");
   }
@@ -75,11 +92,7 @@ export async function mintBootstrapToken(db: Connection): Promise<string> {
 // additional role_bindings row a manual SQL promotion would. Used
 // by the OIDC role-matrix tests to exercise senior_analyst /
 // auditor without depending on wave-2 OIDC group-claim mapping.
-export async function promote(
-  db: Connection,
-  email: string,
-  role: "admin" | "senior_analyst" | "auditor" | "super_admin",
-): Promise<void> {
+export async function promote(db: Connection, email: string, role: "admin" | "senior_analyst" | "auditor" | "super_admin"): Promise<void> {
   await db.query(
     `INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)
      SELECT id, ?, 'global', '*' FROM users WHERE email = ?`,
@@ -107,10 +120,7 @@ export async function promote(
 // to '' and a second seed for the same host+rule collides on
 // uk_alerts_dedup. Each seed creates a fresh process row, so the
 // per-process subject keeps re-seeds (Playwright retries) distinct.
-export async function seedCriticalAlert(
-  db: Connection,
-  opts: { hostId: string; ruleId: string; title: string },
-): Promise<number> {
+export async function seedCriticalAlert(db: Connection, opts: { hostId: string; ruleId: string; title: string }): Promise<number> {
   const procResult = await db.query(
     `INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns)
      VALUES (?, 4242, 1, '/usr/bin/qa-test-process', ?)`,
