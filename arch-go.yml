@@ -87,6 +87,7 @@ dependenciesRules:
         - "**.endpoint.api"
         - "**.identity.api"
         - "**.rules.api"
+        - "**.visibility.api"  # ADR-0015 cutover: intake fans out to EventLog/EventArchive, the processor claims from EventLog, and correlation/evidence read the EventArchive
         - "**.sqlhelpers"
         - "**.coordination.leader"  # MySQL-advisory-lock leader coordinator: pipeline.Runner gates retention + process-TTL on it
         - "**.testdb"

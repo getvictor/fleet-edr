@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -23,6 +24,7 @@ import (
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
 	"github.com/fleetdm/edr/server/tracingpolicy"
+	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
 )
 
 var (
@@ -80,6 +82,28 @@ func run() error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+
+	// ClickHouse is the event store (ADR-0015). The ingest tier fans every accepted event out to the ClickHouse archive plus the MySQL
+	// EventLog queue, so EDR_CLICKHOUSE_DSN is required here too: an unset value is a fatal misconfig, not a MySQL fallback.
+	if cfg.ClickHouseDSN == "" {
+		logger.ErrorContext(ctx, "EDR_CLICKHOUSE_DSN is required: the event store is ClickHouse (ADR-0015)")
+		return errors.New("EDR_CLICKHOUSE_DSN is required")
+	}
+	chDB, err := visibilitybootstrap.OpenClickHouse(ctx, cfg.ClickHouseDSN)
+	if err != nil {
+		logger.ErrorContext(ctx, "open clickhouse", "err", err)
+		return err
+	}
+	defer func() { _ = chDB.Close() }()
+	visibilityCtx, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db, ClickHouseDB: chDB, Logger: logger})
+	if err != nil {
+		logger.ErrorContext(ctx, "open visibility", "err", err)
+		return err
+	}
+	if err := visibilityCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "visibility schema", "err", err)
+		return err
+	}
 
 	// One root secret seeds every long-lived server-side key, same as fleet-edr-server. Deriving here (rather than skipping the keyring)
 	// is mandatory: identity + endpoint bootstrap require the derived keys, and the labels MUST match fleet-edr-server's so a host token
@@ -139,6 +163,8 @@ func run() error {
 			Commit:    commit,
 			BuildTime: buildTime,
 		},
+		EventLog:     visibilityCtx.EventLog(),
+		EventArchive: visibilityCtx.EventArchive(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)

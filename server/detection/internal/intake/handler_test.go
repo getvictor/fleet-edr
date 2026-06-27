@@ -148,7 +148,7 @@ func TestHandleReadyz_Draining(t *testing.T) {
 	t.Parallel()
 	t.Run("spec:server-availability/sigterm-produces-a-load-balancer-drainable-graceful-shutdown/readiness-reports-not-ready-once-draining-begins", func(t *testing.T) {
 		t.Parallel()
-		h := New(nil, nil, BuildInfo{})
+		h := New(nil, nil, BuildInfo{}, nil, nil)
 		h.SetReadinessGate(func() bool { return true })
 
 		mux := http.NewServeMux()
@@ -182,7 +182,7 @@ func gzipBytesForTest(t *testing.T, b []byte) []byte {
 // readBodyWithCap before the handler reaches the store, so no MySQL is needed. Returns the recorder for status/code asserts.
 func postGzipToIngest(t *testing.T, wire []byte) *httptest.ResponseRecorder {
 	t.Helper()
-	h := New(nil, nil, BuildInfo{})
+	h := New(nil, nil, BuildInfo{}, nil, nil)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/events", bytes.NewReader(wire))
 	req.Header.Set("Content-Encoding", "gzip")
 	req = req.WithContext(endpointapi.WithHostIDForTest(req.Context(), "host-a"))

@@ -24,4 +24,9 @@ type EventArchive interface {
 	// timestamp. Cross-stream correlation rules and the process-detail view consume it to join a process's DNS resolutions with its
 	// outbound connections.
 	NetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr httpserver.TimeRange) ([]Event, error)
+
+	// EventsByIDs returns the full envelopes for the given event_ids, ordered by (timestamp_ns, event_id). Alert evidence capture uses
+	// it to snapshot a finding's triggering events into durable per-alert storage (alert_event_payloads) that outlives the archive's
+	// retention window. IDs with no surviving event (already aged out) are omitted rather than erroring, so capture stays best-effort.
+	EventsByIDs(ctx context.Context, eventIDs []string) ([]Event, error)
 }

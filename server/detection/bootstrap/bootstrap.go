@@ -24,6 +24,7 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // BuildInfo is injected by cmd/main and surfaced through the intake handler's livez/readyz payloads. Re-exported from
@@ -83,6 +84,12 @@ type Deps struct {
 	// Coordinator gates the single-replica periodic tasks (retention + process-TTL) so they run on exactly one replica. Optional:
 	// nil runs them directly (single-replica deployments and tests). cmd/main wires a MySQL-advisory-lock coordinator.
 	Coordinator leader.Coordinator
+
+	// EventLog is the visibility work queue intake appends to and the processor claims from (ADR-0015). EventArchive is the durable
+	// ClickHouse event lake intake writes to and correlation/evidence reads from. Both are REQUIRED in ModeFull and ModeIntake (the
+	// intake handler fans out to both); cmd/main wires visibilityCtx.EventLog() / EventArchive().
+	EventLog     visibilityapi.EventLog
+	EventArchive visibilityapi.EventArchive
 }
 
 // Detection is the handle cmd/main holds.
@@ -110,12 +117,19 @@ func New(deps Deps) (*Detection, error) {
 		logger = slog.Default()
 	}
 
+	if deps.EventLog == nil {
+		return nil, errors.New("detection bootstrap: EventLog is required")
+	}
+	if deps.EventArchive == nil {
+		return nil, errors.New("detection bootstrap: EventArchive is required")
+	}
+
 	store, err := mysql.New(deps.DB)
 	if err != nil {
 		return nil, fmt.Errorf("detection bootstrap: %w", err)
 	}
 
-	intakeH := intake.New(store, logger, deps.Build)
+	intakeH := intake.New(store, logger, deps.Build, deps.EventLog, deps.EventArchive)
 	// Unconditional: a nil predicate is the documented "readiness reflects only the DB check" case (handleReadyz guards on
 	// h.isDraining != nil), so there is no branch to leave untested here.
 	intakeH.SetReadinessGate(deps.IsDraining)
@@ -146,7 +160,7 @@ func New(deps Deps) (*Detection, error) {
 		det.operatorH.SetAudit(deps.Audit)
 
 		processor := pipeline.NewProcessor(
-			store,
+			deps.EventLog,
 			graph.NewBuilder(store, logger),
 			det.engine,
 			logger,
