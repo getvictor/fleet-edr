@@ -13,7 +13,7 @@
 
 import * as crypto from "node:crypto";
 import { test, expect } from "../../fixtures/agent";
-import { openDB } from "../../fixtures/db";
+import { openDB, queryClickHouse } from "../../fixtures/db";
 
 interface ScenarioCase {
   file: string;
@@ -41,31 +41,27 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
       // snapshot_heartbeat is accepted by ingest (counted in eventsPosted, above) but is NOT persisted as an events row: the server
       // applies its freshness side effect at ingest and drops it (issue #408). So the DB-side assertion is over the PERSISTED
       // subset: everything the scenario posts except snapshot_heartbeat.
-      const persistedCounts = Object.fromEntries(Object.entries(sc.expectedCounts).filter(([t]) => t !== "snapshot_heartbeat"));
+      const persistedCounts = Object.fromEntries(Object.entries(sc.expectedCounts).filter(([t]) => t !== "snapshot_heartbeat")) as Record<
+        string,
+        number
+      >;
 
-      const db = await openDB();
-      try {
-        const [rows] = (await db.query(
-          `SELECT event_type, COUNT(*) AS n
-             FROM events
-            WHERE host_id = ?
-            GROUP BY event_type`,
-          [hostId],
-        )) as [Array<{ event_type: string; n: number | string }>, unknown];
-
-        // Exact-set assertion: the persisted event_types in the DB must equal exactly the scenario's non-heartbeat types, with no
-        // missing types and no surprises (extra inserts would suggest the fixture leaked to a wrong host, or that a heartbeat was
-        // persisted when it should have been dropped).
-        const dbTypes = rows.map((r) => r.event_type).sort((a, b) => a.localeCompare(b, "en"));
-        expect(dbTypes).toEqual(Object.keys(persistedCounts).sort((a, b) => a.localeCompare(b, "en")));
-
-        // Exact-count per event_type: catches partial-ingest cases the presence-only check used to miss.
-        for (const row of rows) {
-          expect(Number(row.n), `count for ${row.event_type} in ${sc.file}`).toBe(persistedCounts[row.event_type]);
-        }
-      } finally {
-        await db.end();
-      }
+      // Events land in the ClickHouse archive now (ADR-0015), not a MySQL table. count() over FINAL collapses any at-least-once
+      // duplicates. Poll because the archive read is decoupled from the ingest 200: a freshly-committed batch is normally visible at
+      // once, but the poll absorbs any read-after-write lag without flaking. The map equality is the exact-set + exact-count check:
+      // exactly the scenario's non-heartbeat types, with no missing types and no surprises (a persisted heartbeat or a leaked host
+      // would change it).
+      await expect
+        .poll(
+          async () => {
+            const rows = await queryClickHouse<{ event_type: string; n: string }>(
+              `SELECT event_type, count() AS n FROM events FINAL WHERE host_id = '${hostId}' GROUP BY event_type`,
+            );
+            return Object.fromEntries(rows.map((r) => [r.event_type, Number(r.n)]));
+          },
+          { timeout: 10_000 },
+        )
+        .toEqual(persistedCounts);
     });
   }
 
@@ -82,20 +78,19 @@ test.describe("L4 agent fixture: scenarios land in events table", () => {
 
     const db = await openDB();
     try {
-      const [hostRows] = (await db.query(
-        "SELECT event_count AS n FROM hosts WHERE host_id = ?",
-        [overrideId],
-      )) as [Array<{ n: number | string }>, unknown];
+      const [hostRows] = (await db.query("SELECT event_count AS n FROM hosts WHERE host_id = ?", [overrideId])) as [
+        Array<{ n: number | string }>,
+        unknown,
+      ];
       expect(hostRows, "the heartbeat must be attributed to the override host_id").toHaveLength(1);
       expect(Number(hostRows[0].n), "event_count counts the accepted heartbeat for the override host").toBe(1);
-
-      const [eventRows] = (await db.query(
-        "SELECT COUNT(*) AS n FROM events WHERE host_id = ?",
-        [overrideId],
-      )) as [Array<{ n: number | string }>, unknown];
-      expect(Number(eventRows[0].n), "snapshot_heartbeat is not persisted as an events row (issue #408)").toBe(0);
     } finally {
       await db.end();
     }
+
+    // The heartbeat reached neither event store: issue #408 drops it at ingest before the archive + queue fan-out, so the archive has
+    // no row for the override host.
+    const eventRows = await queryClickHouse<{ n: string }>(`SELECT count() AS n FROM events FINAL WHERE host_id = '${overrideId}'`);
+    expect(Number(eventRows[0].n), "snapshot_heartbeat is not persisted to the archive (issue #408)").toBe(0);
   });
 });

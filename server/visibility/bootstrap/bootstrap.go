@@ -35,6 +35,13 @@ type Visibility struct {
 	logger       *slog.Logger
 }
 
+// OpenClickHouse dials the ClickHouse event archive and returns the pool, exposed here so cmd/main can open it without importing the
+// visibility-internal clickhouse package (the Go internal rule blocks that). dsn is a clickhouse-go DSN; closing the handle is the
+// caller's responsibility. Pass the returned pool to New as Deps.ClickHouseDB.
+func OpenClickHouse(ctx context.Context, dsn string) (*sqlx.DB, error) {
+	return clickhouse.Open(ctx, dsn)
+}
+
 // New wires the visibility context. It does NOT apply the schema (call ApplySchema).
 func New(deps Deps) (*Visibility, error) {
 	if deps.DB == nil {

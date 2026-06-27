@@ -186,25 +186,26 @@ func recordMax(maxConcurrent *atomic.Int64, cur int64) {
 	}
 }
 
-// seedUnprocessedEvents inserts n events in the unprocessed state (processed = 0) for the SKIP LOCKED claim test. All share one
-// host so the processor's per-host ordering (host_id, timestamp_ns) is well-defined and the two batches are contiguous ranges.
+// seedUnprocessedEvents inserts n events in the unprocessed state (processed = 0) into the visibility event_queue for the SKIP LOCKED
+// claim test (ADR-0015: the processor claims from the queue, not the dropped events table). All share one host so the per-host ordering
+// (host_id, timestamp_ns) is well-defined and the two batches are contiguous ranges.
 func seedUnprocessedEvents(t *testing.T, db *sqlx.DB, n int) {
 	t.Helper()
 	ctx := t.Context()
 	const hostID = "host-skiplocked"
 	for i := range n {
 		_, err := db.ExecContext(ctx,
-			`INSERT INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload)
+			`INSERT INTO event_queue (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload)
 			 VALUES (?, ?, ?, ?, 'process_exec', JSON_OBJECT('pid', ?))`,
 			fmt.Sprintf("evt-%05d", i), hostID, int64(i+1), int64(i+1), i+1)
 		require.NoErrorf(t, err, "seed event %d", i)
 	}
 }
 
-// claimBatchSkipLocked mirrors server/detection/internal/mysql/store.go's FetchUnprocessed verbatim: claim up to limit unprocessed
-// events with SELECT ... FOR UPDATE SKIP LOCKED, then transition them to processed = 2 in the same transaction. The internal store
-// is unreachable from this cross-context package (Go's internal/ rule), so the claim is reproduced here on a dedicated connection
-// (one replica's session) to assert two concurrent claimers get disjoint rows.
+// claimBatchSkipLocked mirrors the visibility EventLog's Claim verbatim: claim up to limit unprocessed events from event_queue with
+// SELECT ... FOR UPDATE SKIP LOCKED, then transition them to processed = 2 in the same transaction. The internal eventlog store is
+// unreachable from this cross-context package (Go's internal/ rule), so the claim is reproduced here on a dedicated connection (one
+// replica's session) to assert two concurrent claimers get disjoint rows.
 func claimBatchSkipLocked(ctx context.Context, db *sqlx.DB, limit int) ([]string, error) {
 	conn, err := db.Connx(ctx)
 	if err != nil {
@@ -220,7 +221,7 @@ func claimBatchSkipLocked(ctx context.Context, db *sqlx.DB, limit int) ([]string
 
 	var ids []string
 	if err := tx.SelectContext(ctx, &ids, `
-		SELECT event_id FROM events
+		SELECT event_id FROM event_queue
 		WHERE processed = 0
 		ORDER BY host_id, timestamp_ns
 		LIMIT ?
@@ -234,7 +235,7 @@ func claimBatchSkipLocked(ctx context.Context, db *sqlx.DB, limit int) ([]string
 	// Hold the row locks briefly so the sibling claimer's SELECT overlaps and must skip these rows rather than serialise behind us.
 	time.Sleep(40 * time.Millisecond)
 
-	q, args, err := sqlx.In("UPDATE events SET processed = 2 WHERE event_id IN (?)", ids)
+	q, args, err := sqlx.In("UPDATE event_queue SET processed = 2 WHERE event_id IN (?)", ids)
 	if err != nil {
 		return nil, err
 	}

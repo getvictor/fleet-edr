@@ -42,10 +42,7 @@ export async function signInAsAdminViaBreakGlass(page: Page): Promise<VirtualAut
   await page.getByRole("button", { name: /register security key/i }).click();
   // The redemption ceremony auto-signs the admin in and lands on the dashboard. Waiting on URL not containing break-glass / login is
   // robust to small route shape changes (e.g. ? param suffixes the server may add).
-  await page.waitForURL(
-    (url) => !url.pathname.includes("break-glass") && !url.pathname.includes("login"),
-    { timeout: 15_000 },
-  );
+  await page.waitForURL((url) => !url.pathname.includes("break-glass") && !url.pathname.includes("login"), { timeout: 15_000 });
   return va;
 }
 
@@ -66,19 +63,20 @@ export async function resetAndSignIn(page: Page): Promise<VirtualAuthenticator> 
 }
 
 /**
- * resetHostData wipes the agent-side tables (events, processes, hosts, enrollments) and the dependent alert_events / alerts rows.
- * The order respects FK constraints: alert_events references both alerts and events, and alerts references processes, so children
- * first, then parents. Tests that want a clean host-list view call this; auth-only specs don't need it (and fixtures/db.ts's resetDB
- * deliberately leaves these tables alone so the existing reauth-modal spec keeps its hosts row available across runs).
+ * resetHostData wipes the agent-side tables (the visibility event_queue, processes, hosts, enrollments) and the dependent
+ * alert_events / alerts rows. The order respects FK constraints: alert_events references alerts, and alerts references processes, so
+ * children first, then parents. event_queue is the visibility work queue (ADR-0015): clearing it stops any leftover queued events from
+ * materializing processes/hosts into an "empty state" test after reset. Events themselves live in the ClickHouse archive, which these
+ * MySQL-backed UI specs don't read (they assert host/process/alert state), so the archive is intentionally left alone. Tests that want
+ * a clean host-list view call this; auth-only specs don't need it (and fixtures/db.ts's resetDB deliberately leaves these tables alone
+ * so the existing reauth-modal spec keeps its hosts row available across runs).
  */
-export async function resetHostData(
-  db: import("mysql2/promise").Connection,
-): Promise<void> {
+export async function resetHostData(db: import("mysql2/promise").Connection): Promise<void> {
   await db.query(`
     DELETE FROM alert_events;
     DELETE FROM alerts;
     DELETE FROM processes;
-    DELETE FROM events;
+    DELETE FROM event_queue;
     DELETE FROM hosts;
     DELETE FROM enrollments;
   `);

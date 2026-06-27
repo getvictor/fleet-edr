@@ -27,9 +27,10 @@ func openCatalogStore(t *testing.T) *catalogStore {
 	return &catalogStore{scenario: detectiontestkit.NewScenario(t, db)}
 }
 
-// InsertEvents inserts a batch into the test DB.
+// InsertEvents seeds the batch into the scenario's in-memory event archive, which the rule's correlation reads delegate to (ADR-0015:
+// events live in the archive, not a MySQL events table).
 func (c *catalogStore) InsertEvents(ctx context.Context, events []detectionapi.Event) error {
-	return c.scenario.Store.InsertEvents(ctx, events)
+	return c.scenario.Archive.Insert(ctx, events)
 }
 
 // ProcessBatch runs the graph builder against the events so the rule

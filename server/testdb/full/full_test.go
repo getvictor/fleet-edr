@@ -22,7 +22,7 @@ func TestOpen_AllContextsSchemaPresent(t *testing.T) {
 		"sessions":             "identity",
 		"enrollments":          "endpoint",
 		"commands":             "response",
-		"events":               "detection",
+		"event_queue":          "visibility",
 		"processes":            "detection",
 		"alerts":               "detection",
 		"alert_events":         "detection",

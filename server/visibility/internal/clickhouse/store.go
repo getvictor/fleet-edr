@@ -8,8 +8,10 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2" // registers the "clickhouse" database/sql driver
 	"github.com/XSAM/otelsql"
@@ -107,12 +109,39 @@ func (s *Store) NetworkEventsForProcess(ctx context.Context, hostID string, pid 
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse network events for process: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
+	return scanEvents(rows)
+}
 
+// EventsByIDs returns the full envelopes for the given event_ids, ordered by (timestamp_ns, event_id). Alert evidence capture snapshots
+// a finding's triggering events into alert_event_payloads with it (ADR-0015), so the evidence outlives the archive's retention window.
+// FINAL collapses ReplacingMergeTree duplicates; IDs with no surviving event are simply absent from the result, keeping capture
+// best-effort. Empty input returns no rows without a query.
+func (s *Store) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event, error) {
+	if len(eventIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(eventIDs))
+	args := make([]any, len(eventIDs))
+	for i, id := range eventIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := "SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload FROM events FINAL WHERE event_id IN (" +
+		strings.Join(placeholders, ", ") + ") ORDER BY timestamp_ns, event_id"
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("clickhouse events by ids: %w", err)
+	}
+	return scanEvents(rows)
+}
+
+// scanEvents drains rows of the standard event projection (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) into
+// a slice and closes them. The String payload is scanned into a []byte (database/sql copies the driver's string into it) and handed to
+// json.RawMessage, since database/sql cannot assign a string driver value straight into json.RawMessage.
+func scanEvents(rows *sql.Rows) ([]api.Event, error) {
+	defer rows.Close() //nolint:errcheck
 	var events []api.Event
 	for rows.Next() {
-		// Scan the String payload into a []byte (database/sql copies the driver's string into it), then hand the bytes to
-		// json.RawMessage; database/sql cannot assign a string driver value straight into json.RawMessage.
 		var e api.Event
 		var payload []byte
 		if err := rows.Scan(&e.EventID, &e.HostID, &e.TimestampNs, &e.IngestedAtNs, &e.EventType, &payload); err != nil {
@@ -122,7 +151,7 @@ func (s *Store) NetworkEventsForProcess(ctx context.Context, hostID string, pid 
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("clickhouse network events for process: %w", err)
+		return nil, fmt.Errorf("scan clickhouse events: %w", err)
 	}
 	return events, nil
 }

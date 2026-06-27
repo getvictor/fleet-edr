@@ -13,14 +13,15 @@ import (
 // spec:server-detection-rules-engine/alert-evidence-is-self-contained/triggering-event-payloads-are-captured-at-alert-creation
 func TestStore_InsertAlert_CapturesEventEvidence(t *testing.T) {
 	t.Parallel()
-	s := newTestStore(t)
+	s, archive := newTestStoreWithArchive(t)
 	ctx := t.Context()
 
 	events := []api.Event{
 		{EventID: "ev-1", HostID: "h1", TimestampNs: 100, EventType: "network_connect", Payload: json.RawMessage(`{"pid":42,"remote":"1.2.3.4"}`)},
 		{EventID: "ev-2", HostID: "h1", TimestampNs: 200, EventType: "dns_query", Payload: json.RawMessage(`{"pid":42,"name":"evil.example"}`)},
 	}
-	require.NoError(t, s.InsertEventsAt(ctx, events, 1000))
+	// The triggering events live in the durable archive (ADR-0015); alert creation snapshots their envelopes into alert_event_payloads.
+	require.NoError(t, archive.Insert(ctx, events))
 
 	// A process-less alert (Subject set, ProcessID 0) avoids needing a processes row for the FK; the evidence copy is what we exercise.
 	alertID, created, err := s.InsertAlert(ctx, api.Alert{
@@ -41,21 +42,20 @@ func TestStore_InsertAlert_CapturesEventEvidence(t *testing.T) {
 // spec:server-detection-rules-engine/alert-evidence-is-self-contained/evidence-survives-event-archive-expiry
 func TestStore_AlertEvidence_SurvivesEventDeletion(t *testing.T) {
 	t.Parallel()
-	s := newTestStore(t)
+	s, archive := newTestStoreWithArchive(t)
 	ctx := t.Context()
 
-	require.NoError(t, s.InsertEventsAt(ctx, []api.Event{
+	require.NoError(t, archive.Insert(ctx, []api.Event{
 		{EventID: "gone-1", HostID: "h1", TimestampNs: 100, EventType: "network_connect", Payload: json.RawMessage(`{"pid":7}`)},
-	}, 1000))
+	}))
 	alertID, _, err := s.InsertAlert(ctx, api.Alert{
 		HostID: "h1", RuleID: "test_rule", Severity: api.SeverityHigh, Title: "t", Description: "d", Subject: "test:survives",
 	}, []string{"gone-1"})
 	require.NoError(t, err)
 
-	// Simulate the events aging out (and the cutover dropping the events table + its FK): drop the link, then the source event.
+	// The evidence is a self-contained copy in alert_event_payloads: drop the alert_events correlation link (and, post-cutover, the
+	// archive ages the source event out) and the captured payload still resolves.
 	_, err = s.DB().ExecContext(ctx, "DELETE FROM alert_events WHERE alert_id = ?", alertID)
-	require.NoError(t, err)
-	_, err = s.DB().ExecContext(ctx, "DELETE FROM events WHERE event_id = ?", "gone-1")
 	require.NoError(t, err)
 
 	evidence, err := s.GetAlertEventPayloads(ctx, alertID)

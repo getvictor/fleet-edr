@@ -17,6 +17,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // MaxIngestBodyBytes is the per-request body cap on POST /api/events. The contract is documented in openspec/specs/
@@ -128,25 +129,30 @@ type BuildInfo struct {
 // Handler serves the event ingestion API plus the
 // livez/readyz/health endpoints.
 type Handler struct {
-	store      *mysql.Store
-	logger     *slog.Logger
-	buildInfo  BuildInfo
-	startTime  time.Time
-	metrics    api.MetricsRecorder
-	isDraining func() bool
+	store        *mysql.Store
+	eventLog     visibilityapi.EventLog
+	eventArchive visibilityapi.EventArchive
+	logger       *slog.Logger
+	buildInfo    BuildInfo
+	startTime    time.Time
+	metrics      api.MetricsRecorder
+	isDraining   func() bool
 }
 
-// New creates an ingestion Handler. The store argument may be nil in tests that only exercise the health endpoints; readiness checks
-// handle that case explicitly.
-func New(s *mysql.Store, logger *slog.Logger, info BuildInfo) *Handler {
+// New creates an ingestion Handler. eventLog (the work queue) and eventArchive (the durable lake) are the post-cutover event sinks
+// (ADR-0015); both are required in full mode. The store argument carries control-plane writes (host summary + snapshot freshness) and
+// may be nil in tests that only exercise the health endpoints; readiness checks handle that case explicitly.
+func New(s *mysql.Store, logger *slog.Logger, info BuildInfo, eventLog visibilityapi.EventLog, eventArchive visibilityapi.EventArchive) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Handler{
-		store:     s,
-		logger:    logger,
-		buildInfo: info,
-		startTime: time.Now(),
+		store:        s,
+		eventLog:     eventLog,
+		eventArchive: eventArchive,
+		logger:       logger,
+		buildInfo:    info,
+		startTime:    time.Now(),
 	}
 }
 
@@ -198,8 +204,26 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// rule evaluation. Everything else is persisted exactly as before.
 	toStore, heartbeats := partitionHeartbeats(events)
 
-	if err := h.store.InsertEvents(ctx, toStore); err != nil {
-		h.logger.ErrorContext(ctx, "insert error", "err", err)
+	// Stamp the server-controlled arrival time on every storable event before the fan-out. ingested_at_ns is the clock-drift-tolerant
+	// ordering + correlation key (cross-stream rules and the process-detail read window on it), so it MUST come from the server clock,
+	// not the agent's: an agent cannot set or skew it. Both stores persist exactly what we stamp here. (Pre-cutover this lived in the
+	// MySQL InsertEvents path; the fan-out moved it up to the handler so both the archive and the queue see the same value.)
+	ingestedAtNs := time.Now().UnixNano()
+	for i := range toStore {
+		toStore[i].IngestedAtNs = ingestedAtNs
+	}
+
+	// Fan out to the two event stores (ADR-0015), archive FIRST so the durable lake has every event before it is enqueued for
+	// processing: the alert-evidence copy reads the archive, and a partial failure leaves nothing queued. Both writes are idempotent by
+	// event_id (ReplacingMergeTree on the archive, INSERT IGNORE on the queue), so the agent's retry of a 200-less batch is safe. We
+	// return 200 only after BOTH succeed.
+	if err := h.eventArchive.Insert(ctx, toStore); err != nil {
+		h.logger.ErrorContext(ctx, "archive insert error", "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	if err := h.eventLog.Append(ctx, toStore); err != nil {
+		h.logger.ErrorContext(ctx, "eventlog append error", "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}

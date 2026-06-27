@@ -502,25 +502,9 @@ func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, 
 // on ingested_at_ns (server-stamped) rather than timestamp_ns
 // because ES and NE clocks drift (issue #7).
 //
-// The payload_pid predicate is index-backed by
-// idx_events_host_type_pid_ingested (issue #92): the prior
-// JSON_EXTRACT predicate forced a full scan of the events table.
-// payload_pid is a STORED generated column; the index entry is
-// populated on insert so this query is a range scan, not a JSON
-// reparse, regardless of how many rows live in events.
+// GetNetworkEventsForProcess delegates to the visibility EventArchive (ADR-0015): post-cutover the events live in ClickHouse, not the
+// MySQL events table, so the detection store no longer owns this query. The method is kept on the store so its callers (the process-detail
+// graph query and the DNS-C2 correlation rule, both reaching the store as a detection api.GraphReader) stay unchanged across the cutover.
 func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr api.TimeRange) ([]api.Event, error) {
-	var events []api.Event
-	err := s.db.SelectContext(ctx, &events, `
-		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
-		FROM events
-		WHERE host_id = ? AND event_type IN ('network_connect', 'dns_query')
-		  AND payload_pid = ?
-		  AND ingested_at_ns >= ? AND ingested_at_ns <= ?
-		ORDER BY timestamp_ns`,
-		hostID, pid, tr.FromNs, tr.ToNs,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query network events: %w", err)
-	}
-	return events, nil
+	return s.archive.NetworkEventsForProcess(ctx, hostID, pid, tr)
 }

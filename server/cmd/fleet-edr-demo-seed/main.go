@@ -22,6 +22,9 @@ import (
 
 	// Registers the "mysql" driver with database/sql so sql.Open("mysql", dsn) resolves; imported for its init side effect.
 	_ "github.com/go-sql-driver/mysql"
+
+	// Registers the "clickhouse" driver so sql.Open("clickhouse", dsn) resolves for the optional event-archive timestamp slide.
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 func main() {
@@ -52,6 +55,18 @@ func realMain(logger *slog.Logger, getenv func(string) string, args []string) er
 	}
 	defer db.Close()
 
+	// The event archive (ADR-0015) is optional for the seeder: it posts events via the HTTP API (the server writes them to the
+	// archive), and only needs a direct ClickHouse connection for the restart timestamp-slide. When EDR_CLICKHOUSE_DSN is unset the
+	// seeder still runs; refreshTimestamps just skips the archived-event shift.
+	var chDB *sql.DB
+	if cfg.chDSN != "" {
+		chDB, err = sql.Open("clickhouse", cfg.chDSN)
+		if err != nil {
+			return fmt.Errorf("open clickhouse: %w", err)
+		}
+		defer chDB.Close()
+	}
+
 	// Budget the overall run at the readiness + verification windows plus headroom for enroll/ingest round-trips.
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.readyTimeout+cfg.verifyTimeout+defaultHeadroom)
 	defer cancel()
@@ -59,8 +74,17 @@ func realMain(logger *slog.Logger, getenv func(string) string, args []string) er
 	if err := pingUntilReady(ctx, db, cfg.readyTimeout, cfg.pollInterval); err != nil {
 		return err
 	}
+	// Fail fast if the archive is unreachable, before the seeder mutates any MySQL state (refreshTimestamps slides MySQL rows and then
+	// the ClickHouse events): a dead archive discovered mid-run would leave the demo split across the two stores.
+	if chDB != nil {
+		if err := pingUntilReady(ctx, chDB, cfg.readyTimeout, cfg.pollInterval); err != nil {
+			return fmt.Errorf("clickhouse not ready: %w", err)
+		}
+	}
 
-	return newSeeder(cfg, db, client, logger).run(ctx)
+	s := newSeeder(cfg, db, client, logger)
+	s.chDB = chDB
+	return s.run(ctx)
 }
 
 // pingUntilReady retries the DB ping until it succeeds or the ready window elapses. In docker-compose first boot, MySQL may still be

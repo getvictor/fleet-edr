@@ -21,7 +21,7 @@ type retentionDeleter interface {
 
 // RetentionOptions tune the retention runner.
 type RetentionOptions struct {
-	// RetentionDays is how long events are kept. 0 disables retention.
+	// RetentionDays is how long process records are kept. 0 disables retention. Event retention is ClickHouse-native TTL (ADR-0015).
 	RetentionDays int
 	// Interval between runs. Default 1h.
 	Interval time.Duration
@@ -37,10 +37,11 @@ type RetentionOptions struct {
 
 const attrRetentionDays = "edr.retention.days"
 
-// RetentionRunner executes retention passes on a cadence. Each pass deletes two row families older than RetentionDays, each preserving
-// rows still referenced by an alert so alert detail views keep rendering:
-//   - `events` older than the cutoff (by timestamp_ns), skipping any event referenced by an alert_events row.
+// RetentionRunner executes retention passes on a cadence. Each pass prunes completed process records older than RetentionDays,
+// preserving rows still referenced by an alert so alert detail views keep rendering:
 //   - completed `processes` whose exit_time_ns is older than the cutoff, skipping any process referenced by an alerts.process_id row.
+//
+// Event retention is handled by the ClickHouse archive's native TTL (ADR-0015), not here; the server owns only the process prune.
 //
 // The process prune keys on exit_time_ns, never fork_time_ns: a still-running record (exit_time_ns IS NULL, which includes the live
 // snapshot working set) is therefore never deleted, and a long-running process that only recently exited is retained for the full
@@ -115,7 +116,8 @@ func (r *RetentionRunner) Loop(ctx context.Context) {
 	}
 }
 
-// Run executes one retention pass and returns total rows deleted across events + processes.
+// Run executes one retention pass and returns the number of process records pruned. Event retention is ClickHouse-native TTL now
+// (ADR-0015): the server no longer sweeps an events table, so this pass prunes only the MySQL process records.
 func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 	if r.retentionDays == 0 {
 		return 0, nil
@@ -126,26 +128,6 @@ func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 		attribute.Int(attrRetentionDays, r.retentionDays),
 		attribute.Int64("edr.retention.cutoff_ns", cutoff),
 	)
-
-	// Emit each delete's count as soon as that delete returns, before checking its error. pruneBatched reports rows actually deleted even
-	// on a mid-batch failure, and a failure in the second (processes) delete must not suppress the telemetry for the first (events) one,
-	// else a partial-failure run reports zero events pruned when rows were in fact removed.
-	events, eventsErr := r.pruneBatched(ctx, `
-		DELETE FROM events
-		WHERE timestamp_ns < ?
-		  AND NOT EXISTS (
-		      SELECT 1 FROM alert_events ae WHERE ae.event_id = events.event_id
-		  )
-		ORDER BY timestamp_ns
-		LIMIT ?
-	`, cutoff)
-	span.SetAttributes(attribute.Int64("edr.retention.rows_deleted", events))
-	if r.metrics != nil {
-		r.metrics.RetentionRowsDeleted(ctx, events)
-	}
-	if eventsErr != nil {
-		return events, fmt.Errorf("retention delete events batch: %w", eventsErr)
-	}
 
 	// Completed processes only (exit_time_ns IS NOT NULL): see the type doc for why NULL-exit rows are intentionally left to the
 	// freshness-TTL reconciler. The alerts.process_id FK is ON DELETE RESTRICT, so an alert-referenced row must be skipped or the
@@ -165,16 +147,15 @@ func (r *RetentionRunner) Run(ctx context.Context) (int64, error) {
 		r.metrics.ProcessRetentionRowsDeleted(ctx, processes)
 	}
 	if procErr != nil {
-		return events + processes, fmt.Errorf("retention delete processes batch: %w", procErr)
+		return processes, fmt.Errorf("retention delete processes batch: %w", procErr)
 	}
 
 	r.logger.InfoContext(ctx, "retention run",
 		attrRetentionDays, r.retentionDays,
 		"edr.retention.cutoff_ns", cutoff,
-		"edr.retention.rows_deleted", events,
 		"edr.retention.processes.rows_deleted", processes,
 	)
-	return events + processes, nil
+	return processes, nil
 }
 
 // pruneBatched runs a batched DELETE until a batch removes fewer than batchSize rows, returning the total deleted. query MUST end in a

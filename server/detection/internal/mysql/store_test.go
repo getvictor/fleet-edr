@@ -2,10 +2,6 @@ package mysql_test
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"strconv"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +12,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 	"github.com/fleetdm/edr/server/testdb/full"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // newTestStore wraps testdb.Open with detection's ApplySchema and
@@ -29,12 +26,22 @@ import (
 // interface.
 func newTestStore(tb testing.TB) *mysql.Store {
 	tb.Helper()
+	s, _ := newTestStoreWithArchive(tb)
+	return s
+}
+
+// newTestStoreWithArchive is newTestStore plus the in-memory EventArchive the store reads correlation + evidence from, returned so tests
+// that need a populated archive (alert evidence, network correlation) can seed it with archive.Insert. The store and the returned
+// archive share the same instance, so seeding the archive is visible to the store's reads.
+func newTestStoreWithArchive(tb testing.TB) (*mysql.Store, visibilityapi.EventArchive) {
+	tb.Helper()
 	db := testdb.Open(tb)
 	ctx := tb.Context()
 	require.NoError(tb, testkit.ApplySchema(ctx, db))
-	s, err := mysql.New(db)
+	archive := testkit.NewMemArchive()
+	s, err := mysql.New(db, archive)
 	require.NoError(tb, err)
-	return s
+	return s, archive
 }
 
 // newFullSchemaStore is newTestStore's cross-context sibling for the handful of store tests that exercise ListHosts, which LEFT JOINs
@@ -43,16 +50,23 @@ func newTestStore(tb testing.TB) *mysql.Store {
 // (arch-go allows **.testdb here); it takes *testing.T, so this helper is test-only (no benchmark variant needed).
 func newFullSchemaStore(t *testing.T) *mysql.Store {
 	t.Helper()
-	s, err := mysql.New(full.Open(t))
+	s, err := mysql.New(full.Open(t), testkit.NewMemArchive())
 	require.NoError(t, err)
 	return s
 }
 
 func TestNew_RejectsNilDB(t *testing.T) {
 	t.Parallel()
-	_, err := mysql.New(nil)
+	_, err := mysql.New(nil, testkit.NewMemArchive())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db handle")
+}
+
+func TestNew_RejectsNilArchive(t *testing.T) {
+	t.Parallel()
+	_, err := mysql.New(testdb.Open(t), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event archive")
 }
 
 func TestStore_DBAndClose(t *testing.T) {
@@ -61,247 +75,6 @@ func TestStore_DBAndClose(t *testing.T) {
 	assert.NotNil(t, s.DB(), "DB() returns the underlying *sqlx.DB")
 	require.NoError(t, s.Close(), "Close is a no-op (the db handle is shared with cmd/main)")
 	require.NoError(t, s.PingContext(t.Context()), "Ping after no-op Close still works")
-}
-
-func TestStore_CountEventsAndUnprocessed(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	count, err := s.CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), count, "fresh DB has no events")
-
-	events := []api.Event{
-		{EventID: "ce-1", HostID: "h", TimestampNs: 1, EventType: "fork", Payload: json.RawMessage(`{}`)},
-		{EventID: "ce-2", HostID: "h", TimestampNs: 2, EventType: "fork", Payload: json.RawMessage(`{}`)},
-	}
-	require.NoError(t, s.InsertEvents(ctx, events))
-
-	count, err = s.CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), count)
-
-	unproc, err := s.CountUnprocessed(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), unproc, "freshly inserted events are unprocessed")
-}
-
-func TestStore_InsertEventsAtPinsTimestamp(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	events := []api.Event{
-		{EventID: "ia-1", HostID: "h", TimestampNs: 100, EventType: "fork", Payload: json.RawMessage(`{}`)},
-	}
-	require.NoError(t, s.InsertEventsAt(ctx, events, 9999))
-
-	// The caller's slice is stamped in place when the row was actually
-	// inserted (vs deduped via INSERT IGNORE).
-	assert.Equal(t, int64(9999), events[0].IngestedAtNs,
-		"InsertEventsAt must pin the deterministic ingest timestamp")
-}
-
-// TestStore_InsertEventsAt_DuplicateStampsPersistedIngestedAt pins the batched-insert behavior: a duplicate event_id (dropped by
-// INSERT IGNORE) keeps the ingested_at_ns from its FIRST insert, and the caller's slice is stamped with that persisted value, not
-// the current batch's. A genuinely-new row in the same batch still gets the current batch's time.
-func TestStore_InsertEventsAt_DuplicateStampsPersistedIngestedAt(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	first := []api.Event{{EventID: "dup-1", HostID: "h", TimestampNs: 100, EventType: "fork", Payload: json.RawMessage(`{}`)}}
-	require.NoError(t, s.InsertEventsAt(ctx, first, 1000))
-	require.Equal(t, int64(1000), first[0].IngestedAtNs)
-
-	second := []api.Event{
-		{EventID: "dup-1", HostID: "h", TimestampNs: 100, EventType: "fork", Payload: json.RawMessage(`{}`)},
-		{EventID: "dup-2", HostID: "h", TimestampNs: 200, EventType: "fork", Payload: json.RawMessage(`{}`)},
-	}
-	require.NoError(t, s.InsertEventsAt(ctx, second, 2000))
-	assert.Equal(t, int64(1000), second[0].IngestedAtNs, "duplicate keeps its original persisted ingested_at_ns, not the new batch's 2000")
-	assert.Equal(t, int64(2000), second[1].IngestedAtNs, "newly inserted row in the same batch gets the new ingest time")
-
-	count, err := s.CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), count, "dup-1 deduped; only dup-2 added")
-}
-
-// TestStore_InsertEventsAt_ChunksLargeBatch inserts more events than eventInsertChunkRows so the multi-row INSERT spans more than
-// one chunk, and asserts every row across the chunk boundary is persisted and stamped.
-func TestStore_InsertEventsAt_ChunksLargeBatch(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	const n = 600 // > eventInsertChunkRows (500): forces two chunks
-	events := make([]api.Event, n)
-	for i := range events {
-		events[i] = api.Event{EventID: "chunk-" + strconv.Itoa(i), HostID: "h", TimestampNs: int64(i + 1), EventType: "fork", Payload: json.RawMessage(`{}`)}
-	}
-	require.NoError(t, s.InsertEventsAt(ctx, events, 7777))
-	for i := range events {
-		require.Equal(t, int64(7777), events[i].IngestedAtNs, "row %d across the chunk boundary must be stamped", i)
-	}
-
-	count, err := s.CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(n), count)
-}
-
-func TestStore_InsertEvents_EmptyIsNoOp(t *testing.T) {
-	t.Parallel()
-	// The empty-slice fast path returns nil without touching the DB. Important for the retry wrapper: an empty insert must
-	// not waste a deadlock-retry budget on a no-op transaction.
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	require.NoError(t, s.InsertEvents(ctx, nil), "InsertEvents(nil) is a no-op")
-	require.NoError(t, s.InsertEvents(ctx, []api.Event{}), "InsertEvents([]) is a no-op")
-	require.NoError(t, s.InsertEventsAt(ctx, nil, 1234), "InsertEventsAt(nil, _) is a no-op")
-
-	count, err := s.CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), count, "no rows inserted by any of the no-op calls")
-}
-
-func TestStore_InsertEvents_ClosedDBReturnsError(t *testing.T) {
-	t.Parallel()
-	// Closing the underlying db pool forces BeginTxx to fail on the first attempt. The deadlock-retry wrapper must NOT
-	// retry this class of error (it is not a 1213), so the call should return promptly with the begin-tx error wrapped.
-	s := newTestStore(t)
-	require.NoError(t, s.DB().Close(), "close underlying pool to force begin-tx failure")
-
-	events := []api.Event{
-		{EventID: "closed-db-1", HostID: "h", TimestampNs: 1, EventType: "fork", Payload: json.RawMessage(`{}`)},
-	}
-	err := s.InsertEvents(t.Context(), events)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "begin tx", "begin tx failures must propagate, not be swallowed by the retry loop")
-}
-
-// spec:server-event-ingestion/horizontally-scalable-ingestion-service/two-ingestion-replicas-run-against-the-same-database
-//
-// Concurrent-InsertEvents stress test. Spawns N goroutines that each call InsertEvents with overlapping batches against
-// the SAME *mysql.Store (which models two ingestion replicas pointing at one shared MySQL backend, since the handler is
-// stateless apart from its store handle and both replicas would dial the same DB). Half the batches share event_ids
-// with each other and with the other half, exercising both the INSERT IGNORE deduplication path and the M10 deadlock-
-// retry wrapper under contention.
-//
-// Assertions:
-//
-//   - Every goroutine completes without error. The M10 retry budget is 5 attempts; if a deadlock window cannot resolve
-//     in that budget, the goroutine returns the wrapped 1213 and the test fails loudly rather than silently dropping
-//     events.
-//   - The events table's final cardinality equals the count of distinct event_ids across all batches (not the SUM of
-//     batch lengths). This pins both the dedup semantic AND the "no spurious deletes / rollbacks" property: a buggy
-//     concurrent path that lost rows would show up as a low cardinality count here.
-//
-// The architectural property being pinned is the spec's "Multiple replicas of the ingestion service MUST be able to
-// accept agent traffic concurrently against the same database without coordinating with each other." A literal two-
-// process test (two scaledriver binaries against one server) belongs at the M12 scale layer (#232); this in-process
-// stress test pins the wire-level concurrency-safety property that makes the multi-process shape work.
-func TestStore_InsertEvents_ConcurrentReplicaShape(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	const goroutines = 16
-	const eventsPerBatch = 20
-	const sharedEventCount = 8 // first 8 events overlap across every batch; remaining 12 are unique per goroutine
-
-	// Build the shared (overlap) event slice once. Every goroutine reuses these event_ids, so concurrent inserts of the
-	// same row exercise INSERT IGNORE under contention. Their host_ids match across goroutines too because in
-	// production multiple replicas commonly receive batches from the same host on different connections.
-	shared := make([]api.Event, sharedEventCount)
-	for i := range shared {
-		shared[i] = api.Event{
-			EventID:     "shared-" + strconv.Itoa(i),
-			HostID:      "host-shared",
-			TimestampNs: int64(i + 1),
-			EventType:   "fork",
-			Payload:     json.RawMessage(`{}`),
-		}
-	}
-
-	var wg sync.WaitGroup
-	errs := make(chan error, goroutines)
-	for g := range goroutines {
-		wg.Add(1)
-		go func(replicaIdx int) {
-			defer wg.Done()
-			batch := append([]api.Event(nil), shared...)
-			for i := sharedEventCount; i < eventsPerBatch; i++ {
-				batch = append(batch, api.Event{
-					EventID:     "rep-" + strconv.Itoa(replicaIdx) + "-evt-" + strconv.Itoa(i),
-					HostID:      "host-rep-" + strconv.Itoa(replicaIdx),
-					TimestampNs: int64(i + 1),
-					EventType:   "fork",
-					Payload:     json.RawMessage(`{}`),
-				})
-			}
-			if err := s.InsertEvents(ctx, batch); err != nil {
-				errs <- fmt.Errorf("replica %d: %w", replicaIdx, err)
-			}
-		}(g)
-	}
-	wg.Wait()
-	close(errs)
-
-	var collected []error
-	for err := range errs {
-		collected = append(collected, err)
-	}
-	require.Empty(t, collected, "no replica goroutine may surface an unretried deadlock or insert error")
-
-	got, err := s.CountEvents(ctx)
-	require.NoError(t, err)
-	// Distinct event_ids = sharedEventCount + goroutines * the per-batch unique count (eventsPerBatch minus sharedEventCount).
-	wantDistinct := int64(sharedEventCount + (eventsPerBatch-sharedEventCount)*goroutines)
-	assert.Equal(t, wantDistinct, got,
-		"final events table cardinality must equal the distinct-event-id union across replicas")
-}
-
-// spec:server-event-ingestion/event-storage-drops-redundant-indexes/the-unprocessed-event-claim-still-works-after-the-index-diet
-func TestStore_FetchUnprocessedAndUnclaim(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
-
-	events := []api.Event{
-		{EventID: "fu-1", HostID: "h", TimestampNs: 1, EventType: "fork", Payload: json.RawMessage(`{}`)},
-		{EventID: "fu-2", HostID: "h", TimestampNs: 2, EventType: "fork", Payload: json.RawMessage(`{}`)},
-	}
-	require.NoError(t, s.InsertEvents(ctx, events))
-
-	got, err := s.FetchUnprocessed(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, got, 2)
-	ids := []string{got[0].EventID, got[1].EventID}
-
-	// After Fetch the rows are in state 2 (claimed). UnclaimEvents
-	// transitions them back to state 0 so a future cycle can retry.
-	require.NoError(t, s.UnclaimEvents(ctx, ids))
-
-	got2, err := s.FetchUnprocessed(ctx, 10)
-	require.NoError(t, err)
-	assert.Len(t, got2, 2, "unclaimed events must be reclaimable")
-}
-
-func TestStore_FetchUnprocessedRejectsZeroLimit(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	out, err := s.FetchUnprocessed(t.Context(), 0)
-	require.NoError(t, err)
-	assert.Nil(t, out, "zero limit yields nil without a query")
-}
-
-func TestStore_MarkProcessedNoOpOnEmpty(t *testing.T) {
-	t.Parallel()
-	s := newTestStore(t)
-	require.NoError(t, s.MarkProcessed(t.Context(), nil))
-	require.NoError(t, s.UnclaimEvents(t.Context(), nil))
 }
 
 func TestStore_CountAlerts(t *testing.T) {

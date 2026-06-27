@@ -23,6 +23,7 @@ import (
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
+	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
 )
 
 // migration pairs a context name with its package-level schema applier. Ordering is not load-bearing (there are no cross-context
@@ -39,6 +40,9 @@ func migrations() []migration {
 		{"rules", rulesbootstrap.ApplySchema},
 		{"response", responsebootstrap.ApplySchema},
 		{"detection", detectionbootstrap.ApplySchema},
+		// visibility applies only its MySQL schema here (the event_queue work queue); the ClickHouse event archive is migrated by the
+		// server at boot, since this CLI takes a MySQL DSN only (ADR-0015).
+		{"visibility", visibilitybootstrap.ApplySchema},
 	}
 }
 

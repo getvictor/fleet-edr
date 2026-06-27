@@ -24,6 +24,7 @@ type config struct {
 	serverURL    string
 	enrollSecret string
 	dsn          string
+	chDSN        string
 	caCertPath   string
 	force        bool
 
@@ -49,6 +50,8 @@ func resolveConfig(getenv func(string) string, args []string) (config, error) {
 		"enrollment secret the server was started with")
 	fs.StringVar(&c.dsn, "dsn", envOr(getenv, "EDR_DSN", ""),
 		"MySQL DSN used to verify materialised demo data and seed the SSO demo user")
+	fs.StringVar(&c.chDSN, "clickhouse-dsn", envOr(getenv, "EDR_CLICKHOUSE_DSN", ""),
+		"ClickHouse DSN for the event archive (ADR-0015); when set, the restart timestamp-refresh slides archived events too. Optional")
 	fs.StringVar(&c.caCertPath, "ca-cert", envOr(getenv, "EDR_DEMO_CA_CERT", ""),
 		"PEM CA/cert file to trust for the server's TLS (the demo stack's self-signed localhost cert); empty uses system roots")
 	fs.BoolVar(&c.force, "force", envBool(getenv, "EDR_DEMO_FORCE", false),

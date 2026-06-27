@@ -145,6 +145,40 @@ func TestEventArchive_ErrorsOnClosedConnection(t *testing.T) {
 		"insert on a closed connection surfaces the error")
 	_, err = store.NetworkEventsForProcess(ctx, "h1", 1, httpserver.TimeRange{FromNs: 0, ToNs: 1})
 	require.Error(t, err, "read on a closed connection surfaces the error")
+	_, err = store.EventsByIDs(ctx, []string{"x"})
+	require.Error(t, err, "events-by-ids on a closed connection surfaces the error")
+}
+
+func TestEventArchive_EventsByIDs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+
+	// Recent base so ingested_date lands inside the 30-day TTL window (see readNetworkEvents).
+	base := time.Now().UnixNano()
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
+		archiveEvent("ev-b", "h1", "exec", base+200, 1),
+		archiveEvent("ev-a", "h1", "network_connect", base+100, 1),
+		archiveEvent("ev-c", "h1", "dns_query", base+300, 1),
+	}))
+
+	// EventsByIDs backs self-contained alert evidence: it returns the requested envelopes ordered by (timestamp_ns, event_id), across
+	// any event_type, and silently omits an id with no surviving row (best-effort, so an aged-out event never fails alert creation).
+	var got []visibilityapi.Event
+	require.Eventually(t, func() bool {
+		var err error
+		got, err = arch.EventsByIDs(ctx, []string{"ev-b", "ev-a", "missing"})
+		return err == nil && len(got) == 2
+	}, 5*time.Second, 100*time.Millisecond, "EventsByIDs returns the two known events, omitting the unknown id")
+
+	ids := []string{got[0].EventID, got[1].EventID}
+	assert.Equal(t, []string{"ev-a", "ev-b"}, ids, "ordered by (timestamp_ns, event_id) regardless of request order")
+	assert.Equal(t, "network_connect", got[0].EventType)
+	assert.JSONEq(t, `{"pid":1}`, string(got[0].Payload), "payload round-trips from the archive")
+
+	empty, err := arch.EventsByIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty, "no ids requested returns no rows without a query")
 }
 
 func TestEventArchive_IdempotentInsert(t *testing.T) {

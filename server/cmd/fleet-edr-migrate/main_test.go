@@ -28,11 +28,12 @@ func TestApplyAll(t *testing.T) {
 
 	require.NoError(t, applyAll(t.Context(), db, io.Discard))
 
-	// One representative table per context, plus a per-context goose tracking table, must exist after the run.
+	// One representative table per context, plus a per-context goose tracking table, must exist after the run. Detection's is `alerts`
+	// (the `events` table is dropped by the ClickHouse cutover, ADR-0015); visibility's is the `event_queue` work queue.
 	for _, table := range []string{
-		"users", "enrollments", "app_control_policies", "commands", "events",
+		"users", "enrollments", "app_control_policies", "commands", "alerts", "event_queue",
 		"identity_goose_db_version", "endpoint_goose_db_version", "rules_goose_db_version",
-		"response_goose_db_version", "detection_goose_db_version",
+		"response_goose_db_version", "detection_goose_db_version", "visibility_goose_db_version",
 	} {
 		assert.Truef(t, tableExists(t, db, table), "table %q must exist after applyAll", table)
 	}

@@ -36,6 +36,7 @@ import (
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/tracingpolicy"
 	"github.com/fleetdm/edr/server/ui"
+	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
 )
 
 // serverGaugeSource adapts our endpoint Service + detection Service
@@ -118,6 +119,19 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
+	// ClickHouse is the event store (ADR-0015): the durable archive intake writes to and correlation/evidence reads from. It is
+	// required, not optional: there is no MySQL events fallback after the cutover, so an unset EDR_CLICKHOUSE_DSN is a fatal misconfig.
+	if cfg.ClickHouseDSN == "" {
+		logger.ErrorContext(ctx, "EDR_CLICKHOUSE_DSN is required: the event store is ClickHouse (ADR-0015)")
+		return errors.New("EDR_CLICKHOUSE_DSN is required")
+	}
+	chDB, err := visibilitybootstrap.OpenClickHouse(ctx, cfg.ClickHouseDSN)
+	if err != nil {
+		logger.ErrorContext(ctx, "open clickhouse", "err", err)
+		return err
+	}
+	defer func() { _ = chDB.Close() }()
+
 	// drain is the process-wide graceful-shutdown signal: SIGTERM flips it so /readyz reports 503 and the load balancer drains this
 	// replica before RunAndShutdown closes the listener. Shared between the detection intake handler (which serves /readyz) and
 	// RunAndShutdown below.
@@ -129,7 +143,7 @@ func run() error {
 	// spare connection.
 	coord := leader.NewMySQL(db, logger)
 
-	identityCtx, detectionCtx, responseCtx, rulesCtx, endpointCtx, observabilityCtx, err := openContexts(ctx, logger, db, cfg, coord, drain)
+	identityCtx, detectionCtx, responseCtx, rulesCtx, endpointCtx, observabilityCtx, err := openContexts(ctx, logger, db, chDB, cfg, coord, drain)
 	if err != nil {
 		return err
 	}
@@ -221,6 +235,7 @@ func openContexts(
 	ctx context.Context,
 	logger *slog.Logger,
 	db *sqlx.DB,
+	chDB *sqlx.DB,
 	cfg *config.Config,
 	coord leader.Coordinator,
 	drain *httpserver.DrainState,
@@ -254,7 +269,22 @@ func openContexts(
 		kr.Derive(keyring.ServiceAccountTokenSigningLabel)); err != nil {
 		return
 	}
-	if detectionCtx, err = openDetection(ctx, logger, db, cfg, identityCtx, drain.IsDraining, coord); err != nil {
+	// The visibility context (ADR-0015) owns the two event stores: the MySQL EventLog work queue and the ClickHouse EventArchive.
+	// Built under the same migration lock as the others; detection consumes both (intake fans out to them, the processor claims from
+	// the queue). chDB is non-nil here (run() makes EDR_CLICKHOUSE_DSN required), so EventArchive() is the live archive, not nil.
+	visibilityCtx, verr := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db, ClickHouseDB: chDB, Logger: logger})
+	if verr != nil {
+		logger.ErrorContext(ctx, "open visibility", "err", verr)
+		err = verr
+		return
+	}
+	if err = visibilityCtx.ApplySchema(ctx); err != nil {
+		logger.ErrorContext(ctx, "visibility schema", "err", err)
+		return
+	}
+	if detectionCtx, err = openDetection(ctx, logger, db, cfg, detectionWiring{
+		identity: identityCtx, visibility: visibilityCtx, isDraining: drain.IsDraining, coord: coord,
+	}); err != nil {
 		return
 	}
 	if responseCtx, err = openResponse(ctx, logger, db, detectionCtx, identityCtx); err != nil {
@@ -346,14 +376,21 @@ func openIdentity(
 	return identityCtx, nil
 }
 
+// detectionWiring bundles the cross-context handles openDetection threads into the detection bootstrap, keeping its signature under the
+// parameter-count limit.
+type detectionWiring struct {
+	identity   *identitybootstrap.Identity
+	visibility *visibilitybootstrap.Visibility
+	isDraining func() bool
+	coord      leader.Coordinator
+}
+
 func openDetection(
 	ctx context.Context,
 	logger *slog.Logger,
 	db *sqlx.DB,
 	cfg *config.Config,
-	identityCtx *identitybootstrap.Identity,
-	isDraining func() bool,
-	coord leader.Coordinator,
+	w detectionWiring,
 ) (*detectionbootstrap.Detection, error) {
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:     db,
@@ -370,11 +407,13 @@ func openDetection(
 		StaleProcessInterval: config.DefaultStaleProcessInterval,
 		RetentionDays:        cfg.RetentionDays,
 		RetentionInterval:    config.DefaultRetentionInterval,
-		UserExists:           identityCtx.Service().UserExists,
-		Audit:                identityCtx.AuditRecorder(),
-		AuthZ:                identityCtx.AuthZ(),
-		IsDraining:           isDraining,
-		Coordinator:          coord,
+		UserExists:           w.identity.Service().UserExists,
+		Audit:                w.identity.AuditRecorder(),
+		AuthZ:                w.identity.AuthZ(),
+		IsDraining:           w.isDraining,
+		Coordinator:          w.coord,
+		EventLog:             w.visibility.EventLog(),
+		EventArchive:         w.visibility.EventArchive(),
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)

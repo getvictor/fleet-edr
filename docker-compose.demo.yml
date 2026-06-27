@@ -36,6 +36,25 @@ services:
       retries: 20
       start_period: 10s
 
+  # ClickHouse event store (ADR-0015): the source-built server stores events here; the released `latest` image ignores the unused
+  # EDR_CLICKHOUSE_DSN and runs MySQL-only, so one compose file serves both demo legs. Anonymous volume like mysql: persists across
+  # up/down, discarded by `down -v`.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    environment:
+      CLICKHOUSE_DB: edr
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   dex:
     image: ghcr.io/dexidp/dex:v2.41.1
     command: ["dex", "serve", "/etc/dex/config.yaml"]
@@ -88,12 +107,16 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
       dex:
         condition: service_healthy
       cert-init:
         condition: service_completed_successfully
     environment:
       EDR_DSN: "root@tcp(mysql:3306)/edr?parseTime=true&tls=false"
+      # Required by the source-built server (ADR-0015); ignored by the released `latest` image.
+      EDR_CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/edr"
       EDR_ENROLL_SECRET: demo-enroll-secret
       EDR_TLS_CERT_FILE: /tls/dev.crt
       EDR_TLS_KEY_FILE: /tls/dev.key
@@ -123,6 +146,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
       cert-init:
         condition: service_completed_successfully
       server:
@@ -133,6 +158,8 @@ services:
       EDR_DEMO_SERVER_URL: https://server:8088
       EDR_ENROLL_SECRET: demo-enroll-secret
       EDR_DSN: "root@tcp(mysql:3306)/edr?parseTime=true&tls=false"
+      # Lets the source-built seeder slide archived-event timestamps on restart (ADR-0015); ignored by the released `latest` image.
+      EDR_CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/edr"
       EDR_DEMO_CA_CERT: /tls/dev.crt
     volumes:
       - tls:/tls:ro

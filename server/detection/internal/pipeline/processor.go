@@ -7,13 +7,14 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/internal/engine"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
-	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
-// Processor polls for unprocessed events and runs them through the graph builder, then evaluates detection rules over the same batch.
-// Decouples event ingestion from graph materialization so the write path (intake) runs independently of the processing path.
+// Processor claims events from the visibility EventLog work queue and runs them through the graph builder, then evaluates detection
+// rules over the same batch. Decouples event ingestion from graph materialization so the write path (intake) runs independently of the
+// processing path. Post-cutover (ADR-0015) the queue is the only work source; the durable archive is read-only correlation storage.
 type Processor struct {
-	store     *mysql.Store
+	eventLog  visibilityapi.EventLog
 	builder   *graph.Builder
 	detection *engine.Engine
 	logger    *slog.Logger
@@ -21,10 +22,9 @@ type Processor struct {
 	batch     int
 }
 
-// NewProcessor creates a Processor with the given poll interval and
-// batch size.
+// NewProcessor creates a Processor that claims from the given EventLog with the given poll interval and batch size.
 func NewProcessor(
-	s *mysql.Store,
+	eventLog visibilityapi.EventLog,
 	builder *graph.Builder,
 	det *engine.Engine,
 	logger *slog.Logger,
@@ -35,7 +35,7 @@ func NewProcessor(
 		logger = slog.Default()
 	}
 	return &Processor{
-		store:     s,
+		eventLog:  eventLog,
 		builder:   builder,
 		detection: det,
 		logger:    logger,
@@ -65,9 +65,9 @@ func (p *Processor) ProcessOnce(ctx context.Context) {
 }
 
 func (p *Processor) processOnce(ctx context.Context) {
-	events, err := p.store.FetchUnprocessed(ctx, p.batch)
+	events, err := p.eventLog.Claim(ctx, p.batch)
 	if err != nil {
-		p.logger.ErrorContext(ctx, "fetch unprocessed events", "err", err)
+		p.logger.ErrorContext(ctx, "claim events", "err", err)
 		return
 	}
 	if len(events) == 0 {
@@ -81,8 +81,8 @@ func (p *Processor) processOnce(ctx context.Context) {
 
 	if err := p.builder.ProcessBatch(ctx, events); err != nil {
 		p.logger.WarnContext(ctx, "graph builder failure, will retry batch", "err", err)
-		if unclaimErr := p.store.UnclaimEvents(ctx, eventIDs); unclaimErr != nil {
-			p.logger.ErrorContext(ctx, "unclaim events after builder failure", "err", unclaimErr)
+		if nackErr := p.eventLog.Nack(ctx, eventIDs); nackErr != nil {
+			p.logger.ErrorContext(ctx, "nack events after builder failure", "err", nackErr)
 		}
 		return
 	}
@@ -91,14 +91,14 @@ func (p *Processor) processOnce(ctx context.Context) {
 	if p.detection != nil {
 		if err := p.detection.Evaluate(ctx, events); err != nil {
 			p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
-			if unclaimErr := p.store.UnclaimEvents(ctx, eventIDs); unclaimErr != nil {
-				p.logger.ErrorContext(ctx, "unclaim events after detection failure", "err", unclaimErr)
+			if nackErr := p.eventLog.Nack(ctx, eventIDs); nackErr != nil {
+				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
 			return
 		}
 	}
 
-	if err := p.store.MarkProcessed(ctx, eventIDs); err != nil {
-		p.logger.ErrorContext(ctx, "mark events processed", "err", err)
+	if err := p.eventLog.Ack(ctx, eventIDs); err != nil {
+		p.logger.ErrorContext(ctx, "ack events", "err", err)
 	}
 }

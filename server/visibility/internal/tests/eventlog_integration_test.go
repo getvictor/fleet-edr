@@ -7,6 +7,9 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -152,6 +155,47 @@ func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
 	reclaimed, err := log.Claim(ctx, 10)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"e1"}, ids(reclaimed), "an expired claim is re-delivered on a later Claim")
+}
+
+// spec:server-event-ingestion/horizontally-scalable-ingestion-service/two-ingestion-replicas-run-against-the-same-database
+//
+// Two EventLog instances over one MySQL event_queue model two ingestion replicas that share only their backing store. Both replicas
+// append the same event_id space concurrently; the queue's idempotent INSERT IGNORE (with deadlock retry) must absorb the contention
+// so every distinct event is enqueued exactly once and neither replica observes an error caused by the other.
+func TestEventLog_ConcurrentReplicasShareOneQueue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := testdb.Open(t)
+	require.NoError(t, visibilitytestkit.ApplySchema(ctx, db))
+	replica := func() visibilityapi.EventLog {
+		vis, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db})
+		require.NoError(t, err)
+		return vis.EventLog()
+	}
+	logA, logB := replica(), replica()
+
+	const distinctEvents = 100
+	var errCount atomic.Int64
+	appendAll := func(wg *sync.WaitGroup, log visibilityapi.EventLog) {
+		defer wg.Done()
+		for i := range distinctEvents {
+			// Both replicas append the SAME ids, so the dedup is exercised under genuine cross-replica concurrency.
+			if err := log.Append(ctx, []visibilityapi.Event{ev(fmt.Sprintf("evt-%03d", i), "h-shared", int64(i+1), "exec")}); err != nil {
+				errCount.Add(1)
+			}
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go appendAll(&wg, logA)
+	go appendAll(&wg, logB)
+	wg.Wait()
+
+	require.Zero(t, errCount.Load(), "neither replica observes errors caused by the other")
+	pending, err := logA.CountPending(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(distinctEvents), pending,
+		"each event_id is enqueued exactly once despite both replicas appending it concurrently")
 }
 
 func TestEventLog_EmptyOps(t *testing.T) {
