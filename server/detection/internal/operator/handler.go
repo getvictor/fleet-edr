@@ -227,11 +227,12 @@ func (h *Handler) handleGetAlert(w http.ResponseWriter, r *http.Request) {
 	if eventIDs == nil {
 		eventIDs = []string{}
 	}
+	// Evidence is best-effort (see alertDetailResponse): if the alert_event_payloads read fails, log it and still serve the alert
+	// plus its correlated event IDs rather than 500 the whole detail view, which GetAlert already resolved successfully.
 	events, err := h.svc.GetAlertEvidence(ctx, id)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get alert evidence", "id", id, "err", err)
-		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
-		return
+		events = nil
 	}
 	if events == nil {
 		events = []api.Event{}

@@ -420,7 +420,7 @@ func TestHandleGetAlert(t *testing.T) {
 		assert.Equal(t, "network_connect", events[0].(map[string]any)["event_type"])
 	})
 
-	t.Run("evidence read error returns 500", func(t *testing.T) {
+	t.Run("evidence read error degrades to empty events, still serves the alert", func(t *testing.T) {
 		t.Parallel()
 		svc := fakeService{
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) {
@@ -433,8 +433,16 @@ func TestHandleGetAlert(t *testing.T) {
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/alerts/42")
 		defer resp.Body.Close()
-		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-		assert.Equal(t, errInternal, readErrorEnvelope(t, resp))
+		// Evidence is best-effort: a failed payload read must not 500 the whole detail view that GetAlert already resolved.
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var parsed map[string]any
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&parsed))
+		ids, ok := parsed["event_ids"].([]any)
+		require.True(t, ok, "event_ids still served when evidence read fails")
+		assert.Len(t, ids, 1)
+		events, ok := parsed["events"].([]any)
+		require.True(t, ok, "events MUST be a JSON array even on evidence read failure")
+		assert.Empty(t, events, "evidence degrades to an empty array, not null or 500")
 	})
 }
 
