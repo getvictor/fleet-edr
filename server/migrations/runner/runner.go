@@ -19,6 +19,15 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+// Dialect selects the SQL dialect goose applies migrations with. The zero value is MySQL, the data plane's default ([0005]); the
+// visibility event archive uses ClickHouse ([0015]).
+type Dialect string
+
+const (
+	DialectMySQL      Dialect = "" // zero value: MySQL
+	DialectClickHouse Dialect = "clickhouse"
+)
+
 // Options configures a single context's migration run.
 type Options struct {
 	// Context is the bounded-context name (e.g. "identity"). Used only to prefix errors so a boot failure names the context that
@@ -29,6 +38,9 @@ type Options struct {
 	// versions here so the corpora stay independent. It MUST be stable for the life of a deployment: renaming it strands the
 	// applied-version history and goose would re-run every migration against an already-migrated database.
 	TableName string
+
+	// Dialect is the SQL dialect of fsys's migrations. Defaults to MySQL; set DialectClickHouse for the event archive.
+	Dialect Dialect
 }
 
 // Up applies every not-yet-applied migration in fsys against db, recording applied versions in opts.TableName. It is idempotent:
@@ -60,7 +72,11 @@ func Up(ctx context.Context, db *sqlx.DB, fsys fs.FS, opts Options) error {
 		return fmt.Errorf("%s migrations: table name must not be empty", opts.Context)
 	}
 
-	provider, err := goose.NewProvider(goose.DialectMySQL, db.DB, fsys,
+	gooseDialect := goose.DialectMySQL
+	if opts.Dialect == DialectClickHouse {
+		gooseDialect = goose.DialectClickHouse
+	}
+	provider, err := goose.NewProvider(gooseDialect, db.DB, fsys,
 		goose.WithTableName(opts.TableName),
 		goose.WithVerbose(false),
 	)
