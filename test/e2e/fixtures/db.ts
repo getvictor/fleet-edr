@@ -23,14 +23,16 @@ export async function openDB(): Promise<Connection> {
 }
 
 // Dev ClickHouse archive HTTP endpoint, matching docker-compose.yml's clickhouse service (8123 published on 18123). The default user
-// has an empty password (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT), so no auth header is needed.
-const CLICKHOUSE_HTTP = "http://127.0.0.1:18123";
+// has an empty password (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT), so no auth header is needed. database=edr selects the archive database
+// the server creates (matching EDR_CLICKHOUSE_DSN's /edr path); the connection's implicit database is `default`, where `events` does
+// not live.
+const CLICKHOUSE_HTTP = "http://127.0.0.1:18123/?database=edr";
 
 // queryClickHouse runs a read-only query against the dev ClickHouse event archive (ADR-0015: events live here, not MySQL) over its HTTP
 // interface and returns the rows as parsed objects. No extra npm dependency: the HTTP interface speaks plain SQL. count() and other
 // UInt64 columns arrive as JSON strings (JSONEachRow quotes them to preserve precision), so callers wrap them in Number().
 export async function queryClickHouse<T = Record<string, unknown>>(sql: string): Promise<T[]> {
-  const res = await fetch(`${CLICKHOUSE_HTTP}/`, { method: "POST", body: `${sql} FORMAT JSONEachRow` });
+  const res = await fetch(CLICKHOUSE_HTTP, { method: "POST", body: `${sql} FORMAT JSONEachRow` });
   if (!res.ok) {
     throw new Error(`clickhouse query failed (${res.status}): ${await res.text()}`);
   }
