@@ -59,6 +59,7 @@ type Recorder struct {
 	alertsCreated               metric.Int64Counter
 	retentionRowsDeleted        metric.Int64Counter
 	processRetentionRowsDeleted metric.Int64Counter
+	queueRowsPruned             metric.Int64Counter
 	processesReconciled         metric.Int64Counter
 	queueDropped                metric.Int64Counter
 	httpRequestDuration         metric.Float64Histogram
@@ -118,6 +119,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.processes.rows_deleted",
 		metric.WithDescription("Total completed process rows deleted by the retention job since server start."),
+		metric.WithUnit("{row}"),
+	)
+	r.queueRowsPruned, _ = meter.Int64Counter(
+		"edr.event_queue.rows_pruned",
+		metric.WithDescription("Total acked rows pruned from the event work queue since server start."),
 		metric.WithUnit("{row}"),
 	)
 	r.processesReconciled, _ = meter.Int64Counter(
@@ -247,6 +253,15 @@ func (r *Recorder) ProcessRetentionRowsDeleted(ctx context.Context, n int64) {
 		return
 	}
 	r.processRetentionRowsDeleted.Add(ctx, n)
+}
+
+// QueueRowsPruned satisfies api.MetricsRecorder. Counts acked rows the queue-prune sweep removed from the event work queue, so a
+// dashboard can compare prune throughput against ingest and catch a sweep falling behind.
+func (r *Recorder) QueueRowsPruned(ctx context.Context, n int64) {
+	if r == nil || r.queueRowsPruned == nil || n <= 0 {
+		return
+	}
+	r.queueRowsPruned.Add(ctx, n)
 }
 
 // ProcessesTTLReconciled satisfies processttl.MetricsRecorder. A non-zero rate of this indicates the fleet is losing exit events

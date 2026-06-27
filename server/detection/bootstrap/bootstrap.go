@@ -66,6 +66,9 @@ type Deps struct {
 	StaleProcessInterval time.Duration
 	RetentionDays        int
 	RetentionInterval    time.Duration
+	// QueuePruneInterval is the cadence of the visibility event-queue sweep that removes acked rows (ADR-0015). Zero uses the
+	// pipeline default (1 minute). Independent of RetentionDays: the queue is swept even when age-based retention is disabled.
+	QueuePruneInterval time.Duration
 
 	// Cross-context inputs (Full mode only).
 	UserExists UserExists
@@ -177,10 +180,15 @@ func New(deps Deps) (*Detection, error) {
 			Interval:      deps.RetentionInterval,
 			Logger:        logger,
 		})
+		queuePrune := pipeline.NewQueuePrune(deps.EventLog, pipeline.QueuePruneOptions{
+			Interval: deps.QueuePruneInterval,
+			Logger:   logger,
+		})
 		det.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
 			Processor:   processor,
 			ProcessTTL:  processTTL,
 			Retention:   retention,
+			QueuePrune:  queuePrune,
 			DB:          deps.DB,
 			Coordinator: deps.Coordinator,
 		})

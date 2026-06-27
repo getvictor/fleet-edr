@@ -181,3 +181,37 @@ func (s *Store) CountPending(ctx context.Context) (int64, error) {
 	}
 	return count, nil
 }
+
+// defaultPruneBatch caps a single prune DELETE so each statement's InnoDB row-lock + undo footprint stays bounded on a large backlog,
+// the same per-batch discipline the process-retention sweep uses.
+const defaultPruneBatch = 10_000
+
+// PruneProcessed deletes acked rows (processed = 1) in bounded batches until none remain, returning the total removed. Ack only marks a
+// row processed (a cheap index UPDATE on the hot path); this sweep does the deletes off the hot path so a high-volume queue does not
+// accumulate. The DELETE is index-driven (the claim index leads with processed) and ordered like the claim, and each batch is
+// deadlock-retried since concurrent claims take gap locks on the same index. processed = 1 is terminal (Nack only reverts processed = 2),
+// so a row selected here is never concurrently resurrected.
+func (s *Store) PruneProcessed(ctx context.Context, batchSize int) (int64, error) {
+	if batchSize <= 0 {
+		batchSize = defaultPruneBatch
+	}
+	var total int64
+	for {
+		var affected int64
+		if err := sqlhelpers.WithDeadlockRetry(ctx, insertMaxAttempts, insertBackoffStep, func() error {
+			res, err := s.db.ExecContext(ctx,
+				"DELETE FROM event_queue WHERE processed = 1 ORDER BY host_id, timestamp_ns LIMIT ?", batchSize)
+			if err != nil {
+				return err
+			}
+			affected, err = res.RowsAffected()
+			return err
+		}); err != nil {
+			return total, fmt.Errorf("prune processed event_queue: %w", err)
+		}
+		total += affected
+		if affected < int64(batchSize) {
+			return total, nil
+		}
+	}
+}

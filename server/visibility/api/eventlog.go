@@ -32,4 +32,10 @@ type EventLog interface {
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)
+
+	// PruneProcessed removes fully-processed (acked) events from the queue in batches of at most batchSize, returning the total
+	// removed. It is the sweep that keeps the queue to its in-flight working set (the archive holds the durable history); a high-volume
+	// deployment runs it on a cadence off the hot path rather than deleting on each Ack. Removing only acked events never affects a
+	// not-yet-processed or in-flight claim.
+	PruneProcessed(ctx context.Context, batchSize int) (int64, error)
 }

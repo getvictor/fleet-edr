@@ -99,4 +99,7 @@ type MetricsRecorder interface {
 	// ProcessRetentionRowsDeleted is called by the pipeline's retention runner on every pass with the count of completed process rows
 	// pruned past the retention window (counted separately from event rows).
 	ProcessRetentionRowsDeleted(ctx context.Context, n int64)
+	// QueueRowsPruned is called by the pipeline's queue-prune sweep on every pass with the number of acked rows removed from the event
+	// work queue (the visibility EventLog), so operators can watch the sweep keep pace with ingest (ADR-0015).
+	QueueRowsPruned(ctx context.Context, n int64)
 }
