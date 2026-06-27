@@ -34,6 +34,7 @@ import (
 	responsetestkit "github.com/fleetdm/edr/server/response/testkit"
 	rulestestkit "github.com/fleetdm/edr/server/rules/testkit"
 	"github.com/fleetdm/edr/server/testdb"
+	visibilitytestkit "github.com/fleetdm/edr/server/visibility/testkit"
 )
 
 // Open creates an isolated test database (via testdb.Open) and
@@ -60,6 +61,9 @@ func Open(t *testing.T) *sqlx.DB {
 	}
 	if err := observabilitytestkit.ApplySchema(ctx, db); err != nil {
 		t.Fatalf("apply observability schema: %v", err)
+	}
+	if err := visibilitytestkit.ApplySchema(ctx, db); err != nil {
+		t.Fatalf("apply visibility schema: %v", err)
 	}
 	return db
 }

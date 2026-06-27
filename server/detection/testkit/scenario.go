@@ -11,14 +11,17 @@ import (
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
-	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 	visibilitytestkit "github.com/fleetdm/edr/server/visibility/testkit"
 )
 
-// NewMemArchive returns an in-memory EventArchive for detection tests that seed correlation + evidence reads without a ClickHouse
-// container. Re-exported through detection's own testkit so detection-internal test packages (e.g. mysql_test) reach it without
-// importing visibility/testkit directly, which the bounded-context import rules do not permit them.
-func NewMemArchive() visibilityapi.EventArchive { return visibilitytestkit.NewMemArchive() }
+// MemArchive is the in-memory EventArchive for detection tests, aliased from visibility/testkit so detection-internal test packages
+// (e.g. mysql_test, internal/tests) reach it through detection's own testkit; the bounded-context import rules do not let them import
+// visibility/testkit directly. It satisfies visibilityapi.EventArchive and adds Len for durable-cardinality assertions.
+type MemArchive = visibilitytestkit.MemArchive
+
+// NewMemArchive returns an empty in-memory EventArchive for detection tests that seed correlation + evidence reads without a ClickHouse
+// container.
+func NewMemArchive() *MemArchive { return visibilitytestkit.NewMemArchive() }
 
 // Scenario is a per-test detection-stack fixture: a *mysql.Store wrapping the test DB + an in-memory event archive, and a *graph.Builder
 // that materialises events into the processes table. Tests outside detection (e.g. catalog rule tests in server/rules/internal/catalog/)

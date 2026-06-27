@@ -29,6 +29,24 @@ func NewMemArchive() *MemArchive {
 	return &MemArchive{byID: make(map[string]api.Event)}
 }
 
+// Len reports the number of distinct event_ids stored, the in-memory analogue of the archive table's row count (ReplacingMergeTree
+// collapses re-inserts of a known id). Tests use it as the durable-cardinality probe that the dropped MySQL events table's COUNT(*)
+// used to provide, e.g. to assert idempotent ingest stored each event once.
+func (m *MemArchive) Len() int { return len(m.byID) }
+
+// CountByType reports how many stored events have the given event_type, the in-memory analogue of a COUNT(*) ... WHERE event_type = ?
+// against the archive. Tests use it to assert event-kind filtering, e.g. that snapshot_heartbeat events are dropped at ingest and never
+// reach the durable store.
+func (m *MemArchive) CountByType(eventType string) int {
+	n := 0
+	for _, e := range m.byID {
+		if e.EventType == eventType {
+			n++
+		}
+	}
+	return n
+}
+
 // Insert stores events idempotently by event_id (last write wins), mirroring ReplacingMergeTree dedup.
 func (m *MemArchive) Insert(_ context.Context, events []api.Event) error {
 	for _, e := range events {

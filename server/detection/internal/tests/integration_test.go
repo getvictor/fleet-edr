@@ -33,10 +33,12 @@ import (
 	"github.com/fleetdm/edr/server/detection/bootstrap"
 	"github.com/fleetdm/edr/server/detection/internal/intake"
 	"github.com/fleetdm/edr/server/detection/internal/pipeline"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/testdb/full"
+	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
 )
 
 // stubUserExists is a closure-typed UserExists fixture. Tests pin the known-user set up front; UpdateAlertStatus consults it for the
@@ -304,8 +306,21 @@ type detectionOpts struct {
 // In Full mode, launches d.Run(ctx) in a goroutine so the processor +
 // processttl + retention loops are live. Cleanup cancels and waits.
 func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
+	d, _ := newDetectionWithArchive(t, opts)
+	return d
+}
+
+// newDetectionWithArchive is newDetection plus the in-memory EventArchive the pipeline writes to and reads correlation/evidence from,
+// returned so tests can probe durable event cardinality (archive.Len()) the way they used to probe the events table's COUNT(*). The
+// EventLog work queue is a real MySQL table (event_queue) so the processor's FOR UPDATE SKIP LOCKED claim is exercised for real; only
+// the durable archive is in-memory (the real ClickHouse archive has its own integration test). ADR-0015.
+func newDetectionWithArchive(t *testing.T, opts detectionOpts) (*bootstrap.Detection, *detectiontestkit.MemArchive) {
 	t.Helper()
 	db := full.Open(t)
+	vis, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db})
+	require.NoError(t, err)
+	require.NoError(t, vis.ApplySchema(t.Context()))
+	archive := detectiontestkit.NewMemArchive()
 	deps := bootstrap.Deps{
 		DB:                   db,
 		Mode:                 opts.mode,
@@ -317,6 +332,8 @@ func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
 		RetentionInterval:    20 * time.Millisecond,
 		UserExists:           opts.userExists,
 		AuthZ:                allowAllAuthZ{},
+		EventLog:             vis.EventLog(),
+		EventArchive:         archive,
 	}
 	d, err := bootstrap.New(deps)
 	require.NoError(t, err)
@@ -338,7 +355,7 @@ func newDetection(t *testing.T, opts detectionOpts) *bootstrap.Detection {
 			}
 		})
 	}
-	return d
+	return d, archive
 }
 
 // withHostID pins host_id on the request context the way the real endpoint.HostToken middleware does. Lets the ingest handler tests
@@ -580,17 +597,16 @@ func TestIngest_InvalidJSONRejected(t *testing.T) {
 // spec:server-event-ingestion/idempotent-submission-by-event-id/an-agent-retries-a-batch-after-a-network-failure
 // spec:agent-event-uploader/server-side-deduplication-makes-replay-safe/same-batch-is-delivered-twice
 //
-// The store's InsertEvents uses INSERT IGNORE so duplicate event_id collisions are dropped silently at the
-// events table. This test posts the same single-event batch twice and asserts the second response is still 200
-// and that the events table has exactly one row afterwards. The agent-event-uploader marker is the AGENT-side
-// view of the same property: the agent can safely retry a batch whose ack was lost in transit because the server
-// dedupes by event_id and still returns 2xx, so the agent's MarkUploaded path runs and the batch leaves the queue.
-// CountEvents (the events table cardinality) is the authoritative probe; hosts.event_count is a per-batch arrival
-// counter that increments on every POST including duplicates by design (see
+// Ingest is idempotent by event_id (the archive's ReplacingMergeTree and the queue's INSERT IGNORE both dedupe), so a re-delivered
+// batch never produces a duplicate. This test posts the same single-event batch twice and asserts the second response is still 200 and
+// that the durable archive holds exactly one event afterwards. The agent-event-uploader marker is the AGENT-side view of the same
+// property: the agent can safely retry a batch whose ack was lost in transit because the server dedupes by event_id and still returns
+// 2xx, so the agent's MarkUploaded path runs and the batch leaves the queue. archive.Len() (the durable cardinality) is the authoritative
+// probe; hosts.event_count is a per-batch arrival counter that increments on every POST including duplicates by design (see
 // server/detection/internal/mysql/perf_test.go:59) and is NOT what the idempotency spec scenario constrains.
 func TestIngest_DuplicateEventIDIsIdempotent(t *testing.T) {
 	t.Parallel()
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
 	t.Cleanup(srv.Close)
@@ -613,46 +629,7 @@ func TestIngest_DuplicateEventIDIsIdempotent(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp2.StatusCode, "retry of an already-persisted batch must succeed")
 	resp2.Body.Close()
 
-	count, err := d.Store().CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), count, "duplicate event_id must not produce a duplicate row in the events table")
-}
-
-// spec:server-event-ingestion/event-storage-drops-redundant-indexes/a-duplicate-event-is-still-rejected-after-the-index-diet
-//
-// TestEvents_SchemaDiet pins the issue #408 index diet on the live migrated schema: the two redundant secondary indexes are gone
-// while every index a query relies on remains. A future migration that re-adds a subsumed index trips this test rather than
-// silently regrowing the index footprint. (The surrogate-PK swap that was originally part of #408 was dropped: it regressed the
-// multi-replica FOR UPDATE SKIP LOCKED claim into deterministic deadlocks; event_id stays the primary key.)
-func TestEvents_SchemaDiet(t *testing.T) {
-	t.Parallel()
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
-	ctx := t.Context()
-
-	indexNames := map[string]bool{}
-	rows, err := d.Store().DB().QueryxContext(ctx,
-		"SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'events'")
-	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		require.NoError(t, rows.Scan(&name))
-		indexNames[name] = true
-	}
-	require.NoError(t, rows.Err())
-
-	assert.False(t, indexNames["idx_events_host_id"], "idx_events_host_id is subsumed by idx_events_host_type_ingested and must be dropped")
-	assert.False(t, indexNames["idx_events_type"], "idx_events_type serves no query and must be dropped")
-	// Indexes that queries depend on must survive the diet.
-	assert.True(t, indexNames["idx_events_processed"], "idx_events_processed backs the FetchUnprocessed SKIP LOCKED claim")
-	assert.True(t, indexNames["idx_events_host_type_pid_ingested"], "idx_events_host_type_pid_ingested backs the network-event correlation query")
-	assert.True(t, indexNames["PRIMARY"], "events must keep its primary key")
-
-	// event_id remains the primary key (the surrogate-PK swap was dropped, see the doc comment).
-	var pkColumn string
-	require.NoError(t, d.Store().DB().GetContext(ctx, &pkColumn,
-		"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'events' AND INDEX_NAME = 'PRIMARY' AND SEQ_IN_INDEX = 1"))
-	assert.Equal(t, "event_id", pkColumn, "event_id remains the primary key")
+	assert.Equal(t, 1, archive.Len(), "duplicate event_id must not produce a duplicate event in the archive")
 }
 
 // spec:server-application-control/application-control-block-event-contract/a-block-event-for-a-now-deleted-rule-is-accepted
@@ -666,7 +643,7 @@ func TestEvents_SchemaDiet(t *testing.T) {
 // spec:server-application-control/application-control-block-event-contract/a-block-event-for-an-unknown-rule-is-accepted
 func TestIngest_ApplicationControlBlockForDeletedRuleIsAccepted(t *testing.T) {
 	t.Parallel()
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
 	// rule_id app_control:999999 does not correspond to any live rule on this server (the rule was deleted after the
@@ -691,23 +668,20 @@ func TestIngest_ApplicationControlBlockForDeletedRuleIsAccepted(t *testing.T) {
 	// scenario.
 	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{blockEvent})
 
-	// The "and persists" half: the block event lands as a row in the events table even though its rule_id resolves to no
-	// live rule, so the historical decision survives the rule deletion.
-	count, err := d.Store().CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), count, "an application_control_block event for a deleted/unknown rule must still persist")
+	// The "and persists" half: the block event lands in the durable archive even though its rule_id resolves to no live rule, so the
+	// historical decision survives the rule deletion.
+	assert.Equal(t, 1, archive.Len(), "an application_control_block event for a deleted/unknown rule must still persist")
 }
 
 // spec:server-event-ingestion/idempotent-submission-by-event-id/a-batch-mixes-new-and-previously-seen-events
 //
-// First batch persists one event; second batch contains the same event plus a new one. The expected post-state
-// in the events table is two rows: the original (untouched) and the new one. This pins the per-row INSERT
-// IGNORE behaviour against a regression that would either reject the whole batch on the first duplicate or
-// overwrite the original row. See the comment on TestIngest_DuplicateEventIDIsIdempotent for why CountEvents is
-// the right probe rather than hosts.event_count.
+// First batch persists one event; second batch contains the same event plus a new one. The expected post-state in the durable archive
+// is two distinct events: the original (untouched) and the new one. This pins the per-event dedupe against a regression that would
+// either reject the whole batch on the first duplicate or overwrite the original. See the comment on TestIngest_DuplicateEventIDIsIdempotent
+// for why archive.Len() is the right probe rather than hosts.event_count.
 func TestIngest_MixedNewAndSeen(t *testing.T) {
 	t.Parallel()
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
 	t.Cleanup(srv.Close)
@@ -730,10 +704,8 @@ func TestIngest_MixedNewAndSeen(t *testing.T) {
 	post(first)
 	post(mixed)
 
-	count, err := d.Store().CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), count,
-		"mixed batch: the previously-seen event is deduped, the new event is appended; events table = 2 rows")
+	assert.Equal(t, 2, archive.Len(),
+		"mixed batch: the previously-seen event is deduped, the new event is appended; archive holds 2 distinct events")
 }
 
 // spec:server-event-ingestion/transparent-persistence-failure-reporting/the-database-is-temporarily-unavailable
@@ -831,7 +803,7 @@ func TestIngest_OversizedBodyRejected(t *testing.T) {
 // suite-wide test budgets.
 func TestIngest_RightAtCapAccepted(t *testing.T) {
 	t.Parallel()
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 	srv := httptest.NewServer(withHostID(d.Service().IngestHandler(), "host-a"))
 	t.Cleanup(srv.Close)
@@ -853,9 +825,7 @@ func TestIngest_RightAtCapAccepted(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "right-at-cap body must be accepted")
 
-	count, err := d.Store().CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), count, "the single right-at-cap event was persisted")
+	assert.Equal(t, 1, archive.Len(), "the single right-at-cap event was persisted to the archive")
 }
 
 // ---- Engine + processor tests ----------------------------------------------
@@ -1080,7 +1050,7 @@ func TestEngine_BatchProducesNoFindings(t *testing.T) {
 	// emitted no findings; then we read ListAlerts and assert empty. This pattern replaces a fixed time.Sleep which
 	// CI runners can blow past or undershoot.
 	require.Eventually(t, func() bool {
-		n, err := d.Store().CountUnprocessed(ctx)
+		n, err := d.Service().CountUnprocessed(ctx)
 		return err == nil && n == 0
 	}, 5*time.Second, 25*time.Millisecond, "processor must drain the batch even when no rule fires")
 
@@ -1138,7 +1108,7 @@ func TestEngine_OperatorDisablesNoisyRule(t *testing.T) {
 
 	// Wait for the phase-2 batch to drain through the processor so the assertion isn't racing the engine.
 	require.Eventually(t, func() bool {
-		n, err := d.Store().CountUnprocessed(ctx)
+		n, err := d.Service().CountUnprocessed(ctx)
 		return err == nil && n == 0
 	}, 5*time.Second, 25*time.Millisecond, "processor must consume the phase-2 batch before the assertion")
 
@@ -1207,7 +1177,7 @@ func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
 	// time.Sleep which CodeRabbit + Copilot both flagged as flake-prone: a slow CI runner can have the assertion
 	// run before the processor's next cycle, accidentally green-lighting a regression.
 	require.Eventually(t, func() bool {
-		n, err := d.Store().CountUnprocessed(ctx)
+		n, err := d.Service().CountUnprocessed(ctx)
 		return err == nil && n == 0
 	}, 5*time.Second, 25*time.Millisecond, "processor must consume trigger-2 before the historical-preservation assertion")
 
@@ -1289,19 +1259,15 @@ func TestEngine_PersistenceFailureSurfacesError(t *testing.T) {
 
 	// Now that the engine has tried and failed, the persistence-failure path must NOT have produced an alert,
 	// and the processor must have left the events unprocessed for the next retry cycle.
-	n, err := d.Store().CountUnprocessed(ctx)
+	n, err := d.Service().CountUnprocessed(ctx)
 	require.NoError(t, err)
 	assert.Positive(t, n, "events stay unprocessed because the engine returned an error on persistFinding")
 
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
 	assert.Empty(t, alerts, "FK-violating finding must NOT produce an alert row; failure is surfaced, not swallowed")
-
-	// Negative assertion (b): events are still in the events table (not deleted/forgotten by the processor). A
-	// regression that drops events on persistence failure would silently lose telemetry; this assertion catches it.
-	count, err := d.Store().CountEvents(ctx)
-	require.NoError(t, err)
-	assert.Positive(t, count, "events must remain in the table so a future retry cycle can re-evaluate them")
+	// The Positive(n) assertion above already establishes the negative-retention property: a regression that dropped events on
+	// persistence failure would Nack nothing and CountUnprocessed would fall to 0, so the events-stay-queued guarantee is covered.
 }
 
 // spec:server-detection-rules-engine/snapshot-exec-events-are-excluded-from-rule-evaluation/a-snapshot-exec-is-delivered-in-a-batch
@@ -2011,7 +1977,7 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	// GIVEN of this scenario (a live snapshot row) must be established first, exactly as it is in production where a heartbeat
 	// arrives a reconcile interval after the snapshot row was materialised. We ingest the snapshot exec, wait for the row to
 	// appear, then ingest the heartbeat in a later request and assert the bump lands.
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
 	forkTime := time.Now().UnixNano()
@@ -2044,11 +2010,8 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 		return p.Process.LastSeenNs != nil && *p.Process.LastSeenNs == heartbeatTime
 	}, 5*time.Second, 50*time.Millisecond, "heartbeat must bump last_seen_ns")
 
-	// And no events row was created for the heartbeat (issue #408): only the snapshot exec is persisted.
-	var heartbeatRows int
-	require.NoError(t, d.Store().DB().GetContext(ctx, &heartbeatRows,
-		"SELECT COUNT(*) FROM events WHERE host_id = ? AND event_type = 'snapshot_heartbeat'", "h-snap-heartbeat"))
-	assert.Zero(t, heartbeatRows, "heartbeat must not be persisted as an events row")
+	// And no heartbeat reached the durable archive (issue #408): it is dropped at ingest, only the snapshot exec is persisted.
+	assert.Zero(t, archive.CountByType("snapshot_heartbeat"), "heartbeat must not be persisted to the archive")
 }
 
 // spec:server-process-graph-builder/snapshot-heartbeat-events-extend-the-freshness-window/heartbeat-for-a-live-snapshot-row-bumps-freshness
@@ -2057,7 +2020,7 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 // bumpSnapshotLastSeenChunk, issue #408 AI-review fix): a single ingest batch carrying heartbeats for several distinct PIDs bumps
 // every matching live snapshot row in one CASE-based UPDATE, while a heartbeat for an unknown PID is a no-op.
 func TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs(t *testing.T) {
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 	const host = "h-snap-multi"
 	forkTime := time.Now().UnixNano()
@@ -2104,14 +2067,11 @@ func TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs(t *testing.T) {
 		return true
 	}, 5*time.Second, 50*time.Millisecond, "the batched CASE update must bump every live snapshot PID")
 
-	// The unknown-PID heartbeat created no process row, and no heartbeat was persisted as an events row.
+	// The unknown-PID heartbeat created no process row, and no heartbeat reached the durable archive.
 	unknown, err := d.Service().GetProcessDetail(ctx, host, 9999, hbTime+1)
 	require.NoError(t, err)
 	assert.Nil(t, unknown, "a heartbeat for an unknown PID must not create a row")
-	var heartbeatRows int
-	require.NoError(t, d.Store().DB().GetContext(ctx, &heartbeatRows,
-		"SELECT COUNT(*) FROM events WHERE host_id = ? AND event_type = 'snapshot_heartbeat'", host))
-	assert.Zero(t, heartbeatRows, "heartbeats must not be persisted as events rows")
+	assert.Zero(t, archive.CountByType("snapshot_heartbeat"), "heartbeats must not be persisted to the archive")
 }
 
 // spec:server-process-graph-builder/snapshot-exec-events-are-stitched-but-not-treated-as-new-activity/extension-restarts-and-replays-the-live-process-set
@@ -2516,7 +2476,7 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 			// Gating on CountUnprocessed==0 ensures both the exec and the exit (when there is one) are durably reflected
 			// in the read model before the snapshot. Pre-existing race surfaced on PR #281.
 			require.Eventually(t, func() bool {
-				n, err := d.Store().CountUnprocessed(ctx)
+				n, err := d.Service().CountUnprocessed(ctx)
 				if err != nil || n != 0 {
 					return false
 				}
@@ -2537,7 +2497,7 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 
 			// Wait for the heartbeat event to be processed (CountUnprocessed == 0).
 			require.Eventually(t, func() bool {
-				n, err := d.Store().CountUnprocessed(ctx)
+				n, err := d.Service().CountUnprocessed(ctx)
 				return err == nil && n == 0
 			}, 5*time.Second, 25*time.Millisecond, "heartbeat event must reach the processor")
 

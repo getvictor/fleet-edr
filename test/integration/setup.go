@@ -31,6 +31,7 @@ import (
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
@@ -39,6 +40,7 @@ import (
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
+	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
 )
 
 // EnrollSecret is the value Setup wires through endpoint.New. Tests use it
@@ -109,6 +111,12 @@ func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
 	})
 	require.NoError(t, err, "open identity")
 
+	// Visibility (ADR-0015): the real MySQL EventLog queue (event_queue is in the full schema) plus an in-memory EventArchive. Intake
+	// fans out to both; the processor claims from the queue. The cross-context tests assert detection outcomes (alerts, process graph),
+	// not the durable archive's storage engine, so MemArchive stands in for ClickHouse here.
+	visibilityCtx, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db, Logger: logger})
+	require.NoError(t, err, "open visibility")
+
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
 		DB:              db,
 		Logger:          logger,
@@ -117,6 +125,8 @@ func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
 		ProcessBatch:    100,
 		UserExists:      identityCtx.Service().UserExists,
 		AuthZ:           identityCtx.AuthZ(),
+		EventLog:        visibilityCtx.EventLog(),
+		EventArchive:    detectiontestkit.NewMemArchive(),
 	})
 	require.NoError(t, err, "open detection")
 
