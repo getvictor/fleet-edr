@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS events (
     event_type      LowCardinality(String),
     payload         String,
     pid             Int64 MATERIALIZED JSONExtractInt(payload, 'pid'),
-    ingested_date   Date  MATERIALIZED toDate(ingested_at_ns / 1000000000)
+    ingested_date   Date  MATERIALIZED toDate(toDateTime(intDiv(ingested_at_ns, 1000000000)))
 )
 ENGINE = ReplacingMergeTree(ingested_at_ns)
 PARTITION BY toYYYYMM(ingested_date)

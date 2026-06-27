@@ -734,7 +734,7 @@ tasks:
       - docker compose up -d mysql mysql_test clickhouse clickhouse_test
 
   db:down:
-    desc: Stop local MySQL
+    desc: Stop local MySQL + ClickHouse
     cmds:
       - docker compose down
 

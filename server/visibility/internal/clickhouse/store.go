@@ -8,7 +8,6 @@ package clickhouse
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -78,12 +77,13 @@ func (s *Store) Insert(ctx context.Context, events []api.Event) error {
 	}
 	defer stmt.Close() //nolint:errcheck
 	for i := range events {
-		payload := events[i].Payload
+		payload := []byte(events[i].Payload)
 		if len(payload) == 0 {
 			payload = []byte("null") // events.payload is non-empty JSON text; an empty envelope stores as the JSON null literal
 		}
+		// Pass the payload bytes directly; the clickhouse-go driver binds []byte to a String column without the extra string copy.
 		if _, err := stmt.ExecContext(ctx, events[i].EventID, events[i].HostID, events[i].TimestampNs,
-			events[i].IngestedAtNs, events[i].EventType, string(payload)); err != nil {
+			events[i].IngestedAtNs, events[i].EventType, payload); err != nil {
 			return fmt.Errorf("append clickhouse row %s: %w", events[i].EventID, err)
 		}
 	}
@@ -111,14 +111,14 @@ func (s *Store) NetworkEventsForProcess(ctx context.Context, hostID string, pid 
 
 	var events []api.Event
 	for rows.Next() {
-		// Scan payload into a string: the ClickHouse driver returns a String column as a Go string, which database/sql cannot assign
-		// straight into json.RawMessage. Convert explicitly.
+		// Scan the String payload into a []byte (database/sql copies the driver's string into it), then hand the bytes to
+		// json.RawMessage; database/sql cannot assign a string driver value straight into json.RawMessage.
 		var e api.Event
-		var payload string
+		var payload []byte
 		if err := rows.Scan(&e.EventID, &e.HostID, &e.TimestampNs, &e.IngestedAtNs, &e.EventType, &payload); err != nil {
 			return nil, fmt.Errorf("scan clickhouse event: %w", err)
 		}
-		e.Payload = json.RawMessage(payload)
+		e.Payload = payload
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
