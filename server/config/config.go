@@ -29,6 +29,9 @@ const (
 	defaultRetentionDays = 30
 	// DefaultRetentionInterval is how often the retention runner wakes up. Wired into the retention runner at boot (no longer an env knob).
 	DefaultRetentionInterval = time.Hour
+	// DefaultQueuePruneInterval is how often the event-queue sweep removes acked rows (ADR-0015). Far shorter than the retention
+	// interval: the queue grows at the ingest rate, not the retention window, so a frequent cheap sweep keeps it to its working set.
+	DefaultQueuePruneInterval = time.Minute
 	// DefaultStaleProcessTTL is the fork-time age past which a still-running process row is force-exited by the freshness reconciler.
 	// Long enough to cover an analyst's working window; short enough that overnight greens are gone by morning.
 	DefaultStaleProcessTTL = 6 * time.Hour

@@ -277,6 +277,10 @@ func (m *recordingMetrics) ProcessRetentionRowsDeleted(_ context.Context, n int6
 	m.processRowsDeleted += n
 }
 
+// QueueRowsPruned satisfies the recorder interface; this suite asserts queue-prune behavior through the EventLog + runner tests, not
+// this fake, so it is a no-op here.
+func (m *recordingMetrics) QueueRowsPruned(_ context.Context, _ int64) {}
+
 func (m *recordingMetrics) snapshot() (events, alerts int, reconciled, deleted int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

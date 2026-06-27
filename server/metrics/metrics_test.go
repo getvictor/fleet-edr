@@ -137,6 +137,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.AlertCreated(ctx, "dyld_insert", "high")
 	r.RetentionRowsDeleted(ctx, 42)
 	r.ProcessRetentionRowsDeleted(ctx, 7)
+	r.QueueRowsPruned(ctx, 9)
 	r.QueueDropped(ctx, 3, false)
 	r.QueueDropped(ctx, 5, true)
 
@@ -147,6 +148,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	assert.Equal(t, int64(1), findSum(t, rm, "edr.alerts.created", map[string]any{"rule_id": "dyld_insert", "severity": "high"}))
 	assert.Equal(t, int64(42), findSum(t, rm, "edr.retention.rows_deleted", nil))
 	assert.Equal(t, int64(7), findSum(t, rm, "edr.retention.processes.rows_deleted", nil))
+	assert.Equal(t, int64(9), findSum(t, rm, "edr.event_queue.rows_pruned", nil))
 	assert.Equal(t, int64(3), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": false}))
 	assert.Equal(t, int64(5), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": true}))
 	assert.Equal(t, int64(3), findGauge(t, rm, "edr.enrolled.hosts"))

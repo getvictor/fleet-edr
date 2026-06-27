@@ -19,6 +19,14 @@ The system SHALL, on accepting a batch, durably store every retained event in th
 - **AND** every retained event is enqueued on the work queue marked not yet processed
 - **AND** the system responds with HTTP 200 only after both writes succeed
 
+#### Scenario: Acknowledged work is pruned from the queue
+
+- **GIVEN** events that have been claimed and acknowledged (fully processed) alongside others still unprocessed or in-flight
+- **WHEN** the queue-prune sweep runs
+- **THEN** the acknowledged events are removed from the work queue in bounded batches
+- **AND** the unprocessed and in-flight events remain claimable
+- **AND** the durable history in the event archive is unaffected
+
 ### Requirement: Horizontally scalable ingestion service
 
 The system SHALL support running the ingestion endpoint as a standalone service that shares only its backing stores (the event archive and the work queue) with the processing service. Multiple replicas of the ingestion service MUST be able to accept agent traffic concurrently against the same backing stores without coordinating with each other.

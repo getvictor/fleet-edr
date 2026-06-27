@@ -198,6 +198,72 @@ func TestEventLog_ConcurrentReplicasShareOneQueue(t *testing.T) {
 		"each event_id is enqueued exactly once despite both replicas appending it concurrently")
 }
 
+// spec:server-event-ingestion/decoupled-processing-pipeline/acknowledged-work-is-pruned-from-the-queue
+//
+// PruneProcessed removes acked rows (processed = 1) so the queue keeps to its in-flight working set, while leaving unprocessed
+// (processed = 0) and in-flight (claimed, processed = 2) rows for a later claim.
+func TestEventLog_PruneProcessedRemovesOnlyAcked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := newEventLog(t)
+
+	require.NoError(t, log.Append(ctx, []visibilityapi.Event{
+		ev("acked", "h1", 100, "exec"),
+		ev("inflight", "h1", 200, "exec"),
+		ev("waiting", "h1", 300, "exec"),
+	}))
+
+	// Claim acked+inflight, ack only "acked", leave "inflight" claimed (processed = 2), "waiting" untouched (processed = 0).
+	claimed, err := log.Claim(ctx, 2)
+	require.NoError(t, err)
+	require.Equal(t, []string{"acked", "inflight"}, ids(claimed))
+	require.NoError(t, log.Ack(ctx, []string{"acked"}))
+
+	pruned, err := log.PruneProcessed(ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), pruned, "only the acked row is pruned")
+
+	// The acked row is gone; the in-flight and waiting rows remain (CountPending still counts both not-fully-processed rows).
+	pending, err := log.CountPending(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), pending, "in-flight + waiting rows survive the prune")
+
+	// A second prune with nothing acked is a no-op.
+	pruned, err = log.PruneProcessed(ctx, 10)
+	require.NoError(t, err)
+	assert.Zero(t, pruned, "nothing left to prune")
+}
+
+// TestEventLog_PruneProcessedBatches drives the batched DELETE loop across more than one batch (batchSize < acked count) and confirms
+// every acked row is removed.
+func TestEventLog_PruneProcessedBatches(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := newEventLog(t)
+
+	const n = 25
+	batch := make([]visibilityapi.Event, n)
+	allIDs := make([]string, n)
+	for i := range batch {
+		allIDs[i] = fmt.Sprintf("e-%02d", i)
+		batch[i] = ev(allIDs[i], "h1", int64(i+1), "exec")
+	}
+	require.NoError(t, log.Append(ctx, batch))
+	claimed, err := log.Claim(ctx, n)
+	require.NoError(t, err)
+	require.Len(t, claimed, n)
+	require.NoError(t, log.Ack(ctx, allIDs))
+
+	// batchSize 10 < 25 acked, so the internal loop runs three DELETEs (10, 10, 5) and removes all of them.
+	pruned, err := log.PruneProcessed(ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(n), pruned, "every acked row is removed across batches")
+
+	pending, err := log.CountPending(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, pending, "queue is empty after pruning all acked rows")
+}
+
 func TestEventLog_EmptyOps(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

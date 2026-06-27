@@ -407,6 +407,7 @@ func openDetection(
 		StaleProcessInterval: config.DefaultStaleProcessInterval,
 		RetentionDays:        cfg.RetentionDays,
 		RetentionInterval:    config.DefaultRetentionInterval,
+		QueuePruneInterval:   config.DefaultQueuePruneInterval,
 		UserExists:           w.identity.Service().UserExists,
 		Audit:                w.identity.AuditRecorder(),
 		AuthZ:                w.identity.AuthZ(),

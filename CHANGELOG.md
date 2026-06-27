@@ -14,7 +14,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
-- **Events move to a ClickHouse archive + a MySQL work queue.** Ingestion durably writes each accepted event to the ClickHouse archive and enqueues it on the MySQL queue, returning success only after both; the detection processor claims from the queue. Per-process network/DNS correlation and alert evidence read the archive. Event retention is now ClickHouse-native time-based expiry rather than a periodic MySQL delete (process-record pruning is unchanged).
+- **Events move to a ClickHouse archive + a MySQL work queue.** Ingestion durably writes each accepted event to the ClickHouse archive and enqueues it on the MySQL queue, returning success only after both; the detection processor claims from the queue. Per-process network/DNS correlation and alert evidence read the archive. Event retention is now ClickHouse-native time-based expiry rather than a periodic MySQL delete (process-record pruning is unchanged). A leader-gated sweep prunes acknowledged events from the work queue in batches so it keeps to its in-flight working set; the `edr.event_queue.rows_pruned` metric reports its throughput.
 
 ## [0.3.0] (2026-06-26)
 

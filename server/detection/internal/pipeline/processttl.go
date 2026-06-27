@@ -91,21 +91,7 @@ func (r *ProcessTTLRunner) Loop(ctx context.Context) {
 		r.logger.InfoContext(ctx, "process-ttl reconciliation disabled", "edr.process.ttl_seconds", 0)
 		return
 	}
-	t := time.NewTicker(r.interval)
-	defer t.Stop()
-	if _, err := r.Run(ctx); err != nil {
-		r.logger.WarnContext(ctx, "process-ttl initial run failed", "err", err)
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if _, err := r.Run(ctx); err != nil {
-				r.logger.WarnContext(ctx, "process-ttl run failed", "err", err)
-			}
-		}
-	}
+	runPeriodic(ctx, r.interval, r.logger, "process-ttl", r.Run)
 }
 
 // Run executes one reconciliation pass and returns rows reconciled.
