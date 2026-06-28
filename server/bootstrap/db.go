@@ -12,6 +12,18 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.38.0"
 )
 
+const (
+	// dbMaxOpenConns caps the process-wide MySQL pool. The detection processor now runs several in-process workers that each claim
+	// and flush a batch on a pooled connection (issue #535); without a ceiling, that concurrency multiplied across the replica fleet
+	// could exhaust MySQL's max_connections (default 151). 25 leaves headroom for the worker fleet plus request-path queries on one
+	// replica while staying well under the server limit for a small multi-replica deployment. It is a fixed constant, not an env knob
+	// (server-configuration spec).
+	dbMaxOpenConns = 25
+	// dbMaxIdleConns keeps a warm subset of the pool open between statements so the steady-state worker + request load reuses
+	// connections instead of dialing per statement. Kept below the open ceiling so idle replicas release connections back to MySQL.
+	dbMaxIdleConns = 10
+)
+
 // OpenDB opens a connection pool to MySQL and pings it. cmd/main
 // calls this once and shares the returned handle across every
 // bounded context's bootstrap so all contexts share one connection
@@ -21,13 +33,16 @@ import (
 //
 // The connection pool lives in the platform bootstrap package because
 // it is process-wide infrastructure, not owned by any single bounded
-// context.
+// context. Its open/idle ceilings are fixed constants so intra-replica
+// processor concurrency cannot exhaust the database (server-availability spec).
 func OpenDB(ctx context.Context, dsn string) (*sqlx.DB, error) {
 	sqldb, err := openInstrumentedDB(ensureParseTime(dsn))
 	if err != nil {
 		return nil, err
 	}
 	db := sqlx.NewDb(sqldb, "mysql")
+	db.SetMaxOpenConns(dbMaxOpenConns)
+	db.SetMaxIdleConns(dbMaxIdleConns)
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping db: %w", err)

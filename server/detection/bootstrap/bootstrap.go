@@ -58,10 +58,12 @@ type Deps struct {
 	// payloads. Optional.
 	Build BuildInfo
 
-	// Pipeline cadences (Full mode only). Zero values disable the
-	// corresponding loop.
-	ProcessInterval      time.Duration
-	ProcessBatch         int
+	// Pipeline cadences (Full mode only). A zero interval/cadence disables the corresponding loop.
+	ProcessInterval time.Duration
+	ProcessBatch    int
+	// ProcessConcurrency is the number of in-process processor workers (issue #535). Unlike the cadence fields above, zero does NOT
+	// disable the processor: it is clamped to a single worker (the historical single-goroutine behaviour).
+	ProcessConcurrency   int
 	StaleProcessTTL      time.Duration
 	StaleProcessInterval time.Duration
 	RetentionDays        int
@@ -127,7 +129,7 @@ func New(deps Deps) (*Detection, error) {
 		return nil, errors.New("detection bootstrap: EventArchive is required")
 	}
 
-	store, err := mysql.New(deps.DB, deps.EventArchive)
+	store, err := mysql.New(deps.DB, deps.EventArchive, logger)
 	if err != nil {
 		return nil, fmt.Errorf("detection bootstrap: %w", err)
 	}
@@ -169,6 +171,7 @@ func New(deps Deps) (*Detection, error) {
 			logger,
 			deps.ProcessInterval,
 			deps.ProcessBatch,
+			deps.ProcessConcurrency,
 		)
 		processTTL := pipeline.NewProcessTTL(store, pipeline.ProcessTTLOptions{
 			MaxAge:   deps.StaleProcessTTL,

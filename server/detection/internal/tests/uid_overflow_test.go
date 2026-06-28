@@ -35,7 +35,7 @@ func discardLogger() *slog.Logger {
 func newBuilder(t *testing.T) (*graph.Builder, *sqlx.DB) {
 	t.Helper()
 	db := full.Open(t)
-	store, err := mysql.New(db, detectiontestkit.NewMemArchive())
+	store, err := mysql.New(db, detectiontestkit.NewMemArchive(), nil)
 	require.NoError(t, err)
 	return graph.NewBuilder(store, discardLogger()), db
 }

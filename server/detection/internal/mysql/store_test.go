@@ -39,7 +39,7 @@ func newTestStoreWithArchive(tb testing.TB) (*mysql.Store, visibilityapi.EventAr
 	ctx := tb.Context()
 	require.NoError(tb, testkit.ApplySchema(ctx, db))
 	archive := testkit.NewMemArchive()
-	s, err := mysql.New(db, archive)
+	s, err := mysql.New(db, archive, nil)
 	require.NoError(tb, err)
 	return s, archive
 }
@@ -50,21 +50,21 @@ func newTestStoreWithArchive(tb testing.TB) (*mysql.Store, visibilityapi.EventAr
 // (arch-go allows **.testdb here); it takes *testing.T, so this helper is test-only (no benchmark variant needed).
 func newFullSchemaStore(t *testing.T) *mysql.Store {
 	t.Helper()
-	s, err := mysql.New(full.Open(t), testkit.NewMemArchive())
+	s, err := mysql.New(full.Open(t), testkit.NewMemArchive(), nil)
 	require.NoError(t, err)
 	return s
 }
 
 func TestNew_RejectsNilDB(t *testing.T) {
 	t.Parallel()
-	_, err := mysql.New(nil, testkit.NewMemArchive())
+	_, err := mysql.New(nil, testkit.NewMemArchive(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db handle")
 }
 
 func TestNew_RejectsNilArchive(t *testing.T) {
 	t.Parallel()
-	_, err := mysql.New(testdb.Open(t), nil)
+	_, err := mysql.New(testdb.Open(t), nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "event archive")
 }

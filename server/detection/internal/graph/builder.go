@@ -102,8 +102,11 @@ func (b *Builder) sweepPendingExits() {
 	}
 }
 
-// ProcessBatch processes a batch of events, updating the processes table for fork, exec, and exit events. Other event types are
-// ignored.
+// ProcessBatch materialises a batch of fork/exec/exit/snapshot-heartbeat events into the processes table; other event types are
+// ignored. It collapses what used to be one-or-more DB round-trips per event into a small constant (issue #535): the candidate
+// process rows for every (host_id, pid) the batch touches are preloaded in one query into an in-memory session, the handlers fold
+// the batch against that overlay (reproducing the exact per-event resolution semantics), and the result is persisted with set-based
+// writes in one flush. The resulting forest is identical to applying the events one at a time in timestamp order.
 func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 	// Sort by timestamp so fork always precedes exec/exit for the same PID.
 	sorted := make([]api.Event, len(events))
@@ -122,35 +125,51 @@ func (b *Builder) ProcessBatch(ctx context.Context, events []api.Event) error {
 	// map, called per batch is plenty.
 	b.sweepPendingExits()
 
+	sess, err := newBatchSession(ctx, b.store, collectKeys(sorted))
+	if err != nil {
+		return fmt.Errorf("graph: preload batch: %w", err)
+	}
+
 	var transientFailCount int
 	for _, evt := range sorted {
-		var err error
-		switch evt.EventType {
-		case "fork":
-			err = b.handleFork(ctx, evt)
-		case "exec":
-			err = b.handleExec(ctx, evt)
-		case "exit":
-			err = b.handleExit(ctx, evt)
-		case "snapshot_heartbeat":
-			err = b.handleSnapshotHeartbeat(ctx, evt)
+		// Folding is in-memory: handler errors are payload-decode failures (permanent) only, since the session never touches the
+		// DB here. A permanent data error (a value outside a column's range, the issue #379 uid/gid-overflow class) is not caught
+		// here; it surfaces at flush, where the per-row fallback isolates it. Returning a transient error here would make the
+		// processor re-fetch the whole batch forever, wedging the pipeline fleet-wide on one poison event.
+		if err := b.foldEvent(ctx, sess, evt); err != nil {
+			if permanentError(err) {
+				b.logger.WarnContext(ctx, "event dropped: permanent processing error", "event_id", evt.EventID, "type", evt.EventType, "err", err)
+				continue
+			}
+			transientFailCount++
+			b.logger.WarnContext(ctx, "event processing failed, will retry", "event_id", evt.EventID, "type", evt.EventType, "err", err)
 		}
-		if err == nil {
-			continue
-		}
-		// A permanent (non-retryable) persistence error, e.g. a value outside a column's range, fails identically on every
-		// retry. Returning it here would make the processor unclaim and re-fetch the whole batch forever, wedging the pipeline
-		// fleet-wide on one poison event (the uid/gid-overflow incident, issue #379). Drop the offending event so the batch
-		// advances; only a transient fault (deadlock, lock-wait timeout, lost connection) fails the batch so it is retried.
-		if permanentError(err) {
-			b.logger.WarnContext(ctx, "event dropped: permanent processing error", "event_id", evt.EventID, "type", evt.EventType, "err", err)
-			continue
-		}
-		transientFailCount++
-		b.logger.WarnContext(ctx, "event processing failed, will retry", "event_id", evt.EventID, "type", evt.EventType, "err", err)
 	}
 	if transientFailCount > 0 {
 		return fmt.Errorf("graph: %d event(s) failed to process", transientFailCount)
+	}
+
+	// One set-based flush. A transient write fault is returned so the processor nacks and retries the whole batch atomically (the
+	// flush rolls back on failure); a permanent data error is isolated inside the flush via a per-row fallback, dropping the
+	// poison row and persisting the rest, so the batch still advances (issue #379).
+	if err := b.store.FlushProcessBatch(ctx, sess.plan()); err != nil {
+		return fmt.Errorf("graph: flush batch: %w", err)
+	}
+	return nil
+}
+
+// foldEvent applies one event against the writer (the in-memory session in production, the store directly in the differential
+// reference test). Unhandled event types are a no-op.
+func (b *Builder) foldEvent(ctx context.Context, w processStore, evt api.Event) error {
+	switch evt.EventType {
+	case "fork":
+		return b.handleFork(ctx, w, evt)
+	case "exec":
+		return b.handleExec(ctx, w, evt)
+	case "exit":
+		return b.handleExit(ctx, w, evt)
+	case "snapshot_heartbeat":
+		return b.handleSnapshotHeartbeat(ctx, w, evt)
 	}
 	return nil
 }
@@ -177,12 +196,12 @@ type snapshotHeartbeatPayload struct {
 // handleSnapshotHeartbeat bumps last_seen_ns on the snapshot row for the heartbeat PID so the TTL reconciler's
 // COALESCE(last_seen_ns, fork_time_ns) predicate sees a fresh timestamp and exempts the row from the issue #6 force-exit. No-ops
 // for non-snapshot rows and for snapshot rows that have already exited; the store's WHERE clause guards both. Issue #173.
-func (b *Builder) handleSnapshotHeartbeat(ctx context.Context, evt api.Event) error {
+func (b *Builder) handleSnapshotHeartbeat(ctx context.Context, w processStore, evt api.Event) error {
 	var p snapshotHeartbeatPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return err
 	}
-	return b.store.UpdateLastSeenForSnapshot(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	return w.UpdateLastSeenForSnapshot(ctx, evt.HostID, p.PID, evt.TimestampNs)
 }
 
 type forkPayload struct {
@@ -194,25 +213,25 @@ type forkPayload struct {
 	PIDVersion *uint32 `json:"pidversion"`
 }
 
-func (b *Builder) handleFork(ctx context.Context, evt api.Event) error {
+func (b *Builder) handleFork(ctx context.Context, w processStore, evt api.Event) error {
 	var p forkPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return err
 	}
 
 	// Handle PID reuse: close any existing non-exited record for this PID.
-	if err := b.store.CloseStaleProcess(ctx, evt.HostID, p.ChildPID, evt.TimestampNs); err != nil {
+	if err := w.CloseStaleProcess(ctx, evt.HostID, p.ChildPID, evt.TimestampNs); err != nil {
 		return err
 	}
 
 	// Inherit parent's path for the new process (fork-without-exec case).
-	parentPath, err := b.store.GetParentPath(ctx, evt.HostID, p.ParentPID)
+	parentPath, err := w.GetParentPath(ctx, evt.HostID, p.ParentPID)
 	if err != nil {
 		b.logger.WarnContext(ctx, "failed to get parent path", "host_id", evt.HostID, "parent_pid", p.ParentPID, "err", err)
 	}
 
 	forkIngested := evt.IngestedAtNs
-	_, err = b.store.InsertProcess(ctx, api.Process{
+	_, err = w.InsertProcess(ctx, api.Process{
 		HostID:           evt.HostID,
 		PID:              p.ChildPID,
 		PPID:             p.ParentPID,
@@ -246,7 +265,7 @@ type execPayload struct {
 	Snapshot bool `json:"snapshot"`
 }
 
-func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
+func (b *Builder) handleExec(ctx context.Context, w processStore, evt api.Event) error {
 	var p execPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return err
@@ -258,7 +277,7 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 	//   (c) row, exec_time_ns set: same-PID re-exec (issue #10). Close the prior generation and INSERT a new linked row.
 	//       Without this branch, shell exec-optimization chains (python -> sh -> bash -> /tmp/payload) get collapsed
 	//       into the final exec only.
-	current, err := b.store.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	current, err := w.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
 	if err != nil {
 		return err
 	}
@@ -272,10 +291,10 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 	}
 
 	if current == nil {
-		return b.insertExecWithoutFork(ctx, evt, p)
+		return b.insertExecWithoutFork(ctx, w, evt, p)
 	}
 	if current.ExecTimeNs == nil {
-		return b.store.UpdateProcessExec(ctx, mysql.ProcessExecUpdate{
+		return w.UpdateProcessExec(ctx, mysql.ProcessExecUpdate{
 			HostID: evt.HostID, PID: p.PID, ExecTimeNs: evt.TimestampNs,
 			Path: p.Path, Args: p.Args,
 			UID: p.UID, GID: p.GID,
@@ -283,12 +302,12 @@ func (b *Builder) handleExec(ctx context.Context, evt api.Event) error {
 			PIDVersion: p.PIDVersion,
 		})
 	}
-	return b.insertReExec(ctx, evt, p, current)
+	return b.insertReExec(ctx, w, evt, p, current)
 }
 
 // insertExecWithoutFork synthesizes a root process row when an exec event arrives for a PID we've never seen fork for. fork_time_ns is
 // set to the exec time as a best effort.
-func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p execPayload) error {
+func (b *Builder) insertExecWithoutFork(ctx context.Context, w processStore, evt api.Event, p execPayload) error {
 	ppid := 0
 	if p.PPID != 0 {
 		ppid = p.PPID
@@ -342,15 +361,15 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, evt api.Event, p ex
 			row.ExitCode = &pe.exitCode
 		}
 	}
-	_, err := b.store.InsertProcess(ctx, row)
+	_, err := w.InsertProcess(ctx, row)
 	return err
 }
 
 // insertReExec handles the issue #10 branch: a process called execve() again on the same PID without forking in between. The store's
 // ReExec helper wraps the close + insert in a single transaction so we can never leave the PID appearing exited with no current
 // generation (partial failure).
-func (b *Builder) insertReExec(ctx context.Context, evt api.Event, p execPayload, prior *api.Process) error {
-	_, reLinked, err := b.store.ReExec(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs, api.Process{
+func (b *Builder) insertReExec(ctx context.Context, w processStore, evt api.Event, p execPayload, prior *api.Process) error {
+	_, reLinked, err := w.ReExec(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs, api.Process{
 		HostID: evt.HostID,
 		PID:    p.PID,
 		// Preserve the parent linkage from the original fork: a re-exec doesn't change PPID on macOS. Falls back to whatever
@@ -407,7 +426,7 @@ type exitPayload struct {
 	ExitReason string `json:"exit_reason,omitempty"`
 }
 
-func (b *Builder) handleExit(ctx context.Context, evt api.Event) error {
+func (b *Builder) handleExit(ctx context.Context, w processStore, evt api.Event) error {
 	var p exitPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return err
@@ -420,7 +439,7 @@ func (b *Builder) handleExit(ctx context.Context, evt api.Event) error {
 		reason = api.ExitReasonHostReconciled
 	}
 
-	affected, err := b.store.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason)
+	affected, err := w.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason)
 	if err != nil {
 		return err
 	}

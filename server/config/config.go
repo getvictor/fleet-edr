@@ -23,6 +23,11 @@ const (
 	DefaultProcessInterval = 500 * time.Millisecond
 	// DefaultProcessBatch is the maximum events processed per process-graph tick.
 	DefaultProcessBatch = 500
+	// DefaultProcessConcurrency is the number of in-process detection-processor workers a replica runs (issue #535). The processor is
+	// I/O-round-trip bound, not compute bound, so a single goroutine leaves a saturated replica at ~25% CPU; running several workers
+	// that each claim disjoint batches via SELECT ... FOR UPDATE SKIP LOCKED (ADR-0011) turns the idle CPU into parallel DB progress.
+	// 4 is a conservative default sized for a small pilot replica; it is a fixed constant, not an env knob (server-configuration spec).
+	DefaultProcessConcurrency = 4
 	// defaultEnrollRatePerMin is the per-IP enrollment rate cap.
 	defaultEnrollRatePerMin = 30
 	// defaultRetentionDays is the event-row retention window.
