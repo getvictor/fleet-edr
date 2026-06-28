@@ -46,7 +46,7 @@ func newEngine(t *testing.T) (*authz.Engine, *recordingAudit) {
 
 func actorWithRoles(uid int64, _ string, roles ...api.RoleBinding) *api.Actor {
 	return &api.Actor{
-		UserID:     uid,
+		Principal:  api.UserPrincipal(uid, ""),
 		AuthMethod: "local_password",
 		Roles:      roles,
 		// Default to fresh so the role/action matrix tests can pin grant correctness without entangling the reauth window.
@@ -258,7 +258,7 @@ func TestAllow_FreshSession_ExecutesDestructiveAction(t *testing.T) {
 	t.Parallel()
 	e, _ := newEngine(t)
 	actor := &api.Actor{
-		UserID:       1,
+		Principal:    api.UserPrincipal(1, ""),
 		AuthMethod:   "local_password",
 		SessionFresh: true,
 		Roles:        []api.RoleBinding{globalBinding("admin", "default")},
@@ -279,7 +279,7 @@ func TestAllow_StaleSession_ChallengedBeforeDestructiveAction(t *testing.T) {
 	t.Parallel()
 	e, rec := newEngine(t)
 	actor := &api.Actor{
-		UserID:       1,
+		Principal:    api.UserPrincipal(1, ""),
 		AuthMethod:   "local_password",
 		SessionFresh: false,
 		Roles:        []api.RoleBinding{globalBinding("admin", "default")},

@@ -44,7 +44,7 @@ func TestAllow_P99Latency(t *testing.T) {
 	require.NoError(t, err)
 
 	actor := &api.Actor{
-		UserID: 1,
+		Principal: api.UserPrincipal(1, ""),
 		Roles: []api.RoleBinding{
 			{RoleID: "admin", ScopeType: api.RoleBindingScopeGlobal, ScopeID: "*"},
 		},

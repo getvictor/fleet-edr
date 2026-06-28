@@ -95,7 +95,7 @@ func TestHTTPGate_ReauthRequired_BreakglassActor(t *testing.T) {
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: api.ReasonReauthRequired}}
 	w := httptest.NewRecorder()
 	ctx := api.WithActor(t.Context(), &api.Actor{
-		UserID: 1, AuthMethod: "local_password",
+		Principal: api.UserPrincipal(1, ""), AuthMethod: "local_password",
 	})
 
 	ok := api.HTTPGate(ctx, w, az, slog.Default(),
@@ -123,7 +123,7 @@ func TestHTTPGate_ReauthRequired_OIDCActor(t *testing.T) {
 	az := &stubAuthZ{decision: api.Decision{Allow: false, Reason: api.ReasonReauthRequired}}
 	w := httptest.NewRecorder()
 	ctx := api.WithActor(t.Context(), &api.Actor{
-		UserID: 1, AuthMethod: "oidc",
+		Principal: api.UserPrincipal(1, ""), AuthMethod: "oidc",
 	})
 
 	ok := api.HTTPGate(ctx, w, az, slog.Default(),

@@ -75,7 +75,7 @@ func dcServer(t *testing.T, svc detectionConfigService, withActor bool) *httptes
 	if withActor {
 		inner := handler
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{UserID: 7, SessionFresh: true})
+			ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{Principal: identityapi.UserPrincipal(7, ""), SessionFresh: true})
 			inner.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -102,7 +102,7 @@ func mountDC(t *testing.T, h *DetectionConfigHandler) *httptest.Server {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{UserID: 7, SessionFresh: true})
+		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{Principal: identityapi.UserPrincipal(7, ""), SessionFresh: true})
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 	srv := httptest.NewServer(handler)

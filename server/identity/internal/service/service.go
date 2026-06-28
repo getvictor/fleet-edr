@@ -126,7 +126,6 @@ func (s *service) LoadActor(ctx context.Context, userID int64, authMethod string
 	}
 	return &api.Actor{
 		Principal:    api.UserPrincipal(u.ID, u.Email),
-		UserID:       u.ID,
 		IsBreakglass: u.IsBreakglass,
 		AuthMethod:   authMethod,
 		Roles:        bindings,

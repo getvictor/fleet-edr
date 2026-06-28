@@ -229,8 +229,8 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrUnknownIdentity) {
 			h.failureAudit(r, "oidc.unknown_subject", api.AuditEvent{
-				ActorEmail: claims.Email,
-				Payload:    map[string]any{"subject": claims.Subject},
+				Actor:   api.PrincipalRef{Label: claims.Email},
+				Payload: map[string]any{"subject": claims.Subject},
 			})
 			h.errorRedirect(w, r, http.StatusForbidden, "unknown_subject")
 			return
@@ -239,8 +239,8 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 			// Email already binds another account: surface a directed reason so the operator knows to ask an admin to
 			// merge, not a 500.
 			h.failureAudit(r, "oidc.email_conflict", api.AuditEvent{
-				ActorEmail: claims.Email,
-				Payload:    map[string]any{"subject": claims.Subject},
+				Actor:   api.PrincipalRef{Label: claims.Email},
+				Payload: map[string]any{"subject": claims.Subject},
 			})
 			h.errorRedirect(w, r, http.StatusConflict, "email_conflict")
 			return
@@ -257,11 +257,9 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		h.callbackError(r, w, http.StatusInternalServerError, "session_create_failed", err)
 		return
 	}
-	uid := userID
 	idForAudit := identityID
 	h.recordAudit(ctx, api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: claims.Email,
+		Actor:      api.UserPrincipal(userID, claims.Email),
 		Action:     api.AuditAction("auth.oidc.success"),
 		TargetType: "user",
 		TargetID:   strconv.FormatInt(userID, 10),

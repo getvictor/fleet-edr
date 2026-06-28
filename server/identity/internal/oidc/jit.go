@@ -247,10 +247,8 @@ func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subje
 	if p.audit == nil {
 		return
 	}
-	uid := user.ID
 	if err := p.audit.Record(ctx, api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: user.Email,
+		Actor:      api.UserPrincipal(user.ID, user.Email),
 		Action:     api.AuditAction("user.created"),
 		TargetType: "user",
 		TargetID:   strconv.FormatInt(user.ID, 10),
@@ -261,6 +259,6 @@ func (p *Provisioner) recordCreated(ctx context.Context, user *users.User, subje
 		},
 	}); err != nil && p.logger != nil {
 		p.logger.ErrorContext(ctx, "oidc jit audit record failed",
-			"err", err, "action", "user.created", "user_id", uid)
+			"err", err, "action", "user.created", "user_id", user.ID)
 	}
 }

@@ -91,17 +91,12 @@ const (
 // background ctx without the original span) still attributes the row
 // to the request that triggered it.
 type AuditEvent struct {
-	// Actor is the typed acting principal (user, service account, or system). It is the forward-looking attribution field: it names a
-	// principal for every actor kind, so a service-account action is auditable rather than collapsing to a zero user. See ADR-0017. During
-	// the principal-model cutover it rides alongside UserID/ActorEmail; the recorder snapshots its label onto the row.
-	Actor PrincipalRef
-	// UserID is the authenticated user, when one exists. Nil for pre-auth events (login_failed) so the audit row records "who attempted"
-	// without claiming "who was authenticated."
-	UserID *int64
-	// ActorEmail is the email that should be recorded on the row. For successful actions the user.email at the time of action. For
-	// login_failed, the attempted email even if no user exists.
-	ActorEmail string
-	Action     AuditAction
+	// Actor is the typed acting principal (user, service account, or system) the row is attributed to. It names a principal for every
+	// actor kind, so a service-account action is auditable rather than collapsing to a zero user. The recorder snapshots its label onto
+	// the row. For a pre-authentication failure (login_failed, oidc.unknown_subject) the ID is empty and Label carries the attempted
+	// identifier, so the row records "who attempted" without claiming a principal. See ADR-0017.
+	Actor  PrincipalRef
+	Action AuditAction
 	// TargetType + TargetID identify the object the action applied to.
 	// For unary actions (login, logout) leave both empty.
 	TargetType string

@@ -33,7 +33,7 @@ func newUserAdminEnv(t *testing.T) (*sqlx.DB, http.Handler) {
 // actorWithRole builds a synthetic authenticated actor with a single global role binding, as the session middleware would pin.
 func actorWithRole(uid int64, role string) *api.Actor {
 	return &api.Actor{
-		UserID: uid, AuthMethod: "oidc", SessionFresh: true,
+		Principal: api.UserPrincipal(uid, "op@example.com"), AuthMethod: "oidc", SessionFresh: true,
 		Roles: []api.RoleBinding{{
 			UserID: uid, RoleID: role, ScopeType: api.RoleBindingScopeGlobal, ScopeID: api.RoleBindingScopeWildcard,
 		}},

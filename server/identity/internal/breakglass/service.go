@@ -220,10 +220,8 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 
 	// Audit AFTER commit: a missing audit row does not roll the account-creation back, but a successful audit is evidence the account is
 	// live.
-	uid := req.User.ID
 	s.recordAudit(ctx, api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: req.User.Email,
+		Actor:      api.UserPrincipal(req.User.ID, req.User.Email),
 		Action:     api.AuditAuthBreakglassBootstrap,
 		TargetType: "user",
 		TargetID:   formatID(req.User.ID),
@@ -453,7 +451,7 @@ func (s *Service) recordAudit(ctx context.Context, e api.AuditEvent) {
 // `webauthn.no_credentials`, `bootstrap.expired`, `bootstrap.consumed`, etc.).
 func (s *Service) AuditFailure(ctx context.Context, email, reason, remoteAddr, userAgent string) {
 	s.recordAudit(ctx, api.AuditEvent{
-		ActorEmail: email,
+		Actor:      api.PrincipalRef{Label: email},
 		Action:     api.AuditAuthBreakglassFailure,
 		RemoteAddr: remoteAddr,
 		Payload: map[string]any{
@@ -466,10 +464,8 @@ func (s *Service) AuditFailure(ctx context.Context, email, reason, remoteAddr, u
 
 // AuditSuccess is the auth.breakglass.success helper.
 func (s *Service) AuditSuccess(ctx context.Context, user *users.User, remoteAddr, userAgent string) {
-	uid := user.ID
 	s.recordAudit(ctx, api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: user.Email,
+		Actor:      api.UserPrincipal(user.ID, user.Email),
 		Action:     api.AuditAuthBreakglassSuccess,
 		TargetType: "user",
 		TargetID:   formatID(user.ID),

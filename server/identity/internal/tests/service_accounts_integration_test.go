@@ -47,7 +47,7 @@ func saFixedKey(b byte) []byte {
 // pin one. The user id must reference a real users row (the created_by FK on create).
 func superAdminReq(r *http.Request, uid int64) *http.Request {
 	actor := &api.Actor{
-		UserID: uid, AuthMethod: "oidc", SessionFresh: true,
+		Principal: api.UserPrincipal(uid, "op@example.com"), AuthMethod: "oidc", SessionFresh: true,
 		Roles: []api.RoleBinding{{
 			UserID: uid, RoleID: "super_admin", ScopeType: api.RoleBindingScopeGlobal, ScopeID: api.RoleBindingScopeWildcard,
 		}},
@@ -214,7 +214,7 @@ func TestServiceAccounts_unauthorizedCallerForbidden(t *testing.T) {
 	authed := http.NewServeMux()
 	id.RegisterAuthedRoutes(authed)
 
-	analyst := &api.Actor{UserID: 2, AuthMethod: "oidc", SessionFresh: true, Roles: []api.RoleBinding{{
+	analyst := &api.Actor{Principal: api.UserPrincipal(2, ""), AuthMethod: "oidc", SessionFresh: true, Roles: []api.RoleBinding{{
 		UserID: 2, RoleID: "analyst", ScopeType: api.RoleBindingScopeGlobal, ScopeID: api.RoleBindingScopeWildcard,
 	}}}
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/settings/service-accounts", nil)

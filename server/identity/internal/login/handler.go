@@ -147,8 +147,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 				attrkeys.SessionIDPrefix, idPrefix(raw),
 			)
 			h.recordAudit(ctx, api.AuditEvent{
-				UserID:     actorUserID,
-				ActorEmail: actorEmail,
+				Actor:      api.UserPrincipal(*actorUserID, actorEmail),
 				Action:     api.AuditAuthLogout,
 				RemoteAddr: ip,
 			})
@@ -273,7 +272,7 @@ func (h *Handler) recordAudit(ctx context.Context, e api.AuditEvent) {
 		h.logger.WarnContext(ctx, "audit record",
 			"err", err,
 			"action", string(e.Action),
-			attrkeys.UserEmail, e.ActorEmail,
+			attrkeys.UserEmail, e.Actor.Label,
 		)
 	}
 }

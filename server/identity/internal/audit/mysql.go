@@ -102,7 +102,7 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	if traceID == "" {
 		traceID = traceIDFromContext(ctx)
 	}
-	actor := actorOf(e)
+	actor := e.Actor
 
 	var payloadBytes []byte
 	if len(e.Payload) > 0 {
@@ -252,25 +252,6 @@ func auditReason(e api.AuditEvent) string {
 		}
 	}
 	return ""
-}
-
-// actorOf derives the acting principal recorded on the audit row. The principal-model attribution path sets AuditEvent.Actor directly;
-// callers not yet converted still set UserID/ActorEmail, which actorOf bridges to a user principal so every row carries the principal
-// columns regardless of which caller wrote it. A pre-authentication failure (neither Actor nor UserID) yields an empty-id principal
-// whose label is the attempted identifier, so the row records "who attempted" without claiming a principal. The UserID/ActorEmail
-// bridge is removed when every caller sets Actor, in the final cutover commit (ADR-0017).
-func actorOf(e api.AuditEvent) api.PrincipalRef {
-	if e.Actor.ID != "" {
-		return e.Actor
-	}
-	if e.UserID != nil {
-		return api.UserPrincipal(*e.UserID, e.ActorEmail)
-	}
-	label := e.Actor.Label
-	if label == "" {
-		label = e.ActorEmail
-	}
-	return api.PrincipalRef{Label: label}
 }
 
 // List returns audit rows matching the filter, newest first. Caller passes a non-zero Limit; the Store caps it at maxListLimit so a

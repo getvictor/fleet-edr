@@ -62,8 +62,8 @@ func TestService_CreateExclusion_PersistsResolvesAndAudits(t *testing.T) {
 	ev := audit.events[0]
 	assert.Equal(t, identityapi.AuditDetectionConfigExclusionCreate, ev.Action)
 	assert.Equal(t, "detection_exclusion", ev.TargetType)
-	require.NotNil(t, ev.UserID)
-	assert.Equal(t, int64(42), *ev.UserID)
+	assert.Equal(t, "usr_42", ev.Actor.ID)
+	assert.Equal(t, identityapi.PrincipalUser, ev.Actor.Type)
 	assert.Equal(t, "Claude Code CLI", ev.Payload["reason"])
 }
 

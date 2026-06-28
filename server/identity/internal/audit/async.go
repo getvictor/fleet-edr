@@ -248,17 +248,16 @@ func (w *AsyncWriter) logDropped(ctx context.Context, e api.AuditEvent, reason s
 	w.dropMu.Lock()
 	w.dropped++
 	w.dropMu.Unlock()
-	uid := int64(0)
-	if e.UserID != nil {
-		uid = *e.UserID
-	}
 	attrs := []any{
 		"reason", reason,
 		"action", string(e.Action),
 		"target_type", e.TargetType,
 		"target_id", e.TargetID,
-		"actor_email", e.ActorEmail,
-		attrkeys.UserID, uid,
+		"actor_principal_id", e.Actor.ID,
+		"actor_label", e.Actor.Label,
+	}
+	if uid, ok := e.Actor.UserID(); ok {
+		attrs = append(attrs, attrkeys.UserID, uid)
 	}
 	if e.TraceID != "" {
 		attrs = append(attrs, "trace_id", e.TraceID)

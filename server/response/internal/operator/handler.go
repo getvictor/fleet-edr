@@ -120,14 +120,12 @@ func (h *Handler) recordCommandAudit(r *http.Request, hostID, commandType string
 		return
 	}
 	ctx := r.Context()
-	uid, _ := identityapi.UserIDFromContext(ctx)
-	var userID *int64
-	if uid > 0 {
-		u := uid
-		userID = &u
+	var actor identityapi.PrincipalRef
+	if a, ok := identityapi.ActorFromContext(ctx); ok {
+		actor = a.Principal
 	}
 	if err := h.audit.Record(ctx, identityapi.AuditEvent{
-		UserID:     userID,
+		Actor:      actor,
 		Action:     identityapi.AuditCommandIssue,
 		TargetType: "host",
 		TargetID:   hostID,

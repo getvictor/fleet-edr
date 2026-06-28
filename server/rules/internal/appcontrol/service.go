@@ -404,16 +404,10 @@ func (s *Service) emitAudit(
 		Action:     identityapi.AuditAppControlRuleCreate,
 		TargetType: "application_control_rule",
 		TargetID:   strconv.FormatInt(rule.ID, 10),
-		ActorEmail: req.Actor,
 		Payload:    payload,
 	}
 	if actor != nil {
 		event.Actor = actor.Principal
-		// Transitional: derive the legacy user id from the principal for a human actor so the audit store's UserID path stays correct
-		// until the bridge is removed. A service-account actor has no user id and is attributed via Actor alone.
-		if uid, ok := actor.Principal.UserID(); ok {
-			event.UserID = &uid
-		}
 	}
 	if err := s.audit.Record(ctx, event); err != nil {
 		s.logger.WarnContext(ctx, "appcontrol: audit record failed", "err", err, "rule_id", rule.ID)
@@ -436,10 +430,6 @@ func (s *Service) emitAudit(
 func (s *Service) recordAudit(ctx context.Context, actor *identityapi.Actor, evt identityapi.AuditEvent) {
 	if actor != nil {
 		evt.Actor = actor.Principal
-		// Transitional: derive the legacy user id from the principal for a human actor; a service-account actor is attributed via Actor.
-		if uid, ok := actor.Principal.UserID(); ok {
-			evt.UserID = &uid
-		}
 	}
 	if s.audit == nil {
 		s.logger.WarnContext(ctx, "appcontrol: audit recorder is nil; dropping mutation audit row",
@@ -550,7 +540,6 @@ func (s *Service) recordRuleMutationAudit(ctx context.Context, args ruleMutation
 		Action:     args.Action,
 		TargetType: "application_control_rule",
 		TargetID:   strconv.FormatInt(args.Rule.ID, 10),
-		ActorEmail: args.ActorString,
 		Payload:    payload,
 	})
 }
@@ -620,7 +609,6 @@ func (s *Service) recordPolicyMutationAudit(
 		Action:     action,
 		TargetType: "application_control_policy",
 		TargetID:   strconv.FormatInt(policy.ID, 10),
-		ActorEmail: actorString,
 		Payload: map[string]any{
 			"policy_id":      policy.ID,
 			"policy_name":    policy.Name,
@@ -702,7 +690,6 @@ func (s *Service) recordBulkUpsertAudit(ctx context.Context, args bulkUpsertAudi
 		Action:     identityapi.AuditAppControlRuleBulkUpsert,
 		TargetType: "application_control_policy",
 		TargetID:   strconv.FormatInt(args.Req.PolicyID, 10),
-		ActorEmail: args.Req.Actor,
 		Payload:    payload,
 	})
 }

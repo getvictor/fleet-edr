@@ -129,14 +129,14 @@ func TestFailureAudit(t *testing.T) {
 	r.Header.Set("User-Agent", "test/1.0")
 
 	h.failureAudit(r, "oidc.unknown_subject", api.AuditEvent{
-		ActorEmail: "alice@example.com",
-		Payload:    map[string]any{"subject": "okta-1"},
+		Actor:   api.PrincipalRef{Label: "alice@example.com"},
+		Payload: map[string]any{"subject": "okta-1"},
 	})
 
 	require.Len(t, rec.events, 1)
 	got := rec.events[0]
 	assert.Equal(t, api.AuditAction("auth.oidc.failure"), got.Action)
-	assert.Equal(t, "alice@example.com", got.ActorEmail)
+	assert.Equal(t, "alice@example.com", got.Actor.Label)
 	assert.Equal(t, "deny", got.Payload["decision"])
 	assert.Equal(t, "oidc.unknown_subject", got.Payload["reason"])
 	assert.Equal(t, "test/1.0", got.Payload["user_agent"])

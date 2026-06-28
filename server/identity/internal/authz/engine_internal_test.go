@@ -192,7 +192,7 @@ func TestEngineErrorDecision(t *testing.T) {
 	rec := &internalAudit{}
 	e, err := New(t.Context(), rec, nil, Options{})
 	require.NoError(t, err)
-	actor := &api.Actor{UserID: 1}
+	actor := &api.Actor{Principal: api.UserPrincipal(1, "")}
 	d := e.engineErrorDecision(t.Context(), actor, api.ActionHostIsolate,
 		api.Resource{Type: "host", ID: "h1"})
 	assert.False(t, d.Allow, "engine_error must deny")
