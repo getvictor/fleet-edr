@@ -50,7 +50,9 @@ type ServiceAccount struct {
 // AuthRecord is the secret-bearing lookup used only by the token endpoint to validate a presented credential. It carries the stored
 // hash (never the plaintext) plus the fields needed to mint and to decide whether minting is allowed.
 type AuthRecord struct {
+	ID         int64        `db:"id"`
 	ClientID   string       `db:"client_id"`
+	Name       string       `db:"name"`
 	RoleID     string       `db:"role_id"`
 	SecretHash []byte       `db:"secret_hash"`
 	Epoch      int64        `db:"epoch"`
@@ -122,7 +124,7 @@ func (s *Store) List(ctx context.Context) ([]ServiceAccount, error) {
 func (s *Store) AuthByClientID(ctx context.Context, clientID string) (AuthRecord, error) {
 	var rec AuthRecord
 	err := s.db.GetContext(ctx, &rec, `
-		SELECT client_id, role_id, secret_hash, epoch, expires_at, revoked_at
+		SELECT id, client_id, name, role_id, secret_hash, epoch, expires_at, revoked_at
 		FROM service_accounts WHERE client_id = ?`, clientID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AuthRecord{}, ErrNotFound

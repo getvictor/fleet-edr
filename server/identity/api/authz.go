@@ -192,6 +192,10 @@ const (
 // policies that gate on SessionFresh therefore default to deny, which
 // is the safe direction.
 type Actor struct {
+	// Principal is the typed identity of the acting principal (user, service account, or system). It carries a stable principal id that
+	// survives authentication for every actor kind, so a service-account request is attributable rather than collapsing to a zero user.
+	// It is the value recorded for audit and per-row attribution. See ADR-0017.
+	Principal    PrincipalRef  `json:"principal"`
 	UserID       int64         `json:"user_id"`
 	IsBreakglass bool          `json:"is_breakglass"`
 	AuthMethod   string        `json:"auth_method"`

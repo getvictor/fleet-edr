@@ -50,6 +50,14 @@ func (a *Authenticator) Authenticate(token string, now time.Time) (*api.Actor, b
 		return nil, false
 	}
 	return &api.Actor{
+		// The principal id + label ride in the token claims (stamped at the token endpoint, which already read the SA row), so the acting
+		// service account survives authentication with no DB read on the hot path. This is the root fix for #514 and #518: a service-account
+		// actor is now attributable rather than collapsing to a zero user.
+		Principal: api.PrincipalRef{
+			ID:    claims.Principal,
+			Type:  api.PrincipalServiceAccount,
+			Label: claims.Label,
+		},
 		AuthMethod:   AuthMethodServiceAccount,
 		SessionFresh: false,
 		Roles: []api.RoleBinding{{

@@ -114,7 +114,13 @@ func (h *TokenHandler) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := h.now().UTC()
-	token, exp, err := h.minter.Mint(satoken.MintInput{Subject: rec.ClientID, Role: rec.RoleID, Epoch: rec.Epoch}, accessTokenTTL, now)
+	token, exp, err := h.minter.Mint(satoken.MintInput{
+		Subject:   rec.ClientID,
+		Role:      rec.RoleID,
+		Epoch:     rec.Epoch,
+		Principal: api.ServiceAccountPrincipalID(rec.ID),
+		Label:     rec.Name,
+	}, accessTokenTTL, now)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "service-account token mint", "err", err)
 		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]string{"error": "internal"})
