@@ -53,11 +53,11 @@ type captureApply struct {
 	oidcIn          ssoconfig.UpsertInput
 	appCfg          appconfig.AppConfig
 	expectedVersion int64
-	updatedBy       *int64
+	updatedBy       string
 	err             error
 }
 
-func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedVersion int64, updatedBy *int64) error {
+func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedVersion int64, updatedBy string) error {
 	c.called = true
 	c.oidcIn = oidcIn
 	c.appCfg = appCfg
@@ -66,7 +66,7 @@ func (c *captureApply) fn(_ context.Context, oidcIn ssoconfig.UpsertInput, appCf
 	return c.err
 }
 
-func noopApply(context.Context, ssoconfig.UpsertInput, appconfig.AppConfig, int64, *int64) error {
+func noopApply(context.Context, ssoconfig.UpsertInput, appconfig.AppConfig, int64, string) error {
 	return nil
 }
 
@@ -93,7 +93,7 @@ func okProbe(context.Context, string) error { return nil }
 
 // withActor pins an actor on the request context so handleUpdate's ActorFromContext succeeds.
 func withActor(r *http.Request, userID int64) *http.Request {
-	return r.WithContext(api.WithActor(r.Context(), &api.Actor{UserID: userID, AuthMethod: "oidc"}))
+	return r.WithContext(api.WithActor(r.Context(), &api.Actor{Principal: api.UserPrincipal(userID, ""), AuthMethod: "oidc"}))
 }
 
 func putReq(t *testing.T, body any) *http.Request {
@@ -167,8 +167,7 @@ func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	require.True(t, ap.called, "the transactional apply must be invoked")
 	require.NotNil(t, ap.oidcIn.NewSecret)
 	assert.Equal(t, "rotate-me", *ap.oidcIn.NewSecret)
-	require.NotNil(t, ap.updatedBy, "a human actor stamps updated_by with its user id")
-	assert.Equal(t, int64(42), *ap.updatedBy)
+	assert.Equal(t, "usr_42", ap.updatedBy, "a human actor stamps updated_by with its principal id")
 	assert.Equal(t, "https://edr.example.com", ap.appCfg.ExternalURL)
 	assert.Equal(t, int64(3), ap.expectedVersion, "the read app-config version must flow into the OCC check")
 

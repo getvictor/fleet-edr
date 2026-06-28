@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -68,19 +67,23 @@ func newIdentityWithDiscovery(t *testing.T, idp *httptest.Server) (*bootstrap.Id
 	return id, db, ssoconfig.New(db, sealer), appconfig.New(db)
 }
 
-// seedUser inserts a users row and returns its id, for the oidc_config.updated_by FK on the admin update path.
+// seedUser inserts a users row plus its principals spine row (the oidc_config.updated_by FK targets principals(id)) and returns the
+// user id.
 func seedUser(t *testing.T, db *sqlx.DB, email string) int64 {
 	t.Helper()
 	res, err := db.ExecContext(t.Context(), "INSERT INTO users (email) VALUES (?)", email)
 	require.NoError(t, err)
 	id, err := res.LastInsertId()
 	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(),
+		"INSERT INTO principals (id, type, display_label) VALUES (?, 'user', ?)", api.UserPrincipalID(id), email)
+	require.NoError(t, err)
 	return id
 }
 
 func adminActorCtx(r *http.Request, userID int64) *http.Request {
 	actor := &api.Actor{
-		UserID:       userID,
+		Principal:    api.UserPrincipal(userID, "admin@itest.local"),
 		AuthMethod:   "oidc",
 		SessionFresh: true,
 		Roles: []api.RoleBinding{{
@@ -158,7 +161,7 @@ func TestSSOAdmin_updatePersistsAtomically(t *testing.T) {
 // "admin" (which holds sso.manage): service accounts are forbidden from binding super_admin, so admin reflects a real SA token.
 func serviceAccountActorCtx(r *http.Request) *http.Request {
 	actor := &api.Actor{
-		UserID:       0,
+		Principal:    api.ServiceAccountPrincipal(7, "ci-bot"),
 		AuthMethod:   "service_account",
 		SessionFresh: false,
 		Roles: []api.RoleBinding{{
@@ -168,13 +171,18 @@ func serviceAccountActorCtx(r *http.Request) *http.Request {
 	return r.WithContext(api.WithActor(r.Context(), actor))
 }
 
-// TestSSOAdmin_updateByServiceAccountRecordsNullUpdatedBy is a regression test: a service-account actor has no user id, so the update
-// path must record oidc_config.updated_by as NULL rather than 0. Binding 0 violates the updated_by FK to users(id) and previously
-// failed the write with a 500, blocking service-account-driven SSO configuration.
-func TestSSOAdmin_updateByServiceAccountRecordsNullUpdatedBy(t *testing.T) {
+// TestSSOAdmin_updateByServiceAccountRecordsPrincipal verifies the #514 fix: a service-account SSO update records its principal id
+// (svc_<id>) on both oidc_config.updated_by and app_config.updated_by, rather than the interim NULL the #515 stopgap recorded. The
+// columns FK principals(id), so the acting service account is attributed to the same standard as a user.
+func TestSSOAdmin_updateByServiceAccountRecordsPrincipal(t *testing.T) {
 	t.Parallel()
 	idp := oidcDiscoveryServer(t)
 	id, db, ssoStore, _ := newIdentityWithDiscovery(t, idp)
+
+	// The actor's service-account principal (svc_7) must exist for the updated_by FK to principals.
+	_, err := db.ExecContext(t.Context(),
+		"INSERT INTO principals (id, type, display_label) VALUES ('svc_7', 'service_account', 'ci-bot')")
+	require.NoError(t, err)
 
 	mux := http.NewServeMux()
 	id.RegisterAuthedRoutes(mux)
@@ -204,13 +212,12 @@ func TestSSOAdmin_updateByServiceAccountRecordsNullUpdatedBy(t *testing.T) {
 	assert.Equal(t, "edr-sa-updated", cfg.ClientID)
 	assert.Equal(t, rotated, cfg.ClientSecret)
 
-	// Both rows the transaction writes record updated_by NULL (no operator), the same semantics as env-seeding, never 0. app_config
-	// carries the same updated_by FK as oidc_config, so it would 500 the write too if a service account stamped 0.
-	var oidcUpdatedBy, appUpdatedBy sql.NullInt64
+	// Both rows the transaction writes record the acting service account's principal id, attributing the change to it (not NULL).
+	var oidcUpdatedBy, appUpdatedBy string
 	require.NoError(t, db.GetContext(t.Context(), &oidcUpdatedBy, "SELECT updated_by FROM oidc_config WHERE id = 1"))
 	require.NoError(t, db.GetContext(t.Context(), &appUpdatedBy, "SELECT updated_by FROM app_config WHERE id = 1"))
-	assert.False(t, oidcUpdatedBy.Valid, "oidc_config: service-account write must record updated_by NULL, not %d", oidcUpdatedBy.Int64)
-	assert.False(t, appUpdatedBy.Valid, "app_config: service-account write must record updated_by NULL, not %d", appUpdatedBy.Int64)
+	assert.Equal(t, "svc_7", oidcUpdatedBy, "oidc_config: service-account write records the SA principal id")
+	assert.Equal(t, "svc_7", appUpdatedBy, "app_config: service-account write records the SA principal id")
 }
 
 // TestSSOAdmin_updateDeniedWithoutGrant confirms the real chokepoint rejects an actor lacking sso.manage (analyst).

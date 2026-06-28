@@ -289,7 +289,7 @@ func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
 		return nil
 	}
 	oidcHTTPClient := in.deps.OIDC.HTTPClient
-	apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy *int64) error {
+	apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string) error {
 		tx, err := in.deps.DB.BeginTxx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
@@ -587,7 +587,7 @@ func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
 		Scopes:      i.oidcSeed.Scopes,
 		JITEnabled:  i.oidcSeed.AllowJITProvisioning,
 		DefaultRole: defaultRole,
-		UpdatedBy:   nil,
+		UpdatedBy:   api.PrincipalSystemID,
 	}); err != nil {
 		return fmt.Errorf("identity bootstrap: seed OIDC config from env: %w", err)
 	}
@@ -600,7 +600,7 @@ func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
 			return fmt.Errorf("identity bootstrap: read app config: %w", err)
 		} else if cur.ExternalURL == "" {
 			cur.ExternalURL = externalURL
-			if err := i.appConfigStore.Put(ctx, cur, version, nil); err != nil {
+			if err := i.appConfigStore.Put(ctx, cur, version, api.PrincipalSystemID); err != nil {
 				return fmt.Errorf("identity bootstrap: seed external URL from env: %w", err)
 			}
 		}

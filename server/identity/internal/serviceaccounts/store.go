@@ -37,16 +37,16 @@ var ErrNotFound = errors.New("serviceaccounts: not found")
 
 // ServiceAccount is the read model returned to the admin surface. It never carries the secret or its hash.
 type ServiceAccount struct {
-	ID         int64        `db:"id"`
-	ClientID   string       `db:"client_id"`
-	Name       string       `db:"name"`
-	RoleID     string       `db:"role_id"`
-	Epoch      int64        `db:"epoch"`
-	CreatedBy  *int64       `db:"created_by"`
-	ExpiresAt  time.Time    `db:"expires_at"`
-	RevokedAt  sql.NullTime `db:"revoked_at"`
-	LastUsedAt sql.NullTime `db:"last_used_at"`
-	CreatedAt  time.Time    `db:"created_at"`
+	ID         int64          `db:"id"`
+	ClientID   string         `db:"client_id"`
+	Name       string         `db:"name"`
+	RoleID     string         `db:"role_id"`
+	Epoch      int64          `db:"epoch"`
+	CreatedBy  sql.NullString `db:"created_by"`
+	ExpiresAt  time.Time      `db:"expires_at"`
+	RevokedAt  sql.NullTime   `db:"revoked_at"`
+	LastUsedAt sql.NullTime   `db:"last_used_at"`
+	CreatedAt  time.Time      `db:"created_at"`
 }
 
 // AuthRecord is the secret-bearing lookup used only by the token endpoint to validate a presented credential. It carries the stored
@@ -77,7 +77,7 @@ func New(db *sqlx.DB) *Store {
 type CreateInput struct {
 	Name      string
 	RoleID    string
-	CreatedBy *int64
+	CreatedBy *string
 	ExpiresAt time.Time
 }
 

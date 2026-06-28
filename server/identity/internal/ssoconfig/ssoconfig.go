@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // ErrNotFound is returned by the Get methods when no oidc_config row exists (OIDC has not been configured for the deployment).
@@ -28,7 +30,7 @@ type Config struct {
 	DefaultRole  string
 	Version      int64
 	UpdatedAt    time.Time
-	UpdatedBy    sql.NullInt64
+	UpdatedBy    sql.NullString
 }
 
 // CallbackPath is the OIDC redirect/callback route the server serves. The registered redirect URI is the deployment external URL +
@@ -59,15 +61,15 @@ func RedirectURLFor(externalURL string) string {
 
 // row is the raw DB shape; client_secret_enc stays sealed until GetDecrypted opens it.
 type row struct {
-	Issuer          string        `db:"issuer"`
-	ClientID        string        `db:"client_id"`
-	ClientSecretEnc []byte        `db:"client_secret_enc"`
-	Scopes          string        `db:"scopes"`
-	JITEnabled      bool          `db:"jit_enabled"`
-	DefaultRole     string        `db:"default_role"`
-	Version         int64         `db:"config_version"`
-	UpdatedAt       time.Time     `db:"updated_at"`
-	UpdatedBy       sql.NullInt64 `db:"updated_by"`
+	Issuer          string         `db:"issuer"`
+	ClientID        string         `db:"client_id"`
+	ClientSecretEnc []byte         `db:"client_secret_enc"`
+	Scopes          string         `db:"scopes"`
+	JITEnabled      bool           `db:"jit_enabled"`
+	DefaultRole     string         `db:"default_role"`
+	Version         int64          `db:"config_version"`
+	UpdatedAt       time.Time      `db:"updated_at"`
+	UpdatedBy       sql.NullString `db:"updated_by"`
 }
 
 // UpsertInput is the write shape. NewSecret nil leaves the stored secret unchanged (rotate-only semantics); a non-nil pointer (even to
@@ -79,7 +81,7 @@ type UpsertInput struct {
 	Scopes      []string
 	JITEnabled  bool
 	DefaultRole string
-	UpdatedBy   *int64
+	UpdatedBy   string
 }
 
 // Store owns the oidc_config table. It holds the Sealer so secret sealing/opening stays co-located with persistence.
@@ -170,9 +172,11 @@ func (s *Store) Upsert(ctx context.Context, in UpsertInput) error {
 // also updates other tables atomically (e.g. the SSO admin update that writes oidc_config and app_config together).
 func (s *Store) UpsertTx(ctx context.Context, ext sqlx.ExtContext, in UpsertInput) error {
 	scopes := strings.Join(in.Scopes, ",")
-	var updatedBy sql.NullInt64
-	if in.UpdatedBy != nil {
-		updatedBy = sql.NullInt64{Int64: *in.UpdatedBy, Valid: true}
+	// An unset updater records the system principal (env-seed / background write), matching the column's NOT NULL DEFAULT 'sys' and its
+	// FK to principals(id); an empty string would violate the FK.
+	updatedBy := in.UpdatedBy
+	if updatedBy == "" {
+		updatedBy = api.PrincipalSystemID
 	}
 
 	if in.NewSecret != nil {

@@ -169,10 +169,10 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	expiresAt := h.resolveExpiry(req.ExpiresInDays)
 
-	var createdBy *int64
-	if actor, ok := api.ActorFromContext(ctx); ok && actor.UserID > 0 {
-		uid := actor.UserID
-		createdBy = &uid
+	var createdBy *string
+	if actor, ok := api.ActorFromContext(ctx); ok && actor.Principal.ID != "" {
+		pid := actor.Principal.ID
+		createdBy = &pid
 	}
 	sa, secret, err := h.store.Create(ctx, serviceaccounts.CreateInput{
 		Name: name, RoleID: role, CreatedBy: createdBy, ExpiresAt: expiresAt,
