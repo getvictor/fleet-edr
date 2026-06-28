@@ -35,10 +35,11 @@ type Deps struct {
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
-	// UserEmailByID resolves a user id to its display email for the detection-config exclusions list's created_by column. Optional:
-	// when nil the handler returns the raw "user:<id>" identifier. cmd/main wires it over identity's Service.GetUser; a func keeps the
-	// rules context free of an identity-internal import (ADR-0004), same posture as detection's UserExists dep.
-	UserEmailByID func(ctx context.Context, userID int64) (string, error)
+	// PrincipalLabel resolves a principal id (usr_<id> / svc_<id> / sys) to its display label (a user's email, a service account's
+	// name, or "system") for the detection-config exclusions list's created_by column. Optional: when nil the handler returns the raw
+	// principal id. cmd/main wires it over identity's Service.PrincipalLabel; a func keeps the rules context free of an identity-internal
+	// import (ADR-0004), same posture as detection's UserExists dep.
+	PrincipalLabel func(ctx context.Context, principalID string) (string, error)
 
 	// CommandBatchInserter is the closure that enqueues `set_application_control` commands to a set of hosts in one batched
 	// multi-row INSERT. The application-control fan-out path consults it on every rule mutation so every assigned host receives one
@@ -92,8 +93,8 @@ func New(deps Deps) (*Rules, error) {
 	opH.SetAudit(deps.Audit)
 
 	detectionConfigH := operator.NewDetectionConfig(detectionConfigSvc, deps.AuthZ, logger)
-	if deps.UserEmailByID != nil {
-		detectionConfigH.SetUserEmailResolver(deps.UserEmailByID)
+	if deps.PrincipalLabel != nil {
+		detectionConfigH.SetPrincipalLabelResolver(deps.PrincipalLabel)
 	}
 
 	appControlStore := appcontrol.NewStore(deps.DB)

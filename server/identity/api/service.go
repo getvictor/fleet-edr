@@ -30,6 +30,12 @@ type Service interface {
 	// handleGet renders {user.id, user.email}). Returns ErrUserNotFound for unknown ids.
 	GetUser(ctx context.Context, userID int64) (User, error)
 
+	// PrincipalLabel resolves a principal id (usr_<id> / svc_<id> / sys) to its current display label: a user's email, a service
+	// account's name, or "system". The detection-config exclusions list (rules context) calls it cross-context to render an author for
+	// every principal kind. Returns "" for an unrecognized id; a not-found user or service account surfaces as ("", error) so the caller
+	// falls back to the raw principal id.
+	PrincipalLabel(ctx context.Context, principalID string) (string, error)
+
 	// SeedAdmin creates the first admin user if no users exist, prints the generated password to w, and returns the user record +
 	// plaintext password. Returns (zero User, "", ErrAlreadySeeded) if the table is non-empty so the caller can errors.Is to the
 	// success-but-noop case.

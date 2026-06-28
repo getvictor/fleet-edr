@@ -71,7 +71,20 @@ func ServiceAccountPrincipal(serviceAccountID int64, label string) PrincipalRef 
 // a malformed local part, or a non-positive value, so callers cannot accidentally treat a service account as a user. It keys off the id
 // prefix rather than Type so it still works on a ref reconstructed from a bare attribution string with Type unset.
 func (p PrincipalRef) UserID() (int64, bool) {
-	rest, ok := strings.CutPrefix(p.ID, principalUserPrefix)
+	return parsePrincipalLocalPart(p.ID, principalUserPrefix)
+}
+
+// ServiceAccountID returns the numeric service_accounts.id when this principal is a service account, parsing it out of the svc_<n> id.
+// Used by the principal-label resolver to look up a service account's display name. Returns ok=false for any non-service-account id.
+func (p PrincipalRef) ServiceAccountID() (int64, bool) {
+	return parsePrincipalLocalPart(p.ID, principalServiceAccountPrefix)
+}
+
+// parsePrincipalLocalPart strips prefix from a principal id and parses the remaining local part as a positive autoincrement key. It is
+// the shared contract behind UserID and ServiceAccountID so the two id formats cannot drift: ok is false when id lacks the prefix, the
+// local part is not an integer, or the value is non-positive (which guards against a caller treating one principal kind as another).
+func parsePrincipalLocalPart(id, prefix string) (int64, bool) {
+	rest, ok := strings.CutPrefix(id, prefix)
 	if !ok {
 		return 0, false
 	}

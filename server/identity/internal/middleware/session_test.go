@@ -40,7 +40,7 @@ func newService(t *testing.T) (api.Service, *sessions.Store) {
 	us := users.New(s)
 	ss := sessions.New(s, sessions.Options{})
 	rb := rbac.New(s)
-	return service.New(us, ss, rb, slog.Default()), ss
+	return service.New(us, ss, rb, nil, slog.Default()), ss
 }
 
 func fmtInt(i int64) string {

@@ -45,19 +45,20 @@ type detectionConfigService interface {
 	UpsertRuleSetting(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.UpsertSettingInput) (api.DetectionRuleSetting, error)
 }
 
-// userEmailResolver resolves a numeric user id to its display email for the exclusions list's created_by column. Optional: a nil
-// resolver (or one that errors / returns "") leaves CreatedByEmail empty so the UI falls back to the raw "user:<id>". cmd/main wires
-// it over identity's Service.GetUser; keeping it a func avoids a cross-context import of the identity internals (ADR-0004).
-type userEmailResolver func(ctx context.Context, userID int64) (string, error)
+// principalLabelResolver resolves a principal id (usr_<id> / svc_<id> / sys) to its display label for the exclusions list's created_by
+// column: a user's email, a service account's name, or "system". Optional: a nil resolver (or one that errors / returns "") leaves
+// CreatedByLabel empty so the UI falls back to the raw principal id. cmd/main wires it over identity's Service.PrincipalLabel; keeping
+// it a func avoids a cross-context import of the identity internals (ADR-0004).
+type principalLabelResolver func(ctx context.Context, principalID string) (string, error)
 
 // DetectionConfigHandler serves the rules-context /api/v1/detection-config/* admin routes (issue #459): the per-host false-positive
 // exclusions and per-rule mode/severity the detection engine consults at evaluation time. Separate from the App Control handler
 // because the surface and dependencies do not overlap.
 type DetectionConfigHandler struct {
-	svc       detectionConfigService
-	authz     identityapi.AuthZ
-	userEmail userEmailResolver
-	logger    *slog.Logger
+	svc            detectionConfigService
+	authz          identityapi.AuthZ
+	principalLabel principalLabelResolver
+	logger         *slog.Logger
 }
 
 // NewDetectionConfig builds the detection-config operator handler. svc + authz are required; logger defaults to slog.Default. A nil
@@ -75,48 +76,43 @@ func NewDetectionConfig(svc detectionConfigService, authz identityapi.AuthZ, log
 	return &DetectionConfigHandler{svc: svc, authz: authz, logger: logger}
 }
 
-// SetUserEmailResolver wires the optional directory lookup that resolves an exclusion's created_by ("user:<id>") to a display email.
-// Mirrors SetAudit: set post-construction so non-REST consumers and tests that don't need email resolution can skip it.
-func (h *DetectionConfigHandler) SetUserEmailResolver(r userEmailResolver) {
-	h.userEmail = r
+// SetPrincipalLabelResolver wires the optional directory lookup that resolves an exclusion's created_by principal id to a display
+// label. Mirrors SetAudit: set post-construction so non-REST consumers and tests that don't need label resolution can skip it.
+func (h *DetectionConfigHandler) SetPrincipalLabelResolver(r principalLabelResolver) {
+	h.principalLabel = r
 }
 
-// resolveCreatedByEmails fills CreatedByEmail on each exclusion by resolving its "user:<id>" created_by through the directory. A nil
-// resolver is a no-op (the UI falls back to the raw identifier). Lookups are memoized per call so N exclusions from the same author
-// cost one directory hit; a failed or empty lookup leaves that row's email blank rather than failing the list.
-func (h *DetectionConfigHandler) resolveCreatedByEmails(ctx context.Context, exclusions []api.DetectionExclusion) {
-	if h.userEmail == nil {
+// resolveCreatedByLabels fills CreatedByLabel on each exclusion by resolving its created_by principal id (usr_<id> / svc_<id> / sys)
+// through the directory. A nil resolver is a no-op (the UI falls back to the raw identifier). Lookups are memoized per call so N
+// exclusions from the same author cost one directory hit; a failed or empty lookup leaves that row's label blank rather than failing
+// the list.
+func (h *DetectionConfigHandler) resolveCreatedByLabels(ctx context.Context, exclusions []api.DetectionExclusion) {
+	if h.principalLabel == nil {
 		return
 	}
-	cache := make(map[int64]string)
+	cache := make(map[string]string)
 	for i := range exclusions {
-		id, ok := parseUserActorID(exclusions[i].CreatedBy)
-		if !ok {
+		id := exclusions[i].CreatedBy
+		if id == "" {
 			continue
 		}
-		email, seen := cache[id]
+		label, seen := cache[id]
 		if !seen {
-			resolved, err := h.userEmail(ctx, id)
+			resolved, err := h.principalLabel(ctx, id)
 			if err != nil {
-				// A deleted user (ErrUserNotFound) is the expected fallback case: the UI shows the raw "user:<id>". Warning on it
-				// would spam the log on every list render per missing author, so only genuinely unexpected failures get a WARN.
-				if !errors.Is(err, identityapi.ErrUserNotFound) {
-					h.logger.WarnContext(ctx, "detectionconfig: resolve created_by email", "user_id", id, "err", err)
+				// A deleted principal (a user or a service account) is the expected fallback case: the UI shows the raw principal id.
+				// Warning on it would spam the log on every list render per missing author, so only genuinely unexpected failures
+				// (e.g. DB connectivity) get a WARN.
+				if !errors.Is(err, identityapi.ErrUserNotFound) && !errors.Is(err, identityapi.ErrServiceAccountNotFound) {
+					h.logger.WarnContext(ctx, "detectionconfig: resolve created_by label", "principal_id", id, "err", err)
 				}
 				resolved = ""
 			}
-			email = resolved
-			cache[id] = email
+			label = resolved
+			cache[id] = label
 		}
-		exclusions[i].CreatedByEmail = email
+		exclusions[i].CreatedByLabel = label
 	}
-}
-
-// parseUserActorID extracts the numeric users.id from a usr_<id> principal identifier recorded as created_by, to resolve the author's
-// display email. Returns false for any non-user principal (a service-account svc_<id>, the system principal) or empty actor, so the
-// caller leaves the email unresolved and the UI falls back to the raw identifier. See ADR-0017.
-func parseUserActorID(actor string) (int64, bool) {
-	return identityapi.PrincipalRef{ID: actor}.UserID()
 }
 
 // RegisterRoutes wires the detection-config admin routes:
@@ -149,7 +145,7 @@ func (h *DetectionConfigHandler) handleListExclusions(w http.ResponseWriter, r *
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
 		return
 	}
-	h.resolveCreatedByEmails(ctx, exclusions)
+	h.resolveCreatedByLabels(ctx, exclusions)
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"exclusions": exclusions})
 }
 

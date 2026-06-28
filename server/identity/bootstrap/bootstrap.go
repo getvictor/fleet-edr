@@ -173,7 +173,10 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 	})
 	rbacStore := rbac.New(deps.DB)
 	identitiesStore := identities.New(deps.DB)
-	svc := service.New(usersStore, sessionsStore, rbacStore, logger)
+	// A service-account store for the Service's principal-label resolver (svc_<id> -> name). It is a plain DB reader and does not depend
+	// on the SA token-signing key, so it is wired unconditionally even when the SA token surface is disabled; the token surface builds
+	// its own store.
+	svc := service.New(usersStore, sessionsStore, rbacStore, serviceaccounts.New(deps.DB), logger)
 	auditStore := audit.New(deps.DB, logger)
 	auditAsync := audit.NewAsyncWriter(auditStore, audit.AsyncOptions{
 		QueueCap: deps.AuditAsyncQueueCap,

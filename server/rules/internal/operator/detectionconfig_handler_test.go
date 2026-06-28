@@ -110,29 +110,33 @@ func mountDC(t *testing.T, h *DetectionConfigHandler) *httptest.Server {
 	return srv
 }
 
-func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
+func TestDetectionConfigHandler_ResolvesCreatedByLabel(t *testing.T) {
 	t.Parallel()
-	// resolveCreatedByEmails fills CreatedByEmail in place, so each subtest needs its own slice (with its own backing array):
-	// sharing one across the parallel subtests would let one run's resolved emails leak into the nil-resolver run.
+	// resolveCreatedByLabels fills CreatedByLabel in place, so each subtest needs its own slice (with its own backing array):
+	// sharing one across the parallel subtests would let one run's resolved labels leak into the nil-resolver run.
 	newExclusions := func() []api.DetectionExclusion {
 		return []api.DetectionExclusion{
-			{ID: 1, CreatedBy: "usr_8"}, // resolves
+			{ID: 1, CreatedBy: "usr_8"}, // user -> email
 			{ID: 2, CreatedBy: "usr_8"}, // same author: memoized, no second lookup
-			{ID: 3, CreatedBy: "usr_9"}, // resolver errors: email stays empty
-			{ID: 4, CreatedBy: "svc_5"}, // service-account principal: never looked up
+			{ID: 3, CreatedBy: "usr_9"}, // resolver errors: label stays empty
+			{ID: 4, CreatedBy: "svc_5"}, // service account -> name (now resolved, not skipped)
 		}
 	}
 
-	t.Run("fills email, memoizes per id, falls back on error or non-user actor", func(t *testing.T) {
+	t.Run("fills label for users and service accounts, memoizes per id, falls back on error", func(t *testing.T) {
 		t.Parallel()
 		var calls int
 		h := NewDetectionConfig(&fakeDCService{exclusions: newExclusions()}, allowAllAuthZ{}, slog.Default())
-		h.SetUserEmailResolver(func(_ context.Context, id int64) (string, error) {
+		h.SetPrincipalLabelResolver(func(_ context.Context, principalID string) (string, error) {
 			calls++
-			if id == 8 {
+			switch principalID {
+			case "usr_8":
 				return "ops@fleetdm.com", nil
+			case "svc_5":
+				return "ci-bot", nil
+			default: // usr_9
+				return "", errors.New("principal not found")
 			}
-			return "", errors.New("user not found")
 		})
 		srv := mountDC(t, h)
 		resp := dcDo(t, srv, http.MethodGet, "/api/v1/detection-config/exclusions", "")
@@ -144,14 +148,14 @@ func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
 		resp.Body.Close()
 
 		require.Len(t, out.Exclusions, 4)
-		assert.Equal(t, "ops@fleetdm.com", out.Exclusions[0].CreatedByEmail)
-		assert.Equal(t, "ops@fleetdm.com", out.Exclusions[1].CreatedByEmail)
-		assert.Empty(t, out.Exclusions[2].CreatedByEmail, "errored lookup leaves email blank")
-		assert.Empty(t, out.Exclusions[3].CreatedByEmail, "non-user actor is not looked up")
-		assert.Equal(t, 2, calls, "usr_8 resolved once (memoized) + usr_9 once; service-account skipped")
+		assert.Equal(t, "ops@fleetdm.com", out.Exclusions[0].CreatedByLabel, "user resolves to email")
+		assert.Equal(t, "ops@fleetdm.com", out.Exclusions[1].CreatedByLabel)
+		assert.Empty(t, out.Exclusions[2].CreatedByLabel, "errored lookup leaves label blank")
+		assert.Equal(t, "ci-bot", out.Exclusions[3].CreatedByLabel, "service account resolves to its name")
+		assert.Equal(t, 3, calls, "usr_8 resolved once (memoized) + usr_9 once + svc_5 once")
 	})
 
-	t.Run("nil resolver leaves created_by_email empty", func(t *testing.T) {
+	t.Run("nil resolver leaves created_by_label empty", func(t *testing.T) {
 		t.Parallel()
 		h := NewDetectionConfig(&fakeDCService{exclusions: newExclusions()}, allowAllAuthZ{}, slog.Default())
 		srv := mountDC(t, h)
@@ -163,7 +167,7 @@ func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 		resp.Body.Close()
 		for _, ex := range out.Exclusions {
-			assert.Empty(t, ex.CreatedByEmail)
+			assert.Empty(t, ex.CreatedByLabel)
 		}
 	})
 }

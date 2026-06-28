@@ -21,7 +21,14 @@ type service struct {
 	users    *users.Store
 	sessions *sessions.Store
 	rbac     *rbac.Store
+	saNames  serviceAccountNamer
 	logger   *slog.Logger
+}
+
+// serviceAccountNamer is the subset of the service-account store the principal-label resolver needs (svc_<id> -> name). An interface
+// keeps service.New decoupled from the full SA store and lets tests inject a fake.
+type serviceAccountNamer interface {
+	NameByID(ctx context.Context, id int64) (string, error)
 }
 
 // New constructs a Service. The Service is the cross-context entry point
@@ -29,11 +36,44 @@ type service struct {
 // session/CSRF middleware, and the AuthZ engine also call into it for
 // business logic so the orchestration is in one place.
 //
-// All inputs are required to be non-nil; bootstrap.New is the only caller
-// and provides them via Deps. A nil-defensive branch here would be dead
-// code, so we trust the caller.
-func New(u *users.Store, s *sessions.Store, r *rbac.Store, logger *slog.Logger) api.Service {
-	return &service{users: u, sessions: s, rbac: r, logger: logger}
+// u, s, r, and logger are required to be non-nil; bootstrap.New is the production caller and provides them via Deps, so a
+// nil-defensive branch here would be dead code and we trust the caller. saNames is optional: when nil, PrincipalLabel cannot resolve a
+// service-account name and returns "" for svc_<id> ids (tests that don't exercise that path pass nil).
+func New(u *users.Store, s *sessions.Store, r *rbac.Store, saNames serviceAccountNamer, logger *slog.Logger) api.Service {
+	return &service{users: u, sessions: s, rbac: r, saNames: saNames, logger: logger}
+}
+
+// PrincipalLabel resolves a principal id to its current display label by dispatching on the id prefix: a user to its live email, a
+// service account to its live name, the system principal to "system". An unrecognized id yields "". See ADR-0017.
+func (s *service) PrincipalLabel(ctx context.Context, principalID string) (string, error) {
+	typ, ok := api.PrincipalTypeForID(principalID)
+	if !ok {
+		return "", nil
+	}
+	switch typ {
+	case api.PrincipalSystem:
+		return "system", nil
+	case api.PrincipalUser:
+		uid, ok := (api.PrincipalRef{ID: principalID}).UserID()
+		if !ok {
+			return "", nil
+		}
+		u, err := s.GetUser(ctx, uid)
+		if err != nil {
+			return "", err
+		}
+		return u.Email, nil
+	case api.PrincipalServiceAccount:
+		said, ok := (api.PrincipalRef{ID: principalID}).ServiceAccountID()
+		if !ok || s.saNames == nil {
+			return "", nil
+		}
+		return s.saNames.NameByID(ctx, said)
+	}
+	// PrincipalTypeForID returned ok=true, so typ is one of the three handled cases above; this terminal is unreachable today. It is
+	// not a silent empty default: PrincipalType is a string type that could gain a member (an agent principal is deferred in ADR-0017),
+	// and a fail-loud error here forces this resolver to be updated when that happens rather than silently mislabeling the new type.
+	return "", fmt.Errorf("identity: unhandled principal type %q for principal %q", typ, principalID)
 }
 
 func (s *service) Logout(ctx context.Context, sessionToken []byte) error {
