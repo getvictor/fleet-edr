@@ -38,6 +38,7 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0013](0013-service-account-and-api-authentication.md) | Service-account and API authentication: client-credentials with short-lived self-validating tokens | Accepted |
 | [0014](0014-inline-enforcement-failure-semantics.md) | Inline network enforcement: observation fails open, enforcement is explicit and resilient | Proposed |
 | [0015](0015-clickhouse-visibility-store.md) | ClickHouse event store in a new `visibility` bounded context | Proposed |
+| [0016](0016-event-delivery-substrate.md) | Event delivery: database-backed work queue now, streaming substrate at scale | Accepted |
 
 ## Tooling
 

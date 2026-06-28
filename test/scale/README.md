@@ -123,6 +123,31 @@ Pass `--signoz-url=http://localhost:8080` to enrich the report with the SigNoz-r
 
 A large positive `client_server_delta_p99` points at network + balancer + agent-side queue time as the dominant contributor rather than server work. A failed SigNoz query is a soft error (`signoz_query_error` field), not a gate: the cross-check is a diagnostic, not a contract.
 
+## Server-backlog gate (optional, long-form lane only)
+
+The ingest p99 gate measures the HTTP boundary; it says nothing about whether the detection processor keeps pace with ingest. After the ClickHouse cutover (ADR-0015) ingest fans out to the ClickHouse archive plus the MySQL `event_queue` work queue, and a single server replica's processor drains that queue at a finite rate. At a high enough host count the queue backlog grows during the lane (the processor falls behind) even while ingest latency stays green. A 500-host run on one replica grew the `event_queue` pending backlog to tens of thousands; the same load across three replicas kept it bounded under ~500 (the processor is not leader-gated and scales out via `FOR UPDATE SKIP LOCKED`, ADR-0011).
+
+To measure that, pass `--backlog-dsn` (the server's MySQL DSN) in `direct` mode. A background sampler polls the not-yet-acked `event_queue` depth every `--backlog-poll-interval` (default 5s) for the life of the run and records its percentiles. The poll is direct-mode only (it measures the server's queue, not the agent's); passing `--backlog-dsn` in `headless` mode is rejected at startup rather than silently skipped, and `--pass-max-server-backlog` without a `--backlog-dsn` is rejected too (a ceiling with nothing to sample would be a false pass). Example output:
+
+```json
+{
+  "server_backlog_samples": 60,
+  "server_backlog_p50": 120,
+  "server_backlog_p95": 410,
+  "server_backlog_p99": 480,
+  "server_backlog_max": 512
+}
+```
+
+Set `--pass-max-server-backlog=N` to gate on it: the run fails if the sampled depth ever exceeds `N`, catching a processor-throughput regression distinct from the ingest p99 gate. The default 0 leaves the gate disabled (report-only) until an operator has captured a baseline worth gating on. This is opt-in and off by default: the per-PR smoke and the default baseline run never open a DB connection. It is the server-side counterpart to the agent-side `--pass-max-queue-depth` (headless) gate. Example baseline-with-backlog run:
+
+```bash
+task uat:scale -- --hosts=500 --duration=30m --insecure-tls=true \
+    --backlog-dsn='root:@tcp(127.0.0.1:33306)/edr?parseTime=true' \
+    --pass-max-server-backlog=5000 \
+    --output=test/scale/baselines/baseline-500.json
+```
+
 ## What this layer does NOT do
 
-- **MySQL CPU / row count growth**: the plan calls for these as observability outputs. They are not gates today; capturing them is an operator job during the baseline run (a SigNoz dashboard or `mysqladmin extended-status` snapshot). Promote to gates when a regression case justifies them.
+- **MySQL CPU / row count growth**: the plan calls for these as observability outputs. They are not gates today; capturing them is an operator job during the baseline run (a SigNoz dashboard or `mysqladmin extended-status` snapshot). Promote to gates when a regression case justifies them. (The `event_queue` processing backlog is the one DB-side metric now promoted to an opt-in gate, see "Server-backlog gate" above.)

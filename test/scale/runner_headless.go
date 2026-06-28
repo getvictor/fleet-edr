@@ -502,24 +502,3 @@ func aggregateHeadless(rep *Report, hosts []*headlessHostState, opts Options) {
 			fmt.Sprintf("queue_depth_max %d exceeds budget %d", rep.QueueDepthMax, opts.PassMaxQueueDepth))
 	}
 }
-
-// depthPercentile is the int64 analogue of percentileSorted (which operates on time.Duration). Same nearest-rank method;
-// same banker's-style rounding constant. Returns 0 for an empty input.
-func depthPercentile(sorted []int64, p float64) int64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	if p <= 0 {
-		return sorted[0]
-	}
-	if p >= 100 {
-		return sorted[len(sorted)-1]
-	}
-	const halfStep = 0.5
-	const percentageScale = 100.0
-	rank := int((p/percentageScale)*float64(len(sorted)) + halfStep)
-	if rank >= len(sorted) {
-		rank = len(sorted) - 1
-	}
-	return sorted[rank]
-}

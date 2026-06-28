@@ -154,6 +154,21 @@ type Options struct {
 	// the operator has captured a baseline value worth gating on (per the M12 issue's "TBD; capture observed values
 	// first" guidance). Ignored when Mode != ModeHeadless.
 	PassMaxQueueDepth int64
+
+	// BacklogDSN is an optional MySQL DSN for the server's database. When non-empty, a background sampler polls the event_queue
+	// processing backlog (not-yet-acked rows) on BacklogPollInterval for the life of the run and records its percentiles in the
+	// Report. Empty (the default) skips the poll entirely: the per-PR smoke and the default baseline run never open a DB connection.
+	// This is the opt-in server-side counterpart to the agent-side PassMaxQueueDepth gate, for the long-form lane only.
+	BacklogDSN string
+
+	// BacklogPollInterval is the cadence of the server-backlog poll. Zero defaults to defaultBacklogPollInterval (5s). Ignored when
+	// BacklogDSN is empty.
+	BacklogPollInterval time.Duration
+
+	// PassMaxServerBacklog optionally extends the pass criteria with a server-side processing-backlog ceiling. When > 0, the run fails
+	// if the sampled event_queue depth ever crosses this value, catching a processor-throughput regression (a single replica falling
+	// behind ingest) distinct from the ingest-p99 gate. Zero (the default) leaves it disabled. Requires BacklogDSN to be set.
+	PassMaxServerBacklog int64
 }
 
 // Report is the aggregate output of a Run. Every numeric field is computed across all simulated hosts; PerHost preserves the
@@ -195,6 +210,19 @@ type Report struct {
 
 	// PassMaxQueueDepth echoes the configured ceiling. Zero (the default) means the gate was disabled.
 	PassMaxQueueDepth int64 `json:"pass_max_queue_depth,omitempty"`
+
+	// v3 fields (server-backlog poll only, populated when Options.BacklogDSN was set).
+
+	// ServerBacklogSamples is the number of event_queue depth readings aggregated into the percentile fields below. Zero when the
+	// run did not poll the server DB (the default), so a reader can tell "no backlog poll requested" from "polled, saw nothing."
+	ServerBacklogSamples int   `json:"server_backlog_samples,omitempty"`
+	ServerBacklogP50     int64 `json:"server_backlog_p50,omitempty"`
+	ServerBacklogP95     int64 `json:"server_backlog_p95,omitempty"`
+	ServerBacklogP99     int64 `json:"server_backlog_p99,omitempty"`
+	ServerBacklogMax     int64 `json:"server_backlog_max,omitempty"`
+
+	// PassMaxServerBacklog echoes the configured server-backlog ceiling. Zero (the default) means the gate was disabled.
+	PassMaxServerBacklog int64 `json:"pass_max_server_backlog,omitempty"`
 
 	// ServerLatencyP99 is the SigNoz-reported http.server.request.duration p99 over the run's time window. nil when
 	// Options.SigNozURL was empty or the query failed; SigNozQueryError captures the latter.
@@ -296,6 +324,16 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	runCtx, cancel := context.WithTimeout(ctx, opts.Duration)
 	defer cancel()
 
+	// Optional server-side backlog sampler (long-form lane only). Bound to runCtx so it stops at the run deadline alongside the hosts.
+	// A bad DSN fails the run here rather than silently recording nothing.
+	var backlog *backlogSampler
+	if opts.BacklogDSN != "" {
+		backlog, err = startBacklogSampler(runCtx, opts.BacklogDSN, opts.BacklogPollInterval)
+		if err != nil {
+			return Report{}, fmt.Errorf("start server-backlog sampler: %w", err)
+		}
+	}
+
 	g, runCtx := errgroup.WithContext(runCtx)
 	for _, h := range hosts {
 		g.Go(func() error {
@@ -304,10 +342,18 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		})
 	}
 	_ = g.Wait()
+	// Cancel runCtx now that the hosts are done so the backlog sampler (bound to runCtx) exits promptly. Without this, hosts that
+	// return early (e.g. mass enroll failure) would leave the sampler running until opts.Duration, and backlog.stop() would block
+	// for the rest of the lane (Qodo #536). cancel() is idempotent with the deferred cancel above.
+	cancel()
 
 	rep.EndTime = time.Now()
 	rep.Duration = rep.EndTime.Sub(rep.StartTime)
 	aggregate(&rep, hosts, opts)
+	if backlog != nil {
+		backlog.stop() // waits for the poll goroutine to exit (runCtx is cancelled), then closes the DB; snapshot is final after this.
+		aggregateServerBacklog(&rep, backlog.snapshot(), opts)
+	}
 	return rep, ctx.Err()
 }
 
@@ -494,6 +540,28 @@ func percentileSorted(sorted []time.Duration, p float64) time.Duration {
 	return sorted[rank]
 }
 
+// depthPercentile is the int64 counterpart of percentileSorted, over a pre-sorted slice. Shared by the headless agent-side queue-depth
+// aggregation and the server-side backlog aggregation (backlog.go), so it lives here in the always-compiled file rather than behind
+// the headless build tag.
+func depthPercentile(sorted []int64, p float64) int64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if p <= 0 {
+		return sorted[0]
+	}
+	if p >= 100 {
+		return sorted[len(sorted)-1]
+	}
+	const halfStep = 0.5
+	const percentageScale = 100.0
+	rank := int((p/percentageScale)*float64(len(sorted)) + halfStep)
+	if rank >= len(sorted) {
+		rank = len(sorted) - 1
+	}
+	return sorted[rank]
+}
+
 // enrollOne hits /api/enroll for a single host_id and returns the issued host_token. Bounded retry: enrollment under fan-in can
 // temporarily 429 if many hosts arrive in the same second; one short backoff covers that without papering over real failures.
 // The retry-vs-terminal classification is delegated to enrollAttempt so this loop stays under the cognitive-complexity budget.
@@ -620,6 +688,16 @@ func validateOptions(opts Options) (Options, error) {
 		// caller would survive that and panic in time.NewTicker (CodeRabbit #277).
 		return opts, fmt.Errorf("scale: QueueDepthPollInterval must be > 0 in headless mode, got %s",
 			opts.QueueDepthPollInterval)
+	}
+	// A server-backlog ceiling with no DSN to sample is a silent no-op: the sampler never starts, so the gate the operator
+	// asked for is never evaluated and the run reports a false pass. Reject it (Copilot/Gemini/CodeRabbit #536).
+	if opts.PassMaxServerBacklog > 0 && opts.BacklogDSN == "" {
+		return opts, errors.New("scale: PassMaxServerBacklog requires BacklogDSN to be set")
+	}
+	// The server-backlog poll is only wired into the direct-mode Run; runHeadless ignores it. Reject the flags in headless
+	// mode rather than silently skipping the poll, so --backlog-dsn in a headless run fails loudly instead of no-op'ing.
+	if opts.Mode == ModeHeadless && opts.BacklogDSN != "" {
+		return opts, errors.New("scale: BacklogDSN is only supported in direct mode, not headless")
 	}
 	return opts, nil
 }
