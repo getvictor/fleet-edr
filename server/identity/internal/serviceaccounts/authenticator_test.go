@@ -26,7 +26,7 @@ func (f fakeAllow) Allowed(string, int64) bool { return f.allowed }
 func TestAuthenticator_validTokenResolvesActor(t *testing.T) {
 	t.Parallel()
 	a := NewAuthenticator(
-		fakeVerifier{claims: satoken.Claims{Subject: "sa_abc", Role: "analyst", Epoch: 3}},
+		fakeVerifier{claims: satoken.Claims{Subject: "sa_abc", Role: "analyst", Epoch: 3, Principal: "svc_7", Label: "ci-bot"}},
 		fakeAllow{allowed: true},
 	)
 	actor, ok := a.Authenticate("token", time.Now())
@@ -38,6 +38,13 @@ func TestAuthenticator_validTokenResolvesActor(t *testing.T) {
 	require.Len(t, actor.Roles, 1)
 	assert.Equal(t, "analyst", actor.Roles[0].RoleID)
 	assert.Equal(t, api.RoleBindingScopeGlobal, actor.Roles[0].ScopeType)
+	// The acting service account survives authentication as a typed principal (the root fix for #514/#518): id + label come from the
+	// token claims, with no DB read.
+	assert.Equal(t, "svc_7", actor.Principal.ID)
+	assert.Equal(t, api.PrincipalServiceAccount, actor.Principal.Type)
+	assert.Equal(t, "ci-bot", actor.Principal.Label)
+	_, isUser := actor.Principal.UserID()
+	assert.False(t, isUser, "a service-account principal must never read as a user")
 }
 
 func TestAuthenticator_invalidTokenRejected(t *testing.T) {

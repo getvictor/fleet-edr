@@ -43,7 +43,7 @@ type appConfigStore interface {
 // a new issuer/client paired with a stale derived redirect. expectedAppVersion drives the app-config optimistic-concurrency check;
 // implementations return appconfig.ErrVersionConflict on a concurrent edit. Injected so the handler stays unit-testable without a DB.
 type applyUpdate func(
-	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy *int64,
+	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string,
 ) error
 
 // prober verifies a candidate issuer is reachable. Production wraps oidc.Probe with the deployment HTTP client; tests inject a fake.
@@ -175,12 +175,10 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	// A service-account actor has no user id (UserID == 0), so leave UpdatedBy nil and record NULL on both writes below, the same "no
-	// operator" semantics the env-seed path uses. Binding 0 would violate the updated_by FKs (fk_oidc_config_updated_by /
-	// fk_app_config_updated_by; no users row has id 0) and fail the transaction with a 500.
-	if actor.UserID != 0 {
-		in.UpdatedBy = &actor.UserID
-	}
+	// Record the acting principal id (usr_<id> for a user, svc_<id> for a service account) as updated_by. Both are valid principals(id)
+	// FK targets, so a service-account SSO update is attributed to the service account rather than the interim NULL the #515 stopgap
+	// recorded. See ADR-0017.
+	in.UpdatedBy = actor.Principal.ID
 	// Read the app-config document (read-modify-write preserves unrelated settings) and capture its version for the optimistic-
 	// concurrency check inside the transactional apply.
 	appCfg, appVersion, err := h.appCfg.Get(ctx)

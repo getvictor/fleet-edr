@@ -16,6 +16,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/argon2"
+
+	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // argon2id parameters per OWASP Password Storage Cheat Sheet 2024. ~30 ms per hash on M-series Mac; the hot path (login verify) hashes
@@ -112,17 +114,58 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (email, password_hash, password_salt) VALUES (?, ?, ?)
-	`, email, hash, salt)
+	// The user row and its principals spine row commit together: a failed principal insert must not leave an unattributable user behind.
+	id, err := s.txInsertUser(ctx, `INSERT INTO users (email, password_hash, password_salt) VALUES (?, ?, ?)`, email,
+		email, hash, salt)
 	if err != nil {
-		return nil, fmt.Errorf("insert user: %w", err)
+		return nil, err
+	}
+	return s.Get(ctx, id)
+}
+
+// txInsertUser runs the user INSERT and its principals spine row in one transaction, returning the new user id. label is the principal
+// display label (the email); args are the INSERT placeholders. Keeps every user-creation path atomic in the user + principal write.
+func (s *Store) txInsertUser(ctx context.Context, insertSQL, label string, args ...any) (int64, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin user insert tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	res, err := tx.ExecContext(ctx, insertSQL, args...)
+	if err != nil {
+		return 0, fmt.Errorf("insert user: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return nil, fmt.Errorf("last insert id: %w", err)
+		return 0, fmt.Errorf("last insert id: %w", err)
 	}
-	return s.Get(ctx, id)
+	if err := ensureUserPrincipal(ctx, tx, id, label); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit user insert tx: %w", err)
+	}
+	committed = true
+	return id, nil
+}
+
+// ensureUserPrincipal inserts (idempotently) the principals spine row for a user, so the user is attributable as a typed principal and
+// can be referenced by the principal-FK attribution columns. The display label is the user's email, snapshotted onto audit rows. See
+// ADR-0017.
+func ensureUserPrincipal(ctx context.Context, ec Executor, userID int64, email string) error {
+	_, err := ec.ExecContext(ctx,
+		`INSERT INTO principals (id, type, display_label) VALUES (?, 'user', ?)
+		 ON DUPLICATE KEY UPDATE display_label = VALUES(display_label)`,
+		api.UserPrincipalID(userID), email)
+	if err != nil {
+		return fmt.Errorf("ensure user principal: %w", err)
+	}
+	return nil
 }
 
 // CreateOIDCRequest is the shape accepted by CreateOIDC. password_* columns are NULL on the resulting row: OIDC users have no
@@ -156,6 +199,10 @@ func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCReque
 	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, fmt.Errorf("last insert id: %w", err)
+	}
+	// Same executor (the caller's tx) so the principal row commits or rolls back atomically with the user + identity + role-binding inserts.
+	if err := ensureUserPrincipal(ctx, ec, id, email); err != nil {
+		return nil, err
 	}
 	return &User{
 		ID:           id,
@@ -208,6 +255,9 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 	// silently flipping the row's flag and stranding the existing password.
 	if !u.IsBreakglass {
 		return &u, ErrExistingNonBreakglass
+	}
+	if err := ensureUserPrincipal(ctx, s.db, u.ID, email); err != nil {
+		return nil, err
 	}
 	return &u, nil
 }

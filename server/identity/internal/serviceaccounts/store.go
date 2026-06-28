@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // clientIDPrefix and secretPrefix are self-describing so a leaked secret is greppable by secret-scanners and a client id is
@@ -35,22 +37,24 @@ var ErrNotFound = errors.New("serviceaccounts: not found")
 
 // ServiceAccount is the read model returned to the admin surface. It never carries the secret or its hash.
 type ServiceAccount struct {
-	ID         int64        `db:"id"`
-	ClientID   string       `db:"client_id"`
-	Name       string       `db:"name"`
-	RoleID     string       `db:"role_id"`
-	Epoch      int64        `db:"epoch"`
-	CreatedBy  *int64       `db:"created_by"`
-	ExpiresAt  time.Time    `db:"expires_at"`
-	RevokedAt  sql.NullTime `db:"revoked_at"`
-	LastUsedAt sql.NullTime `db:"last_used_at"`
-	CreatedAt  time.Time    `db:"created_at"`
+	ID         int64          `db:"id"`
+	ClientID   string         `db:"client_id"`
+	Name       string         `db:"name"`
+	RoleID     string         `db:"role_id"`
+	Epoch      int64          `db:"epoch"`
+	CreatedBy  sql.NullString `db:"created_by"`
+	ExpiresAt  time.Time      `db:"expires_at"`
+	RevokedAt  sql.NullTime   `db:"revoked_at"`
+	LastUsedAt sql.NullTime   `db:"last_used_at"`
+	CreatedAt  time.Time      `db:"created_at"`
 }
 
 // AuthRecord is the secret-bearing lookup used only by the token endpoint to validate a presented credential. It carries the stored
 // hash (never the plaintext) plus the fields needed to mint and to decide whether minting is allowed.
 type AuthRecord struct {
+	ID         int64        `db:"id"`
 	ClientID   string       `db:"client_id"`
+	Name       string       `db:"name"`
 	RoleID     string       `db:"role_id"`
 	SecretHash []byte       `db:"secret_hash"`
 	Epoch      int64        `db:"epoch"`
@@ -73,7 +77,7 @@ func New(db *sqlx.DB) *Store {
 type CreateInput struct {
 	Name      string
 	RoleID    string
-	CreatedBy *int64
+	CreatedBy *string
 	ExpiresAt time.Time
 }
 
@@ -89,7 +93,19 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (ServiceAccount, str
 		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: generate secret: %w", err)
 	}
 	hash := hashSecret(secret)
-	res, err := s.db.ExecContext(ctx, `
+	// The service_accounts row and its principals spine row commit together: a failed principal insert must not leave an unattributable
+	// service account behind. The principal's display label is the SA name, snapshotted onto audit rows. See ADR-0017.
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: begin create tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO service_accounts (client_id, name, role_id, secret_hash, expires_at, created_by)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		clientID, in.Name, in.RoleID, hash, in.ExpiresAt.UTC(), in.CreatedBy)
@@ -100,6 +116,16 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (ServiceAccount, str
 	if err != nil {
 		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: last insert id: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO principals (id, type, display_label) VALUES (?, 'service_account', ?)
+		 ON DUPLICATE KEY UPDATE display_label = VALUES(display_label)`,
+		api.ServiceAccountPrincipalID(id), in.Name); err != nil {
+		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: ensure principal: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: commit create tx: %w", err)
+	}
+	committed = true
 	sa, err := s.getByID(ctx, id)
 	if err != nil {
 		return ServiceAccount{}, "", err
@@ -122,7 +148,7 @@ func (s *Store) List(ctx context.Context) ([]ServiceAccount, error) {
 func (s *Store) AuthByClientID(ctx context.Context, clientID string) (AuthRecord, error) {
 	var rec AuthRecord
 	err := s.db.GetContext(ctx, &rec, `
-		SELECT client_id, role_id, secret_hash, epoch, expires_at, revoked_at
+		SELECT id, client_id, name, role_id, secret_hash, epoch, expires_at, revoked_at
 		FROM service_accounts WHERE client_id = ?`, clientID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AuthRecord{}, ErrNotFound

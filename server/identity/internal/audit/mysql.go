@@ -102,7 +102,7 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	if traceID == "" {
 		traceID = traceIDFromContext(ctx)
 	}
-	actorEmail := s.resolveActorEmail(ctx, e)
+	actor := actorOf(e)
 
 	var payloadBytes []byte
 	if len(e.Payload) > 0 {
@@ -115,12 +115,13 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 
 	const q = `
 		INSERT INTO audit_events (
-			actor_user_id, actor_email, action, target_type, target_id,
+			actor_type, actor_principal_id, actor_label, action, target_type, target_id,
 			trace_id, remote_addr, payload
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.ExecContext(ctx, q,
-		nullInt64(e.UserID),
-		nullString(actorEmail),
+		nullString(string(actor.Type)),
+		nullString(actor.ID),
+		nullString(actor.Label),
 		string(e.Action),
 		nullString(e.TargetType),
 		nullString(e.TargetID),
@@ -131,7 +132,7 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 	// Dual-emit BEFORE returning on INSERT failure so the observability pipeline always sees a record, even when the DB rejected the row.
 	// Per server-identity-audit-log spec: "The dual emit MUST happen even when the database insert fails so the observability pipeline
 	// sees a record."
-	s.emitDualEmit(ctx, e, actorEmail, traceID)
+	s.emitDualEmit(ctx, e, actor, traceID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "audit row INSERT failed",
 			"err", err,
@@ -154,17 +155,17 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 // recovery surface is the high-privilege path). Mirrors logDropped's attribute set minus the "reason" key (drops carry queue_full /
 // writer_stopped / drain_deadline_exceeded; a successful row has none). Payload is included verbatim when non-empty so dashboards can
 // filter on payload.decision (chokepoint allow/deny) and payload.reason (OIDC + break-glass failure mode codes).
-func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actorEmail, traceID string) {
-	uid := int64(0)
-	if e.UserID != nil {
-		uid = *e.UserID
-	}
+func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actor api.PrincipalRef, traceID string) {
 	attrs := []any{
 		"action", string(e.Action),
 		"target_type", e.TargetType,
 		"target_id", e.TargetID,
-		"actor_email", actorEmail,
-		attrkeys.UserID, uid,
+		"actor_principal_id", actor.ID,
+		"actor_label", actor.Label,
+	}
+	// Only emit edr.user.id for a real human user; a service-account or system principal would otherwise log a misleading uid=0.
+	if uid, ok := actor.UserID(); ok {
+		attrs = append(attrs, attrkeys.UserID, uid)
 	}
 	if traceID != "" {
 		attrs = append(attrs, "trace_id", traceID)
@@ -253,26 +254,23 @@ func auditReason(e api.AuditEvent) string {
 	return ""
 }
 
-// resolveActorEmail returns the email to denormalise onto the audit row. Caller-supplied ActorEmail wins (login paths know the email
-// already); otherwise look it up from users by UserID. A failed lookup is not a hard error because the audit row's user_id column
-// is still authoritative; we simply leave actor_email empty and let the LEFT JOIN on read surface the live email when the user still
-// exists.
-func (s *Store) resolveActorEmail(ctx context.Context, e api.AuditEvent) string {
-	if e.ActorEmail != "" {
-		return e.ActorEmail
+// actorOf derives the acting principal recorded on the audit row. The principal-model attribution path sets AuditEvent.Actor directly;
+// callers not yet converted still set UserID/ActorEmail, which actorOf bridges to a user principal so every row carries the principal
+// columns regardless of which caller wrote it. A pre-authentication failure (neither Actor nor UserID) yields an empty-id principal
+// whose label is the attempted identifier, so the row records "who attempted" without claiming a principal. The UserID/ActorEmail
+// bridge is removed when every caller sets Actor, in the final cutover commit (ADR-0017).
+func actorOf(e api.AuditEvent) api.PrincipalRef {
+	if e.Actor.ID != "" {
+		return e.Actor
 	}
-	if e.UserID == nil {
-		return ""
+	if e.UserID != nil {
+		return api.UserPrincipal(*e.UserID, e.ActorEmail)
 	}
-	var email sql.NullString
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT email FROM users WHERE id = ?`, *e.UserID).Scan(&email); err != nil {
-		return ""
+	label := e.Actor.Label
+	if label == "" {
+		label = e.ActorEmail
 	}
-	if email.Valid {
-		return email.String
-	}
-	return ""
+	return api.PrincipalRef{Label: label}
 }
 
 // List returns audit rows matching the filter, newest first. Caller passes a non-zero Limit; the Store caps it at maxListLimit so a
@@ -286,11 +284,10 @@ func (s *Store) List(ctx context.Context, f api.AuditFilter) ([]api.AuditRow, er
 	args = append(args, limit)
 
 	q := `
-		SELECT a.id, a.occurred_at, a.actor_user_id, a.actor_email,
+		SELECT a.id, a.occurred_at, a.actor_type, a.actor_principal_id, a.actor_label,
 		       a.action, a.target_type, a.target_id, a.trace_id,
-		       a.remote_addr, a.payload, COALESCE(u.email, '')
-		FROM audit_events a
-		LEFT JOIN users u ON u.id = a.actor_user_id ` + where + `
+		       a.remote_addr, a.payload
+		FROM audit_events a ` + where + `
 		ORDER BY a.id DESC
 		LIMIT ?`
 
@@ -324,8 +321,8 @@ func buildListWhere(f api.AuditFilter) (string, []any) {
 	args := make([]any, 0, 8)
 	where := "WHERE 1=1"
 	if f.UserID != nil {
-		where += " AND a.actor_user_id = ?"
-		args = append(args, *f.UserID)
+		where += " AND a.actor_principal_id = ?"
+		args = append(args, api.UserPrincipalID(*f.UserID))
 	}
 	if f.Action != "" {
 		where += " AND a.action = ?"
@@ -360,37 +357,33 @@ func buildListWhere(f api.AuditFilter) (string, []any) {
 // round-trip assertions.
 func scanListRow(rows *sql.Rows) (api.AuditRow, error) {
 	var (
-		r            api.AuditRow
-		actorUserID  sql.NullInt64
-		actorEmail   sql.NullString
-		targetType   sql.NullString
-		targetID     sql.NullString
-		traceID      sql.NullString
-		remoteAddr   sql.NullString
-		payloadBytes []byte
-		joinedEmail  string
-		action       string
+		r                api.AuditRow
+		actorType        sql.NullString
+		actorPrincipalID sql.NullString
+		actorLabel       sql.NullString
+		targetType       sql.NullString
+		targetID         sql.NullString
+		traceID          sql.NullString
+		remoteAddr       sql.NullString
+		payloadBytes     []byte
+		action           string
 	)
 	if err := rows.Scan(
-		&r.ID, &r.OccurredAt, &actorUserID, &actorEmail,
+		&r.ID, &r.OccurredAt, &actorType, &actorPrincipalID, &actorLabel,
 		&action, &targetType, &targetID, &traceID,
-		&remoteAddr, &payloadBytes, &joinedEmail,
+		&remoteAddr, &payloadBytes,
 	); err != nil {
 		return r, fmt.Errorf("audit.List scan: %w", err)
 	}
 	r.Action = api.AuditAction(action)
-	if actorUserID.Valid {
-		id := actorUserID.Int64
-		r.UserID = &id
+	// The audit row is self-contained: the snapshot label was captured at write time, so a renamed or deleted principal does not rewrite
+	// history and no join is needed. UserID/UserEmail are derived from the principal for back-compat with existing API consumers: a user
+	// principal yields the numeric id; the label populates UserEmail for any principal kind (a service account's name surfaces there).
+	r.Actor = api.PrincipalRef{ID: actorPrincipalID.String, Type: api.PrincipalType(actorType.String), Label: actorLabel.String}
+	if uid, ok := r.Actor.UserID(); ok {
+		r.UserID = &uid
 	}
-	// Prefer the live join so the retrieval endpoint reflects current emails (e.g. an admin who renamed their email post-action sees the
-	// new value). Fall back to the denormalised actor_email when the user row no longer exists.
-	switch {
-	case joinedEmail != "":
-		r.UserEmail = joinedEmail
-	case actorEmail.Valid:
-		r.UserEmail = actorEmail.String
-	}
+	r.UserEmail = actorLabel.String
 	r.TargetType = targetType.String
 	r.TargetID = targetID.String
 	r.TraceID = traceID.String
@@ -416,13 +409,6 @@ func traceIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	return sc.TraceID().String()
-}
-
-func nullInt64(p *int64) any {
-	if p == nil {
-		return nil
-	}
-	return *p
 }
 
 func nullString(s string) any {

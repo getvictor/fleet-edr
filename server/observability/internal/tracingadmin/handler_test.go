@@ -23,7 +23,7 @@ type fakeStore struct {
 	getErr    error
 	updErr    error
 	updated   *tracing.Settings
-	updatedBy *int64
+	updatedBy string
 	gotExpVer int64
 }
 
@@ -39,7 +39,7 @@ func (f *fakeStore) Get(context.Context) (*tracing.Settings, int64, error) {
 	return &cp, f.version, nil
 }
 
-func (f *fakeStore) Update(_ context.Context, s tracing.Settings, expectedVersion int64, by *int64) error {
+func (f *fakeStore) Update(_ context.Context, s tracing.Settings, expectedVersion int64, by string) error {
 	f.gotExpVer = expectedVersion
 	if f.updErr != nil {
 		return f.updErr
@@ -74,7 +74,7 @@ func patchReq(t *testing.T, rawBody string, withActor bool) *http.Request {
 	t.Helper()
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPatch, "/api/settings/tracing", bytes.NewReader([]byte(rawBody)))
 	if withActor {
-		r = r.WithContext(api.WithActor(r.Context(), &api.Actor{UserID: 7, AuthMethod: "oidc"}))
+		r = r.WithContext(api.WithActor(r.Context(), &api.Actor{Principal: api.UserPrincipal(7, ""), AuthMethod: "oidc"}))
 	}
 	return r
 }
@@ -134,8 +134,7 @@ func TestHandleUpdate_adminUpdatesRatios(t *testing.T) {
 	assert.InDelta(t, 0.05, store.updated.HighVolumeRatio, 1e-9)
 	assert.InDelta(t, 0.25, store.updated.StandardRatio, 1e-9)
 	assert.Equal(t, int64(5), store.gotExpVer, "Update must carry the version read by Get for OCC")
-	require.NotNil(t, store.updatedBy)
-	assert.Equal(t, int64(7), *store.updatedBy)
+	assert.Equal(t, "usr_7", store.updatedBy)
 	require.Len(t, audit.events, 1)
 	assert.Equal(t, api.AuditAction("tracing.settings.updated"), audit.events[0].Action)
 }

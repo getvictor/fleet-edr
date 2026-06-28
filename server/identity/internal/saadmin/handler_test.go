@@ -80,7 +80,7 @@ func newHandler(store ManagementStore, az api.AuthZ, audit AuditRecorder) *Handl
 }
 
 func withActor(r *http.Request, userID int64) *http.Request {
-	return r.WithContext(api.WithActor(r.Context(), &api.Actor{UserID: userID, AuthMethod: "oidc"}))
+	return r.WithContext(api.WithActor(r.Context(), &api.Actor{Principal: api.UserPrincipal(userID, ""), AuthMethod: "oidc"}))
 }
 
 func TestHandleList(t *testing.T) {
@@ -140,7 +140,7 @@ func TestHandleCreate_success(t *testing.T) {
 	assert.Equal(t, "sa_created", resp.ClientID)
 	assert.Equal(t, "analyst", store.createInput.RoleID)
 	require.NotNil(t, store.createInput.CreatedBy)
-	assert.Equal(t, int64(42), *store.createInput.CreatedBy)
+	assert.Equal(t, "usr_42", *store.createInput.CreatedBy)
 	// Default 90-day lifetime from the injected clock.
 	assert.Equal(t, time.Unix(1_700_000_000, 0).Add(defaultLifetime).UTC(), store.createInput.ExpiresAt)
 

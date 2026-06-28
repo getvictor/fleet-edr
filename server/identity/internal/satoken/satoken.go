@@ -34,12 +34,14 @@ const minKeyLen = 32
 // Claims is the authenticated payload of a service-account access token. JSON tags are short because the token rides on every API
 // request the service account makes.
 type Claims struct {
-	Subject   string `json:"sub"`  // service-account client id
-	Audience  string `json:"aud"`  // the API audience this token is minted for
-	Role      string `json:"role"` // the single bound role id, evaluated by the authz chokepoint
-	Epoch     int64  `json:"ep"`   // revocation generation; checked against the per-replica snapshot
-	IssuedAt  int64  `json:"iat"`  // unix seconds
-	ExpiresAt int64  `json:"exp"`  // unix seconds
+	Subject   string `json:"sub"`           // service-account client id
+	Audience  string `json:"aud"`           // the API audience this token is minted for
+	Role      string `json:"role"`          // the single bound role id, evaluated by the authz chokepoint
+	Epoch     int64  `json:"ep"`            // revocation generation; checked against the per-replica snapshot
+	Principal string `json:"pid,omitempty"` // the service account's principal id (svc_<id>); carried so the actor survives auth with no DB read
+	Label     string `json:"nm,omitempty"`  // the service account's display name, snapshotted onto audit rows without a DB read
+	IssuedAt  int64  `json:"iat"`           // unix seconds
+	ExpiresAt int64  `json:"exp"`           // unix seconds
 	KeyID     string `json:"kid"`
 	TokenID   string `json:"jti"` // unique per mint; correlation + forward-compat with a future jti denylist
 }
@@ -81,9 +83,11 @@ func New(key []byte, kid, audience string) (*Signer, error) {
 
 // MintInput is the per-token data the caller supplies; the Signer fills in audience, timestamps, kid, and a random jti.
 type MintInput struct {
-	Subject string
-	Role    string
-	Epoch   int64
+	Subject   string
+	Role      string
+	Epoch     int64
+	Principal string // the service account's principal id (svc_<id>)
+	Label     string // the service account's display name
 }
 
 // Mint returns a token for in, valid for ttl from now, plus the absolute (second-truncated, UTC) expiry. now is injected so callers
@@ -108,6 +112,8 @@ func (s *Signer) Mint(in MintInput, ttl time.Duration, now time.Time) (string, t
 		Audience:  s.audience,
 		Role:      in.Role,
 		Epoch:     in.Epoch,
+		Principal: in.Principal,
+		Label:     in.Label,
 		IssuedAt:  now.Unix(),
 		ExpiresAt: exp.Unix(),
 		KeyID:     s.kid,

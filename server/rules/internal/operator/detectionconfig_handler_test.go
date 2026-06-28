@@ -116,10 +116,10 @@ func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
 	// sharing one across the parallel subtests would let one run's resolved emails leak into the nil-resolver run.
 	newExclusions := func() []api.DetectionExclusion {
 		return []api.DetectionExclusion{
-			{ID: 1, CreatedBy: "user:8"},                 // resolves
-			{ID: 2, CreatedBy: "user:8"},                 // same author: memoized, no second lookup
-			{ID: 3, CreatedBy: "user:9"},                 // resolver errors: email stays empty
-			{ID: 4, CreatedBy: "service-account:reaper"}, // non-user actor: never looked up
+			{ID: 1, CreatedBy: "usr_8"}, // resolves
+			{ID: 2, CreatedBy: "usr_8"}, // same author: memoized, no second lookup
+			{ID: 3, CreatedBy: "usr_9"}, // resolver errors: email stays empty
+			{ID: 4, CreatedBy: "svc_5"}, // service-account principal: never looked up
 		}
 	}
 
@@ -148,7 +148,7 @@ func TestDetectionConfigHandler_ResolvesCreatedByEmail(t *testing.T) {
 		assert.Equal(t, "ops@fleetdm.com", out.Exclusions[1].CreatedByEmail)
 		assert.Empty(t, out.Exclusions[2].CreatedByEmail, "errored lookup leaves email blank")
 		assert.Empty(t, out.Exclusions[3].CreatedByEmail, "non-user actor is not looked up")
-		assert.Equal(t, 2, calls, "user:8 resolved once (memoized) + user:9 once; service-account skipped")
+		assert.Equal(t, 2, calls, "usr_8 resolved once (memoized) + usr_9 once; service-account skipped")
 	})
 
 	t.Run("nil resolver leaves created_by_email empty", func(t *testing.T) {

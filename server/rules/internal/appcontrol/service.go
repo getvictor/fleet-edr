@@ -408,8 +408,12 @@ func (s *Service) emitAudit(
 		Payload:    payload,
 	}
 	if actor != nil {
-		userID := actor.UserID
-		event.UserID = &userID
+		event.Actor = actor.Principal
+		// Transitional: derive the legacy user id from the principal for a human actor so the audit store's UserID path stays correct
+		// until the bridge is removed. A service-account actor has no user id and is attributed via Actor alone.
+		if uid, ok := actor.Principal.UserID(); ok {
+			event.UserID = &uid
+		}
 	}
 	if err := s.audit.Record(ctx, event); err != nil {
 		s.logger.WarnContext(ctx, "appcontrol: audit record failed", "err", err, "rule_id", rule.ID)
@@ -430,11 +434,11 @@ func (s *Service) emitAudit(
 // Failed audit emission is logged but not returned; audit is best-effort relative to the mutation that already committed (same
 // posture as emitAudit's create-rule path).
 func (s *Service) recordAudit(ctx context.Context, actor *identityapi.Actor, evt identityapi.AuditEvent) {
-	if actor != nil && actor.UserID > 0 {
-		userID := actor.UserID
-		evt.UserID = &userID
-		if evt.ActorEmail == "" {
-			evt.ActorEmail = "user:" + strconv.FormatInt(actor.UserID, 10)
+	if actor != nil {
+		evt.Actor = actor.Principal
+		// Transitional: derive the legacy user id from the principal for a human actor; a service-account actor is attributed via Actor.
+		if uid, ok := actor.Principal.UserID(); ok {
+			evt.UserID = &uid
 		}
 	}
 	if s.audit == nil {

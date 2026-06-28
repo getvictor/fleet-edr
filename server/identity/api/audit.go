@@ -91,6 +91,10 @@ const (
 // background ctx without the original span) still attributes the row
 // to the request that triggered it.
 type AuditEvent struct {
+	// Actor is the typed acting principal (user, service account, or system). It is the forward-looking attribution field: it names a
+	// principal for every actor kind, so a service-account action is auditable rather than collapsing to a zero user. See ADR-0017. During
+	// the principal-model cutover it rides alongside UserID/ActorEmail; the recorder snapshots its label onto the row.
+	Actor PrincipalRef
 	// UserID is the authenticated user, when one exists. Nil for pre-auth events (login_failed) so the audit row records "who attempted"
 	// without claiming "who was authenticated."
 	UserID *int64
@@ -217,9 +221,15 @@ type AuditReader interface {
 // retrieval endpoint produces actionable rows in a single query, even after a user has been deleted from the users table (UserID then
 // resolves to a nil-or-empty email).
 type AuditRow struct {
-	ID         int64          `json:"id"`
-	OccurredAt time.Time      `json:"occurred_at"`
-	UserID     *int64         `json:"user_id,omitempty"`
+	ID         int64     `json:"id"`
+	OccurredAt time.Time `json:"occurred_at"`
+	// Actor is the typed acting principal recorded on the row (user, service account, or system). It is the principal-model attribution
+	// field; UserID/UserEmail below are derived from it for backward compatibility with existing API consumers. See ADR-0017.
+	Actor PrincipalRef `json:"actor"`
+	// UserID is the numeric users.id when the actor is a user, derived from Actor for back-compat. Nil for a service-account, system, or
+	// pre-auth-failure row.
+	UserID *int64 `json:"user_id,omitempty"`
+	// UserEmail is the actor's snapshot display label (a user's email, a service account's name) for back-compat display.
 	UserEmail  string         `json:"user_email,omitempty"`
 	Action     AuditAction    `json:"action"`
 	TargetType string         `json:"target_type,omitempty"`

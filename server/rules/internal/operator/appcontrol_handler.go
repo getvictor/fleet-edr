@@ -656,10 +656,10 @@ func actorIdentifierFromContext(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
-	if a.UserID > 0 {
-		return "user:" + strconv.FormatInt(a.UserID, 10)
-	}
-	return ""
+	// The acting principal id (usr_<id> for a user, svc_<id> for a service account) is recorded as created_by / updated_by. It survives
+	// authentication for every actor kind, so a service-account mutation is attributed rather than rejected by the store's required-actor
+	// validation (#518). See ADR-0017.
+	return a.Principal.ID
 }
 
 // errCodeInvalidQuery is the typed code the cross-policy list handler uses to flag a malformed query parameter (negative

@@ -142,7 +142,7 @@ func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 	mux := http.NewServeMux()
 	rules.RegisterAuthedRoutes(mux)
 	actor := &identityapi.Actor{
-		UserID: 42,
+		Principal: identityapi.UserPrincipal(42, "op@example.com"),
 		Roles: []identityapi.RoleBinding{{
 			RoleID:    "admin",
 			ScopeType: identityapi.RoleBindingScopeGlobal,
@@ -640,7 +640,7 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	mux := http.NewServeMux()
 	rules.RegisterAuthedRoutes(mux)
 	actor := &identityapi.Actor{
-		UserID: 99,
+		Principal: identityapi.UserPrincipal(99, "op@example.com"),
 		Roles: []identityapi.RoleBinding{{
 			RoleID:    "admin",
 			ScopeType: identityapi.RoleBindingScopeGlobal,

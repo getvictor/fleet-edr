@@ -13,6 +13,8 @@ import (
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // ErrVersionConflict is returned by Put when the row's version no longer matches the expected version (a concurrent write landed
@@ -64,21 +66,22 @@ func (s *Store) Get(ctx context.Context) (AppConfig, int64, error) {
 // Put writes the whole document with optimistic concurrency. Callers Get (which returns the current version), mutate, then Put with
 // that version (read-modify-write) so unrelated fields are preserved and a concurrent write is detected. expectedVersion <= 0 means
 // "first write" (no row yet) and inserts the singleton; expectedVersion > 0 updates only when the stored version still matches,
-// returning ErrVersionConflict otherwise. updatedBy nil records a non-operator write (env seed).
-func (s *Store) Put(ctx context.Context, cfg AppConfig, expectedVersion int64, updatedBy *int64) error {
+// returning ErrVersionConflict otherwise. updatedBy is the acting principal id (api.SystemPrincipal().ID for a non-operator env seed).
+func (s *Store) Put(ctx context.Context, cfg AppConfig, expectedVersion int64, updatedBy string) error {
 	return s.PutTx(ctx, s.db, cfg, expectedVersion, updatedBy)
 }
 
 // PutTx is Put against a caller-supplied executor (*sqlx.Tx or the Store's *sqlx.DB), so a write can join a transaction that also
 // updates other tables atomically (e.g. the SSO admin update that writes oidc_config and app_config together).
-func (s *Store) PutTx(ctx context.Context, ext sqlx.ExtContext, cfg AppConfig, expectedVersion int64, updatedBy *int64) error {
+func (s *Store) PutTx(ctx context.Context, ext sqlx.ExtContext, cfg AppConfig, expectedVersion int64, updatedBy string) error {
 	encoded, err := json.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("appconfig: marshal: %w", err)
 	}
-	var by sql.NullInt64
-	if updatedBy != nil {
-		by = sql.NullInt64{Int64: *updatedBy, Valid: true}
+	// An unset updater records the system principal, matching the column's NOT NULL DEFAULT 'sys' and its FK to principals(id).
+	by := updatedBy
+	if by == "" {
+		by = api.PrincipalSystemID
 	}
 	if expectedVersion <= 0 {
 		// First write: insert the singleton. ON DUPLICATE KEY UPDATE keeps the env-seed path idempotent across a concurrent first boot.
