@@ -113,6 +113,27 @@ func TestRecord_SnapshotsActorPrincipal(t *testing.T) {
 		"snapshot label must survive user deletion")
 }
 
+// TestRecord_SnapshotsServiceAccountPrincipal exercises the principal-model attribution path directly (Actor set, no legacy
+// UserID/ActorEmail bridge): a service-account action is recorded with its svc_ principal id and name, and reads back as a
+// service_account row with no user id. This is the #514 attribution guarantee for non-human actors.
+func TestRecord_SnapshotsServiceAccountPrincipal(t *testing.T) {
+	t.Parallel()
+	store, _ := newStore(t)
+
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
+		Actor:  api.ServiceAccountPrincipal(7, "ci-bot"),
+		Action: api.AuditDetectionConfigExclusionCreate,
+	}))
+
+	rows, err := store.List(t.Context(), api.AuditFilter{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "svc_7", rows[0].Actor.ID)
+	assert.Equal(t, api.PrincipalServiceAccount, rows[0].Actor.Type)
+	assert.Equal(t, "ci-bot", rows[0].UserEmail, "the service account's name is the snapshot label")
+	assert.Nil(t, rows[0].UserID, "a service-account row carries no numeric user id")
+}
+
 // login_failed rows have no user_id (the email may be unknown). The retrieval endpoint must surface them with the attempted email so a
 // brute-force pattern is observable in retention.
 func TestRecord_LoginFailedKeepsEmailWithoutUser(t *testing.T) {
@@ -347,7 +368,9 @@ func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
 	assert.Equal(t, "WARN", entry["level"],
 		"server-identity-audit-log spec: error decision must emit slog at WARN")
 	assert.Equal(t, "auth.oidc.failure", entry["action"])
-	assert.InDelta(t, float64(0), entry["edr.user.id"], 0)
+	assert.Equal(t, "operator@test", entry["actor_label"], "the attempted identifier is recorded as the actor label")
+	_, hasUID := entry["edr.user.id"]
+	assert.False(t, hasUID, "a pre-auth failure has no user principal, so edr.user.id must not be emitted")
 }
 
 // Spec contract: a chokepoint deny emits slog at WARN. Pinned so the observability dashboard's "WARN threshold" alert catches

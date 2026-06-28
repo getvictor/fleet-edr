@@ -14,6 +14,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Changed
 
+- **Service-account actions are now fully attributable (unified principal model).** Every operator action is recorded against a typed principal (a user or a service account), so a service-account-initiated change names the specific service account rather than appearing as an anonymous or failed write. Service accounts can now manage detection-config exclusions and rule-settings (previously rejected with `actor is required`), and SSO / app-config / app-control / trace-sampler mutations they make are attributed to them. The audit-log API response identifies the acting principal for every row. See ADR-0017.
 - **Events move to a ClickHouse archive + a MySQL work queue.** Ingestion durably writes each accepted event to the ClickHouse archive and enqueues it on the MySQL queue, returning success only after both; the detection processor claims from the queue. Per-process network/DNS correlation and alert evidence read the archive. Event retention is now ClickHouse-native time-based expiry rather than a periodic MySQL delete (process-record pruning is unchanged). A leader-gated sweep prunes acknowledged events from the work queue in batches so it keeps to its in-flight working set; the `edr.event_queue.rows_pruned` metric reports its throughput.
 
 ## [0.3.0] (2026-06-26)

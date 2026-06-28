@@ -56,9 +56,11 @@ ALTER TABLE audit_events
 	ADD COLUMN actor_label        VARCHAR(255) NULL AFTER actor_principal_id;
 -- +goose StatementEnd
 -- +goose StatementBegin
+-- A legacy row with actor_user_id = 0 carried no real user (pre-auth failures and the old service-account 0 stopgap), so it backfills to
+-- no principal (NULL id/type) with the attempted identifier preserved in actor_label, never the bogus usr_0.
 UPDATE audit_events SET
-	actor_principal_id = CASE WHEN actor_user_id IS NULL THEN NULL ELSE CONCAT('usr_', actor_user_id) END,
-	actor_type = CASE WHEN actor_user_id IS NULL THEN NULL ELSE 'user' END,
+	actor_principal_id = CASE WHEN actor_user_id IS NULL OR actor_user_id = 0 THEN NULL ELSE CONCAT('usr_', actor_user_id) END,
+	actor_type = CASE WHEN actor_user_id IS NULL OR actor_user_id = 0 THEN NULL ELSE 'user' END,
 	actor_label = actor_email;
 -- +goose StatementEnd
 -- +goose StatementBegin

@@ -31,7 +31,7 @@ import (
 // detection-config mutation handlers (which require an actor) can be exercised over HTTP in tests.
 func withActor(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{UserID: 1, SessionFresh: true})
+		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "op@example.com"), SessionFresh: true})
 		h.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

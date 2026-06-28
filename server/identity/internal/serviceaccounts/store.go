@@ -93,7 +93,19 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (ServiceAccount, str
 		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: generate secret: %w", err)
 	}
 	hash := hashSecret(secret)
-	res, err := s.db.ExecContext(ctx, `
+	// The service_accounts row and its principals spine row commit together: a failed principal insert must not leave an unattributable
+	// service account behind. The principal's display label is the SA name, snapshotted onto audit rows. See ADR-0017.
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: begin create tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO service_accounts (client_id, name, role_id, secret_hash, expires_at, created_by)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		clientID, in.Name, in.RoleID, hash, in.ExpiresAt.UTC(), in.CreatedBy)
@@ -104,14 +116,16 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (ServiceAccount, str
 	if err != nil {
 		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: last insert id: %w", err)
 	}
-	// The service account is a typed principal: insert its spine row so it is attributable and can be referenced by principal-FK
-	// attribution columns. The display label is its name, snapshotted onto audit rows. See ADR-0017.
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO principals (id, type, display_label) VALUES (?, 'service_account', ?)
 		 ON DUPLICATE KEY UPDATE display_label = VALUES(display_label)`,
 		api.ServiceAccountPrincipalID(id), in.Name); err != nil {
 		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: ensure principal: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: commit create tx: %w", err)
+	}
+	committed = true
 	sa, err := s.getByID(ctx, id)
 	if err != nil {
 		return ServiceAccount{}, "", err

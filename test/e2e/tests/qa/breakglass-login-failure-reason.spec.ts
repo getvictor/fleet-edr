@@ -115,7 +115,7 @@ test.describe.serial("break-glass login failure reason", () => {
         `SELECT JSON_UNQUOTE(JSON_EXTRACT(payload, '$.reason')) AS reason
            FROM audit_events
           WHERE action = 'auth.breakglass.failure'
-            AND actor_email = 'admin@fleet-edr.local'
+            AND actor_label = 'admin@fleet-edr.local'
           ORDER BY id DESC LIMIT 1`,
       )) as [Array<{ reason: string }>, unknown];
       expect(rows).toHaveLength(1);

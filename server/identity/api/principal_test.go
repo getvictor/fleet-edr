@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,10 +9,30 @@ import (
 	"pgregory.net/rapid"
 )
 
+// TestPrincipalRefJSONRoundTrip pins that a PrincipalRef survives a JSON marshal/unmarshal unchanged: it rides on api.Actor and
+// AuditRow wire shapes, so a field-tag drift would silently break attribution serialization.
+func TestPrincipalRefJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		want := PrincipalRef{
+			ID:    rapid.StringMatching(`(usr_|svc_)[0-9]{1,18}`).Draw(rt, "id"),
+			Type:  PrincipalType(rapid.SampledFrom([]string{"user", "service_account", "system"}).Draw(rt, "type")),
+			Label: rapid.String().Draw(rt, "label"),
+		}
+		raw, err := json.Marshal(want)
+		require.NoError(rt, err)
+		var got PrincipalRef
+		require.NoError(rt, json.Unmarshal(raw, &got))
+		assert.Equal(rt, want, got)
+	})
+}
+
 // TestPrincipalIDRoundTrip is the serialization round-trip property from the testing-strategy matrix: minting a principal id from a
 // numeric key and reading it back recovers the same key and type, across the whole positive-int64 input space.
 func TestPrincipalIDRoundTrip(t *testing.T) {
+	t.Parallel()
 	t.Run("user id round-trips through UserID", func(t *testing.T) {
+		t.Parallel()
 		rapid.Check(t, func(rt *rapid.T) {
 			id := rapid.Int64Range(1, 1<<62).Draw(rt, "userID")
 			ref := UserPrincipal(id, "op@example.com")
@@ -25,6 +46,7 @@ func TestPrincipalIDRoundTrip(t *testing.T) {
 	})
 
 	t.Run("service-account id carries the service_account type", func(t *testing.T) {
+		t.Parallel()
 		rapid.Check(t, func(rt *rapid.T) {
 			id := rapid.Int64Range(1, 1<<62).Draw(rt, "saID")
 			ref := ServiceAccountPrincipal(id, "ci-bot")
@@ -40,6 +62,7 @@ func TestPrincipalIDRoundTrip(t *testing.T) {
 // TestPrincipalRefUserID pins the exact accepted and rejected shapes of the user-id accessor, the security-relevant boundary that keeps
 // a service account from ever being treated as a user.
 func TestPrincipalRefUserID(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		id     string
@@ -58,6 +81,7 @@ func TestPrincipalRefUserID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := PrincipalRef{ID: tc.id}.UserID()
 			assert.Equal(t, tc.wantOK, ok)
 			assert.Equal(t, tc.wantID, got)
@@ -68,6 +92,7 @@ func TestPrincipalRefUserID(t *testing.T) {
 // TestPrincipalTypeForID covers the read-side type recovery, including the legacy/malformed values the migration backfill must not
 // produce but the parser must reject rather than misclassify.
 func TestPrincipalTypeForID(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		id   string
@@ -83,6 +108,7 @@ func TestPrincipalTypeForID(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := PrincipalTypeForID(tc.id)
 			assert.Equal(t, tc.ok, ok)
 			assert.Equal(t, tc.want, got)
@@ -92,6 +118,7 @@ func TestPrincipalTypeForID(t *testing.T) {
 
 // TestSystemPrincipal pins the singleton system principal's shape.
 func TestSystemPrincipal(t *testing.T) {
+	t.Parallel()
 	sys := SystemPrincipal()
 	assert.Equal(t, PrincipalSystemID, sys.ID)
 	assert.Equal(t, PrincipalSystem, sys.Type)

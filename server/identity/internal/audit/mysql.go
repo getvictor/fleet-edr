@@ -156,14 +156,16 @@ func (s *Store) Record(ctx context.Context, e api.AuditEvent) error {
 // writer_stopped / drain_deadline_exceeded; a successful row has none). Payload is included verbatim when non-empty so dashboards can
 // filter on payload.decision (chokepoint allow/deny) and payload.reason (OIDC + break-glass failure mode codes).
 func (s *Store) emitDualEmit(ctx context.Context, e api.AuditEvent, actor api.PrincipalRef, traceID string) {
-	uid, _ := actor.UserID()
 	attrs := []any{
 		"action", string(e.Action),
 		"target_type", e.TargetType,
 		"target_id", e.TargetID,
 		"actor_principal_id", actor.ID,
 		"actor_label", actor.Label,
-		attrkeys.UserID, uid,
+	}
+	// Only emit edr.user.id for a real human user; a service-account or system principal would otherwise log a misleading uid=0.
+	if uid, ok := actor.UserID(); ok {
+		attrs = append(attrs, attrkeys.UserID, uid)
 	}
 	if traceID != "" {
 		attrs = append(attrs, "trace_id", traceID)

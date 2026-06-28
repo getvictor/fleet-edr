@@ -114,20 +114,44 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (email, password_hash, password_salt) VALUES (?, ?, ?)
-	`, email, hash, salt)
+	// The user row and its principals spine row commit together: a failed principal insert must not leave an unattributable user behind.
+	id, err := s.txInsertUser(ctx, `INSERT INTO users (email, password_hash, password_salt) VALUES (?, ?, ?)`, email,
+		email, hash, salt)
 	if err != nil {
-		return nil, fmt.Errorf("insert user: %w", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("last insert id: %w", err)
-	}
-	if err := ensureUserPrincipal(ctx, s.db, id, email); err != nil {
 		return nil, err
 	}
 	return s.Get(ctx, id)
+}
+
+// txInsertUser runs the user INSERT and its principals spine row in one transaction, returning the new user id. label is the principal
+// display label (the email); args are the INSERT placeholders. Keeps every user-creation path atomic in the user + principal write.
+func (s *Store) txInsertUser(ctx context.Context, insertSQL, label string, args ...any) (int64, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin user insert tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	res, err := tx.ExecContext(ctx, insertSQL, args...)
+	if err != nil {
+		return 0, fmt.Errorf("insert user: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("last insert id: %w", err)
+	}
+	if err := ensureUserPrincipal(ctx, tx, id, label); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit user insert tx: %w", err)
+	}
+	committed = true
+	return id, nil
 }
 
 // ensureUserPrincipal inserts (idempotently) the principals spine row for a user, so the user is attributable as a typed principal and

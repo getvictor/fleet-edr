@@ -49,6 +49,12 @@ func (a *Authenticator) Authenticate(token string, now time.Time) (*api.Actor, b
 	if !a.snap.Allowed(claims.Subject, claims.Epoch) {
 		return nil, false
 	}
+	// Reject a token that carries no principal id (a pre-cutover token minted before the principal claim existed). Admitting it would
+	// produce an actor with an empty Principal.ID that then fails every attribution write; a 401 makes the client re-run the grant and
+	// get a principal-bearing token. The 15-minute TTL bounds the transition.
+	if claims.Principal == "" {
+		return nil, false
+	}
 	return &api.Actor{
 		// The principal id + label ride in the token claims (stamped at the token endpoint, which already read the SA row), so the acting
 		// service account survives authentication with no DB read on the hot path. This is the root fix for #514 and #518: a service-account
