@@ -61,7 +61,8 @@ ALTER TABLE audit_events
 UPDATE audit_events SET
 	actor_principal_id = CASE WHEN actor_user_id IS NULL OR actor_user_id = 0 THEN NULL ELSE CONCAT('usr_', actor_user_id) END,
 	actor_type = CASE WHEN actor_user_id IS NULL OR actor_user_id = 0 THEN NULL ELSE 'user' END,
-	actor_label = actor_email;
+	actor_label = actor_email
+WHERE actor_user_id IS NOT NULL OR actor_email IS NOT NULL;
 -- +goose StatementEnd
 -- +goose StatementBegin
 ALTER TABLE audit_events DROP INDEX idx_audit_events_actor;

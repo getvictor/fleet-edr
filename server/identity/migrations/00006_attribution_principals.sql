@@ -12,7 +12,7 @@ ALTER TABLE oidc_config DROP FOREIGN KEY fk_oidc_config_updated_by;
 ALTER TABLE oidc_config MODIFY COLUMN updated_by VARCHAR(40) NULL;
 -- +goose StatementEnd
 -- +goose StatementBegin
-UPDATE oidc_config SET updated_by = CASE WHEN updated_by IS NULL OR updated_by = '0' THEN 'sys' ELSE CONCAT('usr_', updated_by) END;
+UPDATE oidc_config SET updated_by = CASE WHEN updated_by IS NULL OR updated_by = '0' THEN 'sys' ELSE CONCAT('usr_', updated_by) END WHERE id = 1;
 -- +goose StatementEnd
 -- +goose StatementBegin
 ALTER TABLE oidc_config MODIFY COLUMN updated_by VARCHAR(40) NOT NULL DEFAULT 'sys';
@@ -29,7 +29,7 @@ ALTER TABLE app_config DROP FOREIGN KEY fk_app_config_updated_by;
 ALTER TABLE app_config MODIFY COLUMN updated_by VARCHAR(40) NULL;
 -- +goose StatementEnd
 -- +goose StatementBegin
-UPDATE app_config SET updated_by = CASE WHEN updated_by IS NULL OR updated_by = '0' THEN 'sys' ELSE CONCAT('usr_', updated_by) END;
+UPDATE app_config SET updated_by = CASE WHEN updated_by IS NULL OR updated_by = '0' THEN 'sys' ELSE CONCAT('usr_', updated_by) END WHERE id = 1;
 -- +goose StatementEnd
 -- +goose StatementBegin
 ALTER TABLE app_config MODIFY COLUMN updated_by VARCHAR(40) NOT NULL DEFAULT 'sys';
