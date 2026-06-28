@@ -102,6 +102,8 @@ A first scale baseline ships with the rest of the plan: 100 simulated agents aga
 
 UAT plan milestone **M12** ships the first cut of the scale lane: `test/scale/` exposes a `scale.Run(ctx, Options)` runner plus a `scaledriver` binary invoked via `task uat:scale`. Each simulated host enrols via `/api/enroll`, then loops `fakeagent.PostDirect` against `/api/events` for the configured duration; the runner records client-observed p50/p95/p99 latency and asserts the documented gate (`p99 < 250ms`, zero errors). A per-PR smoke (5 hosts x 5s) at `test/scale/scale_test.go` runs on every push via the `./test/scale/...` glob in the server-test job (`task test:go:server:coverage`) and proves the harness itself does not rot. The 30-minute baseline is captured manually and committed to `test/scale/baselines/`. Queue-depth probes and SigNoz cross-checks (see the M12 row in `ai/uat/plan.md`) are explicitly deferred to a follow-up.
 
+The per-RC scale gate (#203) sits above the smoke: `test/scale/scalegate_test.go` (build tag `scalegate`, so it stays out of the per-PR run) fans out a CI-feasible 200-host lane against an in-process `integration.Setup` stack with the production processor fan-out (`ProcessConcurrency = 4`) and asserts the `event_queue` processing backlog stays bounded. The `scale.yml` workflow runs it on every `v*-rc.*` tag push plus weekly and on manual dispatch, mirroring the L6 efficacy gate's "nightly + RC" shape (standalone, not coupled into `release.yml`); a red check blocks RC promotion per `docs/release-checklist.md`. It is the regression gate for the #535 throughput work and the #544 deadlock-resilient claim. The full 500-host proof remains the committed baseline `test/scale/baselines/post-535-500host.json`.
+
 ## Reusable artefacts
 
 ### Fake agent and headless agent binary
@@ -255,12 +257,12 @@ These are the rules a contributor follows when adding code. They are enforced pa
 
 ## CI tiering
 
-| Trigger               | Layers run                                                            | Wall-time budget              |
-| --------------------- | --------------------------------------------------------------------- | ----------------------------- |
-| Every PR              | Unit through browser E2E (L0 to L4) + `spectrace` advisory            | < 20 min total (parallelised) |
-| Nightly on `main`     | + detection efficacy (L6) + small soak                                | < 90 min                      |
-| Release-candidate tag | + system / VM (L5) + detection efficacy full corpus + 100-agent scale | < 4 hours                     |
-| Manual pre-pilot      | System / VM (L5) with the pilot's specific environment knobs          | as needed                     |
+| Trigger | Layers run | Wall-time budget |
+| --- | --- | --- |
+| Every PR | Unit through browser E2E (L0 to L4) + `spectrace` advisory | < 20 min total (parallelised) |
+| Nightly on `main` | + detection efficacy (L6) + small soak | < 90 min |
+| Release-candidate tag | + system / VM (L5) + detection efficacy full corpus + the 200-host scale gate (`scale.yml`) | < 4 hours |
+| Manual pre-pilot | System / VM (L5) with the pilot's specific environment knobs | as needed |
 
 The `changes` gate-then-analyze pattern in `.github/workflows/test.yml` is preserved; jobs only fire when their relevant inputs change.
 

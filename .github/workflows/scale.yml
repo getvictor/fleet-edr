@@ -1,0 +1,76 @@
+name: Scale gate
+
+# UAT plan #203 (Larger scale leg): re-runs the single-replica scale lane per RC and gates the RC on a bounded
+# event_queue processing backlog. Mirrors the L6 efficacy workflow's "nightly + RC" gate shape: a standalone heavy
+# workflow, not a per-PR job (the lane is ~2 min) and not coupled into release.yml's signing jobs.
+#
+# Triggers:
+#   - push of a v*-rc.* tag: the gate runs automatically when an RC is cut. A red check here means the RC must not be
+#     promoted (enforced via docs/release-checklist.md, the same way the efficacy gate is).
+#   - weekly schedule on the default branch: catches a processor-throughput regression that merged between RCs.
+#   - workflow_dispatch: manual re-run.
+#
+# The full 500-host proof is the committed baseline (test/scale/baselines/post-535-500host.json); this gate runs a
+# CI-runner-feasible 200-host lane in-process (integration.Setup, EnrollRatePerMinute=1000, MemArchive so no ClickHouse)
+# and asserts the backlog stays bounded. See test/scale/scalegate_test.go.
+
+on:
+  push:
+    tags:
+      - "v*-rc.*"
+  schedule:
+    # 06:00 UTC Monday. Weekly drift check on the throughput path between RCs.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scale-gate:
+    name: Single-replica scale gate (200 hosts)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The lane is ~2 min (90s load + setup). 15 is a generous ceiling that fails a wedged MySQL container without
+    # burning runner minutes, matching the efficacy gate.
+    timeout-minutes: 15
+    env:
+      EDR_TEST_DSN: "root:@tcp(127.0.0.1:3306)/edr_test?parseTime=true"
+    services:
+      mysql:
+        image: mysql:8.4.9@sha256:c36050afdca850f23cef85703f84c7531a5ae155a11b5ee1c60acb09937c4084
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: edr_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      # The in-process stack runs the server + 200 simulated hosts against one MySQL; raise the connection ceiling above
+      # the 151 default, matching the efficacy + server-test jobs.
+      - name: Raise MySQL max_connections
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -e "SET GLOBAL max_connections = 500"
+
+      - name: Run scale gate
+        # CGO_ENABLED=0 keeps the build off the receiver cgo path (belt-and-braces; ubuntu already takes the !darwin branch).
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go test -tags "integration scalegate" -v -count=1 -timeout=10m -run TestScaleGate_BacklogBounded ./test/scale/...

@@ -83,17 +83,37 @@ func (s *Stack) DetectionService() detectionapi.Service { return s.Detection.Ser
 //     would invent exit events for fixture processes).
 //   - RetentionDays = 0 (disabled; tests are short-lived; nothing to GC).
 //   - CookieSecure = false because httptest is plain HTTP.
-func Setup(t *testing.T) *Stack {
+func Setup(t *testing.T, opts ...Option) *Stack {
 	t.Helper()
-	return setupReplica(t, full.Open(t))
+	return setupReplica(t, full.Open(t), opts...)
+}
+
+// Option customises the stack Setup builds. Defaults reproduce the historical Setup behaviour (a single processor worker, the
+// detection bootstrap default), so existing callers are unaffected; the scale gate passes WithProcessConcurrency to exercise the
+// production multi-worker processor (issue #535 / #544).
+type Option func(*setupConfig)
+
+type setupConfig struct {
+	processConcurrency int
+}
+
+// WithProcessConcurrency runs the detection processor with n in-process workers, matching the production fan-out. Zero (the default
+// when the option is omitted) leaves the bootstrap default, which clamps to a single worker.
+func WithProcessConcurrency(n int) Option {
+	return func(c *setupConfig) { c.processConcurrency = n }
 }
 
 // setupReplica wires one full stack against an already-open database. Setup calls it with a fresh per-test DB; the multi-replica
 // test calls it twice with the SAME *sqlx.DB so two independent stacks (two sets of bootstrap contexts, two muxes, two httptest
 // servers) share one MySQL. That models two replicas: separate in-process state, one shared store. The signing key is identical
 // across calls, which is what lets a session minted against one stack validate on the other.
-func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
+func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	t.Helper()
+
+	var cfg setupConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	logger := slog.Default()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -118,15 +138,16 @@ func setupReplica(t *testing.T, db *sqlx.DB) *Stack {
 	require.NoError(t, err, "open visibility")
 
 	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
-		DB:              db,
-		Logger:          logger,
-		Mode:            detectionbootstrap.ModeFull,
-		ProcessInterval: 20 * time.Millisecond,
-		ProcessBatch:    100,
-		UserExists:      identityCtx.Service().UserExists,
-		AuthZ:           identityCtx.AuthZ(),
-		EventLog:        visibilityCtx.EventLog(),
-		EventArchive:    detectiontestkit.NewMemArchive(),
+		DB:                 db,
+		Logger:             logger,
+		Mode:               detectionbootstrap.ModeFull,
+		ProcessInterval:    20 * time.Millisecond,
+		ProcessBatch:       100,
+		ProcessConcurrency: cfg.processConcurrency,
+		UserExists:         identityCtx.Service().UserExists,
+		AuthZ:              identityCtx.AuthZ(),
+		EventLog:           visibilityCtx.EventLog(),
+		EventArchive:       detectiontestkit.NewMemArchive(),
 	})
 	require.NoError(t, err, "open detection")
 
