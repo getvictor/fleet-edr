@@ -79,7 +79,8 @@ func TestRecord_RoundTrip(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), r.OccurredAt, 30*time.Second)
 }
 
-// The Recorder snapshots the acting principal (id + display label) onto the row at write time, so // join (the label is captured at write time) and survives the user later being deleted. ADR-0017 replaced the live users-table email lookup with this snapshot.
+// The Recorder snapshots the acting principal (id + display label) onto the row at write time, so it needs no join and survives the
+// user later being deleted. ADR-0017 replaced the live users-table email lookup with this snapshot.
 func TestRecord_SnapshotsActorPrincipal(t *testing.T) {
 	t.Parallel()
 	store, db := newStore(t)

@@ -51,9 +51,10 @@ func withServiceAccountActor(h http.Handler) http.Handler {
 }
 
 // TestServiceAccount_WriteRoutes_NotRejectedForActorShape is the #518 regression guard: an admin-roled service account (which carries
-// no human user id) must be accepted by every detection-config / app-control write route and attributed to its svc_<id> principal,
-// never rejected at the store layer with "actor is required". A table over the write surface keeps a future actor-shape assumption from
-// silently re-breaking service-account automation.
+// no human user id) must be accepted by the detection-config write routes (the exact routes #518 names) and attributed to its svc_<id>
+// principal, never rejected at the store layer with "actor is required". A table over these routes keeps a future actor-shape assumption
+// from silently re-breaking service-account automation. App-control write routes share the same actorIdentifierFromContext path and are
+// covered by the app-control REST suite.
 func TestServiceAccount_WriteRoutes_NotRejectedForActorShape(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
@@ -89,7 +90,8 @@ func TestServiceAccount_WriteRoutes_NotRejectedForActorShape(t *testing.T) {
 			status, body := do(w.method, w.path, w.body)
 			assert.NotContains(t, body, "actor is required",
 				"a service-account write MUST NOT be rejected for actor shape (#518)")
-			assert.Less(t, status, http.StatusBadRequest, "service-account write should succeed: status=%d body=%s", status, body)
+			assert.GreaterOrEqual(t, status, http.StatusOK, "service-account write should succeed: status=%d body=%s", status, body)
+			assert.Less(t, status, http.StatusMultipleChoices, "service-account write should be 2xx, not a redirect/error: status=%d body=%s", status, body)
 		})
 	}
 
