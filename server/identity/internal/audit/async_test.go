@@ -57,7 +57,7 @@ func TestAsyncWriter_SubmitDrainsToStore(t *testing.T) {
 
 	for i := range 5 {
 		ok := w.Submit(t.Context(), api.AuditEvent{
-			UserID: &uid,
+			Actor:  api.UserPrincipal(uid, ""),
 			Action: api.AuditAction("authz.host.read"),
 		})
 		assert.True(t, ok, "submit %d must succeed under capacity", i)
@@ -103,7 +103,7 @@ func TestAsyncWriter_DrainOnShutdown(t *testing.T) {
 
 	for range 4 {
 		require.True(t, w.Submit(t.Context(), api.AuditEvent{
-			UserID: &uid,
+			Actor:  api.UserPrincipal(uid, ""),
 			Action: api.AuditAction("authz.alert.read"),
 		}))
 	}

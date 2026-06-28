@@ -295,8 +295,8 @@ func TestAppControlREST_CreateRule_FansOutToEveryHost(t *testing.T) {
 	assert.Equal(t, identityapi.AuditAppControlRuleCreate, ev.Action)
 	assert.Equal(t, "application_control_rule", ev.TargetType)
 	assert.NotEmpty(t, ev.TargetID)
-	require.NotNil(t, ev.UserID)
-	assert.Equal(t, int64(42), *ev.UserID, "audit row carries the actor user_id")
+	assert.Equal(t, "usr_42", ev.Actor.ID, "audit row carries the actor user_id")
+	assert.Equal(t, identityapi.PrincipalUser, ev.Actor.Type, "and the principal type")
 	assert.Equal(t, 3, ev.Payload["fanout_hosts"], "fanout_hosts must reflect unique host count")
 	assert.Equal(t, 0, ev.Payload["fanout_failed"], "no failures expected on the happy path")
 }
@@ -430,8 +430,8 @@ func TestAppControlREST_CreateRule_AuditCarriesIdentityReasonAndDiff(t *testing.
 	ev := events[0]
 	// Operator identity.
 	assert.Equal(t, identityapi.AuditAppControlRuleCreate, ev.Action)
-	require.NotNil(t, ev.UserID)
-	assert.Equal(t, int64(42), *ev.UserID, "audit event carries the session operator's identity")
+	assert.Equal(t, "usr_42", ev.Actor.ID, "audit event carries the session operator's identity")
+	assert.Equal(t, identityapi.PrincipalUser, ev.Actor.Type, "and the principal type")
 	// Rule identifier (target) + policy identifier in the payload.
 	assert.Equal(t, "application_control_rule", ev.TargetType)
 	assert.Equal(t, i64(created.ID), ev.TargetID, "target id is the created rule id")

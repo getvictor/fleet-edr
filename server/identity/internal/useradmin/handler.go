@@ -272,9 +272,11 @@ func (h *Handler) guardTarget(ctx context.Context, w http.ResponseWriter, target
 		writeErr(ctx, h.logger, w, http.StatusConflict, "breakglass_immutable")
 		return false
 	}
-	if actor, ok := api.ActorFromContext(ctx); ok && actor.UserID == target.ID {
-		writeErr(ctx, h.logger, w, http.StatusConflict, "cannot_modify_self")
-		return false
+	if actor, ok := api.ActorFromContext(ctx); ok {
+		if uid, isUser := actor.Principal.UserID(); isUser && uid == target.ID {
+			writeErr(ctx, h.logger, w, http.StatusConflict, "cannot_modify_self")
+			return false
+		}
 	}
 	if !actorSuper && slices.Contains(current, roleSuperAdmin) {
 		writeErr(ctx, h.logger, w, http.StatusForbidden, "super_admin_forbidden")
@@ -300,13 +302,12 @@ func (h *Handler) record(ctx context.Context, r *http.Request, action api.AuditA
 	if h.audit == nil {
 		return
 	}
-	var uid *int64
-	if actor, ok := api.ActorFromContext(ctx); ok && actor.UserID > 0 {
-		id := actor.UserID
-		uid = &id
+	var actorRef api.PrincipalRef
+	if actor, ok := api.ActorFromContext(ctx); ok {
+		actorRef = actor.Principal
 	}
 	if err := h.audit.Record(ctx, api.AuditEvent{
-		UserID:     uid,
+		Actor:      actorRef,
 		Action:     action,
 		TargetType: "user",
 		TargetID:   strconv.FormatInt(targetID, 10),

@@ -28,7 +28,7 @@ type Service interface {
 	// detail view resolves them even after the raw events age out of the event store. Best-effort: an alert may carry fewer payloads
 	// than event IDs (alerts created before capture landed, or events already aged out at creation).
 	GetAlertEvidence(ctx context.Context, id int64) ([]Event, error)
-	UpdateAlertStatus(ctx context.Context, id int64, status AlertStatus, userID int64) (Alert, error)
+	UpdateAlertStatus(ctx context.Context, id int64, status AlertStatus, actorID string) (Alert, error)
 
 	// RecordHostSeen advances hosts.last_seen_ns. Called by response
 	// on every /api/commands poll; replaces store.UpdateHostLastSeen.

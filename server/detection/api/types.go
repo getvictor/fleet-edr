@@ -156,7 +156,7 @@ type Alert struct {
 	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt  time.Time       `db:"updated_at" json:"updated_at"`
 	ResolvedAt *time.Time      `db:"resolved_at" json:"resolved_at,omitempty"`
-	UpdatedBy  *int64          `db:"updated_by" json:"updated_by,omitempty"`
+	UpdatedBy  *string         `db:"updated_by" json:"updated_by,omitempty"`
 }
 
 // AlertSource records what subsystem emitted an alert. The schema's `source` ENUM mirrors this set. Including source in the alert

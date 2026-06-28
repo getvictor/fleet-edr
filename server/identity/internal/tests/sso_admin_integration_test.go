@@ -230,7 +230,7 @@ func TestSSOAdmin_updateDeniedWithoutGrant(t *testing.T) {
 	mux := http.NewServeMux()
 	id.RegisterAuthedRoutes(mux)
 
-	analyst := &api.Actor{UserID: 2, AuthMethod: "oidc", SessionFresh: true, Roles: []api.RoleBinding{{
+	analyst := &api.Actor{Principal: api.UserPrincipal(2, ""), AuthMethod: "oidc", SessionFresh: true, Roles: []api.RoleBinding{{
 		UserID: 2, RoleID: "analyst", ScopeType: api.RoleBindingScopeGlobal, ScopeID: api.RoleBindingScopeWildcard,
 	}}}
 	// Exercise the actual update verb so the test matches its name: the chokepoint must reject the PUT before any write.

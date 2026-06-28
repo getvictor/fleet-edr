@@ -60,7 +60,7 @@ func (c *captureAudit) snapshot() []identityapi.AuditEvent {
 }
 
 func newAdmin() *identityapi.Actor {
-	return &identityapi.Actor{UserID: 7}
+	return &identityapi.Actor{Principal: identityapi.UserPrincipal(7, "admin@audit.test")}
 }
 
 // newService wires a fresh Service backed by a real test DB. The seed runs explicitly so the Default policy exists for the tests pin
@@ -123,8 +123,9 @@ func TestService_CreateRule_AuditCarriesActorEmail(t *testing.T) {
 
 	events := audit.snapshot()
 	require.Len(t, events, 1)
-	assert.Equal(t, "admin@audit.test", events[0].ActorEmail,
-		"AuditEvent must carry req.Actor so the audit row records who authored the rule")
+	assert.Equal(t, "usr_7", events[0].Actor.ID,
+		"AuditEvent must carry the acting principal id so the audit row records who authored the rule")
+	assert.Equal(t, "admin@audit.test", events[0].Actor.Label, "and the snapshot label for display")
 }
 
 // TestService_NilDeps_Panics verifies the constructor's fail-fast posture: a nil Store / Commands / Hosts is a wiring bug at cmd/main,

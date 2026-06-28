@@ -129,17 +129,10 @@ func (s *Service) emitAudit(
 		Action:     action,
 		TargetType: targetType,
 		TargetID:   targetID,
-		ActorEmail: actorIdentifier(actor),
 		Payload:    payload,
 	}
 	if actor != nil {
 		event.Actor = actor.Principal
-		// Transitional: the audit store still keys user attribution on UserID, so derive it from the principal for a human actor. A
-		// service-account actor has no user id and is attributed solely through Actor/ActorEmail (its principal id). Removed when the audit
-		// store reads Actor directly, in the final cutover commit.
-		if uid, ok := actor.Principal.UserID(); ok {
-			event.UserID = &uid
-		}
 	}
 	if err := s.audit.Record(ctx, event); err != nil {
 		s.logger.WarnContext(ctx, "detectionconfig: audit record failed", "err", err, "action", string(action))

@@ -170,7 +170,7 @@ func TestHandleCallback_HappyPath_JITNewUser(t *testing.T) {
 	require.Len(t, env.rec.events, 2)
 	assert.Equal(t, api.AuditAction("user.created"), env.rec.events[0].Action)
 	assert.Equal(t, api.AuditAction("auth.oidc.success"), env.rec.events[1].Action)
-	assert.Equal(t, "happy@example.com", env.rec.events[1].ActorEmail)
+	assert.Equal(t, "happy@example.com", env.rec.events[1].Actor.Label)
 	assert.Equal(t, "allow", env.rec.events[1].Payload["decision"])
 }
 

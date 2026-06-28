@@ -74,7 +74,7 @@ func serve(h *Handler, method, path, body string, actor *api.Actor) *httptest.Re
 }
 
 func superActor() *api.Actor {
-	return &api.Actor{UserID: 999, Roles: []api.RoleBinding{{RoleID: roleSuperAdmin}}}
+	return &api.Actor{Principal: api.UserPrincipal(999, ""), Roles: []api.RoleBinding{{RoleID: roleSuperAdmin}}}
 }
 
 func TestHandler_listErrorsReturn500(t *testing.T) {

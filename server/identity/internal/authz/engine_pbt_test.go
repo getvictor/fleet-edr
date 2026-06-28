@@ -71,7 +71,7 @@ func TestEngine_ActionRegistryParity_PBT(t *testing.T) {
 		severity := rapid.SampledFrom([]string{"", "low", "high", "critical"}).Draw(rt, "severity")
 
 		actor := api.Actor{
-			UserID:       1,
+			Principal:    api.UserPrincipal(1, ""),
 			AuthMethod:   "oidc",
 			SessionFresh: fresh,
 			Roles: []api.RoleBinding{{
@@ -157,7 +157,7 @@ func TestEngine_NonGlobalScope_PBT(t *testing.T) {
 		}).Draw(rt, "scope")
 
 		actor := api.Actor{
-			UserID:       1,
+			Principal:    api.UserPrincipal(1, ""),
 			AuthMethod:   "oidc",
 			SessionFresh: true,
 			Roles: []api.RoleBinding{{

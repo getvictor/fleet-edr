@@ -25,7 +25,7 @@ import (
 )
 
 // newStore returns a fresh audit Store backed by a test DB. The identity testkit applies users + sessions + audit_events schema,
-// so the LEFT JOIN against users in List can resolve actor emails.
+// so audit rows that reference them are seedable for the snapshot-label tests.
 func newStore(t *testing.T) (*audit.Store, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
@@ -60,8 +60,7 @@ func TestRecord_RoundTrip(t *testing.T) {
 
 	uid := userID
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: "admin@fleet-edr.local",
+		Actor:      api.UserPrincipal(uid, "admin@fleet-edr.local"),
 		Action:     api.AuditAuthLoginSuccess,
 		RemoteAddr: "127.0.0.1:54321",
 		Payload:    map[string]any{"reason": "n/a"},
@@ -72,7 +71,7 @@ func TestRecord_RoundTrip(t *testing.T) {
 	require.Len(t, rows, 1)
 	r := rows[0]
 	assert.Equal(t, api.AuditAuthLoginSuccess, r.Action)
-	assert.Equal(t, "admin@fleet-edr.local", r.UserEmail, "live email comes from JOIN")
+	assert.Equal(t, "admin@fleet-edr.local", r.UserEmail, "snapshot label surfaced as UserEmail")
 	require.NotNil(t, r.UserID)
 	assert.Equal(t, userID, *r.UserID)
 	assert.Equal(t, "127.0.0.1:54321", r.RemoteAddr)
@@ -80,9 +79,8 @@ func TestRecord_RoundTrip(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), r.OccurredAt, 30*time.Second)
 }
 
-// The Recorder snapshots the acting principal (id + display label) onto the row at write time, so the row stays attributable with no
-// join and survives the user later being deleted. ADR-0017 replaced the live users-table email lookup with this snapshot. The store's
-// bridge derives the principal from a legacy UserID/ActorEmail caller until every caller sets Actor directly.
+// The Recorder snapshots the acting principal (id + display label) onto the row at write time, so it needs no join and survives the
+// user later being deleted. ADR-0017 replaced the live users-table email lookup with this snapshot.
 func TestRecord_SnapshotsActorPrincipal(t *testing.T) {
 	t.Parallel()
 	store, db := newStore(t)
@@ -91,9 +89,8 @@ func TestRecord_SnapshotsActorPrincipal(t *testing.T) {
 
 	uid := userID
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: "operator-99@test",
-		Action:     api.AuditAlertAcknowledge,
+		Actor:  api.UserPrincipal(uid, "operator-99@test"),
+		Action: api.AuditAlertAcknowledge,
 	}))
 
 	rows, err := store.List(t.Context(), api.AuditFilter{Limit: 1})
@@ -141,7 +138,7 @@ func TestRecord_LoginFailedKeepsEmailWithoutUser(t *testing.T) {
 	store, _ := newStore(t)
 
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-		ActorEmail: "stranger@example.test",
+		Actor:      api.PrincipalRef{Label: "stranger@example.test"},
 		Action:     api.AuditAuthLoginFailed,
 		RemoteAddr: "203.0.113.1:11111",
 		Payload:    map[string]any{"reason": "user_not_found"},
@@ -187,9 +184,9 @@ func TestList_FilterByAction(t *testing.T) {
 	seedUser(t, db, 1, "u1@test")
 
 	uid := int64(1)
-	require.NoError(t, store.Record(t.Context(), api.AuditEvent{UserID: &uid, Action: api.AuditAuthLoginSuccess}))
-	require.NoError(t, store.Record(t.Context(), api.AuditEvent{UserID: &uid, Action: api.AuditAuthLogout}))
-	require.NoError(t, store.Record(t.Context(), api.AuditEvent{UserID: &uid, Action: api.AuditAuthLogout}))
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{Actor: api.UserPrincipal(uid, ""), Action: api.AuditAuthLoginSuccess}))
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{Actor: api.UserPrincipal(uid, ""), Action: api.AuditAuthLogout}))
+	require.NoError(t, store.Record(t.Context(), api.AuditEvent{Actor: api.UserPrincipal(uid, ""), Action: api.AuditAuthLogout}))
 
 	logouts, err := store.List(t.Context(), api.AuditFilter{Action: api.AuditAuthLogout, Limit: 10})
 	require.NoError(t, err)
@@ -209,7 +206,7 @@ func TestList_Paginates(t *testing.T) {
 	uid := int64(1)
 	for range 5 {
 		require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-			UserID: &uid, Action: api.AuditAuthLoginSuccess,
+			Actor: api.UserPrincipal(uid, ""), Action: api.AuditAuthLoginSuccess,
 		}))
 	}
 
@@ -262,8 +259,7 @@ func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
 	seedUser(t, db, userID, "operator-7@test")
 	uid := userID
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: "operator-7@test",
+		Actor:      api.UserPrincipal(uid, "operator-7@test"),
 		Action:     api.AuditAuthLoginSuccess,
 		TargetType: "user",
 		TargetID:   "7",
@@ -308,8 +304,7 @@ func TestRecord_AllowEmitsInfoAndSpanAttributes(t *testing.T) {
 
 	uid := userID
 	require.NoError(t, store.Record(ctx, api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: "operator-13@test",
+		Actor:      api.UserPrincipal(uid, "operator-13@test"),
 		Action:     api.AuditAction("authz.host.isolate"),
 		TargetType: "host",
 		TargetID:   "h-1",
@@ -357,9 +352,9 @@ func TestRecord_EmitsWarnLogForFailureAction(t *testing.T) {
 	store, _ := newStoreWithLogger(t, logger)
 
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-		ActorEmail: "operator@test",
-		Action:     api.AuditAction("auth.oidc.failure"),
-		Payload:    map[string]any{"reason": "oidc.unknown_subject"},
+		Actor:   api.PrincipalRef{Label: "operator@test"},
+		Action:  api.AuditAction("auth.oidc.failure"),
+		Payload: map[string]any{"reason": "oidc.unknown_subject"},
 	}))
 
 	var entry map[string]any
@@ -386,8 +381,7 @@ func TestRecord_EmitsWarnLogOnChokepointDeny(t *testing.T) {
 	seedUser(t, db, uid, "denied@test")
 
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-		UserID:     &uid,
-		ActorEmail: "denied@test",
+		Actor:      api.UserPrincipal(uid, "denied@test"),
 		Action:     api.AuditAction("authz.host.isolate"),
 		TargetType: "host",
 		TargetID:   "h-1",
@@ -423,7 +417,7 @@ func TestRecord_EmitsWarnLogForBreakglassActions(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			store, _ := newStoreWithLogger(t, logger)
 			require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-				ActorEmail: "admin@fleet-edr.local",
+				Actor:      api.PrincipalRef{Label: "admin@fleet-edr.local"},
 				Action:     action,
 				TargetType: "user",
 				TargetID:   "1",
@@ -450,9 +444,9 @@ func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	err := store.Record(t.Context(), api.AuditEvent{
-		ActorEmail: "operator@test",
-		Action:     api.AuditAction("authz.host.read"),
-		Payload:    map[string]any{"allow": false, "reason": "no_matching_rule"},
+		Actor:   api.PrincipalRef{Label: "operator@test"},
+		Action:  api.AuditAction("authz.host.read"),
+		Payload: map[string]any{"allow": false, "reason": "no_matching_rule"},
 	})
 	require.Error(t, err, "INSERT against a closed DB must surface as an error")
 
@@ -508,9 +502,9 @@ func TestRecord_WriteFailureLogsErrorAndIncrementsMetric(t *testing.T) { //nolin
 	require.NoError(t, db.Close())
 
 	err := store.Record(t.Context(), api.AuditEvent{
-		ActorEmail: "operator@test",
-		Action:     api.AuditAuthLoginSuccess,
-		Payload:    map[string]any{"decision": "allow"},
+		Actor:   api.PrincipalRef{Label: "operator@test"},
+		Action:  api.AuditAuthLoginSuccess,
+		Payload: map[string]any{"decision": "allow"},
 	})
 	require.Error(t, err, "INSERT against a closed DB must surface as an error to the recorder")
 

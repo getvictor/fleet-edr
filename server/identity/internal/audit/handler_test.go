@@ -304,7 +304,7 @@ func TestHandler_AuditorReadIsAuditedThroughRealChokepoint(t *testing.T) {
 	h.RegisterAuthedRoutes(mux)
 
 	auditor := &api.Actor{
-		UserID:       uid,
+		Principal:    api.UserPrincipal(uid, "auditor@example.test"),
 		AuthMethod:   "oidc",
 		SessionFresh: true,
 		Roles: []api.RoleBinding{{

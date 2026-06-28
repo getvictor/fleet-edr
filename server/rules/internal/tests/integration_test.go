@@ -12,6 +12,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,77 @@ func withActor(h http.Handler) http.Handler {
 		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "op@example.com"), SessionFresh: true})
 		h.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// withServiceAccountActor injects the actor shape serviceaccounts.Authenticator produces for a bearer-token request: a service-account
+// principal (svc_<id>) with no human user id. Used by the #518 regression guard to drive the write routes exactly as a service account
+// would.
+func withServiceAccountActor(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := identityapi.WithActor(r.Context(), &identityapi.Actor{
+			Principal:  identityapi.ServiceAccountPrincipal(7, "ci-bot"),
+			AuthMethod: "service_account",
+		})
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// TestServiceAccount_WriteRoutes_NotRejectedForActorShape is the #518 regression guard: an admin-roled service account (which carries
+// no human user id) must be accepted by the detection-config write routes (the exact routes #518 names) and attributed to its svc_<id>
+// principal, never rejected at the store layer with "actor is required". A table over these routes keeps a future actor-shape assumption
+// from silently re-breaking service-account automation. App-control write routes share the same actorIdentifierFromContext path and are
+// covered by the app-control REST suite.
+func TestServiceAccount_WriteRoutes_NotRejectedForActorShape(t *testing.T) {
+	t.Parallel()
+	r := newRules(t)
+	mux := http.NewServeMux()
+	r.RegisterAuthedRoutes(mux)
+	srv := httptest.NewServer(withServiceAccountActor(mux))
+	t.Cleanup(srv.Close)
+
+	do := func(method, path, body string) (int, string) {
+		req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+path, strings.NewReader(body))
+		require.NoError(t, err)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, string(b)
+	}
+
+	writes := []struct {
+		name, method, path, body string
+	}{
+		{"detection-config create exclusion", http.MethodPost, "/api/v1/detection-config/exclusions",
+			`{"rule_id":"suspicious_exec","match_type":"parent_path_glob","value":"*/ci/*","reason":"sa automation"}`},
+		{"detection-config upsert rule-setting", http.MethodPut, "/api/v1/detection-config/rule-settings",
+			`{"rule_id":"suspicious_exec","mode":"disabled","reason":"sa automation"}`},
+	}
+	for _, w := range writes {
+		t.Run(w.name, func(t *testing.T) {
+			status, body := do(w.method, w.path, w.body)
+			assert.NotContains(t, body, "actor is required",
+				"a service-account write MUST NOT be rejected for actor shape (#518)")
+			assert.GreaterOrEqual(t, status, http.StatusOK, "service-account write should succeed: status=%d body=%s", status, body)
+			assert.Less(t, status, http.StatusMultipleChoices, "service-account write should be 2xx, not a redirect/error: status=%d body=%s", status, body)
+		})
+	}
+
+	// The created exclusion is attributed to the acting service account, not an empty/anonymous actor.
+	status, body := do(http.MethodGet, "/api/v1/detection-config/exclusions", "")
+	require.Equal(t, http.StatusOK, status, body)
+	var list struct {
+		Exclusions []struct {
+			CreatedBy string `json:"created_by"`
+		} `json:"exclusions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &list))
+	require.Len(t, list.Exclusions, 1)
+	assert.Equal(t, "svc_7", list.Exclusions[0].CreatedBy, "exclusion must be attributed to the service-account principal")
 }
 
 // allowAllAuthZ satisfies identityapi.AuthZ unconditionally for the rules-context integration tests. The chokepoint's per-action

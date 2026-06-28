@@ -278,8 +278,8 @@ func (s *Store) GetAlertEventPayloads(ctx context.Context, alertID int64) ([]api
 
 // UpdateAlertStatus changes the status of an alert. If the new
 // status is "resolved", resolved_at is set on first transition only.
-// userID is written to alerts.updated_by; pass 0 to leave it
-// untouched (e.g. an internal backfill).
+// actorID (the acting principal id) is written to alerts.updated_by;
+// pass "" to leave it untouched (e.g. an internal backfill).
 //
 // Returns api.ErrAlertNotFound when the row doesn't exist.
 //
@@ -290,7 +290,7 @@ func (s *Store) GetAlertEventPayloads(ctx context.Context, alertID int64) ([]api
 // where api.ErrInvalidAlertTransition is produced. The updated_by
 // user is also NOT validated here; the service uses the UserExists
 // closure to enforce that before calling.
-func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, userID int64) error {
+func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, actorID string) error {
 	var exists int64
 	if err := s.db.GetContext(ctx, &exists, "SELECT id FROM alerts WHERE id = ?", id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -305,17 +305,17 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.Aler
 			UPDATE alerts
 			SET status = ?,
 			    resolved_at = IFNULL(resolved_at, NOW(6)),
-			    updated_by = IF(? = 0, updated_by, ?)
+			    updated_by = IF(? = '', updated_by, ?)
 			WHERE id = ?
-		`, string(status), userID, userID, id)
+		`, string(status), actorID, actorID, id)
 	} else {
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE alerts
 			SET status = ?,
 			    resolved_at = NULL,
-			    updated_by = IF(? = 0, updated_by, ?)
+			    updated_by = IF(? = '', updated_by, ?)
 			WHERE id = ?
-		`, string(status), userID, userID, id)
+		`, string(status), actorID, actorID, id)
 	}
 	if err != nil {
 		return fmt.Errorf("update alert status %d: %w", id, err)

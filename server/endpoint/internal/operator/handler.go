@@ -145,14 +145,12 @@ func (h *Handler) recordRevokeAudit(r *http.Request, hostID string, body revokeR
 		return
 	}
 	ctx := r.Context()
-	uid, _ := identityapi.UserIDFromContext(ctx)
-	var userID *int64
-	if uid > 0 {
-		u := uid
-		userID = &u
+	var actor identityapi.PrincipalRef
+	if a, ok := identityapi.ActorFromContext(ctx); ok {
+		actor = a.Principal
 	}
 	if err := h.audit.Record(ctx, identityapi.AuditEvent{
-		UserID:     userID,
+		Actor:      actor,
 		Action:     identityapi.AuditEnrollmentRevoke,
 		TargetType: "host",
 		TargetID:   hostID,

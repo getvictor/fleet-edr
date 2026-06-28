@@ -259,13 +259,12 @@ func (h *Handler) recordLifecycle(ctx context.Context, r *http.Request, action, 
 	if h.audit == nil {
 		return
 	}
-	var uid *int64
-	if actor, ok := api.ActorFromContext(ctx); ok && actor.UserID > 0 {
-		id := actor.UserID
-		uid = &id
+	var actorRef api.PrincipalRef
+	if actor, ok := api.ActorFromContext(ctx); ok {
+		actorRef = actor.Principal
 	}
 	if err := h.audit.Record(ctx, api.AuditEvent{
-		UserID:     uid,
+		Actor:      actorRef,
 		Action:     api.AuditAction(action),
 		TargetType: "service_account",
 		TargetID:   targetID,

@@ -198,7 +198,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
 		return
 	}
-	h.recordUpdate(ctx, r, actor.UserID, in, externalURL)
+	h.recordUpdate(ctx, r, actor.Principal, in, externalURL)
 
 	cfg, err := h.store.Get(ctx)
 	if err != nil {
@@ -256,13 +256,12 @@ func (h *Handler) handleTestConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 // recordUpdate emits the mutation audit row. It never includes the client secret, only whether one was rotated.
-func (h *Handler) recordUpdate(ctx context.Context, r *http.Request, userID int64, in ssoconfig.UpsertInput, externalURL string) {
+func (h *Handler) recordUpdate(ctx context.Context, r *http.Request, actor api.PrincipalRef, in ssoconfig.UpsertInput, externalURL string) {
 	if h.audit == nil {
 		return
 	}
-	uid := userID
 	if err := h.audit.Record(ctx, api.AuditEvent{
-		UserID:     &uid,
+		Actor:      actor,
 		Action:     api.AuditAction("sso.config.updated"),
 		TargetType: "sso_config",
 		RemoteAddr: httpserver.ClientIP(r),

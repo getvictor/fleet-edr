@@ -15,7 +15,7 @@ func BenchmarkAllow_GlobalScopeAllow(b *testing.B) {
 		b.Fatalf("construct engine: %v", err)
 	}
 	actor := &api.Actor{
-		UserID: 1,
+		Principal: api.UserPrincipal(1, ""),
 		Roles: []api.RoleBinding{
 			{RoleID: "admin", ScopeType: api.RoleBindingScopeGlobal, ScopeID: "*"},
 		},
@@ -37,7 +37,7 @@ func BenchmarkAllow_Deny(b *testing.B) {
 		b.Fatalf("construct engine: %v", err)
 	}
 	actor := &api.Actor{
-		UserID: 1,
+		Principal: api.UserPrincipal(1, ""),
 		Roles: []api.RoleBinding{
 			{RoleID: "analyst", ScopeType: api.RoleBindingScopeGlobal, ScopeID: "*"},
 		},

@@ -295,8 +295,11 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 	}) {
 		return
 	}
-	userID, _ := identityapi.UserIDFromContext(ctx)
-	if _, err := h.svc.UpdateAlertStatus(ctx, id, api.AlertStatus(body.Status), userID); err != nil {
+	var actor identityapi.PrincipalRef
+	if a, ok := identityapi.ActorFromContext(ctx); ok {
+		actor = a.Principal
+	}
+	if _, err := h.svc.UpdateAlertStatus(ctx, id, api.AlertStatus(body.Status), actor.ID); err != nil {
 		switch {
 		case errors.Is(err, api.ErrAlertNotFound):
 			h.writeError(ctx, w, http.StatusNotFound, errNotFound)
@@ -313,23 +316,22 @@ func (h *Handler) handleUpdateAlertStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if userID > 0 {
-		h.logger.InfoContext(ctx, "alert status updated",
-			attrkeys.AdminAction, "alert_update",
-			"edr.alert.id", id,
-			"edr.alert.status", body.Status,
-			attrkeys.UserID, userID,
-		)
+	if actor.ID != "" {
+		attrs := []any{attrkeys.AdminAction, "alert_update", "edr.alert.id", id, "edr.alert.status", body.Status}
+		if uid, ok := actor.UserID(); ok {
+			attrs = append(attrs, attrkeys.UserID, uid)
+		}
+		h.logger.InfoContext(ctx, "alert status updated", attrs...)
 	}
 
-	h.recordAlertStatusAudit(r, id, body.Status, userID)
+	h.recordAlertStatusAudit(r, id, body.Status, actor)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // recordAlertStatusAudit emits one audit row for the just-committed alert-status change. Action is per-status so SIEM filters can
 // scope to "all acks" vs "all resolves" without parsing payload. Audit failures are soft: the action committed; a missing audit row is
 // a follow-up incident, not a reason to fail an HTTP response that already returned 204.
-func (h *Handler) recordAlertStatusAudit(r *http.Request, alertID int64, newStatus string, userID int64) {
+func (h *Handler) recordAlertStatusAudit(r *http.Request, alertID int64, newStatus string, actor identityapi.PrincipalRef) {
 	if h.audit == nil {
 		return
 	}
@@ -344,13 +346,8 @@ func (h *Handler) recordAlertStatusAudit(r *http.Request, alertID int64, newStat
 	default:
 		return // status validated above; an unknown one would be a programming error.
 	}
-	var uid *int64
-	if userID > 0 {
-		u := userID
-		uid = &u
-	}
 	if err := h.audit.Record(r.Context(), identityapi.AuditEvent{
-		UserID:     uid,
+		Actor:      actor,
 		Action:     action,
 		TargetType: "alert",
 		TargetID:   strconv.FormatInt(alertID, 10),

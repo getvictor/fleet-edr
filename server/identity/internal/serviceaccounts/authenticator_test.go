@@ -34,7 +34,6 @@ func TestAuthenticator_validTokenResolvesActor(t *testing.T) {
 	require.NotNil(t, actor)
 	assert.Equal(t, AuthMethodServiceAccount, actor.AuthMethod)
 	assert.False(t, actor.SessionFresh, "a machine actor is never session-fresh; the chokepoint exempts it from the reauth gate by identity, not by faking freshness")
-	assert.Equal(t, int64(0), actor.UserID, "a service account has no human user id")
 	require.Len(t, actor.Roles, 1)
 	assert.Equal(t, "analyst", actor.Roles[0].RoleID)
 	assert.Equal(t, api.RoleBindingScopeGlobal, actor.Roles[0].ScopeType)

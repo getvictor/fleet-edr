@@ -49,8 +49,8 @@ func TestAppControl_SeedDefaultPolicy(t *testing.T) {
 	assert.Equal(t, api.DefaultPolicyName, p.Name)
 	assert.Equal(t, int64(1), p.Version)
 	assert.Equal(t, api.PolicyDefaultActionNone, p.DefaultAction)
-	assert.Equal(t, "system", p.CreatedBy)
-	assert.Equal(t, "system", p.UpdatedBy)
+	assert.Equal(t, "sys", p.CreatedBy, "seeded by the system principal")
+	assert.Equal(t, "sys", p.UpdatedBy, "seeded by the system principal")
 
 	rules, err := store.ListRulesByPolicy(t.Context(), p.ID)
 	require.NoError(t, err)
