@@ -15,22 +15,33 @@ import (
 // statements rather than one UPDATE per heartbeat.
 const snapshotBumpChunkPIDs = 500
 
-// InsertProcess inserts a new process record (typically from a fork event). The caller is expected to pass the ingest timestamp of
-// the originating fork event in ForkIngestedAtNs so cross-source correlation queries can anchor against a server-controlled clock;
-// nil is tolerated for back-compat with pre-migration callers.
-func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO processes
-			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
-			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-			 exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
-			 is_snapshot, last_seen_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+// insertProcessColumns and insertProcessPlaceholders pin the 21-column process INSERT shape in one place, shared by the per-event
+// InsertProcess, the batched multi-row INSERT, and the per-row poison fallback (processbatch.go), so the column list and arg order
+// can never drift between the per-event and set-based write paths.
+const insertProcessColumns = `INSERT INTO processes
+		(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
+		 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
+		 exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
+		 is_snapshot, last_seen_ns)`
+
+const insertProcessPlaceholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+// appendInsertProcessArgs appends the 21 INSERT bind values for p in insertProcessColumns order.
+func appendInsertProcessArgs(args []any, p api.Process) []any {
+	return append(args,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
 		p.CodeSigning, p.SHA256, p.CDHash, p.PIDVersion, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
 		p.ExitIngestedAtNs, p.ExitReason, p.ExitCode, p.PreviousExecID,
 		p.IsSnapshot, p.LastSeenNs,
 	)
+}
+
+// InsertProcess inserts a new process record (typically from a fork event). The caller is expected to pass the ingest timestamp of
+// the originating fork event in ForkIngestedAtNs so cross-source correlation queries can anchor against a server-controlled clock;
+// nil is tolerated for back-compat with pre-migration callers.
+func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error) {
+	res, err := s.db.ExecContext(ctx, insertProcessColumns+" VALUES "+insertProcessPlaceholders,
+		appendInsertProcessArgs(nil, p)...)
 	if err != nil {
 		return 0, fmt.Errorf("insert process: %w", err)
 	}
@@ -49,7 +60,7 @@ func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pi
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET last_seen_ns = ?
 		WHERE host_id = ? AND pid = ? AND is_snapshot = TRUE AND exit_time_ns IS NULL
-		ORDER BY fork_time_ns DESC LIMIT 1`,
+		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
 		lastSeenNs, hostID, pid,
 	)
 	return err
@@ -152,7 +163,7 @@ func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) erro
 		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, cdhash = ?, exec_time_ns = ?,
 		                    pidversion = COALESCE(?, pidversion)
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
-		ORDER BY fork_time_ns DESC LIMIT 1`,
+		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
 		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.CDHash, u.ExecTimeNs, u.PIDVersion,
 		u.HostID, u.PID,
 	)
@@ -174,7 +185,7 @@ func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
 		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?,
 		                    exit_reason = ?, exit_code = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
-		ORDER BY fork_time_ns DESC LIMIT 1`,
+		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
 		exitTimeNs, exitIngestedAtNs, reason, exitCode, hostID, pid,
 	)
 	if err != nil {
@@ -377,7 +388,7 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 	err := s.db.GetContext(ctx, &path, `
 		SELECT path FROM processes
 		WHERE host_id = ? AND pid = ?
-		ORDER BY fork_time_ns DESC LIMIT 1`,
+		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
 		hostID, pid,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -424,7 +435,7 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)
-		ORDER BY fork_time_ns DESC
+		ORDER BY fork_time_ns DESC, id DESC
 		LIMIT 1`,
 		hostID, pid, atTimeNs, atTimeNs,
 	)

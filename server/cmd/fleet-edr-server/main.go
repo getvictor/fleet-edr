@@ -403,6 +403,7 @@ func openDetection(
 		},
 		ProcessInterval:      config.DefaultProcessInterval,
 		ProcessBatch:         config.DefaultProcessBatch,
+		ProcessConcurrency:   config.DefaultProcessConcurrency,
 		StaleProcessTTL:      config.DefaultStaleProcessTTL,
 		StaleProcessInterval: config.DefaultStaleProcessInterval,
 		RetentionDays:        cfg.RetentionDays,

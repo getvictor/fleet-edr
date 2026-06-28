@@ -60,8 +60,10 @@ type Deps struct {
 
 	// Pipeline cadences (Full mode only). Zero values disable the
 	// corresponding loop.
-	ProcessInterval      time.Duration
-	ProcessBatch         int
+	ProcessInterval time.Duration
+	ProcessBatch    int
+	// ProcessConcurrency is the number of in-process processor workers (issue #535). Zero or one runs a single worker.
+	ProcessConcurrency   int
 	StaleProcessTTL      time.Duration
 	StaleProcessInterval time.Duration
 	RetentionDays        int
@@ -169,6 +171,7 @@ func New(deps Deps) (*Detection, error) {
 			logger,
 			deps.ProcessInterval,
 			deps.ProcessBatch,
+			deps.ProcessConcurrency,
 		)
 		processTTL := pipeline.NewProcessTTL(store, pipeline.ProcessTTLOptions{
 			MaxAge:   deps.StaleProcessTTL,
