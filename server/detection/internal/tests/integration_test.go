@@ -1337,13 +1337,13 @@ func TestOperator_UpdateAlertStatus_HappyPath(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 
 	// Walk the legal lifecycle: open -> acknowledged -> resolved.
-	updated, err := d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, 42)
+	updated, err := d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, "usr_42")
 	require.NoError(t, err)
 	assert.Equal(t, api.AlertStatusAcknowledged, updated.Status)
 	require.NotNil(t, updated.UpdatedBy)
-	assert.Equal(t, int64(42), *updated.UpdatedBy)
+	assert.Equal(t, "usr_42", *updated.UpdatedBy)
 
-	updated, err = d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusResolved, 42)
+	updated, err = d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusResolved, "usr_42")
 	require.NoError(t, err)
 	assert.Equal(t, api.AlertStatusResolved, updated.Status)
 	require.NotNil(t, updated.ResolvedAt, "resolved_at must be stamped on the resolve transition")
@@ -1361,7 +1361,7 @@ func TestOperator_UpdateAlertStatus_RejectsUnknownUser(t *testing.T) {
 
 	// userID 99 is not in the UserExists set. The cross-context FK
 	// guard (ErrInvalidUserUpdater) MUST fire before the row update.
-	_, err := d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, 99)
+	_, err := d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, "usr_99")
 	require.ErrorIs(t, err, api.ErrInvalidUserUpdater,
 		"expected ErrInvalidUserUpdater, got %v", err)
 
@@ -1383,11 +1383,11 @@ func TestOperator_UpdateAlertStatus_TerminalImmutable(t *testing.T) {
 
 	// open -> acknowledged -> resolved -> open is the legal reopen
 	// path; resolved -> acknowledged is forbidden.
-	_, err := d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, 42)
+	_, err := d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, "usr_42")
 	require.NoError(t, err)
-	_, err = d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusResolved, 42)
+	_, err = d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusResolved, "usr_42")
 	require.NoError(t, err)
-	_, err = d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, 42)
+	_, err = d.Service().UpdateAlertStatus(ctx, alertID, api.AlertStatusAcknowledged, "usr_42")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, api.ErrInvalidAlertTransition,
 		"expected ErrInvalidAlertTransition, got %v", err)

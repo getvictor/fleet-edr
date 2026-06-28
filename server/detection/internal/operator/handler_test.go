@@ -29,7 +29,7 @@ type fakeService struct {
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
 	getAlert          func(ctx context.Context, id int64) (api.Alert, []string, error)
 	getAlertEvidence  func(ctx context.Context, id int64) ([]api.Event, error)
-	updateAlertStatus func(ctx context.Context, id int64, status api.AlertStatus, userID int64) (api.Alert, error)
+	updateAlertStatus func(ctx context.Context, id int64, status api.AlertStatus, actorID string) (api.Alert, error)
 }
 
 // GetAlertEvidence returns nil (no payloads) when unset, so existing GetAlert handler tests keep passing without wiring evidence.
@@ -75,11 +75,11 @@ func (f fakeService) GetAlert(ctx context.Context, id int64) (api.Alert, []strin
 	return f.getAlert(ctx, id)
 }
 
-func (f fakeService) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, userID int64) (api.Alert, error) {
+func (f fakeService) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, actorID string) (api.Alert, error) {
 	if f.updateAlertStatus == nil {
 		panic("fakeService.UpdateAlertStatus not set")
 	}
-	return f.updateAlertStatus(ctx, id, status, userID)
+	return f.updateAlertStatus(ctx, id, status, actorID)
 }
 
 // Methods the operator handler never reaches but the interface requires. Panic on call so a regression that newly invokes them
@@ -518,7 +518,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 				return api.Alert{Severity: "low"}, nil, nil
 			},
-			updateAlertStatus: func(context.Context, int64, api.AlertStatus, int64) (api.Alert, error) {
+			updateAlertStatus: func(context.Context, int64, api.AlertStatus, string) (api.Alert, error) {
 				return api.Alert{}, api.ErrInvalidAlertTransition
 			},
 		}
@@ -533,7 +533,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 		t.Parallel()
 		svc := fakeService{
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) { return api.Alert{}, nil, nil },
-			updateAlertStatus: func(context.Context, int64, api.AlertStatus, int64) (api.Alert, error) {
+			updateAlertStatus: func(context.Context, int64, api.AlertStatus, string) (api.Alert, error) {
 				return api.Alert{}, api.ErrInvalidUserUpdater
 			},
 		}
@@ -548,7 +548,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 		t.Parallel()
 		svc := fakeService{
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) { return api.Alert{}, nil, nil },
-			updateAlertStatus: func(context.Context, int64, api.AlertStatus, int64) (api.Alert, error) {
+			updateAlertStatus: func(context.Context, int64, api.AlertStatus, string) (api.Alert, error) {
 				return api.Alert{}, errors.New("db write failed")
 			},
 		}
@@ -565,7 +565,7 @@ func TestHandleUpdateAlertStatus(t *testing.T) {
 			getAlert: func(context.Context, int64) (api.Alert, []string, error) {
 				return api.Alert{Severity: "medium"}, nil, nil
 			},
-			updateAlertStatus: func(context.Context, int64, api.AlertStatus, int64) (api.Alert, error) {
+			updateAlertStatus: func(context.Context, int64, api.AlertStatus, string) (api.Alert, error) {
 				return api.Alert{}, nil
 			},
 		}

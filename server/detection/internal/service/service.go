@@ -11,6 +11,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/graph"
 	"github.com/fleetdm/edr/server/detection/internal/intake"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
@@ -104,7 +105,7 @@ func (s *Service) GetAlertEvidence(ctx context.Context, id int64) ([]api.Event, 
 //	resolved     -> open  (operator reopens)
 //
 // All other transitions return ErrInvalidAlertTransition.
-func (s *Service) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, userID int64) (api.Alert, error) {
+func (s *Service) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, actorID string) (api.Alert, error) {
 	current, err := s.store.GetAlert(ctx, id)
 	if err != nil {
 		return api.Alert{}, err
@@ -114,19 +115,20 @@ func (s *Service) UpdateAlertStatus(ctx context.Context, id int64, status api.Al
 		return api.Alert{}, fmt.Errorf("%w: %s -> %s", api.ErrInvalidAlertTransition, current.Status, status)
 	}
 
-	// Validate updated_by user exists in the identity context. Replaces the dropped cross-context FK fk_alerts_updated_by. userID == 0
-	// means "internal backfill, leave updated_by alone" so the existence check is skipped.
-	if userID > 0 && s.userExists != nil {
-		exists, err := s.userExists(ctx, userID)
+	// For a human actor, validate the user still exists in the identity context (alerts.updated_by has no cross-context FK, ADR-0004).
+	// A service-account or system principal is trusted from the authenticated actor and skips the check; an empty actor ("" = internal
+	// backfill) leaves updated_by alone.
+	if uid, ok := (identityapi.PrincipalRef{ID: actorID}).UserID(); ok && s.userExists != nil {
+		exists, err := s.userExists(ctx, uid)
 		if err != nil {
-			return api.Alert{}, fmt.Errorf("validate updated_by user %d: %w", userID, err)
+			return api.Alert{}, fmt.Errorf("validate updated_by user %d: %w", uid, err)
 		}
 		if !exists {
-			return api.Alert{}, fmt.Errorf("%w: user_id=%d", api.ErrInvalidUserUpdater, userID)
+			return api.Alert{}, fmt.Errorf("%w: principal=%s", api.ErrInvalidUserUpdater, actorID)
 		}
 	}
 
-	if err := s.store.UpdateAlertStatus(ctx, id, status, userID); err != nil {
+	if err := s.store.UpdateAlertStatus(ctx, id, status, actorID); err != nil {
 		return api.Alert{}, err
 	}
 	updated, err := s.store.GetAlert(ctx, id)
