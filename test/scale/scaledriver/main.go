@@ -56,6 +56,9 @@ type flagSet struct {
 	queueDepthPollInterval time.Duration
 	signozURL              string
 	passMaxQueueDepth      int64
+	backlogDSN             string
+	backlogPollInterval    time.Duration
+	passMaxServerBacklog   int64
 }
 
 func main() {
@@ -103,6 +106,9 @@ func run() error {
 		QueueDepthPollInterval: fs.queueDepthPollInterval,
 		SigNozURL:              fs.signozURL,
 		PassMaxQueueDepth:      fs.passMaxQueueDepth,
+		BacklogDSN:             fs.backlogDSN,
+		BacklogPollInterval:    fs.backlogPollInterval,
+		PassMaxServerBacklog:   fs.passMaxServerBacklog,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
@@ -164,6 +170,12 @@ func parseFlags() flagSet {
 		"optional SigNoz base URL (e.g. http://localhost:8080); when set the report includes server-side p99 + client-vs-server delta")
 	flag.Int64Var(&fs.passMaxQueueDepth, "pass-max-queue-depth", 0,
 		"optional max-queue-depth ceiling; exit 2 if any host's max queue_depth exceeds this value (0 disables the gate)")
+	flag.StringVar(&fs.backlogDSN, "backlog-dsn", "",
+		"optional MySQL DSN for the server DB; when set, the run polls the event_queue processing backlog and reports its percentiles")
+	flag.DurationVar(&fs.backlogPollInterval, "backlog-poll-interval", 0,
+		"cadence of the server-backlog poll; 0 uses the package default of 5s (requires --backlog-dsn)")
+	flag.Int64Var(&fs.passMaxServerBacklog, "pass-max-server-backlog", 0,
+		"optional server-backlog ceiling; exit 2 if the sampled event_queue depth exceeds this value (0 disables; requires --backlog-dsn)")
 	flag.Parse()
 	return fs
 }
