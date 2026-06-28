@@ -264,6 +264,70 @@ func TestEventLog_PruneProcessedBatches(t *testing.T) {
 	assert.Zero(t, pending, "queue is empty after pruning all acked rows")
 }
 
+// spec:server-availability/the-processor-scales-across-replicas-via-skip-locked/concurrent-workers-within-one-replica-claim-disjoint-event-batches
+//
+// Issue #544: with intra-replica processor concurrency (#535), many workers claim from event_queue at once. Under the default
+// REPEATABLE READ the SKIP LOCKED claim scan takes gap locks on the (processed, host_id, timestamp_ns) index and concurrent
+// claimers deadlock on the claim UPDATE (MySQL 1213); a single-box 500-host run logged ~1.6/s. The fix runs the claim at READ
+// COMMITTED with a bounded deadlock retry, so concurrent claimers MUST never surface a deadlock AND MUST still partition the queue:
+// every seeded event is claimed exactly once. A worker observes an empty claim only once no claimable (processed = 0 or
+// lease-expired) rows remain, so breaking on empty drains the whole queue without a spin.
+func TestEventLog_ConcurrentClaimersNoDeadlock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := newEventLog(t)
+
+	const totalEvents = 1500
+	const hostCount = 30
+	seed := make([]visibilityapi.Event, totalEvents)
+	for i := range seed {
+		seed[i] = ev(fmt.Sprintf("evt-%04d", i), fmt.Sprintf("h-%02d", i%hostCount), int64(i+1), "exec")
+	}
+	require.NoError(t, log.Append(ctx, seed))
+
+	const workers = 8
+	const batch = 50
+	var (
+		mu        sync.Mutex
+		claimed   = make(map[string]int) // event_id -> times claimed; must end at exactly 1 each
+		claimErrs atomic.Int64
+		ackErrs   atomic.Int64
+	)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for {
+				batchEvents, err := log.Claim(ctx, batch)
+				if err != nil {
+					claimErrs.Add(1)
+					return
+				}
+				if len(batchEvents) == 0 {
+					return // no claimable rows left: every event has already been claimed by some worker
+				}
+				mu.Lock()
+				for _, e := range batchEvents {
+					claimed[e.EventID]++
+				}
+				mu.Unlock()
+				if err := log.Ack(ctx, ids(batchEvents)); err != nil {
+					ackErrs.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	require.Zero(t, claimErrs.Load(), "concurrent claimers must not surface a deadlock error (#544)")
+	require.Zero(t, ackErrs.Load(), "acks must not error under concurrency")
+	require.Len(t, claimed, totalEvents, "every seeded event is claimed exactly once")
+	for id, n := range claimed {
+		assert.Equalf(t, 1, n, "event %s must be claimed by exactly one worker (no double-claim)", id)
+	}
+}
+
 func TestEventLog_EmptyOps(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

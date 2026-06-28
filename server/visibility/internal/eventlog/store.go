@@ -5,6 +5,7 @@ package eventlog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -98,11 +99,32 @@ func appendArgs(chunk []api.Event) ([]string, []any, error) {
 // (FOR UPDATE SKIP LOCKED, ADR-0011). It offers both never-claimed rows (processed = 0) and rows whose prior claim has expired past
 // claimLeaseNs (processed = 2 with a stale claimed_at_ns), so a worker that crashed between Claim and Ack has its events re-delivered.
 // Claimed rows are stamped processed = 2 with a fresh claimed_at_ns in the same transaction.
+//
+// Concurrent claimers (across replicas, and since #535 across multiple in-process workers per replica) can deadlock on the
+// event_queue claim (MySQL 1213): a single-box 500-host run logged ~1.6 claim deadlocks/sec. The claim transaction runs at READ
+// COMMITTED so the SKIP LOCKED scan takes no next-key/gap locks on the (processed, host_id, timestamp_ns) index, removing the
+// contention at its source, and the whole transaction is wrapped in the same bounded deadlock retry the append and prune paths use
+// so any residual 1213 is cleared transparently rather than surfacing to the processor loop (issue #544).
 func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
-	tx, err := s.db.BeginTxx(ctx, nil)
+	var events []api.Event
+	err := sqlhelpers.WithDeadlockRetry(ctx, deadlockMaxAttempts, deadlockBackoffStep, func() error {
+		var claimErr error
+		events, claimErr = s.claimOnce(ctx, limit)
+		return claimErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// claimOnce runs one claim transaction. Extracted so Claim can wrap it in a deadlock retry. READ COMMITTED is deliberate (see Claim):
+// the SKIP LOCKED scan must not take gap locks, or concurrent claimers deadlock on the claim UPDATE.
+func (s *Store) claimOnce(ctx context.Context, limit int) ([]api.Event, error) {
+	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, fmt.Errorf("begin tx for claim: %w", err)
 	}
