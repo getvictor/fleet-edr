@@ -32,7 +32,7 @@ func TestTraceSamplerStore_updateRoundTripBumpsVersion(t *testing.T) {
 	_, version, err := store.Get(ctx)
 	require.NoError(t, err)
 	// updatedBy nil records a non-operator write; the value round-trip + version bump are what we assert here.
-	require.NoError(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.03, StandardRatio: 0.3, ForceFull: true}, version, nil))
+	require.NoError(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.03, StandardRatio: 0.3, ForceFull: true}, version, ""))
 
 	got, newVersion, err := store.Get(ctx)
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestTraceSamplerStore_outOfRangeRejectedByCheckConstraint(t *testing.T) {
 	_, version, err := store.Get(ctx)
 	require.NoError(t, err)
 	// The DB CHECK constraint is the backstop behind the handler's validation: a ratio above 1 is rejected at the write.
-	require.Error(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 2.0, StandardRatio: 0.1}, version, nil))
+	require.Error(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 2.0, StandardRatio: 0.1}, version, ""))
 
 	// And the stored row is unchanged (still the seeded default).
 	got, _, getErr := store.Get(ctx)
@@ -67,9 +67,9 @@ func TestTraceSamplerStore_staleVersionConflicts(t *testing.T) {
 	_, version, err := store.Get(ctx)
 	require.NoError(t, err)
 	// First writer holding the current version succeeds and bumps it.
-	require.NoError(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.02, StandardRatio: 0.2}, version, nil))
+	require.NoError(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.02, StandardRatio: 0.2}, version, ""))
 	// A second writer still holding the now-stale version is rejected (lost-update prevented).
-	err = store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.04, StandardRatio: 0.4}, version, nil)
+	err = store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.04, StandardRatio: 0.4}, version, "")
 	require.ErrorIs(t, err, tracingconfig.ErrVersionConflict)
 }
 
@@ -97,7 +97,7 @@ func TestTraceSamplerStore_missingRowSelfHeals(t *testing.T) {
 	assert.Equal(t, int64(0), version)
 
 	// Update with version 0 re-inserts the singleton rather than failing on the absent row.
-	require.NoError(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.07, StandardRatio: 0.7}, 0, nil))
+	require.NoError(t, store.Update(ctx, tracing.Settings{HighVolumeRatio: 0.07, StandardRatio: 0.7}, 0, ""))
 	got2, _, err := store.Get(ctx)
 	require.NoError(t, err)
 	assert.InDelta(t, 0.07, got2.HighVolumeRatio, 1e-9)

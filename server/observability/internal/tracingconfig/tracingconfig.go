@@ -66,12 +66,9 @@ func (s *Store) GetTraceSamplerSettings(ctx context.Context) (*tracing.Settings,
 // Update writes the singleton row with optimistic concurrency: it succeeds only when the stored version still matches expectedVersion,
 // returning ErrVersionConflict otherwise so a concurrent PATCH cannot silently clobber a peer's write. expectedVersion 0 means "no row
 // yet" and inserts the singleton (idempotent under a concurrent first write). The caller validates the ratios are in [0,1]; the DB
-// CHECK constraints are the backstop. updatedBy records the operator user id as a breadcrumb (nil for a non-operator write).
-func (s *Store) Update(ctx context.Context, settings tracing.Settings, expectedVersion int64, updatedBy *int64) error {
-	var by sql.NullInt64
-	if updatedBy != nil {
-		by = sql.NullInt64{Int64: *updatedBy, Valid: true}
-	}
+// CHECK constraints are the backstop. updatedBy records the acting principal id as a breadcrumb ("" for a non-operator write).
+func (s *Store) Update(ctx context.Context, settings tracing.Settings, expectedVersion int64, updatedBy string) error {
+	by := sql.NullString{String: updatedBy, Valid: updatedBy != ""}
 	if expectedVersion <= 0 {
 		// First write: insert the singleton. ON DUPLICATE KEY UPDATE keeps a concurrent first write idempotent.
 		_, err := s.db.ExecContext(ctx, `
