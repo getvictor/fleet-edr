@@ -17,7 +17,9 @@
 ## Identity code
 
 - [ ] `service.LoadActor`: build `PrincipalRef` (user) from the user row.
-- [ ] `serviceaccounts/authenticator.go`: build `PrincipalRef` (service_account) from the token subject -> SA principal id + name. This is the root fix for #514/#518.
+- [ ] `satoken`: add the SA `principal_id` + display name to the minted claims; the token endpoint stamps them (it already reads the SA row), so the authenticator stays DB-free.
+- [ ] `serviceaccounts/authenticator.go`: build `PrincipalRef` (service_account) from the token claims (principal id + name), no DB read. This is the root fix for #514/#518.
+- [ ] Replace hardcoded `"system"` / `"user:"+` literals in Go (e.g. the app-control seed `created_by='system'`) with the `sys` principal id / `Principal.ID`; grep for residual `"system"` and `user:` attribution literals after the cutover.
 - [ ] `audit/mysql.go`: write the three principal columns; drop the `LEFT JOIN users` in `List`; read the snapshot label; remove `resolveActorEmail`.
 - [ ] Update every `AuditEvent` construction in identity (`useradmin`, `breakglass`, `oidc`, `saadmin`, `authz/engine`, `login`, `ssoadmin`) to set `Actor PrincipalRef`; login-failure rows set a null-id ref with the attempted email as label.
 - [ ] `useradmin`/`saadmin` user-on-user checks use `Principal.UserID()`.
@@ -49,6 +51,8 @@
 
 ## Cross-cutting tests
 
+- [ ] `PrincipalRef.UserID()` negative cases: `(0, false)` for `svc_`/`sys`/malformed/empty ids; `(n, true)` only for well-formed `usr_<n>`.
+- [ ] System-write test: an env-seed / background mutation records `sys` (never `NULL` or `"system"`); deleted-principal tombstone keeps the id resolvable.
 - [ ] #518 regression: table over every authed write route exercised with a service-account actor; assert no `actor is required` rejection and an audit row + per-row attribution of `svc_<id>`.
 - [ ] Integration: SA SSO update, SA detection-config exclusion create, SA app-control rule create each record `svc_<id>` in the audit row and the attribution column.
 - [ ] Audit reader: a deleted user's history resolves the snapshot label with no join.

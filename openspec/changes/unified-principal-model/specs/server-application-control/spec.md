@@ -2,7 +2,7 @@
 
 ### Requirement: Rule lifecycle audit events
 
-The system SHALL emit an audit event for every create, update, or delete of a policy or a rule. The event SHALL include the acting principal (its principal id and a resolvable label, for a human user or a service account alike), the reason supplied with the request, the policy and (for rule events) rule identifier, and a structured diff of the change. The per-row attribution columns (`created_by` / `updated_by`) SHALL store the acting principal id, not a human-only identifier, and a system-originated write SHALL record the `system` principal rather than a free-form literal. A `bulkUpsert` SHALL emit exactly one audit event covering the logical operation rather than one event per touched rule. A service-account write MUST NOT be rejected at the persistence layer for lacking a human user id.
+The system SHALL emit an audit event for every create, update, or delete of a policy or a rule. The event SHALL include the acting principal (its principal id and a resolvable label, for a human user or a service account alike), the reason supplied with the request, the policy and (for rule events) rule identifier, and a structured diff of the change. The per-row attribution columns (`created_by` / `updated_by`) SHALL store the acting principal id, not a human-only identifier, and a system-originated write SHALL record the system principal (principal id `sys`, type `system`) rather than a free-form literal such as `"system"`. A `bulkUpsert` SHALL emit exactly one audit event covering the logical operation rather than one event per touched rule. A service-account write MUST NOT be rejected at the persistence layer for lacking a human user id.
 
 #### Scenario: Creating a rule records the acting principal
 

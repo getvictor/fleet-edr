@@ -2,7 +2,7 @@
 
 ### Requirement: Every configuration mutation is audited
 
-The system SHALL emit an audit row for every successful create, update, or secret rotation of the OIDC configuration, recording the acting principal (a human user or a service account) by its principal id and a resolvable label, plus the action. The per-row attribution column (`updated_by`) SHALL store the acting principal id; a service-account update MUST record the service account's principal id rather than the interim `NULL`, and an environment-seed write with no operator SHALL record the `system` principal. The audit row MUST NOT contain the client secret in any form. Test-connection, which persists nothing, need not emit a mutation audit row.
+The system SHALL emit an audit row for every successful create, update, or secret rotation of the OIDC configuration, recording the acting principal (a human user or a service account) by its principal id and a resolvable label, plus the action. The per-row attribution column (`updated_by`) SHALL store the acting principal id; a service-account update MUST record the service account's principal id rather than the interim `NULL`, and an environment-seed write with no operator SHALL record the system principal (principal id `sys`, type `system`). The audit row MUST NOT contain the client secret in any form. Test-connection, which persists nothing, need not emit a mutation audit row.
 
 #### Scenario: Saving a change writes an audit row naming the principal
 
