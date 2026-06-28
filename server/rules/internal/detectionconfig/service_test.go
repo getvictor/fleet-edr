@@ -37,7 +37,7 @@ func TestService_CreateExclusion_PersistsResolvesAndAudits(t *testing.T) {
 	audit := &fakeAudit{}
 	svc := newService(t, audit)
 	ctx := context.Background()
-	actor := &identityapi.Actor{UserID: 42}
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(42, "ops@fleetdm.com")}
 
 	excl, err := svc.CreateExclusion(ctx, actor, "Claude Code CLI", detectionconfig.CreateExclusionInput{
 		RuleID:    "suspicious_exec",
@@ -46,7 +46,7 @@ func TestService_CreateExclusion_PersistsResolvesAndAudits(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotZero(t, excl.ID)
-	assert.Equal(t, "user:42", excl.CreatedBy, "store records the actor identifier as created_by")
+	assert.Equal(t, "usr_42", excl.CreatedBy, "store records the acting principal id as created_by")
 
 	// The snapshot reloaded, so the resolver now suppresses the matching parent.
 	assert.True(t, svc.Excluded("suspicious_exec", api.ExclusionMatchParentPathGlob,
@@ -72,7 +72,7 @@ func TestService_UpsertRuleSetting_ResolvesAndAudits(t *testing.T) {
 	audit := &fakeAudit{}
 	svc := newService(t, audit)
 	ctx := context.Background()
-	actor := &identityapi.Actor{UserID: 7}
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(7, "ops@fleetdm.com")}
 
 	_, err := svc.UpsertRuleSetting(ctx, actor, "too noisy", detectionconfig.UpsertSettingInput{
 		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeDisabled,
@@ -99,7 +99,7 @@ func TestService_UpsertRuleSetting_ReEnablePreviouslyDisabledRule(t *testing.T) 
 	t.Parallel()
 	svc := newService(t, &fakeAudit{})
 	ctx := context.Background()
-	actor := &identityapi.Actor{UserID: 7}
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(7, "ops@fleetdm.com")}
 
 	_, err := svc.UpsertRuleSetting(ctx, actor, "too noisy", detectionconfig.UpsertSettingInput{
 		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeDisabled,
@@ -122,7 +122,7 @@ func TestService_DeleteExclusion(t *testing.T) {
 	audit := &fakeAudit{}
 	svc := newService(t, audit)
 	ctx := context.Background()
-	actor := &identityapi.Actor{UserID: 1}
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "ops@fleetdm.com")}
 
 	excl, err := svc.CreateExclusion(ctx, actor, "r", detectionconfig.CreateExclusionInput{
 		RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchPathGlob, Value: "/usr/local/bin/munki",
@@ -144,7 +144,7 @@ func TestService_NilAuditDropsRowWithoutPanic(t *testing.T) {
 	t.Parallel()
 	svc := newService(t, nil) // nil recorder
 	ctx := context.Background()
-	_, err := svc.CreateExclusion(ctx, &identityapi.Actor{UserID: 1}, "r", detectionconfig.CreateExclusionInput{
+	_, err := svc.CreateExclusion(ctx, &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "ops@fleetdm.com")}, "r", detectionconfig.CreateExclusionInput{
 		RuleID: "dyld_insert", MatchType: api.ExclusionMatchSHA256, Value: "abc",
 	})
 	require.NoError(t, err, "a nil audit recorder must not fail the mutation")
@@ -177,7 +177,7 @@ func TestService_RefreshLoop_ConvergesAcrossReplicas(t *testing.T) {
 
 	// Replica A creates the exclusion. This bumps detection_config_meta.version; B never sees the mutation directly.
 	_, err := svcA.CreateExclusion(
-		t.Context(), &identityapi.Actor{UserID: 1}, "munki staged installer writes sudoers",
+		t.Context(), &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "ops@fleetdm.com")}, "munki staged installer writes sudoers",
 		detectionconfig.CreateExclusionInput{
 			RuleID: "sudoers_tamper", MatchType: api.ExclusionMatchPathGlob, Value: "/var/db/munki/installer",
 		})

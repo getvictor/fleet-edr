@@ -133,21 +133,27 @@ func (s *Service) emitAudit(
 		Payload:    payload,
 	}
 	if actor != nil {
-		userID := actor.UserID
-		event.UserID = &userID
+		event.Actor = actor.Principal
+		// Transitional: the audit store still keys user attribution on UserID, so derive it from the principal for a human actor. A
+		// service-account actor has no user id and is attributed solely through Actor/ActorEmail (its principal id). Removed when the audit
+		// store reads Actor directly, in the final cutover commit.
+		if uid, ok := actor.Principal.UserID(); ok {
+			event.UserID = &uid
+		}
 	}
 	if err := s.audit.Record(ctx, event); err != nil {
 		s.logger.WarnContext(ctx, "detectionconfig: audit record failed", "err", err, "action", string(action))
 	}
 }
 
-// actorIdentifier renders the stable "user:<id>" identifier recorded as created_by / actor_email, matching the app-control handler's
-// convention. Empty when there is no actor on the context (a wiring bug, which the store's required-actor validation then surfaces).
+// actorIdentifier renders the acting principal id recorded as created_by / actor_email (usr_<id> for a user, svc_<id> for a service
+// account). It survives authentication for every actor kind, so a service-account write is attributed rather than rejected by the
+// store's required-actor validation (#518). Empty only when there is no actor on the context (a wiring bug). See ADR-0017.
 func actorIdentifier(actor *identityapi.Actor) string {
-	if actor == nil || actor.UserID <= 0 {
+	if actor == nil {
 		return ""
 	}
-	return "user:" + strconv.FormatInt(actor.UserID, 10)
+	return actor.Principal.ID
 }
 
 // Reload reads the current configuration from the store and atomically swaps the in-memory snapshot. Called once at boot (after the

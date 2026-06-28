@@ -112,18 +112,11 @@ func (h *DetectionConfigHandler) resolveCreatedByEmails(ctx context.Context, exc
 	}
 }
 
-// parseUserActorID extracts the numeric id from the "user:<id>" actor identifier the service records as created_by. Returns false for
-// any other shape (e.g. a service-account or empty actor) so the caller leaves the email unresolved.
+// parseUserActorID extracts the numeric users.id from a usr_<id> principal identifier recorded as created_by, to resolve the author's
+// display email. Returns false for any non-user principal (a service-account svc_<id>, the system principal) or empty actor, so the
+// caller leaves the email unresolved and the UI falls back to the raw identifier. See ADR-0017.
 func parseUserActorID(actor string) (int64, bool) {
-	rest, ok := strings.CutPrefix(actor, "user:")
-	if !ok {
-		return 0, false
-	}
-	id, err := strconv.ParseInt(rest, 10, 64)
-	if err != nil || id <= 0 {
-		return 0, false
-	}
-	return id, true
+	return identityapi.PrincipalRef{ID: actor}.UserID()
 }
 
 // RegisterRoutes wires the detection-config admin routes:
