@@ -2,62 +2,54 @@
 
 ## Identity API: the principal boundary
 
-- [ ] Add `PrincipalType` + `PrincipalRef{ID, Type, Label}` to `server/identity/api` with a `UserID() (int64, bool)` accessor (valid only for `usr_` ids) and a mint helper that sets prefix + type together.
-- [ ] PBT: `PrincipalRef` id round-trips mint -> parse for every type; `UserID()` is true only for `usr_`.
-- [ ] Replace `Actor.UserID int64` with `Actor.Principal PrincipalRef` in `authz.go`; update `WithActor`/`ActorFromContext` doc comments.
-- [ ] Replace `AuditEvent.UserID *int64` + `ActorEmail string` with `AuditEvent.Actor PrincipalRef`; update `AuditRow` to carry `actor_type`/`actor_principal_id`/`actor_label`.
+- [x] Add `PrincipalType` + `PrincipalRef{ID, Type, Label}` to `server/identity/api` with a `UserID() (int64, bool)` accessor (valid only for `usr_` ids) and mint helpers that set prefix + type together.
+- [x] PBT: `PrincipalRef` id round-trips mint -> parse for every type; `UserID()` is true only for `usr_`; plus a JSON round-trip property.
+- [x] Replace `Actor.UserID int64` with `Actor.Principal PrincipalRef` in `authz.go`.
+- [x] Replace `AuditEvent.UserID *int64` + `ActorEmail string` with `AuditEvent.Actor PrincipalRef`; `AuditRow` carries the typed `Actor` (with `UserID`/`UserEmail` derived from it for back-compat).
 
-## Identity schema (migration 00005)
+## Identity schema (migrations 00005 + 00006)
 
-- [ ] Create `principals` (id, type ENUM, display_label, disabled_at, created_at; index on type) and seed the `sys` row.
-- [ ] Add `principal_id VARCHAR(40)` (unique, FK to principals) to `users` and `service_accounts`; backfill `usr_<id>` / `svc_<id>` and the labels.
-- [ ] Rewrite `oidc_config.updated_by`, `app_config.updated_by`, `service_accounts.created_by` from `BIGINT REFERENCES users(id)` to `VARCHAR(40) REFERENCES principals(id)`; backfill `usr_<id>`, default new system writes to `sys`.
-- [ ] Rewrite `audit_events`: add `actor_type`/`actor_principal_id`/`actor_label`, backfill from `actor_user_id`/`actor_email`, drop the two legacy columns, swap the actor index.
+- [x] Create `principals` (id, type ENUM, display_label, disabled_at, created_at; index on type) and seed the `sys` row; backfill one row per user / service account (00005).
+- [x] Refinement (vs the original draft): user/service-account principals use a deterministic id (`usr_<users.id>` / `svc_<service_accounts.id>`) created in the same transaction as the row, rather than a stored `principal_id` FK column on `users`/`service_accounts`. Determinism makes the column redundant and sidesteps the insert-ordering chicken-and-egg; attribution columns still FK `principals(id)`.
+- [x] Rewrite `oidc_config.updated_by`, `app_config.updated_by`, `service_accounts.created_by` to `VARCHAR(40) REFERENCES principals(id)`; backfill `usr_<id>`, default system writes to `sys` (00006).
+- [x] Rewrite `audit_events`: add `actor_type`/`actor_principal_id`/`actor_label`, backfill (legacy `actor_user_id=0` -> no principal), drop the two legacy columns, swap the actor index (00005).
 
 ## Identity code
 
-- [ ] `service.LoadActor`: build `PrincipalRef` (user) from the user row.
-- [ ] `satoken`: add the SA `principal_id` + display name to the minted claims; the token endpoint stamps them (it already reads the SA row), so the authenticator stays DB-free.
-- [ ] `serviceaccounts/authenticator.go`: build `PrincipalRef` (service_account) from the token claims (principal id + name), no DB read. This is the root fix for #514/#518.
-- [ ] Replace hardcoded `"system"` / `"user:"+` literals in Go (e.g. the app-control seed `created_by='system'`) with the `sys` principal id / `Principal.ID`; grep for residual `"system"` and `user:` attribution literals after the cutover.
-- [ ] `audit/mysql.go`: write the three principal columns; drop the `LEFT JOIN users` in `List`; read the snapshot label; remove `resolveActorEmail`.
-- [ ] Update every `AuditEvent` construction in identity (`useradmin`, `breakglass`, `oidc`, `saadmin`, `authz/engine`, `login`, `ssoadmin`) to set `Actor PrincipalRef`; login-failure rows set a null-id ref with the attempted email as label.
-- [ ] `useradmin`/`saadmin` user-on-user checks use `Principal.UserID()`.
-- [ ] Delete the #515 SSO stopgap: remove the nullable `*int64` threading in `ssoadmin/handler.go` and the `bootstrap.go` apply closure; the SSO + app-config update stamps `Principal.ID`.
-- [ ] `ssoconfig`/`appconfig` stores: `updated_by` becomes the principal id string (default `sys` on env-seed).
-- [ ] Add the principal-label resolver to `identity/api` (resolves any principal type); retire `Service.GetUser`-only email lookups where they served attribution.
+- [x] `service.LoadActor` builds the user `PrincipalRef`; user/SA creation paths insert the principals spine row in one transaction.
+- [x] `satoken` claims carry the SA `principal_id` + display name, stamped at the token endpoint; the authenticator builds the `PrincipalRef` from the claims with no DB read (root fix for #514/#518), rejecting a token with no principal claim.
+- [x] Replace hardcoded `"system"` / `"user:"+` attribution literals (app-control seed, rules columns) with the `sys` principal id / `Principal.ID` (00003 + store seed).
+- [x] `audit/mysql.go` writes the three principal columns, drops the `LEFT JOIN users`, reads the snapshot label; `resolveActorEmail` + the transitional `actorOf` bridge removed.
+- [x] Every `AuditEvent` emitter (identity `useradmin`/`breakglass`/`oidc`/`saadmin`/`authz`/`login`/`ssoadmin`/`jit`, plus endpoint/response/rules/detection) sets `Actor`; pre-auth failures set a label-only ref.
+- [x] `useradmin` self-edit check uses `Principal.UserID()`.
+- [x] Delete the #515 SSO `NULL` stopgap; SSO + app-config update stamps `Principal.ID`.
+- [x] `ssoconfig`/`appconfig` stores: `updated_by` is the principal id string (defaults to `sys`).
+- [ ] DEFERRED (display polish, follow-up): a single identity-owned principal-label resolver that resolves any principal type. Today the detection-config exclusions list resolves `usr_<id>` authors to an email and shows the raw id for `svc_`/`sys`; attribution is correct, only the SA display name is unresolved.
 
 ## Observability (migration 00002 + code)
 
-- [ ] Rewrite `trace_sampler_settings.updated_by` `BIGINT` -> `VARCHAR(40)`; backfill `usr_<id>`.
-- [ ] `tracingadmin`/`tracingconfig`: stamp `Principal.ID`; audit sets `Actor`.
+- [x] Rewrite `trace_sampler_settings.updated_by` to `VARCHAR(40)`; tracing-admin store + audit thread `Principal.ID` / set `Actor`.
 
 ## Rules (migration 00003 + code)
 
-- [ ] Rewrite values in `detection_exclusions`, `detection_rule_settings`, `app_control_policies`, `app_control_rules` attribution columns: `"user:<id>" -> usr_<id>`, `"system" -> sys`; change column default to `'sys'`.
-- [ ] `detectionconfig/store.go` + `appcontrol/store.go`/`service.go`: the `actor is required` gates accept any non-empty principal id; a service-account write satisfies them (closes #518).
-- [ ] Delete `actorIdentifier` / `actorIdentifierFromContext` / `parseUserActorID`; stamp `Principal.ID` directly; audit sets `Actor`.
-- [ ] Replace the detection-config `userEmailResolver` / `SetUserEmailResolver` / `resolveCreatedByEmails` with the identity principal-label resolver; the `created_by_email`-style field is filled for service accounts too.
-- [ ] `rules/bootstrap`: drop the `UserEmailByID` dep in favor of the principal resolver.
+- [x] Rewrite the `detection_*` + `app_control_*` attribution values (`user:<id>` -> `usr_<id>`, `system` -> `sys`) and change the column defaults to `'sys'`.
+- [x] The `actor is required` store gates accept any non-empty principal id; a service-account write satisfies them (closes #518).
+- [x] `actorIdentifier` / `actorIdentifierFromContext` return `Principal.ID`; audit emitters set `Actor`.
+- [ ] DEFERRED with the resolver above: `created_by_email` for service-account authors.
 
 ## Detection (migration 00008 + code)
 
-- [ ] Rewrite `alerts.updated_by` `BIGINT` -> `VARCHAR(40)`; backfill `usr_<id>`.
-- [ ] `detection/internal/mysql/alerts.go` + `operator/handler.go` + `service/service.go`: stamp/read `Principal.ID`; the `UserExists` FK-replacement check becomes a principal existence check; audit sets `Actor`.
-
-## cmd/main wiring
-
-- [ ] Remove `userEmailByIDFromIdentity`; wire the single principal-label resolver into the rules + detection bootstraps.
+- [x] Rewrite `alerts.updated_by` to `VARCHAR(40)`; operator/service/store thread the principal id; audit sets `Actor`.
+- [x] Refinement: the `UserExists` FK-replacement check runs only for a user principal (parsed from `usr_<id>`); a service-account/system principal is trusted from the authenticated actor.
 
 ## Cross-cutting tests
 
-- [ ] `PrincipalRef.UserID()` negative cases: `(0, false)` for `svc_`/`sys`/malformed/empty ids; `(n, true)` only for well-formed `usr_<n>`.
-- [ ] System-write test: an env-seed / background mutation records `sys` (never `NULL` or `"system"`); deleted-principal tombstone keeps the id resolvable.
-- [ ] #518 regression: table over every authed write route exercised with a service-account actor; assert no `actor is required` rejection and an audit row + per-row attribution of `svc_<id>`.
-- [ ] Integration: SA SSO update, SA detection-config exclusion create, SA app-control rule create each record `svc_<id>` in the audit row and the attribution column.
-- [ ] Audit reader: a deleted user's history resolves the snapshot label with no join.
-- [ ] Spectrace markers reference the new/modified scenario IDs in the delta specs.
+- [x] `PrincipalRef.UserID()` negative cases; JSON round-trip; mint/parse PBT.
+- [x] System-write + deleted-user snapshot tests (audit label survives, no join); direct service-account audit-snapshot.
+- [x] #518 regression: a service-account actor over the detection-config write routes asserts no `actor is required` rejection and `svc_<id>` attribution.
+- [x] Integration: SA SSO update records `svc_<id>` on both `updated_by` columns; SA detection-config exclusion create records `svc_<id>`.
+- [ ] DEFERRED: SA app-control rule create via the full REST harness (covered structurally by the shared `actorIdentifierFromContext` path the route-sweep exercises).
 
 ## Docs
 
-- [ ] ADR-0017 (done in this change) and the openspec delta; note the deferred items (api_token reconciliation, role_bindings unification, delegation, agent principal).
+- [x] ADR-0017 + the openspec delta (on main); deferred items (api_token reconciliation, role_bindings unification, delegation, agent principal) recorded in the ADR.

@@ -54,7 +54,7 @@ func (s *Store) EnsureDefaultPolicy(ctx context.Context) error {
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT IGNORE INTO app_control_policies (name, description, version, default_action, created_by, updated_by)
-		 VALUES (?, ?, 1, 'NONE', 'system', 'system')`,
+		 VALUES (?, ?, 1, 'NONE', 'sys', 'sys')`,
 		api.DefaultPolicyName,
 		"Default application control policy. Add rules to block executables by SHA-256 hash or signing identity.",
 	); err != nil {
