@@ -112,6 +112,9 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 
 	var cfg setupConfig
 	for _, opt := range opts {
+		if opt == nil { // tolerate a nil from the conditional-option idiom (var o Option; if cond { o = WithX() }; Setup(t, o))
+			continue
+		}
 		opt(&cfg)
 	}
 

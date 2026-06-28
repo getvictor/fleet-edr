@@ -43,6 +43,9 @@ const (
 	scaleGateMaxBacklog = 5000
 	// scaleGateBacklogPoll is how often the gate samples the queue depth during the run.
 	scaleGateBacklogPoll = 1 * time.Second
+	// scaleGateQueryTimeout bounds a single backlog COUNT so a stuck query cannot stall sampling for the rest of the lane (mirrors
+	// the scale runner's backlogQueryTimeout, which is unexported to this external test package).
+	scaleGateQueryTimeout = 5 * time.Second
 )
 
 // TestScaleGate_BacklogBounded is the per-RC gate: 200 hosts, production processor fan-out, backlog must stay bounded.
@@ -56,8 +59,10 @@ func TestScaleGate_BacklogBounded(t *testing.T) {
 
 	// Sample the server-side processing backlog (not-yet-acked rows) for the life of the run and keep the max. integration.Setup is
 	// in-process against a per-test DB whose DSN the scale runner's BacklogDSN sampler can't reach, so the gate polls the stack's own
-	// DB handle directly with the same query the runner's sampler uses.
-	maxBacklog := pollMaxBacklog(ctx, t, stack)
+	// DB handle directly with the same query the runner's sampler uses. The probe is stopped and joined after the run, and the gate
+	// requires at least one successful sample so a broken COUNT / unusable DB fails the gate closed rather than passing vacuously.
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	probe := startBacklogProbe(probeCtx, stack)
 
 	opts := scale.Options{
 		HostCount:         scaleGateHosts,
@@ -79,27 +84,39 @@ func TestScaleGate_BacklogBounded(t *testing.T) {
 
 	rep, err := scale.Run(ctx, opts)
 	require.NoError(t, err, "scale.Run gate lane")
-	cancel() // stop the backlog sampler before reading its result
 
-	got := maxBacklog()
-	t.Logf("scale gate: %d hosts, %d observations, errors=%d, p99=%s, max_backlog=%d (ceiling %d)",
-		rep.HostCount, rep.ObservationCount, rep.ErrorCount, rep.LatencyP99, got, scaleGateMaxBacklog)
+	stopProbe()  // stop sampling now the lane is done
+	probe.wait() // join the sampler goroutine so no query races the test teardown
+	maxDepth, samples := probe.result()
+
+	t.Logf("scale gate: %d hosts, %d observations, errors=%d, p99=%s, max_backlog=%d over %d samples (ceiling %d)",
+		rep.HostCount, rep.ObservationCount, rep.ErrorCount, rep.LatencyP99, maxDepth, samples, scaleGateMaxBacklog)
+
+	// Fail closed: if the COUNT query / DB handle was unusable the whole run, maxDepth stays 0 and the ceiling check would pass
+	// vacuously, silently disabling the gate. Require that sampling actually happened.
+	require.Positive(t, samples, "backlog sampler took no successful samples; the gate cannot vouch for the backlog (fail closed)")
 
 	assert.Zero(t, rep.ErrorCount, "no ingest errors at the gate fan-out (enroll cap is 1000/min in-process); last error per host is in PerHost")
-	assert.Greater(t, rep.ObservationCount, scaleGateHosts, "every host posts at least once over the lane")
-	assert.Lessf(t, got, int64(scaleGateMaxBacklog),
-		"event_queue backlog must stay bounded (got max %d, ceiling %d): a processor-throughput regression makes this diverge", got, scaleGateMaxBacklog)
+	assert.GreaterOrEqual(t, rep.ObservationCount, scaleGateHosts, "every host posts at least once over the lane")
+	assert.LessOrEqualf(t, maxDepth, int64(scaleGateMaxBacklog),
+		"event_queue backlog must not exceed the ceiling (got max %d, ceiling %d): a processor-throughput regression makes this diverge", maxDepth, scaleGateMaxBacklog)
 }
 
-// pollMaxBacklog starts a goroutine that samples the event_queue processing backlog every scaleGateBacklogPoll until ctx is done,
-// and returns a getter for the maximum observed depth. Mirrors backlogSampler's query without needing a separate DSN.
-func pollMaxBacklog(ctx context.Context, t *testing.T, stack *integration.Stack) func() int64 {
-	t.Helper()
-	var (
-		mu       sync.Mutex
-		maxDepth int64
-	)
+// backlogProbe samples the event_queue processing backlog on an interval for the life of a run, tracking the maximum observed depth
+// and the count of successful samples. Mirrors the scale runner's backlogSampler query without a separate DSN, and fails closed: the
+// caller requires samples > 0 so a broken query cannot leave maxDepth at 0 and pass the gate vacuously.
+type backlogProbe struct {
+	done     chan struct{}
+	mu       sync.Mutex
+	maxDepth int64
+	samples  int
+}
+
+// startBacklogProbe launches the sampler bound to ctx; cancel ctx to stop it, then wait() to join.
+func startBacklogProbe(ctx context.Context, stack *integration.Stack) *backlogProbe {
+	p := &backlogProbe{done: make(chan struct{})}
 	go func() {
+		defer close(p.done)
 		ticker := time.NewTicker(scaleGateBacklogPoll)
 		defer ticker.Stop()
 		for {
@@ -107,21 +124,29 @@ func pollMaxBacklog(ctx context.Context, t *testing.T, stack *integration.Stack)
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				qctx, cancel := context.WithTimeout(ctx, scaleGateQueryTimeout)
 				var depth int64
-				if err := stack.DB.GetContext(ctx, &depth, "SELECT COUNT(*) FROM event_queue WHERE processed != 1"); err != nil {
-					continue // a transient read error during a sample is not the gate's concern; the next tick re-samples
+				err := stack.DB.GetContext(qctx, &depth, "SELECT COUNT(*) FROM event_queue WHERE processed != 1")
+				cancel()
+				if err != nil {
+					continue // a transient read error on one tick is recovered by the next; require(samples > 0) guards a total failure
 				}
-				mu.Lock()
-				if depth > maxDepth {
-					maxDepth = depth
+				p.mu.Lock()
+				p.samples++
+				if depth > p.maxDepth {
+					p.maxDepth = depth
 				}
-				mu.Unlock()
+				p.mu.Unlock()
 			}
 		}
 	}()
-	return func() int64 {
-		mu.Lock()
-		defer mu.Unlock()
-		return maxDepth
-	}
+	return p
+}
+
+func (p *backlogProbe) wait() { <-p.done }
+
+func (p *backlogProbe) result() (maxDepth int64, samples int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxDepth, p.samples
 }
