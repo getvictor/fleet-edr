@@ -16,6 +16,8 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"golang.org/x/crypto/argon2"
+
+	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // argon2id parameters per OWASP Password Storage Cheat Sheet 2024. ~30 ms per hash on M-series Mac; the hot path (login verify) hashes
@@ -122,7 +124,24 @@ func (s *Store) Create(ctx context.Context, req CreateRequest) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("last insert id: %w", err)
 	}
+	if err := ensureUserPrincipal(ctx, s.db, id, email); err != nil {
+		return nil, err
+	}
 	return s.Get(ctx, id)
+}
+
+// ensureUserPrincipal inserts (idempotently) the principals spine row for a user, so the user is attributable as a typed principal and
+// can be referenced by the principal-FK attribution columns. The display label is the user's email, snapshotted onto audit rows. See
+// ADR-0017.
+func ensureUserPrincipal(ctx context.Context, ec Executor, userID int64, email string) error {
+	_, err := ec.ExecContext(ctx,
+		`INSERT INTO principals (id, type, display_label) VALUES (?, 'user', ?)
+		 ON DUPLICATE KEY UPDATE display_label = VALUES(display_label)`,
+		api.UserPrincipalID(userID), email)
+	if err != nil {
+		return fmt.Errorf("ensure user principal: %w", err)
+	}
+	return nil
 }
 
 // CreateOIDCRequest is the shape accepted by CreateOIDC. password_* columns are NULL on the resulting row: OIDC users have no
@@ -156,6 +175,10 @@ func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCReque
 	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, fmt.Errorf("last insert id: %w", err)
+	}
+	// Same executor (the caller's tx) so the principal row commits or rolls back atomically with the user + identity + role-binding inserts.
+	if err := ensureUserPrincipal(ctx, ec, id, email); err != nil {
+		return nil, err
 	}
 	return &User{
 		ID:           id,
@@ -208,6 +231,9 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 	// silently flipping the row's flag and stranding the existing password.
 	if !u.IsBreakglass {
 		return &u, ErrExistingNonBreakglass
+	}
+	if err := ensureUserPrincipal(ctx, s.db, u.ID, email); err != nil {
+		return nil, err
 	}
 	return &u, nil
 }

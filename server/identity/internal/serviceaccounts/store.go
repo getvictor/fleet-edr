@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+
+	"github.com/fleetdm/edr/server/identity/api"
 )
 
 // clientIDPrefix and secretPrefix are self-describing so a leaked secret is greppable by secret-scanners and a client id is
@@ -101,6 +103,14 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (ServiceAccount, str
 	id, err := res.LastInsertId()
 	if err != nil {
 		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: last insert id: %w", err)
+	}
+	// The service account is a typed principal: insert its spine row so it is attributable and can be referenced by principal-FK
+	// attribution columns. The display label is its name, snapshotted onto audit rows. See ADR-0017.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO principals (id, type, display_label) VALUES (?, 'service_account', ?)
+		 ON DUPLICATE KEY UPDATE display_label = VALUES(display_label)`,
+		api.ServiceAccountPrincipalID(id), in.Name); err != nil {
+		return ServiceAccount{}, "", fmt.Errorf("serviceaccounts: ensure principal: %w", err)
 	}
 	sa, err := s.getByID(ctx, id)
 	if err != nil {

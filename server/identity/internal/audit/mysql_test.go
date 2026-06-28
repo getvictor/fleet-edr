@@ -80,10 +80,10 @@ func TestRecord_RoundTrip(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), r.OccurredAt, 30*time.Second)
 }
 
-// When the caller does not supply ActorEmail, the Recorder must look it up from the users table by UserID and denormalise it onto the
-// row so the audit row stays attributable after the user is later deleted. This is the key durability promise behind the cross-context
-// recordX helpers, which only have user_id from ctx (no email).
-func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
+// The Recorder snapshots the acting principal (id + display label) onto the row at write time, so the row stays attributable with no
+// join and survives the user later being deleted. ADR-0017 replaced the live users-table email lookup with this snapshot. The store's
+// bridge derives the principal from a legacy UserID/ActorEmail caller until every caller sets Actor directly.
+func TestRecord_SnapshotsActorPrincipal(t *testing.T) {
 	t.Parallel()
 	store, db := newStore(t)
 	const userID = int64(99)
@@ -91,25 +91,26 @@ func TestRecord_AutoResolvesActorEmailFromUserID(t *testing.T) {
 
 	uid := userID
 	require.NoError(t, store.Record(t.Context(), api.AuditEvent{
-		UserID: &uid,
-		Action: api.AuditAlertAcknowledge,
-		// ActorEmail intentionally empty; Recorder should fill it from the users row.
+		UserID:     &uid,
+		ActorEmail: "operator-99@test",
+		Action:     api.AuditAlertAcknowledge,
 	}))
 
 	rows, err := store.List(t.Context(), api.AuditFilter{Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "operator-99@test", rows[0].UserEmail)
+	assert.Equal(t, "usr_99", rows[0].Actor.ID)
+	assert.Equal(t, api.PrincipalUser, rows[0].Actor.Type)
+	assert.Equal(t, "operator-99@test", rows[0].UserEmail, "snapshot label is surfaced as UserEmail for back-compat")
 
-	// And after the user is deleted, the denormalised email survives so the audit row stays attributable. Pre-deletion the LEFT JOIN
-	// returns the live email; post-deletion the join is empty and the reader falls back to the actor_email column captured at record time.
+	// The snapshot survives user deletion: no join means the label captured at write time is authoritative.
 	_, err = db.ExecContext(t.Context(), `DELETE FROM users WHERE id = ?`, userID)
 	require.NoError(t, err)
 	rowsAfter, err := store.List(t.Context(), api.AuditFilter{Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, rowsAfter, 1)
 	assert.Equal(t, "operator-99@test", rowsAfter[0].UserEmail,
-		"denormalised actor_email must survive user deletion")
+		"snapshot label must survive user deletion")
 }
 
 // login_failed rows have no user_id (the email may be unknown). The retrieval endpoint must surface them with the attempted email so a
@@ -256,7 +257,8 @@ func TestRecord_EmitsInfoLogOnSuccess(t *testing.T) {
 	assert.Equal(t, "auth.login.success", entry["action"])
 	assert.Equal(t, "user", entry["target_type"])
 	assert.Equal(t, "7", entry["target_id"])
-	assert.Equal(t, "operator-7@test", entry["actor_email"])
+	assert.Equal(t, "operator-7@test", entry["actor_label"])
+	assert.Equal(t, "usr_7", entry["actor_principal_id"])
 	assert.InDelta(t, float64(userID), entry["edr.user.id"], 0)
 
 	payload, ok := entry["payload"].(map[string]any)
