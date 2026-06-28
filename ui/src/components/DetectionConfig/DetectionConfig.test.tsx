@@ -290,18 +290,22 @@ describe("DetectionConfig", () => {
     expect(modes).toEqual(["monitor", "alert", "disabled"]);
   });
 
-  // created_by shows the server-resolved email when present, falling back to the raw "user:<id>" identifier otherwise.
+  // created_by shows the server-resolved label (a user's email or a service account's name) when present, falling back to the raw
+  // principal identifier otherwise.
   // spec:web-ui/detection-configuration-admin-views/exclusion-author-is-shown-as-a-resolved-email
-  it("renders created_by_email when the server resolves it, else the raw identifier", async () => {
+  // spec:web-ui/detection-configuration-admin-views/exclusion-author-shows-a-service-account-name
+  it("renders created_by_label (user email or service-account name) when resolved, else the raw identifier", async () => {
     stubReads({
       exclusions: [
-        makeExclusion({ id: 1, created_by: "user:8", created_by_email: "ops@fleetdm.com" }),
-        makeExclusion({ id: 2, created_by: "user:9" }),
+        makeExclusion({ id: 1, created_by: "usr_8", created_by_label: "ops@fleetdm.com" }),
+        makeExclusion({ id: 2, created_by: "svc_5", created_by_label: "ci-bot" }),
+        makeExclusion({ id: 3, created_by: "usr_9" }),
       ],
     });
     renderPage();
     await waitFor(() => { expect(screen.getByText("ops@fleetdm.com")).toBeInTheDocument(); });
-    expect(screen.getByText("user:9")).toBeInTheDocument();
+    expect(screen.getByText("ci-bot")).toBeInTheDocument();
+    expect(screen.getByText("usr_9")).toBeInTheDocument();
   });
 
   it("re-enabling a rule (mode -> alert) applies immediately with a generated reason and no modal", async () => {

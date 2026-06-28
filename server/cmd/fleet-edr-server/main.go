@@ -466,7 +466,7 @@ func openRules(
 		Logger:               logger,
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
-		UserEmailByID:        userEmailByIDFromIdentity(identityCtx.Service()),
+		PrincipalLabel:       identityCtx.Service().PrincipalLabel,
 		CommandBatchInserter: responseCtx.Service().InsertBatch,
 		HostLister:           hostListerFromDetection(detectionCtx.Service()),
 	})
@@ -479,19 +479,6 @@ func openRules(
 		return nil, err
 	}
 	return rulesCtx, nil
-}
-
-// userEmailByIDFromIdentity adapts identity's Service.GetUser to the rules-context UserEmailByID closure shape used to resolve an
-// exclusion's created_by ("user:<id>") to a display email. Lives in cmd/main because, like the host-lister projection, it is part of
-// the cross-context dep wiring: rules can't import identity/bootstrap without breaking the bounded-context import rule (ADR-0004).
-func userEmailByIDFromIdentity(svc identityapi.Service) func(context.Context, int64) (string, error) {
-	return func(ctx context.Context, userID int64) (string, error) {
-		u, err := svc.GetUser(ctx, userID)
-		if err != nil {
-			return "", err
-		}
-		return u.Email, nil
-	}
 }
 
 // hostListerFromDetection projects detection's ListHosts (returns the richer HostSummary shape) down to the appcontrol.HostLister

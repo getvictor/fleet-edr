@@ -21,7 +21,14 @@ type service struct {
 	users    *users.Store
 	sessions *sessions.Store
 	rbac     *rbac.Store
+	saNames  serviceAccountNamer
 	logger   *slog.Logger
+}
+
+// serviceAccountNamer is the subset of the service-account store the principal-label resolver needs (svc_<id> -> name). An interface
+// keeps service.New decoupled from the full SA store and lets tests inject a fake.
+type serviceAccountNamer interface {
+	NameByID(ctx context.Context, id int64) (string, error)
 }
 
 // New constructs a Service. The Service is the cross-context entry point
@@ -32,8 +39,39 @@ type service struct {
 // All inputs are required to be non-nil; bootstrap.New is the only caller
 // and provides them via Deps. A nil-defensive branch here would be dead
 // code, so we trust the caller.
-func New(u *users.Store, s *sessions.Store, r *rbac.Store, logger *slog.Logger) api.Service {
-	return &service{users: u, sessions: s, rbac: r, logger: logger}
+func New(u *users.Store, s *sessions.Store, r *rbac.Store, saNames serviceAccountNamer, logger *slog.Logger) api.Service {
+	return &service{users: u, sessions: s, rbac: r, saNames: saNames, logger: logger}
+}
+
+// PrincipalLabel resolves a principal id to its current display label by dispatching on the id prefix: a user to its live email, a
+// service account to its live name, the system principal to "system". An unrecognized id yields "". See ADR-0017.
+func (s *service) PrincipalLabel(ctx context.Context, principalID string) (string, error) {
+	typ, ok := api.PrincipalTypeForID(principalID)
+	if !ok {
+		return "", nil
+	}
+	switch typ {
+	case api.PrincipalSystem:
+		return "system", nil
+	case api.PrincipalUser:
+		uid, ok := (api.PrincipalRef{ID: principalID}).UserID()
+		if !ok {
+			return "", nil
+		}
+		u, err := s.GetUser(ctx, uid)
+		if err != nil {
+			return "", err
+		}
+		return u.Email, nil
+	case api.PrincipalServiceAccount:
+		said, ok := (api.PrincipalRef{ID: principalID}).ServiceAccountID()
+		if !ok || s.saNames == nil {
+			return "", nil
+		}
+		return s.saNames.NameByID(ctx, said)
+	default:
+		return "", nil
+	}
 }
 
 func (s *service) Logout(ctx context.Context, sessionToken []byte) error {

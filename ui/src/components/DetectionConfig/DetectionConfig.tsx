@@ -304,7 +304,7 @@ export function DetectionConfig() {
                       <td><code>{ex.value}</code></td>
                       <td>{ex.reason}</td>
                       <td>{ex.expires_at ? ex.expires_at.split("T")[0] : "never"}</td>
-                      <td>{ex.created_by_email || ex.created_by}</td>
+                      <td>{ex.created_by_label || ex.created_by}</td>
                       {canWrite && (
                         <td>
                           <Button variant="alert" disabled={mutating} onClick={() => { handleDelete(ex.id); }}

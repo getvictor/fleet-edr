@@ -82,6 +82,20 @@ func (p PrincipalRef) UserID() (int64, bool) {
 	return n, true
 }
 
+// ServiceAccountID returns the numeric service_accounts.id when this principal is a service account, parsing it out of the svc_<n> id.
+// Used by the principal-label resolver to look up a service account's display name. Returns ok=false for any non-service-account id.
+func (p PrincipalRef) ServiceAccountID() (int64, bool) {
+	rest, ok := strings.CutPrefix(p.ID, principalServiceAccountPrefix)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
 // PrincipalTypeForID reports the principal type encoded in a bare id's prefix. It is the read-side inverse of the mint helpers: code
 // that loads an attribution-column string uses it to recover the type without a database lookup. ok is false for an id carrying no
 // recognized prefix (a malformed or legacy value).

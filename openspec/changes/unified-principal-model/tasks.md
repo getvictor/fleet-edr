@@ -24,7 +24,7 @@
 - [x] `useradmin` self-edit check uses `Principal.UserID()`.
 - [x] Delete the #515 SSO `NULL` stopgap; SSO + app-config update stamps `Principal.ID`.
 - [x] `ssoconfig`/`appconfig` stores: `updated_by` is the principal id string (defaults to `sys`).
-- [ ] DEFERRED (display polish, follow-up): a single identity-owned principal-label resolver that resolves any principal type. Today the detection-config exclusions list resolves `usr_<id>` authors to an email and shows the raw id for `svc_`/`sys`; attribution is correct, only the SA display name is unresolved.
+- [x] A single identity-owned principal-label resolver (`Service.PrincipalLabel`) that resolves any principal type: a user to its email, a service account to its name, the system principal to "system". The detection-config exclusions list now resolves every author through it.
 
 ## Observability (migration 00002 + code)
 
@@ -35,7 +35,7 @@
 - [x] Rewrite the `detection_*` + `app_control_*` attribution values (`user:<id>` -> `usr_<id>`, `system` -> `sys`) and change the column defaults to `'sys'`.
 - [x] The `actor is required` store gates accept any non-empty principal id; a service-account write satisfies them (closes #518).
 - [x] `actorIdentifier` / `actorIdentifierFromContext` return `Principal.ID`; audit emitters set `Actor`.
-- [ ] DEFERRED with the resolver above: `created_by_email` for service-account authors.
+- [x] The exclusions list exposes `created_by_label` (a user's email or a service account's name), resolved via `Service.PrincipalLabel`. Replaces the user-only `created_by_email`.
 
 ## Detection (migration 00008 + code)
 

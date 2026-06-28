@@ -42,7 +42,7 @@ func setupServer(t *testing.T) (*httptest.Server, *users.Store, *sessions.Store)
 	us := users.New(db)
 	ss := sessions.New(db, sessions.Options{})
 	rb := rbac.New(db)
-	svc := service.New(us, ss, rb, slog.Default())
+	svc := service.New(us, ss, rb, nil, slog.Default())
 
 	h := login.New(svc, login.Options{
 		CookieSecure: false, // httptest is plain HTTP; browsers would reject Secure anyway.

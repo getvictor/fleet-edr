@@ -222,6 +222,20 @@ func (s *Store) RevocationEntries(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
+// NameByID returns the display name for a service account id, used to resolve a svc_<id> principal to its label for attribution
+// display. Returns ErrNotFound when no row matches.
+func (s *Store) NameByID(ctx context.Context, id int64) (string, error) {
+	var name string
+	err := s.db.GetContext(ctx, &name, `SELECT name FROM service_accounts WHERE id = ?`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("serviceaccounts: name by id: %w", err)
+	}
+	return name, nil
+}
+
 func (s *Store) getByID(ctx context.Context, id int64) (ServiceAccount, error) {
 	var sa ServiceAccount
 	err := s.db.GetContext(ctx, &sa, `
