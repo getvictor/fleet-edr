@@ -1,0 +1,25 @@
+{
+  "start_time": "2026-06-28T19:45:54.987836+01:00",
+  "end_time": "2026-06-28T19:50:54.989491+01:00",
+  "duration": 300002654917,
+  "host_count": 500,
+  "quiet_host_count": 400,
+  "active_host_count": 100,
+  "observation_count": 6388,
+  "error_count": 350,
+  "latency_p50": 4380166,
+  "latency_p95": 10102083,
+  "latency_p99": 17637292,
+  "latency_max": 53998708,
+  "observations_per_sec": 21.29314489489212,
+  "pass": false,
+  "pass_p99": 5000000000,
+  "fail_reasons": [
+    "error_count > 0 (got 350)"
+  ],
+  "server_backlog_samples": 60,
+  "server_backlog_p95": 15,
+  "server_backlog_p99": 17,
+  "server_backlog_max": 17,
+  "pass_max_server_backlog": 5000
+}
