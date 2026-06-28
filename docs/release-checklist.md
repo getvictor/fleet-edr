@@ -45,6 +45,7 @@ These layers do not run per-PR (`docs/testing-strategy.md`); the RC is where the
 
 - The macOS VM end-to-end run: real Swift extensions + real agent + real server on a SIP-enabled, Gatekeeper-enabled VM. Any agent/extension change touching ESF, XPC, or the event wire format MUST be exercised here since the last release.
 - The detection-efficacy run: the MITRE-aligned attack corpus, asserting each shipped rule fires within its SLA (detection rate gate) and the noise corpus stays clean (false-positive gate).
+- The single-replica scale gate (#203): `scale.yml` runs automatically on the `v*-rc.*` tag push and asserts the `event_queue` processing backlog stays bounded under a 200-host lane with the production processor fan-out. Confirm that check is green on the RC before promoting (or run `task uat:scale:gate` locally). The full 500-host reference is the committed baseline (`test/scale/baselines/post-535-500host.json`); re-capture it on a dev box with `task uat:scale -- --hosts=500 ...` if the throughput path changed materially.
 
 ## 5. Manual UI review
 

@@ -334,6 +334,14 @@ tasks:
     cmds:
       - go run ./test/scale/scaledriver {{.CLI_ARGS}}
 
+  uat:scale:gate:
+    desc: |
+      Run the per-RC scale gate (#203): a 200-host in-process lane (integration.Setup, production processor fan-out)
+      that asserts the event_queue backlog stays bounded. This is what .github/workflows/scale.yml runs on RC tags +
+      weekly; run it locally before promoting an RC. Needs a test MySQL (EDR_TEST_DSN); ~2 min wall.
+    cmds:
+      - go test -tags "integration scalegate" -v -count=1 -timeout=10m -run TestScaleGate_BacklogBounded ./test/scale/...
+
   test:go:server:coverage:
     desc: |
       Server + shared coverage flavor of test:go:server. Emits coverage-server.out
