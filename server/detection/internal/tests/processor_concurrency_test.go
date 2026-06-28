@@ -38,7 +38,7 @@ func TestProcessor_IntraReplicaConcurrencyDrainsCompletely(t *testing.T) {
 	require.NoError(t, vis.ApplySchema(ctx))
 	eventLog := vis.EventLog()
 
-	store, err := mysql.New(db, detectiontestkit.NewMemArchive())
+	store, err := mysql.New(db, detectiontestkit.NewMemArchive(), nil)
 	require.NoError(t, err)
 	builder := graph.NewBuilder(store, discardLogger())
 
@@ -78,7 +78,9 @@ func TestProcessor_IntraReplicaConcurrencyDrainsCompletely(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			t.Log("processor did not stop within 2s of cancel")
+			// Fail rather than log: this is the only direct coverage of Run teardown, so a worker-loop deadlock that leaves the
+			// goroutine alive must surface as a test failure, not a silent leak into the rest of the suite.
+			t.Errorf("processor did not stop within 2s of cancel")
 		}
 	})
 

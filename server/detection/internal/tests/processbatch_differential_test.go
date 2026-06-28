@@ -13,6 +13,7 @@
 package tests
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -141,7 +142,7 @@ func requireBatchInvariant(t *testing.T, db *sqlx.DB, bRef, bBatch *graph.Builde
 	refEvents := rewriteHost(baseEvents, refHost)
 	// The per-event reference processes in timestamp order, mirroring ProcessBatch's internal stable sort, then applies each event
 	// as its own batch so every read sees the committed state of the prior event.
-	slices.SortStableFunc(refEvents, func(a, b api.Event) int { return int(a.TimestampNs - b.TimestampNs) })
+	slices.SortStableFunc(refEvents, func(a, b api.Event) int { return cmp.Compare(a.TimestampNs, b.TimestampNs) })
 	for _, e := range refEvents {
 		require.NoError(t, bRef.ProcessBatch(ctx, []api.Event{e}))
 	}
@@ -157,7 +158,7 @@ func requireBatchInvariant(t *testing.T, db *sqlx.DB, bRef, bBatch *graph.Builde
 func twoBuilders(t *testing.T) (*graph.Builder, *graph.Builder, *sqlx.DB) {
 	t.Helper()
 	db := full.Open(t)
-	store, err := mysql.New(db, detectiontestkit.NewMemArchive())
+	store, err := mysql.New(db, detectiontestkit.NewMemArchive(), nil)
 	require.NoError(t, err)
 	return graph.NewBuilder(store, discardLogger()), graph.NewBuilder(store, discardLogger()), db
 }

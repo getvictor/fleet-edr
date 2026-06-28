@@ -43,6 +43,11 @@ func NewProcessor(
 	if concurrency < 1 {
 		concurrency = 1
 	}
+	// A non-positive batch size would make the drain loop (`for processOnce(ctx) >= p.batch`) spin: an empty claim returns 0 and
+	// 0 >= 0 stays true forever. Clamp to at least 1 so an empty queue always breaks the drain and yields back to the ticker.
+	if batchSize < 1 {
+		batchSize = 1
+	}
 	return &Processor{
 		eventLog:    eventLog,
 		builder:     builder,
@@ -130,7 +135,11 @@ func (p *Processor) processOnce(ctx context.Context) int {
 	}
 
 	if err := p.eventLog.Ack(ctx, eventIDs); err != nil {
+		// The batch processed but the queue was not durably advanced (the rows stay leased until the claim lease expires).
+		// Returning 0 stops the drain loop so the worker waits for the next tick rather than treating this as a full-batch
+		// drain and immediately re-claiming, which would spread a transient ack outage into a tight re-processing loop.
 		p.logger.ErrorContext(ctx, "ack events", "err", err)
+		return 0
 	}
 	return len(events)
 }

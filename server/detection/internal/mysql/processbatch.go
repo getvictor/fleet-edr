@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -25,6 +26,11 @@ const loadKeyChunk = 1000
 // processUpdateChunk caps the rows folded into one set-based UPDATE. Each row binds 14 CASE values plus one IN-list id (15
 // placeholders), so a few hundred per chunk keeps the statement well bounded.
 const processUpdateChunk = 200
+
+// insertRowChunk caps the rows folded into one multi-row INSERT. Each row binds 21 placeholders, so this keeps the statement under
+// MySQL's ~65k placeholder ceiling even if the configured processing batch grows well beyond today's default; the preload and
+// update paths are chunked for the same reason.
+const insertRowChunk = 1000
 
 // HostPID identifies a process lineage key for the batch preload.
 type HostPID struct {
@@ -167,8 +173,20 @@ func (s *Store) insertNewRowsBatched(ctx context.Context, ext sqlx.ExtContext, r
 		return nil
 	}
 	if hasSameBatchLink(rows) {
-		return insertNewRowsLinked(ctx, ext, rows, false)
+		return insertNewRowsLinked(ctx, ext, rows, false, s.logger)
 	}
+	for start := 0; start < len(rows); start += insertRowChunk {
+		end := min(start+insertRowChunk, len(rows))
+		if err := insertNewRowsChunk(ctx, ext, rows[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// insertNewRowsChunk emits one multi-row INSERT for up to insertRowChunk rows. Used only on the no-same-batch-link path, so every
+// previous_exec_id is already a real id (or nil) and no post-insert id resolution is needed.
+func insertNewRowsChunk(ctx context.Context, ext sqlx.ExtContext, rows []NewProcessRow) error {
 	var sb strings.Builder
 	sb.WriteString(insertProcessColumns)
 	sb.WriteString(" VALUES ")
@@ -200,8 +218,9 @@ func hasSameBatchLink(rows []NewProcessRow) bool {
 // insertNewRowsLinked inserts the new rows one at a time in creation order, resolving each same-batch re-exec link to the real id
 // the predecessor received. Creation order guarantees a predecessor is inserted before the child that links to it. When dropPoison
 // is true a per-row permanent data error drops that row (and any later row whose predecessor was dropped loses its link) instead of
-// failing; a transient error always aborts.
-func insertNewRowsLinked(ctx context.Context, ext sqlx.ExtContext, rows []NewProcessRow, dropPoison bool) error {
+// failing; a transient error always aborts. A dropped row is logged so an unpersistable (e.g. attacker-influenced) process row
+// leaves an audit trail rather than vanishing silently (issue #535 review).
+func insertNewRowsLinked(ctx context.Context, ext sqlx.ExtContext, rows []NewProcessRow, dropPoison bool, logger *slog.Logger) error {
 	ids := make([]int64, len(rows)) // assigned id per row; 0 for a row that was dropped or has no predecessor
 	for i, r := range rows {
 		if r.PrevNewIndex >= 0 {
@@ -215,6 +234,8 @@ func insertNewRowsLinked(ctx context.Context, ext sqlx.ExtContext, rows []NewPro
 		id, err := insertOneProcessRow(ctx, ext, r.Proc)
 		if err != nil {
 			if dropPoison && IsPermanentDataError(err) {
+				logger.WarnContext(ctx, "process row dropped: permanent data error at flush",
+					"host_id", r.Proc.HostID, "pid", r.Proc.PID, "err", err)
 				continue // drop the poison row; ids[i] stays 0
 			}
 			return err
@@ -330,9 +351,9 @@ func updateColumnValue(col string, u ProcessRowUpdate) any {
 	}
 }
 
-// flushProcessBatchPerRow re-applies the plan one statement at a time in a fresh transaction, dropping rows that hit a permanent
-// data error and logging nothing here (the builder logs the drop with event context). Used only after the batched fast path failed
-// with a permanent error, so this slow path runs at most once per poison batch.
+// flushProcessBatchPerRow re-applies the plan one statement at a time in a fresh transaction, dropping (and logging) rows that hit a
+// permanent data error so one unpersistable row cannot wedge the batch (issue #379) while still leaving an audit trail (issue #535
+// review). Used only after the batched fast path failed with a permanent error, so this slow path runs at most once per poison batch.
 func (s *Store) flushProcessBatchPerRow(ctx context.Context, plan ProcessBatchPlan) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -340,12 +361,13 @@ func (s *Store) flushProcessBatchPerRow(ctx context.Context, plan ProcessBatchPl
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if err := insertNewRowsLinked(ctx, tx, plan.NewRows, true); err != nil {
+	if err := insertNewRowsLinked(ctx, tx, plan.NewRows, true, s.logger); err != nil {
 		return err
 	}
 	for _, u := range plan.Updates {
 		if err := updateRowsChunk(ctx, tx, []ProcessRowUpdate{u}); err != nil {
 			if IsPermanentDataError(err) {
+				s.logger.WarnContext(ctx, "process row update dropped: permanent data error at flush", "id", u.ID, "err", err)
 				continue // drop the poison update; the rest still applies
 			}
 			return err

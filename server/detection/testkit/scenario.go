@@ -39,7 +39,7 @@ type Scenario struct {
 func NewScenario(t *testing.T, db *sqlx.DB) *Scenario {
 	t.Helper()
 	archive := visibilitytestkit.NewMemArchive()
-	s, err := mysql.New(db, archive)
+	s, err := mysql.New(db, archive, nil)
 	require.NoError(t, err, "wrap test store")
 	return &Scenario{
 		Store:   s,

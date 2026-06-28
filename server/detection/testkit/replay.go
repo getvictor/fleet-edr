@@ -119,7 +119,7 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	ctx := t.Context()
 	require.NoError(t, ApplySchema(ctx, db), "apply detection schema")
 	archive := visibilitytestkit.NewMemArchive()
-	mysqlStore, err := mysql.New(db, archive)
+	mysqlStore, err := mysql.New(db, archive, nil)
 	require.NoError(t, err, "wrap test store")
 	require.NoError(t, archive.Insert(ctx, c.Events), "seed archive")
 

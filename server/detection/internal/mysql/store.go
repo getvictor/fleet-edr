@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/jmoiron/sqlx"
 
@@ -15,21 +16,27 @@ import (
 type Store struct {
 	db      *sqlx.DB
 	archive visibilityapi.EventArchive
+	logger  *slog.Logger
 }
 
 // New returns a Store wrapping the provided db handle and event archive. Schema is applied separately via detection/bootstrap.ApplySchema;
 // New just hands back the read/write surface. archive is required: post-cutover the detection store has no MySQL events table to read, so
-// correlation and evidence reads delegate to it. Tests pass an in-memory archive (visibility/testkit.MemArchive).
+// correlation and evidence reads delegate to it. Tests pass an in-memory archive (visibility/testkit.MemArchive). logger is used for the
+// rare diagnostic paths the store owns (e.g. a poison row dropped by the batch-flush per-row fallback, issue #535); nil defaults to
+// slog.Default().
 //
 // Closing the db handle is cmd/main's responsibility, not Store's.
-func New(db *sqlx.DB, archive visibilityapi.EventArchive) (*Store, error) {
+func New(db *sqlx.DB, archive visibilityapi.EventArchive, logger *slog.Logger) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("detection mysql.New: db handle must not be nil")
 	}
 	if archive == nil {
 		return nil, errors.New("detection mysql.New: event archive must not be nil")
 	}
-	return &Store{db: db, archive: archive}, nil
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Store{db: db, archive: archive, logger: logger}, nil
 }
 
 // DB returns the underlying *sqlx.DB. Used by integration tests that
