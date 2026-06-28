@@ -127,7 +127,7 @@ A large positive `client_server_delta_p99` points at network + balancer + agent-
 
 The ingest p99 gate measures the HTTP boundary; it says nothing about whether the detection processor keeps pace with ingest. After the ClickHouse cutover (ADR-0015) ingest fans out to the ClickHouse archive plus the MySQL `event_queue` work queue, and a single server replica's processor drains that queue at a finite rate. At a high enough host count the queue backlog grows during the lane (the processor falls behind) even while ingest latency stays green. A 500-host run on one replica grew the `event_queue` pending backlog to tens of thousands; the same load across three replicas kept it bounded under ~500 (the processor is not leader-gated and scales out via `FOR UPDATE SKIP LOCKED`, ADR-0011).
 
-To measure that, pass `--backlog-dsn` (the server's MySQL DSN). A background sampler polls the not-yet-acked `event_queue` depth every `--backlog-poll-interval` (default 5s) for the life of the run and records its percentiles:
+To measure that, pass `--backlog-dsn` (the server's MySQL DSN) in `direct` mode. A background sampler polls the not-yet-acked `event_queue` depth every `--backlog-poll-interval` (default 5s) for the life of the run and records its percentiles. The poll is direct-mode only (it measures the server's queue, not the agent's); passing `--backlog-dsn` in `headless` mode is rejected at startup rather than silently skipped, and `--pass-max-server-backlog` without a `--backlog-dsn` is rejected too (a ceiling with nothing to sample would be a false pass). Example output:
 
 ```json
 {

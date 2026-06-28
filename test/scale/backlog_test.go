@@ -4,7 +4,51 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestValidateOptionsBacklogGuards pins the two server-backlog misconfiguration guards: a ceiling with no DSN to sample, and a DSN
+// passed in headless mode where the sampler does not run. Both must fail loudly rather than silently no-op the gate (#536).
+func TestValidateOptionsBacklogGuards(t *testing.T) {
+	t.Parallel()
+	// base is a minimal otherwise-valid direct-mode Options; each case overlays the field under test.
+	base := func() Options {
+		return Options{
+			ServerURL:           "https://localhost:8090",
+			EnrollSecret:        "s",
+			QuietScenarioPath:   "q.yaml",
+			ActiveScenarioPaths: []string{"a.yaml"},
+		}
+	}
+
+	t.Run("PassMaxServerBacklog without BacklogDSN is rejected", func(t *testing.T) {
+		t.Parallel()
+		o := base()
+		o.PassMaxServerBacklog = 1000
+		_, err := validateOptions(o)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "PassMaxServerBacklog requires BacklogDSN")
+	})
+
+	t.Run("BacklogDSN in headless mode is rejected", func(t *testing.T) {
+		t.Parallel()
+		o := base()
+		o.Mode = ModeHeadless
+		o.BacklogDSN = "root:@tcp(127.0.0.1:33308)/edr"
+		_, err := validateOptions(o)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "only supported in direct mode")
+	})
+
+	t.Run("a backlog ceiling with a DSN in direct mode is accepted", func(t *testing.T) {
+		t.Parallel()
+		o := base()
+		o.BacklogDSN = "root:@tcp(127.0.0.1:33308)/edr"
+		o.PassMaxServerBacklog = 1000
+		_, err := validateOptions(o)
+		require.NoError(t, err)
+	})
+}
 
 // TestAggregateServerBacklog pins the pure aggregation + gate over a sampled-depth set, with no DB. The sampler that produces the
 // samples is exercised live by the long-form lane (it needs a real MySQL); these cases pin the percentile wiring and the gate

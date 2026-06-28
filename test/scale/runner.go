@@ -342,12 +342,16 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		})
 	}
 	_ = g.Wait()
+	// Cancel runCtx now that the hosts are done so the backlog sampler (bound to runCtx) exits promptly. Without this, hosts that
+	// return early (e.g. mass enroll failure) would leave the sampler running until opts.Duration, and backlog.stop() would block
+	// for the rest of the lane (Qodo #536). cancel() is idempotent with the deferred cancel above.
+	cancel()
 
 	rep.EndTime = time.Now()
 	rep.Duration = rep.EndTime.Sub(rep.StartTime)
 	aggregate(&rep, hosts, opts)
 	if backlog != nil {
-		backlog.stop() // waits for the poll goroutine to exit (runCtx is done), then closes the DB; snapshot is final after this.
+		backlog.stop() // waits for the poll goroutine to exit (runCtx is cancelled), then closes the DB; snapshot is final after this.
 		aggregateServerBacklog(&rep, backlog.snapshot(), opts)
 	}
 	return rep, ctx.Err()
@@ -684,6 +688,16 @@ func validateOptions(opts Options) (Options, error) {
 		// caller would survive that and panic in time.NewTicker (CodeRabbit #277).
 		return opts, fmt.Errorf("scale: QueueDepthPollInterval must be > 0 in headless mode, got %s",
 			opts.QueueDepthPollInterval)
+	}
+	// A server-backlog ceiling with no DSN to sample is a silent no-op: the sampler never starts, so the gate the operator
+	// asked for is never evaluated and the run reports a false pass. Reject it (Copilot/Gemini/CodeRabbit #536).
+	if opts.PassMaxServerBacklog > 0 && opts.BacklogDSN == "" {
+		return opts, errors.New("scale: PassMaxServerBacklog requires BacklogDSN to be set")
+	}
+	// The server-backlog poll is only wired into the direct-mode Run; runHeadless ignores it. Reject the flags in headless
+	// mode rather than silently skipping the poll, so --backlog-dsn in a headless run fails loudly instead of no-op'ing.
+	if opts.Mode == ModeHeadless && opts.BacklogDSN != "" {
+		return opts, errors.New("scale: BacklogDSN is only supported in direct mode, not headless")
 	}
 	return opts, nil
 }

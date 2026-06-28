@@ -39,8 +39,9 @@ type backlogSampler struct {
 	samples []int64
 }
 
-// startBacklogSampler opens the DSN, verifies connectivity, and launches the poll goroutine bound to ctx. It returns an error if the
-// DB is unreachable so a fat-fingered DSN fails the run loudly at startup rather than silently recording zero samples.
+// startBacklogSampler opens the DSN, runs the backlog query once to prove it works, and launches the poll goroutine bound to ctx. It
+// returns an error if the query fails so a misconfigured DSN fails the run loudly at startup rather than silently recording zero
+// samples (which would bypass the PassMaxServerBacklog gate).
 func startBacklogSampler(ctx context.Context, dsn string, interval time.Duration) (*backlogSampler, error) {
 	if interval <= 0 {
 		interval = defaultBacklogPollInterval
@@ -49,9 +50,15 @@ func startBacklogSampler(ctx context.Context, dsn string, interval time.Duration
 	if err != nil {
 		return nil, err
 	}
-	if err := db.PingContext(ctx); err != nil {
+	// The sampler is a single goroutine issuing serial queries, so one connection is all it needs; cap the pool to match.
+	db.SetMaxOpenConns(1)
+	// Fail closed: run the backlog query once at startup rather than a bare Ping. A DSN can ping successfully yet be unusable for the
+	// poll (wrong schema, no SELECT on event_queue), which would otherwise drop every poll error and leave the run with zero samples,
+	// silently bypassing the PassMaxServerBacklog gate (Copilot/Gemini/CodeRabbit #536). The pre-flight query surfaces that at startup.
+	var probe int64
+	if err := db.QueryRowContext(ctx, backlogQuery).Scan(&probe); err != nil {
 		_ = db.Close()
-		return nil, err
+		return nil, fmt.Errorf("pre-flight backlog query: %w", err)
 	}
 	s := &backlogSampler{db: db, done: make(chan struct{})}
 	go func() {
