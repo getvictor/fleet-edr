@@ -36,9 +36,9 @@ type serviceAccountNamer interface {
 // session/CSRF middleware, and the AuthZ engine also call into it for
 // business logic so the orchestration is in one place.
 //
-// All inputs are required to be non-nil; bootstrap.New is the only caller
-// and provides them via Deps. A nil-defensive branch here would be dead
-// code, so we trust the caller.
+// u, s, r, and logger are required to be non-nil; bootstrap.New is the production caller and provides them via Deps, so a
+// nil-defensive branch here would be dead code and we trust the caller. saNames is optional: when nil, PrincipalLabel cannot resolve a
+// service-account name and returns "" for svc_<id> ids (tests that don't exercise that path pass nil).
 func New(u *users.Store, s *sessions.Store, r *rbac.Store, saNames serviceAccountNamer, logger *slog.Logger) api.Service {
 	return &service{users: u, sessions: s, rbac: r, saNames: saNames, logger: logger}
 }
@@ -69,9 +69,11 @@ func (s *service) PrincipalLabel(ctx context.Context, principalID string) (strin
 			return "", nil
 		}
 		return s.saNames.NameByID(ctx, said)
-	default:
-		return "", nil
 	}
+	// PrincipalTypeForID returned ok=true, so typ is one of the three handled cases above; this terminal is unreachable today. It is
+	// not a silent empty default: PrincipalType is a string type that could gain a member (an agent principal is deferred in ADR-0017),
+	// and a fail-loud error here forces this resolver to be updated when that happens rather than silently mislabeling the new type.
+	return "", fmt.Errorf("identity: unhandled principal type %q for principal %q", typ, principalID)
 }
 
 func (s *service) Logout(ctx context.Context, sessionToken []byte) error {

@@ -70,6 +70,11 @@ var (
 	// admin-tier user. The admin surface maps it to 409 last_admin. Defined here so the store that raises it and the handler that maps
 	// it share one vocabulary without the handler importing the store package.
 	ErrLastAdmin = errors.New("identity: change would remove the last active admin")
+	// ErrServiceAccountNotFound is returned across the api boundary when a svc_<id> principal cannot be resolved (a deleted service
+	// account). PrincipalLabel surfaces it so a cross-context caller (the detection-config exclusions list) can recognize the benign
+	// "author no longer exists" case with errors.Is and fall back to the raw principal id, mirroring ErrUserNotFound for users, rather
+	// than importing the serviceaccounts-internal not-found type (ADR-0004).
+	ErrServiceAccountNotFound = errors.New("identity: service account not found")
 )
 
 // ctxKey is unexported so ctx values can only be set via the With*

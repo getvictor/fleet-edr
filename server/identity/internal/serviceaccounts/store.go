@@ -223,12 +223,14 @@ func (s *Store) RevocationEntries(ctx context.Context) ([]Entry, error) {
 }
 
 // NameByID returns the display name for a service account id, used to resolve a svc_<id> principal to its label for attribution
-// display. Returns ErrNotFound when no row matches.
+// display. Returns the api-level api.ErrServiceAccountNotFound when no row matches: this error crosses the bounded-context boundary
+// (PrincipalLabel surfaces it to the rules context), so it must be a public sentinel a cross-context caller can match with errors.Is
+// rather than the package-internal ErrNotFound (ADR-0004).
 func (s *Store) NameByID(ctx context.Context, id int64) (string, error) {
 	var name string
 	err := s.db.GetContext(ctx, &name, `SELECT name FROM service_accounts WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrNotFound
+		return "", api.ErrServiceAccountNotFound
 	}
 	if err != nil {
 		return "", fmt.Errorf("serviceaccounts: name by id: %w", err)

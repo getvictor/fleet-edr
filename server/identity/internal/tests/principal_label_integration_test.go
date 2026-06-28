@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/identity/api"
-	"github.com/fleetdm/edr/server/identity/internal/serviceaccounts"
 )
 
 // TestPrincipalLabel_resolvesEachPrincipalType pins the read-side label resolution the detection-config exclusions list relies on: a
@@ -49,8 +48,9 @@ func TestPrincipalLabel_resolvesEachPrincipalType(t *testing.T) {
 		// A deleted author surfaces ErrUserNotFound (an empty label); the detection-config handler treats this as the benign
 		// fallback and shows the raw principal id rather than logging.
 		{name: "missing user surfaces not-found", principalID: api.UserPrincipalID(999999), want: "", wantErr: api.ErrUserNotFound},
-		// A missing service account surfaces the store's not-found from NameByID.
-		{name: "missing service account surfaces not-found", principalID: api.ServiceAccountPrincipalID(999999), want: "", wantErr: serviceaccounts.ErrNotFound},
+		// A missing service account surfaces the public api sentinel (NameByID maps the store not-found to it so a cross-context
+		// caller can match it without importing serviceaccounts-internal).
+		{name: "missing service account surfaces not-found", principalID: api.ServiceAccountPrincipalID(999999), want: "", wantErr: api.ErrServiceAccountNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

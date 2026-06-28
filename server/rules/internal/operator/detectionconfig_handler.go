@@ -100,9 +100,10 @@ func (h *DetectionConfigHandler) resolveCreatedByLabels(ctx context.Context, exc
 		if !seen {
 			resolved, err := h.principalLabel(ctx, id)
 			if err != nil {
-				// A deleted principal (ErrUserNotFound) is the expected fallback case: the UI shows the raw principal id. Warning on it
-				// would spam the log on every list render per missing author, so only genuinely unexpected failures get a WARN.
-				if !errors.Is(err, identityapi.ErrUserNotFound) {
+				// A deleted principal (a user or a service account) is the expected fallback case: the UI shows the raw principal id.
+				// Warning on it would spam the log on every list render per missing author, so only genuinely unexpected failures
+				// (e.g. DB connectivity) get a WARN.
+				if !errors.Is(err, identityapi.ErrUserNotFound) && !errors.Is(err, identityapi.ErrServiceAccountNotFound) {
 					h.logger.WarnContext(ctx, "detectionconfig: resolve created_by label", "principal_id", id, "err", err)
 				}
 				resolved = ""
