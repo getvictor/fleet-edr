@@ -66,20 +66,6 @@ function globalSetting(settings: DetectionRuleSetting[], ruleID: string): Detect
   return settings.find((s) => s.rule_id === ruleID && s.host_group_id === 0);
 }
 
-// ruleLabel is the concise rule name the picker shows. Catalog titles carry a trailing descriptive aside (e.g. "Suspicious exec
-// chain (non-shell → shell → temp/network)") which, paired with the rule id, made each option long and noisy. Top EDR consoles list
-// the short rule name only, so we drop the aside and the id; the id still rides as the option value.
-function ruleLabel(title: string): string {
-  // Drop a trailing " (...)" aside with linear string ops rather than a regex: the equivalent /\s*\([^)]*\)\s*$/ has super-linear
-  // backtracking (Sonar S8786) because .replace retries the greedy leading \s* at every start position.
-  const trimmed = title.trimEnd();
-  if (trimmed.endsWith(")")) {
-    const open = trimmed.lastIndexOf("(");
-    if (open > 0) return trimmed.slice(0, open).trim() || title;
-  }
-  return title;
-}
-
 // DetectionConfig is the admin surface for detection-rule tuning (issue #459): per-host false-positive exclusions and per-rule
 // mode/severity. It edits global scope only (host-group scoping arrives with editable host groups). Write affordances are gated on
 // detection_config.write; the server still enforces. The per-rule "settings" are mode + severity today; when a rule declares
@@ -113,9 +99,10 @@ export function DetectionConfig() {
   const [pendingMode, setPendingMode] = useState<{ ruleID: string; ruleTitle: string; mode: string; severity: string } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
 
-  // The exclusion picker lists rules alphabetically by display name so an operator can scan to the rule they want.
+  // The exclusion picker lists rules alphabetically by their canonical title so an operator can scan to the rule they want. Titles
+  // are clean single names (issue #519), so the option shows the title verbatim.
   const rulesByName = useMemo(
-    () => [...rules].sort((a, b) => ruleLabel(a.doc.title).localeCompare(ruleLabel(b.doc.title))),
+    () => [...rules].sort((a, b) => a.doc.title.localeCompare(b.doc.title)),
     [rules],
   );
   // The rule-modes table orders by declared severity (critical first), where muting a rule is most consequential, then
@@ -260,7 +247,7 @@ export function DetectionConfig() {
                 <Select label="Rule" id="dc-rule" inline={false} value={formRuleID}
                   onChange={(e) => { setFormRuleID(e.target.value); }}>
                   <option value="">Select a rule...</option>
-                  {rulesByName.map((r) => <option key={r.id} value={r.id}>{ruleLabel(r.doc.title)}</option>)}
+                  {rulesByName.map((r) => <option key={r.id} value={r.id}>{r.doc.title}</option>)}
                 </Select>
                 <Select label="Match type" id="dc-match" inline={false} value={formMatchType}
                   onChange={(e) => { setFormMatchType(e.target.value); }}>

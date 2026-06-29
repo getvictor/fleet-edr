@@ -70,21 +70,35 @@ func TestRenderTechniqueLinks(t *testing.T) {
 	assert.Contains(t, out, "https://attack.mitre.org/techniques/T1059/")
 }
 
-// TestRenderConfigKnobsListed confirms that rules with config knobs surface
-// their env var, type, and description in the per-rule Configuration table.
+// TestRenderConfigKnobsListed confirms that a rule with config knobs surfaces their env var, type, and description in the per-rule
+// Configuration table. The shipped catalog currently declares no env-var knobs (per-host tuning moved to the durable detection-config
+// exclusion surface, issue #459), so this drives the renderer with a synthetic rule that does, pinning writeRuleConfig's output shape
+// independent of whether any live rule happens to carry a knob.
 func TestRenderConfigKnobsListed(t *testing.T) {
 	t.Parallel()
+	synthetic := []rulesapi.RuleMetadata{{
+		ID:         "synthetic_configurable_rule",
+		Techniques: []string{"T1059"},
+		Doc: rulesapi.Documentation{
+			Title:       "Synthetic configurable rule",
+			Summary:     "fixture",
+			Description: "fixture",
+			Severity:    rulesapi.SeverityHigh,
+			EventTypes:  []string{"exec"},
+			Config: []rulesapi.ConfigKnob{{
+				EnvVar:      "EDR_SYNTHETIC_ALLOWLIST",
+				Type:        "csv-paths",
+				Default:     "",
+				Description: "Absolute paths exempt from the synthetic rule.",
+			}},
+		},
+	}}
 	var buf bytes.Buffer
-	require.NoError(t, render(&buf, allRegisteredRules()))
+	require.NoError(t, render(&buf, synthetic))
 	out := buf.String()
 
-	for _, env := range []string{
-		"EDR_LAUNCHAGENT_ALLOWLIST",
-		"EDR_LAUNCHDAEMON_TEAMID_ALLOWLIST",
-		"EDR_SUDOERS_WRITER_ALLOWLIST",
-		"EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST",
-	} {
-		assert.Contains(t, out, "`"+env+"`",
-			"expected config env var %q to appear in generated docs", env)
-	}
+	assert.Contains(t, out, "### Configuration", "a rule with config knobs must render a Configuration section")
+	assert.Contains(t, out, "`EDR_SYNTHETIC_ALLOWLIST`", "config knob env var must appear in the table")
+	assert.Contains(t, out, "`csv-paths`", "config knob type must appear in the table")
+	assert.Contains(t, out, "Absolute paths exempt from the synthetic rule.", "config knob description must appear in the table")
 }
