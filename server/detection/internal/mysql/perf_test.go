@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -146,6 +147,11 @@ func TestInsertAlert_DedupBranchAlsoLinksAllEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, created1)
 
+	beforeDedup, err := s.GetAlert(ctx, alertID1)
+	require.NoError(t, err)
+	// Sleep so a stray updated_at bump on the dedup path would land in a distinct microsecond and fail the assertion below.
+	time.Sleep(5 * time.Millisecond)
+
 	alertID2, created2, err := s.InsertAlert(ctx, api.Alert{
 		HostID: "h", RuleID: "r", Severity: api.SeverityHigh,
 		Title: "T", Description: "D", ProcessID: procID,
@@ -153,6 +159,12 @@ func TestInsertAlert_DedupBranchAlsoLinksAllEvents(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, created2, "duplicate (host_id,rule_id,process_id) must dedup, not create")
 	assert.Equal(t, alertID1, alertID2, "dedup returns the existing alert id")
+
+	// #522: the dedup upsert pins `updated_at = updated_at` so a routine dedup collision does not churn the API-visible
+	// timestamp (the no-op match never fires the column's ON UPDATE CURRENT_TIMESTAMP). Pins the Copilot/Qodo concern.
+	afterDedup, err := s.GetAlert(ctx, alertID1)
+	require.NoError(t, err)
+	assert.Equal(t, beforeDedup.UpdatedAt, afterDedup.UpdatedAt, "dedup must not bump updated_at")
 
 	got, err := s.GetAlertEventIDs(ctx, alertID1)
 	require.NoError(t, err)

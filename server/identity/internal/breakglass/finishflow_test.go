@@ -228,6 +228,46 @@ func TestService_FinishSetup_HappyPath(t *testing.T) {
 	assert.ErrorIs(t, err, breakglass.ErrTokenConsumed)
 }
 
+// FinishSetup must resolve (not re-insert) a local_password identity an earlier seed/migration already created: the expected-duplicate
+// path now upserts in one statement instead of insert-and-catch-the-duplicate, so it no longer raises a benign hasError trace span
+// (#522). The redemption still succeeds, resolves to the pre-existing identity id, and leaves exactly one identities row.
+func TestService_FinishSetup_PreexistingIdentityResolves(t *testing.T) {
+	t.Parallel()
+	svc, db, rec, uid, _ := newFakeService(t)
+
+	// Pre-seed the local_password identity the redemption would otherwise insert, mirroring a row left by an earlier seed.
+	res, err := db.ExecContext(t.Context(),
+		`INSERT INTO identities (user_id, provider, subject) VALUES (?, ?, ?)`,
+		uid, identities.ProviderLocalPassword, "admin@fleet-edr.local")
+	require.NoError(t, err)
+	seededID, err := res.LastInsertId()
+	require.NoError(t, err)
+
+	plaintext, _, err := svc.IssueSetupToken(t.Context(), uid, time.Hour)
+	require.NoError(t, err)
+	_, tok, user, err := svc.BeginSetup(t.Context(), plaintext)
+	require.NoError(t, err)
+
+	setup, err := svc.FinishSetup(t.Context(), breakglass.FinishSetupRequest{
+		Token:          tok,
+		User:           user,
+		Session:        webauthn.SessionData{Challenge: "fake-challenge"},
+		Password:       "long-enough-password",
+		CredentialName: "yk-test",
+		Attestation:    fakeAttestation(),
+	})
+	require.NoError(t, err, "an already-seeded identity must not fail the redemption")
+	require.NotNil(t, setup)
+
+	// Exactly one identities row survives, and the redemption resolved to the pre-seeded id (no second row).
+	var idCount int
+	require.NoError(t, db.GetContext(t.Context(), &idCount,
+		`SELECT COUNT(*) FROM identities WHERE user_id = ? AND provider = ?`, uid, identities.ProviderLocalPassword))
+	assert.Equal(t, 1, idCount, "the upsert resolves the existing row rather than inserting a duplicate")
+	require.Len(t, rec.events, 1)
+	assert.Equal(t, seededID, rec.events[0].Payload["identity_id"], "redemption resolves to the pre-existing identity id")
+}
+
 // FinishSetup with a too-short password rejects with ErrPasswordTooShort BEFORE touching the WebAuthn engine: the validator runs
 // first per the implementation contract.
 func TestService_FinishSetup_PasswordTooShort(t *testing.T) {

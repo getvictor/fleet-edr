@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -21,8 +20,9 @@ const alertEventsBatchSize = 500
 
 // InsertAlert creates an alert and links it to the given event IDs.
 // If a duplicate alert exists (same source, host_id, rule_id,
-// subject), the insert is skipped and the existing alert ID is
-// returned. Returns the alert ID and whether it was newly created.
+// subject), the existing row is matched and its ID is returned
+// without raising a driver error. Returns the alert ID and whether
+// it was newly created.
 //
 // Callers SHOULD set a.Source; a blank Source defaults to
 // AlertSourceDetection so existing catalog-rule call sites that
@@ -68,16 +68,22 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 
 	// NULLIF(process_id, 0) stores a process-less alert's link as NULL (there is no processes(id) = 0 row, so a literal 0
 	// would violate fk_alerts_process). Dedup is on `subject`, not process_id.
+	//
+	// ON DUPLICATE KEY UPDATE turns the expected dedup collision (a re-fired finding deliberately colliding with uk_alerts_dedup)
+	// into an idempotent single statement instead of letting the driver raise a duplicate-key error that surfaces as a benign
+	// hasError trace span on every deduplicated alert (#522). LAST_INSERT_ID(id) makes res.LastInsertId() return the existing
+	// row's id on the matched path. Both assignments are no-ops (id and updated_at set to their current values), so MySQL treats
+	// the matched row as unchanged: it does not fire updated_at's ON UPDATE CURRENT_TIMESTAMP (a dedup must not churn the
+	// API-visible timestamp) and reports RowsAffected 1 only for a fresh insert, 0 for a match. created is therefore
+	// rowsAffected == 1; this holds because no DSN enables clientFoundRows (which would make a match report 1 as "found").
+	// Keeps the single-statement, race-safe dedup the insert-and-catch path gave us across replicas (ADR-0010), span-free.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, process_id, subject, techniques)
-		VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)
+		ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = updated_at`,
 		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.ProcessID, a.Subject, a.Techniques,
 	)
 	if err != nil {
-		if isDuplicateKeyErr(err) {
-			existingID, attachErr := s.attachEventsToExistingAlert(ctx, tx, a, eventIDs, evidence)
-			return existingID, false, attachErr // dedup branch never creates a row
-		}
 		return 0, false, fmt.Errorf("insert alert: %w", err)
 	}
 
@@ -85,8 +91,15 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert alert last id: %w", err)
 	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return 0, false, fmt.Errorf("insert alert rows affected: %w", err)
+	}
+	created := rowsAffected == 1
 
-	if err := bulkInsertAlertEvents(ctx, tx, alertID, eventIDs, false /* not dedup */); err != nil {
+	// A re-fired-finding dedup re-links any newly-triggering events to the existing alert (INSERT IGNORE absorbs the rows
+	// already linked); a fresh alert links them with a plain INSERT. Both copy the triggering-event payloads idempotently.
+	if err := bulkInsertAlertEvents(ctx, tx, alertID, eventIDs, !created /* dedup re-link uses INSERT IGNORE */); err != nil {
 		return 0, false, err
 	}
 	if err := insertEventPayloads(ctx, tx, alertID, evidence); err != nil {
@@ -96,7 +109,7 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	if err := tx.Commit(); err != nil {
 		return 0, false, fmt.Errorf("commit insert alert: %w", err)
 	}
-	return alertID, true, nil
+	return alertID, created, nil
 }
 
 // bulkInsertAlertEvents links eventIDs to alertID with one (chunked) multi-row INSERT instead of N round-trips. dedup=true switches to
@@ -124,45 +137,6 @@ func bulkInsertAlertEvents(ctx context.Context, tx *sqlx.Tx, alertID int64, even
 		}
 	}
 	return nil
-}
-
-// mysqlErrDuplicateKey is MySQL error 1062 (duplicate primary/unique key).
-const mysqlErrDuplicateKey = 1062
-
-// isDuplicateKeyErr matches MySQL error 1062 (duplicate primary/unique key).
-func isDuplicateKeyErr(err error) bool {
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) {
-		return false
-	}
-	return mysqlErr.Number == mysqlErrDuplicateKey
-}
-
-// attachEventsToExistingAlert handles the dedup branch when (source, host_id, rule_id, subject) already has an alert row. Extracted
-// from InsertAlert to keep the main path under the cognitive complexity limit. Returns the existing alert's id; the caller reports
-// created=false (this branch never creates a row).
-func (s *Store) attachEventsToExistingAlert(ctx context.Context, tx *sqlx.Tx, a api.Alert, eventIDs []string, evidence []api.Event) (int64, error) {
-	var existingID int64
-	// FOR UPDATE makes this a locking (current) read rather than a consistent snapshot read. We only reach here after the
-	// INSERT hit a duplicate-key error, i.e. a concurrent transaction inserted and committed this (source, host_id,
-	// rule_id, subject) row; under REPEATABLE READ a plain SELECT could miss that row against this transaction's MVCC
-	// snapshot. The locking read sees the latest committed row (Gemini).
-	if err := tx.GetContext(ctx, &existingID,
-		"SELECT id FROM alerts WHERE source = ? AND host_id = ? AND rule_id = ? AND subject = ? FOR UPDATE",
-		a.Source, a.HostID, a.RuleID, a.Subject,
-	); err != nil {
-		return 0, fmt.Errorf("lookup duplicate alert: %w", err)
-	}
-	if err := bulkInsertAlertEvents(ctx, tx, existingID, eventIDs, true /* dedup */); err != nil {
-		return 0, err
-	}
-	if err := insertEventPayloads(ctx, tx, existingID, evidence); err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit duplicate alert lookup: %w", err)
-	}
-	return existingID, nil
 }
 
 // insertEventPayloads makes the alert's evidence self-contained: it copies the given triggering-event envelopes (already read from the

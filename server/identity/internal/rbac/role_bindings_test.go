@@ -166,6 +166,32 @@ func TestProvisionUser(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+// TestBindRole_IsIdempotent pins #522: re-binding an already-bound (user_id, role_id, scope_type, scope_id) must be a single-statement
+// no-op that returns no error (the break-glass re-seed on every container boot), not a duplicate-key error that the caller swallows but
+// that still surfaces as a benign hasError trace span. A second bind leaves exactly one row, and a third bind carrying a different
+// ExpiresAt leaves the original (non-expiring) binding untouched, matching the prior swallow-the-duplicate semantics.
+func TestBindRole_IsIdempotent(t *testing.T) {
+	t.Parallel()
+	db := openSchema(t)
+	uid := insertUser(t, db, "rebind@test")
+	s := rbac.New(db)
+
+	req := rbac.BindRoleRequest{UserID: uid, RoleID: "admin", ScopeType: "global", ScopeID: api.RoleBindingScopeWildcard}
+	require.NoError(t, s.BindRole(t.Context(), db, req), "first bind creates the row")
+	require.NoError(t, s.BindRole(t.Context(), db, req), "re-binding the same key must not raise a duplicate-key error")
+
+	future := time.Now().Add(time.Hour)
+	withExpiry := req
+	withExpiry.ExpiresAt = &future
+	require.NoError(t, s.BindRole(t.Context(), db, withExpiry), "re-bind with a different ExpiresAt is still a no-op")
+
+	got, err := s.ListLiveBindings(t.Context(), uid)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "idempotent re-binds collapse to exactly one row")
+	assert.Equal(t, "admin", got[0].RoleID)
+	assert.Nil(t, got[0].ExpiresAt, "the no-op update leaves the original non-expiring binding untouched")
+}
+
 // openSchema returns a fresh test DB with identity's full schema + seeds applied. roles are seeded by ApplySchema so the FK-bound
 // role_bindings inserts in these tests don't trip fk_role_bindings_role.
 func openSchema(t *testing.T) *sqlx.DB {
