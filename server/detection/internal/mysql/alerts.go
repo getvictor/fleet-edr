@@ -69,17 +69,18 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	// NULLIF(process_id, 0) stores a process-less alert's link as NULL (there is no processes(id) = 0 row, so a literal 0
 	// would violate fk_alerts_process). Dedup is on `subject`, not process_id.
 	//
-	// ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id) turns the expected dedup collision (a re-fired finding deliberately
-	// colliding with uk_alerts_dedup) into an idempotent single statement instead of letting the driver raise a duplicate-key
-	// error that surfaces as a benign hasError trace span on every deduplicated alert (#522). LAST_INSERT_ID(id) makes
-	// res.LastInsertId() return the existing row's id on the matched path. The no-op id=id assignment means RowsAffected is 1
-	// for a fresh insert and 0 when an existing row matched, which is how we derive `created` (the DSN does not set
-	// clientFoundRows, so a match never reports 1). This keeps the single-statement, race-safe dedup the insert-and-catch path
-	// gave us across replicas (ADR-0010) without the error span.
+	// ON DUPLICATE KEY UPDATE turns the expected dedup collision (a re-fired finding deliberately colliding with uk_alerts_dedup)
+	// into an idempotent single statement instead of letting the driver raise a duplicate-key error that surfaces as a benign
+	// hasError trace span on every deduplicated alert (#522). LAST_INSERT_ID(id) makes res.LastInsertId() return the existing
+	// row's id on the matched path. Both assignments are no-ops (id and updated_at set to their current values), so MySQL treats
+	// the matched row as unchanged: it does not fire updated_at's ON UPDATE CURRENT_TIMESTAMP (a dedup must not churn the
+	// API-visible timestamp) and reports RowsAffected 1 only for a fresh insert, 0 for a match. created is therefore
+	// rowsAffected == 1; this holds because no DSN enables clientFoundRows (which would make a match report 1 as "found").
+	// Keeps the single-statement, race-safe dedup the insert-and-catch path gave us across replicas (ADR-0010), span-free.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, process_id, subject, techniques)
 		VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)
-		ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+		ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = updated_at`,
 		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.ProcessID, a.Subject, a.Techniques,
 	)
 	if err != nil {
