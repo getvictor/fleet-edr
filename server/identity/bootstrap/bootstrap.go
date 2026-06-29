@@ -603,13 +603,6 @@ func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in O
 	case err != nil && !errors.Is(err, ssoconfig.ErrNotFound):
 		return fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
 	}
-	// Clamp the JIT default role to the analyst/auditor floor the SSO admin API enforces, so a non-interactive caller (demo/CI) cannot
-	// seed default_role=admin and have the OIDC provisioner auto-bind first-time SSO users to a privileged role. Anything outside the set
-	// (including the empty default) falls back to the lowest-privilege JIT role, matching ssoadmin and the pre-#512 env-seed behaviour.
-	defaultRole := strings.ToLower(strings.TrimSpace(in.DefaultRole))
-	if defaultRole != "analyst" && defaultRole != "auditor" {
-		defaultRole = oidc.DefaultJITRole
-	}
 	// Write oidc_config and the external URL in ONE transaction (same shape as the admin API's apply), so a partial failure can't leave a
 	// stored OIDC config paired with a missing derived redirect; a rolled-back seed re-runs cleanly.
 	tx, err := db.BeginTxx(ctx, nil)
@@ -629,29 +622,51 @@ func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in O
 		NewSecret:   &secret,
 		Scopes:      in.Scopes,
 		JITEnabled:  in.JITEnabled,
-		DefaultRole: defaultRole,
+		DefaultRole: clampJITRole(in.DefaultRole),
 		UpdatedBy:   api.PrincipalSystemID,
 	}); err != nil {
 		return fmt.Errorf("identity SeedOIDCConfig: write OIDC config: %w", err)
 	}
-	// Seed the external URL only when the app_config document has none, so a later UI edit is never clobbered.
-	if in.ExternalURL != "" {
-		appCfg := appconfig.New(db)
-		cur, version, err := appCfg.Get(ctx)
-		if err != nil {
-			return fmt.Errorf("identity SeedOIDCConfig: read app config: %w", err)
-		}
-		if cur.ExternalURL == "" {
-			cur.ExternalURL = in.ExternalURL
-			if err := appCfg.PutTx(ctx, tx, cur, version, api.PrincipalSystemID); err != nil {
-				return fmt.Errorf("identity SeedOIDCConfig: seed external URL: %w", err)
-			}
-		}
+	if err := seedExternalURLTx(ctx, tx, db, in.ExternalURL); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("identity SeedOIDCConfig: commit tx: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+// clampJITRole normalizes a seeded JIT default role to the analyst/auditor floor the SSO admin API enforces. Anything outside that set
+// (including the empty default) falls back to the lowest-privilege JIT role, so a non-interactive seed (demo/CI) cannot set
+// default_role=admin and have the OIDC provisioner auto-bind first-time SSO users to a privileged role. Mirrors ssoadmin + the
+// pre-#512 env-seed behaviour.
+func clampJITRole(role string) string {
+	r := strings.ToLower(strings.TrimSpace(role))
+	if r == "analyst" || r == "auditor" {
+		return r
+	}
+	return oidc.DefaultJITRole
+}
+
+// seedExternalURLTx seeds the deployment external URL into the app_config document within tx, but only when the document has none, so a
+// later UI edit is never clobbered. No-op when externalURL is empty. The version read is the optimistic-concurrency stamp PutTx checks.
+func seedExternalURLTx(ctx context.Context, tx *sqlx.Tx, db *sqlx.DB, externalURL string) error {
+	if externalURL == "" {
+		return nil
+	}
+	appCfg := appconfig.New(db)
+	cur, version, err := appCfg.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: read app config: %w", err)
+	}
+	if cur.ExternalURL != "" {
+		return nil // operator already set it; don't clobber
+	}
+	cur.ExternalURL = externalURL
+	if err := appCfg.PutTx(ctx, tx, cur, version, api.PrincipalSystemID); err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: seed external URL: %w", err)
+	}
 	return nil
 }
 
