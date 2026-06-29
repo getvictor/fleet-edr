@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -101,27 +100,9 @@ type Config struct {
 	// or one user hitting the rate limit will lock out everyone behind the proxy.
 	TrustedProxies []string
 
-	// OIDC authentication configuration. When OIDCIssuer is non-empty, the server enables the OIDC sign-in flow at /api/auth/login +
-	// /api/auth/callback. When OIDCIssuer is empty, the server refuses to start unless AuthAllowNoOIDC=true (which lets dev workflows run
-	// break-glass-only). All fields are populated from EDR_OIDC_* env vars.
-	OIDCIssuer       string
-	OIDCClientID     string
-	OIDCClientSecret string
-	OIDCRedirectURL  string
-	// OIDCAllowJITProvisioning controls whether a successful OIDC sign-in by an unknown subject creates a user + identity + default role
-	// binding. true = create on first sign-in (recommended for most deployments); false = require an admin to pre-provision the user.
-	// Default true.
-	OIDCAllowJITProvisioning bool
-	// OIDCDefaultRole is the role a JIT-provisioned OIDC user is bound to. Populated from EDR_OIDC_DEFAULT_ROLE; empty falls through to
-	// the identity context's default (`analyst`). Must name a seeded role. Lets a deployment land SSO users at a higher role without
-	// per-user pre-provisioning (the docker demo uses it to land its single SSO user at `admin`).
-	OIDCDefaultRole string
-
-	// AuthAllowNoOIDC is the dedicated dev flag that lets the server boot in break-glass-only mode (no OIDC). Default false:
-	// production deployments without OIDC config refuse to start with an explicit error pointing the operator at the missing
-	// env vars. Set EDR_AUTH_ALLOW_NO_OIDC=1 in dev environments where running against a real IdP is overkill. The TLS posture
-	// has no equivalent opt-out: TLS cert + key are unconditionally required (issue #140).
-	AuthAllowNoOIDC bool
+	// OIDC sign-in is configured at runtime through the Single sign-on admin page + API, backed by the durable oidc_config store
+	// (issue #375); the store is the source of truth and the login routes are always mounted. The server reads no EDR_OIDC_* env vars and
+	// boots without any OIDC configuration (the admin signs in via break-glass and configures SSO from the UI). See sso-configuration.
 
 	// SecretKey is the deployment root secret. Every long-lived server-side key is derived from it via HKDF (internal/keyring) under a
 	// versioned domain-separation label: the host-token HMAC pepper and the pre-auth cookie signing key (OIDC state + break-glass
@@ -188,13 +169,12 @@ func (c Config) ExternalTLS() bool {
 // Defaults returns a Config populated with default values. Callers should overlay env vars on top.
 func defaults() Config {
 	return Config{
-		ListenAddr:               ":8088",
-		LogLevel:                 "info",
-		LogFormat:                "json",
-		EnrollRatePerMin:         defaultEnrollRatePerMin,
-		RetentionDays:            defaultRetentionDays,
-		ShutdownDrain:            defaultShutdownDrain,
-		OIDCAllowJITProvisioning: true,
+		ListenAddr:       ":8088",
+		LogLevel:         "info",
+		LogFormat:        "json",
+		EnrollRatePerMin: defaultEnrollRatePerMin,
+		RetentionDays:    defaultRetentionDays,
+		ShutdownDrain:    defaultShutdownDrain,
 	}
 }
 
@@ -226,7 +206,6 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	loadTLSConfig(&c, &errs)
 	loadRateLimits(&c, getenv, &errs)
 	loadLogConfig(&c, getenv, &errs)
-	loadOIDCConfig(&c, getenv, &errs)
 	loadBreakglassConfig(&c, getenv, &errs)
 	loadSessionTimeouts(&c, getenv, &errs)
 
@@ -336,73 +315,6 @@ func loadLogConfig(c *Config, getenv func(string) string, errs *[]error) {
 	}
 	if c.LogFormat != "json" && c.LogFormat != "text" {
 		*errs = append(*errs, fmt.Errorf("EDR_LOG_FORMAT=%q must be 'json' or 'text'", c.LogFormat))
-	}
-}
-
-// loadOIDCConfig parses the Phase-4 authentication knobs and enforces the "OIDC required unless explicitly opted out" gate.
-// When EDR_OIDC_ISSUER is non-empty, the rest of the config block is validated as a coherent set; missing client_id / redirect URL
-// surfaces a focused error. When EDR_OIDC_ISSUER is empty, the gate requires EDR_AUTH_ALLOW_NO_OIDC=1 so dev workflows can opt into
-// break-glass-only mode without a silent fallback in production.
-func loadOIDCConfig(c *Config, getenv func(string) string, errs *[]error) {
-	optionalStr(&c.OIDCIssuer, "EDR_OIDC_ISSUER", getenv)
-	optionalStr(&c.OIDCClientID, "EDR_OIDC_CLIENT_ID", getenv)
-	optionalStr(&c.OIDCClientSecret, "EDR_OIDC_CLIENT_SECRET", getenv)
-	optionalStr(&c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL", getenv)
-	parseOIDCOverrides(c, getenv, errs)
-	c.AuthAllowNoOIDC = getenv("EDR_AUTH_ALLOW_NO_OIDC") == "1"
-	enforceOIDCGate(c, errs)
-}
-
-// builtinRoleIDs is the set of seeded RBAC role IDs that EDR_OIDC_DEFAULT_ROLE may name. Kept in sync with the canonical list in
-// server/identity/internal/seed/roles.go; config is a platform package and cannot import an identity-context internal package, so
-// the list is duplicated here behind this sync note. Validating against it at boot turns a mistyped role into a clear startup
-// error instead of an opaque foreign-key failure on the first SSO sign-in.
-var builtinRoleIDs = []string{"super_admin", "admin", "senior_analyst", "analyst", "auditor"}
-
-// parseOIDCOverrides reads the optional override env vars (EDR_OIDC_ALLOW_JIT_PROVISIONING, EDR_OIDC_DEFAULT_ROLE) onto c. Pulled out
-// so loadOIDCConfig stays under the cognitive-complexity budget.
-func parseOIDCOverrides(c *Config, getenv func(string) string, errs *[]error) {
-	if v := getenv("EDR_OIDC_ALLOW_JIT_PROVISIONING"); v != "" {
-		c.OIDCAllowJITProvisioning = v == "1"
-	}
-	if v := getenv("EDR_OIDC_DEFAULT_ROLE"); v != "" {
-		// Normalize away whitespace + case typos; role IDs are canonically lower-case.
-		role := strings.ToLower(strings.TrimSpace(v))
-		if !slices.Contains(builtinRoleIDs, role) {
-			*errs = append(*errs, fmt.Errorf("EDR_OIDC_DEFAULT_ROLE %q is not a known role; allowed values: %s",
-				v, strings.Join(builtinRoleIDs, ", ")))
-		}
-		c.OIDCDefaultRole = role
-	}
-}
-
-// enforceOIDCGate cross-checks the OIDC env block: every OIDC field is set together, OR none is set AND AuthAllowNoOIDC is the
-// explicit dev opt-out. Anything else is a misconfiguration the operator should surface at boot rather than silently fall back to
-// break-glass-only mode. The allow-no-oidc opt-out specifically does NOT excuse partial configuration: if any EDR_OIDC_* knob is set,
-// the operator clearly intends OIDC and a missing companion is a typo, not an opt-out.
-func enforceOIDCGate(c *Config, errs *[]error) {
-	partialOIDC := c.OIDCClientID != "" || c.OIDCClientSecret != "" || c.OIDCRedirectURL != "" || c.OIDCDefaultRole != ""
-	switch {
-	case c.OIDCIssuer == "" && partialOIDC:
-		*errs = append(*errs, errors.New(
-			"EDR_OIDC_CLIENT_ID/CLIENT_SECRET/REDIRECT_URL/DEFAULT_ROLE set without EDR_OIDC_ISSUER; "+
-				"set EDR_OIDC_ISSUER to enable OIDC, or unset the partial values to opt out"))
-	case c.OIDCIssuer == "" && !c.AuthAllowNoOIDC:
-		*errs = append(*errs, errors.New(
-			"EDR_OIDC_ISSUER is required (set EDR_AUTH_ALLOW_NO_OIDC=1 for break-glass-only dev mode)"))
-	case c.OIDCIssuer != "":
-		appendIfMissing(c.OIDCClientID, "EDR_OIDC_CLIENT_ID is required when EDR_OIDC_ISSUER is set", errs)
-		appendIfMissing(c.OIDCClientSecret, "EDR_OIDC_CLIENT_SECRET is required when EDR_OIDC_ISSUER is set"+
-			" (use EDR_OIDC_CLIENT_SECRET_FILE for docker-secret mounts)", errs)
-		appendIfMissing(c.OIDCRedirectURL, "EDR_OIDC_REDIRECT_URL is required when EDR_OIDC_ISSUER is set", errs)
-	}
-}
-
-// appendIfMissing emits msg when v is empty. Tiny helper so the gate switch reads as a list of cross-checks rather than three near-
-// identical branches.
-func appendIfMissing(v, msg string, errs *[]error) {
-	if v == "" {
-		*errs = append(*errs, errors.New(msg))
 	}
 }
 

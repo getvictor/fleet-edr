@@ -5,13 +5,14 @@
 #   task qa:up      # base mysql + mysql_test + this dex service
 #   task qa:down    # tears all of them down
 #
-# Run alongside `task dev:server:qa-oidc` which wires the EDR's
-# EDR_OIDC_* env vars to point at this dex.
+# Run alongside `task dev:server:qa-oidc`, which seeds this dex's
+# connection config into the EDR's durable oidc_config store (the
+# server reads no EDR_OIDC_* env vars, issue #512).
 #
 # See config/dex/dev-config.yaml for credentials + scope set. Both the
 # config and these credentials are dev-only: they are checked into the
-# repo by design. Production OIDC config lives in env vars loaded from
-# a real secrets manager per docs/okta-setup.md.
+# repo by design. Production SSO is configured at runtime through the
+# Single sign-on admin page per docs/okta-setup.md.
 #
 # Usage shorthand (no task runner):
 #

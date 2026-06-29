@@ -40,8 +40,9 @@ func oidcDiscoveryServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// newIdentityWithDiscovery wires the identity context against a real test DB with OIDC seeded from env pointing at a local discovery
-// server, so the runtime resolver + admin handler exercise their real (non-faked) code paths.
+// newIdentityWithDiscovery wires the identity context against a real test DB, then seeds the durable OIDC config pointing at a local
+// discovery server (via the same bootstrap.SeedOIDCConfig seam the demo/QA stacks use, since the server no longer reads EDR_OIDC_*),
+// so the runtime resolver + admin handler exercise their real (non-faked) code paths.
 func newIdentityWithDiscovery(t *testing.T, idp *httptest.Server) (*bootstrap.Identity, *sqlx.DB, *ssoconfig.Store, *appconfig.Store) {
 	t.Helper()
 	db := full.Open(t)
@@ -53,14 +54,16 @@ func newIdentityWithDiscovery(t *testing.T, idp *httptest.Server) (*bootstrap.Id
 		OIDCSecretKey:     secretKey,
 		SessionAbsolute:   time.Hour,
 		CleanupInterval:   time.Hour,
-		OIDC: bootstrap.OIDCDeps{
-			Issuer: idp.URL, ClientID: "edr-itest", ClientSecret: "itest-secret",
-			RedirectURL: "https://edr.example.com/api/auth/callback", Scopes: []string{"openid", "email", "profile"},
-			AllowJITProvisioning: true, DefaultRole: "analyst", HTTPClient: idp.Client(),
-		},
+		OIDC:              bootstrap.OIDCDeps{HTTPClient: idp.Client()},
 	})
 	require.NoError(t, err)
 	require.NoError(t, id.ApplySchema(t.Context()))
+
+	require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
+		Issuer: idp.URL, ClientID: "edr-itest", ClientSecret: "itest-secret",
+		Scopes: []string{"openid", "email", "profile"}, JITEnabled: true, DefaultRole: "analyst",
+		ExternalURL: "https://edr.example.com",
+	}))
 
 	sealer, err := ssoconfig.NewSealer(secretKey)
 	require.NoError(t, err)
@@ -100,7 +103,7 @@ func TestSSOAdmin_loginResolvesSeededProvider(t *testing.T) {
 	t.Parallel()
 	idp := oidcDiscoveryServer(t)
 	id, _, _, _ := newIdentityWithDiscovery(t, idp)
-	require.True(t, id.OIDCEnabled())
+	require.True(t, id.OIDCEnabled(t.Context()))
 
 	mux := http.NewServeMux()
 	id.RegisterPublicRoutes(mux)

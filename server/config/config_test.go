@@ -68,15 +68,14 @@ func writeTestCert(tb testing.TB) (certFile, keyFile string) {
 func TestLoad(t *testing.T) {
 	t.Parallel()
 	// Minimal env: every dev + prod deployment must supply TLS cert + key (issue #140 removed the EDR_ALLOW_INSECURE_HTTP opt-out).
-	// EDR_AUTH_ALLOW_NO_OIDC stays as the deliberate break-glass-only dev opt-out; the OIDC-required interaction is covered in
-	// TestLoad_OIDCConfig below.
+	// The server boots without any OIDC configuration; SSO is configured at runtime via the Single sign-on admin page (issue #512
+	// removed the EDR_OIDC_* env ingestion and the EDR_AUTH_ALLOW_NO_OIDC boot gate).
 	certFile, keyFile := writeTestCert(t)
 	minEnv := map[string]string{
-		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":      "enroll-me",
-		"EDR_TLS_CERT_FILE":      certFile,
-		"EDR_TLS_KEY_FILE":       keyFile,
-		"EDR_AUTH_ALLOW_NO_OIDC": "1",
+		"EDR_DSN":           "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET": "enroll-me",
+		"EDR_TLS_CERT_FILE": certFile,
+		"EDR_TLS_KEY_FILE":  keyFile,
 	}
 
 	cases := []struct {
@@ -193,7 +192,6 @@ func TestLoad(t *testing.T) {
 			env: map[string]string{
 				"EDR_DSN":                     "x",
 				"EDR_ENROLL_SECRET":           "s",
-				"EDR_AUTH_ALLOW_NO_OIDC":      "1",
 				"EDR_TLS_TERMINATED_BY_PROXY": "1",
 			},
 			validate: func(t *testing.T, c *Config) {
@@ -219,7 +217,6 @@ func TestLoad(t *testing.T) {
 			env: map[string]string{
 				"EDR_DSN":                     "x",
 				"EDR_ENROLL_SECRET":           "s",
-				"EDR_AUTH_ALLOW_NO_OIDC":      "1",
 				"EDR_TLS_TERMINATED_BY_PROXY": "1",
 			},
 			validate: func(t *testing.T, c *Config) {
@@ -343,182 +340,6 @@ func TestLoad(t *testing.T) {
 	}
 }
 
-// TestLoad_OIDCConfig covers the Phase-4a auth-mode enforcement: a production deployment without OIDC config refuses to start;
-// dev mode opts out via EDR_AUTH_ALLOW_NO_OIDC=1; setting OIDC_ISSUER without the rest produces focused per-field errors.
-func TestLoad_OIDCConfig(t *testing.T) {
-	t.Parallel()
-	certFile, keyFile := writeTestCert(t)
-	prodLikeEnv := map[string]string{
-		"EDR_DSN":           "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET": "enroll-me",
-		"EDR_TLS_CERT_FILE": certFile,
-		"EDR_TLS_KEY_FILE":  keyFile,
-	}
-
-	cases := []struct {
-		name     string
-		env      map[string]string
-		wantErr  string
-		validate func(t *testing.T, c *Config)
-	}{
-		{
-			name:    "no OIDC + no dev flag -> refuse",
-			env:     prodLikeEnv,
-			wantErr: "EDR_OIDC_ISSUER is required",
-		},
-		{
-			name: "no OIDC + dev flag -> ok",
-			env:  withExtra(prodLikeEnv, map[string]string{"EDR_AUTH_ALLOW_NO_OIDC": "1"}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.True(t, c.AuthAllowNoOIDC)
-				assert.Empty(t, c.OIDCIssuer)
-			},
-		},
-		{
-			name: "issuer set without client_id -> per-field error",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER": "https://example.okta.com",
-			}),
-			wantErr: "EDR_OIDC_CLIENT_ID is required",
-		},
-		{
-			name: "issuer + client_id without secret -> per-field error",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":    "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID": "edr",
-			}),
-			wantErr: "EDR_OIDC_CLIENT_SECRET is required",
-		},
-		{
-			name: "issuer + client_id + secret without redirect -> per-field error",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":        "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":     "edr",
-				"EDR_OIDC_CLIENT_SECRET": "shh",
-			}),
-			wantErr: "EDR_OIDC_REDIRECT_URL is required",
-		},
-		{
-			name: "complete OIDC config -> ok with default scopes",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":        "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":     "edr",
-				"EDR_OIDC_CLIENT_SECRET": "shh",
-				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Equal(t, "https://example.okta.com", c.OIDCIssuer)
-				assert.Equal(t, "edr", c.OIDCClientID)
-				assert.Equal(t, "shh", c.OIDCClientSecret)
-				assert.Equal(t, "https://edr.example.com/api/auth/callback", c.OIDCRedirectURL)
-				assert.True(t, c.OIDCAllowJITProvisioning)
-				assert.Empty(t, c.OIDCDefaultRole, "default JIT role falls through to the identity-context default")
-				assert.False(t, c.AuthAllowNoOIDC)
-			},
-		},
-		{
-			name: "EDR_OIDC_ALLOW_JIT_PROVISIONING=0 disables JIT",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":                 "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":              "edr",
-				"EDR_OIDC_CLIENT_SECRET":          "shh",
-				"EDR_OIDC_REDIRECT_URL":           "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_ALLOW_JIT_PROVISIONING": "0",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.False(t, c.OIDCAllowJITProvisioning)
-			},
-		},
-		{
-			name: "EDR_OIDC_DEFAULT_ROLE override",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":        "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":     "edr",
-				"EDR_OIDC_CLIENT_SECRET": "shh",
-				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_DEFAULT_ROLE":  "admin",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Equal(t, "admin", c.OIDCDefaultRole)
-			},
-		},
-		{
-			name: "EDR_OIDC_DEFAULT_ROLE is normalized (trim + lowercase)",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":        "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":     "edr",
-				"EDR_OIDC_CLIENT_SECRET": "shh",
-				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_DEFAULT_ROLE":  "  Senior_Analyst  ",
-			}),
-			validate: func(t *testing.T, c *Config) {
-				t.Helper()
-				assert.Equal(t, "senior_analyst", c.OIDCDefaultRole)
-			},
-		},
-		{
-			name: "EDR_OIDC_DEFAULT_ROLE unknown role -> error listing allowed values",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_ISSUER":        "https://example.okta.com",
-				"EDR_OIDC_CLIENT_ID":     "edr",
-				"EDR_OIDC_CLIENT_SECRET": "shh",
-				"EDR_OIDC_REDIRECT_URL":  "https://edr.example.com/api/auth/callback",
-				"EDR_OIDC_DEFAULT_ROLE":  "wizard",
-			}),
-			wantErr: "EDR_OIDC_DEFAULT_ROLE \"wizard\" is not a known role",
-		},
-		{
-			name: "EDR_OIDC_DEFAULT_ROLE without issuer -> partial-OIDC error",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_OIDC_DEFAULT_ROLE":  "admin",
-				"EDR_AUTH_ALLOW_NO_OIDC": "1",
-			}),
-			wantErr: "set without EDR_OIDC_ISSUER",
-		},
-		{
-			// Partial OIDC config + EDR_AUTH_ALLOW_NO_OIDC=1 must NOT silently disable OIDC. A typo in EDR_OIDC_ISSUER
-			// while EDR_OIDC_CLIENT_ID is set is unmistakeably an OIDC intent; falling through to break-glass-only mode
-			// masks the misconfiguration.
-			name: "partial OIDC config + allow-no-oidc still refuses",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_AUTH_ALLOW_NO_OIDC": "1",
-				"EDR_OIDC_CLIENT_ID":     "edr",
-			}),
-			wantErr: "set without EDR_OIDC_ISSUER",
-		},
-		{
-			// Same as above but with the secret set instead of client_id.
-			name: "partial OIDC (secret only) + allow-no-oidc still refuses",
-			env: withExtra(prodLikeEnv, map[string]string{
-				"EDR_AUTH_ALLOW_NO_OIDC": "1",
-				"EDR_OIDC_CLIENT_SECRET": "shh",
-			}),
-			wantErr: "set without EDR_OIDC_ISSUER",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got, err := loadFrom(envMap(tc.env))
-			if tc.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			require.NotNil(t, got)
-			if tc.validate != nil {
-				tc.validate(t, got)
-			}
-		})
-	}
-}
-
 func withExtra(base, extra map[string]string) map[string]string {
 	out := make(map[string]string, len(base)+len(extra))
 	maps.Copy(out, base)
@@ -544,9 +365,8 @@ func TestLoad_TLSCertFailFast(t *testing.T) {
 	t.Parallel()
 	certFile, keyFile := writeTestCert(t)
 	base := map[string]string{
-		"EDR_DSN":                "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
-		"EDR_ENROLL_SECRET":      "enroll-me",
-		"EDR_AUTH_ALLOW_NO_OIDC": "1",
+		"EDR_DSN":           "root@tcp(127.0.0.1:3306)/edr?parseTime=true",
+		"EDR_ENROLL_SECRET": "enroll-me",
 	}
 
 	t.Run("nonexistent cert file rejected at Load time", func(t *testing.T) {

@@ -344,14 +344,9 @@ func openIdentity(
 		OIDCSecretKey:                 oidcSecretKey,
 		ServiceAccountTokenSigningKey: serviceAccountTokenSigningKey,
 		OIDC: identitybootstrap.OIDCDeps{
-			Issuer:               cfg.OIDCIssuer,
-			ClientID:             cfg.OIDCClientID,
-			ClientSecret:         cfg.OIDCClientSecret,
-			RedirectURL:          cfg.OIDCRedirectURL,
-			Scopes:               config.DefaultOIDCScopes(),
-			AllowJITProvisioning: cfg.OIDCAllowJITProvisioning,
-			DefaultRole:          cfg.OIDCDefaultRole,
-			StateCookieTTL:       config.DefaultOIDCStateCookieTTL,
+			// Live handler knobs only; the provider connection config lives in the durable oidc_config store and is resolved per login
+			// (issue #375). The server reads no EDR_OIDC_* env vars (issue #512).
+			StateCookieTTL: config.DefaultOIDCStateCookieTTL,
 		},
 		Breakglass: identitybootstrap.BreakglassDeps{
 			BootstrapTokenTTL: cfg.BreakglassBootstrapTokenTTL,

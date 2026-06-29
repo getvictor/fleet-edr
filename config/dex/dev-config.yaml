@@ -11,8 +11,8 @@
 #
 # DO NOT use this config or these credentials in production. The
 # issuer URL, client secret, and static passwords are all checked
-# into the repo by design; production OIDC config lives in env vars
-# loaded from a real secrets manager per docs/okta-setup.md.
+# into the repo by design; production SSO is configured at runtime
+# through the Single sign-on admin page per docs/okta-setup.md.
 
 issuer: http://localhost:5556/dex
 
@@ -35,9 +35,9 @@ staticClients:
     name: "EDR QA"
     secret: edr-qa-client-secret-do-not-use-in-prod
     redirectURIs:
-      # HTTPS-only since issue #140. Must match task dev:server:qa-oidc's
-      # EDR_OIDC_REDIRECT_URL exactly; dex refuses any other URL during the
-      # authorization-code redirect.
+      # HTTPS-only since issue #140. Must match the redirect derived from task
+      # dev:server:qa-oidc's seeded EDR_DEMO_OIDC_EXTERNAL_URL (<url>/api/auth/callback)
+      # exactly; dex refuses any other URL during the authorization-code redirect.
       - "https://localhost:8088/api/auth/callback"
 
 enablePasswordDB: true

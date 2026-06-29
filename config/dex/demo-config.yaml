@@ -3,13 +3,13 @@
 # reviewer can sign in and click around without an MDM, a Mac, or a real IdP.
 #
 # A single static user is pre-provisioned: demo@fleet-edr.local / demo. On
-# first sign-in the EDR JIT-provisions it; docker-compose.demo.yml sets
-# EDR_OIDC_DEFAULT_ROLE=admin so that account lands at the `admin` role and
-# every affordance is visible.
+# first sign-in the EDR JIT-provisions it at the seeded config's default role
+# (analyst). The demo seeder writes this dex connection config into the durable
+# oidc_config store (issue #512); the server reads no EDR_OIDC_* env vars.
 #
 # DO NOT use this config or these credentials in production. The issuer URL,
 # client secret, and static password are all checked into the repo by design;
-# production OIDC config lives in env vars loaded from a real secrets manager
+# production SSO is configured at runtime through the Single sign-on admin page
 # per docs/okta-setup.md.
 #
 # The issuer host `dex.demo.localhost` is deliberate: browsers resolve any
@@ -36,9 +36,10 @@ staticClients:
     name: "Fleet EDR demo"
     secret: edr-demo-client-secret-do-not-use-in-prod
     redirectURIs:
-      # Must match docker-compose.demo.yml's EDR_OIDC_REDIRECT_URL exactly; dex
-      # refuses any other URL during the authorization-code redirect. This is the
-      # browser-facing EDR server URL, hence localhost (not the in-network name).
+      # Must match the redirect derived from the seeder's EDR_DEMO_OIDC_EXTERNAL_URL
+      # (<url>/api/auth/callback) exactly; dex refuses any other URL during the
+      # authorization-code redirect. This is the browser-facing EDR server URL, hence
+      # localhost (not the in-network name).
       - "https://localhost:8088/api/auth/callback"
 
 enablePasswordDB: true

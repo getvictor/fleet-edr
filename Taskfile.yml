@@ -698,9 +698,8 @@ tasks:
       # convention): never reuse this placeholder. Length: 49 bytes, well past the 32-byte
       # minimum the config layer validates.
       EDR_SECRET_KEY: dev-only-secret-key-do-not-use-in-production-xyz
-      # Default dev mode is break-glass-only (no OIDC IdP wired up). For the OIDC-against-dex
-      # flow used by Playwright e2e + the QA matrix, use `task dev:server:qa-oidc` instead.
-      EDR_AUTH_ALLOW_NO_OIDC: "1"
+      # Default dev mode is break-glass-only (no OIDC IdP wired up); the server always boots and SSO is configured at runtime via the
+      # UI (issue #512). For the OIDC-against-dex flow used by Playwright e2e + the QA matrix, use `task dev:server:qa-oidc` instead.
       # Break-glass RP_ORIGINS now uses https:// to match the server's TLS posture;
       # RP_ID stays the registrable host (no scheme, no port). Mismatch between the
       # browser-observed origin and any RP_ORIGINS entry rejects the WebAuthn ceremony
@@ -868,18 +867,19 @@ tasks:
   dev:server:qa-oidc:
     desc: |
       Run the dev server pointed at the local dex (qa:up) instead of a
-      real Okta tenant. Mirrors dev:server's env block + adds the four
-      EDR_OIDC_* env vars matching config/dex/dev-config.yaml. Drop
-      EDR_AUTH_ALLOW_NO_OIDC=1 so the server actually exercises the
-      OIDC sign-in path; the four pre-provisioned dex users
-      (analyst@qa.local, senior@qa.local, auditor@qa.local,
-      admin@qa.local) all share password `qa-password-123`. First
-      sign-in JIT-provisions the user as `analyst`; promote via SQL
-      per docs/authz.md to test the role matrix.
+      real Okta tenant. The server reads no EDR_OIDC_* env vars (issue
+      #512); SSO lives in the durable oidc_config store. This task applies
+      migrations, seeds the dex connection config into that store (via the
+      demo-seed --oidc-only path), then boots the server. The four
+      pre-provisioned dex users (analyst@qa.local, senior@qa.local,
+      auditor@qa.local, admin@qa.local) all share password
+      `qa-password-123`. First sign-in JIT-provisions the user as
+      `analyst`; promote via SQL per docs/authz.md to test the role matrix.
 
-      HTTPS-only since issue #140. Depends on dev:certs and binds the
-      dex redirect URL to https://localhost:8088/api/auth/callback;
-      config/dex/dev-config.yaml's redirectURIs list mirrors that.
+      HTTPS-only since issue #140. Depends on dev:certs and seeds the
+      external URL as https://localhost:8088, so the derived redirect is
+      https://localhost:8088/api/auth/callback; config/dex/dev-config.yaml's
+      redirectURIs list mirrors that.
     deps: [dev:certs]
     env:
       EDR_DSN: "root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
@@ -894,21 +894,22 @@ tasks:
       EDR_SECRET_KEY: dev-only-secret-key-do-not-use-in-production-xyz
       EDR_BREAKGLASS_RP_ID: localhost
       EDR_BREAKGLASS_RP_ORIGINS: https://localhost:8088
-      # OIDC: point at the local dex from qa:up. Dex itself runs over plain HTTP
-      # on :5556, which is the dex container's listener, not the EDR's, and the
-      # OIDC client lib speaks HTTP to the issuer just fine. The redirect URL
-      # MUST match config/dex/dev-config.yaml's redirectURIs entry exactly,
-      # both sides on https://localhost:8088 (issue #140).
-      EDR_OIDC_ISSUER: http://localhost:5556/dex
-      EDR_OIDC_CLIENT_ID: edr-qa
-      EDR_OIDC_CLIENT_SECRET: edr-qa-client-secret-do-not-use-in-prod
-      EDR_OIDC_REDIRECT_URL: https://localhost:8088/api/auth/callback
-      EDR_OIDC_ALLOW_JIT_PROVISIONING: "1"
+      # Dex SSO connection config seeded into the durable store (not read by the server). Dex listens on plain HTTP :5556 (its own
+      # listener, not the EDR's); the OIDC client lib speaks HTTP to the issuer fine. The external URL drives the derived redirect, which
+      # MUST match config/dex/dev-config.yaml's redirectURIs entry (https://localhost:8088/api/auth/callback, issue #140).
+      EDR_DEMO_OIDC_ISSUER: http://localhost:5556/dex
+      EDR_DEMO_OIDC_CLIENT_ID: edr-qa
+      EDR_DEMO_OIDC_CLIENT_SECRET: edr-qa-client-secret-do-not-use-in-prod
+      EDR_DEMO_OIDC_EXTERNAL_URL: https://localhost:8088
       OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: fleet-edr-server
     cmds:
+      # Apply migrations so oidc_config exists, seed the dex SSO config into the durable store, then boot. The seed is idempotent and
+      # never clobbers a UI edit, so re-running is safe.
+      - go run ./server/cmd/fleet-edr-migrate
+      - go run ./server/cmd/fleet-edr-demo-seed --oidc-only
       - go run {{.SERVER_PKG}}
 
   # -------- install tools / hooks --------

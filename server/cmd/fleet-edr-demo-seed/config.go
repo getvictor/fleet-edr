@@ -34,6 +34,20 @@ type config struct {
 	demoOIDCSubject string
 	demoRole        string
 
+	// OIDC connection config the seeder writes to the durable oidc_config store so the demo/QA dex SSO is configured without the
+	// server reading EDR_OIDC_* (issue #512 removed that env path). secretKey is the deployment root secret (must match the server's
+	// EDR_SECRET_KEY) used to seal the client secret at rest. When oidcIssuer is empty the OIDC seed is skipped. oidcOnly seeds just the
+	// OIDC config and exits, skipping the corpus replay (used by `task dev:server:qa-oidc`).
+	secretKey        string
+	oidcIssuer       string
+	oidcClientID     string
+	oidcClientSecret string
+	oidcExternalURL  string
+	oidcDefaultRole  string
+	oidcJIT          bool
+	oidcOnly         bool
+	oidcForce        bool
+
 	readyTimeout  time.Duration
 	verifyTimeout time.Duration
 	pollInterval  time.Duration
@@ -62,6 +76,24 @@ func resolveConfig(getenv func(string) string, args []string) (config, error) {
 		"dex-issued OIDC subject for the demo user; empty disables the demo-user seed")
 	fs.StringVar(&c.demoRole, "demo-role", envOr(getenv, "EDR_DEMO_ROLE", "senior_analyst"),
 		"role bound to the SSO demo user (must be a seeded role id)")
+	fs.StringVar(&c.secretKey, "secret-key", envOr(getenv, "EDR_SECRET_KEY", ""),
+		"deployment root secret (matches the server's EDR_SECRET_KEY); required to seal the OIDC client secret when seeding SSO")
+	fs.StringVar(&c.oidcIssuer, "oidc-issuer", envOr(getenv, "EDR_DEMO_OIDC_ISSUER", ""),
+		"OIDC issuer URL to seed into the durable config; empty skips the SSO config seed")
+	fs.StringVar(&c.oidcClientID, "oidc-client-id", envOr(getenv, "EDR_DEMO_OIDC_CLIENT_ID", ""),
+		"OIDC client id to seed")
+	fs.StringVar(&c.oidcClientSecret, "oidc-client-secret", envOr(getenv, "EDR_DEMO_OIDC_CLIENT_SECRET", ""),
+		"OIDC client secret to seed (sealed at rest with the deployment root secret)")
+	fs.StringVar(&c.oidcExternalURL, "oidc-external-url", envOr(getenv, "EDR_DEMO_OIDC_EXTERNAL_URL", ""),
+		"deployment external URL the OIDC redirect is derived from (<url>/api/auth/callback)")
+	fs.StringVar(&c.oidcDefaultRole, "oidc-default-role", envOr(getenv, "EDR_DEMO_OIDC_DEFAULT_ROLE", "analyst"),
+		"role JIT-provisioned SSO users are bound to (must be a seeded role id)")
+	fs.BoolVar(&c.oidcJIT, "oidc-jit", envBool(getenv, "EDR_DEMO_OIDC_JIT", true),
+		"enable JIT provisioning of unknown SSO subjects in the seeded config")
+	fs.BoolVar(&c.oidcOnly, "oidc-only", envBool(getenv, "EDR_DEMO_OIDC_ONLY", false),
+		"seed only the durable OIDC config and exit, skipping the corpus replay (for local QA against dex)")
+	fs.BoolVar(&c.oidcForce, "oidc-force", envBool(getenv, "EDR_DEMO_OIDC_FORCE", false),
+		"overwrite an existing stored OIDC config instead of skipping it (test harnesses re-pointing the JIT toggle; not for the demo)")
 	fs.DurationVar(&c.readyTimeout, "ready-timeout", envDuration(getenv, "EDR_DEMO_READY_TIMEOUT", defaultReadyTimeout),
 		"how long to wait for the server's /readyz to report ok")
 	fs.DurationVar(&c.verifyTimeout, "verify-timeout", envDuration(getenv, "EDR_DEMO_VERIFY_TIMEOUT", defaultVerifyTimeout),
@@ -75,6 +107,9 @@ func resolveConfig(getenv func(string) string, args []string) (config, error) {
 	c.serverURL = strings.TrimSuffix(c.serverURL, "/")
 	if c.dsn == "" {
 		return config{}, errors.New("a MySQL DSN is required: set EDR_DSN or pass --dsn")
+	}
+	if c.oidcOnly && c.oidcIssuer == "" {
+		return config{}, errors.New("--oidc-only requires an OIDC issuer: set EDR_DEMO_OIDC_ISSUER or pass --oidc-issuer")
 	}
 	return c, nil
 }

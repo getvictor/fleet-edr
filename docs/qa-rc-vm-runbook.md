@@ -28,7 +28,7 @@ export EDR_ENROLL_SECRET=dev-enroll-secret
 export EDR_TLS_CERT_FILE=tmp/dev.crt EDR_TLS_KEY_FILE=tmp/dev.key
 export EDR_LISTEN_ADDR=0.0.0.0:8088 EDR_UI_LIVE_DIR=server/ui/dist
 export EDR_SECRET_KEY=dev-only-secret-key-do-not-use-in-production-xyz
-export EDR_AUTH_ALLOW_NO_OIDC=1 EDR_BREAKGLASS_RP_ID=localhost EDR_BREAKGLASS_RP_ORIGINS=https://localhost:8088
+export EDR_BREAKGLASS_RP_ID=localhost EDR_BREAKGLASS_RP_ORIGINS=https://localhost:8088
 export OTEL_SERVICE_NAME=fleet-edr-server
 unset OTEL_EXPORTER_OTLP_INSECURE
 go run ./server/cmd/fleet-edr-server

@@ -4,10 +4,10 @@ import { openDB, resetDB } from "../../fixtures/db";
 // When JIT provisioning is disabled the OIDC callback refuses to create a new users row for a `sub` it doesn't already know, emits an
 // oidc.unknown_subject audit row, and bounces the operator to /login?error=unknown_subject.
 //
-// JIT is DB-governed (issue #375): EDR_OIDC_ALLOW_JIT_PROVISIONING only seeds the stored oidc_config on first boot and is inert once a
-// row exists, so this test disables JIT by writing jit_enabled = 0 directly to the stored config (the provisioner reads it per OIDC
-// callback, so it applies without a restart). resetDB() intentionally does not touch oidc_config, so the flag is persistent shared
-// state across specs; beforeAll captures the prior value and afterAll restores it exactly, leaving the suite's SSO posture unchanged.
+// JIT is DB-governed (issue #375; the server reads no EDR_OIDC_* env vars since issue #512): the stored oidc_config row is the source of
+// truth, so this test disables JIT by writing jit_enabled = 0 directly to it (the provisioner reads it per OIDC callback, so it applies
+// without a restart). resetDB() intentionally does not touch oidc_config, so the flag is persistent shared state across specs; beforeAll
+// captures the prior value and afterAll restores it exactly, leaving the suite's SSO posture unchanged.
 
 const dexPassword = "qa-password-123"; // NOSONAR(typescript:S2068)
 
