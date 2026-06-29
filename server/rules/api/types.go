@@ -67,7 +67,8 @@ type Rule interface {
 	// so the operator who triages an alert, reads the docs, and writes an exclusion sees the same name mapped to one stable ID(). Unlike
 	// ID() (the snake_case machine identifier), this is prose, e.g. "Keychain credential dump". A rule with multiple trigger arms still
 	// emits this one title; which arm fired lives in the finding's Description, not in a forked title (SIEM/Sigma catalog convention:
-	// one rule, one name). The catalog guard test asserts Doc().Title == DisplayName() and that every finding carries it.
+	// one rule, one name). The catalog guard test (TestAll_CanonicalDisplayName) asserts Doc().Title == DisplayName(); the
+	// fixture-replay harness and each rule's positive-detection test assert that findings carry it.
 	DisplayName() string
 	// Techniques returns the MITRE ATT&CK technique IDs the rule maps to (e.g. []string{"T1059.002", "T1105"}). Used for Navigator export
 	// + UI badging. Return an empty slice, not nil, for "no mapping".

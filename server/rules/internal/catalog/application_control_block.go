@@ -34,8 +34,8 @@ func (r *ApplicationControlBlock) ID() string { return "application_control_bloc
 // DisplayName is the canonical name for the rule's catalog entry (Doc().Title). Unlike the other rules, the alert this rule raises
 // does NOT carry DisplayName as its title: each block event maps to a finding whose RuleID is the matched app-control rule
 // (`app_control:<n>`, not this catalog ID) and whose title is computed per block (`Application blocked: <binary>`), so the operator
-// sees which binary was blocked by which admin rule. The catalog guard test exempts this rule from the finding-title==DisplayName
-// assertion for that reason (issue #519).
+// sees which binary was blocked by which admin rule. The finding-title==DisplayName invariant is enforced by the fixture-replay
+// harness; this rule is table-driven (not fixture-replayed) and so is never subject to that assertion (issue #519).
 func (r *ApplicationControlBlock) DisplayName() string { return "Application control block" }
 
 // Techniques returns an empty slice. App-control blocks are not mapped to MITRE ATT&CK because the framework's perspective is "the
