@@ -18,7 +18,7 @@
     "install:browsers": "playwright install --with-deps chromium",
     "report": "playwright show-report"
   },
-  "//": "Scripts split by required server env. `test` + `qa` run against the default `task dev:server:qa-oidc`, which seeds the dex SSO config into the durable store (the server reads no EDR_OIDC_* per issue #512). qa:jit-off needs no special server env: oidc-jit-disabled.spec.ts toggles jit_enabled directly in the stored config and restores it. The other env-specific ones (qa:allowlist needs EDR_BREAKGLASS_IP_ALLOWLIST, qa:lifecycle needs short EDR_SESSION_*_TIMEOUTs) MUST be invoked with the server restarted under that env, otherwise they will pass for the wrong reason or time out. The break-glass setup endpoint is globally rate-limited at 5/min - back-to-back full qa passes need a 90s pause between them; that's what test:all sleeps between the auth + qa runs.",
+  "//": "Scripts split by required server env. `test` + `qa` run against the default `task dev:server:qa-oidc`, which seeds the dex SSO config into the durable store (the server reads no EDR_OIDC_* per issue #512). qa:jit-off needs no special server env: oidc-jit-disabled.spec.ts toggles jit_enabled directly in the stored config and restores it. The other env-specific ones (qa:allowlist needs EDR_BREAKGLASS_IP_ALLOWLIST, qa:lifecycle needs short EDR_SESSION_*_TIMEOUTs) MUST be invoked with the server restarted under that env, otherwise they will pass for the wrong reason or time out. The break-glass setup endpoint is globally rate-limited at 5/min: back-to-back full qa passes need a 90s pause between them; that's what test:all sleeps between the auth + qa runs.",
   "devDependencies": {
     "@playwright/test": "1.60.0",
     "@types/js-yaml": "4.0.9",

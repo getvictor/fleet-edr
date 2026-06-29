@@ -597,11 +597,16 @@ func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in O
 		return fmt.Errorf("identity SeedOIDCConfig: build secret sealer: %w", err)
 	}
 	store := ssoconfig.New(db, sealer)
-	switch _, err := store.Get(ctx); {
-	case err == nil && !in.Force:
-		return nil // a stored config governs; leave it untouched
-	case err != nil && !errors.Is(err, ssoconfig.ErrNotFound):
-		return fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
+	// Skip only when a USABLE (decryptable) config already exists and we are not forcing. Gating on decryptability, not mere row
+	// presence, avoids silently no-opping over a row whose secret cannot be decrypted (e.g. after an EDR_SECRET_KEY rotation), which would
+	// leave SSO unusable while OIDCEnabled reports false; that surfaces as an error so the caller can rerun with Force to overwrite.
+	if !in.Force {
+		switch _, err := store.GetDecrypted(ctx); {
+		case err == nil:
+			return nil // a usable stored config governs; leave it untouched
+		case !errors.Is(err, ssoconfig.ErrNotFound):
+			return fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
+		}
 	}
 	// Write oidc_config and the external URL in ONE transaction (same shape as the admin API's apply), so a partial failure can't leave a
 	// stored OIDC config paired with a missing derived redirect; a rolled-back seed re-runs cleanly.

@@ -144,4 +144,30 @@ func TestSeedOIDCConfig(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "analyst", got.DefaultRole, "default_role=admin must be clamped to analyst")
 	})
+
+	t.Run("undecryptable row errors without force and is repaired with force", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		keyA := fixedKey(29)
+		keyB := fixedKey(31) // a different sealer key, e.g. after an EDR_SECRET_KEY rotation
+		require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+
+		seed := func(key []byte, force bool) error {
+			return bootstrap.SeedOIDCConfig(t.Context(), db, key, bootstrap.OIDCSeedInput{
+				Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "s",
+				Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst", Force: force,
+			})
+		}
+		require.NoError(t, seed(keyA, false)) // row sealed with key A
+
+		// A non-force re-seed with a different key must NOT silently no-op over a row it cannot decrypt; it errors instead.
+		require.Error(t, seed(keyB, false), "an undecryptable existing config must surface an error, not a silent no-op")
+
+		// Force overwrites the unreadable row, repairing SSO; the row now decrypts with key B.
+		require.NoError(t, seed(keyB, true))
+		sealerB, err := ssoconfig.NewSealer(keyB)
+		require.NoError(t, err)
+		_, err = ssoconfig.New(db, sealerB).GetDecrypted(t.Context())
+		require.NoError(t, err, "force re-seed must leave a config decryptable with the new key")
+	})
 }
