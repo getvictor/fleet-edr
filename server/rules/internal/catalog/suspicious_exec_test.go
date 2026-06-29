@@ -52,7 +52,7 @@ func TestSuspiciousExecDetectsPayloadFromTmp(t *testing.T) {
 	f := findings[0]
 	assert.Equal(t, "suspicious_exec", f.RuleID)
 	assert.Equal(t, "high", f.Severity)
-	assert.Equal(t, "Suspicious exec from temp path", f.Title)
+	assert.Equal(t, "Suspicious exec chain", f.Title)
 	assert.Contains(t, f.Description, "/usr/bin/python3")
 	assert.Contains(t, f.Description, "/bin/sh")
 	assert.Contains(t, f.Description, "/tmp/payload")
@@ -94,7 +94,7 @@ func TestSuspiciousExecDetectsShellReExec(t *testing.T) {
 	f := findings[0]
 	assert.Equal(t, "suspicious_exec", f.RuleID)
 	assert.Equal(t, "high", f.Severity)
-	assert.Equal(t, "Suspicious exec from temp path", f.Title)
+	assert.Equal(t, "Suspicious exec chain", f.Title)
 	assert.Contains(t, f.Description, "/usr/bin/python3")
 	assert.Contains(t, f.Description, "/bin/sh")
 	assert.Contains(t, f.Description, "/private/tmp/payload")
@@ -287,7 +287,7 @@ func TestSuspiciousExecDetectsShellWithOutboundConnection(t *testing.T) {
 	f := findings[0]
 	assert.Equal(t, "suspicious_exec", f.RuleID)
 	assert.Equal(t, "high", f.Severity)
-	assert.Equal(t, "Shell spawn with outbound network connection", f.Title)
+	assert.Equal(t, "Suspicious exec chain", f.Title)
 	assert.Contains(t, f.Description, "198.51.100.42:443")
 	assert.Contains(t, f.EventIDs, "exec-sh")
 	assert.Contains(t, f.EventIDs, "net-curl")
@@ -325,8 +325,11 @@ func TestSuspiciousExecPrefersSuspiciousPathOverNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 
-	// Should be the path-based finding, not the network one.
-	assert.Equal(t, "Suspicious exec from temp path", findings[0].Title)
+	// Should be the path-based finding, not the network one. Both arms now share the canonical title (issue #519), so the
+	// discriminator is the Description: the temp arm names the /tmp path, the network arm says "outbound".
+	assert.Equal(t, "Suspicious exec chain", findings[0].Title)
+	assert.Contains(t, findings[0].Description, "/tmp/payload")
+	assert.NotContains(t, findings[0].Description, "outbound")
 }
 
 func TestIsSuspiciousPath(t *testing.T) {
@@ -382,7 +385,7 @@ func TestSuspiciousExecDetectsShebangScriptInArgs(t *testing.T) {
 	findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "shebang script in argv[1] must match the temp-exec arm")
-	assert.Equal(t, "Suspicious exec from temp path", findings[0].Title)
+	assert.Equal(t, "Suspicious exec chain", findings[0].Title)
 	assert.Contains(t, findings[0].Description, "/usr/bin/python3")
 	assert.Contains(t, findings[0].Description, "/tmp/payload.sh", "description must surface the argv script path, not just /bin/sh")
 }
@@ -515,7 +518,7 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	findings2, err := rule.Evaluate(ctx, batch2, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings2, 1, "temp-binary exec in batch 2 must walk up to python3 → sh from batch 1")
-	assert.Equal(t, "Suspicious exec from temp path", findings2[0].Title)
+	assert.Equal(t, "Suspicious exec chain", findings2[0].Title)
 	assert.Contains(t, findings2[0].Description, "/usr/bin/python3")
 	assert.Contains(t, findings2[0].Description, "/bin/sh")
 	assert.Contains(t, findings2[0].Description, "/tmp/payload")
@@ -683,7 +686,7 @@ func TestSuspiciousExec_LocalResolverDNSDeNoising(t *testing.T) {
 		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
 		require.NoError(t, err)
 		require.Len(t, findings, 1, "DNS to a public resolver must still trigger the network arm")
-		assert.Equal(t, "Shell spawn with outbound network connection", findings[0].Title)
+		assert.Equal(t, "Suspicious exec chain", findings[0].Title)
 		assert.Contains(t, findings[0].Description, "8.8.8.8:53")
 	})
 

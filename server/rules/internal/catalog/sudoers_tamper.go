@@ -52,6 +52,9 @@ type SudoersTamper struct {
 
 func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
+func (r *SudoersTamper) DisplayName() string { return "Sudoers tamper" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1548.003
 // (Abuse Elevation Control Mechanism: Sudo and Sudo Caching).
 func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
@@ -60,7 +63,7 @@ func (r *SudoersTamper) Techniques() []string { return []string{"T1548.003"} }
 // the generated docs/detection-rules.md.
 func (r *SudoersTamper) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "Sudoers tamper (write to /etc/sudoers or /etc/sudoers.d/*)",
+		Title:   r.DisplayName(),
 		Summary: "Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in write mode.",
 		Description: "Detects an instant escalation primitive: writing to `/etc/sudoers` or any direct child of " +
 			"`/etc/sudoers.d/`. A successful tamper grants future shell sessions arbitrary command execution as " +
@@ -180,7 +183,7 @@ func (r *SudoersTamper) evalEvent(
 		HostID:   evt.HostID,
 		RuleID:   r.ID(),
 		Severity: api.SeverityHigh,
-		Title:    "Sudoers tamper",
+		Title:    r.DisplayName(),
 		Description: fmt.Sprintf(
 			"%s opened %s for writing: sudo escalation surface (MITRE T1548.003)",
 			proc.Path, p.Path,

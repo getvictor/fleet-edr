@@ -102,20 +102,19 @@ describe("DetectionConfig", () => {
     expect(screen.getByRole("cell", { name: "medium" })).toBeInTheDocument();
   });
 
-  // The rule picker shows a concise rule name: the descriptive parenthetical and the rule id are dropped from the option text,
-  // while the id still rides as the option value the form submits.
-  it("renders a concise rule name in the picker, dropping the descriptive aside and id", async () => {
-    const verbose = makeRuleEntry({
+  // The rule picker shows the rule's canonical title verbatim as the option text (titles are clean single names, issue #519),
+  // while the id rides as the option value the form submits.
+  it("renders the canonical rule title in the picker, with the id as the option value", async () => {
+    const entry = makeRuleEntry({
       id: "suspicious_exec",
-      doc: makeRuleDoc({ title: "Suspicious exec chain (non-shell → shell → temp/network)" }),
+      doc: makeRuleDoc({ title: "Suspicious exec chain" }),
     });
-    stubReads({ rules: [verbose] });
+    stubReads({ rules: [entry] });
     renderPage();
     await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
 
     const option = screen.getByRole("option", { name: "Suspicious exec chain" });
     expect(option).toHaveValue("suspicious_exec");
-    expect(screen.queryByRole("option", { name: /\(suspicious_exec\)/ })).not.toBeInTheDocument();
   });
 
   it("orders the rule picker alphabetically by display name", async () => {

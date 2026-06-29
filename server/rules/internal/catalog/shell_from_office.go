@@ -19,6 +19,9 @@ type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
+func (r *ShellFromOffice) DisplayName() string { return "Shell spawned by Microsoft Office" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1566.001 (Phishing → Spearphishing Attachment) + T1059.004 (Command and
 // Scripting Interpreter → Unix Shell). The chain "Office app → shell" is a textbook post-phish execution step.
 func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "T1059.004"} }
@@ -27,7 +30,7 @@ func (r *ShellFromOffice) Techniques() []string { return []string{"T1566.001", "
 // the generated docs/detection-rules.md.
 func (r *ShellFromOffice) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "Shell spawned by Microsoft Office",
+		Title:   r.DisplayName(),
 		Summary: "Flags any /bin/sh, /bin/bash, /bin/zsh (etc.) whose parent is Word, Excel, PowerPoint, or Outlook.",
 		Description: "Detects the textbook post-phishing execution step: a macro-laden Office document opens, the macro " +
 			"shells out, and the second stage takes off from there. The match is on the parent process being one of " +
@@ -111,7 +114,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
 		Severity:    api.SeverityHigh,
-		Title:       "Shell spawned from Office app",
+		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parent.Path), p.Path),
 		ProcessID:   proc.ID,
 		EventIDs:    []string{evt.EventID},

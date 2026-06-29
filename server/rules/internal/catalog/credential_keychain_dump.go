@@ -30,6 +30,9 @@ type CredentialKeychainDump struct{}
 
 func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
+func (r *CredentialKeychainDump) DisplayName() string { return "Keychain credential dump" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1555.001 (Credentials from Password Stores → Keychain). Apple's own docs
 // list `security dump-keychain` as the tool for enumerating Keychain items, and MITRE explicitly cites it on the technique page.
 func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.001"} }
@@ -38,7 +41,7 @@ func (r *CredentialKeychainDump) Techniques() []string { return []string{"T1555.
 // the generated docs/detection-rules.md.
 func (r *CredentialKeychainDump) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "Keychain dump (security dump-keychain)",
+		Title:   r.DisplayName(),
 		Summary: "Flags exec of /usr/bin/security dump-keychain: the canonical macOS Keychain export command.",
 		Description: "Fires when a process invokes `/usr/bin/security` with the `dump-keychain` subcommand. " +
 			"That command exports Keychain entries (saved passwords, private keys) and is the macOS-native equivalent " +
@@ -112,7 +115,7 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			HostID:      evt.HostID,
 			RuleID:      r.ID(),
 			Severity:    api.SeverityHigh,
-			Title:       "Keychain credential dump attempted",
+			Title:       r.DisplayName(),
 			Description: fmt.Sprintf("%s invoked with %q: reads all Keychain entries (Keychain credential access, MITRE T1555.001)", p.Path, sub),
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},

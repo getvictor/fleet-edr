@@ -22,10 +22,11 @@ type stubRule struct {
 }
 
 func (r *stubRule) ID() string           { return r.id }
+func (r *stubRule) DisplayName() string  { return "Stub" }
 func (r *stubRule) Techniques() []string { return r.techniques }
 func (r *stubRule) Doc() rulesapi.Documentation {
 	return rulesapi.Documentation{
-		Title:    "Stub",
+		Title:    r.DisplayName(),
 		Severity: rulesapi.SeverityHigh,
 	}
 }

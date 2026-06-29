@@ -41,6 +41,7 @@ func TestOsascriptNetworkExec_DetectsChain(t *testing.T) {
 	require.Len(t, findings, 1)
 	f := findings[0]
 	assert.Equal(t, "osascript_network_exec", f.RuleID)
+	assert.Equal(t, rule.DisplayName(), f.Title, "alert title is the rule's canonical DisplayName (issue #519)")
 	assert.Equal(t, "critical", f.Severity)
 	assert.Contains(t, f.Description, "/usr/bin/curl")
 	assert.Contains(t, f.Description, "/tmp/stage2")

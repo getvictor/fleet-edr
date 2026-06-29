@@ -24,6 +24,9 @@ type DyldInsert struct{}
 
 func (r *DyldInsert) ID() string { return "dyld_insert" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
+func (r *DyldInsert) DisplayName() string { return "DYLD injection on exec" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1574.006 (Hijack Execution Flow → Dynamic Linker Hijacking).
 // Sub-technique chosen deliberately: the rule catches DYLD_* env-var abuse specifically, not the broader "Hijack Execution Flow"
 // parent.
@@ -33,7 +36,7 @@ func (r *DyldInsert) Techniques() []string { return []string{"T1574.006"} }
 // the generated docs/detection-rules.md.
 func (r *DyldInsert) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "DYLD injection on exec",
+		Title:   r.DisplayName(),
 		Summary: "Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shell-style or via env(1)).",
 		Description: "Detects the classic macOS code-injection primitive: launching a process with " +
 			"`DYLD_INSERT_LIBRARIES=…` or `DYLD_LIBRARY_PATH=…` set so dyld loads attacker-supplied dylibs into " +
@@ -95,7 +98,7 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 			HostID:      evt.HostID,
 			RuleID:      r.ID(),
 			Severity:    api.SeverityHigh,
-			Title:       "DYLD injection env var set on exec",
+			Title:       r.DisplayName(),
 			Description: fmt.Sprintf("%s launched with %s", p.Path, matched),
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},

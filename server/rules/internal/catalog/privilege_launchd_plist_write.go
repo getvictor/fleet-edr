@@ -44,6 +44,10 @@ type PrivilegeLaunchdPlistWrite struct {
 
 func (r *PrivilegeLaunchdPlistWrite) ID() string { return "privilege_launchd_plist_write" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519). The ID stays the stale-but-stable
+// snake_case identifier (renaming it is a migration-backed change); the prose name reflects what the rule actually detects today.
+func (r *PrivilegeLaunchdPlistWrite) DisplayName() string { return "LaunchDaemon persistence" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1543.004
 // (Boot or Logon Autostart Execution → Launch Daemon).
 func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1543.004"} }
@@ -52,7 +56,7 @@ func (r *PrivilegeLaunchdPlistWrite) Techniques() []string { return []string{"T1
 // the generated docs/detection-rules.md.
 func (r *PrivilegeLaunchdPlistWrite) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "LaunchDaemon persistence (BTM daemon registration)",
+		Title:   r.DisplayName(),
 		Summary: "Flags a system-domain LaunchDaemon whose registered executable is not an Apple platform binary and not allowlisted.",
 		Description: "Detects the canonical system-domain persistence vector (T1543.004): a LaunchDaemon being registered " +
 			"with macOS Background Task Management. Once registered, the next `launchctl bootstrap system/<name>` (or a " +
@@ -149,7 +153,7 @@ func (r *PrivilegeLaunchdPlistWrite) evalEvent(
 		HostID:   evt.HostID,
 		RuleID:   r.ID(),
 		Severity: api.SeverityHigh,
-		Title:    "LaunchDaemon persistence",
+		Title:    r.DisplayName(),
 		Description: fmt.Sprintf(
 			"Untrusted executable %s registered as system LaunchDaemon %s: persistence (MITRE T1543.004)",
 			executable, p.ItemPath,

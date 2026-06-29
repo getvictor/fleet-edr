@@ -106,6 +106,7 @@ func TestShellFromOffice_TableDriven(t *testing.T) {
 			}
 			require.Len(t, findings, 1)
 			assert.Equal(t, "shell_from_office", findings[0].RuleID)
+			assert.Equal(t, rule.DisplayName(), findings[0].Title, "alert title is the rule's canonical DisplayName (issue #519)")
 			assert.Equal(t, "high", findings[0].Severity)
 			assert.Equal(t, tc.wantDesc, findings[0].Description)
 		})

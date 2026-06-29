@@ -62,10 +62,11 @@ type stubRule struct {
 }
 
 func (r *stubRule) ID() string           { return r.id }
+func (r *stubRule) DisplayName() string  { return "Stub rule" }
 func (r *stubRule) Techniques() []string { return r.techniques }
 func (r *stubRule) Doc() rulesapi.Documentation {
 	return rulesapi.Documentation{
-		Title:    "Stub rule",
+		Title:    r.DisplayName(),
 		Summary:  "test fixture",
 		Severity: rulesapi.SeverityHigh,
 	}
@@ -107,9 +108,10 @@ func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
 type multiPIDStub struct{ id string }
 
 func (r *multiPIDStub) ID() string           { return r.id }
+func (r *multiPIDStub) DisplayName() string  { return "Multi-pid stub" }
 func (r *multiPIDStub) Techniques() []string { return nil }
 func (r *multiPIDStub) Doc() rulesapi.Documentation {
-	return rulesapi.Documentation{Title: "Multi-pid stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+	return rulesapi.Documentation{Title: r.DisplayName(), Summary: "test fixture", Severity: rulesapi.SeverityHigh}
 }
 
 func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
@@ -153,9 +155,10 @@ type fixedPIDStub struct {
 }
 
 func (r *fixedPIDStub) ID() string           { return r.id }
+func (r *fixedPIDStub) DisplayName() string  { return "Fixed-PID stub" }
 func (r *fixedPIDStub) Techniques() []string { return nil }
 func (r *fixedPIDStub) Doc() rulesapi.Documentation {
-	return rulesapi.Documentation{Title: "Fixed-PID stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+	return rulesapi.Documentation{Title: r.DisplayName(), Summary: "test fixture", Severity: rulesapi.SeverityHigh}
 }
 
 func (r *fixedPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
@@ -183,9 +186,10 @@ func (r *fixedPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesap
 type errorStub struct{ id string }
 
 func (r *errorStub) ID() string           { return r.id }
+func (r *errorStub) DisplayName() string  { return "Erroring stub" }
 func (r *errorStub) Techniques() []string { return nil }
 func (r *errorStub) Doc() rulesapi.Documentation {
-	return rulesapi.Documentation{Title: "Erroring stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+	return rulesapi.Documentation{Title: r.DisplayName(), Summary: "test fixture", Severity: rulesapi.SeverityHigh}
 }
 
 func (r *errorStub) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
@@ -210,9 +214,10 @@ type execFiringStub struct {
 }
 
 func (r *execFiringStub) ID() string           { return r.id }
+func (r *execFiringStub) DisplayName() string  { return "Exec-firing stub" }
 func (r *execFiringStub) Techniques() []string { return nil }
 func (r *execFiringStub) Doc() rulesapi.Documentation {
-	return rulesapi.Documentation{Title: "Exec-firing stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+	return rulesapi.Documentation{Title: r.DisplayName(), Summary: "test fixture", Severity: rulesapi.SeverityHigh}
 }
 
 func (r *execFiringStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
