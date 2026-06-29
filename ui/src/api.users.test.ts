@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { listUsers, setUserRole, setUserStatus, attachCsrfHeader } from "./api";
+import { createUser, listUsers, setUserRole, setUserStatus, attachCsrfHeader } from "./api";
 
 interface FakeResponse {
   ok: boolean;
@@ -67,5 +67,22 @@ describe("user-management API client", () => {
     expect(target.toString()).toContain("/api/settings/users/9/status");
     expect(init.method).toBe("PUT");
     expect(JSON.parse(init.body as string)).toEqual({ status: "disabled" });
+  });
+
+  it("createUser POSTs the email + role and returns the provisioned user", async () => {
+    sessionStorage.setItem("edr_csrf_token", "csrf-xyz");
+    const mock = stubFetch(
+      { id: 11, email: "staged@x.com", role: "senior_analyst", roles: ["senior_analyst"], status: "provisioned", is_breakglass: false },
+      201,
+    );
+    const out = await createUser("Staged@X.com", "senior_analyst");
+    const [target, init] = mock.mock.calls[0] as [URL, RequestInit & { headers: Record<string, string> }];
+    expect(target.toString()).toContain("/api/settings/users");
+    expect(init.method).toBe("POST");
+    const expectedCsrf: Record<string, string> = {};
+    attachCsrfHeader(expectedCsrf, "POST");
+    expect(init.headers).toMatchObject(expectedCsrf);
+    expect(JSON.parse(init.body as string)).toEqual({ email: "Staged@X.com", role: "senior_analyst" });
+    expect(out.status).toBe("provisioned");
   });
 });

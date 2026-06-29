@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -38,13 +39,19 @@ var ErrEmailConflict = errors.New("oidc: email already bound to another account"
 // stores it writes to, the audit recorder it logs to, and the
 // allow-JIT flag that gates whether unknown subjects auto-provision.
 //
-// A successful ProvisionOrFind call is one of two shapes:
+// A successful ProvisionOrFind call is one of three shapes:
 //
 //  1. Existing identity: lookup-by-(provider, subject) finds the row;
 //     return the bound user. No DB writes; no audit emission (every
 //     subsequent privileged request emits the standard
 //     authz.<action> chokepoint row).
-//  2. New identity (JIT): one transaction inserts users + identities
+//  2. Pre-provisioned adoption (#509): the verified email matches an
+//     admin-staged stub (status 'provisioned'); one transaction links
+//     the identity and activates the account, keeping the pre-assigned
+//     role. Honored regardless of allowJIT; no new audit row (the
+//     staging was already audited as user.provisioned, and the login
+//     emits auth.login.success).
+//  3. New identity (JIT): one transaction inserts users + identities
 //     + role_bindings; emits one audit row (action="user.created",
 //     payload.source="oidc.jit").
 type Provisioner struct {
@@ -104,13 +111,16 @@ func NewProvisioner(
 	}
 }
 
-// ProvisionOrFind resolves the OIDC subject to a local user. Three
+// ProvisionOrFind resolves the OIDC subject to a local user. Four
 // outcomes:
 //
 //   - identity exists -> return its user_id + identity_id.
-//   - identity missing + allowJIT -> atomic insert (user + identity +
-//     role binding); return the new user_id + identity_id.
-//   - identity missing + !allowJIT -> ErrUnknownIdentity.
+//   - identity missing + verified email matches a pre-provisioned stub
+//     -> adopt it (link identity, activate, keep pre-assigned role),
+//     regardless of allowJIT (#509).
+//   - identity missing + no stub + allowJIT -> atomic insert (user +
+//     identity + role binding); return the new user_id + identity_id.
+//   - identity missing + no stub + !allowJIT -> ErrUnknownIdentity.
 //
 // Race-safe: when two callbacks for the same fresh subject arrive at
 // once, one wins the unique constraint on (provider, subject) and the
@@ -136,15 +146,12 @@ func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, i
 	default:
 		return 0, 0, fmt.Errorf("oidc: lookup identity: %w", err)
 	}
-	if !allowJIT {
-		return 0, 0, ErrUnknownIdentity
-	}
-	userID, identityID, err = p.jitProvision(ctx, c, defaultRole)
+	userID, identityID, err = p.provisionNew(ctx, c, allowJIT, defaultRole)
 	if err == nil {
 		return userID, identityID, nil
 	}
-	// Duplicate-key on the identity insert means a concurrent callback for the same subject won. Re-resolve and let the loser ride the
-	// winner's commit.
+	// Duplicate-key on the identity insert (from adopting a pre-provisioned stub or from a fresh JIT create) means a concurrent callback
+	// for the same subject won. Re-resolve and let the loser ride the winner's commit.
 	if isDuplicateKey(err) {
 		existing, lookupErr := p.identities.FindByProviderSubject(
 			ctx, identities.ProviderOIDC, c.Subject)
@@ -154,6 +161,111 @@ func (p *Provisioner) ProvisionOrFind(ctx context.Context, c *Claims) (userID, i
 		return 0, 0, fmt.Errorf("oidc: race-resolve lookup: %w", lookupErr)
 	}
 	return 0, 0, err
+}
+
+// provisionNew handles the identity-missing case. It first tries to adopt a pre-provisioned stub (an admin-staged user matching the
+// verified email, issue #509); that path is honored regardless of allowJIT because staging is an explicit admin decision. When there is
+// no stub to adopt, allowJIT governs whether a brand-new account is JIT-created or the unknown subject is rejected.
+func (p *Provisioner) provisionNew(ctx context.Context, c *Claims, allowJIT bool, defaultRole string) (userID, identityID int64, err error) {
+	adopted, uid, idID, err := p.reconcilePreProvisioned(ctx, c)
+	if err != nil {
+		return 0, 0, err
+	}
+	if adopted {
+		return uid, idID, nil
+	}
+	if !allowJIT {
+		return 0, 0, ErrUnknownIdentity
+	}
+	return p.jitProvision(ctx, c, defaultRole)
+}
+
+// reconcilePreProvisioned adopts a pre-provisioned account (#509) when the OIDC claim carries a verified email matching a staged user.
+// The discriminator is the explicit lifecycle status: a pre-provisioned stub is exactly a user with status 'provisioned' (a role binding
+// but no credential and no identity, by construction). Returns adopted=false when there is nothing to adopt (no verified email, no user
+// with that email, or a user in any other status, which includes a real local-password or already-active OIDC account), in which case
+// the caller falls through to the normal JIT-create / unknown-subject path and a same-email real account still yields ErrEmailConflict.
+// Gating on the explicit status (not "has no identity") is what keeps a real local-password user, which may also lack an identity row,
+// from being silently adopted. Matching on the verified email only is what stops an attacker claiming a staged email the IdP has not
+// verified.
+func (p *Provisioner) reconcilePreProvisioned(ctx context.Context, c *Claims) (adopted bool, userID, identityID int64, err error) {
+	// Adoption requires an EXPLICITLY verified email, stricter than EmailTrusted() (which trusts an absent email_verified claim) and
+	// stricter than JIT creation: adoption binds an external subject to a pre-staged account that may carry an elevated role, so a missing
+	// verification signal must not be treated as trusted here. An IdP that omits email_verified will not auto-adopt a staged account.
+	if c.Email == "" || c.EmailVerified == nil || !*c.EmailVerified {
+		return false, 0, 0, nil
+	}
+	u, err := p.users.GetByEmail(ctx, c.Email)
+	if errors.Is(err, users.ErrNotFound) {
+		return false, 0, 0, nil
+	}
+	if err != nil {
+		return false, 0, 0, fmt.Errorf("oidc: reconcile lookup email: %w", err)
+	}
+	if u.Status != users.StatusProvisioned {
+		return false, 0, 0, nil
+	}
+	idID, err := p.adoptPreProvisioned(ctx, c, u.ID)
+	if errors.Is(err, errAdoptionLost) {
+		// A concurrent sign-in flipped this staged account to active first. If it was our own subject (same email, same subject racing),
+		// the winner's identity row resolves and we ride it; if it was a different subject, the email now belongs to an active account and
+		// this login is an email conflict (never silently bind a second subject to one staged account).
+		existing, lookupErr := p.identities.FindByProviderSubject(ctx, identities.ProviderOIDC, c.Subject)
+		if lookupErr == nil {
+			return true, existing.UserID, existing.ID, nil
+		}
+		if errors.Is(lookupErr, identities.ErrNotFound) {
+			return false, 0, 0, fmt.Errorf("%w: %s", ErrEmailConflict, c.Email)
+		}
+		return false, 0, 0, fmt.Errorf("oidc: adoption-lost re-resolve: %w", lookupErr)
+	}
+	if err != nil {
+		return false, 0, 0, err
+	}
+	return true, u.ID, idID, nil
+}
+
+// errAdoptionLost signals that a concurrent sign-in won the race to activate a staged account, so this transaction must abandon its
+// adoption. reconcilePreProvisioned turns it into either the winner's resolved identity (same subject) or an email conflict (different
+// subject); it never escapes the oidc package.
+var errAdoptionLost = errors.New("oidc: pre-provisioned account adopted by a concurrent sign-in")
+
+// adoptPreProvisioned links a new OIDC identity to an already-staged user and activates it, in one transaction, keeping the pre-assigned
+// role (it deliberately does NOT bind defaultRole). The status flip is the serialization gate: Activate's `WHERE status = 'provisioned'`
+// UPDATE takes a row lock, so two sign-ins racing the same staged email contend on it and exactly one sees the row flip. The loser gets
+// flipped=false and returns errAdoptionLost without inserting its identity, so a single staged account can never bind two subjects.
+// READ COMMITTED (matching the rbac guarded writes) ensures the loser's UPDATE re-reads the winner's committed status rather than a stale
+// snapshot. A duplicate-key on the identity insert (a same-subject race that slipped past the gate) bubbles to ProvisionOrFind's
+// re-resolve branch.
+func (p *Provisioner) adoptPreProvisioned(ctx context.Context, c *Claims, userID int64) (identityID int64, err error) {
+	tx, err := p.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return 0, fmt.Errorf("oidc adopt: begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	// Flip first: this is the lock + gate. Only the winner proceeds to link an identity.
+	flipped, err := p.users.Activate(ctx, tx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("oidc adopt: activate user %d: %w", userID, err)
+	}
+	if !flipped {
+		return 0, errAdoptionLost
+	}
+	idID, err := p.identities.InsertWith(ctx, tx, userID, identities.ProviderOIDC, c.Subject)
+	if err != nil {
+		// Bubble the duplicate up unwrapped so ProvisionOrFind's race branch detects it and re-resolves.
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("oidc adopt: commit: %w", err)
+	}
+	committed = true
+	return idID, nil
 }
 
 // resolvePolicy returns the JIT policy (allowJIT + defaultRole) for this provision. When policyFn is wired (production), it reads the

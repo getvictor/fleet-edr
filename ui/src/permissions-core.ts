@@ -30,6 +30,7 @@ export const PermissionAction = {
   ServiceAccountRead: "service_account.read",
   UserRead: "user.read",
   UserManage: "user.manage",
+  UserInvite: "user.invite",
 } as const;
 
 export type PermissionActionValue = (typeof PermissionAction)[keyof typeof PermissionAction];

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
@@ -21,12 +22,15 @@ import (
 )
 
 const (
-	statusActive   = "active"
-	statusDisabled = "disabled"
-	roleSuperAdmin = "super_admin"
-	roleAdmin      = "admin"
-	// maxBodyBytes bounds a mutation request body; the bodies are tiny ({"role":"..."} / {"status":"..."}).
+	statusActive      = "active"
+	statusDisabled    = "disabled"
+	statusProvisioned = "provisioned"
+	roleSuperAdmin    = "super_admin"
+	roleAdmin         = "admin"
+	// maxBodyBytes bounds a mutation request body; the bodies are tiny ({"role":"..."} / {"status":"..."} / {"email":"...","role":"..."}).
 	maxBodyBytes = 4 << 10
+	// maxEmailLen mirrors the users.email column (VARCHAR(255)); reject overlong input with a 400 rather than a failed insert 500.
+	maxEmailLen = 255
 )
 
 // bindableRoles is the set of seeded roles the UI offers and an admin may grant. super_admin is excluded here and handled separately:
@@ -57,6 +61,9 @@ type RolesStore interface {
 	LiveGlobalRoles(ctx context.Context, userID int64) ([]string, error)
 	SetUserRole(ctx context.Context, userID int64, roleID string) (previous []string, err error)
 	SetUserStatus(ctx context.Context, userID int64, status string) error
+	// ProvisionUser stages a new user (email + role, no credential) before their first sign-in and returns the new user id;
+	// api.ErrEmailExists when the email is already taken (#509).
+	ProvisionUser(ctx context.Context, email, roleID string) (int64, error)
 }
 
 // AuditRecorder records lifecycle audit rows.
@@ -84,6 +91,7 @@ func NewHandler(usersStore UsersStore, rolesStore RolesStore, authz api.AuthZ, a
 // RegisterAuthedRoutes mounts the routes. The caller wraps the mux in the session auth + CSRF chain.
 func (h *Handler) RegisterAuthedRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/settings/users", h.handleList)
+	mux.HandleFunc("POST /api/settings/users", h.handleCreate)
 	mux.HandleFunc("PUT /api/settings/users/{id}/role", h.handleSetRole)
 	mux.HandleFunc("PUT /api/settings/users/{id}/status", h.handleSetStatus)
 }
@@ -129,6 +137,69 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		out[i] = view(u, bindings[u.ID])
 	}
 	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"users": out})
+}
+
+type createRequest struct {
+	Email string `json:"email"`
+	Role  string `json:"role"`
+}
+
+// handleCreate pre-provisions a user (issue #509): an admin stages an email + role before that person has ever signed in, so they land
+// in the chosen role on their first SSO login instead of defaulting to analyst. Gated on user.invite. The created account holds one
+// global binding for the role, has no credential, and carries status 'provisioned' until the OIDC first-login reconciliation adopts it.
+func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionUserInvite, api.Resource{Type: "user"}) {
+		return
+	}
+	var req createRequest
+	if !decodeBody(ctx, h.logger, w, r, &req) {
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if !validEmail(email) {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_email")
+		return
+	}
+	role := strings.ToLower(strings.TrimSpace(req.Role))
+	if role == roleSuperAdmin {
+		// Only a super_admin actor may stage a super_admin; the UI never offers it (mirrors handleSetRole).
+		if !h.actorIsSuperAdmin(ctx) {
+			writeErr(ctx, h.logger, w, http.StatusForbidden, "super_admin_forbidden")
+			return
+		}
+	} else if !bindableRoles[role] {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_role")
+		return
+	}
+
+	userID, err := h.roles.ProvisionUser(ctx, email, role)
+	if errors.Is(err, api.ErrEmailExists) {
+		writeErr(ctx, h.logger, w, http.StatusConflict, "email_exists")
+		return
+	}
+	if err != nil {
+		h.internal(ctx, w, "provision user", err)
+		return
+	}
+	h.record(ctx, r, api.AuditUserProvisioned, userID, map[string]any{"role": role})
+	httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusCreated, userView{
+		ID: userID, Email: email, Role: role, Roles: []string{role}, Status: statusProvisioned,
+	})
+}
+
+// validEmail is a deliberately minimal check: non-empty, within the column width, and shaped like local@domain with exactly one '@' and
+// no embedded whitespace. The verified-email claim from the IdP is the real authority at first login; this only rejects obviously
+// malformed input (e.g. "a@@b", "a@ b", a tab) that could otherwise stage a permanently unreconcilable user.
+func validEmail(email string) bool {
+	if email == "" || len(email) > maxEmailLen {
+		return false
+	}
+	if strings.IndexFunc(email, unicode.IsSpace) >= 0 {
+		return false
+	}
+	at := strings.IndexByte(email, '@')
+	return at > 0 && at == strings.LastIndexByte(email, '@') && at < len(email)-1
 }
 
 type roleRequest struct {
@@ -220,6 +291,13 @@ func (h *Handler) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.guardTarget(ctx, w, target, current, h.actorIsSuperAdmin(ctx)) {
+		return
+	}
+	// A pre-provisioned account must stay 'provisioned' until its first SSO login adopts it (#509): flipping it to active/disabled here
+	// would strand it in a state the OIDC reconciliation no longer matches, so the staged user could never sign in. Reject the change.
+	// Role edits remain allowed on a provisioned user (they keep the status), so an admin can still re-stage the role before first login.
+	if target.Status == statusProvisioned {
+		writeErr(ctx, h.logger, w, http.StatusConflict, "provisioned_immutable")
 		return
 	}
 	if target.Status == status {

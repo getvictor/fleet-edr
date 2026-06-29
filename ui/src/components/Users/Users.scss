@@ -60,4 +60,30 @@
     align-items: center;
     justify-content: flex-end;
   }
+
+  &__card-title {
+    margin: 0 0 8px;
+    font-size: 16px;
+    font-weight: 600;
+    color: $core-fleet-black;
+  }
+
+  &__help {
+    margin: 0 0 16px;
+    font-size: 13px;
+    color: $ui-fleet-black-50;
+  }
+
+  &__form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: flex-end;
+  }
+
+  &__form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+  }
 }

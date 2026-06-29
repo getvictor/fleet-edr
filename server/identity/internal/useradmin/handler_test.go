@@ -46,6 +46,11 @@ type fakeRoles struct {
 	liveErr   error
 	setErr    error
 	statusErr error
+	// provision* drive ProvisionUser; provisionID is the new id returned on success.
+	provisionID    int64
+	provisionErr   error
+	provisionEmail string
+	provisionRole  string
 }
 
 func (f *fakeRoles) AllLiveBindings(context.Context) (map[int64][]string, error) {
@@ -59,6 +64,10 @@ func (f *fakeRoles) SetUserRole(context.Context, int64, string) ([]string, error
 }
 func (f *fakeRoles) SetUserStatus(context.Context, int64, string) error {
 	return f.statusErr
+}
+func (f *fakeRoles) ProvisionUser(_ context.Context, email, roleID string) (int64, error) {
+	f.provisionEmail, f.provisionRole = email, roleID
+	return f.provisionID, f.provisionErr
 }
 
 func serve(h *Handler, method, path, body string, actor *api.Actor) *httptest.ResponseRecorder {
@@ -75,6 +84,17 @@ func serve(h *Handler, method, path, body string, actor *api.Actor) *httptest.Re
 
 func superActor() *api.Actor {
 	return &api.Actor{Principal: api.UserPrincipal(999, ""), Roles: []api.RoleBinding{{RoleID: roleSuperAdmin}}}
+}
+
+func adminActor() *api.Actor {
+	return &api.Actor{Principal: api.UserPrincipal(1, ""), Roles: []api.RoleBinding{{RoleID: roleAdmin}}}
+}
+
+type fakeAudit struct{ events []api.AuditEvent }
+
+func (f *fakeAudit) Record(_ context.Context, e api.AuditEvent) error {
+	f.events = append(f.events, e)
+	return nil
 }
 
 func TestHandler_listErrorsReturn500(t *testing.T) {
@@ -178,4 +198,86 @@ func TestHandler_lastAdminMapsTo409(t *testing.T) {
 		assert.Equal(t, http.StatusConflict, w.Code)
 		assert.Contains(t, w.Body.String(), "last_admin")
 	})
+}
+
+func TestHandler_createPreProvisionsUser(t *testing.T) {
+	t.Parallel()
+	roles := &fakeRoles{provisionID: 42}
+	audit := &fakeAudit{}
+	h := NewHandler(&fakeUsers{}, roles, fakeAuthZ{allow: true}, audit, nil)
+	w := serve(h, http.MethodPost, "/api/settings/users", `{"email":" Alice@Example.COM ","role":"senior_analyst"}`, superActor())
+
+	require.Equal(t, http.StatusCreated, w.Code)
+	// Email is normalised (lowercase + trimmed) and the role passes through to the store.
+	assert.Equal(t, "alice@example.com", roles.provisionEmail)
+	assert.Equal(t, "senior_analyst", roles.provisionRole)
+	body := w.Body.String()
+	assert.Contains(t, body, `"id":42`)
+	assert.Contains(t, body, `"status":"provisioned"`)
+	assert.Contains(t, body, `"role":"senior_analyst"`)
+	assert.Contains(t, body, `"roles":["senior_analyst"]`)
+	// Exactly one user.provisioned audit row carrying the assigned role and the new user as target.
+	require.Len(t, audit.events, 1)
+	assert.Equal(t, api.AuditUserProvisioned, audit.events[0].Action)
+	assert.Equal(t, "user", audit.events[0].TargetType)
+	assert.Equal(t, "42", audit.events[0].TargetID)
+	assert.Equal(t, "senior_analyst", audit.events[0].Payload["role"])
+}
+
+func TestHandler_createSuperAdminAllowedForSuperActor(t *testing.T) {
+	t.Parallel()
+	roles := &fakeRoles{provisionID: 7}
+	h := NewHandler(&fakeUsers{}, roles, fakeAuthZ{allow: true}, &fakeAudit{}, nil)
+	w := serve(h, http.MethodPost, "/api/settings/users", `{"email":"root@example.io","role":"super_admin"}`, superActor())
+	require.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, "super_admin", roles.provisionRole)
+}
+
+func TestHandler_createValidationAndGuards(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		body       string
+		actor      *api.Actor
+		allow      bool
+		provErr    error
+		wantStatus int
+		wantBody   string
+	}{
+		{"invite denied", `{"email":"a@x.io","role":"analyst"}`, superActor(), false, nil, http.StatusForbidden, ""},
+		{"malformed json", `{nope`, superActor(), true, nil, http.StatusBadRequest, "invalid_json"},
+		{"empty email", `{"email":"   ","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
+		{"email without at", `{"email":"nope","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
+		{"email with double at", `{"email":"a@@example.io","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
+		// `\\t` is a JSON escape, so the parsed email value contains a real tab that validEmail must reject (vs an invalid-JSON literal tab).
+		{"email with embedded whitespace", `{"email":"a@ex\tample.io","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
+		{"unknown role", `{"email":"a@x.io","role":"wizard"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_role"},
+		{"super_admin by admin actor", `{"email":"a@x.io","role":"super_admin"}`, adminActor(), true, nil, http.StatusForbidden, "super_admin_forbidden"},
+		{"duplicate email", `{"email":"a@x.io","role":"analyst"}`, superActor(), true, api.ErrEmailExists, http.StatusConflict, "email_exists"},
+		{"store error", `{"email":"a@x.io","role":"analyst"}`, superActor(), true, errors.New("boom"), http.StatusInternalServerError, "internal"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := NewHandler(&fakeUsers{}, &fakeRoles{provisionErr: tc.provErr}, fakeAuthZ{allow: tc.allow}, &fakeAudit{}, nil)
+			w := serve(h, http.MethodPost, "/api/settings/users", tc.body, tc.actor)
+			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantBody != "" {
+				assert.Contains(t, w.Body.String(), tc.wantBody)
+			}
+		})
+	}
+}
+
+// A provisioned (pre-provisioned, not-yet-signed-in) user cannot be moved off the provisioned status via the status endpoint: doing so
+// would strand it where the OIDC first-login reconciliation no longer matches. handleSetStatus rejects it with 409 provisioned_immutable.
+func TestHandler_setStatusRejectsProvisionedUser(t *testing.T) {
+	t.Parallel()
+	// spec:server-identity-authorization/admins-pre-provision-users-into-a-staged-role-through-an-audited-api/a-pre-provisioned-account-cannot-be-moved-off-the-provisioned-status-before-first-login
+	h := NewHandler(
+		&fakeUsers{get: &users.AdminUser{ID: 5, Email: "staged@x", Status: "provisioned"}},
+		&fakeRoles{live: []string{"analyst"}}, fakeAuthZ{allow: true}, &fakeAudit{}, nil)
+	w := serve(h, http.MethodPut, "/api/settings/users/5/status", `{"status":"active"}`, superActor())
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "provisioned_immutable")
 }

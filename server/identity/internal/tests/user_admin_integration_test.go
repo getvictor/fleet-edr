@@ -408,3 +408,88 @@ func TestUserAdmin_guardrails(t *testing.T) {
 		assert.Contains(t, modBoss.Body.String(), "super_admin_forbidden")
 	})
 }
+
+// userAbsent reports whether no users row carries the given email; used to assert a rejected pre-provisioning mutated nothing.
+func userAbsent(t *testing.T, db *sqlx.DB, email string) bool {
+	t.Helper()
+	var n int
+	require.NoError(t, db.GetContext(t.Context(), &n, "SELECT COUNT(*) FROM users WHERE email = ?", email))
+	return n == 0
+}
+
+func TestUserAdmin_preProvision(t *testing.T) {
+	t.Parallel()
+
+	t.Run("spec:server-identity-authorization/admins-pre-provision-users-into-a-staged-role-through-an-audited-api/admin-pre-provisions-a-user-into-a-senior-role", func(t *testing.T) {
+		t.Parallel()
+		db, mux := newUserAdminEnv(t)
+		adminID := seedUserWithRole(t, db, "admin-pp@ua.local", "admin")
+
+		w := userReq(t, mux, actorWithRole(adminID, "admin"), http.MethodPost,
+			"/api/settings/users", `{"email":"alice-pp@example.com","role":"senior_analyst"}`)
+		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+		var u struct {
+			ID           int64  `db:"id"`
+			Status       string `db:"status"`
+			PasswordHash []byte `db:"password_hash"`
+		}
+		require.NoError(t, db.GetContext(t.Context(), &u,
+			"SELECT id, status, password_hash FROM users WHERE email = ?", "alice-pp@example.com"))
+		assert.Equal(t, "provisioned", u.Status)
+		assert.Nil(t, u.PasswordHash, "a pre-provisioned user has no credential")
+		assert.Equal(t, []string{"senior_analyst"}, globalRoleIDs(t, db, u.ID))
+
+		tid := strconv.FormatInt(u.ID, 10)
+		assert.Equal(t, 1, auditRows(t, db, "user.provisioned", tid))
+		assert.Contains(t, auditPayload(t, db, "user.provisioned", tid), "senior_analyst")
+	})
+
+	t.Run("spec:server-identity-authorization/admins-pre-provision-users-into-a-staged-role-through-an-audited-api/a-role-without-the-invite-grant-is-denied", func(t *testing.T) {
+		t.Parallel()
+		db, mux := newUserAdminEnv(t)
+		analystID := seedUserWithRole(t, db, "ana-pp@ua.local", "analyst")
+		w := userReq(t, mux, actorWithRole(analystID, "analyst"), http.MethodPost,
+			"/api/settings/users", `{"email":"nope-pp@example.com","role":"analyst"}`)
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.True(t, userAbsent(t, db, "nope-pp@example.com"), "a denied pre-provisioning creates no user")
+	})
+
+	t.Run("spec:server-identity-authorization/admins-pre-provision-users-into-a-staged-role-through-an-audited-api/pre-provisioning-rejects-the-super-admin-role", func(t *testing.T) {
+		t.Parallel()
+		db, mux := newUserAdminEnv(t)
+		adminID := seedUserWithRole(t, db, "admin-pp2@ua.local", "admin")
+		w := userReq(t, mux, actorWithRole(adminID, "admin"), http.MethodPost,
+			"/api/settings/users", `{"email":"boss-pp@example.com","role":"super_admin"}`)
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.Contains(t, w.Body.String(), "super_admin_forbidden")
+		assert.True(t, userAbsent(t, db, "boss-pp@example.com"))
+	})
+
+	t.Run("a super_admin actor may pre-provision super_admin", func(t *testing.T) {
+		t.Parallel()
+		db, mux := newUserAdminEnv(t)
+		actingID := seedUserWithRole(t, db, "superpp@ua.local", "super_admin")
+		w := userReq(t, mux, actorWithRole(actingID, "super_admin"), http.MethodPost,
+			"/api/settings/users", `{"email":"boss-ok@example.com","role":"super_admin"}`)
+		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+		var u struct {
+			ID     int64  `db:"id"`
+			Status string `db:"status"`
+		}
+		require.NoError(t, db.GetContext(t.Context(), &u, "SELECT id, status FROM users WHERE email = ?", "boss-ok@example.com"))
+		assert.Equal(t, "provisioned", u.Status)
+		assert.Equal(t, []string{"super_admin"}, globalRoleIDs(t, db, u.ID))
+	})
+
+	t.Run("spec:server-identity-authorization/admins-pre-provision-users-into-a-staged-role-through-an-audited-api/pre-provisioning-a-duplicate-email-is-rejected", func(t *testing.T) {
+		t.Parallel()
+		db, mux := newUserAdminEnv(t)
+		adminID := seedUserWithRole(t, db, "admin-pp3@ua.local", "admin")
+		seedUser(t, db, "bob-pp@example.com")
+		w := userReq(t, mux, actorWithRole(adminID, "admin"), http.MethodPost,
+			"/api/settings/users", `{"email":"bob-pp@example.com","role":"analyst"}`)
+		assert.Equal(t, http.StatusConflict, w.Code)
+		assert.Contains(t, w.Body.String(), "email_exists")
+	})
+}

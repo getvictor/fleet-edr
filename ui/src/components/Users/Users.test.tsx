@@ -106,6 +106,75 @@ describe("Users", () => {
     expect(screen.queryByText(/Error: refresh boom/)).not.toBeInTheDocument();
   });
 
+  // spec:web-ui/the-users-page-pre-provisions-a-new-user-and-distinguishes-the-pending-state/an-admin-pre-provisions-a-user-from-the-users-page
+  it("pre-provisions a user from the add-user form and refreshes the list", async () => {
+    const staged: api.AdminUser = {
+      id: 9, email: "carol@acme.com", role: "senior_analyst", roles: ["senior_analyst"], status: "provisioned", is_breakglass: false,
+    };
+    const listUsers = vi.spyOn(api, "listUsers").mockResolvedValueOnce([baseUsers[0]]).mockResolvedValue([baseUsers[0], staged]);
+    const createUser = vi.spyOn(api, "createUser").mockResolvedValue(staged);
+    renderUsers(); // optimistic -> can invite
+
+    await screen.findByText("alice@acme.com");
+    // Opening the form unmounts the header trigger, leaving the form's submit button as the only "Add user" button.
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "carol@acme.com" } });
+    fireEvent.change(screen.getByLabelText("Role"), { target: { value: "senior_analyst" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+
+    await waitFor(() => { expect(createUser).toHaveBeenCalledWith("carol@acme.com", "senior_analyst"); });
+    // The refreshed list shows the new user with a pending indicator.
+    expect(await screen.findByText("carol@acme.com")).toBeInTheDocument();
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(listUsers).toHaveBeenCalledTimes(2);
+  });
+
+  // spec:web-ui/the-users-page-pre-provisions-a-new-user-and-distinguishes-the-pending-state/the-add-user-control-is-hidden-without-the-invite-grant
+  it("hides the add-user control when the operator lacks user.invite", async () => {
+    vi.spyOn(api, "listUsers").mockResolvedValue(baseUsers);
+    renderUsers(["user.read", "user.manage"]); // manage but not invite
+    await screen.findByText("alice@acme.com");
+    expect(screen.queryByRole("button", { name: "Add user" })).not.toBeInTheDocument();
+  });
+
+  it("shows a pending badge and no enable/disable control for a provisioned user", async () => {
+    const staged: api.AdminUser = {
+      id: 7, email: "dora@acme.com", role: "auditor", roles: ["auditor"], status: "provisioned", is_breakglass: false,
+    };
+    vi.spyOn(api, "listUsers").mockResolvedValue([staged]);
+    renderUsers();
+    await screen.findByText("dora@acme.com");
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Disable" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable" })).not.toBeInTheDocument();
+    // Their role is still editable (re-stage before first login).
+    expect(screen.getByLabelText("Role for dora@acme.com")).toBeInTheDocument();
+  });
+
+  it("surfaces a duplicate-email conflict in the add-user form", async () => {
+    vi.spyOn(api, "listUsers").mockResolvedValue([baseUsers[0]]);
+    vi.spyOn(api, "createUser").mockRejectedValue(new Error("API error: 409 Conflict"));
+    renderUsers();
+    await screen.findByText("alice@acme.com");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "dup@acme.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/already exists/i);
+  });
+
+  it("shows a permission message when add-user is forbidden (stale invite grant)", async () => {
+    vi.spyOn(api, "listUsers").mockResolvedValue([baseUsers[0]]);
+    vi.spyOn(api, "createUser").mockRejectedValue(new Error("API error: 403 Forbidden"));
+    renderUsers();
+    await screen.findByText("alice@acme.com");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "new@acme.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/permission to add users/i);
+  });
+
   it("shows the empty state", async () => {
     vi.spyOn(api, "listUsers").mockResolvedValue([]);
     renderUsers();
