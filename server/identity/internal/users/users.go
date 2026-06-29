@@ -38,6 +38,14 @@ const (
 	argonSaltLen int    = 16
 )
 
+// Account lifecycle statuses, mirroring the users.status ENUM. StatusProvisioned is the pre-provisioned stub state (#509): an
+// admin-staged user with a role binding but no credential and no identity, flipped to StatusActive when its first OIDC login adopts it.
+const (
+	StatusActive      = "active"
+	StatusDisabled    = "disabled"
+	StatusProvisioned = "provisioned"
+)
+
 func init() {
 	if testing.Testing() {
 		argonTime = 1
@@ -144,7 +152,7 @@ func (s *Store) txInsertUser(ctx context.Context, insertSQL, label string, args 
 	if err != nil {
 		return 0, fmt.Errorf("last insert id: %w", err)
 	}
-	if err := ensureUserPrincipal(ctx, tx, id, label); err != nil {
+	if err := EnsureUserPrincipal(ctx, tx, id, label); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -154,10 +162,11 @@ func (s *Store) txInsertUser(ctx context.Context, insertSQL, label string, args 
 	return id, nil
 }
 
-// ensureUserPrincipal inserts (idempotently) the principals spine row for a user, so the user is attributable as a typed principal and
+// EnsureUserPrincipal inserts (idempotently) the principals spine row for a user, so the user is attributable as a typed principal and
 // can be referenced by the principal-FK attribution columns. The display label is the user's email, snapshotted onto audit rows. See
-// ADR-0017.
-func ensureUserPrincipal(ctx context.Context, ec Executor, userID int64, email string) error {
+// ADR-0017. Exported so a peer identity store that creates a user row in its own transaction (rbac.ProvisionUser, #509) can attach the
+// principal spine in the same tx rather than cloning the insert.
+func EnsureUserPrincipal(ctx context.Context, ec Executor, userID int64, email string) error {
 	_, err := ec.ExecContext(ctx,
 		`INSERT INTO principals (id, type, display_label) VALUES (?, 'user', ?)
 		 ON DUPLICATE KEY UPDATE display_label = VALUES(display_label)`,
@@ -201,7 +210,7 @@ func (s *Store) CreateOIDC(ctx context.Context, ec Executor, req CreateOIDCReque
 		return nil, fmt.Errorf("last insert id: %w", err)
 	}
 	// Same executor (the caller's tx) so the principal row commits or rolls back atomically with the user + identity + role-binding inserts.
-	if err := ensureUserPrincipal(ctx, ec, id, email); err != nil {
+	if err := EnsureUserPrincipal(ctx, ec, id, email); err != nil {
 		return nil, err
 	}
 	return &User{
@@ -256,7 +265,7 @@ func (s *Store) CreateBreakglass(ctx context.Context, req CreateBreakglassReques
 	if !u.IsBreakglass {
 		return &u, ErrExistingNonBreakglass
 	}
-	if err := ensureUserPrincipal(ctx, s.db, u.ID, email); err != nil {
+	if err := EnsureUserPrincipal(ctx, s.db, u.ID, email); err != nil {
 		return nil, err
 	}
 	return &u, nil
@@ -317,7 +326,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	var u User
 	err := s.db.GetContext(ctx, &u, `
-		SELECT id, email, is_breakglass, created_at, updated_at
+		SELECT id, email, is_breakglass, status, created_at, updated_at
 		FROM users WHERE email = ?
 	`, email)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -327,6 +336,19 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 		return nil, fmt.Errorf("get user by email: %w", err)
 	}
 	return &u, nil
+}
+
+// Activate transitions a pre-provisioned account to active under a caller-supplied transaction (issue #509). The OIDC first-login
+// reconciliation calls it inside the same tx that links the new identity, so adopting a staged user (link identity + flip status + keep
+// the pre-assigned role) is atomic. Scoped to `status = 'provisioned'` so it never silently re-activates an account an admin disabled;
+// a no-op (the row is already active or was disabled) returns nil. Runs against an Executor (typically *sqlx.Tx).
+func (s *Store) Activate(ctx context.Context, ec Executor, userID int64) error {
+	if _, err := ec.ExecContext(ctx, `
+		UPDATE users SET status = 'active' WHERE id = ? AND status = 'provisioned'
+	`, userID); err != nil {
+		return fmt.Errorf("activate provisioned user %d: %w", userID, err)
+	}
+	return nil
 }
 
 // Get returns a user by id without hash/salt. Returns ErrNotFound if absent.

@@ -58,6 +58,11 @@ const (
 	AuditRoleBindingDelete AuditAction = "authz.role_binding.delete"
 	AuditUserDisabled      AuditAction = "user.disabled"
 	AuditUserEnabled       AuditAction = "user.enabled"
+	// AuditUserProvisioned records an admin pre-provisioning a user before their first sign-in (issue #509): a dedicated verb so SIEM
+	// correlation keys on a stable event type, distinct from OIDC JIT creation (user.created, payload source "oidc.jit") and from admin
+	// role edits on existing users (authz.role_binding.*). The payload carries the assigned role; target is the staged user. Stable wire
+	// string; never repurposed (see the convention note at the top of this file).
+	AuditUserProvisioned AuditAction = "user.provisioned"
 
 	// Application Control mutations (rules context). The payload records actor reason, rule type / identifier, policy version post-bump,
 	// and fan-out counts (fanout_hosts / fanout_failed) so SIEM dashboards can trace which hosts received the rule. Stable wire strings

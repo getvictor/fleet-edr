@@ -770,9 +770,10 @@ export async function revokeServiceAccount(id: number): Promise<void> {
 // --- Users + role management (issue #135) ---------------------------------------
 
 // AdminUser is the read shape from GET /api/settings/users. role is the effective single global role ("" when the user holds none);
-// roles carries every live global role (usually one). status is "active" | "disabled". is_breakglass marks the recovery account, which
-// the server refuses to modify through this surface.
-export type UserStatus = "active" | "disabled";
+// roles carries every live global role (usually one). status is "active" | "disabled" | "provisioned" ("provisioned" is a
+// pre-provisioned account staged by an admin that has not yet signed in, #509). is_breakglass marks the recovery account, which the
+// server refuses to modify through this surface.
+export type UserStatus = "active" | "disabled" | "provisioned";
 
 export interface AdminUser {
   id: number;
@@ -797,6 +798,13 @@ export async function setUserRole(id: number, role: string): Promise<AdminUser> 
 
 export async function setUserStatus(id: number, status: UserStatus): Promise<AdminUser> {
   return fetchJSON<AdminUser>(`/settings/users/${String(id)}/status`, { method: "PUT", body: JSON.stringify({ status }) });
+}
+
+// createUser pre-provisions a user (issue #509): an admin stages an email + role before that person has ever signed in, so they land in
+// the chosen role on their first SSO login. Returns the created user in the "provisioned" state. Gated server-side on user.invite;
+// super_admin is accepted only when the caller is itself a super_admin, and the UI does not offer it.
+export async function createUser(email: string, role: string): Promise<AdminUser> {
+  return fetchJSON<AdminUser>("/settings/users", { method: "POST", body: JSON.stringify({ email, role }) });
 }
 
 // --- Detection configuration endpoints (issue #459) ---

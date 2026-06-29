@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { listUsers, setUserRole, setUserStatus, type AdminUser } from "../../api";
+import { createUser, listUsers, setUserRole, setUserStatus, type AdminUser } from "../../api";
 import { useCan, PermissionAction } from "../../permissions-core";
 import { PageHeader } from "../ui/PageHeader";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
-import { Select } from "../ui/Input";
+import { Input, Select } from "../ui/Input";
 import { Badge, type BadgeVariant } from "../ui/Badge";
 import "./Users.scss";
 
@@ -52,11 +52,19 @@ function friendlyError(err: unknown, fallback: string): string {
 export function Users() {
   const can = useCan();
   const canManage = can(PermissionAction.UserManage);
+  const canInvite = can(PermissionAction.UserInvite);
 
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyID, setBusyID] = useState<number | null>(null);
+
+  // Add-user (pre-provisioning) form state (#509).
+  const [showCreate, setShowCreate] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState<string>(ROLES[0].value);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   function reload(): void {
     listUsers()
@@ -112,14 +120,92 @@ export function Users() {
     }
   }
 
+  function resetCreateForm(): void {
+    setShowCreate(false);
+    setCreateError(null);
+    setNewEmail("");
+    setNewRole(ROLES[0].value);
+  }
+
+  async function handleCreate(): Promise<void> {
+    const email = newEmail.trim();
+    if (email === "" || !email.includes("@")) {
+      setCreateError("Enter a valid email address.");
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await createUser(email, newRole);
+      resetCreateForm();
+      reload();
+    } catch (err: unknown) {
+      // 409 here is a duplicate email (a user with that address already exists); 403 is the super-admin restriction.
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("409")) {
+        setCreateError("A user with that email already exists.");
+      } else {
+        setCreateError(friendlyError(err, "Failed to add user."));
+      }
+    } finally {
+      setCreating(false);
+    }
+  }
+
   return (
     <div className="users">
       <PageHeader
         title="Users"
-        subtitle="Operators who can sign in to the console. Assign each a role and enable or disable access. New users arrive through single sign-on or break-glass."
+        subtitle="Operators who can sign in to the console. Assign each a role and enable or disable access. Pre-provision a user to set their role before their first single sign-on; new users otherwise arrive through single sign-on or break-glass."
+        actions={
+          canInvite && !showCreate ? (
+            <Button type="button" variant="primary" size="small" onClick={() => { setShowCreate(true); }}>
+              Add user
+            </Button>
+          ) : undefined
+        }
       />
 
       {actionError !== null && <div className="users__error" role="alert">{actionError}</div>}
+
+      {canInvite && showCreate && (
+        <Card padding="large">
+          <h2 className="users__card-title">Add user</h2>
+          <p className="users__help">
+            Pre-provision an operator by email and role. They are staged as pending until their first single sign-on, at which point they
+            land in the role you assign here instead of the default analyst role.
+          </p>
+          <div className="users__form">
+            <Input
+              id="new-user-email"
+              label="Email"
+              type="email"
+              placeholder="alice@example.com"
+              maxLength={255}
+              value={newEmail}
+              onChange={(e) => { setNewEmail(e.target.value); }}
+            />
+            <Select
+              id="new-user-role"
+              label="Role"
+              inline={false}
+              value={newRole}
+              onChange={(e) => { setNewRole(e.target.value); }}
+            >
+              {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </Select>
+          </div>
+          {createError !== null && <div className="users__error" role="alert">{createError}</div>}
+          <div className="users__form-actions">
+            <Button type="button" variant="primary" isLoading={creating} onClick={() => { void handleCreate(); }}>
+              Add user
+            </Button>
+            <Button type="button" variant="inverse" disabled={creating} onClick={resetCreateForm}>
+              Cancel
+            </Button>
+          </div>
+        </Card>
+      )}
 
       <Card padding="large">
         {error !== null && <div className="users__status users__status--error">Error: {error}</div>}
@@ -138,6 +224,9 @@ export function Users() {
                 // super_admin (both of which the server refuses to modify through this surface). Read-only rows show badges, no controls.
                 const editable = canManage && !u.is_breakglass && u.role !== "super_admin";
                 const disabled = u.status === "disabled";
+                // A pre-provisioned user (#509) has not signed in yet: show a "Pending" badge and no enable/disable control (the toggle
+                // only applies to accounts that have an active/disabled lifecycle). Their role can still be re-staged via the selector.
+                const pending = u.status === "provisioned";
                 return (
                   <tr key={u.id}>
                     <td>
@@ -164,9 +253,15 @@ export function Users() {
                         <Badge variant={roleVariant(u.role)}>{roleLabel(u.role)}</Badge>
                       )}
                     </td>
-                    <td><Badge variant={disabled ? "neutral" : "success"}>{disabled ? "Disabled" : "Active"}</Badge></td>
+                    <td>
+                      {pending ? (
+                        <Badge variant="medium">Pending</Badge>
+                      ) : (
+                        <Badge variant={disabled ? "neutral" : "success"}>{disabled ? "Disabled" : "Active"}</Badge>
+                      )}
+                    </td>
                     <td className="users__row-actions">
-                      {editable && (
+                      {editable && !pending && (
                         <Button
                           type="button"
                           variant={disabled ? "inverse" : "alert"}

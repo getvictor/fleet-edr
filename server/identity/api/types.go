@@ -70,6 +70,10 @@ var (
 	// admin-tier user. The admin surface maps it to 409 last_admin. Defined here so the store that raises it and the handler that maps
 	// it share one vocabulary without the handler importing the store package.
 	ErrLastAdmin = errors.New("identity: change would remove the last active admin")
+	// ErrEmailExists is returned by the pre-provisioning create path when a user row already owns the requested email (the
+	// uk_users_email unique key is the race-safe enforcement point). The admin surface maps it to 409 email_exists. Defined here so the
+	// store that raises it and the handler that maps it share one vocabulary without the handler importing the store package (#509).
+	ErrEmailExists = errors.New("identity: a user with that email already exists")
 	// ErrServiceAccountNotFound is returned across the api boundary when a svc_<id> principal cannot be resolved (a deleted service
 	// account). PrincipalLabel surfaces it so a cross-context caller (the detection-config exclusions list) can recognize the benign
 	// "author no longer exists" case with errors.Is and fall back to the raw principal id, mirroring ErrUserNotFound for users, rather

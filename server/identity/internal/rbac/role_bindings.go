@@ -15,10 +15,22 @@ import (
 	"slices"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/users"
 )
+
+// mysqlErrDupEntry is the MySQL "Duplicate entry" code. ProvisionUser maps a uk_users_email collision to api.ErrEmailExists. One local
+// helper mirrors the same pattern in seed/admin.go, oidc/jit.go, and breakglass/service.go (the role set is dynamic, so there is no
+// shared cross-package home for it).
+const mysqlErrDupEntry = 1062
+
+func isDuplicateKey(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrDupEntry
+}
 
 // Store owns the role_bindings table.
 type Store struct {
@@ -317,6 +329,49 @@ func (s *Store) SetUserStatus(ctx context.Context, userID int64, status string) 
 		return fmt.Errorf("commit set-status tx: %w", err)
 	}
 	return nil
+}
+
+// ProvisionUser stages a new operator before their first sign-in (issue #509): it inserts a users row in the 'provisioned' lifecycle
+// state with no credential and binds it to exactly one global role, atomically, returning the new user id. A duplicate email returns
+// api.ErrEmailExists (the uk_users_email unique key is the race-safe enforcement point). The last-active-admin guard does not apply: a
+// brand-new row can only add an admin-tier binding, never remove the last one, and the account cannot authenticate until its first OIDC
+// login adopts it (server/identity/internal/oidc reconciliation). Lives here because the rbac store already owns the user-plus-role
+// write surface (SetUserRole, SetUserStatus). The caller (useradmin handler) normalizes the email and validates the role first.
+func (s *Store) ProvisionUser(ctx context.Context, email, roleID string) (int64, error) {
+	if s.db == nil {
+		return 0, errNilDB
+	}
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin provision tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `INSERT INTO users (email, status) VALUES (?, 'provisioned')`, email)
+	if err != nil {
+		if isDuplicateKey(err) {
+			return 0, api.ErrEmailExists
+		}
+		return 0, fmt.Errorf("insert provisioned user %q: %w", email, err)
+	}
+	userID, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("last insert id for provisioned user: %w", err)
+	}
+	// Attach the principals spine row in the same tx so the staged user is attributable per ADR-0017 (mirrors every other user-creation
+	// path); reuses the centralized helper rather than cloning the principals insert.
+	if err = users.EnsureUserPrincipal(ctx, tx, userID, email); err != nil {
+		return 0, fmt.Errorf("ensure principal for provisioned user %d: %w", userID, err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id) VALUES (?, ?, ?, '*')
+	`, userID, roleID, globalScope); err != nil {
+		return 0, fmt.Errorf("bind role %q to provisioned user %d: %w", roleID, userID, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit provision tx: %w", err)
+	}
+	return userID, nil
 }
 
 // ListLiveBindings returns every role binding for a user that is not

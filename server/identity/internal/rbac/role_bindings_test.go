@@ -134,6 +134,38 @@ func TestListLiveBindings_OnlyTargetUser(t *testing.T) {
 	assert.Equal(t, "auditor", gotB[0].RoleID)
 }
 
+// TestProvisionUser pins the pre-provisioning store contract (#509): one transaction inserts a provisioned, credential-less user and a
+// single global binding for the chosen role, and a duplicate email is refused as api.ErrEmailExists with no row created.
+func TestProvisionUser(t *testing.T) {
+	t.Parallel()
+	db := openSchema(t)
+	s := rbac.New(db)
+
+	uid, err := s.ProvisionUser(t.Context(), "staged@test", "senior_analyst")
+	require.NoError(t, err)
+	assert.Positive(t, uid)
+
+	var row struct {
+		Status       string `db:"status"`
+		PasswordHash []byte `db:"password_hash"`
+	}
+	require.NoError(t, db.GetContext(t.Context(), &row, `SELECT status, password_hash FROM users WHERE id = ?`, uid))
+	assert.Equal(t, "provisioned", row.Status)
+	assert.Nil(t, row.PasswordHash, "a pre-provisioned user has no credential")
+
+	var roles []string
+	require.NoError(t, db.SelectContext(t.Context(), &roles,
+		`SELECT role_id FROM role_bindings WHERE user_id = ? AND scope_type = 'global'`, uid))
+	assert.Equal(t, []string{"senior_analyst"}, roles)
+
+	// A second insert at the same email is refused, and no extra user row is created.
+	_, err = s.ProvisionUser(t.Context(), "staged@test", "analyst")
+	require.ErrorIs(t, err, api.ErrEmailExists)
+	var count int
+	require.NoError(t, db.GetContext(t.Context(), &count, `SELECT COUNT(*) FROM users WHERE email = ?`, "staged@test"))
+	assert.Equal(t, 1, count)
+}
+
 // openSchema returns a fresh test DB with identity's full schema + seeds applied. roles are seeded by ApplySchema so the FK-bound
 // role_bindings inserts in these tests don't trip fk_role_bindings_role.
 func openSchema(t *testing.T) *sqlx.DB {
