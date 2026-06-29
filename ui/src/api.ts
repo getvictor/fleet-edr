@@ -775,6 +775,11 @@ export async function revokeServiceAccount(id: number): Promise<void> {
 // server refuses to modify through this surface.
 export type UserStatus = "active" | "disabled" | "provisioned";
 
+// MutableUserStatus is the subset an admin may set via the status endpoint. "provisioned" is a server-assigned lifecycle state (set at
+// pre-provisioning, cleared on first-login adoption) and is never a valid mutation target, so it is excluded here even though the wire
+// read shape (UserStatus) includes it (#509).
+export type MutableUserStatus = "active" | "disabled";
+
 export interface AdminUser {
   id: number;
   email: string;
@@ -796,7 +801,7 @@ export async function setUserRole(id: number, role: string): Promise<AdminUser> 
   return fetchJSON<AdminUser>(`/settings/users/${String(id)}/role`, { method: "PUT", body: JSON.stringify({ role }) });
 }
 
-export async function setUserStatus(id: number, status: UserStatus): Promise<AdminUser> {
+export async function setUserStatus(id: number, status: MutableUserStatus): Promise<AdminUser> {
   return fetchJSON<AdminUser>(`/settings/users/${String(id)}/status`, { method: "PUT", body: JSON.stringify({ status }) });
 }
 

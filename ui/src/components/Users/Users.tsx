@@ -135,15 +135,20 @@ export function Users() {
     }
     setCreating(true);
     setCreateError(null);
+    // Clear any stale page-level banner from a prior row mutation so a successful invite doesn't leave an unrelated error showing.
+    setActionError(null);
     try {
       await createUser(email, newRole);
       resetCreateForm();
       reload();
     } catch (err: unknown) {
-      // 409 here is a duplicate email (a user with that address already exists); 403 is the super-admin restriction.
+      // 409 = duplicate email. 403 on this form means lost/stale user.invite (the form is gated on it and never offers super_admin),
+      // not the super-admin restriction friendlyError assumes, so give an accurate message here.
       const msg = err instanceof Error ? err.message : "";
       if (msg.includes("409")) {
         setCreateError("A user with that email already exists.");
+      } else if (msg.includes("403")) {
+        setCreateError("You do not have permission to add users.");
       } else {
         setCreateError(friendlyError(err, "Failed to add user."));
       }

@@ -338,10 +338,22 @@ func seedProvisioned(t *testing.T, db *sqlx.DB, email, role string) int64 {
 	require.NoError(t, err)
 	uid, err := res.LastInsertId()
 	require.NoError(t, err)
+	// Mirror the production pre-provisioning shape (rbac.ProvisionUser), which also inserts the principals spine row (ADR-0017), so the
+	// adopted account is attributable exactly as a real staged user would be.
+	_, err = db.ExecContext(t.Context(),
+		`INSERT INTO principals (id, type, display_label) VALUES (?, 'user', ?)`, api.UserPrincipalID(uid), email)
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(),
 		`INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id) VALUES (?, ?, 'global', '*')`, uid, role)
 	require.NoError(t, err)
 	return uid
+}
+
+// verifiedClaims builds an OIDC claim set with an explicitly verified email, the shape an adoptable first login carries (#509 hardening:
+// adoption requires email_verified == true, not merely an absent/trusted claim).
+func verifiedClaims(subject, email string) *oidc.Claims {
+	verified := true
+	return &oidc.Claims{Subject: subject, Email: email, EmailVerified: &verified}
 }
 
 // First SSO login adopts a pre-provisioned account: the staged row is reused (not a new user), activated, its identity linked, and the
@@ -352,9 +364,7 @@ func TestProvisionOrFind_AdoptsPreProvisioned(t *testing.T) {
 	p, db, rec := newProvisioner(t, true)
 	staged := seedProvisioned(t, db, "alice@example.com", "senior_analyst")
 
-	uid, idID, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{
-		Subject: "okta-alice", Email: "alice@example.com", Name: "Alice",
-	})
+	uid, idID, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-alice", "alice@example.com"))
 	require.NoError(t, err)
 	assert.Equal(t, staged, uid, "first login adopts the staged row rather than creating a new user")
 	assert.Positive(t, idID)
@@ -382,7 +392,7 @@ func TestProvisionOrFind_AdoptsWhenJITDisabled(t *testing.T) {
 	p, db, _ := newProvisioner(t, false)
 	staged := seedProvisioned(t, db, "bob@example.com", "auditor")
 
-	uid, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-bob", Email: "bob@example.com"})
+	uid, _, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-bob", "bob@example.com"))
 	require.NoError(t, err)
 	assert.Equal(t, staged, uid)
 	var status string
@@ -417,4 +427,45 @@ func TestProvisionOrFind_UnverifiedEmailDoesNotAdopt(t *testing.T) {
 	var status string
 	require.NoError(t, db.GetContext(t.Context(), &status, `SELECT status FROM users WHERE id = ?`, staged))
 	assert.Equal(t, "provisioned", status, "the staged row is untouched by an unverified-email login")
+}
+
+// Adoption requires an EXPLICITLY verified email: an absent email_verified claim (which EmailTrusted treats as trusted for JIT creation)
+// must NOT adopt a staged account, because adoption binds a subject to a possibly-elevated pre-staged role. The staged email already
+// owns the row, so the non-adopting login surfaces an email conflict rather than silently binding or creating; either way the staged row
+// is left untouched (still provisioned), so it remains adoptable once the IdP presents an explicitly verified claim.
+// spec:server-identity-authorization/first-sso-login-adopts-a-pre-provisioned-account-into-its-staged-role/an-absent-verification-claim-does-not-adopt
+func TestProvisionOrFind_AbsentVerificationDoesNotAdopt(t *testing.T) {
+	t.Parallel()
+	p, db, _ := newProvisioner(t, true)
+	staged := seedProvisioned(t, db, "erin@example.com", "admin")
+	// EmailVerified left nil (claim omitted) -> not explicitly verified -> no adoption.
+	_, _, err := p.ProvisionOrFind(t.Context(), &oidc.Claims{Subject: "okta-erin", Email: "erin@example.com"})
+	require.ErrorIs(t, err, oidc.ErrEmailConflict, "an absent email_verified claim must not adopt a staged (possibly elevated) account")
+	var status string
+	require.NoError(t, db.GetContext(t.Context(), &status, `SELECT status FROM users WHERE id = ?`, staged))
+	assert.Equal(t, "provisioned", status, "the staged row is untouched and remains adoptable")
+	var idCount int
+	require.NoError(t, db.GetContext(t.Context(), &idCount, `SELECT COUNT(*) FROM identities WHERE user_id = ?`, staged))
+	assert.Equal(t, 0, idCount, "no identity is linked to the staged account")
+}
+
+// A second OIDC subject cannot claim a staged account already adopted by a first subject. After subject-1 adopts the staged email,
+// subject-2 presenting the same verified email is an email conflict, and the account keeps exactly one identity (the first subject's).
+// This is the observable contract of the concurrent-adoption guard (the status flip is the single-winner serialization point).
+// spec:server-identity-authorization/first-sso-login-adopts-a-pre-provisioned-account-into-its-staged-role/a-second-subject-cannot-claim-an-adopted-staged-account
+func TestProvisionOrFind_SecondSubjectCannotClaimStaged(t *testing.T) {
+	t.Parallel()
+	p, db, _ := newProvisioner(t, true)
+	staged := seedProvisioned(t, db, "frank@example.com", "senior_analyst")
+
+	uid1, _, err := p.ProvisionOrFind(t.Context(), verifiedClaims("okta-frank-1", "frank@example.com"))
+	require.NoError(t, err)
+	assert.Equal(t, staged, uid1)
+
+	_, _, err = p.ProvisionOrFind(t.Context(), verifiedClaims("okta-frank-2", "frank@example.com"))
+	require.ErrorIs(t, err, oidc.ErrEmailConflict, "a different subject must not bind to an already-adopted staged account")
+
+	var idCount int
+	require.NoError(t, db.GetContext(t.Context(), &idCount, `SELECT COUNT(*) FROM identities WHERE user_id = ?`, staged))
+	assert.Equal(t, 1, idCount, "the adopted account keeps exactly one identity")
 }

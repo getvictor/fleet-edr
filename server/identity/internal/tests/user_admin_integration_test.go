@@ -466,6 +466,22 @@ func TestUserAdmin_preProvision(t *testing.T) {
 		assert.True(t, userAbsent(t, db, "boss-pp@example.com"))
 	})
 
+	t.Run("a super_admin actor may pre-provision super_admin", func(t *testing.T) {
+		t.Parallel()
+		db, mux := newUserAdminEnv(t)
+		actingID := seedUserWithRole(t, db, "superpp@ua.local", "super_admin")
+		w := userReq(t, mux, actorWithRole(actingID, "super_admin"), http.MethodPost,
+			"/api/settings/users", `{"email":"boss-ok@example.com","role":"super_admin"}`)
+		require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+		var u struct {
+			ID     int64  `db:"id"`
+			Status string `db:"status"`
+		}
+		require.NoError(t, db.GetContext(t.Context(), &u, "SELECT id, status FROM users WHERE email = ?", "boss-ok@example.com"))
+		assert.Equal(t, "provisioned", u.Status)
+		assert.Equal(t, []string{"super_admin"}, globalRoleIDs(t, db, u.ID))
+	})
+
 	t.Run("spec:server-identity-authorization/admins-pre-provision-users-into-a-staged-role-through-an-audited-api/pre-provisioning-a-duplicate-email-is-rejected", func(t *testing.T) {
 		t.Parallel()
 		db, mux := newUserAdminEnv(t)

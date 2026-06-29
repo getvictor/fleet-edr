@@ -338,17 +338,24 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*User, error) {
 	return &u, nil
 }
 
-// Activate transitions a pre-provisioned account to active under a caller-supplied transaction (issue #509). The OIDC first-login
-// reconciliation calls it inside the same tx that links the new identity, so adopting a staged user (link identity + flip status + keep
-// the pre-assigned role) is atomic. Scoped to `status = 'provisioned'` so it never silently re-activates an account an admin disabled;
-// a no-op (the row is already active or was disabled) returns nil. Runs against an Executor (typically *sqlx.Tx).
-func (s *Store) Activate(ctx context.Context, ec Executor, userID int64) error {
-	if _, err := ec.ExecContext(ctx, `
+// Activate transitions a pre-provisioned account to active under a caller-supplied transaction (issue #509) and reports whether the row
+// actually flipped. The OIDC first-login reconciliation calls it inside the same tx that links the new identity, so adopting a staged
+// user (flip status + link identity + keep the pre-assigned role) is atomic. The `WHERE status = 'provisioned'` predicate is the
+// serialization gate for concurrent adoptions: the UPDATE takes a row lock, so two sign-ins racing the same staged email contend on it
+// and only one sees a row affected; the loser gets flipped=false and must abandon its adoption (see oidc.adoptPreProvisioned). flipped
+// is also false when an admin already moved the account off 'provisioned', so a disabled account is never silently re-activated.
+func (s *Store) Activate(ctx context.Context, ec Executor, userID int64) (flipped bool, err error) {
+	res, err := ec.ExecContext(ctx, `
 		UPDATE users SET status = 'active' WHERE id = ? AND status = 'provisioned'
-	`, userID); err != nil {
-		return fmt.Errorf("activate provisioned user %d: %w", userID, err)
+	`, userID)
+	if err != nil {
+		return false, fmt.Errorf("activate provisioned user %d: %w", userID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected activating user %d: %w", userID, err)
+	}
+	return n == 1, nil
 }
 
 // Get returns a user by id without hash/salt. Returns ErrNotFound if absent.

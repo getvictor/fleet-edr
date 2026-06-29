@@ -29,7 +29,12 @@ const mysqlErrDupEntry = 1062
 
 func isDuplicateKey(err error) bool {
 	var mysqlErr *mysql.MySQLError
-	return errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrDupEntry
+	// Early-return rather than `errors.As(...) && mysqlErr.Number == ...`: the one-liner trips nilaway (it cannot prove mysqlErr is
+	// non-nil across the && short-circuit), and this shape matches the sibling helpers in oidc/jit.go and breakglass/service.go.
+	if !errors.As(err, &mysqlErr) {
+		return false
+	}
+	return mysqlErr.Number == mysqlErrDupEntry
 }
 
 // Store owns the role_bindings table.
@@ -347,12 +352,13 @@ func (s *Store) ProvisionUser(ctx context.Context, email, roleID string) (int64,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.ExecContext(ctx, `INSERT INTO users (email, status) VALUES (?, 'provisioned')`, email)
+	res, err := tx.ExecContext(ctx, `INSERT INTO users (email, status) VALUES (?, ?)`, email, users.StatusProvisioned)
 	if err != nil {
 		if isDuplicateKey(err) {
 			return 0, api.ErrEmailExists
 		}
-		return 0, fmt.Errorf("insert provisioned user %q: %w", email, err)
+		// Do not log the email (PII) in the error; the user id isn't known yet, so keep it generic, matching CreateOIDC.
+		return 0, fmt.Errorf("insert provisioned user: %w", err)
 	}
 	userID, err := res.LastInsertId()
 	if err != nil {

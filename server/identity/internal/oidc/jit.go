@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -188,7 +189,10 @@ func (p *Provisioner) provisionNew(ctx context.Context, c *Claims, allowJIT bool
 // from being silently adopted. Matching on the verified email only is what stops an attacker claiming a staged email the IdP has not
 // verified.
 func (p *Provisioner) reconcilePreProvisioned(ctx context.Context, c *Claims) (adopted bool, userID, identityID int64, err error) {
-	if c.Email == "" || !c.EmailTrusted() {
+	// Adoption requires an EXPLICITLY verified email, stricter than EmailTrusted() (which trusts an absent email_verified claim) and
+	// stricter than JIT creation: adoption binds an external subject to a pre-staged account that may carry an elevated role, so a missing
+	// verification signal must not be treated as trusted here. An IdP that omits email_verified will not auto-adopt a staged account.
+	if c.Email == "" || c.EmailVerified == nil || !*c.EmailVerified {
 		return false, 0, 0, nil
 	}
 	u, err := p.users.GetByEmail(ctx, c.Email)
@@ -202,17 +206,39 @@ func (p *Provisioner) reconcilePreProvisioned(ctx context.Context, c *Claims) (a
 		return false, 0, 0, nil
 	}
 	idID, err := p.adoptPreProvisioned(ctx, c, u.ID)
+	if errors.Is(err, errAdoptionLost) {
+		// A concurrent sign-in flipped this staged account to active first. If it was our own subject (same email, same subject racing),
+		// the winner's identity row resolves and we ride it; if it was a different subject, the email now belongs to an active account and
+		// this login is an email conflict (never silently bind a second subject to one staged account).
+		existing, lookupErr := p.identities.FindByProviderSubject(ctx, identities.ProviderOIDC, c.Subject)
+		if lookupErr == nil {
+			return true, existing.UserID, existing.ID, nil
+		}
+		if errors.Is(lookupErr, identities.ErrNotFound) {
+			return false, 0, 0, fmt.Errorf("%w: %s", ErrEmailConflict, c.Email)
+		}
+		return false, 0, 0, fmt.Errorf("oidc: adoption-lost re-resolve: %w", lookupErr)
+	}
 	if err != nil {
 		return false, 0, 0, err
 	}
 	return true, u.ID, idID, nil
 }
 
+// errAdoptionLost signals that a concurrent sign-in won the race to activate a staged account, so this transaction must abandon its
+// adoption. reconcilePreProvisioned turns it into either the winner's resolved identity (same subject) or an email conflict (different
+// subject); it never escapes the oidc package.
+var errAdoptionLost = errors.New("oidc: pre-provisioned account adopted by a concurrent sign-in")
+
 // adoptPreProvisioned links a new OIDC identity to an already-staged user and activates it, in one transaction, keeping the pre-assigned
-// role (it deliberately does NOT bind defaultRole). Mirrors jitProvision's duplicate-key handling: a concurrent same-subject callback
-// loses the unique (provider, subject) insert; the raw error bubbles to ProvisionOrFind's race branch, which re-resolves to the winner.
+// role (it deliberately does NOT bind defaultRole). The status flip is the serialization gate: Activate's `WHERE status = 'provisioned'`
+// UPDATE takes a row lock, so two sign-ins racing the same staged email contend on it and exactly one sees the row flip. The loser gets
+// flipped=false and returns errAdoptionLost without inserting its identity, so a single staged account can never bind two subjects.
+// READ COMMITTED (matching the rbac guarded writes) ensures the loser's UPDATE re-reads the winner's committed status rather than a stale
+// snapshot. A duplicate-key on the identity insert (a same-subject race that slipped past the gate) bubbles to ProvisionOrFind's
+// re-resolve branch.
 func (p *Provisioner) adoptPreProvisioned(ctx context.Context, c *Claims, userID int64) (identityID int64, err error) {
-	tx, err := p.db.BeginTxx(ctx, nil)
+	tx, err := p.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return 0, fmt.Errorf("oidc adopt: begin tx: %w", err)
 	}
@@ -222,13 +248,18 @@ func (p *Provisioner) adoptPreProvisioned(ctx context.Context, c *Claims, userID
 			_ = tx.Rollback()
 		}
 	}()
+	// Flip first: this is the lock + gate. Only the winner proceeds to link an identity.
+	flipped, err := p.users.Activate(ctx, tx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("oidc adopt: activate user %d: %w", userID, err)
+	}
+	if !flipped {
+		return 0, errAdoptionLost
+	}
 	idID, err := p.identities.InsertWith(ctx, tx, userID, identities.ProviderOIDC, c.Subject)
 	if err != nil {
 		// Bubble the duplicate up unwrapped so ProvisionOrFind's race branch detects it and re-resolves.
 		return 0, err
-	}
-	if err = p.users.Activate(ctx, tx, userID); err != nil {
-		return 0, fmt.Errorf("oidc adopt: activate user %d: %w", userID, err)
 	}
 	if err = tx.Commit(); err != nil {
 		return 0, fmt.Errorf("oidc adopt: commit: %w", err)

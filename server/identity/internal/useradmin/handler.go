@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
@@ -187,14 +188,18 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// validEmail is a deliberately minimal check: non-empty, within the column width, and shaped like local@domain. The verified-email
-// claim from the IdP is the real authority at first login; this only rejects obviously malformed input before the insert.
+// validEmail is a deliberately minimal check: non-empty, within the column width, and shaped like local@domain with exactly one '@' and
+// no embedded whitespace. The verified-email claim from the IdP is the real authority at first login; this only rejects obviously
+// malformed input (e.g. "a@@b", "a@ b", a tab) that could otherwise stage a permanently unreconcilable user.
 func validEmail(email string) bool {
 	if email == "" || len(email) > maxEmailLen {
 		return false
 	}
+	if strings.IndexFunc(email, unicode.IsSpace) >= 0 {
+		return false
+	}
 	at := strings.IndexByte(email, '@')
-	return at > 0 && at < len(email)-1 && !strings.Contains(email, " ")
+	return at > 0 && at == strings.LastIndexByte(email, '@') && at < len(email)-1
 }
 
 type roleRequest struct {
@@ -286,6 +291,13 @@ func (h *Handler) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.guardTarget(ctx, w, target, current, h.actorIsSuperAdmin(ctx)) {
+		return
+	}
+	// A pre-provisioned account must stay 'provisioned' until its first SSO login adopts it (#509): flipping it to active/disabled here
+	// would strand it in a state the OIDC reconciliation no longer matches, so the staged user could never sign in. Reject the change.
+	// Role edits remain allowed on a provisioned user (they keep the status), so an admin can still re-stage the role before first login.
+	if target.Status == statusProvisioned {
+		writeErr(ctx, h.logger, w, http.StatusConflict, "provisioned_immutable")
 		return
 	}
 	if target.Status == status {

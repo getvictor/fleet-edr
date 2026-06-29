@@ -248,6 +248,9 @@ func TestHandler_createValidationAndGuards(t *testing.T) {
 		{"malformed json", `{nope`, superActor(), true, nil, http.StatusBadRequest, "invalid_json"},
 		{"empty email", `{"email":"   ","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
 		{"email without at", `{"email":"nope","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
+		{"email with double at", `{"email":"a@@example.io","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
+		// `\\t` is a JSON escape, so the parsed email value contains a real tab that validEmail must reject (vs an invalid-JSON literal tab).
+		{"email with embedded whitespace", `{"email":"a@ex\tample.io","role":"analyst"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_email"},
 		{"unknown role", `{"email":"a@x.io","role":"wizard"}`, superActor(), true, nil, http.StatusBadRequest, "invalid_role"},
 		{"super_admin by admin actor", `{"email":"a@x.io","role":"super_admin"}`, adminActor(), true, nil, http.StatusForbidden, "super_admin_forbidden"},
 		{"duplicate email", `{"email":"a@x.io","role":"analyst"}`, superActor(), true, api.ErrEmailExists, http.StatusConflict, "email_exists"},
@@ -264,4 +267,17 @@ func TestHandler_createValidationAndGuards(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A provisioned (pre-provisioned, not-yet-signed-in) user cannot be moved off the provisioned status via the status endpoint: doing so
+// would strand it where the OIDC first-login reconciliation no longer matches. handleSetStatus rejects it with 409 provisioned_immutable.
+func TestHandler_setStatusRejectsProvisionedUser(t *testing.T) {
+	t.Parallel()
+	// spec:server-identity-authorization/admins-pre-provision-users-into-a-staged-role-through-an-audited-api/a-pre-provisioned-account-cannot-be-moved-off-the-provisioned-status-before-first-login
+	h := NewHandler(
+		&fakeUsers{get: &users.AdminUser{ID: 5, Email: "staged@x", Status: "provisioned"}},
+		&fakeRoles{live: []string{"analyst"}}, fakeAuthZ{allow: true}, &fakeAudit{}, nil)
+	w := serve(h, http.MethodPut, "/api/settings/users/5/status", `{"status":"active"}`, superActor())
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "provisioned_immutable")
 }

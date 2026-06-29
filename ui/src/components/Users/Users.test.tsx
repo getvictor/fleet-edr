@@ -163,6 +163,18 @@ describe("Users", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/already exists/i);
   });
 
+  it("shows a permission message when add-user is forbidden (stale invite grant)", async () => {
+    vi.spyOn(api, "listUsers").mockResolvedValue([baseUsers[0]]);
+    vi.spyOn(api, "createUser").mockRejectedValue(new Error("API error: 403 Forbidden"));
+    renderUsers();
+    await screen.findByText("alice@acme.com");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "new@acme.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add user" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/permission to add users/i);
+  });
+
   it("shows the empty state", async () => {
     vi.spyOn(api, "listUsers").mockResolvedValue([]);
     renderUsers();
