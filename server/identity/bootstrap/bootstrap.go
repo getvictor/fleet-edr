@@ -709,7 +709,7 @@ func (i *Identity) OIDCEnabled(ctx context.Context) bool {
 	// secret (only on decrypt failure), and a secretless config cannot complete token exchange, so reporting it as enabled would be a
 	// false positive. A wrong/rotated sealer key (decrypt failure) likewise reports not-enabled.
 	cfg, err := i.ssoStore.GetDecrypted(ctx)
-	return err == nil && cfg.ClientSecret != ""
+	return err == nil && cfg != nil && cfg.ClientSecret != ""
 }
 
 // RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured).
