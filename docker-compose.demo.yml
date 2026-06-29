@@ -123,9 +123,9 @@ services:
       EDR_LOG_FORMAT: json
       EDR_SECRET_KEY: demo-only-secret-key-do-not-use-in-prod-0123456789
       # SSO against the bundled dex. The demo floats to the released `:latest` image (see docs/doc-versioning.md), whose server still
-      # env-seeds these into the durable oidc_config store on first boot. The source-built / v0.4.0+ server reads no EDR_OIDC_* (issue
-      # #512) and ignores them; the seeder below configures SSO for that image. Both seed the same row, so the two paths never collide
-      # (the version pin selects one image for both services). TRANSITIONAL: drop this block once `:latest` is v0.4.0+.
+      # env-seeds these into the durable oidc_config store on first boot. The source-built / v0.4.0+ server (issue 512) reads no
+      # EDR_OIDC_* and ignores them; the seeder below configures SSO for that image. Both seed the same row, so the two paths never
+      # collide (the version pin selects one image for both services). TRANSITIONAL: drop this block once `:latest` is v0.4.0+.
       EDR_OIDC_ISSUER: http://dex.demo.localhost:5556/dex
       EDR_OIDC_CLIENT_ID: edr-demo
       EDR_OIDC_CLIENT_SECRET: edr-demo-client-secret-do-not-use-in-prod

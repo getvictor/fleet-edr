@@ -906,10 +906,10 @@ tasks:
       OTEL_EXPORTER_OTLP_INSECURE: "true"
       OTEL_SERVICE_NAME: fleet-edr-server
     cmds:
-      # Apply migrations so oidc_config exists, seed the dex SSO config into the durable store, then boot. The seed is idempotent and
-      # never clobbers a UI edit, so re-running is safe.
+      # Apply migrations so oidc_config exists, seed the dex SSO config into the durable store, then boot. --oidc-force overwrites any
+      # existing row so a rerun always restores the QA dex issuer/client/external-URL (a plain seed is a no-op once a row exists).
       - go run ./server/cmd/fleet-edr-migrate
-      - go run ./server/cmd/fleet-edr-demo-seed --oidc-only
+      - go run ./server/cmd/fleet-edr-demo-seed --oidc-only --oidc-force
       - go run {{.SERVER_PKG}}
 
   # -------- install tools / hooks --------

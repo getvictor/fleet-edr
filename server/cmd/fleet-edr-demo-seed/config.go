@@ -111,6 +111,17 @@ func resolveConfig(getenv func(string) string, args []string) (config, error) {
 	if c.oidcOnly && c.oidcIssuer == "" {
 		return config{}, errors.New("--oidc-only requires an OIDC issuer: set EDR_DEMO_OIDC_ISSUER or pass --oidc-issuer")
 	}
+	// Once an issuer is set the seeder will write a durable oidc_config row; reject an incomplete block here so it fails fast with a
+	// clear message instead of a late keyring error (missing secret key) or a stored row that makes OIDCEnabled true while sign-in is
+	// broken (missing client id/secret).
+	if c.oidcIssuer != "" {
+		if c.secretKey == "" {
+			return config{}, errors.New("seeding OIDC requires the deployment root secret: set EDR_SECRET_KEY or pass --secret-key")
+		}
+		if c.oidcClientID == "" || c.oidcClientSecret == "" {
+			return config{}, errors.New("seeding OIDC requires the client id + secret: set EDR_DEMO_OIDC_CLIENT_ID / EDR_DEMO_OIDC_CLIENT_SECRET or pass --oidc-client-id / --oidc-client-secret")
+		}
+	}
 	return c, nil
 }
 

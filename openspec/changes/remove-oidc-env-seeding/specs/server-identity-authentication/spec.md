@@ -11,7 +11,7 @@ The system SHALL accept operator login via the configured OpenID Connect (OIDC) 
 - **GIVEN** OIDC is enabled for the deployment via a stored configuration record
 - **WHEN** the browser issues `GET /api/auth/login`
 - **THEN** the server responds with a 302 to the issuer's authorization endpoint
-- **AND** the redirect carries the `client_id`, `redirect_url`, and scope set from the stored configuration, a server-generated `state` parameter, and a PKCE `code_challenge` with method `S256`
+- **AND** the redirect carries the `client_id`, `redirect_uri`, and scope set from the stored configuration, a server-generated `state` parameter, and a PKCE `code_challenge` with method `S256`
 
 #### Scenario: Successful callback mints a session
 

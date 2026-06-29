@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -375,10 +376,12 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 	rpID := bg.RPID
 	rpOrigins := bg.RPOrigins
 	if rpID == "" && len(rpOrigins) == 0 {
-		// Nothing configured: default to localhost so first boot has a working recovery surface without a long env var prelude.
-		// Production sets EDR_BREAKGLASS_RP_ID + EDR_BREAKGLASS_RP_ORIGINS to the externally reachable host.
+		// Nothing configured: default to localhost so first boot has a working recovery surface without a long env var prelude. The
+		// origins are https:// to match the server's mandatory-TLS posture (issue #140); the browser hits https://localhost:8088, so the
+		// WebAuthn origin check would reject http:// here. Production sets EDR_BREAKGLASS_RP_ID + EDR_BREAKGLASS_RP_ORIGINS to the
+		// externally reachable host.
 		rpID = "localhost"
-		rpOrigins = []string{"http://localhost:8088", "http://127.0.0.1:8088"}
+		rpOrigins = []string{"https://localhost:8088", "https://127.0.0.1:8088"}
 	}
 	// Reject partial config: an operator who set RP_ORIGINS WITHOUT RP_ID intended to configure break-glass; silently defaulting to the
 	// localhost RP id would brick recovery against the wrong relying party.
@@ -578,7 +581,10 @@ type OIDCSeedInput struct {
 // the sealed secret decrypts at login. It exists for non-interactive bootstrapping, the demo and local-QA stacks, where no operator is
 // present to use the Single sign-on settings UI; production deployments configure SSO through the UI/API. It is a no-op when a stored
 // OIDC config already exists (unless OIDCSeedInput.Force), so it is safe to re-run and never clobbers a later UI edit, and it seeds the
-// external URL only when the app_config document has none, for the same reason.
+// external URL only when the app_config document has none, for the same reason. The JIT default role is clamped to the analyst/auditor
+// floor the SSO admin API enforces (a non-interactive caller cannot seed a privileged default role), and the two writes commit in one
+// transaction. This is a bootstrap-only seam: like the pre-#512 env seed it writes as the system principal and does not pass through the
+// authorization chokepoint (there is no operator/session at seed time); operator-initiated SSO changes go through the audited admin API.
 func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in OIDCSeedInput) error {
 	if db == nil {
 		return errors.New("identity SeedOIDCConfig: db must not be nil")
@@ -597,33 +603,55 @@ func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in O
 	case err != nil && !errors.Is(err, ssoconfig.ErrNotFound):
 		return fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
 	}
+	// Clamp the JIT default role to the analyst/auditor floor the SSO admin API enforces, so a non-interactive caller (demo/CI) cannot
+	// seed default_role=admin and have the OIDC provisioner auto-bind first-time SSO users to a privileged role. Anything outside the set
+	// (including the empty default) falls back to the lowest-privilege JIT role, matching ssoadmin and the pre-#512 env-seed behaviour.
+	defaultRole := strings.ToLower(strings.TrimSpace(in.DefaultRole))
+	if defaultRole != "analyst" && defaultRole != "auditor" {
+		defaultRole = oidc.DefaultJITRole
+	}
+	// Write oidc_config and the external URL in ONE transaction (same shape as the admin API's apply), so a partial failure can't leave a
+	// stored OIDC config paired with a missing derived redirect; a rolled-back seed re-runs cleanly.
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	secret := in.ClientSecret
-	if err := store.Upsert(ctx, ssoconfig.UpsertInput{
+	if err := store.UpsertTx(ctx, tx, ssoconfig.UpsertInput{
 		Issuer:      in.Issuer,
 		ClientID:    in.ClientID,
 		NewSecret:   &secret,
 		Scopes:      in.Scopes,
 		JITEnabled:  in.JITEnabled,
-		DefaultRole: in.DefaultRole,
+		DefaultRole: defaultRole,
 		UpdatedBy:   api.PrincipalSystemID,
 	}); err != nil {
 		return fmt.Errorf("identity SeedOIDCConfig: write OIDC config: %w", err)
 	}
-	if in.ExternalURL == "" {
-		return nil
+	// Seed the external URL only when the app_config document has none, so a later UI edit is never clobbered.
+	if in.ExternalURL != "" {
+		appCfg := appconfig.New(db)
+		cur, version, err := appCfg.Get(ctx)
+		if err != nil {
+			return fmt.Errorf("identity SeedOIDCConfig: read app config: %w", err)
+		}
+		if cur.ExternalURL == "" {
+			cur.ExternalURL = in.ExternalURL
+			if err := appCfg.PutTx(ctx, tx, cur, version, api.PrincipalSystemID); err != nil {
+				return fmt.Errorf("identity SeedOIDCConfig: seed external URL: %w", err)
+			}
+		}
 	}
-	appCfg := appconfig.New(db)
-	cur, version, err := appCfg.Get(ctx)
-	if err != nil {
-		return fmt.Errorf("identity SeedOIDCConfig: read app config: %w", err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: commit tx: %w", err)
 	}
-	if cur.ExternalURL != "" {
-		return nil // operator already set it; don't clobber
-	}
-	cur.ExternalURL = in.ExternalURL
-	if err := appCfg.Put(ctx, cur, version, api.PrincipalSystemID); err != nil {
-		return fmt.Errorf("identity SeedOIDCConfig: seed external URL: %w", err)
-	}
+	committed = true
 	return nil
 }
 
@@ -656,7 +684,9 @@ func (i *Identity) OIDCEnabled(ctx context.Context) bool {
 	if i.ssoStore == nil {
 		return false
 	}
-	_, err := i.ssoStore.Get(ctx)
+	// GetDecrypted, not Get: a row whose client secret cannot be decrypted (wrong/rotated sealer key) is not a usable config, so the
+	// fail-closed signal must reflect decryptability, not mere row presence.
+	_, err := i.ssoStore.GetDecrypted(ctx)
 	return err == nil
 }
 

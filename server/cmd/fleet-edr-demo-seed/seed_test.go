@@ -88,6 +88,45 @@ func TestResolveConfig(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "DSN is required")
 	})
+
+	t.Run("oidc-only without issuer is an error", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{"EDR_DSN": "d", "EDR_DEMO_OIDC_ONLY": "1"}
+		_, err := resolveConfig(func(k string) string { return env[k] }, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--oidc-only requires an OIDC issuer")
+	})
+
+	t.Run("oidc issuer without secret key is an error", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{"EDR_DSN": "d", "EDR_DEMO_OIDC_ISSUER": "https://idp.example.com"}
+		_, err := resolveConfig(func(k string) string { return env[k] }, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "deployment root secret")
+	})
+
+	t.Run("oidc issuer without client credentials is an error", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{"EDR_DSN": "d", "EDR_DEMO_OIDC_ISSUER": "https://idp.example.com", "EDR_SECRET_KEY": "x"}
+		_, err := resolveConfig(func(k string) string { return env[k] }, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "client id + secret")
+	})
+
+	t.Run("complete oidc seed config is valid", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{
+			"EDR_DSN": "d", "EDR_SECRET_KEY": "root-secret",
+			"EDR_DEMO_OIDC_ISSUER": "https://idp.example.com", "EDR_DEMO_OIDC_CLIENT_ID": "cid",
+			"EDR_DEMO_OIDC_CLIENT_SECRET": "shh", "EDR_DEMO_OIDC_EXTERNAL_URL": "https://edr.example.com",
+		}
+		c, err := resolveConfig(func(k string) string { return env[k] }, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "https://idp.example.com", c.oidcIssuer)
+		assert.Equal(t, "cid", c.oidcClientID)
+		assert.True(t, c.oidcJIT, "JIT defaults on")
+		assert.Equal(t, "analyst", c.oidcDefaultRole)
+	})
 }
 
 func TestEnvHelpers(t *testing.T) {

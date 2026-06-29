@@ -124,4 +124,24 @@ func TestSeedOIDCConfig(t *testing.T) {
 		assert.False(t, got.JITEnabled, "force re-seed must apply the new JIT toggle")
 		assert.Equal(t, "auditor", got.DefaultRole)
 	})
+
+	t.Run("privileged default role is clamped to the JIT floor", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		secretKey := fixedKey(23)
+		require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+
+		// A non-interactive caller must not be able to seed default_role=admin and have the OIDC provisioner auto-bind first-time SSO
+		// users to a privileged role; the seam clamps anything outside {analyst, auditor} to the lowest-privilege JIT role.
+		require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
+			Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "s",
+			Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "admin",
+		}))
+
+		sealer, err := ssoconfig.NewSealer(secretKey)
+		require.NoError(t, err)
+		got, err := ssoconfig.New(db, sealer).Get(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "analyst", got.DefaultRole, "default_role=admin must be clamped to analyst")
+	})
 }
