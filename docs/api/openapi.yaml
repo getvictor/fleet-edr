@@ -1160,7 +1160,7 @@ components:
       properties:
         title:
           type: string
-          example: "Keychain dump (security dump-keychain)"
+          example: "Keychain credential dump"
         summary:
           type: string
           description: One-line elevator pitch shown in tooltips.

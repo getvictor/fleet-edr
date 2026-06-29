@@ -61,6 +61,11 @@ type SuspiciousExec struct {
 
 func (r *SuspiciousExec) ID() string { return "suspicious_exec" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519). Both trigger arms (the
+// temp-path exec and the outbound network_connect) emit this one title; which arm fired lives in the finding Description, so the
+// alert maps 1:1 to the one rule an operator can look up (SIEM/Sigma catalog convention) rather than forking into two titles.
+func (r *SuspiciousExec) DisplayName() string { return "Suspicious exec chain" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1059
 // (Command and Scripting Interpreter) + T1105 (Ingress Tool Transfer).
 func (r *SuspiciousExec) Techniques() []string {
@@ -71,7 +76,7 @@ func (r *SuspiciousExec) Techniques() []string {
 // the generated docs/detection-rules.md.
 func (r *SuspiciousExec) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "Suspicious exec chain (non-shell → shell → temp/network)",
+		Title:   r.DisplayName(),
 		Summary: "Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.",
 		Description: "Detects two related chain shapes that share a single attribution chain:\n\n" +
 			"1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)\n" +
@@ -363,7 +368,7 @@ func (r *SuspiciousExec) evalNetwork(
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
 		Severity:    api.SeverityHigh,
-		Title:       "Shell spawn with outbound network connection",
+		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("%s → %s → outbound %s:%d", parentPath, shell.Path, c.RemoteAddress, c.RemotePort),
 		ProcessID:   conn.ID,
 		EventIDs:    eventIDs,
@@ -498,7 +503,7 @@ func (r *SuspiciousExec) makeExecFinding(
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
 		Severity:    api.SeverityHigh,
-		Title:       "Suspicious exec from temp path",
+		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("%s → %s → %s", parentPath, shell.Path, tempPath),
 		ProcessID:   tempProc.ID,
 		EventIDs:    eventIDs,

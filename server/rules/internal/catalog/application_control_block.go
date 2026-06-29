@@ -31,6 +31,13 @@ const applicationControlBlockEventType = "application_control_block"
 
 func (r *ApplicationControlBlock) ID() string { return "application_control_block" }
 
+// DisplayName is the canonical name for the rule's catalog entry (Doc().Title). Unlike the other rules, the alert this rule raises
+// does NOT carry DisplayName as its title: each block event maps to a finding whose RuleID is the matched app-control rule
+// (`app_control:<n>`, not this catalog ID) and whose title is computed per block (`Application blocked: <binary>`), so the operator
+// sees which binary was blocked by which admin rule. The catalog guard test exempts this rule from the finding-title==DisplayName
+// assertion for that reason (issue #519).
+func (r *ApplicationControlBlock) DisplayName() string { return "Application control block" }
+
 // Techniques returns an empty slice. App-control blocks are not mapped to MITRE ATT&CK because the framework's perspective is "the
 // adversary did something": a successful block is the absence of that. Operators who want ATT&CK badging on app-control alerts can
 // tag the originating rule downstream.
@@ -38,7 +45,7 @@ func (r *ApplicationControlBlock) Techniques() []string { return []string{} }
 
 func (r *ApplicationControlBlock) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "Application control block",
+		Title:   r.DisplayName(),
 		Summary: "Surfaces every AUTH_EXEC denial from the extension as an alert in the unified view.",
 		Description: "The extension's AUTH_EXEC decision walker denies execs that match an admin-defined " +
 			"application-control rule. Every such denial emits an `application_control_block` event that this " +

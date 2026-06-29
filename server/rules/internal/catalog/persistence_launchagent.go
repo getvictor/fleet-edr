@@ -24,6 +24,9 @@ type PersistenceLaunchAgent struct {
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
+func (r *PersistenceLaunchAgent) DisplayName() string { return "LaunchAgent persistence" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1543.001 (Create or Modify System Process → Launch Agent). The rule
 // fires on `launchctl load` of user LaunchAgent plists, which is exactly this sub-technique's scope.
 func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.001"} }
@@ -32,7 +35,7 @@ func (r *PersistenceLaunchAgent) Techniques() []string { return []string{"T1543.
 // the generated docs/detection-rules.md.
 func (r *PersistenceLaunchAgent) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "LaunchAgent persistence (launchctl load/bootstrap)",
+		Title:   r.DisplayName(),
 		Summary: "Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/LaunchAgents or /Library/LaunchAgents.",
 		Description: "Detects the canonical user-domain persistence step on macOS: an attacker drops a plist into a " +
 			"LaunchAgents directory and then activates it via `launchctl load <plist>` or `launchctl bootstrap " +
@@ -117,7 +120,7 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
 		Severity:    api.SeverityHigh,
-		Title:       "LaunchAgent persistence attempt",
+		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("launchctl %s %s", subcommand, plistPath),
 		ProcessID:   proc.ID,
 		EventIDs:    []string{evt.EventID},

@@ -126,7 +126,7 @@ describe("ProcessTreeView process-backed alert", () => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({
       ...launchDaemonAlert,
       rule_id: "suspicious_exec",
-      title: "Shell spawn with outbound network connection",
+      title: "Suspicious exec chain",
       process_id: 99,
     });
     renderTree("?alert=7&process=99&at=1750248000000");

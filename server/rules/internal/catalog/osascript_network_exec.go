@@ -36,6 +36,9 @@ type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
+func (r *OsascriptNetworkExec) DisplayName() string { return "AppleScript dropper" }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1059.002 (Command and Scripting Interpreter → AppleScript) + T1105
 // (Ingress Tool Transfer). The rule specifically flags osascript invoking a curl/wget that stages an executable to /tmp, which is the
 // exact shape of a T1105 dropper.
@@ -47,7 +50,7 @@ func (r *OsascriptNetworkExec) Techniques() []string {
 // the generated docs/detection-rules.md.
 func (r *OsascriptNetworkExec) Doc() api.Documentation {
 	return api.Documentation{
-		Title:   "AppleScript dropper (osascript → curl/wget → temp exec)",
+		Title:   r.DisplayName(),
 		Summary: "Critical-severity catch on the canonical macOS commodity-dropper chain: osascript fetches a stage-2 over the network and runs it from /tmp.",
 		Description: "Fires on the LAST link of the chain: an exec from a temp directory whose process tree has " +
 			"both an osascript ancestor and a curl/wget sibling within the osascript's 30-second descendant window. " +
@@ -194,7 +197,7 @@ func (r *OsascriptNetworkExec) evalEvent(
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
 		Severity:    api.SeverityCritical,
-		Title:       "osascript download-and-exec chain",
+		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("osascript → %s → %s", downloader.Path, displayTempExec(p)),
 		ProcessID:   tempExecProc.ID,
 		EventIDs:    []string{evt.EventID},

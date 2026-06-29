@@ -62,10 +62,11 @@ type stubRule struct {
 }
 
 func (r *stubRule) ID() string           { return r.id }
+func (r *stubRule) DisplayName() string  { return "Stub rule" }
 func (r *stubRule) Techniques() []string { return r.techniques }
 func (r *stubRule) Doc() rulesapi.Documentation {
 	return rulesapi.Documentation{
-		Title:    "Stub rule",
+		Title:    r.DisplayName(),
 		Summary:  "test fixture",
 		Severity: rulesapi.SeverityHigh,
 	}
@@ -107,9 +108,10 @@ func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
 type multiPIDStub struct{ id string }
 
 func (r *multiPIDStub) ID() string           { return r.id }
+func (r *multiPIDStub) DisplayName() string  { return "Multi-pid stub" }
 func (r *multiPIDStub) Techniques() []string { return nil }
 func (r *multiPIDStub) Doc() rulesapi.Documentation {
-	return rulesapi.Documentation{Title: "Multi-pid stub", Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+	return rulesapi.Documentation{Title: r.DisplayName(), Summary: "test fixture", Severity: rulesapi.SeverityHigh}
 }
 
 func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {

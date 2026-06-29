@@ -34,6 +34,9 @@ type DNSC2Beacon struct{}
 
 func (r *DNSC2Beacon) ID() string { return "dns_c2_beacon" }
 
+// DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
+func (r *DNSC2Beacon) DisplayName() string { return "DNS C2 beacon" }
+
 // Techniques is the union the rule can stamp; a given finding narrows this to the subset that actually applied (every
 // finding carries T1071.004; only DGA-domain findings add T1568.002). Procurement and ATT&CK-Navigator export read this
 // list, so it is pinned by a test.
@@ -43,7 +46,7 @@ func (r *DNSC2Beacon) Techniques() []string {
 
 func (r *DNSC2Beacon) Doc() api.Documentation {
 	return api.Documentation{
-		Title: "DNS C2 beacon (suspicious process resolves a domain then connects to it)",
+		Title: r.DisplayName(),
 		Summary: "Flags a program that looks up a domain name and then connects to the address that lookup returned, when that " +
 			"program was launched from a suspicious location such as a temporary or world-writable folder. This is the classic " +
 			"\"malware phoning home\" shape, and the alert ties three normally separate signals into one finding: the program launch, " +
@@ -193,7 +196,7 @@ func (r *DNSC2Beacon) evalEvent(
 		HostID:      evt.HostID,
 		RuleID:      r.ID(),
 		Severity:    severity,
-		Title:       "DNS C2 beacon",
+		Title:       r.DisplayName(),
 		Description: fmt.Sprintf("%s resolved %s and connected to %s", proc.Path, queryName, conn.RemoteAddress),
 		ProcessID:   proc.ID,
 		EventIDs:    []string{dnsEvt.EventID, evt.EventID},

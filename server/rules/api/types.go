@@ -62,6 +62,13 @@ const (
 // events. Concrete rules live in rules/internal/catalog/.
 type Rule interface {
 	ID() string
+	// DisplayName returns the single canonical human-readable name for the detection (issue #519). It is the one string a rule names
+	// itself with everywhere a human reads it: Doc().Title (docs + /api/rules + UI) and Finding.Title (the alert) both derive from it,
+	// so the operator who triages an alert, reads the docs, and writes an exclusion sees the same name mapped to one stable ID(). Unlike
+	// ID() (the snake_case machine identifier), this is prose, e.g. "Keychain credential dump". A rule with multiple trigger arms still
+	// emits this one title; which arm fired lives in the finding's Description, not in a forked title (SIEM/Sigma catalog convention:
+	// one rule, one name). The catalog guard test asserts Doc().Title == DisplayName() and that every finding carries it.
+	DisplayName() string
 	// Techniques returns the MITRE ATT&CK technique IDs the rule maps to (e.g. []string{"T1059.002", "T1105"}). Used for Navigator export
 	// + UI badging. Return an empty slice, not nil, for "no mapping".
 	Techniques() []string
@@ -87,8 +94,10 @@ type RuleMetadata struct {
 // Documentation is the structured per-rule descriptor consumed by the
 // markdown generator, /api/rules, and the UI's rule detail page.
 type Documentation struct {
-	// Title is the operator-facing display name (e.g. "Keychain dump"). Distinct from ID(): IDs are stable identifiers used in alert rows;
-	// titles are the human-readable label rendered in tables and headings.
+	// Title is the operator-facing display name (e.g. "Keychain credential dump"). It MUST equal the rule's DisplayName() (issue #519):
+	// it is set from r.DisplayName() in every Doc() so the docs, /api/rules, and the alert all show one canonical name. Distinct from
+	// ID(): IDs are stable snake_case identifiers used in alert rows; the title is the human-readable label. The catalog guard test
+	// enforces Title == DisplayName().
 	Title string `json:"title"`
 	// Summary is a one-sentence elevator pitch shown in lists / tooltips.
 	Summary string `json:"summary"`

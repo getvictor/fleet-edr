@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,6 +80,31 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 				// _ = is a compile-time reference, not a runtime assertion.
 				_ = c.Default
 			}
+		})
+	}
+}
+
+// spec:server-detection-rules-engine/canonical-rule-naming/a-rule-names-itself-the-same-way-everywhere
+//
+// TestAll_CanonicalDisplayName is the structural guard against the three-names-for-one-detection drift issue #519 fixed. It pins the
+// single-source-of-truth invariant for every shipped rule: Doc().Title (docs, /api/rules, UI) MUST equal DisplayName(), so the doc
+// surface can never silently diverge from the canonical name again. It also enforces that the canonical name is a clean human-readable
+// label, not the old "<name> (parenthetical implementation detail)" form whose detail belongs in Summary. The finding-title half of the
+// invariant (Finding.Title == DisplayName) is enforced for fixture-replayed rules by server/detection/testkit Replay and by each
+// rule's positive-detection test; application_control_block is the one exemption (per-block computed title + app_control:<n> RuleID).
+func TestAll_CanonicalDisplayName(t *testing.T) {
+	t.Parallel()
+	for _, r := range New(nil) {
+		t.Run(r.ID(), func(t *testing.T) {
+			t.Parallel()
+			name := r.DisplayName()
+			assert.NotEmpty(t, name, "DisplayName must be set for %s", r.ID())
+			assert.Equal(t, name, r.Doc().Title,
+				"%s: Doc().Title must equal DisplayName() so the docs and the alert name the rule one way", r.ID())
+			assert.NotContains(t, name, "(",
+				"%s DisplayName %q carries a parenthetical; the implementation detail belongs in Summary, the title stays a clean name",
+				r.ID(), name)
+			assert.Equal(t, strings.TrimSpace(name), name, "%s DisplayName must not carry leading/trailing whitespace", r.ID())
 		})
 	}
 }

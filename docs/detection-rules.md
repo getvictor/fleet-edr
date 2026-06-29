@@ -15,20 +15,20 @@ Hand-edits to this file get overwritten on the next regeneration.
 
 | Rule ID | Title | Severity | ATT&CK |
 | --- | --- | --- | --- |
-| [`suspicious_exec`](#suspicious_exec) | Suspicious exec chain (non-shell → shell → temp/network) | high | T1059, T1105 |
-| [`persistence_launchagent`](#persistence_launchagent) | LaunchAgent persistence (launchctl load/bootstrap) | high | T1543.001 |
+| [`suspicious_exec`](#suspicious_exec) | Suspicious exec chain | high | T1059, T1105 |
+| [`persistence_launchagent`](#persistence_launchagent) | LaunchAgent persistence | high | T1543.001 |
 | [`dyld_insert`](#dyld_insert) | DYLD injection on exec | high | T1574.006 |
 | [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | T1566.001, T1059.004 |
-| [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper (osascript → curl/wget → temp exec) | critical | T1059.002, T1105 |
-| [`credential_keychain_dump`](#credential_keychain_dump) | Keychain dump (security dump-keychain) | high | T1555.001 |
-| [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence (BTM daemon registration) | high | T1543.004 |
-| [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper (write to /etc/sudoers or /etc/sudoers.d/*) | high | T1548.003 |
+| [`osascript_network_exec`](#osascript_network_exec) | AppleScript dropper | critical | T1059.002, T1105 |
+| [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | T1555.001 |
+| [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | T1543.004 |
+| [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | T1548.003 |
 | [`application_control_block`](#application_control_block) | Application control block | medium |  |
-| [`dns_c2_beacon`](#dns_c2_beacon) | DNS C2 beacon (suspicious process resolves a domain then connects to it) | high | T1071.004, T1568.002 |
+| [`dns_c2_beacon`](#dns_c2_beacon) | DNS C2 beacon | high | T1071.004, T1568.002 |
 
 ## suspicious_exec
 
-**Suspicious exec chain (non-shell → shell → temp/network)**  
+**Suspicious exec chain**  
 Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.
 
 | | |
@@ -63,7 +63,7 @@ The rule fires on the LAST link of the chain (the temp-exec or the network_conne
 
 ## persistence_launchagent
 
-**LaunchAgent persistence (launchctl load/bootstrap)**  
+**LaunchAgent persistence**  
 Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/LaunchAgents or /Library/LaunchAgents.
 
 | | |
@@ -147,7 +147,7 @@ Office apps almost never need to shell out in normal use; when they do, it's an 
 
 ## osascript_network_exec
 
-**AppleScript dropper (osascript → curl/wget → temp exec)**  
+**AppleScript dropper**  
 Critical-severity catch on the canonical macOS commodity-dropper chain: osascript fetches a stage-2 over the network and runs it from /tmp.
 
 | | |
@@ -176,7 +176,7 @@ The rule requires both halves of the chain to be present, so download-only or te
 
 ## credential_keychain_dump
 
-**Keychain dump (security dump-keychain)**  
+**Keychain credential dump**  
 Flags exec of /usr/bin/security dump-keychain: the canonical macOS Keychain export command.
 
 | | |
@@ -203,7 +203,7 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 
 ## privilege_launchd_plist_write
 
-**LaunchDaemon persistence (BTM daemon registration)**  
+**LaunchDaemon persistence**  
 Flags a system-domain LaunchDaemon whose registered executable is not an Apple platform binary and not allowlisted.
 
 | | |
@@ -235,7 +235,7 @@ Notarization is deliberately NOT a trust signal: it is an automated Apple scan, 
 
 ## sudoers_tamper
 
-**Sudoers tamper (write to /etc/sudoers or /etc/sudoers.d/*)**  
+**Sudoers tamper**  
 Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in write mode.
 
 | | |
@@ -278,7 +278,7 @@ The extension's AUTH_EXEC decision walker denies execs that match an admin-defin
 
 ## dns_c2_beacon
 
-**DNS C2 beacon (suspicious process resolves a domain then connects to it)**  
+**DNS C2 beacon**  
 Flags a program that looks up a domain name and then connects to the address that lookup returned, when that program was launched from a suspicious location such as a temporary or world-writable folder. This is the classic "malware phoning home" shape, and the alert ties three normally separate signals into one finding: the program launch, the DNS lookup, and the outbound connection.
 
 | | |
