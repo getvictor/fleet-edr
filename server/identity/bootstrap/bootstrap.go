@@ -705,11 +705,16 @@ func (i *Identity) OIDCEnabled(ctx context.Context) bool {
 	if i.ssoStore == nil {
 		return false
 	}
-	// "Usable" matches SeedOIDCConfig: the row must decrypt AND carry a client secret. GetDecrypted does not error on a missing/empty
-	// secret (only on decrypt failure), and a secretless config cannot complete token exchange, so reporting it as enabled would be a
-	// false positive. A wrong/rotated sealer key (decrypt failure) likewise reports not-enabled.
+	// "Usable" matches what the login resolver treats as configured: the row must decrypt AND carry a client secret AND yield a derivable
+	// redirect (the deployment external URL is set). GetDecrypted does not error on a missing secret, and the resolver returns
+	// ErrNotConfigured when the external URL is empty, so requiring all three keeps this status signal honest about whether
+	// /api/auth/login will actually work rather than reporting enabled for a half-configured deployment.
 	cfg, err := i.ssoStore.GetDecrypted(ctx)
-	return err == nil && cfg != nil && cfg.ClientSecret != ""
+	if err != nil || cfg == nil || cfg.ClientSecret == "" {
+		return false
+	}
+	appCfg, _, err := i.appConfigStore.Get(ctx)
+	return err == nil && ssoconfig.RedirectURLFor(appCfg.ExternalURL) != ""
 }
 
 // RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured).

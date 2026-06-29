@@ -169,6 +169,8 @@ rm -rf "$COVDATA_DIR" "$LOG_DIR" "$COV_OUT" "$REPO_ROOT/test/e2e/coverage-raw" "
 mkdir -p "$COVDATA_DIR" "$LOG_DIR"
 
 echo "::group::Build covered server binary"
+# Ensure the binary output dir exists so `go build -o tmp/...` is self-contained (does not rely on an earlier mkdir).
+mkdir -p "$REPO_ROOT/tmp"
 go build -cover -coverpkg=./server/...,./internal/... -o "$BINARY" ./server/cmd/fleet-edr-server
 # Build the demo-seeder once so each phase's seed_oidc call is a fast exec rather than a recompile.
 go build -o "$REPO_ROOT/tmp/edr-demo-seed-e2e" ./server/cmd/fleet-edr-demo-seed

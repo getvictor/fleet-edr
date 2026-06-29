@@ -195,7 +195,7 @@ func TestSeedOIDCConfig(t *testing.T) {
 		assert.Equal(t, "real-secret", got.ClientSecret, "a non-force seed must repair a secretless row")
 	})
 
-	t.Run("OIDCEnabled requires a decryptable client secret", func(t *testing.T) {
+	t.Run("OIDCEnabled requires a decryptable secret and a derivable redirect", func(t *testing.T) {
 		t.Parallel()
 		db := full.Open(t)
 		secretKey := fixedKey(41)
@@ -214,11 +214,18 @@ func TestSeedOIDCConfig(t *testing.T) {
 		}))
 		assert.False(t, id.OIDCEnabled(t.Context()), "a secretless config is not usable")
 
-		// A config carrying a secret is usable.
+		// A secret but no external URL: the redirect can't be derived, so the resolver treats it as not configured; OIDCEnabled agrees.
 		require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
 			Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "real",
 			Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst", Force: true,
 		}))
-		assert.True(t, id.OIDCEnabled(t.Context()), "a config with a secret is usable")
+		assert.False(t, id.OIDCEnabled(t.Context()), "no external URL means no derivable redirect, so not usable")
+
+		// Secret + external URL: fully usable.
+		require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
+			Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "real",
+			Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst", ExternalURL: "https://edr.example.com", Force: true,
+		}))
+		assert.True(t, id.OIDCEnabled(t.Context()), "a config with a secret and external URL is usable")
 	})
 }
