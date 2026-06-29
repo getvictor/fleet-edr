@@ -194,4 +194,31 @@ func TestSeedOIDCConfig(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "real-secret", got.ClientSecret, "a non-force seed must repair a secretless row")
 	})
+
+	t.Run("OIDCEnabled requires a decryptable client secret", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		secretKey := fixedKey(41)
+		id, err := bootstrap.New(t.Context(), bootstrap.Deps{
+			DB: db, Logger: slog.Default(), SessionSigningKey: fixedKey(1), OIDCSecretKey: secretKey,
+			SessionAbsolute: time.Hour, CleanupInterval: time.Hour, OIDC: bootstrap.OIDCDeps{},
+		})
+		require.NoError(t, err)
+		require.NoError(t, id.ApplySchema(t.Context()))
+		assert.False(t, id.OIDCEnabled(t.Context()), "no stored config yet")
+
+		// A row that decrypts but has no client secret is not usable; OIDCEnabled must stay false.
+		require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
+			Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "",
+			Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		}))
+		assert.False(t, id.OIDCEnabled(t.Context()), "a secretless config is not usable")
+
+		// A config carrying a secret is usable.
+		require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
+			Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "real",
+			Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst", Force: true,
+		}))
+		assert.True(t, id.OIDCEnabled(t.Context()), "a config with a secret is usable")
+	})
 }

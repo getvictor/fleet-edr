@@ -705,10 +705,11 @@ func (i *Identity) OIDCEnabled(ctx context.Context) bool {
 	if i.ssoStore == nil {
 		return false
 	}
-	// GetDecrypted, not Get: a row whose client secret cannot be decrypted (wrong/rotated sealer key) is not a usable config, so the
-	// fail-closed signal must reflect decryptability, not mere row presence.
-	_, err := i.ssoStore.GetDecrypted(ctx)
-	return err == nil
+	// "Usable" matches SeedOIDCConfig: the row must decrypt AND carry a client secret. GetDecrypted does not error on a missing/empty
+	// secret (only on decrypt failure), and a secretless config cannot complete token exchange, so reporting it as enabled would be a
+	// false positive. A wrong/rotated sealer key (decrypt failure) likewise reports not-enabled.
+	cfg, err := i.ssoStore.GetDecrypted(ctx)
+	return err == nil && cfg.ClientSecret != ""
 }
 
 // RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured).
