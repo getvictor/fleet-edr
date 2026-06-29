@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jmoiron/sqlx"
@@ -249,42 +248,18 @@ func (s *Service) FinishSetup(ctx context.Context, req FinishSetupRequest) (*Fin
 	return &FinishSetupResult{Session: sess, CredentialID: credID}, nil
 }
 
-// resolveLocalPasswordIdentityID inserts the local_password identity row for the redeeming user. When the row already exists
-// from an earlier seed, it finds it instead. Distinguishes duplicate-key (the only acceptable path to "row already exists") from any other
-// DB failure: a transient outage or permission glitch must propagate so the redemption rolls back instead of silently committing a
-// partial account.
+// resolveLocalPasswordIdentityID inserts the local_password identity row for the redeeming user, or returns the id of the row an
+// earlier seed/migration already created. identities.UpsertWith does both in one statement on the redemption transaction, so the
+// expected-duplicate re-run no longer raises a driver error that surfaces as a benign hasError trace span (#522). A transient outage or
+// permission glitch still propagates so the redemption rolls back instead of silently committing a partial account.
 func (s *Service) resolveLocalPasswordIdentityID(
 	ctx context.Context, tx *sqlx.Tx, u *users.User,
 ) (int64, error) {
-	id, err := s.identities.InsertWith(ctx, tx,
-		u.ID, identities.ProviderLocalPassword, u.Email)
-	if err == nil {
-		return id, nil
+	id, err := s.identities.UpsertWith(ctx, tx, u.ID, identities.ProviderLocalPassword, u.Email)
+	if err != nil {
+		return 0, fmt.Errorf("breakglass: resolve identity: %w", err)
 	}
-	if !isMySQLDuplicateKey(err) {
-		return 0, fmt.Errorf("breakglass: insert identity: %w", err)
-	}
-	// Dup-key only: the row exists from a prior seed/migration. Look it up via the same tx so the CASCADE guarantees a consistent read.
-	existing, lookupErr := s.identities.FindByProviderSubject(ctx,
-		identities.ProviderLocalPassword, u.Email)
-	if lookupErr != nil {
-		return 0, fmt.Errorf("breakglass: lookup existing identity: %w", lookupErr)
-	}
-	return existing.ID, nil
-}
-
-// mysqlErrDupEntry is the MySQL "Duplicate entry" code we expect on the local_password identity insert when the row already exists.
-// Lifted to a const so the magic-number lint is satisfied.
-const mysqlErrDupEntry = 1062
-
-// isMySQLDuplicateKey reports whether err wraps the MySQL 1062
-// "Duplicate entry" code. Mirrors the helper in jit.go.
-func isMySQLDuplicateKey(err error) bool {
-	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) {
-		return false
-	}
-	return mysqlErr.Number == mysqlErrDupEntry
+	return id, nil
 }
 
 // LoginChallenge mirrors SetupChallenge but for the assertion flow.

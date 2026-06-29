@@ -18,8 +18,6 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/go-sql-driver/mysql"
-
 	"github.com/fleetdm/edr/server/attrkeys"
 	"github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/identity/internal/rbac"
@@ -34,11 +32,6 @@ const DefaultAdminEmail = "admin@fleet-edr.local"
 // break-glass account lands in `super_admin` so an operator who completes the redemption flow can do every operator action without a
 // manual SQL promotion. Without this binding the user has zero grants and the chokepoint denies even host.read.
 const DefaultAdminRole = "super_admin"
-
-// mysqlErrDupEntry is the SQL state for "row already exists with the unique key you tried to insert." We rely on the role_bindings
-// unique key (user_id, role_id, scope_type, scope_id) to make the seed idempotent across container restarts; a duplicate just means
-// "already seeded, nothing to do."
-const mysqlErrDupEntry = 1062
 
 // Admin idempotently seeds the break-glass admin user AND its
 // super_admin role binding. Returns the inserted (or pre-existing)
@@ -110,25 +103,19 @@ func resolveOrCreateAdmin(ctx context.Context, us *users.Store, logger *slog.Log
 	return u, nil
 }
 
-// bindSuperAdmin inserts the role_bindings row that gives the break-glass admin its wave-1 grants. Idempotent on the rbac unique key:
-// a duplicate-entry error is swallowed (binding already exists, nothing to do); any other DB failure surfaces.
+// bindSuperAdmin inserts the role_bindings row that gives the break-glass admin its wave-1 grants. rbac.BindRole is idempotent on the
+// unique key (INSERT ... ON DUPLICATE KEY UPDATE), so a re-seed where the binding already exists is a single-statement no-op rather than
+// a swallowed duplicate-key error; any other DB failure surfaces.
 func bindSuperAdmin(ctx context.Context, rb *rbac.Store, u *users.User, logger *slog.Logger) error {
-	err := rb.BindRole(ctx, rb.DB(), rbac.BindRoleRequest{
+	if err := rb.BindRole(ctx, rb.DB(), rbac.BindRoleRequest{
 		UserID:    u.ID,
 		RoleID:    DefaultAdminRole,
 		ScopeType: string(api.RoleBindingScopeGlobal),
 		ScopeID:   api.RoleBindingScopeWildcard,
-	})
-	var mysqlErr *mysql.MySQLError
-	if errors.As(err, &mysqlErr) && mysqlErr.Number == mysqlErrDupEntry {
-		logger.DebugContext(ctx, "break-glass admin role binding already present",
-			attrkeys.UserID, u.ID, "role", DefaultAdminRole)
-		return nil
-	}
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("bind %s to %d: %w", DefaultAdminRole, u.ID, err)
 	}
-	logger.InfoContext(ctx, "break-glass admin role binding seeded",
+	logger.InfoContext(ctx, "break-glass admin role binding ensured",
 		attrkeys.UserID, u.ID, "role", DefaultAdminRole)
 	return nil
 }

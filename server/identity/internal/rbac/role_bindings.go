@@ -86,12 +86,19 @@ type BindRoleRequest struct {
 	ExpiresAt *time.Time
 }
 
-// BindRole inserts a role_bindings row. Used by Phase-4 JIT provisioning to bind a freshly-provisioned OIDC user to the default role
-// for the deployment.
+// BindRole idempotently inserts a role_bindings row. Used by Phase-4 JIT provisioning to bind a freshly-provisioned OIDC user to the
+// default role, and by seed.Admin's idempotent bootstrap-time bind.
+//
+// ON DUPLICATE KEY UPDATE user_id = user_id makes a re-bind of an already-bound (user_id, role_id, scope_type, scope_id) a
+// single-statement no-op instead of a duplicate-key error: the break-glass admin re-seed runs on every container boot where an existing
+// binding is expected, and the old insert-and-let-the-caller-swallow path raised a benign hasError trace span on each restart (#522).
+// The no-op update leaves the existing row (including its expires_at) untouched, matching the prior swallow-the-duplicate semantics
+// exactly. Unlike INSERT IGNORE, a genuine FK violation or other DB error still surfaces.
 func (s *Store) BindRole(ctx context.Context, ec Executor, req BindRoleRequest) error {
 	_, err := ec.ExecContext(ctx, `
 		INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id, expires_at)
 		VALUES (?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE user_id = user_id
 	`, req.UserID, req.RoleID, req.ScopeType, req.ScopeID, req.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("bind role %q to user %d: %w", req.RoleID, req.UserID, err)
