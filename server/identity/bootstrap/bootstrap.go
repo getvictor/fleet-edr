@@ -62,8 +62,9 @@ type Deps struct {
 	// uses the audit package default (8192).
 	AuditAsyncQueueCap int
 
-	// OIDC carries the OIDC auth knobs. When OIDC.Issuer is empty, the OIDC handler + routes are not constructed (break-glass-only
-	// deployment); cfg validation upstream is responsible for refusing to boot if the operator did not opt into that mode.
+	// OIDC carries the live OIDC handler knobs (state-cookie TTL, optional test HTTP client). The provider connection config lives in
+	// the durable oidc_config store, not here; the handler + routes are always built when the signing/secret keys are supplied, and the
+	// login flow resolves the provider from the store per request (issue #375).
 	OIDC OIDCDeps
 	// SessionSigningKey is the HMAC key the OIDC state cookie reuses (per spec). Required when OIDC.Issuer is set; ignored otherwise.
 	// 32+ bytes recommended. The break-glass challenge cookie reuses the same key.
@@ -91,17 +92,11 @@ type BreakglassDeps struct {
 	RPOrigins         []string
 }
 
-// OIDCDeps mirrors the deployment-specific OIDC config the identity context needs. Lifted out of Deps so OIDC-related additions don't
-// keep widening the parent struct.
+// OIDCDeps carries the live, deployment-level knobs the OIDC handler needs at construction time. The provider connection config
+// (issuer, client id, secret, scopes, JIT toggle, default role) is NOT here: it lives in the durable oidc_config store and is read
+// per-login (issue #375), so these are only the handler's runtime parameters. Lifted out of Deps so OIDC additions don't widen the
+// parent struct.
 type OIDCDeps struct {
-	Issuer               string
-	ClientID             string
-	ClientSecret         string
-	RedirectURL          string
-	Scopes               []string
-	AllowJITProvisioning bool
-	// DefaultRole is the role a JIT-provisioned OIDC user is bound to. Empty falls through to the provisioner default (`analyst`).
-	DefaultRole    string
 	StateCookieTTL time.Duration
 	HTTPClient     *http.Client // optional; tests inject a fixture
 }
@@ -126,13 +121,11 @@ type Identity struct {
 	db                *sqlx.DB
 	logger            *slog.Logger
 	cleanupEvery      time.Duration
-	// ssoStore is the durable OIDC config store (nil when the OIDC handler was not built). oidcSeed carries the env OIDC values used to
-	// seed the store on first boot; oidcConfiguredAtBoot records whether a usable config existed after seeding, for OIDCEnabled.
-	ssoStore             *ssoconfig.Store
-	appConfigStore       *appconfig.Store
-	ssoAdminHandler      *ssoadmin.Handler // nil when the OIDC handler was not built (no signing/secret key)
-	oidcSeed             OIDCDeps
-	oidcConfiguredAtBoot bool
+	// ssoStore is the durable OIDC config store (nil when the OIDC handler was not built); it is the runtime source of truth the login
+	// path resolves the provider from and the signal OIDCEnabled reports on.
+	ssoStore        *ssoconfig.Store
+	appConfigStore  *appconfig.Store
+	ssoAdminHandler *ssoadmin.Handler // nil when the OIDC handler was not built (no signing/secret key)
 	// Service-account surface (issue #376). All nil when no SA signing key was provided (minimal test wiring). saSnapshot is a
 	// per-replica revocation cache; apiAuthMW is the combined bearer-or-session+CSRF middleware for the operator API mux.
 	saAdminHandler *saadmin.Handler
@@ -269,7 +262,6 @@ func New(ctx context.Context, deps Deps) (*Identity, error) {
 		saSnapshot:        saSurface.snapshot,
 		apiAuthMW:         saSurface.apiAuthMW,
 		userAdminHandler:  useradmin.NewHandler(usersStore, rbacStore, authzEngine, auditStore, logger),
-		oidcSeed:          deps.OIDC,
 	}, nil
 }
 
@@ -375,29 +367,27 @@ type breakglassDeps struct {
 	identity   api.Service // for the reauth POST endpoint
 }
 
-// buildBreakglass constructs the break-glass Service + Handler. Returns (nil, nil, nil) when the deployment opted out (no RP ID + OIDC
-// enabled). Returns an error when the operator partially configured the surface, following the same pattern as the OIDC gate.
+// buildBreakglass constructs the break-glass Service + Handler. Break-glass is the bootstrap login path the first admin uses before any
+// SSO config exists (SSO is configured at runtime through the UI after a break-glass login), so it is always available: when no
+// EDR_BREAKGLASS_* is set it defaults to a localhost configuration (the dev shape; production sets the externally reachable RP id +
+// origins). Returns an error when the operator partially configured the surface.
 func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handler, error) {
 	bg := in.deps.Breakglass
 	rpID := bg.RPID
 	rpOrigins := bg.RPOrigins
-	if rpID == "" && len(rpOrigins) == 0 && in.deps.OIDC.Issuer == "" {
-		// Dev fallback: neither OIDC nor break-glass explicitly configured. Default to localhost so first-boot works without a
-		// long env var prelude. Production is covered by the explicit-config branch below.
+	if rpID == "" && len(rpOrigins) == 0 {
+		// Nothing configured: default to localhost so first boot has a working recovery surface without a long env var prelude. The
+		// origins are https:// to match the server's mandatory-TLS posture (issue #140); the browser hits https://localhost:8088, so the
+		// WebAuthn origin check would reject http:// here. Production sets EDR_BREAKGLASS_RP_ID + EDR_BREAKGLASS_RP_ORIGINS to the
+		// externally reachable host.
 		rpID = "localhost"
-		rpOrigins = []string{"http://localhost:8088", "http://127.0.0.1:8088"}
+		rpOrigins = []string{"https://localhost:8088", "https://127.0.0.1:8088"}
 	}
-	// Reject partial config: an operator who set RPOrigins WITHOUT RPID intended to configure break-glass; silently opting out would brick
-	// recovery. Same guard direction as the EDR_OIDC_ISSUER-without-companion check in config.go.
+	// Reject partial config: an operator who set RP_ORIGINS WITHOUT RP_ID intended to configure break-glass; silently defaulting to the
+	// localhost RP id would brick recovery against the wrong relying party.
 	if rpID == "" && len(rpOrigins) > 0 {
 		return nil, nil, errors.New(
 			"identity bootstrap: EDR_BREAKGLASS_RP_ORIGINS set without EDR_BREAKGLASS_RP_ID")
-	}
-	if rpID == "" {
-		// OIDC is configured but break-glass is not: the operator opted out. Routes will not be mounted AND the seed flow will not issue
-		// bootstrap tokens (cmd/main short-circuits when BreakglassService() returns nil). The operator can later opt in by setting
-		// EDR_BREAKGLASS_RP_ID; the seed step on the next boot will then issue a token.
-		return nil, nil, nil
 	}
 	if len(rpOrigins) == 0 {
 		return nil, nil, errors.New(
@@ -464,8 +454,8 @@ type oidcHandlerDeps struct {
 // configuration the store holds, and rebuilds it on a config change (no restart). It returns (nil, nil, nil) only when no signing or
 // secret key was supplied (minimal test wiring), in which case OIDC is simply unavailable; production always supplies both keys.
 //
-// The returned *ssoconfig.Store is retained by New so the ApplySchema step can seed the row from env on first boot and so OIDCEnabled
-// can report config presence.
+// The returned *ssoconfig.Store is retained by New as the runtime source of truth the resolver reads and the signal OIDCEnabled reports
+// on.
 func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, error) {
 	if len(in.deps.SessionSigningKey) == 0 || len(in.deps.OIDCSecretKey) == 0 {
 		return nil, nil, nil
@@ -544,73 +534,7 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 // of code-level UserExists validation, so call order across contexts
 // is no longer load-bearing.
 func (i *Identity) ApplySchema(ctx context.Context) error {
-	if err := ApplySchema(ctx, i.db); err != nil {
-		return err
-	}
-	return i.seedOIDCConfigFromEnv(ctx)
-}
-
-// seedOIDCConfigFromEnv implements the env-seeds / DB-governs precedence (issue #375). On first boot, when no stored OIDC config row
-// exists and the EDR_OIDC_* block is set, it seeds the row from those env values so existing env-only deployments keep working
-// unchanged across the upgrade. When a row already exists, env values are inert and only logged. It runs after the schema is applied
-// (the oidc_config table must exist) and records whether a usable config is present for OIDCEnabled. No-op when the OIDC handler was
-// not built (no signing/secret key).
-func (i *Identity) seedOIDCConfigFromEnv(ctx context.Context) error {
-	if i.ssoStore == nil {
-		return nil
-	}
-	_, err := i.ssoStore.Get(ctx)
-	switch {
-	case err == nil:
-		i.oidcConfiguredAtBoot = true
-		if i.oidcSeed.Issuer != "" {
-			i.logger.InfoContext(ctx, "EDR_OIDC_* env vars present but a stored OIDC config exists; env values are inert (stored config governs)")
-		}
-		return nil
-	case !errors.Is(err, ssoconfig.ErrNotFound):
-		return fmt.Errorf("identity bootstrap: read OIDC config: %w", err)
-	}
-	// No stored row. Seed from env when the block is set; otherwise leave OIDC unconfigured (admin configures it via the UI after a
-	// break-glass login).
-	if i.oidcSeed.Issuer == "" {
-		return nil
-	}
-	// Clamp the seeded JIT default role to the same analyst/auditor floor the admin API enforces: a deployment with
-	// EDR_OIDC_DEFAULT_ROLE=admin must not auto-elevate JIT-provisioned SSO users to a privileged role. Anything outside the allowed
-	// set (including the empty default) falls back to the lowest-privilege JIT role.
-	defaultRole := strings.ToLower(strings.TrimSpace(i.oidcSeed.DefaultRole))
-	if defaultRole != "analyst" && defaultRole != "auditor" {
-		defaultRole = oidc.DefaultJITRole
-	}
-	secret := i.oidcSeed.ClientSecret
-	if err := i.ssoStore.Upsert(ctx, ssoconfig.UpsertInput{
-		Issuer:      i.oidcSeed.Issuer,
-		ClientID:    i.oidcSeed.ClientID,
-		NewSecret:   &secret,
-		Scopes:      i.oidcSeed.Scopes,
-		JITEnabled:  i.oidcSeed.AllowJITProvisioning,
-		DefaultRole: defaultRole,
-		UpdatedBy:   api.PrincipalSystemID,
-	}); err != nil {
-		return fmt.Errorf("identity bootstrap: seed OIDC config from env: %w", err)
-	}
-	// The external URL is deployment-level and lives in the appconfig document. EDR_OIDC_REDIRECT_URL is the full callback URL; recover
-	// the base by trimming a trailing callback path (best-effort). Seed it only when the app_config document has no external URL yet, so
-	// a later UI edit is never clobbered on restart.
-	externalURL := strings.TrimSuffix(strings.TrimRight(i.oidcSeed.RedirectURL, "/"), ssoconfig.CallbackPath)
-	if externalURL != "" {
-		if cur, version, err := i.appConfigStore.Get(ctx); err != nil {
-			return fmt.Errorf("identity bootstrap: read app config: %w", err)
-		} else if cur.ExternalURL == "" {
-			cur.ExternalURL = externalURL
-			if err := i.appConfigStore.Put(ctx, cur, version, api.PrincipalSystemID); err != nil {
-				return fmt.Errorf("identity bootstrap: seed external URL from env: %w", err)
-			}
-		}
-	}
-	i.oidcConfiguredAtBoot = true
-	i.logger.InfoContext(ctx, "seeded OIDC config from EDR_OIDC_* env vars (first boot); the stored config now governs and survives restarts")
-	return nil
+	return ApplySchema(ctx, i.db)
 }
 
 // ApplySchema is the package-level form: applies identity's goose migration corpus against the given DB, then seeds the five
@@ -631,6 +555,123 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	}
 	if err := seed.Roles(ctx, db); err != nil {
 		return fmt.Errorf("identity seed roles: %w", err)
+	}
+	return nil
+}
+
+// OIDCSeedInput is the connection configuration SeedOIDCConfig persists, mirroring the fields an admin enters in the Single sign-on
+// settings UI. The redirect URI is not part of it: it is derived at read time from ExternalURL as ExternalURL + /api/auth/callback.
+type OIDCSeedInput struct {
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	Scopes       []string
+	JITEnabled   bool
+	DefaultRole  string
+	ExternalURL  string
+	// Force overwrites an existing stored config instead of treating its presence as a no-op. It exists only for non-interactive test
+	// harnesses (the e2e coverage run re-points the JIT toggle between phases); the demo and production seed paths leave it false so a
+	// later UI edit is never clobbered.
+	Force bool
+}
+
+// SeedOIDCConfig writes a deployment OIDC configuration (and the deployment external URL) directly to the durable identity stores,
+// sealing the client secret with oidcSecretKey. That key is the AES-256 sealer key the runtime store uses, i.e. the same value the
+// server passes as Deps.OIDCSecretKey (keyring.Derive(OIDCClientSecretLabel) of EDR_SECRET_KEY); the caller derives it the same way so
+// the sealed secret decrypts at login. It exists for non-interactive bootstrapping, the demo and local-QA stacks, where no operator is
+// present to use the Single sign-on settings UI; production deployments configure SSO through the UI/API. It is a no-op when a stored
+// OIDC config already exists (unless OIDCSeedInput.Force), so it is safe to re-run and never clobbers a later UI edit, and it seeds the
+// external URL only when the app_config document has none, for the same reason. The JIT default role is clamped to the analyst/auditor
+// floor the SSO admin API enforces (a non-interactive caller cannot seed a privileged default role), and the two writes commit in one
+// transaction. This is a bootstrap-only seam: like the pre-#512 env seed it writes as the system principal and does not pass through the
+// authorization chokepoint (there is no operator/session at seed time); operator-initiated SSO changes go through the audited admin API.
+func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in OIDCSeedInput) error {
+	if db == nil {
+		return errors.New("identity SeedOIDCConfig: db must not be nil")
+	}
+	if in.Issuer == "" {
+		return errors.New("identity SeedOIDCConfig: issuer is required")
+	}
+	sealer, err := ssoconfig.NewSealer(oidcSecretKey)
+	if err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: build secret sealer: %w", err)
+	}
+	store := ssoconfig.New(db, sealer)
+	// Skip only when a USABLE config already exists and we are not forcing. Usable means the row decrypts AND carries a client secret:
+	// gating on mere row presence would silently no-op over a row whose secret cannot be decrypted (e.g. after an EDR_SECRET_KEY
+	// rotation) or that has no secret at all, leaving SSO broken; an undecryptable row surfaces as an error so the caller can rerun with
+	// Force, while a present-but-secretless row falls through and is (re)seeded.
+	if !in.Force {
+		switch cfg, err := store.GetDecrypted(ctx); {
+		case err == nil && cfg.ClientSecret != "":
+			return nil // a usable stored config governs; leave it untouched
+		case err != nil && !errors.Is(err, ssoconfig.ErrNotFound):
+			return fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
+		}
+	}
+	// Write oidc_config and the external URL in ONE transaction (same shape as the admin API's apply), so a partial failure can't leave a
+	// stored OIDC config paired with a missing derived redirect; a rolled-back seed re-runs cleanly.
+	tx, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: begin tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	secret := in.ClientSecret
+	if err := store.UpsertTx(ctx, tx, ssoconfig.UpsertInput{
+		Issuer:      in.Issuer,
+		ClientID:    in.ClientID,
+		NewSecret:   &secret,
+		Scopes:      in.Scopes,
+		JITEnabled:  in.JITEnabled,
+		DefaultRole: clampJITRole(in.DefaultRole),
+		UpdatedBy:   api.PrincipalSystemID,
+	}); err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: write OIDC config: %w", err)
+	}
+	if err := seedExternalURLTx(ctx, tx, db, in.ExternalURL); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: commit tx: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// clampJITRole normalizes a seeded JIT default role to the analyst/auditor floor the SSO admin API enforces. Anything outside that set
+// (including the empty default) falls back to the lowest-privilege JIT role, so a non-interactive seed (demo/CI) cannot set
+// default_role=admin and have the OIDC provisioner auto-bind first-time SSO users to a privileged role. Mirrors ssoadmin + the
+// pre-#512 env-seed behaviour.
+func clampJITRole(role string) string {
+	r := strings.ToLower(strings.TrimSpace(role))
+	if r == "analyst" || r == "auditor" {
+		return r
+	}
+	return oidc.DefaultJITRole
+}
+
+// seedExternalURLTx seeds the deployment external URL into the app_config document within tx, but only when the document has none, so a
+// later UI edit is never clobbered. No-op when externalURL is empty. The version read is the optimistic-concurrency stamp PutTx checks.
+func seedExternalURLTx(ctx context.Context, tx *sqlx.Tx, db *sqlx.DB, externalURL string) error {
+	if externalURL == "" {
+		return nil
+	}
+	appCfg := appconfig.New(db)
+	cur, version, err := appCfg.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: read app config: %w", err)
+	}
+	if cur.ExternalURL != "" {
+		return nil // operator already set it; don't clobber
+	}
+	cur.ExternalURL = externalURL
+	if err := appCfg.PutTx(ctx, tx, cur, version, api.PrincipalSystemID); err != nil {
+		return fmt.Errorf("identity SeedOIDCConfig: seed external URL: %w", err)
 	}
 	return nil
 }
@@ -656,11 +697,25 @@ func (i *Identity) APIAuthMiddleware() func(http.Handler) http.Handler { return 
 // safe to lose.
 func (i *Identity) ServiceAccountSnapshot() *serviceaccounts.Snapshot { return i.saSnapshot }
 
-// OIDCEnabled reports whether a usable OIDC configuration was present after boot seeding (env-seeded or already stored). cmd/main uses
-// it to log a single info-level line at startup summarising the auth modes the deployment honours. It reflects boot-time state; an
-// admin who configures OIDC via the UI afterward enables SSO at runtime without flipping this flag (the login routes are always
-// mounted when the handler is built).
-func (i *Identity) OIDCEnabled() bool { return i.oidcConfiguredAtBoot }
+// OIDCEnabled reports whether a usable OIDC configuration exists in the durable store. It is the fail-closed signal derived from the
+// oidc_config store (issue #512 removed the env-var boot gate in favour of always-boot): it returns false when the OIDC handler was not
+// built (no signing/secret key) or no configuration has been saved yet, and true once an admin saves one via the UI/API, with no
+// restart. The login routes are always mounted when the handler is built, so this is a status signal, not a routing gate.
+func (i *Identity) OIDCEnabled(ctx context.Context) bool {
+	if i.ssoStore == nil {
+		return false
+	}
+	// "Usable" matches what the login resolver treats as configured: the row must decrypt AND carry a client secret AND yield a derivable
+	// redirect (the deployment external URL is set). GetDecrypted does not error on a missing secret, and the resolver returns
+	// ErrNotConfigured when the external URL is empty, so requiring all three keeps this status signal honest about whether
+	// /api/auth/login will actually work rather than reporting enabled for a half-configured deployment.
+	cfg, err := i.ssoStore.GetDecrypted(ctx)
+	if err != nil || cfg == nil || cfg.ClientSecret == "" {
+		return false
+	}
+	appCfg, _, err := i.appConfigStore.Get(ctx)
+	return err == nil && ssoconfig.RedirectURLFor(appCfg.ExternalURL) != ""
+}
 
 // RegisterPublicRoutes wires DELETE /api/session (logout) plus the pre-auth OIDC + break-glass routes (when configured).
 // Sessions are minted by the OIDC callback or the break-glass FinishLogin / FinishSetup endpoints; there is no

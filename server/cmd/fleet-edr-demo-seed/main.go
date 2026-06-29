@@ -20,11 +20,17 @@ import (
 	"os"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	// Registers the "mysql" driver with database/sql so sql.Open("mysql", dsn) resolves; imported for its init side effect.
 	_ "github.com/go-sql-driver/mysql"
 
 	// Registers the "clickhouse" driver so sql.Open("clickhouse", dsn) resolves for the optional event-archive timestamp slide.
 	_ "github.com/ClickHouse/clickhouse-go/v2"
+
+	"github.com/fleetdm/edr/internal/keyring"
+	serverconfig "github.com/fleetdm/edr/server/config"
+	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 )
 
 func main() {
@@ -55,6 +61,17 @@ func realMain(logger *slog.Logger, getenv func(string) string, args []string) er
 	}
 	defer db.Close()
 
+	// oidc-only mode (local QA against dex): seed just the durable OIDC config and exit, no corpus replay. It needs only DB
+	// connectivity plus an applied schema (the caller runs migrations first), not a running server.
+	if cfg.oidcOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.readyTimeout+defaultHeadroom)
+		defer cancel()
+		if err := pingUntilReady(ctx, db, cfg.readyTimeout, cfg.pollInterval); err != nil {
+			return err
+		}
+		return seedOIDCConfig(ctx, db, cfg, logger)
+	}
+
 	// The event archive (ADR-0015) is optional for the seeder: it posts events via the HTTP API (the server writes them to the
 	// archive), and only needs a direct ClickHouse connection for the restart timestamp-slide. When EDR_CLICKHOUSE_DSN is unset the
 	// seeder still runs; refreshTimestamps just skips the archived-event shift.
@@ -84,7 +101,41 @@ func realMain(logger *slog.Logger, getenv func(string) string, args []string) er
 
 	s := newSeeder(cfg, db, client, logger)
 	s.chDB = chDB
-	return s.run(ctx)
+	if err := s.run(ctx); err != nil {
+		return err
+	}
+	// Seed the durable OIDC config last, once the server is ready and the schema applied. Idempotent and never clobbers a UI edit, so
+	// re-running `up` is safe; skipped when no issuer is configured (a break-glass-only demo).
+	return seedOIDCConfig(ctx, db, cfg, logger)
+}
+
+// seedOIDCConfig writes the demo/QA dex SSO connection config into the durable oidc_config store so login works without the server
+// reading EDR_OIDC_* (issue #512). No-op when no issuer is configured. The client secret is sealed with the OIDC sealer key derived
+// from the deployment root secret (EDR_SECRET_KEY) under the same keyring label the server uses, so the secret decrypts at login.
+func seedOIDCConfig(ctx context.Context, db *sql.DB, cfg config, logger *slog.Logger) error {
+	if cfg.oidcIssuer == "" {
+		logger.InfoContext(ctx, "no OIDC issuer configured, skipping SSO config seed")
+		return nil
+	}
+	kr, err := keyring.New([]byte(cfg.secretKey))
+	if err != nil {
+		return fmt.Errorf("build keyring from EDR_SECRET_KEY: %w", err)
+	}
+	if err := identitybootstrap.SeedOIDCConfig(ctx, sqlx.NewDb(db, "mysql"), kr.Derive(keyring.OIDCClientSecretLabel),
+		identitybootstrap.OIDCSeedInput{
+			Issuer:       cfg.oidcIssuer,
+			ClientID:     cfg.oidcClientID,
+			ClientSecret: cfg.oidcClientSecret,
+			Scopes:       serverconfig.DefaultOIDCScopes(),
+			JITEnabled:   cfg.oidcJIT,
+			DefaultRole:  cfg.oidcDefaultRole,
+			ExternalURL:  cfg.oidcExternalURL,
+			Force:        cfg.oidcForce,
+		}); err != nil {
+		return fmt.Errorf("seed OIDC config: %w", err)
+	}
+	logger.InfoContext(ctx, "seeded durable OIDC config for demo SSO", "issuer", cfg.oidcIssuer)
+	return nil
 }
 
 // pingUntilReady retries the DB ping until it succeeds or the ready window elapses. In docker-compose first boot, MySQL may still be

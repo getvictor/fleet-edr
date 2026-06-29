@@ -25,10 +25,12 @@
 // for the server's process lifetime. The Provider's JWKS cache
 // refreshes on signature failure (go-oidc handles this internally).
 //
-// Dev mode: when EDR_OIDC_ISSUER is unset and
-// EDR_AUTH_ALLOW_NO_OIDC=1, identity bootstrap skips constructing
-// this package entirely; the routes are not registered, and the only
-// way in is the break-glass surface. Production deployments that
-// forget to set EDR_OIDC_ISSUER fail closed at config validation.
+// Configuration: the provider connection config lives in the durable
+// oidc_config store (issue #375) and is resolved per login; the server
+// reads no EDR_OIDC_* env vars (issue #512). The handler is built
+// whenever the signing + secret keys are supplied, and the login
+// routes are always registered; when no config has been saved yet a
+// login attempt returns a directed "SSO not configured" response and
+// the only way in is the break-glass surface.
 
 package oidc

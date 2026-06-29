@@ -122,8 +122,10 @@ services:
       EDR_TLS_KEY_FILE: /tls/dev.key
       EDR_LOG_FORMAT: json
       EDR_SECRET_KEY: demo-only-secret-key-do-not-use-in-prod-0123456789
-      # SSO against the bundled dex. EDR_OIDC_DEFAULT_ROLE lands the single demo
-      # user at `admin` on first sign-in so every affordance is visible.
+      # SSO against the bundled dex. The demo floats to the released `:latest` image (see docs/doc-versioning.md), whose server still
+      # env-seeds these into the durable oidc_config store on first boot. The source-built / v0.4.0+ server (issue 512) reads no
+      # EDR_OIDC_* and ignores them; the seeder below configures SSO for that image. Both seed the same row, so the two paths never
+      # collide (the version pin selects one image for both services). TRANSITIONAL: drop this block once `:latest` is v0.4.0+.
       EDR_OIDC_ISSUER: http://dex.demo.localhost:5556/dex
       EDR_OIDC_CLIENT_ID: edr-demo
       EDR_OIDC_CLIENT_SECRET: edr-demo-client-secret-do-not-use-in-prod
@@ -141,7 +143,7 @@ services:
 
   seeder:
     image: ghcr.io/getvictor/fleet-edr-demo-seed:${EDR_VERSION:-latest}
-    # One-shot: enrolls hosts, replays the corpus, verifies, then exits 0.
+    # One-shot: enrolls hosts, replays the corpus, verifies, seeds the dex SSO config, then exits 0.
     restart: "no"
     depends_on:
       mysql:
@@ -161,6 +163,16 @@ services:
       # Lets the source-built seeder slide archived-event timestamps on restart (ADR-0015); ignored by the released `latest` image.
       EDR_CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/edr"
       EDR_DEMO_CA_CERT: /tls/dev.crt
+      # SSO seed (issue #512): on the source-built / v0.4.0+ image, whose server reads no EDR_OIDC_*, the seeder writes the dex
+      # connection config into the durable oidc_config store. (On the released `:latest` v0.3.0 image the server env-seeds it instead
+      # and this v0.3.0 seeder ignores these vars.) EDR_SECRET_KEY MUST match the server's so the sealed client secret decrypts at
+      # login. EXTERNAL_URL is the browser-facing base; the redirect is derived as <url>/api/auth/callback. JIT lands dex users at analyst.
+      EDR_SECRET_KEY: demo-only-secret-key-do-not-use-in-prod-0123456789
+      EDR_DEMO_OIDC_ISSUER: http://dex.demo.localhost:5556/dex
+      EDR_DEMO_OIDC_CLIENT_ID: edr-demo
+      EDR_DEMO_OIDC_CLIENT_SECRET: edr-demo-client-secret-do-not-use-in-prod
+      EDR_DEMO_OIDC_EXTERNAL_URL: https://localhost:8088
+      EDR_DEMO_OIDC_DEFAULT_ROLE: analyst
     volumes:
       - tls:/tls:ro
 

@@ -69,9 +69,12 @@ services:
       # equal your domain.
       EDR_BREAKGLASS_RP_ID: ${EDR_DOMAIN}
       EDR_BREAKGLASS_RP_ORIGINS: https://${EDR_DOMAIN}
-      # Boot with break-glass only so you can redeem the first admin. Once OIDC
-      # is configured, set EDR_AUTH_ALLOW_NO_OIDC=0 in .env to require SSO. See
-      # docs/quickstart-vm.md ("Single sign-on (OIDC)").
+      # Sign in with the break-glass admin, then configure SSO under Admin
+      # settings -> Single sign-on; it applies at runtime and survives restarts.
+      # See docs/quickstart-vm.md ("Single sign-on (OIDC)"). The v0.4.0+ server
+      # always boots without OIDC config (issue #512). TRANSITIONAL: the released
+      # `:latest` v0.3.0 server still requires this flag to boot break-glass-only;
+      # the v0.4.0+ server ignores it. Drop once `:latest` is v0.4.0+.
       EDR_AUTH_ALLOW_NO_OIDC: ${EDR_AUTH_ALLOW_NO_OIDC:-1}
       EDR_LOG_LEVEL: ${EDR_LOG_LEVEL:-info}
       EDR_LOG_FORMAT: "json"

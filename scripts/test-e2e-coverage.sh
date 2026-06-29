@@ -68,12 +68,30 @@ COMMON_ENV=(
   EDR_SECRET_KEY=dev-only-secret-key-do-not-use-in-production-xyz
   EDR_BREAKGLASS_RP_ID=localhost
   EDR_BREAKGLASS_RP_ORIGINS=https://localhost:8088
-  EDR_OIDC_ISSUER=http://localhost:5556/dex
-  EDR_OIDC_CLIENT_ID=edr-qa
-  EDR_OIDC_CLIENT_SECRET=edr-qa-client-secret-do-not-use-in-prod
-  EDR_OIDC_REDIRECT_URL=https://localhost:8088/api/auth/callback
   GOCOVERDIR="$COVDATA_DIR"
 )
+
+# Dex SSO connection config the seeder writes into the durable oidc_config store (issue #512 removed the server's EDR_OIDC_* env path).
+# The server reads it from the store, not the environment; seed_oidc below installs it after each server boot, re-pointing the JIT
+# toggle per phase. EDR_SECRET_KEY (above) seals the client secret and must match the server's, which it does (same COMMON_ENV value).
+SEED_OIDC_ENV=(
+  EDR_DSN="root:@tcp(127.0.0.1:33306)/edr?parseTime=true"
+  EDR_SECRET_KEY=dev-only-secret-key-do-not-use-in-production-xyz
+  EDR_DEMO_OIDC_ISSUER=http://localhost:5556/dex
+  EDR_DEMO_OIDC_CLIENT_ID=edr-qa
+  EDR_DEMO_OIDC_CLIENT_SECRET=edr-qa-client-secret-do-not-use-in-prod
+  EDR_DEMO_OIDC_EXTERNAL_URL=https://localhost:8088
+)
+
+# seed_oidc <jit-enabled 0|1>
+# Force-writes the dex SSO config into the durable store with the given JIT-provisioning toggle. Run after the server is up (the schema
+# is applied on boot); the server resolves the config from the store live, so the new toggle takes effect on the next sign-in without a
+# restart. --oidc-force overwrites the row left by an earlier phase.
+seed_oidc() {
+  local jit="$1"
+  env "${SEED_OIDC_ENV[@]}" EDR_DEMO_OIDC_JIT="$jit" \
+    "$REPO_ROOT/tmp/edr-demo-seed-e2e" --oidc-only --oidc-force
+}
 
 # Drain any lingering server, wait for :8088 to free, then idle.
 SERVER_PID=""
@@ -151,13 +169,17 @@ rm -rf "$COVDATA_DIR" "$LOG_DIR" "$COV_OUT" "$REPO_ROOT/test/e2e/coverage-raw" "
 mkdir -p "$COVDATA_DIR" "$LOG_DIR"
 
 echo "::group::Build covered server binary"
+# Ensure the binary output dir exists so `go build -o tmp/...` is self-contained (does not rely on an earlier mkdir).
+mkdir -p "$REPO_ROOT/tmp"
 go build -cover -coverpkg=./server/...,./internal/... -o "$BINARY" ./server/cmd/fleet-edr-server
+# Build the demo-seeder once so each phase's seed_oidc call is a fast exec rather than a recompile.
+go build -o "$REPO_ROOT/tmp/edr-demo-seed-e2e" ./server/cmd/fleet-edr-demo-seed
 echo "$END_GROUP"
 
 # --- phase 1: auth suite (default env) -----------------------------------
 echo "::group::Phase 1 - auth specs (break-glass setup, break-glass login, OIDC sign-in)"
-start_server "default-env-auth" \
-  EDR_OIDC_ALLOW_JIT_PROVISIONING=1
+start_server "default-env-auth"
+seed_oidc 1
 (
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test tests/auth
@@ -170,8 +192,8 @@ echo "$END_GROUP"
 # break-glass setup endpoint, so they share this phase's 5/min token budget with reauth-modal-retry. The set is intentionally short
 # enough that the bucket doesn't overflow within the phase.
 echo "::group::Phase 2 - qa default-env (RBAC, reauth, audit, reauth-modal, break-glass login failures, agent wire + UI)"
-start_server "default-env-qa" \
-  EDR_OIDC_ALLOW_JIT_PROVISIONING=1
+start_server "default-env-qa"
+seed_oidc 1
 (
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
@@ -187,8 +209,8 @@ echo "$END_GROUP"
 
 # --- phase 3: brute-force rate limit -------------------------------------
 echo "::group::Phase 3 - break-glass challenge rate limit (default env)"
-start_server "default-env-rate-limit" \
-  EDR_OIDC_ALLOW_JIT_PROVISIONING=1
+start_server "default-env-rate-limit"
+seed_oidc 1
 (
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
@@ -200,8 +222,10 @@ echo "$END_GROUP"
 # --- phase 4: env-specific combo (allowlist + JIT off) -------------------
 echo "::group::Phase 4 - break-glass IP allowlist + OIDC JIT off"
 start_server "envspec-allowlist-jit-off" \
-  EDR_BREAKGLASS_IP_ALLOWLIST=10.99.99.0/24 \
-  EDR_OIDC_ALLOW_JIT_PROVISIONING=0
+  EDR_BREAKGLASS_IP_ALLOWLIST=10.99.99.0/24
+# Seed JIT=1: oidc-jit-disabled.spec.ts flips jit_enabled to 0 itself (beforeAll) and restores it (afterAll); it only needs the stored
+# config row present. Forcing JIT=1 here guarantees the spec's captured "original" is 1 regardless of any leftover state.
+seed_oidc 1
 (
   cd "$REPO_ROOT/test/e2e"
   E2E_REUSE_SERVER=1 E2E_COVERAGE=1 ./node_modules/.bin/playwright test \
@@ -215,11 +239,11 @@ echo "$END_GROUP"
 # --- phase 5: short session timeouts -------------------------------------
 echo "::group::Phase 5 - session lifecycle (short timeouts env)"
 start_server "short-session-timeouts" \
-  EDR_OIDC_ALLOW_JIT_PROVISIONING=1 \
   EDR_SESSION_IDLE_TIMEOUT=5s \
   EDR_SESSION_ABSOLUTE_TIMEOUT=20s \
   EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT=3s \
   EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT=10s
+seed_oidc 1
 (
   cd "$REPO_ROOT/test/e2e"
   # Match the server-side idle windows: sleep 7s past OIDC idle (5s

@@ -227,7 +227,6 @@ Non-exhaustive; see `server/config/config.go` for every knob. Anything unset use
 | `EDR_REAUTH_WINDOW` | no | 30m | Freshness window for destructive actions (host.isolate, host.kill_process, host.run_script, critical alert resolve) |
 | `EDR_BREAKGLASS_SESSION_IDLE_TIMEOUT` | no | 15m | Strict idle cap for recovery sessions |
 | `EDR_BREAKGLASS_SESSION_ABSOLUTE_TIMEOUT` | no | 1h | Absolute cap for recovery sessions |
-| `EDR_AUTH_ALLOW_NO_OIDC` | no | 0 | Dev-only opt-in to boot in break-glass-only mode. Production refuses to start without OIDC unless this is `1`. See [okta-setup.md](okta-setup.md) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | none | `host:port` of an OTLP/gRPC collector; unset disables metrics export |
 
 Every string knob accepts a `_FILE` variant (`EDR_ENROLL_SECRET_FILE`, `EDR_DSN_FILE`, etc.) that points at a file whose trimmed contents become the value. That's how the compose stack delivers secrets.

@@ -80,7 +80,7 @@ docker inspect "$(docker compose -f docker-compose.quickstart.yml ps -q server)"
 
 ### Single sign-on (OIDC)
 
-The quickstart boots with break-glass sign-in only (`EDR_AUTH_ALLOW_NO_OIDC=1`). Configure your identity provider in the UI: sign in with the break-glass admin (step 5), open **Admin settings -> Single sign-on**, and enter the issuer, client ID, client secret, and external URL. The form derives the redirect URI from the external URL and shows it read-only; register that exact value at your IdP. A test-connection button verifies the provider before you save, and changes apply at runtime with no restart. The stored configuration is the source of truth and survives restarts. See [okta-setup.md](okta-setup.md) for the IdP-side steps.
+The quickstart boots with break-glass sign-in only; SSO is configured entirely in the UI. Sign in with the break-glass admin (step 5), open **Admin settings -> Single sign-on**, and enter the issuer, client ID, client secret, and external URL. The form derives the redirect URI from the external URL and shows it read-only; register that exact value at your IdP. A test-connection button verifies the provider before you save, and changes apply at runtime with no restart. The stored configuration is the source of truth and survives restarts. See [okta-setup.md](okta-setup.md) for the IdP-side steps.
 
 ## Operations
 

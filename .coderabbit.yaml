@@ -90,7 +90,7 @@ reviews:
             no fall-through that skips the gate.
           - oidc: HMAC-signed state cookie verified before
             accepting the code; PKCE code_verifier round-trip;
-            EDR_OIDC_ALLOW_JIT_PROVISIONING gate honoured.
+            the stored config's JIT-provisioning gate honoured.
           - seed: idempotent on re-seed (no duplicate users /
             identities / role bindings); rely on unique-key
             constraints, not pre-check-then-insert.
