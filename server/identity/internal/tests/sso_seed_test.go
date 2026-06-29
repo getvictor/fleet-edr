@@ -170,4 +170,28 @@ func TestSeedOIDCConfig(t *testing.T) {
 		_, err = ssoconfig.New(db, sealerB).GetDecrypted(t.Context())
 		require.NoError(t, err, "force re-seed must leave a config decryptable with the new key")
 	})
+
+	t.Run("secretless row is re-seeded, not skipped", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		secretKey := fixedKey(37)
+		require.NoError(t, bootstrap.ApplySchema(t.Context(), db))
+
+		// A row that decrypts but carries no client secret is not usable (login token exchange needs the secret). A later non-force
+		// seed must repair it rather than no-op over it.
+		require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
+			Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "",
+			Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		}))
+		require.NoError(t, bootstrap.SeedOIDCConfig(t.Context(), db, secretKey, bootstrap.OIDCSeedInput{
+			Issuer: "https://idp.example.com", ClientID: "cid", ClientSecret: "real-secret",
+			Scopes: []string{"openid"}, JITEnabled: true, DefaultRole: "analyst",
+		}))
+
+		sealer, err := ssoconfig.NewSealer(secretKey)
+		require.NoError(t, err)
+		got, err := ssoconfig.New(db, sealer).GetDecrypted(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "real-secret", got.ClientSecret, "a non-force seed must repair a secretless row")
+	})
 }

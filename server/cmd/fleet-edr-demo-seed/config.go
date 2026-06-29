@@ -3,9 +3,12 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fleetdm/edr/internal/keyring"
 )
 
 // Default timing knobs. The ready window covers MySQL warmup + migrations on first boot; the verify window covers the processor
@@ -115,8 +118,10 @@ func resolveConfig(getenv func(string) string, args []string) (config, error) {
 	// clear message instead of a late keyring error (missing secret key) or a stored row that makes OIDCEnabled true while sign-in is
 	// broken (missing client id/secret).
 	if c.oidcIssuer != "" {
-		if c.secretKey == "" {
-			return config{}, errors.New("seeding OIDC requires the deployment root secret: set EDR_SECRET_KEY or pass --secret-key")
+		// Mirror the server's EDR_SECRET_KEY floor (keyring.MinRootKeyLen) so a too-short key fails here, not late at the sealing step
+		// after a full corpus replay. len 0 is caught by the same check.
+		if len(c.secretKey) < keyring.MinRootKeyLen {
+			return config{}, fmt.Errorf("seeding OIDC requires the deployment root secret (EDR_SECRET_KEY / --secret-key) of at least %d bytes", keyring.MinRootKeyLen)
 		}
 		if c.oidcClientID == "" || c.oidcClientSecret == "" {
 			return config{}, errors.New("seeding OIDC requires the client id + secret: set EDR_DEMO_OIDC_CLIENT_ID / EDR_DEMO_OIDC_CLIENT_SECRET or pass --oidc-client-id / --oidc-client-secret")

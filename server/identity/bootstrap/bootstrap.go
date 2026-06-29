@@ -597,14 +597,15 @@ func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in O
 		return fmt.Errorf("identity SeedOIDCConfig: build secret sealer: %w", err)
 	}
 	store := ssoconfig.New(db, sealer)
-	// Skip only when a USABLE (decryptable) config already exists and we are not forcing. Gating on decryptability, not mere row
-	// presence, avoids silently no-opping over a row whose secret cannot be decrypted (e.g. after an EDR_SECRET_KEY rotation), which would
-	// leave SSO unusable while OIDCEnabled reports false; that surfaces as an error so the caller can rerun with Force to overwrite.
+	// Skip only when a USABLE config already exists and we are not forcing. Usable means the row decrypts AND carries a client secret:
+	// gating on mere row presence would silently no-op over a row whose secret cannot be decrypted (e.g. after an EDR_SECRET_KEY
+	// rotation) or that has no secret at all, leaving SSO broken; an undecryptable row surfaces as an error so the caller can rerun with
+	// Force, while a present-but-secretless row falls through and is (re)seeded.
 	if !in.Force {
-		switch _, err := store.GetDecrypted(ctx); {
-		case err == nil:
+		switch cfg, err := store.GetDecrypted(ctx); {
+		case err == nil && cfg.ClientSecret != "":
 			return nil // a usable stored config governs; leave it untouched
-		case !errors.Is(err, ssoconfig.ErrNotFound):
+		case err != nil && !errors.Is(err, ssoconfig.ErrNotFound):
 			return fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
 		}
 	}

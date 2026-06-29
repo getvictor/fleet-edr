@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -105,9 +106,20 @@ func TestResolveConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), "deployment root secret")
 	})
 
+	t.Run("oidc issuer with a too-short secret key is an error", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{"EDR_DSN": "d", "EDR_DEMO_OIDC_ISSUER": "https://idp.example.com", "EDR_SECRET_KEY": "too-short"}
+		_, err := resolveConfig(func(k string) string { return env[k] }, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least")
+	})
+
 	t.Run("oidc issuer without client credentials is an error", func(t *testing.T) {
 		t.Parallel()
-		env := map[string]string{"EDR_DSN": "d", "EDR_DEMO_OIDC_ISSUER": "https://idp.example.com", "EDR_SECRET_KEY": "x"}
+		env := map[string]string{
+			"EDR_DSN": "d", "EDR_DEMO_OIDC_ISSUER": "https://idp.example.com",
+			"EDR_SECRET_KEY": strings.Repeat("k", 40), // long enough to clear the 32-byte floor; built, not a literal, to avoid gosec G101
+		}
 		_, err := resolveConfig(func(k string) string { return env[k] }, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "client id + secret")
@@ -116,7 +128,7 @@ func TestResolveConfig(t *testing.T) {
 	t.Run("complete oidc seed config is valid", func(t *testing.T) {
 		t.Parallel()
 		env := map[string]string{
-			"EDR_DSN": "d", "EDR_SECRET_KEY": "root-secret",
+			"EDR_DSN": "d", "EDR_SECRET_KEY": strings.Repeat("k", 40),
 			"EDR_DEMO_OIDC_ISSUER": "https://idp.example.com", "EDR_DEMO_OIDC_CLIENT_ID": "cid",
 			"EDR_DEMO_OIDC_CLIENT_SECRET": "shh", "EDR_DEMO_OIDC_EXTERNAL_URL": "https://edr.example.com",
 		}
