@@ -9,16 +9,21 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/net/http2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 
 	"github.com/fleetdm/edr/agent/coalesce"
 	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/commander"
 	"github.com/fleetdm/edr/agent/config"
+	"github.com/fleetdm/edr/agent/controlclient"
 	"github.com/fleetdm/edr/agent/enrich"
 	"github.com/fleetdm/edr/agent/enrollment"
 	"github.com/fleetdm/edr/agent/hostid"
@@ -28,6 +33,7 @@ import (
 	"github.com/fleetdm/edr/agent/receiver"
 	"github.com/fleetdm/edr/agent/reconcile"
 	"github.com/fleetdm/edr/agent/uploader"
+	"github.com/fleetdm/edr/internal/control"
 	"github.com/fleetdm/edr/internal/logging"
 	"github.com/fleetdm/edr/internal/observability"
 )
@@ -199,7 +205,13 @@ func run() error {
 	}
 	go runUploader(ctx, up, logger)
 
-	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, logger)
+	// streamConnected is the shared flag the control channel raises while its stream is up so the commander suspends polling. Per-replica
+	// ephemeral state, lost on restart; the commander reads it, the control client sets it.
+	var streamConnected atomic.Bool
+	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, &streamConnected, logger)
+	if err := startControlClient(ctx, cfg, hostID, tokenProvider, esfDispatcher, &streamConnected, logger); err != nil {
+		return err
+	}
 	go pruneLoop(ctx, q, config.DefaultPruneAge, logger)
 	startProcessReconciler(ctx, cfg, pidTable, q, tokenProvider, logger)
 
@@ -329,6 +341,7 @@ func startCommander(
 	tokenProvider enrollment.TokenProvider,
 	appControlSender commander.ApplicationControlSender,
 	transport http.RoundTripper,
+	streamConnected *atomic.Bool,
 	logger *slog.Logger,
 ) {
 	if hostID == "" {
@@ -342,6 +355,8 @@ func startCommander(
 		HostID:                   hostID,
 		Interval:                 commanderPollInterval,
 		ApplicationControlSender: appControlSender,
+		// Defer to the control channel while it is connected (the gateway pushes commands in real time); the poll is the fallback floor.
+		StreamConnected: streamConnected.Load,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -349,6 +364,63 @@ func startCommander(
 		}
 	}()
 	logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
+}
+
+// startControlClient opens the persistent control-channel stream when EDR_CONTROL_ADDR is set. It dials the gateway over the same
+// pinned TLS the agent uses for HTTP, presents the host token at connect, and signals streamConnected so the commander suspends polling
+// while the stream is up. Opt-in: an empty ControlAddr leaves the agent on the short-poll path, so this changes nothing by default.
+func startControlClient(
+	ctx context.Context,
+	cfg *config.Config,
+	hostID string,
+	tokenProvider enrollment.TokenProvider,
+	appControlSender commander.ApplicationControlSender,
+	streamConnected *atomic.Bool,
+	logger *slog.Logger,
+) error {
+	if cfg.ControlAddr == "" {
+		return nil
+	}
+	if hostID == "" {
+		logger.WarnContext(ctx, "no host_id available; control channel disabled")
+		return nil
+	}
+	//nolint:contextcheck // BuildTLSConfig takes no context; its TLS-handshake callback intentionally uses context.Background (the
+	// handshake has no request context), the same call newAgentHTTPClient makes.
+	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(cfg.ControlAddr,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		// Keep-alive PINGs detect a half-open link (laptop sleep, NAT rebind) on the long-lived stream, mirroring the HTTP/2 transport.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                h2ReadIdleTimeout,
+			Timeout:             h2PingTimeout,
+			PermitWithoutStream: true,
+		}),
+	)
+	if err != nil {
+		logger.ErrorContext(ctx, "control channel dial", "addr", cfg.ControlAddr, "err", err)
+		return err
+	}
+	client := controlclient.New(controlclient.Config{
+		Client:                   control.NewControlChannelClient(conn),
+		HostID:                   hostID,
+		TokenFn:                  tokenProvider.Token,
+		OnAuthFail:               tokenProvider.OnUnauthorized,
+		ApplicationControlSender: appControlSender,
+		OnConnectedChange:        streamConnected.Store,
+		Logger:                   logger,
+	})
+	go func() {
+		if err := client.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.ErrorContext(ctx, "control channel", "err", err)
+		}
+		_ = conn.Close()
+	}()
+	logger.InfoContext(ctx, "control channel enabled", "addr", cfg.ControlAddr, "host_id_prefix", safePrefix(hostID))
+	return nil
 }
 
 // startProcessReconciler runs the agent-side kill(pid,0) sweep that closes processes whose kernel exit notification went missing

@@ -10,17 +10,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"syscall"
 	"time"
 )
 
 // defaultPollInterval is the fallback Interval when Config.Interval is zero.
 // Mirrored as commanderPollInterval in agent/cmd/fleet-edr-agent.
 const defaultPollInterval = 5 * time.Second
-
-// invalidPayloadPrefix is the reason prefix every command handler emits when json.Unmarshal of cmd.Payload fails. Centralised so the
-// wire shape stays stable across handlers.
-const invalidPayloadPrefix = "invalid payload: "
 
 // ApplicationControlSender forwards a raw application-control snapshot JSON payload to the ESF extension over XPC. The commander stays
 // decoupled from the concrete receiver so tests can supply a recording double. Nil is allowed (set_application_control commands are
@@ -41,13 +36,18 @@ type Config struct {
 	// ApplicationControlSender is the XPC bridge to the ESF extension. Used by the set_application_control command handler; nil means
 	// "commander cannot apply snapshot updates" and the handler will report the command failed with a clear reason.
 	ApplicationControlSender ApplicationControlSender
+	// StreamConnected, when set, lets the commander defer to the persistent control channel: while it returns true the poll is skipped
+	// (the gateway pushes commands in real time), and the poll resumes the moment the stream drops. Nil means "always poll" (the control
+	// channel is disabled), which is the degraded floor.
+	StreamConnected func() bool
 }
 
 // Commander polls the server for pending commands and dispatches them.
 type Commander struct {
-	cfg    Config
-	client *http.Client
-	logger *slog.Logger
+	cfg      Config
+	client   *http.Client
+	executor *Executor
+	logger   *slog.Logger
 }
 
 // New creates a Commander. The client should already be wrapped with otelhttp.NewTransport if
@@ -63,36 +63,11 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 		logger = slog.Default()
 	}
 	return &Commander{
-		cfg:    cfg,
-		client: client,
-		logger: logger,
+		cfg:      cfg,
+		client:   client,
+		executor: NewExecutor(cfg.ApplicationControlSender, logger),
+		logger:   logger,
 	}
-}
-
-// command mirrors the server-side Command struct (fields we need).
-type command struct {
-	ID          int64           `json:"id"`
-	HostID      string          `json:"host_id"`
-	CommandType string          `json:"command_type"`
-	Payload     json.RawMessage `json:"payload"`
-	Status      string          `json:"status"`
-}
-
-type killPayload struct {
-	PID int `json:"pid"`
-}
-
-// setApplicationControlPayload mirrors server/rules/api.SetApplicationControlPayload. Field names + json tags are load-bearing:
-// the extension parses the same JSON bytes and the byte-shape must match across all three sides. The commander's job is envelope
-// validation (policy_id present, version positive, rules is a JSON array) before handing the raw bytes off to the extension;
-// the per-rule decode happens on the extension side, which is the only consumer that actually walks the rules list. Gating on the
-// rules-is-an-array check here prevents reporting `completed` for a payload the extension will silently fail to decode.
-type setApplicationControlPayload struct {
-	PolicyID      int64 `json:"policy_id"`
-	PolicyVersion int64 `json:"policy_version"`
-	// Rules is decoded as json.RawMessage so the commander doesn't need to know the rule shape; the extension is the source of truth for
-	// the per-rule schema and the commander only forwards the bytes it received.
-	Rules json.RawMessage `json:"rules"`
 }
 
 type statusUpdate struct {
@@ -116,6 +91,11 @@ func (c *Commander) Run(ctx context.Context) error {
 }
 
 func (c *Commander) pollAndDispatch(ctx context.Context) {
+	// Defer to the persistent control channel while it is connected: it pushes commands in real time, so polling would only race it and
+	// produce invalid-transition noise on already-acked commands. The poll is the degraded floor, used while the stream is down.
+	if c.cfg.StreamConnected != nil && c.cfg.StreamConnected() {
+		return
+	}
 	commands, err := c.fetchPending(ctx)
 	if err != nil {
 		c.logger.WarnContext(ctx, "commander fetch pending", "err", err)
@@ -127,7 +107,7 @@ func (c *Commander) pollAndDispatch(ctx context.Context) {
 	}
 }
 
-func (c *Commander) fetchPending(ctx context.Context) ([]command, error) {
+func (c *Commander) fetchPending(ctx context.Context) ([]Command, error) {
 	reqURL := fmt.Sprintf("%s/api/commands?host_id=%s&status=pending", c.cfg.ServerURL, url.QueryEscape(c.cfg.HostID))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -150,144 +130,22 @@ func (c *Commander) fetchPending(ctx context.Context) ([]command, error) {
 		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	var commands []command
+	var commands []Command
 	if err := json.NewDecoder(resp.Body).Decode(&commands); err != nil {
 		return nil, fmt.Errorf("decode commands: %w", err)
 	}
 	return commands, nil
 }
 
-func (c *Commander) dispatch(ctx context.Context, cmd command) {
-	if err := c.updateStatus(ctx, cmd.ID, "acked", nil); err != nil {
-		c.logger.ErrorContext(ctx, "commander ack", "cmd_id", cmd.ID, "err", err)
-		return
-	}
-
-	switch cmd.CommandType {
-	case "kill_process":
-		c.executeKill(ctx, cmd)
-	case "set_application_control":
-		c.executeSetApplicationControl(ctx, cmd)
-	default:
-		if err := c.updateStatus(ctx, cmd.ID, "failed", marshalResult("unknown command type: "+cmd.CommandType)); err != nil {
-			c.logger.ErrorContext(ctx, "commander fail", "cmd_id", cmd.ID, "err", err)
-		}
-	}
+func (c *Commander) dispatch(ctx context.Context, cmd Command) {
+	c.executor.Execute(ctx, cmd, c.report(cmd.ID))
 }
 
-// executeSetApplicationControl forwards the raw command payload to the ESF
-// extension over XPC. Result shape on success:
-// {"policy_id": P, "policy_version": V} so operators can confirm via
-// `GET /commands/{id}` that the agent applied the snapshot it was meant to.
-//
-// Envelope validation only: the per-rule shape is the extension's
-// responsibility. Forwarding the raw bytes (rather than re-marshalling)
-// keeps the wire shape byte-identical across server → agent → extension so
-// a future schema tightening that fails on one side surfaces on the same
-// commit.
-func (c *Commander) executeSetApplicationControl(ctx context.Context, cmd command) {
-	var payload setApplicationControlPayload
-	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult(invalidPayloadPrefix+err.Error()))
-		return
+// report adapts the executor's outcome callback to the poll transport: each status transition is a PUT /api/commands/{id}.
+func (c *Commander) report(id int64) ReportFunc {
+	return func(ctx context.Context, status string, result json.RawMessage) error {
+		return c.updateStatus(ctx, id, status, result)
 	}
-	if payload.PolicyID <= 0 {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("payload missing or invalid policy_id"))
-		return
-	}
-	if payload.PolicyVersion <= 0 {
-		// Versioning is the ordering guard for snapshot state on the extension; a zero/negative version would either mask an
-		// out-of-order delivery or reflect a hand-queued test command that shouldn't be acted on. Fail fast so the server-
-		// side audit trail attributes the error to its source rather than to the XPC layer returning opaque decode errors from
-		// the extension.
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid policy_version"))
-		return
-	}
-	// Validate that rules is present AND a JSON array (empty array allowed). Without this gate, payloads with missing/null/non-array rules
-	// slip past the envelope check because the json.RawMessage decode accepts any well-formed JSON value, the extension then fails to
-	// decode silently, and the server sees `completed` for a snapshot the extension never applied.
-	if !isJSONArray(payload.Rules) {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("payload missing or invalid rules array"))
-		return
-	}
-	if c.cfg.ApplicationControlSender == nil {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("application control sender not configured"))
-		return
-	}
-
-	c.logger.InfoContext(ctx, "commander set_application_control",
-		"cmd_id", cmd.ID,
-		"edr.app_control.policy_id", payload.PolicyID,
-		"edr.app_control.policy_version", payload.PolicyVersion,
-	)
-
-	// Forward the raw JSON bytes so the extension parses the same shape the server wrote. Re-marshalling would introduce drift in field
-	// ordering / casing that a future schema tightening could catch on one side but not the other.
-	if err := c.cfg.ApplicationControlSender.SendApplicationControl([]byte(cmd.Payload)); err != nil {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("xpc send: "+err.Error()))
-		return
-	}
-
-	// The send is async: completing the command here does NOT mean the extension has successfully applied the snapshot. The demo cut
-	// intentionally stops short of an extension-side ack; the audit trail of "command completed on agent" is sufficient for now. A future
-	// revision can add a round-trip ack with the actually-applied version.
-	result, _ := json.Marshal(map[string]any{
-		"policy_id":      payload.PolicyID,
-		"policy_version": payload.PolicyVersion,
-	})
-	if err := c.updateStatus(ctx, cmd.ID, "completed", result); err != nil {
-		c.logger.ErrorContext(ctx, "commander report set_application_control success", "cmd_id", cmd.ID, "err", err)
-	}
-}
-
-func (c *Commander) executeKill(ctx context.Context, cmd command) {
-	var payload killPayload
-	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult(invalidPayloadPrefix+err.Error()))
-		return
-	}
-
-	if payload.PID <= 0 {
-		_ = c.updateStatus(ctx, cmd.ID, "failed", marshalResult("invalid pid"))
-		return
-	}
-
-	c.logger.InfoContext(ctx, "commander kill_process", "pid", payload.PID, "cmd_id", cmd.ID)
-
-	if err := syscall.Kill(payload.PID, syscall.SIGKILL); err != nil {
-		if updateErr := c.updateStatus(ctx, cmd.ID, "failed", marshalResult(err.Error())); updateErr != nil {
-			c.logger.ErrorContext(ctx, "commander report kill failure", "cmd_id", cmd.ID, "err", updateErr)
-		}
-		return
-	}
-
-	successResult, _ := json.Marshal(map[string]int{"killed_pid": payload.PID})
-	if err := c.updateStatus(ctx, cmd.ID, "completed", successResult); err != nil {
-		c.logger.ErrorContext(ctx, "commander report kill success", "cmd_id", cmd.ID, "err", err)
-	}
-}
-
-// marshalResult builds a properly-escaped JSON result with an error field.
-func marshalResult(errMsg string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"error": errMsg})
-	return b
-}
-
-// isJSONArray reports whether raw is a JSON array (including the empty array). Used by the set_application_control envelope check to
-// reject payloads with missing or null `rules` fields, which would otherwise slip through json.Unmarshal-into-json.RawMessage and only
-// fail at extension decode time after the server has already seen `completed`.
-func isJSONArray(raw json.RawMessage) bool {
-	for _, b := range raw {
-		switch b {
-		case ' ', '\t', '\r', '\n':
-			continue
-		case '[':
-			return true
-		default:
-			return false
-		}
-	}
-	return false
 }
 
 func (c *Commander) updateStatus(ctx context.Context, cmdID int64, status string, result json.RawMessage) error {
