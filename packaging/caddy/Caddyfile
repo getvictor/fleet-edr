@@ -7,5 +7,11 @@
 # inspection, no managed WAF, so security telemetry uploads are never flagged as
 # attacks. The server enforces its own request-body cap, so none is set here.
 {$EDR_DOMAIN} {
-	reverse_proxy http://server:8088
+	# Forward to the server over HTTP/2 cleartext (h2c). h2c is required so the agent control-channel gRPC stream (issue #477) is
+	# proxied as HTTP/2 rather than downgraded to HTTP/1.1: the server multiplexes gRPC and REST on this one port and serves cleartext
+	# HTTP/2 behind the proxy. REST and UI traffic is re-originated over the same transport. flush_interval -1 disables response
+	# buffering so the long-lived bidirectional control stream is delivered frame-by-frame instead of buffered.
+	reverse_proxy h2c://server:8088 {
+		flush_interval -1
+	}
 }

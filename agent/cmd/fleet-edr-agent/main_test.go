@@ -22,6 +22,8 @@ func TestNewAgentHTTPClient(t *testing.T) {
 // TestControlDialTarget pins how the control-channel dial endpoint and transport credentials are derived from EDR_SERVER_URL (issue
 // #477: the push channel shares the server's address with the REST path). An https URL dials with TLS credentials; an http URL (dev,
 // EDR_ALLOW_INSECURE) dials cleartext with insecure credentials; a missing port defaults to the scheme's standard port.
+//
+// spec:agent-control-channel/the-agent-derives-the-control-endpoint-from-its-server-url/the-control-endpoint-is-derived-from-the-server-url
 func TestControlDialTarget(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

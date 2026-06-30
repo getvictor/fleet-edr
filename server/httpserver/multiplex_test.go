@@ -48,6 +48,8 @@ func waitListening(t *testing.T, addr string) {
 // REST/UI HTTP surface are served on ONE listener, separated by content-type. It asserts that a gRPC call (HTTP/2,
 // application/grpc) and HTTP requests over both HTTP/1.1 and HTTP/2 all succeed on the same address, in both the server-terminates-TLS
 // and the plaintext (proxy-terminated) modes, and that a ctx cancel still drives a clean shutdown.
+//
+// spec:server-configuration/the-agent-control-channel-shares-the-main-server-listener/grpc-and-rest-share-one-port
 func TestRunAndShutdown_MultiplexesGRPCAndHTTP(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
