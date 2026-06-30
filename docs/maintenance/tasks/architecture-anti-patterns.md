@@ -49,9 +49,10 @@ Skim the ADR index (`docs/adr/README.md`) and the load-bearing ones for this tas
 
 ```bash
 # SQL outside the persistence layer. POSIX classes (not \s / \b) so it works under macOS BSD grep;
-# the leading [`"] catches Go SQL in both double-quoted and backtick raw strings. DELETE is matched only as
-# DELETE FROM so the bare HTTP method in route strings ("DELETE /api/...") does not register as SQL.
-grep -rnE '[`"][[:space:]]*(SELECT|INSERT|UPDATE|DELETE[[:space:]]+FROM)' server/ --include='*.go' \
+# the leading [`"] catches Go SQL in both double-quoted and backtick raw strings. DELETE must be followed by
+# whitespace then a non-slash char: that matches both `DELETE FROM` and MySQL multi-table `DELETE t1 FROM ...`
+# while excluding the bare HTTP method in route strings ("DELETE /api/..."), whose next char is the slash.
+grep -rnE '[`"][[:space:]]*(SELECT|INSERT|UPDATE|DELETE[[:space:]]+[^/])' server/ --include='*.go' \
   | grep -vE '/(mysql|store|migrations|tests)/' | grep -v '_test.go'
 
 # Handler files doing more than decode -> delegate -> encode (loops / SQL / multi-branch business logic).
