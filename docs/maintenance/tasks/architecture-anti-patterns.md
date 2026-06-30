@@ -48,13 +48,14 @@ Skim the ADR index (`docs/adr/README.md`) and the load-bearing ones for this tas
 ### 2. Wrong-layer scan
 
 ```bash
-# SQL outside the persistence layer.
-grep -rnE '"\s*(SELECT|INSERT|UPDATE|DELETE)\b' server/ --include='*.go' \
+# SQL outside the persistence layer. POSIX classes (not \s / \b) so it works under macOS BSD grep;
+# the leading [`"] catches Go SQL in both double-quoted and backtick raw strings.
+grep -rnE '[`"][[:space:]]*(SELECT|INSERT|UPDATE|DELETE)' server/ --include='*.go' \
   | grep -vE '/(mysql|store|migrations|tests)/' | grep -v '_test.go'
 
 # Handler files doing more than decode -> delegate -> encode (loops / SQL / multi-branch business logic).
 grep -rlnE 'func .*http|Handler' server/ --include='*.go' | grep -v '_test.go' \
-  | xargs grep -lnE '\bfor \b|"\s*(SELECT|INSERT)' 2>/dev/null
+  | xargs grep -lnE 'for |[`"][[:space:]]*(SELECT|INSERT)' 2>/dev/null
 ```
 
 Any hit is a candidate. Confirm by reading: a handler that ranges over a decoded slice to build a response is fine; one that runs the core domain decision is wrong-layer.
@@ -63,7 +64,7 @@ Any hit is a candidate. Confirm by reading: a handler that ranges over a decoded
 
 ```bash
 # Interfaces: each declared interface is a candidate. The smell is one-impl + one-caller.
-grep -rnE '^\s*type \w+ interface' server/ agent/ internal/ --include='*.go' | grep -v '_test.go'
+grep -rnE '^[[:space:]]*type [[:alnum:]_]+ interface' server/ agent/ internal/ --include='*.go' | grep -v '_test.go'
 ```
 
 For each interface, ask: how many concrete types implement it, and how many call sites pass more than one of those types? An interface with one implementation and no test double that exercises a second is speculative generality. Inline it unless an ADR names the imminent second implementation. Apply the same lens to "provider"/"strategy"/"factory" seams with a single option.
@@ -72,7 +73,10 @@ For each interface, ask: how many concrete types implement it, and how many call
 
 ```bash
 # Package-level mutable state that may outlive a request (ADR-0010 violation surface).
-grep -rnE '^var \w+ +(map\[|chan |\[\])' server/ --include='*.go' | grep -v '_test.go'
+# This single-line form misses state declared inside a multi-line var ( ... ) block; the second grep catches those.
+grep -rnE '^var [[:alnum:]_]+ +(map\[|chan |\[\])' server/ --include='*.go' | grep -v '_test.go'
+# Multi-line var ( ... ) blocks: read the following lines for map / chan / slice declarations.
+grep -rn -A5 '^var (' server/ --include='*.go' | grep -v '_test.go'
 ```
 
 For each, decide: is this request-scoped, immutable-after-init, or a "safe to lose" per-replica cache? If none of those and a second replica would serve a stale or wrong answer, it is a distributed-monolith defect. File it.
@@ -154,4 +158,4 @@ the candidate count and the dropped-at-self-review count.
 - [ ] Latest-guidance search covered the listed sources; catalog table updated for any delta.
 - [ ] Self-review gate applied to every candidate; dropped count recorded with rationale.
 - [ ] Each surviving finding has a decision (refactor / issue / ADR amendment / accept).
-- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md) with candidate count and dropped count. </content> </invoke>
+- [ ] Dated entry in [`docs/maintenance/log.md`](../log.md) with candidate count and dropped count.
