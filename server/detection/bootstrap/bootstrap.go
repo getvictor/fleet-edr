@@ -251,8 +251,11 @@ func (d *Detection) SetMetrics(m api.MetricsRecorder) {
 }
 
 // SetModeResolver wires the per-host rule-mode resolver into the engine AFTER construction (issue #459). cmd/main passes the rules
-// context's detection-config service. No-op in ModeIntake (no engine). Like SetMetrics, it is set-once construction-phase config and
-// MUST be called before Run, not concurrently with the running loops.
+// context's detection-config service. No-op in ModeIntake (no engine). It is set-once construction-phase config, but unlike the metrics
+// recorder (read by the pipeline runners on their immediate first sweep at Run start) the engine reads the mode resolver only while
+// evaluating a claimed event batch. So it need only be wired before events are evaluated, not necessarily before Run: calling it after
+// newDetection but before any events flow is safe (as the integration tests do); what is unsafe is calling it concurrently with the
+// engine's evaluation of a batch.
 func (d *Detection) SetModeResolver(m rulesapi.RuleModeResolver) {
 	if d.engine != nil {
 		d.engine.SetModeResolver(m)
@@ -264,8 +267,11 @@ func (d *Detection) SetModeResolver(m rulesapi.RuleModeResolver) {
 func (d *Detection) Store() *mysql.Store { return d.store }
 
 // LoadActive registers the active rule set with the engine. cmd/main
-// calls this after rulesCtx is built. Skipped in ModeIntake (no engine). Like SetMetrics, it is set-once construction-phase config and
-// MUST be called before Run, not concurrently with the running loops.
+// calls this after rulesCtx is built. Skipped in ModeIntake (no engine). Like SetModeResolver it is set-once config the engine reads
+// only while evaluating a claimed event batch, so wire it before events are evaluated, not necessarily before Run: after newDetection
+// but before any events flow is fine (the engine has not read the rules yet); concurrent with the engine's evaluation of a batch is not.
+// Tests that can fix the rule set at construction should pass it through the helper's opts (wired before Run); those whose rules depend
+// on post-newDetection state (for example a just-inserted process id) call it after newDetection, before inserting the triggering events.
 func (d *Detection) LoadActive(rp interface{ ActiveRules() []rulesapi.Rule }) {
 	if d.engine == nil {
 		return

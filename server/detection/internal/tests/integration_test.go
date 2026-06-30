@@ -307,10 +307,11 @@ type detectionOpts struct {
 	userExists    bootstrap.UserExists
 	processTTL    time.Duration
 	retentionDays int
-	// metrics and ruleProvider, when set, are wired (SetMetrics / LoadActive) BEFORE the Run loops are launched, matching the
-	// production order (cmd/main wires these before `go runDetection`). These setters are construction-phase config published before
-	// the loops start; wiring them after newDetection has already launched Run would race the loops (issue #561). A ModeFull test that
-	// needs metrics or rules in effect must pass them here rather than calling the setters after newDetection.
+	// metrics and ruleProvider, when set, are wired (SetMetrics / LoadActive) BEFORE the Run loops are launched. metrics MUST be wired
+	// before launch: the pipeline runners read the recorder on their immediate first sweep at Run start, so setting it after newDetection
+	// has launched Run races them (issue #561). ruleProvider is wired before launch only as a convenience; LoadActive is also safe to
+	// call after newDetection as long as it precedes any events (the engine reads rules only while evaluating a batch), which is what
+	// most ModeFull tests do.
 	metrics      api.MetricsRecorder
 	ruleProvider interface{ ActiveRules() []rulesapi.Rule }
 }
@@ -354,9 +355,9 @@ func newDetectionWithArchive(t *testing.T, opts detectionOpts) (*bootstrap.Detec
 	require.NoError(t, err)
 	require.NoError(t, d.ApplySchema(t.Context()))
 
-	// Wire construction-phase config BEFORE launching the Run loops, the same order cmd/main uses (SetMetrics / LoadActive happen-before
-	// `go runDetection`). Doing it after the loops start would race them (issue #561): the pipeline runners read the metrics recorder on
-	// their immediate first sweep.
+	// Wire construction-phase config BEFORE launching the Run loops. This is REQUIRED for metrics (the pipeline runners read the recorder
+	// on their immediate first sweep at Run start, so a later SetMetrics races them: issue #561) and a convenience for rules (LoadActive
+	// is also safe after newDetection as long as it precedes any events). cmd/main wires both before `go runDetection`.
 	if opts.metrics != nil {
 		d.SetMetrics(opts.metrics)
 	}
