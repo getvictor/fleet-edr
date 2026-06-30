@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -44,6 +45,9 @@ const (
 	// defaultStopGrace bounds the graceful shutdown. Control streams are long-lived and never end on their own, so an unbounded
 	// GracefulStop would hang shutdown forever; after this window we force the streams closed and the agents reconnect (and poll).
 	defaultStopGrace = 5 * time.Second
+	// clientKeepaliveMinTime is the minimum spacing the server tolerates between agent keep-alive PINGs. It must be at most the agent's
+	// keep-alive interval (the agent reuses its 15s HTTP/2 ReadIdleTimeout) or the server GOAWAYs the connection with "too_many_pings".
+	clientKeepaliveMinTime = 10 * time.Second
 
 	// notifyBuffer bounds the fast-path signal queue. A full buffer is harmless: the 1s watch is the backstop, so a dropped notify just
 	// means the command waits up to one watch interval instead of arriving immediately.
@@ -127,6 +131,13 @@ func New(deps Deps) *Gateway {
 	opts := []grpc.ServerOption{
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.StreamInterceptor(g.authInterceptor),
+		// Permit the agent's keep-alive PINGs. The agent pings on a short cadence (matching its HTTP/2 half-open detection) to notice a
+		// dropped link fast; without this the gRPC default enforcement policy (5-minute floor) GOAWAYs the connection with
+		// "too_many_pings", so the control stream churns every minute. MinTime must be at most the agent's ping interval.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             clientKeepaliveMinTime,
+			PermitWithoutStream: true,
+		}),
 	}
 	if deps.TLSConfig != nil {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(deps.TLSConfig)))
