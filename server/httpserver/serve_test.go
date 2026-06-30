@@ -96,7 +96,7 @@ func TestRunAndShutdown_DrainThenGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	const drainDelay = 100 * time.Millisecond
-	go func() { done <- httpserver.RunAndShutdown(ctx, srv, slog.Default(), drain, drainDelay) }()
+	go func() { done <- httpserver.RunAndShutdown(ctx, srv, nil, slog.Default(), drain, drainDelay) }()
 
 	client := &http.Client{Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // test client against a self-signed test cert

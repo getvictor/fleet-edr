@@ -5,8 +5,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -17,6 +20,7 @@ import (
 	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/fleetdm/edr/agent/coalesce"
@@ -369,9 +373,11 @@ func startCommander(
 	logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
 }
 
-// startControlClient opens the persistent control-channel stream when EDR_CONTROL_ADDR is set. It dials the gateway over the same
-// pinned TLS the agent uses for HTTP, presents the host token at connect, and signals streamConnected so the commander suspends polling
-// while the stream is up. Opt-in: an empty ControlAddr leaves the agent on the short-poll path, so this changes nothing by default.
+// startControlClient opens the persistent control-channel stream to the server. The endpoint is derived from EDR_SERVER_URL (issue
+// #477): the push channel shares the server's address and port with the REST path, so there is nothing extra to configure. It dials
+// over the same pinned TLS the agent uses for HTTP, presents the host token at connect, and signals streamConnected so the commander
+// suspends polling while the stream is up. If the stream can't connect or won't stay up, the commander's GET /api/commands short-poll
+// remains the floor; the control channel is an always-on enhancement, not a separately-enabled feature.
 func startControlClient(
 	ctx context.Context,
 	cfg *config.Config,
@@ -381,21 +387,18 @@ func startControlClient(
 	streamConnected *atomic.Bool,
 	logger *slog.Logger,
 ) error {
-	if cfg.ControlAddr == "" {
-		return nil
-	}
 	if hostID == "" {
 		logger.WarnContext(ctx, "no host_id available; control channel disabled")
 		return nil
 	}
-	//nolint:contextcheck // BuildTLSConfig takes no context; its TLS-handshake callback intentionally uses context.Background (the
-	// handshake has no request context), the same call newAgentHTTPClient makes.
-	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
+	//nolint:contextcheck // controlDialTarget only reaches enrollment.BuildTLSConfig, whose handshake callback intentionally uses
+	// context.Background (the TLS handshake has no request context); see its own nolint inside controlDialTarget.
+	target, creds, err := controlDialTarget(cfg, logger)
 	if err != nil {
 		return err
 	}
-	conn, err := grpc.NewClient(cfg.ControlAddr,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(creds),
 		// Keep-alive PINGs detect a half-open link (laptop sleep, NAT rebind) on the long-lived stream, mirroring the HTTP/2 transport.
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                h2ReadIdleTimeout,
@@ -404,7 +407,7 @@ func startControlClient(
 		}),
 	)
 	if err != nil {
-		logger.ErrorContext(ctx, "control channel dial", "addr", cfg.ControlAddr, "err", err)
+		logger.ErrorContext(ctx, "control channel dial", "addr", target, "err", err)
 		return err
 	}
 	client := controlclient.New(controlclient.Config{
@@ -422,8 +425,38 @@ func startControlClient(
 		}
 		_ = conn.Close()
 	}()
-	logger.InfoContext(ctx, "control channel enabled", "addr", cfg.ControlAddr, "host_id_prefix", safePrefix(hostID))
+	logger.InfoContext(ctx, "control channel enabled", "addr", target, "host_id_prefix", safePrefix(hostID))
 	return nil
+}
+
+// controlDialTarget derives the control-channel gRPC dial target and transport credentials from EDR_SERVER_URL, so the push channel
+// shares the server's host and port with the REST path (issue #477): there is no separate control endpoint to configure. An https URL
+// dials over the same pinned TLS the REST client uses; an http URL (dev, EDR_ALLOW_INSECURE) dials cleartext with insecure credentials,
+// matching the server's TLS-terminated-by-proxy / plaintext posture. A missing port defaults to the scheme's standard port.
+func controlDialTarget(cfg *config.Config, logger *slog.Logger) (string, credentials.TransportCredentials, error) {
+	u, err := url.Parse(cfg.ServerURL)
+	if err != nil {
+		return "", nil, fmt.Errorf("parse EDR_SERVER_URL %q: %w", cfg.ServerURL, err)
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	target := net.JoinHostPort(u.Hostname(), port)
+	if u.Scheme != "https" {
+		return target, insecure.NewCredentials(), nil
+	}
+	//nolint:contextcheck // BuildTLSConfig takes no context; its TLS-handshake callback intentionally uses context.Background (the
+	// handshake has no request context), the same call newAgentHTTPClient makes.
+	tlsCfg, err := enrollment.BuildTLSConfig(cfg.AllowInsecure, cfg.ServerFingerprint, logger)
+	if err != nil {
+		return "", nil, err
+	}
+	return target, credentials.NewTLS(tlsCfg), nil
 }
 
 // startProcessReconciler runs the agent-side kill(pid,0) sweep that closes processes whose kernel exit notification went missing

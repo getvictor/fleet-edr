@@ -224,9 +224,10 @@ func run() error {
 	}); err != nil {
 		return err
 	}
-	// The ingest binary shuts down immediately on SIGTERM (nil drain, 0 delay). Graceful-drain wiring for the ingest tier is a
+	// The ingest binary serves only the event-intake HTTP surface (no agent control channel), so it passes a nil control mux: no gRPC
+	// multiplexing. It also shuts down immediately on SIGTERM (nil drain, 0 delay); graceful-drain wiring for the ingest tier is a
 	// follow-up to the server's (server-availability arc); nil/0 preserves the prior immediate-shutdown behavior with no regression.
-	return httpserver.RunAndShutdown(ctx, srv, logger, nil, 0)
+	return httpserver.RunAndShutdown(ctx, srv, nil, logger, nil, 0)
 }
 
 // openVisibility opens the required ClickHouse event archive (ADR-0015) and builds the visibility context. The ingest tier fans every

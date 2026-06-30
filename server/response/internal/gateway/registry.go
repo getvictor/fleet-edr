@@ -125,3 +125,18 @@ func (r *registry) len() int {
 	defer r.mu.Unlock()
 	return len(r.conns)
 }
+
+// closeAll cancels every live connection so its Connect handler returns. Used on gateway shutdown: cancelling the contexts unblocks
+// the long-lived streams (which never end on their own) so the shared HTTP server's graceful shutdown can complete. Entries remove
+// themselves from the map via the handler's deferred remove; closeAll only triggers the cancel.
+func (r *registry) closeAll() {
+	r.mu.Lock()
+	conns := make([]*conn, 0, len(r.conns))
+	for _, c := range r.conns {
+		conns = append(conns, c)
+	}
+	r.mu.Unlock()
+	for _, c := range conns {
+		c.close()
+	}
+}

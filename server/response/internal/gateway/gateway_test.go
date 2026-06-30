@@ -2,14 +2,8 @@ package gateway
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"math/big"
 	"net"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -279,60 +272,52 @@ func TestGateway(t *testing.T) {
 	})
 }
 
-// genTestCert returns a self-signed TLS 1.3-usable cert for the gateway's TLS serve path.
-func genTestCert(t *testing.T) tls.Certificate {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "edr-control-test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	require.NoError(t, err)
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
-}
-
-// TestGatewayServeTLS exercises the production serve path: New with TLS credentials, Serve on a real TCP listener, a client dialing
-// over TLS with a token, command delivery, and a graceful Stop.
-func TestGatewayServeTLS(t *testing.T) {
+// TestGatewayServeAndStop exercises the production serve path: New, Serve on a real TCP listener, a client dialing with a token,
+// command delivery over a BIDIRECTIONAL stream, and a graceful Stop. This serves the gateway through its production entry point,
+// grpc.Server.ServeHTTP behind a net/http HTTP/2 server (how cmd/main multiplexes it onto the shared HTTPS listener), so it pins that
+// the long-lived bidi control stream works over net/http's HTTP/2 (the documented ServeHTTP caveat), not only over gRPC's own
+// transport. TLS is terminated upstream in production; here the server speaks cleartext HTTP/2 (h2c) and the client dials insecure.
+func TestGatewayServeAndStop(t *testing.T) {
 	t.Parallel()
 	src := newFakeSource()
 	ver := newFakeVerifier()
 	ver.add("tok-a", "host-a")
 	src.addPending(api.Command{ID: 5, HostID: "host-a", CommandType: "kill_process", Payload: []byte(`{"pid":9}`)})
 
-	g := New(Deps{Source: src, Verifier: ver, TLSConfig: &tls.Config{Certificates: []tls.Certificate{genTestCert(t)}, MinVersion: tls.VersionTLS13}})
+	g := New(Deps{Source: src, Verifier: ver})
 	g.watchInterval = 20 * time.Millisecond
-	g.stopGrace = 200 * time.Millisecond // bound the force-close path under test
 
 	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	// Serve the gateway exactly as production does: a net/http server with cleartext HTTP/2 enabled, dispatching to g.ServeHTTP.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	httpSrv := &http.Server{Handler: g, Protocols: protocols, ReadHeaderTimeout: 5 * time.Second}
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- g.Serve(lis) }()
+	go func() { serveDone <- httpSrv.Serve(lis) }()
 	runCtx, runCancel := context.WithCancel(t.Context())
 	defer runCancel()
 	go g.Run(runCtx)
 
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test client against an in-test self-signed cert
-	cc, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(creds))
+	cc, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer func() { _ = cc.Close() }()
 
 	streamCtx, streamCancel := context.WithCancel(connectCtx("tok-a"))
 	stream, err := control.NewControlChannelClient(cc).Connect(streamCtx)
 	require.NoError(t, err)
+	// Server -> client: the pushed command arrives over the bidi stream.
 	frame, err := stream.Recv()
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), frame.GetCommand().GetId())
+	// Client -> server: report an outcome on the same stream, exercising the other direction of the full-duplex stream over ServeHTTP.
+	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{
+		Outcome: &control.Outcome{Id: 5, Status: "completed"},
+	}}))
 
 	streamCancel() // end the client stream so GracefulStop can drain promptly instead of waiting out the grace window
 	g.Stop()
-	require.NoError(t, <-serveDone, "Serve returns nil after a graceful Stop")
+	require.NoError(t, httpSrv.Shutdown(context.WithoutCancel(runCtx)))
+	<-serveDone
 }
