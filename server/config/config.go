@@ -66,9 +66,13 @@ type Config struct {
 	DSN           string
 	ClickHouseDSN string
 	ListenAddr    string
-	EnrollSecret  string
-	TLSCertFile   string
-	TLSKeyFile    string
+	// ControlAddr is the bind address for the agent control-channel gRPC gateway (the push replacement for GET /api/commands polling,
+	// issue #477). Deployment-shape config like ListenAddr. Empty (the default) leaves the gateway unmounted, so agents use the
+	// short-poll path; set EDR_CONTROL_ADDR (for example ":8090") to serve the control channel on its own TLS listener.
+	ControlAddr  string
+	EnrollSecret string
+	TLSCertFile  string
+	TLSKeyFile   string
 	// TLSTerminatedByProxy lets the server listen plaintext HTTP when a TLS-terminating proxy (a PaaS edge, an ALB, nginx, or
 	// Cloudflare) sits in front. It is the gated exception to the mandatory-TLS default (issue #140): the default still refuses
 	// to boot without certs, but an operator who sets EDR_TLS_TERMINATED_BY_PROXY=1 asserts that something in front terminates
@@ -229,6 +233,7 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 		*errs = append(*errs, errors.New("EDR_DSN is required (use EDR_DSN_FILE for docker-secret mounts)"))
 	}
 	optionalStr(&c.ListenAddr, "EDR_LISTEN_ADDR", getenv)
+	optionalStr(&c.ControlAddr, "EDR_CONTROL_ADDR", getenv)
 	requireStr(&c.EnrollSecret, "EDR_ENROLL_SECRET", getenv, errs, true)
 	optionalStr(&c.TLSCertFile, "EDR_TLS_CERT_FILE", getenv)
 	optionalStr(&c.TLSKeyFile, "EDR_TLS_KEY_FILE", getenv)

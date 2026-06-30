@@ -99,9 +99,18 @@ func main() {
 	}
 }
 
+// generatedMarker matches the standard Go "this file is machine-generated" line (golang.org/s/generatedcode), which protoc-gen-go,
+// protoc-gen-go-grpc, stringer, and friends emit. golangci-lint already skips such files (generated: strict); this gate does too, so a
+// generated header's ` - protoc` version list is not flagged as a spaced-hyphen em dash.
+var generatedMarker = regexp.MustCompile(`(?m)^// Code generated .* DO NOT EDIT\.$`)
+
 // checkFile dispatches one file to the checker for its extension, isolating the prose-bearing parts per file type. An
-// unrecognized extension yields no findings (the file is not prose this gate understands).
+// unrecognized extension yields no findings (the file is not prose this gate understands). Machine-generated source is skipped: it
+// is not hand-authored prose, and its tool-emitted headers can carry punctuation this gate would otherwise flag.
 func checkFile(path string, data []byte) []string {
+	if generatedMarker.Match(data) {
+		return nil
+	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".md", ".markdown":
 		return checkMarkdown(path, data)

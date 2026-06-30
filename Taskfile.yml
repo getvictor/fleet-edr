@@ -142,6 +142,21 @@ tasks:
     cmds:
       - go run ./tools/gen-attack-layer
 
+  proto:
+    desc: |
+      Regenerate the gRPC control-channel Go code from internal/control/control.proto.
+      Requires protoc on PATH and the pinned Go plugins; the recipe installs the
+      plugins into GOBIN and invokes protoc with GOBIN on PATH. The generated
+      *.pb.go files are checked in (golangci-lint skips generated files).
+    cmds:
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+      - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+      - >-
+        PATH="$(go env GOPATH)/bin:$PATH" protoc
+        --go_out=. --go_opt=module=github.com/fleetdm/edr
+        --go-grpc_out=. --go-grpc_opt=module=github.com/fleetdm/edr
+        internal/control/control.proto
+
   # -------- test --------
 
   test:

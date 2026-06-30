@@ -148,6 +148,31 @@ func (s *Store) ListForHost(ctx context.Context, hostID, status string) ([]api.C
 	return out, nil
 }
 
+// ListPendingForHosts returns every pending command for the given host ids, in creation order (oldest first, so a connected agent
+// receives its backlog in the order it was queued). It is the control gateway's watch query: scoping on host_id lets the
+// idx_commands_host_status (host_id, status) index serve the lookup and transfers only the rows this gateway can deliver, rather than
+// scanning the whole pending backlog. An empty hostIDs slice returns no rows without touching the database.
+func (s *Store) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]api.Command, error) {
+	if len(hostIDs) == 0 {
+		return []api.Command{}, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT id, host_id, command_type, payload, status, created_at, acked_at, completed_at, result
+			FROM commands WHERE status = 'pending' AND host_id IN (?) ORDER BY created_at ASC`, hostIDs)
+	if err != nil {
+		return nil, fmt.Errorf("expand pending host ids: %w", err)
+	}
+	var rows []commandRow
+	if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
+		return nil, fmt.Errorf("list pending commands for hosts: %w", err)
+	}
+	out := make([]api.Command, len(rows))
+	for i := range rows {
+		out[i] = rows[i].toAPI()
+	}
+	return out, nil
+}
+
 // Get returns a single command by id. Returns api.ErrCommandNotFound
 // when the row doesn't exist.
 func (s *Store) Get(ctx context.Context, id int64) (api.Command, error) {

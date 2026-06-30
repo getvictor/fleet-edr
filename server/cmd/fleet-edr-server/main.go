@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -217,6 +219,9 @@ func run() error {
 
 	srv := newHTTPServer(cfg, mux, logger, clientIPResolver, metricsRec)
 	if err := configureTLS(ctx, logger, srv, cfg); err != nil {
+		return err
+	}
+	if err := startControlGateway(ctx, logger, cfg, responseCtx, endpointCtx, detectionCtx); err != nil {
 		return err
 	}
 	return httpserver.RunAndShutdown(ctx, srv, logger, drain, cfg.ShutdownDrain)
@@ -636,6 +641,56 @@ func configureTLS(ctx context.Context, logger *slog.Logger, srv *http.Server, cf
 		KeyFile:  cfg.TLSKeyFile,
 		Logger:   logger,
 	})
+}
+
+// startControlGateway mounts the agent control-channel gRPC gateway on its own listener when EDR_CONTROL_ADDR is set. It is opt-in: an
+// empty ControlAddr leaves the gateway unmounted and agents use the GET /api/commands short-poll path, so this changes nothing in the
+// default deployment. When enabled it serves on a dedicated listener (the HTTP serve path is untouched), reusing the server's TLS 1.3
+// cert so the agent reaches it on the same pinned identity; in TLS-terminated-by-proxy mode it serves plaintext gRPC behind the proxy,
+// matching the HTTP posture. The watch loop runs alongside, and a graceful stop on ctx cancellation lets agents reconnect (and fall
+// back to polling) against a peer replica.
+func startControlGateway(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg *config.Config,
+	responseCtx *responsebootstrap.Response,
+	endpointCtx *endpointbootstrap.Endpoint,
+	detectionCtx *detectionbootstrap.Detection,
+) error {
+	if cfg.ControlAddr == "" {
+		return nil
+	}
+	var tlsConfig *tls.Config
+	if !cfg.TLSTerminatedByProxy {
+		var err error
+		tlsConfig, err = httpserver.BuildTLSConfig(ctx, httpserver.TLSOptions{
+			CertFile: cfg.TLSCertFile,
+			KeyFile:  cfg.TLSKeyFile,
+			Logger:   logger,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	gw := responseCtx.BuildControlGateway(endpointCtx.Service(), detectionCtx.Service().RecordHostSeen, tlsConfig)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(ctx, "tcp", cfg.ControlAddr)
+	if err != nil {
+		logger.ErrorContext(ctx, "control gateway listen", "addr", cfg.ControlAddr, "err", err)
+		return err
+	}
+	go func() {
+		if serveErr := gw.Serve(lis); serveErr != nil {
+			logger.ErrorContext(ctx, "control gateway serve", "err", serveErr)
+		}
+	}()
+	go gw.Run(ctx)
+	go func() {
+		<-ctx.Done()
+		gw.Stop() // GracefulStop drains in-flight RPCs and closes the listener
+	}()
+	logger.InfoContext(ctx, "control gateway serving", "addr", cfg.ControlAddr, "tls", tlsConfig != nil)
+	return nil
 }
 
 func runDetection(ctx context.Context, detectionCtx *detectionbootstrap.Detection, logger *slog.Logger) {
