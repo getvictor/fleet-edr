@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -27,28 +28,54 @@ func (d *DrainState) BeginDrain() { d.draining.Store(true) }
 // IsDraining reports whether graceful-shutdown draining has begun.
 func (d *DrainState) IsDraining() bool { return d.draining.Load() }
 
+// ControlMux is the agent control-channel gateway as RunAndShutdown consumes it: an HTTP/2 handler (the gateway's gRPC server exposed
+// via grpc.Server.ServeHTTP) plus a Stop that returns promptly after ending the long-lived control streams, so http.Server.Shutdown
+// can then drain. It is an interface so httpserver does not depend on the response context's concrete gateway type. A nil ControlMux
+// serves HTTP only (the ingest binary and tests).
+type ControlMux interface {
+	http.Handler
+	Stop()
+}
+
 // RunAndShutdown starts srv in a background goroutine, blocks until ctx is cancelled or the server returns a fatal error, then
 // performs a graceful shutdown. It serves TLS when srv.TLSConfig is populated (ConfigureTLS ran, the default), and plaintext HTTP
 // when it is nil. The server terminates TLS itself by default (issue #140); the nil-TLSConfig plaintext path is reached only when
 // the operator opts into EDR_TLS_TERMINATED_BY_PROXY, i.e. a TLS-terminating proxy is in front (callers skip ConfigureTLS then).
+//
+// When control is non-nil, the agent control-channel gRPC gateway shares the SAME listener and port as the REST/UI surface (issue
+// #477): one native HTTP/2 server dispatches each request by content-type, sending application/grpc to the gateway (gRPC over HTTP/2)
+// and everything else to the REST/UI handler. This keeps the whole product on one port with one firewall rule and no separate control
+// address to configure, without byte-sniffing the connection (which corrupts persistent HTTP/2). Over TLS, HTTP/2 is negotiated via
+// ALPN by ListenAndServeTLS; in the plaintext proxy-terminated mode, cleartext HTTP/2 (h2c) is enabled so the front proxy can forward
+// gRPC. A nil control serves HTTP only.
 //
 // Returns the server-side error on abnormal exit, or nil on a ctx-driven graceful shutdown (which also logs "shutdown complete"
 // on the way out).
 //
 // On ctx cancellation (SIGTERM) the server enters a drain phase before closing the listener: drain.BeginDrain() flips /readyz to
 // 503 so a load balancer stops routing new requests here, then the server stays up for drainDelay so the LB observes that and
-// removes the replica from rotation. In-flight and new requests are served throughout the drain window; only after it does
-// srv.Shutdown close the listener and wait (up to ShutdownTimeout) for in-flight requests to finish. A nil drain or a zero
-// drainDelay skips the drain phase (the single-process and test paths). The binary exits within drainDelay + ShutdownTimeout.
-func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, drain *DrainState, drainDelay time.Duration) error {
+// removes the replica from rotation. In-flight and new requests are served throughout the drain window; only after it does the control
+// gateway's Stop end the long-lived control streams and srv.Shutdown close the listener and wait (up to ShutdownTimeout) for in-flight
+// work to finish. A nil drain or a zero drainDelay skips the drain phase (the single-process and test paths). The binary exits within
+// drainDelay + ShutdownTimeout.
+func RunAndShutdown(
+	ctx context.Context,
+	srv *http.Server,
+	control ControlMux,
+	logger *slog.Logger,
+	drain *DrainState,
+	drainDelay time.Duration,
+) error {
+	if control != nil {
+		mountControlChannel(srv, control)
+	}
+
 	serverErr := make(chan error, 1)
 	go func() {
-		// srv.TLSConfig is populated by ConfigureTLS when the server terminates TLS itself. When it's nil the operator opted into
-		// EDR_TLS_TERMINATED_BY_PROXY (a TLS-terminating proxy is in front), so we serve plaintext HTTP. Branching on TLSConfig
-		// keeps the proxy-mode plumbing out of this function's signature and its two callers.
 		var serveErr error
 		if srv.TLSConfig != nil {
-			// ConfigureTLS owns the cert source via GetCertificate; pass empty strings.
+			// ConfigureTLS owns the cert source via GetCertificate; pass empty strings. ListenAndServeTLS negotiates HTTP/2 via ALPN, so
+			// the gRPC dispatch handler sees application/grpc requests over HTTP/2.
 			serveErr = srv.ListenAndServeTLS("", "")
 		} else {
 			serveErr = srv.ListenAndServe()
@@ -84,6 +111,12 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, 
 		}
 	}
 
+	// Stop the control gateway first: Stop cancels the long-lived control streams so their handlers return, otherwise they would hold
+	// http.Server.Shutdown open until its deadline. (The gateway is served via grpc.Server.ServeHTTP, where grpc's own GracefulStop is
+	// unusable, so Stop ends the streams directly.) Then drain HTTP.
+	if control != nil {
+		control.Stop()
+	}
 	// Derive the shutdown deadline context from ctx via WithoutCancel so it inherits ctx's values (trace-id, logger attrs) but NOT ctx's
 	// cancellation: otherwise srv.Shutdown would return immediately because ctx is already Done. http.Server.Shutdown uses its context
 	// purely to decide when to give up on in-flight connections, so a fresh, timeout-bounded, values-inherited context is the correct
@@ -95,4 +128,24 @@ func RunAndShutdown(ctx context.Context, srv *http.Server, logger *slog.Logger, 
 	}
 	logger.InfoContext(shutdownCtx, "shutdown complete")
 	return nil
+}
+
+// mountControlChannel wraps srv.Handler so application/grpc HTTP/2 requests are dispatched to the control gateway and all other
+// requests to the original REST/UI handler. In the plaintext (proxy-terminated) mode it also enables cleartext HTTP/2 so the front
+// proxy can forward gRPC; over TLS, HTTP/2 comes from ALPN.
+func mountControlChannel(srv *http.Server, control ControlMux) {
+	base := srv.Handler
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			control.ServeHTTP(w, r)
+			return
+		}
+		base.ServeHTTP(w, r)
+	})
+	if srv.TLSConfig == nil {
+		protocols := new(http.Protocols)
+		protocols.SetHTTP1(true)
+		protocols.SetUnencryptedHTTP2(true)
+		srv.Protocols = protocols
+	}
 }

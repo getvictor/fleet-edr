@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -107,16 +106,16 @@ func (r *Response) Service() api.Service { return r.svc }
 
 // BuildControlGateway constructs the agent control-channel gateway for this context and wires the fast-path notifier so a command
 // queued on this replica is pushed to a locally-held connection immediately. cmd/main supplies the cross-context dependencies (the
-// host-token verifier from endpoint, the last-seen closure from detection) and owns serving the returned gateway's gRPC server and
-// running its watch loop. The gateway uses the concrete service (which carries the gateway-only ListPendingForHosts query), so this
-// stays inside the response context rather than widening the public api.Service.
-func (r *Response) BuildControlGateway(verifier gateway.TokenVerifier, heartbeat gateway.Heartbeat, tlsConfig *tls.Config) *gateway.Gateway {
+// host-token verifier from endpoint, the last-seen closure from detection), multiplexes the returned gateway's gRPC server onto the
+// main HTTPS listener, and runs its watch loop. TLS is terminated once at that shared listener (or by the front proxy), so the gateway
+// runs without its own transport credentials. The gateway uses the concrete service (which carries the gateway-only
+// ListPendingForHosts query), so this stays inside the response context rather than widening the public api.Service.
+func (r *Response) BuildControlGateway(verifier gateway.TokenVerifier, heartbeat gateway.Heartbeat) *gateway.Gateway {
 	gw := gateway.New(gateway.Deps{
 		Source:    r.svc,
 		Verifier:  verifier,
 		Heartbeat: heartbeat,
 		Logger:    r.logger,
-		TLSConfig: tlsConfig,
 	})
 	r.svc.SetNotifier(gw.Notify)
 	return gw

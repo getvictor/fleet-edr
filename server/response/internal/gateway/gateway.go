@@ -14,19 +14,17 @@ package gateway
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
-	"net"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -42,12 +40,6 @@ const (
 	defaultWatchInterval      = 1 * time.Second
 	defaultLivenessInterval   = 30 * time.Second
 	defaultRevocationInterval = 5 * time.Second
-	// defaultStopGrace bounds the graceful shutdown. Control streams are long-lived and never end on their own, so an unbounded
-	// GracefulStop would hang shutdown forever; after this window we force the streams closed and the agents reconnect (and poll).
-	defaultStopGrace = 5 * time.Second
-	// clientKeepaliveMinTime is the minimum spacing the server tolerates between agent keep-alive PINGs. It must be at most the agent's
-	// keep-alive interval (the agent reuses its 15s HTTP/2 ReadIdleTimeout) or the server GOAWAYs the connection with "too_many_pings".
-	clientKeepaliveMinTime = 10 * time.Second
 
 	// notifyBuffer bounds the fast-path signal queue. A full buffer is harmless: the 1s watch is the backstop, so a dropped notify just
 	// means the command waits up to one watch interval instead of arriving immediately.
@@ -77,9 +69,6 @@ type Deps struct {
 	Verifier  TokenVerifier
 	Heartbeat Heartbeat // optional; nil disables the last-seen bump
 	Logger    *slog.Logger
-	// TLSConfig, when set, secures the gRPC server with these credentials (the server's TLS 1.3 cert, so the agent reaches the control
-	// channel on the same pinned identity as the HTTP path). Nil serves without transport credentials, used only by in-memory tests.
-	TLSConfig *tls.Config
 }
 
 // Gateway holds the agent control connections and the gRPC server that serves them.
@@ -100,7 +89,10 @@ type Gateway struct {
 	watchInterval      time.Duration
 	livenessInterval   time.Duration
 	revocationInterval time.Duration
-	stopGrace          time.Duration
+
+	// closing is set by Stop so a connection accepted during shutdown is rejected rather than stranding http.Server.Shutdown on a
+	// long-lived stream. Per-replica ephemeral flag.
+	closing atomic.Bool
 }
 
 // New builds a Gateway and its gRPC server (auth stream interceptor + OTel trace propagation over stream metadata). Panics if a
@@ -126,55 +118,38 @@ func New(deps Deps) *Gateway {
 		watchInterval:      defaultWatchInterval,
 		livenessInterval:   defaultLivenessInterval,
 		revocationInterval: defaultRevocationInterval,
-		stopGrace:          defaultStopGrace,
 	}
 	opts := []grpc.ServerOption{
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.StreamInterceptor(g.authInterceptor),
-		// Permit the agent's keep-alive PINGs. The agent pings on a short cadence (matching its HTTP/2 half-open detection) to notice a
-		// dropped link fast; without this the gRPC default enforcement policy (5-minute floor) GOAWAYs the connection with
-		// "too_many_pings", so the control stream churns every minute. MinTime must be at most the agent's ping interval.
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             clientKeepaliveMinTime,
-			PermitWithoutStream: true,
-		}),
 	}
-	if deps.TLSConfig != nil {
-		opts = append(opts, grpc.Creds(credentials.NewTLS(deps.TLSConfig)))
-	}
+	// No grpc.Creds and no keepalive enforcement: the gateway is served via grpc.Server.ServeHTTP behind the shared HTTPS listener
+	// (cmd/main multiplexes it with the REST/UI surface), so it rides net/http's HTTP/2 server. Transport-level options do not apply
+	// there: TLS is terminated once at that listener (or the front proxy), and net/http answers the agent's keep-alive PINGs itself
+	// without gRPC's strict ping-flood GOAWAY. ServeHTTP honors the stream interceptor (host-token auth) and the stats handler (OTel),
+	// which is all the gateway needs.
 	g.grpc = grpc.NewServer(opts...)
 	control.RegisterControlChannelServer(g.grpc, g)
 	return g
 }
 
-// GRPCServer returns the configured gRPC server. Exposed for tests; production uses Serve/Stop.
+// GRPCServer returns the configured gRPC server. Exposed for tests that serve it over an in-memory listener.
 func (g *Gateway) GRPCServer() *grpc.Server { return g.grpc }
 
-// Serve accepts connections on lis until Stop is called. cmd/main supplies a TCP listener on EDR_CONTROL_ADDR; the gRPC server applies
-// the TLS credentials from Deps. grpc.ErrServerStopped is the normal shutdown signal, not an error, so it is mapped to nil; the caller
-// only logs genuine serve failures.
-func (g *Gateway) Serve(lis net.Listener) error {
-	if err := g.grpc.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-		return err
-	}
-	return nil
-}
+// ServeHTTP serves the control channel as a gRPC-over-HTTP/2 handler. cmd/main mounts it on the shared HTTPS listener so the control
+// gateway and the REST/UI surface share one port (issue #477): the front handler dispatches application/grpc requests here. TLS is
+// terminated upstream, so this rides net/http's HTTP/2 server with no transport credentials of its own; auth is the per-stream
+// host-token interceptor.
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) { g.grpc.ServeHTTP(w, r) }
 
-// Stop drains in-flight RPCs and closes all connections, bounded by stopGrace. Long-lived control streams never end on their own, so a
-// plain GracefulStop would block shutdown indefinitely; after the grace window we force them closed. Either way agents reconnect (and
-// fall back to polling) against a peer replica rather than hanging the shutdown.
+// Stop tears down every live control stream so the shared HTTP server's shutdown can complete. Because the gateway is served via
+// grpc.Server.ServeHTTP (riding net/http's HTTP/2 server), grpc.Server.GracefulStop is unusable here (it panics: the ServeHTTP
+// transport has no Drain). Instead we mark the gateway closing (so a connection accepted mid-shutdown is rejected) and cancel every
+// registered connection's context, which makes its Connect handler return promptly; the caller's http.Server.Shutdown then drains the
+// now-finished requests. Agents reconnect (and fall back to polling) against a peer replica rather than hanging the shutdown.
 func (g *Gateway) Stop() {
-	done := make(chan struct{})
-	go func() {
-		g.grpc.GracefulStop()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(g.stopGrace):
-		g.grpc.Stop()
-		<-done
-	}
+	g.closing.Store(true)
+	g.reg.closeAll()
 }
 
 // Run drives the cross-replica watch and the fast-path notify drain until ctx is cancelled. Both call deliverPending; the watch sweeps
@@ -254,6 +229,12 @@ func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
 		g.logger.InfoContext(ctx, "control gateway replaced existing connection", attrkeys.HostID, hostID)
 	}
 	defer g.reg.remove(hostID, c)
+	// If Stop raced ahead of this registration, close immediately so a connection accepted during shutdown can't strand
+	// http.Server.Shutdown waiting on a long-lived stream. Checked after add so closeAll cannot miss us.
+	if g.closing.Load() {
+		c.close()
+		return status.Error(codes.Unavailable, "control gateway shutting down")
+	}
 
 	g.bumpLastSeen(connCtx, hostID)
 	go c.writeLoop(connCtx, stream, g.logger)
