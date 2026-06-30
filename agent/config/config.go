@@ -57,8 +57,9 @@ type Config struct {
 	EnrollSecret      string
 	TokenFile         string
 	ServerFingerprint string
-	// ControlAddr is the server's control-channel gRPC endpoint (host:port). Empty (default) keeps the agent on the GET /api/commands
-	// short-poll; set EDR_CONTROL_ADDR to open the persistent push stream (the poll then becomes the fallback floor). From #477.
+	// ControlAddr is the server's reachable control-channel gRPC endpoint, e.g. "edr.example.com:8090" (the server's address, not a
+	// bind literal like ":8090"). Empty (default) keeps the agent on the GET /api/commands short-poll; set EDR_CONTROL_ADDR to open the
+	// persistent push stream (the poll then becomes the fallback floor). From #477.
 	ControlAddr              string
 	HostIDOverride           string
 	QueueDBPath              string

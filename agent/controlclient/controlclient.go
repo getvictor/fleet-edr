@@ -73,8 +73,14 @@ func New(cfg Config) *Client {
 		initial = defaultInitialBackoff
 	}
 	maxB := cfg.MaxBackoff
-	if maxB < initial {
+	if maxB <= 0 {
+		// Unset: take the default cap.
 		maxB = defaultMaxBackoff
+	}
+	if maxB < initial {
+		// Misordered config (max below initial): clamp up to initial so the doubling step still makes forward progress, matching
+		// receiver.NewLoop. Replacing it with the 30s default would silently slow reconnects far past what the caller asked for.
+		maxB = initial
 	}
 	return &Client{
 		cfg:            cfg,
@@ -99,7 +105,11 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if connected {
+		// Reset the backoff after a session that actually connected, so a long-lived stream that drops retries immediately.
+		// Exception: a stream rejected as Unauthenticated "connects" at the gRPC layer and then fails on the first frame, so
+		// resetting would spin a ~1s reconnect + re-enrollment storm against an invalid/revoked token. Let the backoff grow in
+		// that case so re-enrollment is attempted at the capped cadence instead.
+		if connected && status.Code(err) != codes.Unauthenticated {
 			backoff = c.initialBackoff
 		}
 		c.logger.WarnContext(ctx, "control channel disconnected; reconnecting", "err", err, "retry_in", backoff)
@@ -121,6 +131,11 @@ func (c *Client) runStream(ctx context.Context) (bool, error) {
 	}
 	stream, err := c.cfg.Client.Connect(sctx)
 	if err != nil {
+		// The server's auth interceptor can reject the stream during setup, not only on the first Recv; treat an
+		// Unauthenticated rejection here the same way so a revoked/expired token still drives re-enrollment.
+		if status.Code(err) == codes.Unauthenticated && c.cfg.OnAuthFail != nil {
+			c.cfg.OnAuthFail(ctx)
+		}
 		return false, err
 	}
 	c.setConnected(true)
@@ -145,6 +160,15 @@ func (c *Client) runStream(ctx context.Context) (bool, error) {
 // already been executed (its outcome is cached), the agent re-reports the recorded outcome instead of running the side effect again, so
 // a re-delivery after a lost report still drives the command to terminal and a non-idempotent command (kill_process) is never re-run.
 func (c *Client) handleCommand(ctx context.Context, stream control.ControlChannel_ConnectClient, pushed *control.Command) {
+	// Defense in depth: the gateway routes a host's commands to that host's stream, but the agent is the last boundary before a
+	// privileged side effect (kill_process). If a command's host_id doesn't match this agent's, drop it without executing and
+	// without reporting an outcome: any outcome we sent would carry this command's id, which belongs to another host, and could
+	// flip that host's command state on the server. A mismatch means a server-side routing bug, so log it loudly.
+	if c.cfg.HostID != "" && pushed.GetHostId() != "" && pushed.GetHostId() != c.cfg.HostID {
+		c.logger.ErrorContext(ctx, "control channel: dropping command addressed to a different host",
+			"cmd_id", pushed.GetId(), "command_type", pushed.GetCommandType())
+		return
+	}
 	cmd := commander.Command{
 		ID:          pushed.GetId(),
 		HostID:      pushed.GetHostId(),
@@ -186,9 +210,10 @@ type cachedOutcome struct {
 	result json.RawMessage
 }
 
-// outcomeCache is a bounded most-recent map of command id to terminal outcome. Per-agent ephemeral cache, safe to lose on restart (a
-// restart's worst case is re-executing a command the server still has pending, which kill_process tolerates as a no-op "no such
-// process" and set_application_control tolerates as an idempotent snapshot re-apply).
+// outcomeCache is a bounded map of command id to terminal outcome with FIFO (insertion-order) eviction: a get does not change an
+// entry's position, so once the cache is full the oldest-inserted id is dropped first. Per-agent ephemeral cache, safe to lose on
+// restart (a restart's worst case is re-executing a command the server still has pending, which kill_process tolerates as a no-op "no
+// such process" and set_application_control tolerates as an idempotent snapshot re-apply).
 type outcomeCache struct {
 	mu    sync.Mutex
 	m     map[int64]cachedOutcome
@@ -233,11 +258,13 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 func jitter(d time.Duration) time.Duration {
-	if d <= 0 {
+	half := int64(d / 2)
+	if half <= 0 {
+		// d <= 1ns: rand.Int64N(0) would panic, and there is no meaningful jitter to add at that scale anyway.
 		return 0
 	}
 	//nolint:gosec // G404: reconnect-backoff jitter is timing, not security-sensitive; a weak PRNG is correct here.
-	return time.Duration(rand.Int64N(int64(d / 2)))
+	return time.Duration(rand.Int64N(half))
 }
 
 func minDuration(a, b time.Duration) time.Duration {

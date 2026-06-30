@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,8 +24,9 @@ import (
 // reports back.
 type fakeGateway struct {
 	control.UnimplementedControlChannelServer
-	push      []*control.Command
-	failFirst bool
+	push          []*control.Command
+	failFirst     bool
+	authFailFirst bool
 
 	mu       sync.Mutex
 	attempts int
@@ -38,6 +40,9 @@ func (g *fakeGateway) Connect(stream control.ControlChannel_ConnectServer) error
 	g.mu.Unlock()
 	if first && g.failFirst {
 		return status.Error(codes.Unavailable, "transient failure") // forces the client to back off and reconnect
+	}
+	if first && g.authFailFirst {
+		return status.Error(codes.Unauthenticated, "bad token") // forces the client to re-enroll, then reconnect
 	}
 	for _, cmd := range g.push {
 		if err := stream.Send(&control.ServerFrame{Frame: &control.ServerFrame_Command{Command: cmd}}); err != nil {
@@ -82,8 +87,9 @@ func (r *recordingSender) count() int {
 	return len(r.sent)
 }
 
-// startClient wires a fakeGateway over bufconn and runs a control client against it until the test ends.
-func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (*fakeGateway, func() bool) {
+// startClient wires a fakeGateway over bufconn and runs a control client against it until the test ends. It returns a connected
+// predicate and an auth-failure counter so tests can observe re-enrollment without standing up a real token provider.
+func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (isConnected func() bool, authFails func() int) {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
@@ -97,12 +103,18 @@ func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (*fak
 	require.NoError(t, err)
 
 	var connected bool
+	var authFailCount int
 	var mu sync.Mutex
 	client := controlclient.New(controlclient.Config{
 		Client:                   control.NewControlChannelClient(cc),
 		HostID:                   "host-a",
 		TokenFn:                  func() string { return "tok" },
 		ApplicationControlSender: sender,
+		OnAuthFail: func(context.Context) {
+			mu.Lock()
+			authFailCount++
+			mu.Unlock()
+		},
 		OnConnectedChange: func(v bool) {
 			mu.Lock()
 			connected = v
@@ -119,12 +131,17 @@ func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (*fak
 		srv.Stop()
 		_ = cc.Close()
 	})
-	isConnected := func() bool {
+	isConnected = func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return connected
 	}
-	return fake, isConnected
+	authFails = func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return authFailCount
+	}
+	return isConnected, authFails
 }
 
 const appControlPayload = `{"policy_id":7,"policy_version":1,"rules":[]}`
@@ -138,7 +155,7 @@ func TestControlClient(t *testing.T) {
 			{Id: 7, HostId: "host-a", CommandType: "set_application_control", Payload: []byte(appControlPayload)},
 		}}
 		sender := &recordingSender{}
-		_, isConnected := startClient(t, fake, sender)
+		isConnected, _ := startClient(t, fake, sender)
 
 		require.Eventually(t, isConnected, 2*time.Second, 10*time.Millisecond)
 		require.Eventually(t, func() bool { return len(fake.recorded()) >= 2 }, 2*time.Second, 10*time.Millisecond)
@@ -193,4 +210,82 @@ func TestControlClient(t *testing.T) {
 		assert.Equal(t, "failed", outs[1].GetStatus())
 		assert.Contains(t, string(outs[1].GetResult()), "unknown command type")
 	})
+
+	t.Run("command addressed to a different host is dropped without executing", func(t *testing.T) {
+		t.Parallel()
+		// The first command targets another host (a server routing bug); it must not run and must not report any outcome, since
+		// that outcome would carry an id belonging to host-b. The second, correctly addressed, command still executes so the
+		// stream is proven live.
+		fake := &fakeGateway{push: []*control.Command{
+			{Id: 100, HostId: "host-b", CommandType: "set_application_control", Payload: []byte(appControlPayload)},
+			{Id: 101, HostId: "host-a", CommandType: "set_application_control", Payload: []byte(appControlPayload)},
+		}}
+		sender := &recordingSender{}
+		_, _ = startClient(t, fake, sender)
+
+		// Wait until the correctly addressed command has driven acked+completed.
+		require.Eventually(t, func() bool { return len(fake.recorded()) >= 2 }, 2*time.Second, 10*time.Millisecond)
+		assert.Equal(t, 1, sender.count(), "only the correctly addressed command runs its side effect")
+		for _, oc := range fake.recorded() {
+			assert.Equal(t, int64(101), oc.GetId(), "no outcome is ever reported for the misrouted command")
+		}
+	})
+
+	t.Run("auth rejection on connect drives re-enrollment then recovers", func(t *testing.T) {
+		t.Parallel()
+		// The gateway rejects the first stream as Unauthenticated. The client must invoke OnAuthFail (re-enrollment) and, crucially,
+		// must NOT reset its backoff for an auth-rejected session, then reconnect and execute the pushed command.
+		fake := &fakeGateway{
+			authFailFirst: true,
+			push:          []*control.Command{{Id: 12, HostId: "host-a", CommandType: "set_application_control", Payload: []byte(appControlPayload)}},
+		}
+		sender := &recordingSender{}
+		_, authFails := startClient(t, fake, sender)
+
+		require.Eventually(t, func() bool { return authFails() >= 1 }, 2*time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool { return sender.count() == 1 }, 3*time.Second, 10*time.Millisecond)
+	})
+}
+
+// connectErrClient is a control.ControlChannelClient whose Connect fails before any stream exists, exercising the runStream path that
+// inspects the Connect() error (rather than the first Recv) for an Unauthenticated rejection.
+type connectErrClient struct {
+	err error
+	mu  sync.Mutex
+	n   int
+}
+
+func (c *connectErrClient) Connect(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[control.AgentFrame, control.ServerFrame], error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return nil, c.err
+}
+
+func (c *connectErrClient) calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func TestControlClientAuthFailOnConnect(t *testing.T) {
+	t.Parallel()
+	// When the gateway rejects the RPC during Connect() (the auth interceptor can deny before the stream opens), the client must
+	// still treat it as an auth failure and trigger re-enrollment, not silently retry forever.
+	stub := &connectErrClient{err: status.Error(codes.Unauthenticated, "denied at setup")}
+	var authFails atomic.Int32
+	client := controlclient.New(controlclient.Config{
+		Client:         stub,
+		HostID:         "host-a",
+		TokenFn:        func() string { return "tok" },
+		OnAuthFail:     func(context.Context) { authFails.Add(1) },
+		InitialBackoff: 10 * time.Millisecond,
+		MaxBackoff:     30 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go func() { _ = client.Run(ctx) }()
+
+	require.Eventually(t, func() bool { return authFails.Load() >= 1 }, 2*time.Second, 5*time.Millisecond)
+	assert.GreaterOrEqual(t, stub.calls(), 1)
 }
