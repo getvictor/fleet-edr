@@ -233,6 +233,10 @@ func (d *Detection) Service() api.Service { return d.svc }
 // SetMetrics wires the metrics recorder into the engine + intake + pipeline (processttl + retention) AFTER construction. Used by
 // cmd/main to break the circular dependency between detectionCtx and metrics.New (the OfflineHosts gauge source needs detectionCtx;
 // detectionCtx's engine + intake + pipeline need the recorder).
+//
+// It MUST be called before Run. The recorder is set-once construction-phase config that the running loops read (the pipeline runners
+// read it on their immediate first sweep), so calling it concurrently with the loops is a data race (issue #561). cmd/main wires it
+// before `go runDetection`; tests wire it through the helper before the loops launch.
 func (d *Detection) SetMetrics(m api.MetricsRecorder) {
 	d.metrics = m
 	if d.engine != nil {
@@ -247,7 +251,8 @@ func (d *Detection) SetMetrics(m api.MetricsRecorder) {
 }
 
 // SetModeResolver wires the per-host rule-mode resolver into the engine AFTER construction (issue #459). cmd/main passes the rules
-// context's detection-config service. No-op in ModeIntake (no engine).
+// context's detection-config service. No-op in ModeIntake (no engine). Like SetMetrics, it is set-once construction-phase config and
+// MUST be called before Run, not concurrently with the running loops.
 func (d *Detection) SetModeResolver(m rulesapi.RuleModeResolver) {
 	if d.engine != nil {
 		d.engine.SetModeResolver(m)
@@ -259,7 +264,8 @@ func (d *Detection) SetModeResolver(m rulesapi.RuleModeResolver) {
 func (d *Detection) Store() *mysql.Store { return d.store }
 
 // LoadActive registers the active rule set with the engine. cmd/main
-// calls this after rulesCtx is built. Skipped in ModeIntake (no engine).
+// calls this after rulesCtx is built. Skipped in ModeIntake (no engine). Like SetMetrics, it is set-once construction-phase config and
+// MUST be called before Run, not concurrently with the running loops.
 func (d *Detection) LoadActive(rp interface{ ActiveRules() []rulesapi.Rule }) {
 	if d.engine == nil {
 		return
