@@ -2,7 +2,7 @@
 
 ### Requirement: The agent holds a persistent authenticated control connection
 
-The agent SHALL maintain a single persistent control connection to the server, authenticated once at connect time with the host's bearer token rather than with a per-message credential, over a server-authenticated transport with the same leaf-certificate pinning the agent applies to its other server calls. The server SHALL accept the connection only when the presented host token verifies (valid signature, not expired, not revoked) and SHALL reject it otherwise without opening the channel.
+The agent SHALL maintain a single persistent control connection to the server, authenticated once at connect time with the host's bearer token rather than with a per-message credential, over a server-authenticated transport with the same leaf-certificate pinning the agent applies to its other server calls. The server SHALL accept the connection only when the presented host token verifies (valid signature, not expired, not revoked) and SHALL reject it otherwise without opening the channel. The server SHALL hold at most one connection per host: when a new connection is accepted for a host that already has one, the server SHALL close and release the prior connection and treat the new one as the sole authoritative channel for that host.
 
 #### Scenario: Connection opens with a valid host token
 
@@ -17,6 +17,13 @@ The agent SHALL maintain a single persistent control connection to the server, a
 - **WHEN** the agent attempts to open the control connection
 - **THEN** the server refuses to open the channel
 - **AND** no command is delivered over the refused connection
+
+#### Scenario: A reconnect replaces the prior connection for the same host
+
+- **GIVEN** a host holding an open control connection that then reconnects (for example after a token refresh) before the old connection is observed as closed
+- **WHEN** the server accepts the new connection
+- **THEN** the server closes and releases the prior connection for that host
+- **AND** only the new connection receives subsequent pushes, with no leaked prior connection
 
 ### Requirement: Queued commands are delivered over the connection in real time
 
@@ -53,14 +60,21 @@ The system SHALL carry command acknowledgement and the completed-or-failed outco
 
 ### Requirement: Delivery is at-least-once and idempotent by command identity
 
-The system MAY offer the same command over a connection more than once, and SHALL ensure a command is executed at most once: the agent SHALL treat a re-delivered command whose lifecycle has already advanced past pending as already handled and SHALL NOT repeat its side effect, and the server SHALL reject an outcome report that does not represent a valid status transition.
+The system MAY offer the same command over a connection more than once, and SHALL run a command's side effect at most once. The agent SHALL key execution by command identity and SHALL record each command's final outcome; on re-delivery of a command it has already executed, the agent SHALL re-report the recorded outcome rather than repeating the side effect, so a command whose outcome report was lost still transitions out of pending rather than being silently dropped and left stuck. The server SHALL reject an outcome report that is not a valid transition for the command's current status, which the agent treats as already handled.
 
-#### Scenario: The same command delivered twice executes once
+#### Scenario: A re-delivered command re-reports its recorded outcome without repeating the side effect
 
-- **GIVEN** a command that has already been delivered, acknowledged, and executed on a host
-- **WHEN** the same command is delivered to that host's connection again
+- **GIVEN** a command that a host already executed but whose outcome report was lost, so the command is still pending on the server
+- **WHEN** the command is delivered to that host's connection again
 - **THEN** the agent does not repeat the command's side effect
-- **AND** an acknowledgement for the already-advanced command is rejected as an invalid transition rather than recorded
+- **AND** the agent re-reports the recorded outcome so the server transitions the command out of pending
+
+#### Scenario: An outcome that is not a valid transition is rejected
+
+- **GIVEN** a command whose status has already advanced past the reported transition
+- **WHEN** the agent reports an outcome that the current status does not permit
+- **THEN** the server rejects it rather than recording it
+- **AND** the agent treats the rejection as already handled, not as a failure
 
 ### Requirement: Commands on the connection are scoped to the authenticated host
 

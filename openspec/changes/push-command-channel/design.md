@@ -32,10 +32,12 @@ A live connection whose token has been revoked (epoch bumped) or has expired is 
 
 The gateway is embedded in the server binary. Each replica behind the load balancer runs a gateway; an agent's connection lands on whichever replica the load balancer routed it to and stays pinned to that replica for the connection's lifetime (the connection is the affinity, no LB stickiness needed).
 
+**At most one connection per host.** The registry is keyed by `host_id`, and a reconnect (after a token refresh, a network transition, or a races where the old connection has not yet been noticed as dead) can open a second connection for a host that already has one. The gateway SHALL close and clean up any existing connection for a `host_id` before registering a new one, and treat the new connection as the sole authoritative channel for that host. Without this, the stale connection leaks its goroutine and file descriptor and could receive a duplicate push. This applies on the replica holding the connection; two connections for one host landing on two different replicas is the cross-replica reconnect case, resolved as the old replica observes its connection drop.
+
 Commands are queued by the operator UI (`POST /api/commands`), by application-control policy fan-out (`InsertBatch`), and by enroll fan-out. The replica that queues a command is not necessarily the one holding the target host's connection. Two delivery paths cover this without a bus:
 
 1. **In-process fast path (same replica).** When a command is queued on the replica that already holds the target host's connection, the gateway is notified in-process and pushes immediately. At the single-replica pilot and single-VM default this covers every command, so delivery is effectively instant.
-2. **MySQL watch (cross-replica floor).** Each gateway watches the `commands` table on a fixed 1s interval (`SELECT id, host_id, command_type, payload FROM commands WHERE status = 'pending'`, served by the existing `(host_id, status)` index), and pushes each pending row whose `host_id` is a locally-held connection. A command queued on another replica is therefore delivered within at most the watch interval.
+2. **MySQL watch (cross-replica floor).** Each gateway watches the `commands` table on a fixed 1s interval, scoped to the hosts it actually holds: `SELECT id, host_id, command_type, payload FROM commands WHERE status = 'pending' AND host_id IN (<locally-held host ids>)`. Constraining on `host_id` is what lets the query seek the existing `(host_id, status)` index rather than scanning every pending row in the fleet, and it transfers only the rows this replica can deliver. The `IN` list is the gateway's connected-host set (batched if a single gateway ever holds more connections than fit one statement). Each returned row is pushed to its connection, skipping IDs already in flight. A command queued on another replica is therefore delivered within at most the watch interval. A bare `WHERE status = 'pending'` (no `host_id` predicate) was rejected in review: it cannot use the leading-column index and would fan every replica's scan across the whole pending backlog, including commands queued for offline hosts.
 
 This collapses O(hosts) agent polls into O(replicas) gateway watches and keeps all delivery state in MySQL, so ADR-0016's "no new messaging substrate at pilot scale" holds. The NATS backplane named in the scale plan is the later move when cross-gateway fan-out latency at scale demands it; it is explicitly out of scope here.
 
@@ -43,12 +45,13 @@ The 1s watch interval is a compiled constant, not an operator environment knob, 
 
 ## Idempotent at-least-once delivery
 
-The fast path and the watch can offer the same command to a connection more than once (for example, a fast-path push followed by a watch tick before the ack lands). Two things make this harmless:
+The fast path and the watch can offer the same command to a connection more than once (for example, a fast-path push followed by a watch tick before the ack lands, or a re-delivery after a reconnect). Three things make this safe, and the third is a correctness fix surfaced in review:
 
 - The gateway tracks the set of command IDs it has pushed to a connection and is awaiting an ack on (in-memory, per-connection, safe to lose), and skips re-pushing an ID already in flight on that connection.
-- The agent dispatches by command ID and is idempotent: a re-delivered command whose lifecycle has already advanced is dropped. The server-side state machine reinforces this: an ack for a command already past `pending` returns an invalid-transition error, which the agent treats as "already handled" rather than a failure.
+- The agent dispatches by command ID: it runs a command's side effect at most once, keyed by ID, so a re-delivery never repeats the kill or the snapshot apply.
+- The agent records each command's final outcome and, on re-delivery of a command it has already executed, **re-reports the recorded outcome rather than silently dropping it**. Silent-drop was wrong: if the agent executed a command and the completion report was lost before the server persisted it, the command stays `pending`, the watch re-delivers it, and a drop would leave it stuck `pending` forever. Re-reporting transitions it out of `pending`. This also avoids a `kill_process` re-execution returning "no such process" and overwriting a recorded success with a failure: the agent reports the cached outcome, it does not signal the (already-dead) PID again. On reconnect the agent likewise re-reports outcomes for commands it executed but whose reports may not have landed, so an acknowledged-but-unreported command is reconciled rather than orphaned. The server-side state machine backstops this: an outcome that is not a valid transition for the command's current status is rejected and treated by the agent as "already handled."
 
-So a command is delivered at least once and executed exactly once.
+So a command is delivered at least once, its side effect runs at most once, and a lost outcome report is always reconciled rather than leaving the command stuck.
 
 ## Liveness
 
@@ -60,7 +63,7 @@ The agent prefers the connection. While the connection is up the agent suppresse
 
 ## ADR-0010 carve-out
 
-The gateway is the first sanctioned stateful tier in the server. It holds live connections (sockets keyed by `host_id`) and a per-connection in-flight set as its only in-process state. It persists nothing durable; all command state remains in MySQL. Losing a gateway or any connection forces the affected agents to reconnect (and to fall back to polling meanwhile), with no command loss because the command rows and their statuses are in the shared store. ADR-0010 is amended to name this carve-out so it is not read as a violation, and the `server-availability` stateless requirement is modified to match.
+The gateway is the first sanctioned stateful tier in the server. Its only in-process state is, per connection: the live socket (keyed by `host_id`), the connection's authentication metadata (the token's epoch and expiry, needed to re-check it against the revocation snapshot without a database lookup), and the set of in-flight command IDs. It persists nothing durable; all command state remains in MySQL. Losing a gateway or any connection forces the affected agents to reconnect (and to fall back to polling meanwhile), with no command loss because the command rows and their statuses are in the shared store. ADR-0010 is amended to name this carve-out so it is not read as a violation, and the `server-availability` stateless requirement is modified to match.
 
 ## Bounded-context placement
 
