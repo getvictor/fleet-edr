@@ -30,7 +30,7 @@ The checklist this task scans for. Each entry names the smell, the EDR-specific 
 | Anti-pattern | EDR-specific shape | Verdict gate |
 | --- | --- | --- |
 | **Wrong-layer logic** | SQL string outside a `mysql`/`store`/`migrations` package; branching business logic inside an HTTP handler that should only decode, delegate, encode | Real finding |
-| **Premature abstraction / speculative generality** | Interface with exactly one implementation and one caller; a "strategy"/"provider" seam with one option; a defensive branch no caller can reach (CLAUDE.md "No speculative edge cases") | Real finding unless an ADR names the second implementation as imminent |
+| **Premature abstraction / speculative generality** | Interface with exactly one implementation and one caller; a "strategy"/"provider" seam with one option; a defensive branch no caller can reach (CLAUDE.md "No speculative edge cases"); in Go specifically, an interface declared at the producer (returned by its own constructor) or grouped in an `interfaces`/`ports` package rather than defined at the consumer that needs it | Real finding unless an ADR names the second implementation as imminent. A consumer-side interface with a test double as its second implementation is idiomatic Go, not a finding |
 | **Distributed monolith / shared mutable state** | Package-level `map`/`chan`/slice holding state that survives a request and a peer replica would need (ADR-0010, ADR-0011) | Real finding unless carrying a "per-replica perf cache, safe to lose" note |
 | **Anemic vs god split** | A domain struct that is pure data while a single `service.go` holds every behaviour for that struct | Judgment: anemic structs are often idiomatic Go. Flag only when the god-service is the join point of many features |
 | **Leaky / reversed abstraction** | `api/` type exposing raw implementation fields; an interface in package A satisfied only by package B which depends on A (the imports are clean, the dependency is a circle) | Real finding (reversal overlaps drift, cross-reference) |
@@ -49,8 +49,10 @@ Skim the ADR index (`docs/adr/README.md`) and the load-bearing ones for this tas
 
 ```bash
 # SQL outside the persistence layer. POSIX classes (not \s / \b) so it works under macOS BSD grep;
-# the leading [`"] catches Go SQL in both double-quoted and backtick raw strings.
-grep -rnE '[`"][[:space:]]*(SELECT|INSERT|UPDATE|DELETE)' server/ --include='*.go' \
+# the leading [`"] catches Go SQL in both double-quoted and backtick raw strings. DELETE must be followed by
+# whitespace then a non-slash char: that matches both `DELETE FROM` and MySQL multi-table `DELETE t1 FROM ...`
+# while excluding the bare HTTP method in route strings ("DELETE /api/..."), whose next char is the slash.
+grep -rnE '[`"][[:space:]]*(SELECT|INSERT|UPDATE|DELETE[[:space:]]+[^/])' server/ --include='*.go' \
   | grep -vE '/(mysql|store|migrations|tests)/' | grep -v '_test.go'
 
 # Handler files doing more than decode -> delegate -> encode (loops / SQL / multi-branch business logic).
@@ -67,7 +69,7 @@ Any hit is a candidate. Confirm by reading: a handler that ranges over a decoded
 grep -rnE '^[[:space:]]*type [[:alnum:]_]+ interface' server/ agent/ internal/ --include='*.go' | grep -v '_test.go'
 ```
 
-For each interface, ask: how many concrete types implement it, and how many call sites pass more than one of those types? An interface with one implementation and no test double that exercises a second is speculative generality. Inline it unless an ADR names the imminent second implementation. Apply the same lens to "provider"/"strategy"/"factory" seams with a single option.
+For each interface, ask: how many concrete types implement it, and how many call sites pass more than one of those types? An interface with one implementation and no test double that exercises a second is speculative generality. Inline it unless an ADR names the imminent second implementation. Apply the same lens to "provider"/"strategy"/"factory" seams with a single option. The sharper Go discriminator is placement, not count: an interface defined at the consumer that needs it (the package that calls it, with the production type plus a test double as its implementations) is idiomatic and not a finding; an interface declared next to its sole production type and returned by that type's constructor, or grouped in a dedicated `interfaces`/`ports` package, is the speculative shape worth flagging. "Accept interfaces, return structs."
 
 ### 4. Distributed-monolith state scan
 
