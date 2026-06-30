@@ -1,6 +1,6 @@
 # 0010. Stateless server: no in-process state survives a request
 
-- Status: Accepted
+- Status: Accepted; amended by the `push-command-channel` change (names the agent control-connection gateway as the one sanctioned stateful tier)
 - Date: 2026-05-31
 - Deciders: getvictor
 
@@ -19,6 +19,17 @@ The server holds no in-process state that survives a request lifetime and that a
 - **Short-lived per-replica performance caches are permitted only when losing them on restart is harmless**: a read-through cache that re-populates from MySQL, not a write buffer that is the only copy of something. Such a cache must be documented as "per-replica perf cache, safe to lose" at its definition.
 
 A few per-replica behaviours are accepted and documented rather than centralised in v0.1.0: the per-IP rate limiter counts per replica (an attacker gets N times the budget behind N replicas), and the async audit-write queue can drop its in-memory backlog on crash. Those are tracked in the operations docs and the `server-availability` arc; they are bounded, non-correctness-critical exceptions, not a licence for new in-process authority.
+
+### Amendment (2026-06-29): the agent control-connection gateway is a sanctioned stateful tier
+
+The `push-command-channel` change replaces the agent's command short-poll with a persistent push connection (the scale-to-100k plan's control channel, `ai/scale-100k/plan.md` section 3.6). The server-side gateway that holds those connections is the first deliberate, named exception to this ADR. It is sanctioned under the following bounds:
+
+- **Its only in-process state is per connection: the live socket (keyed by host), the connection's authentication metadata (the token epoch and expiry needed to re-check it against the revocation snapshot without a database lookup), and the set of in-flight command identifiers.** Nothing else.
+- **Nothing durable is persisted in the gateway.** All command state (the queue, statuses, results) stays in MySQL, exactly as before; the gateway is a second transport in front of the unchanged command service, not a new authority for command state.
+- **Losing the gateway is harmless to correctness.** A gateway or connection loss forces the affected agents to reconnect and, meanwhile, to fall back to the retained short-poll command path. No queued command is lost, because no command state ever lived only in the gateway's memory. The fallback floor is what keeps this exception non-correctness-critical.
+- **The gateway does not reintroduce session affinity.** A host's connection is its own affinity to one replica for the connection's lifetime; the load balancer needs no stickiness, and any replica can serve any host on reconnect. The gateway holds at most one connection per host: a reconnect closes any prior connection for that host before the new one is registered.
+
+This carve-out is specific to the control gateway. It is not a precedent for holding other cross-request state in process: the reviewer guidance below still rejects an undocumented in-memory store of shared state. The carve-out is mirrored as a modification to the "holds no in-process state that survives a request lifetime" requirement in the `server-availability` spec. The later distributed-scale form of this tier (a separate gateway process plus a routing backplane) is out of scope here; it will extend this amendment when it lands and SHALL preserve the same bounded-state constraints (nothing durable persisted, loss harmless, no session affinity), so scaling out never silently relaxes the carve-out.
 
 ## Consequences
 
