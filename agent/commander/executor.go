@@ -34,10 +34,13 @@ const statusExecuting = "executing"
 // commandledger.Store; both transports share one instance so a command executed on either path, in this process run or a prior one,
 // is not re-executed. A nil Ledger disables dedup (tests, and a degraded path if the ledger cannot be opened).
 type Ledger interface {
-	// Lookup returns the recorded status and result for a command id; seen is false if the id is unknown.
-	Lookup(ctx context.Context, id int64) (status string, result json.RawMessage, seen bool, err error)
+	// Claim atomically records a write-ahead claim (claimStatus) for a command id if no row exists. won=true means this caller recorded
+	// the claim and must run the side effect; won=false returns the existing status/result and the caller must NOT run the side effect.
+	Claim(ctx context.Context, id int64, claimStatus string) (won bool, status string, result json.RawMessage, err error)
 	// Mark upserts the status (and result) for a command id.
 	Mark(ctx context.Context, id int64, status string, result json.RawMessage) error
+	// Delete removes a command's row, used to roll back a write-ahead claim when the side effect was not started.
+	Delete(ctx context.Context, id int64) error
 }
 
 // invalidPayloadPrefix is the reason prefix every handler emits when json.Unmarshal of cmd.Payload fails. Centralised so the wire shape
@@ -72,59 +75,83 @@ func NewExecutor(sender ApplicationControlSender, ledger Ledger, logger *slog.Lo
 // Execute drives one command through the acknowledged-then-completed-or-failed lifecycle, deduplicated by command identity via the
 // shared Ledger so the side effect runs at most once across transports and across restarts (issue #558):
 //
-//   - If the ledger already has a terminal outcome for the command (executed earlier, on either transport or a prior process run), it
-//     re-acks and replays that outcome WITHOUT re-running the side effect, so a command whose outcome report was lost still transitions
-//     out of pending rather than being re-executed (re-killing a possibly-reused PID).
-//   - If the ledger has a write-ahead "executing" claim with no terminal outcome, a prior attempt was interrupted (a crash between the
-//     side effect and recording its result). The side effect is NOT re-run; the command is terminalized as failed so the server stops
-//     re-delivering it and an operator can re-issue against the current process.
-//   - Otherwise it acks (skipping the side effect and leaving the command eligible for re-dispatch if the ack fails), records the
-//     write-ahead claim, runs the side effect, records the terminal outcome, then reports it.
+//   - It atomically claims the command. If the claim is LOST (a row already exists), the command was already handled: a recorded
+//     terminal outcome is re-acked and replayed without re-running the side effect, and a bare write-ahead claim left by an interrupted
+//     prior attempt is terminalized as failed rather than re-run (so a since-reused PID is never re-signalled).
+//   - If the claim is WON, it acks, runs the side effect, records the terminal outcome, then reports it. If the ack fails the side
+//     effect is skipped and the claim is rolled back, leaving the command eligible for a fresh claim on re-dispatch.
+//   - If the claim cannot be recorded (ledger error), the side effect is NOT run, preserving at-most-once: the command is left pending
+//     for re-dispatch once the ledger recovers.
+//
+// A nil Ledger disables dedup (tests / a degraded path): it acks, runs, and reports with no claim.
 func (e *Executor) Execute(ctx context.Context, cmd Command, report ReportFunc) {
-	if e.replayIfSeen(ctx, cmd, report) {
+	if e.ledger != nil {
+		won, status, result, err := e.ledger.Claim(ctx, cmd.ID, statusExecuting)
+		if err != nil {
+			// Without a durable claim we cannot guarantee at-most-once, so do NOT run a non-idempotent side effect. Leave the command
+			// pending (no report) so a later re-dispatch retries the claim once the ledger recovers.
+			e.logger.ErrorContext(ctx, "command ledger claim", "cmd_id", cmd.ID, "err", err)
+			return
+		}
+		if !won {
+			e.replaySeen(ctx, cmd, report, status, result)
+			return
+		}
+	}
+	e.executeNew(ctx, cmd, report)
+}
+
+// replaySeen handles a command the ledger already records: re-ack and replay a recorded terminal outcome, or terminalize a bare
+// write-ahead claim left by an interrupted prior attempt. The side effect is never run here.
+func (e *Executor) replaySeen(ctx context.Context, cmd Command, report ReportFunc, status string, result json.RawMessage) {
+	e.reportOrLog(ctx, cmd.ID, report, StatusAcked, nil) // re-ack drives the server out of pending if the earlier ack was lost.
+	if status == StatusCompleted || status == StatusFailed {
+		e.reportOrLog(ctx, cmd.ID, report, status, result)
 		return
 	}
-	if err := report(ctx, StatusAcked, nil); err != nil {
-		e.logger.ErrorContext(ctx, "commander ack", "cmd_id", cmd.ID, "err", err)
-		return // ack did not reach the server: leave the command eligible for re-dispatch, with no ledger claim recorded.
-	}
-	e.mark(ctx, cmd.ID, statusExecuting, nil) // write-ahead: claim before the side effect so a crash mid-execution is not re-run.
-	status, result := e.run(ctx, cmd)
-	e.mark(ctx, cmd.ID, status, result)
-	if err := report(ctx, status, result); err != nil {
-		e.logger.ErrorContext(ctx, "commander report outcome", "cmd_id", cmd.ID, "status", status, "err", err)
-	}
-}
-
-// replayIfSeen consults the ledger; it returns true when the command was already seen and was handled here (replayed terminal outcome,
-// or terminalized as failed for an interrupted prior attempt) so Execute must not run the side effect.
-func (e *Executor) replayIfSeen(ctx context.Context, cmd Command, report ReportFunc) bool {
-	if e.ledger == nil {
-		return false
-	}
-	status, result, seen, err := e.ledger.Lookup(ctx, cmd.ID)
-	if err != nil {
-		// A ledger read error must not wedge command delivery; log and fall through to execute (dedup degraded for this command).
-		e.logger.ErrorContext(ctx, "command ledger lookup", "cmd_id", cmd.ID, "err", err)
-		return false
-	}
-	if !seen {
-		return false
-	}
-	_ = report(ctx, StatusAcked, nil) // re-ack: drives the server out of pending if the earlier ack was lost; a dup ack is benign.
-	if status == StatusCompleted || status == StatusFailed {
-		_ = report(ctx, status, result) // replay the recorded terminal outcome; no side effect.
-		return true
-	}
-	// "executing" with no terminal outcome: a prior attempt was interrupted. Do not re-run a non-idempotent side effect.
+	// A bare "executing" claim with no terminal outcome means a prior attempt was interrupted (a crash between the side effect and
+	// recording its result). The no-concurrency invariant (the poll is suspended while the control stream is connected, and each
+	// transport processes commands sequentially) rules out a live concurrent claim, so this is always a crashed prior attempt:
+	// terminalize it so the server stops re-delivering, and never re-run the side effect.
 	res := marshalResult("not retried: a prior execution attempt did not complete")
 	e.mark(ctx, cmd.ID, StatusFailed, res)
-	_ = report(ctx, StatusFailed, res)
-	return true
+	e.reportOrLog(ctx, cmd.ID, report, StatusFailed, res)
 }
 
-// mark records a status in the ledger, logging (not propagating) a failure: a ledger write error degrades dedup for one command but
-// must not stop the command from being executed and reported.
+// executeNew runs a freshly-claimed command (or, with no ledger, any command): ack, side effect, record terminal, report. If the ack
+// fails the side effect is skipped and any claim is rolled back so a re-dispatch re-claims and runs it.
+func (e *Executor) executeNew(ctx context.Context, cmd Command, report ReportFunc) {
+	if err := report(ctx, StatusAcked, nil); err != nil {
+		e.logger.ErrorContext(ctx, "commander ack", "cmd_id", cmd.ID, "err", err)
+		e.rollbackClaim(ctx, cmd.ID)
+		return
+	}
+	status, result := e.run(ctx, cmd)
+	e.mark(ctx, cmd.ID, status, result)
+	e.reportOrLog(ctx, cmd.ID, report, status, result)
+}
+
+// rollbackClaim removes a write-ahead claim whose side effect never started (the ack failed), so a re-dispatch re-claims rather than
+// finding a stranded "executing" row and terminalizing a never-run command. No-op without a ledger.
+func (e *Executor) rollbackClaim(ctx context.Context, id int64) {
+	if e.ledger == nil {
+		return
+	}
+	if err := e.ledger.Delete(ctx, id); err != nil {
+		e.logger.ErrorContext(ctx, "command ledger rollback", "cmd_id", id, "err", err)
+	}
+}
+
+// reportOrLog reports a status transition and logs (does not propagate) a report error, so a dropped ack/outcome on the poll path is
+// visible rather than silent. The control client additionally captures the error out-of-band in its send callback to reconnect.
+func (e *Executor) reportOrLog(ctx context.Context, id int64, report ReportFunc, status string, result json.RawMessage) {
+	if err := report(ctx, status, result); err != nil {
+		e.logger.ErrorContext(ctx, "commander report", "cmd_id", id, "status", status, "err", err)
+	}
+}
+
+// mark records a status in the ledger, logging (not propagating) a failure: a ledger write error here degrades dedup for one command
+// but must not stop the outcome from being reported.
 func (e *Executor) mark(ctx context.Context, id int64, status string, result json.RawMessage) {
 	if e.ledger == nil {
 		return

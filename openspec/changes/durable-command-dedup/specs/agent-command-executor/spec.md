@@ -17,3 +17,10 @@ The agent SHALL key command execution on a durable, per-agent ledger so a comman
 - **WHEN** the agent restarts and the same command id is delivered again
 - **THEN** the recorded outcome is still available from the durable ledger
 - **AND** the agent re-reports it without re-running the side effect
+
+#### Scenario: Concurrent delivery of the same command runs the side effect once
+
+- **GIVEN** the same command delivered on both transports at the same time
+- **WHEN** the agent attempts to execute it from both
+- **THEN** the write-ahead claim is recorded atomically, so exactly one execution wins the claim
+- **AND** the side effect runs at most once; the other execution does not re-run it

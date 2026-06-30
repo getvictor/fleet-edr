@@ -54,6 +54,38 @@ func TestStore(t *testing.T) {
 		assert.JSONEq(t, `{"ok":true}`, string(result))
 	})
 
+	t.Run("claim wins for a fresh id and loses for an existing one", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		won, status, _, err := s.Claim(t.Context(), 20, "executing")
+		require.NoError(t, err)
+		assert.True(t, won, "the first claim wins")
+		assert.Equal(t, "executing", status)
+		won2, status2, _, err := s.Claim(t.Context(), 20, "executing")
+		require.NoError(t, err)
+		assert.False(t, won2, "a second claim on the same id loses")
+		assert.Equal(t, "executing", status2)
+		// After a terminal mark, a claim still loses and returns the recorded terminal outcome (the replay path).
+		require.NoError(t, s.Mark(t.Context(), 20, "completed", json.RawMessage(`{"killed_pid":7}`)))
+		won3, status3, result3, err := s.Claim(t.Context(), 20, "executing")
+		require.NoError(t, err)
+		assert.False(t, won3)
+		assert.Equal(t, "completed", status3)
+		assert.JSONEq(t, `{"killed_pid":7}`, string(result3))
+	})
+
+	t.Run("delete rolls back a claim so the id can be re-claimed", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		won, _, _, err := s.Claim(t.Context(), 21, "executing")
+		require.NoError(t, err)
+		require.True(t, won)
+		require.NoError(t, s.Delete(t.Context(), 21))
+		won2, _, _, err := s.Claim(t.Context(), 21, "executing")
+		require.NoError(t, err)
+		assert.True(t, won2, "after delete the id is claimable again")
+	})
+
 	t.Run("prune deletes only rows older than maxAge", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)

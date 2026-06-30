@@ -515,8 +515,10 @@ func pruneLoop(ctx context.Context, q *queue.Queue, ledger *commandledger.Store,
 			case pruned > 0:
 				logger.InfoContext(ctx, "pruned old events", "count", pruned)
 			}
-			// Bound the command ledger too: a command-outcome row older than the prune age is far past any plausible re-delivery.
-			if n, err := ledger.Prune(ctx, pruneAge); err != nil {
+			// Bound the command ledger on its own, longer retention: a command stays eligible for re-delivery until it leaves the
+			// server's pending state, so its dedup row must outlive any realistic offline-then-reconnect window (not the 24h event age),
+			// or a re-delivered kill_process could re-execute.
+			if n, err := ledger.Prune(ctx, config.DefaultCommandLedgerRetention); err != nil {
 				logger.WarnContext(ctx, "prune command ledger", "err", err)
 			} else if n > 0 {
 				logger.InfoContext(ctx, "pruned old command outcomes", "count", n)

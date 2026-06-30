@@ -76,6 +76,34 @@ func (s *Store) Lookup(ctx context.Context, id int64) (status string, result jso
 	return status, json.RawMessage(res), true, nil
 }
 
+// Claim atomically records a write-ahead claim (claimStatus, e.g. "executing") for a command id if no row exists yet. It returns
+// won=true when THIS call recorded the claim, so the caller owns execution and must run the side effect. If a row already exists it
+// returns won=false with the existing status/result, so the caller must NOT run the side effect: it replays a recorded terminal
+// outcome, or terminalizes a prior interrupted claim. The INSERT...ON CONFLICT DO NOTHING is a single atomic statement, so two
+// concurrent callers can never both win the claim (and therefore never both run a non-idempotent side effect).
+func (s *Store) Claim(ctx context.Context, id int64, claimStatus string) (won bool, status string, result json.RawMessage, err error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO command_outcomes (command_id, status, result, updated_at) VALUES (?, ?, NULL, ?) ON CONFLICT(command_id) DO NOTHING`,
+		id, claimStatus, time.Now().Unix())
+	if err != nil {
+		return false, "", nil, fmt.Errorf("command ledger claim: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return true, claimStatus, nil, nil
+	}
+	status, result, _, err = s.Lookup(ctx, id)
+	return false, status, result, err
+}
+
+// Delete removes a command's ledger row. Used to roll back a write-ahead claim when the side effect was not started (the acknowledgement
+// report failed), so the command stays eligible for a fresh claim on re-delivery instead of being stranded as a never-run "executing".
+func (s *Store) Delete(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM command_outcomes WHERE command_id = ?`, id); err != nil {
+		return fmt.Errorf("command ledger delete: %w", err)
+	}
+	return nil
+}
+
 // Mark upserts the status (and result) for a command id, stamping updated_at to now. result may be nil.
 func (s *Store) Mark(ctx context.Context, id int64, status string, result json.RawMessage) error {
 	_, err := s.db.ExecContext(ctx,
