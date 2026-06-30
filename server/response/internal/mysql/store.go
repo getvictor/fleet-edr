@@ -20,6 +20,10 @@ import (
 // max_allowed_packet even for a large set_application_control snapshot, while collapsing a 500-host fan-out into two round trips.
 const insertBatchChunkSize = 256
 
+// listPendingChunkSize bounds the host-id IN(...) set per watch query, so a gateway holding many connections does not emit one
+// statement with thousands of placeholders. Each chunk still index-seeks on idx_commands_host_status.
+const listPendingChunkSize = 500
+
 // Store owns the commands table. All public methods take the row's fields directly (rather than a pre-constructed struct) so callers
 // don't need to import a row type.
 type Store struct {
@@ -156,19 +160,24 @@ func (s *Store) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]ap
 	if len(hostIDs) == 0 {
 		return []api.Command{}, nil
 	}
-	query, args, err := sqlx.In(
-		`SELECT id, host_id, command_type, payload, status, created_at, acked_at, completed_at, result
-			FROM commands WHERE status = 'pending' AND host_id IN (?) ORDER BY created_at ASC`, hostIDs)
-	if err != nil {
-		return nil, fmt.Errorf("expand pending host ids: %w", err)
-	}
-	var rows []commandRow
-	if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
-		return nil, fmt.Errorf("list pending commands for hosts: %w", err)
-	}
-	out := make([]api.Command, len(rows))
-	for i := range rows {
-		out[i] = rows[i].toAPI()
+	// Chunk the host-id set so a gateway holding many connections does not build one giant IN(...) statement (placeholder blow-up and
+	// MySQL packet-size pressure). Same defense as InsertBatch's chunking; each chunk still index-seeks on (host_id, status).
+	var out []api.Command
+	for start := 0; start < len(hostIDs); start += listPendingChunkSize {
+		end := min(start+listPendingChunkSize, len(hostIDs))
+		query, args, err := sqlx.In(
+			`SELECT id, host_id, command_type, payload, status, created_at, acked_at, completed_at, result
+				FROM commands WHERE status = 'pending' AND host_id IN (?) ORDER BY created_at ASC`, hostIDs[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("expand pending host ids: %w", err)
+		}
+		var rows []commandRow
+		if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
+			return nil, fmt.Errorf("list pending commands for hosts: %w", err)
+		}
+		for i := range rows {
+			out = append(out, rows[i].toAPI())
+		}
 	}
 	return out, nil
 }

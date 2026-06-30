@@ -30,19 +30,6 @@ type TLSOptions struct {
 // subsequent reload failures (so a bad cert on disk doesn't crash the daemon
 // mid-operation) and keeps the previous cert live.
 func ConfigureTLS(ctx context.Context, srv *http.Server, opts TLSOptions) error {
-	cfg, err := BuildTLSConfig(ctx, opts)
-	if err != nil {
-		return err
-	}
-	srv.TLSConfig = cfg
-	return nil
-}
-
-// BuildTLSConfig loads the cert + key and returns a TLS 1.3 config with a SIGHUP-driven atomic cert reload, the same config
-// ConfigureTLS installs on the HTTP server. Exposed so a second daemon listener (the agent control-channel gRPC gateway) can reuse the
-// identical TLS floor and cert source rather than loading the cert a second way. The SIGHUP watcher goroutine exits when ctx is
-// cancelled; calling this twice (HTTP + gateway) installs two watchers on the same files, both reloading from disk, which is benign.
-func BuildTLSConfig(ctx context.Context, opts TLSOptions) (*tls.Config, error) {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -50,20 +37,20 @@ func BuildTLSConfig(ctx context.Context, opts TLSOptions) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(opts.CertFile, opts.KeyFile)
 	if err != nil {
 		logger.ErrorContext(ctx, "load tls cert", "err", err)
-		return nil, err
+		return err
 	}
 	certHolder := &atomic.Pointer[tls.Certificate]{}
 	certHolder.Store(&cert)
 
 	// TLS 1.3 floor, unconditionally. TLS 1.3 negotiates its own fixed cipher list, so no CipherSuites override is needed.
-	cfg := &tls.Config{
+	srv.TLSConfig = &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return certHolder.Load(), nil
 		},
 	}
 	go watchSIGHUPForCertReload(ctx, opts.CertFile, opts.KeyFile, certHolder, logger)
-	return cfg, nil
+	return nil
 }
 
 // watchSIGHUPForCertReload reloads the cert + key from disk on every SIGHUP and

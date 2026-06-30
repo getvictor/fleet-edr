@@ -221,7 +221,7 @@ func run() error {
 	if err := configureTLS(ctx, logger, srv, cfg); err != nil {
 		return err
 	}
-	if err := startControlGateway(ctx, logger, cfg, responseCtx, endpointCtx, detectionCtx); err != nil {
+	if err := startControlGateway(ctx, logger, cfg, srv.TLSConfig, responseCtx, endpointCtx, detectionCtx); err != nil {
 		return err
 	}
 	return httpserver.RunAndShutdown(ctx, srv, logger, drain, cfg.ShutdownDrain)
@@ -653,6 +653,7 @@ func startControlGateway(
 	ctx context.Context,
 	logger *slog.Logger,
 	cfg *config.Config,
+	tlsConfig *tls.Config,
 	responseCtx *responsebootstrap.Response,
 	endpointCtx *endpointbootstrap.Endpoint,
 	detectionCtx *detectionbootstrap.Detection,
@@ -660,18 +661,10 @@ func startControlGateway(
 	if cfg.ControlAddr == "" {
 		return nil
 	}
-	var tlsConfig *tls.Config
-	if !cfg.TLSTerminatedByProxy {
-		var err error
-		tlsConfig, err = httpserver.BuildTLSConfig(ctx, httpserver.TLSOptions{
-			CertFile: cfg.TLSCertFile,
-			KeyFile:  cfg.TLSKeyFile,
-			Logger:   logger,
-		})
-		if err != nil {
-			return err
-		}
-	}
+	// Reuse the HTTP server's already-built TLS config (srv.TLSConfig) rather than loading the cert a second time: one cert holder and
+	// one SIGHUP reload watcher keeps the gateway and the HTTP listener on the same certificate through a rotation, preserving the
+	// agent's single pinned identity. It is nil in TLS-terminated-by-proxy mode, which serves the gateway plaintext behind the proxy,
+	// matching the HTTP posture.
 	gw := responseCtx.BuildControlGateway(endpointCtx.Service(), detectionCtx.Service().RecordHostSeen, tlsConfig)
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", cfg.ControlAddr)

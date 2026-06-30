@@ -76,7 +76,10 @@ func (c *conn) push(frame *control.ServerFrame) bool {
 // registry maps host id to its single live connection. At most one connection per host: registering a second connection for a host
 // evicts the first (returned to the caller to close), preventing a leaked stream and duplicate delivery on reconnect.
 type registry struct {
-	mu    sync.Mutex
+	mu sync.Mutex
+	// conns is per-replica perf cache, safe to lose: it holds only live sockets for hosts connected to THIS replica. Losing it (replica
+	// restart, gateway stop) just forces those agents to reconnect and fall back to polling; command state lives in MySQL, never here
+	// (ADR-0010 control-gateway carve-out).
 	conns map[string]*conn
 }
 

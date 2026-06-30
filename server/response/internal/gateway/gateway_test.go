@@ -240,6 +240,22 @@ func TestGateway(t *testing.T) {
 		assert.Equal(t, int64(9), frame.GetCommand().GetId())
 	})
 
+	t.Run("client disconnect deregisters the connection", func(t *testing.T) {
+		t.Parallel()
+		src := newFakeSource()
+		ver := newFakeVerifier()
+		ver.add("tok-a", "host-a")
+		g, dial := newTestGateway(t, src, ver)
+
+		streamCtx, streamCancel := context.WithCancel(connectCtx("tok-a"))
+		_, err := dial(streamCtx, "tok-a").Connect(streamCtx)
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return g.reg.len() == 1 }, 2*time.Second, 10*time.Millisecond)
+
+		streamCancel() // client goes away; the server's Recv ends and the connection is removed from the registry
+		require.Eventually(t, func() bool { return g.reg.len() == 0 }, 2*time.Second, 10*time.Millisecond)
+	})
+
 	t.Run("revoked token tears down the connection", func(t *testing.T) {
 		t.Parallel()
 		src := newFakeSource()

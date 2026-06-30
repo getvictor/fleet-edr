@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -86,7 +87,9 @@ type Gateway struct {
 	heartbeat Heartbeat
 	logger    *slog.Logger
 
-	reg      *registry
+	reg *registry
+	// notifyCh is the fast-path signal queue. Per-replica perf cache, safe to lose: a dropped or lost signal only defers delivery to
+	// the next 1s watch tick, and command state lives in MySQL (ADR-0010 control-gateway carve-out).
 	notifyCh chan string
 	grpc     *grpc.Server
 
@@ -137,8 +140,14 @@ func New(deps Deps) *Gateway {
 func (g *Gateway) GRPCServer() *grpc.Server { return g.grpc }
 
 // Serve accepts connections on lis until Stop is called. cmd/main supplies a TCP listener on EDR_CONTROL_ADDR; the gRPC server applies
-// the TLS credentials from Deps. Returns nil on a graceful Stop.
-func (g *Gateway) Serve(lis net.Listener) error { return g.grpc.Serve(lis) }
+// the TLS credentials from Deps. grpc.ErrServerStopped is the normal shutdown signal, not an error, so it is mapped to nil; the caller
+// only logs genuine serve failures.
+func (g *Gateway) Serve(lis net.Listener) error {
+	if err := g.grpc.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+		return err
+	}
+	return nil
+}
 
 // Stop drains in-flight RPCs and closes all connections, bounded by stopGrace. Long-lived control streams never end on their own, so a
 // plain GracefulStop would block shutdown indefinitely; after the grace window we force them closed. Either way agents reconnect (and
@@ -253,26 +262,40 @@ func (g *Gateway) Connect(stream control.ControlChannel_ConnectServer) error {
 }
 
 // writeLoop is the connection's single sender (gRPC allows one concurrent Send). It drains the send queue until the context ends or a
-// Send fails (peer gone).
+// Send fails.
 func (c *conn) writeLoop(ctx context.Context, stream control.ControlChannel_ConnectServer, logger *slog.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case frame := <-c.send:
+			// select may pick this case even when ctx is already done (e.g. the connection was evicted on reconnect with a frame still
+			// buffered); re-check so an evicted/closed connection never delivers a buffered command, which would duplicate delivery
+			// across the old and new streams for a non-idempotent command like kill_process.
+			if ctx.Err() != nil {
+				return
+			}
 			if err := stream.Send(frame); err != nil {
+				// A dead outbound means this connection can no longer deliver commands. Tear the whole connection down (not just this
+				// goroutine) so it is unregistered and the agent reconnects, rather than lingering "online" with delivery silently broken.
 				logger.DebugContext(ctx, "control gateway send", attrkeys.HostID, c.hostID, "err", err)
+				c.close()
 				return
 			}
 		}
 	}
 }
 
-// recvLoop reads outcome frames and applies them through the unchanged UpdateStatus lifecycle. It returns when the stream ends.
+// recvLoop reads outcome frames and applies them through the unchanged UpdateStatus lifecycle. It returns when the stream ends. A
+// client half-close surfaces as io.EOF, which is a normal end-of-stream: returning it from the handler would be converted to a non-OK
+// gRPC status, so we map it to nil and let only real errors propagate.
 func (g *Gateway) recvLoop(ctx context.Context, stream control.ControlChannel_ConnectServer, c *conn) error {
 	for {
 		frame, err := stream.Recv()
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
 			return err
 		}
 		oc := frame.GetOutcome()
@@ -320,6 +343,9 @@ func (g *Gateway) maintain(ctx context.Context, c *conn) {
 			g.bumpLastSeen(ctx, c.hostID)
 		case <-revcheck.C:
 			if _, err := g.verifier.VerifyToken(ctx, c.token); err != nil {
+				if ctx.Err() != nil {
+					return // connection already closing (shutdown/disconnect): the verify error is just the cancelled context, not a revocation
+				}
 				g.logger.InfoContext(ctx, "control gateway closing connection: token no longer valid",
 					attrkeys.HostID, c.hostID, "err", err)
 				c.close()
@@ -360,7 +386,9 @@ func (g *Gateway) authInterceptor(srv any, ss grpc.ServerStream, _ *grpc.StreamS
 	return handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
 }
 
-// bearerFromContext extracts the token from the gRPC "authorization" metadata, accepting a case-insensitive "Bearer" scheme.
+// bearerFromContext extracts the token from the gRPC "authorization" metadata, accepting a case-insensitive "Bearer" scheme. It splits
+// on runs of whitespace (strings.Fields) rather than a single space so a header with extra spaces or a tab between scheme and token is
+// still parsed; the token itself never contains whitespace (it is base64url).
 func bearerFromContext(ctx context.Context) (string, bool) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -370,11 +398,11 @@ func bearerFromContext(ctx context.Context) (string, bool) {
 	if len(vals) == 0 {
 		return "", false
 	}
-	scheme, tok, found := strings.Cut(vals[0], " ")
-	if !found || !strings.EqualFold(scheme, "bearer") || tok == "" {
+	parts := strings.Fields(vals[0])
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
 		return "", false
 	}
-	return tok, true
+	return parts[1], true
 }
 
 // outcomeResult normalizes an empty result to nil so the JSON column stays NULL rather than an empty blob.
