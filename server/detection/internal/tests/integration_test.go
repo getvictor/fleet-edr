@@ -307,6 +307,13 @@ type detectionOpts struct {
 	userExists    bootstrap.UserExists
 	processTTL    time.Duration
 	retentionDays int
+	// metrics and ruleProvider, when set, are wired (SetMetrics / LoadActive) BEFORE the Run loops are launched. metrics MUST be wired
+	// before launch: the pipeline runners read the recorder on their immediate first sweep at Run start, so setting it after newDetection
+	// has launched Run races them (issue #561). ruleProvider is wired before launch only as a convenience; LoadActive is also safe to
+	// call after newDetection as long as it precedes any events (the engine reads rules only while evaluating a batch), which is what
+	// most ModeFull tests do.
+	metrics      api.MetricsRecorder
+	ruleProvider interface{ ActiveRules() []rulesapi.Rule }
 }
 
 // newDetection builds a fresh Detection bootstrap against an isolated
@@ -347,6 +354,16 @@ func newDetectionWithArchive(t *testing.T, opts detectionOpts) (*bootstrap.Detec
 	d, err := bootstrap.New(deps)
 	require.NoError(t, err)
 	require.NoError(t, d.ApplySchema(t.Context()))
+
+	// Wire construction-phase config BEFORE launching the Run loops. This is REQUIRED for metrics (the pipeline runners read the recorder
+	// on their immediate first sweep at Run start, so a later SetMetrics races them: issue #561) and a convenience for rules (LoadActive
+	// is also safe after newDetection as long as it precedes any events). cmd/main wires both before `go runDetection`.
+	if opts.metrics != nil {
+		d.SetMetrics(opts.metrics)
+	}
+	if opts.ruleProvider != nil {
+		d.LoadActive(opts.ruleProvider)
+	}
 
 	if opts.mode == bootstrap.ModeFull {
 		runCtx, cancel := context.WithCancel(context.Background())
@@ -1722,12 +1739,15 @@ func TestBootstrap_SchemaIdempotent(t *testing.T) {
 
 func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
 	t.Parallel()
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
-	ctx := t.Context()
-
+	// Wire the recorder + rules via opts so the helper installs them BEFORE launching Run, matching production order. Calling
+	// d.SetMetrics after newDetection (which has already started the loops) would race the pipeline runners' first sweep (issue #561).
 	rec := &recordingMetrics{}
-	d.SetMetrics(rec)
-	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "metrics"}}})
+	d := newDetection(t, detectionOpts{
+		mode:         bootstrap.ModeFull,
+		metrics:      rec,
+		ruleProvider: stubProvider{rules: []rulesapi.Rule{&stubRule{id: "metrics"}}},
+	})
+	ctx := t.Context()
 
 	mustInsertProcess(t, ctx, d, "host-a", 100)
 	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
