@@ -151,7 +151,11 @@ func (c *Client) runStream(ctx context.Context) (bool, error) {
 			return true, err
 		}
 		if cmd := frame.GetCommand(); cmd != nil {
-			c.handleCommand(ctx, stream, cmd)
+			if err := c.handleCommand(ctx, stream, cmd); err != nil {
+				// A send failure means the stream is one-way broken (we can still Recv but can no longer report outcomes). Tear it
+				// down and reconnect rather than sit "connected" while silently dropping every outcome.
+				return true, err
+			}
 		}
 	}
 }
@@ -159,15 +163,18 @@ func (c *Client) runStream(ctx context.Context) (bool, error) {
 // handleCommand executes a pushed command and reports its outcome over the stream. Delivery is at-least-once: if the command has
 // already been executed (its outcome is cached), the agent re-reports the recorded outcome instead of running the side effect again, so
 // a re-delivery after a lost report still drives the command to terminal and a non-idempotent command (kill_process) is never re-run.
-func (c *Client) handleCommand(ctx context.Context, stream control.ControlChannel_ConnectClient, pushed *control.Command) {
+// A non-nil return is a stream-send failure: the caller must tear the stream down and reconnect, since outcomes can no longer be
+// reported on it. A dropped or misrouted command (host mismatch) is not a send failure and returns nil.
+func (c *Client) handleCommand(ctx context.Context, stream control.ControlChannel_ConnectClient, pushed *control.Command) error {
 	// Defense in depth: the gateway routes a host's commands to that host's stream, but the agent is the last boundary before a
 	// privileged side effect (kill_process). If a command's host_id doesn't match this agent's, drop it without executing and
 	// without reporting an outcome: any outcome we sent would carry this command's id, which belongs to another host, and could
-	// flip that host's command state on the server. A mismatch means a server-side routing bug, so log it loudly.
+	// flip that host's command state on the server. A mismatch means a server-side routing bug, so log it loudly. It is not a stream
+	// fault, so keep the stream up (return nil).
 	if c.cfg.HostID != "" && pushed.GetHostId() != "" && pushed.GetHostId() != c.cfg.HostID {
 		c.logger.ErrorContext(ctx, "control channel: dropping command addressed to a different host",
 			"cmd_id", pushed.GetId(), "command_type", pushed.GetCommandType())
-		return
+		return nil
 	}
 	cmd := commander.Command{
 		ID:          pushed.GetId(),
@@ -178,16 +185,24 @@ func (c *Client) handleCommand(ctx context.Context, stream control.ControlChanne
 	if prior, ok := c.outcomes.get(cmd.ID); ok {
 		// Re-delivery of an already-executed command: replay ack + the recorded terminal outcome (no side effect). The ack drives the
 		// server out of pending if its earlier ack was lost; an already-acked command makes the server reject the duplicate ack benignly.
-		_ = c.send(stream, cmd.ID, commander.StatusAcked, nil)
-		_ = c.send(stream, cmd.ID, prior.status, prior.result)
-		return
+		if err := c.send(stream, cmd.ID, commander.StatusAcked, nil); err != nil {
+			return err
+		}
+		return c.send(stream, cmd.ID, prior.status, prior.result)
 	}
+	// sendErr captures a stream-send failure from inside the executor callback (the executor itself only logs report errors). The
+	// executor stops on the first report error (it skips the side effect if the ack send fails), so sendErr holds that failure;
+	// handleCommand returns it so runStream reconnects. This also surfaces send failures on the terminal "failed" reports, whose
+	// errors the executor's validation paths otherwise discard.
+	var sendErr error
 	c.executor.Execute(ctx, cmd, func(_ context.Context, statusValue string, result json.RawMessage) error {
 		if statusValue == commander.StatusCompleted || statusValue == commander.StatusFailed {
 			c.outcomes.put(cmd.ID, cachedOutcome{status: statusValue, result: result})
 		}
-		return c.send(stream, cmd.ID, statusValue, result)
+		sendErr = c.send(stream, cmd.ID, statusValue, result)
+		return sendErr
 	})
+	return sendErr
 }
 
 func (c *Client) send(stream control.ControlChannel_ConnectClient, id int64, statusValue string, result json.RawMessage) error {
@@ -211,9 +226,11 @@ type cachedOutcome struct {
 }
 
 // outcomeCache is a bounded map of command id to terminal outcome with FIFO (insertion-order) eviction: a get does not change an
-// entry's position, so once the cache is full the oldest-inserted id is dropped first. Per-agent ephemeral cache, safe to lose on
-// restart (a restart's worst case is re-executing a command the server still has pending, which kill_process tolerates as a no-op "no
-// such process" and set_application_control tolerates as an idempotent snapshot re-apply).
+// entry's position, so once the cache is full the oldest-inserted id is dropped first. It is a per-agent in-memory cache, lost on
+// restart, so it dedupes re-deliveries only within a single agent process. It does NOT make a restart-safe guarantee: a still-pending
+// command re-delivered after a restart can be executed again. For set_application_control that is a harmless idempotent snapshot
+// re-apply, but kill_process targets a bare PID, and PIDs can be reused, so a re-execution after restart could in principle signal an
+// unrelated process. Restart-safe dedupe for non-idempotent commands is tracked separately (see issue #558).
 type outcomeCache struct {
 	mu    sync.Mutex
 	m     map[int64]cachedOutcome

@@ -2,6 +2,7 @@ package controlclient_test
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -288,4 +289,81 @@ func TestControlClientAuthFailOnConnect(t *testing.T) {
 
 	require.Eventually(t, func() bool { return authFails.Load() >= 1 }, 2*time.Second, 5*time.Millisecond)
 	assert.GreaterOrEqual(t, stub.calls(), 1)
+}
+
+// scriptedStream is a client bidi stream whose Send always fails (a one-way-broken stream) and whose Recv yields a queued command
+// then blocks until ctx ends. It exercises the runStream path that reconnects when handleCommand cannot report an outcome.
+type scriptedStream struct {
+	grpc.ClientStream
+	ctx     context.Context
+	mu      sync.Mutex
+	recvQ   []*control.ServerFrame
+	sendErr error
+}
+
+func (s *scriptedStream) Send(*control.AgentFrame) error { return s.sendErr }
+
+func (s *scriptedStream) Recv() (*control.ServerFrame, error) {
+	s.mu.Lock()
+	if len(s.recvQ) > 0 {
+		f := s.recvQ[0]
+		s.recvQ = s.recvQ[1:]
+		s.mu.Unlock()
+		return f, nil
+	}
+	s.mu.Unlock()
+	<-s.ctx.Done()
+	return nil, io.EOF
+}
+
+// scriptedClient hands out a failing-Send stream on the first connect (carrying one command) and inert streams afterwards, so a
+// reconnect is observable without spinning.
+type scriptedClient struct {
+	cmd      *control.Command
+	sendErr  error
+	mu       sync.Mutex
+	connects int
+}
+
+func (c *scriptedClient) Connect(ctx context.Context, _ ...grpc.CallOption) (grpc.BidiStreamingClient[control.AgentFrame, control.ServerFrame], error) {
+	c.mu.Lock()
+	c.connects++
+	first := c.connects == 1
+	c.mu.Unlock()
+	st := &scriptedStream{ctx: ctx}
+	if first {
+		st.recvQ = []*control.ServerFrame{{Frame: &control.ServerFrame_Command{Command: c.cmd}}}
+		st.sendErr = c.sendErr
+	}
+	return st, nil
+}
+
+func (c *scriptedClient) connectCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connects
+}
+
+func TestControlClientReconnectsOnSendFailure(t *testing.T) {
+	t.Parallel()
+	// The first stream delivers a command but every Send fails (one-way-broken stream). handleCommand must surface that error so
+	// runStream tears the stream down and reconnects, rather than sitting "connected" while silently dropping outcomes.
+	stub := &scriptedClient{
+		cmd:     &control.Command{Id: 21, HostId: "host-a", CommandType: "set_application_control", Payload: []byte(appControlPayload)},
+		sendErr: status.Error(codes.Unavailable, "broken send"),
+	}
+	client := controlclient.New(controlclient.Config{
+		Client:                   stub,
+		HostID:                   "host-a",
+		TokenFn:                  func() string { return "tok" },
+		ApplicationControlSender: &recordingSender{},
+		InitialBackoff:           5 * time.Millisecond,
+		MaxBackoff:               20 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go func() { _ = client.Run(ctx) }()
+
+	// A reconnect (connects >= 2) proves the send failure tore the stream down rather than wedging it.
+	require.Eventually(t, func() bool { return stub.connectCount() >= 2 }, 2*time.Second, 5*time.Millisecond)
 }

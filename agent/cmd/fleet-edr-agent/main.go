@@ -210,6 +210,9 @@ func run() error {
 	var streamConnected atomic.Bool
 	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, &streamConnected, logger)
 	if err := startControlClient(ctx, cfg, hostID, tokenProvider, esfDispatcher, &streamConnected, logger); err != nil {
+		// Cancel first so the goroutines started above (receiver loops, uploader, commander, coalescer) wind down before the
+		// deferred queue close runs; otherwise the LIFO defers would close the queue while those goroutines still write to it.
+		cancel()
 		return err
 	}
 	go pruneLoop(ctx, q, config.DefaultPruneAge, logger)
