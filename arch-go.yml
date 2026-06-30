@@ -73,6 +73,9 @@ dependenciesRules:
         - "**.identity.api"
         - "**.sqlhelpers"
         - "**.testdb"
+        # control is the shared gRPC wire contract for the agent control channel (a platform package like httpserver/sqlhelpers,
+        # generated from internal/control/control.proto). The response gateway implements its server side.
+        - "**.control"
 
   # detection context internals.
   - package: "**.detection.internal.**"

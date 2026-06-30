@@ -436,3 +436,23 @@ func withHostID(next http.Handler, hostID string) http.Handler {
 }
 
 func intStr(n int64) string { return strconv.FormatInt(n, 10) }
+
+// stubVerifier satisfies gateway.TokenVerifier for the BuildControlGateway wiring test.
+type stubVerifier struct{}
+
+func (stubVerifier) VerifyToken(context.Context, string) (string, error) { return "host-a", nil }
+
+// TestBuildControlGateway covers the response context's construction of the control-channel gateway and the fast-path notifier wiring.
+func TestBuildControlGateway(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+
+	gw := r.BuildControlGateway(stubVerifier{}, nil, nil)
+	require.NotNil(t, gw)
+	require.NotNil(t, gw.GRPCServer())
+
+	// After wiring, an insert drives the fast-path notifier without error (delivery itself needs a live connection, covered in the
+	// gateway package tests).
+	_, err := r.Service().Insert(t.Context(), "host-a", "kill_process", json.RawMessage(`{"pid":1}`))
+	require.NoError(t, err)
+}

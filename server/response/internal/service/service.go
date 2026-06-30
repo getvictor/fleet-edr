@@ -17,8 +17,16 @@ import (
 type Service struct {
 	store     *mysql.Store
 	heartbeat Heartbeat
-	logger    *slog.Logger
+	// notify is an optional per-replica fast-path hook the control gateway registers so a command queued on this replica reaches a
+	// locally-held connection immediately instead of waiting for the gateway watch tick. It is a callback, not stored state; nil leaves
+	// delivery to the gateway watch (and the agent poll fallback).
+	notify func(hostID string)
+	logger *slog.Logger
 }
+
+// SetNotifier registers the control-gateway fast-path callback. Called once at bootstrap, before serving, to break the
+// service-then-gateway construction cycle. Safe to leave unset: delivery then relies on the gateway's 1s watch and the poll fallback.
+func (s *Service) SetNotifier(notify func(hostID string)) { s.notify = notify }
 
 // New builds a Service. store must be non-nil; heartbeat may be nil (tests that don't care about the per-poll last-seen bump pass nil
 // and ListForHost skips the call).
@@ -56,7 +64,18 @@ func (s *Service) Insert(ctx context.Context, hostID, commandType string, payloa
 	if len(payload) == 0 {
 		return 0, fmt.Errorf("%w: payload is required", api.ErrInvalidInsertRequest)
 	}
-	return s.store.Insert(ctx, hostID, commandType, payload)
+	id, err := s.store.Insert(ctx, hostID, commandType, payload)
+	if err == nil {
+		s.fastNotify(hostID)
+	}
+	return id, err
+}
+
+// fastNotify signals the control gateway (if registered) that a host has freshly-queued work, for immediate push.
+func (s *Service) fastNotify(hostID string) {
+	if s.notify != nil {
+		s.notify(hostID)
+	}
 }
 
 // InsertBatch validates the shared commandType + payload once, then enqueues one command row per host via the store's chunked
@@ -78,7 +97,13 @@ func (s *Service) InsertBatch(ctx context.Context, hostIDs []string, commandType
 	if len(payload) == 0 {
 		return 0, fmt.Errorf("%w: payload is required", api.ErrInvalidInsertRequest)
 	}
-	return s.store.InsertBatch(ctx, hostIDs, commandType, payload)
+	n, err := s.store.InsertBatch(ctx, hostIDs, commandType, payload)
+	if err == nil {
+		for _, h := range hostIDs {
+			s.fastNotify(h)
+		}
+	}
+	return n, err
 }
 
 // Get returns a single command by id.
@@ -103,6 +128,13 @@ func (s *Service) ListForHost(ctx context.Context, hostID string, status api.Sta
 		cmds = []api.Command{}
 	}
 	return cmds, nil
+}
+
+// ListPendingForHosts returns every pending command queued for the given hosts. Unlike ListForHost it does NOT bump last-seen: the
+// caller is the control gateway, whose connection presence (not this query) is the liveness signal. Used by the gateway's watch loop
+// and its per-host fast path to push queued work to connected agents.
+func (s *Service) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]api.Command, error) {
+	return s.store.ListPendingForHosts(ctx, hostIDs)
 }
 
 // UpdateStatus enforces the status-transition matrix on top of the store's row write. Loads the current row to validate ownership +

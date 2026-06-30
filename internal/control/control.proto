@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+// Package fleetedr.control.v1 is the wire contract for the persistent agent
+// control channel: a single bidirectional stream that pushes commands to a
+// connected host in real time and carries command outcomes back. It is the
+// push replacement for the GET /api/commands short-poll (issue #477). The
+// channel authenticates once at connect via the host bearer token in
+// connection metadata; there is no per-frame credential.
+package fleetedr.control.v1;
+
+option go_package = "github.com/fleetdm/edr/internal/control;control";
+
+// ControlChannel is the gateway service. The gateway is an explicitly
+// sanctioned stateful tier (ADR-0010 amendment): it holds live connections
+// and per-connection bookkeeping only, and persists nothing durable.
+service ControlChannel {
+  // Connect opens the persistent control stream for one host. The host
+  // authenticates once, at connect, with its signed bearer token presented in
+  // the gRPC metadata key "authorization" as "Bearer <token>". The server
+  // pushes ServerFrames (commands) down the stream and reads AgentFrames
+  // (outcomes) up the stream until either side closes.
+  rpc Connect(stream AgentFrame) returns (stream ServerFrame);
+}
+
+// ServerFrame is one message pushed from the gateway down to the agent. It is
+// a oneof so the channel can carry future control kinds (interactive response
+// session frames) without a second transport.
+message ServerFrame {
+  oneof frame {
+    Command command = 1;
+  }
+}
+
+// AgentFrame is one message sent from the agent up to the gateway. Today the
+// agent only reports command outcomes; the oneof leaves room for future kinds.
+message AgentFrame {
+  oneof frame {
+    Outcome outcome = 1;
+  }
+}
+
+// Command mirrors the server-side command row the agent must execute. The
+// field shapes match the JSON the poll path delivers so the wire shape is
+// stable across both transports.
+message Command {
+  int64 id = 1;
+  string host_id = 2;
+  string command_type = 3;
+  // payload is the raw command-type-specific JSON, forwarded verbatim (the
+  // commander validates and the extension parses the same bytes).
+  bytes payload = 4;
+}
+
+// Outcome is the agent's report for a command: the new status (acked,
+// completed, or failed) and an optional result/error JSON blob. It maps onto
+// the same UpdateStatus lifecycle the PUT /api/commands/{id} path uses.
+message Outcome {
+  int64 id = 1;
+  string status = 2;
+  // result is the raw JSON result on completed, or an error blob on failed;
+  // empty on acked.
+  bytes result = 3;
+}

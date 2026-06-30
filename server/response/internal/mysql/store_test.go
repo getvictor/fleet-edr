@@ -254,3 +254,45 @@ func TestInsertBatch(t *testing.T) {
 		assert.Equal(t, firstStored, []byte(cmds[0].Payload), "every host in one fan-out receives byte-identical payload bytes")
 	}
 }
+
+// TestListPendingForHosts locks the control gateway's watch query: it returns only pending commands, only for the requested hosts, in
+// creation order, and returns nothing (no error) for an empty host set.
+func TestListPendingForHosts(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	ctx := t.Context()
+
+	aFirst, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":1}`))
+	require.NoError(t, err)
+	aSecond, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"n":2}`))
+	require.NoError(t, err)
+	bOnly, err := s.Insert(ctx, "host-b", "kill_process", json.RawMessage(`{"n":3}`))
+	require.NoError(t, err)
+	_, err = s.Insert(ctx, "host-c", "kill_process", json.RawMessage(`{"n":4}`)) // not in the requested set
+	require.NoError(t, err)
+
+	// Move host-a's first command out of pending; it must drop from the result.
+	require.NoError(t, s.UpdateStatus(ctx, aFirst, "host-a", api.StatusPending, api.StatusAcked, nil))
+
+	t.Run("scopes to requested hosts, pending only, creation order", func(t *testing.T) {
+		t.Parallel()
+		cmds, err := s.ListPendingForHosts(ctx, []string{"host-a", "host-b"})
+		require.NoError(t, err)
+		require.Len(t, cmds, 2)
+		// Oldest first: host-a's still-pending second command, then host-b's.
+		assert.Equal(t, aSecond, cmds[0].ID)
+		assert.Equal(t, "host-a", cmds[0].HostID)
+		assert.Equal(t, bOnly, cmds[1].ID)
+		assert.Equal(t, "host-b", cmds[1].HostID)
+		for _, c := range cmds {
+			assert.Equal(t, api.StatusPending, c.Status)
+		}
+	})
+
+	t.Run("empty host set returns no rows without error", func(t *testing.T) {
+		t.Parallel()
+		cmds, err := s.ListPendingForHosts(ctx, nil)
+		require.NoError(t, err)
+		assert.Empty(t, cmds)
+	})
+}

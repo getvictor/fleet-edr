@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/internal/agent"
+	"github.com/fleetdm/edr/server/response/internal/gateway"
 	"github.com/fleetdm/edr/server/response/internal/mysql"
 	"github.com/fleetdm/edr/server/response/internal/operator"
 	"github.com/fleetdm/edr/server/response/internal/service"
@@ -102,6 +104,23 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 // Service.InsertBatch as method values satisfying their command-inserter closure types; cmd/main's metrics adapter consumes
 // Service.CountPending.
 func (r *Response) Service() api.Service { return r.svc }
+
+// BuildControlGateway constructs the agent control-channel gateway for this context and wires the fast-path notifier so a command
+// queued on this replica is pushed to a locally-held connection immediately. cmd/main supplies the cross-context dependencies (the
+// host-token verifier from endpoint, the last-seen closure from detection) and owns serving the returned gateway's gRPC server and
+// running its watch loop. The gateway uses the concrete service (which carries the gateway-only ListPendingForHosts query), so this
+// stays inside the response context rather than widening the public api.Service.
+func (r *Response) BuildControlGateway(verifier gateway.TokenVerifier, heartbeat gateway.Heartbeat, tlsConfig *tls.Config) *gateway.Gateway {
+	gw := gateway.New(gateway.Deps{
+		Source:    r.svc,
+		Verifier:  verifier,
+		Heartbeat: heartbeat,
+		Logger:    r.logger,
+		TLSConfig: tlsConfig,
+	})
+	r.svc.SetNotifier(gw.Notify)
+	return gw
+}
 
 // RegisterAgentRoutes wires the host-token-gated agent routes:
 //
