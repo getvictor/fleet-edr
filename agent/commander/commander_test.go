@@ -24,7 +24,7 @@ import (
 // would respond with the wrong scope and the per-host audit trail would silently merge.
 func TestFetchPending(t *testing.T) {
 	t.Parallel()
-	commands := []command{
+	commands := []Command{
 		{ID: 1, HostID: "host-a", CommandType: "kill_process", Payload: json.RawMessage(`{"pid":123}`), Status: "pending"},
 	}
 
@@ -136,12 +136,12 @@ func TestExecuteSetApplicationControl_HappyPath(t *testing.T) {
 	}, nil, nil)
 
 	rawPayload := `{"policy_id":7,"policy_version":42,"rules":[{"rule_type":"BINARY","identifier":"aaa","action":"BLOCK","enforcement":"PROTECT","severity":"medium"}]}`
-	cmd := command{
+	cmd := Command{
 		ID:          11,
 		CommandType: "set_application_control",
 		Payload:     json.RawMessage(rawPayload),
 	}
-	c.executeSetApplicationControl(t.Context(), cmd)
+	c.dispatch(t.Context(), cmd)
 
 	require.Len(t, sender.sent, 1)
 	// Byte equality, not JSONEq: the commander's contract with the extension is "forward the exact payload bytes the server sent",
@@ -176,7 +176,7 @@ func TestExecuteSetApplicationControl_InvalidPayload(t *testing.T) {
 	sender := &recordingApplicationControlSender{}
 	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
 
-	c.executeSetApplicationControl(t.Context(), command{
+	c.dispatch(t.Context(), Command{
 		ID:          12,
 		CommandType: "set_application_control",
 		Payload:     json.RawMessage(`{`), // malformed
@@ -207,7 +207,7 @@ func TestExecuteSetApplicationControl_InvalidVersion(t *testing.T) {
 	sender := &recordingApplicationControlSender{}
 	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
 
-	c.executeSetApplicationControl(t.Context(), command{
+	c.dispatch(t.Context(), Command{
 		ID:          13,
 		CommandType: "set_application_control",
 		Payload:     json.RawMessage(`{"policy_id":7,"policy_version":0,"rules":[]}`),
@@ -239,7 +239,7 @@ func TestExecuteSetApplicationControl_MissingPolicyID(t *testing.T) {
 	sender := &recordingApplicationControlSender{}
 	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
 
-	c.executeSetApplicationControl(t.Context(), command{
+	c.dispatch(t.Context(), Command{
 		ID:          14,
 		CommandType: "set_application_control",
 		Payload:     json.RawMessage(`{"policy_id":0,"policy_version":1,"rules":[]}`),
@@ -283,7 +283,7 @@ func TestExecuteSetApplicationControl_RulesMissingOrInvalid(t *testing.T) {
 
 			sender := &recordingApplicationControlSender{}
 			c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
-			c.executeSetApplicationControl(t.Context(), command{
+			c.dispatch(t.Context(), Command{
 				ID:          16,
 				CommandType: "set_application_control",
 				Payload:     json.RawMessage(tc.payload),
@@ -306,7 +306,7 @@ func TestExecuteSetApplicationControl_EmptyRulesAccepted(t *testing.T) {
 
 	sender := &recordingApplicationControlSender{}
 	c := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
-	c.executeSetApplicationControl(t.Context(), command{
+	c.dispatch(t.Context(), Command{
 		ID:          17,
 		CommandType: "set_application_control",
 		Payload:     json.RawMessage(`{"policy_id":7,"policy_version":1,"rules":[]}`),
@@ -331,7 +331,7 @@ func TestExecuteSetApplicationControl_NoSenderConfigured(t *testing.T) {
 	defer srv.Close()
 
 	c := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
-	c.executeSetApplicationControl(t.Context(), command{
+	c.dispatch(t.Context(), Command{
 		ID:          15,
 		CommandType: "set_application_control",
 		Payload:     json.RawMessage(`{"policy_id":7,"policy_version":1,"rules":[]}`),
@@ -389,7 +389,7 @@ func TestDispatchUnknownCommand(t *testing.T) {
 	defer srv.Close()
 
 	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
-	cmd := command{ID: 42, CommandType: "reboot", Payload: json.RawMessage(`{}`)}
+	cmd := Command{ID: 42, CommandType: "reboot", Payload: json.RawMessage(`{}`)}
 	cmdr.dispatch(t.Context(), cmd)
 
 	mu.Lock()
@@ -424,7 +424,7 @@ func TestDispatchKillInvalidPayload(t *testing.T) {
 	defer srv.Close()
 
 	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
-	cmd := command{ID: 43, CommandType: "kill_process", Payload: json.RawMessage(`{"pid":0}`)}
+	cmd := Command{ID: 43, CommandType: "kill_process", Payload: json.RawMessage(`{"pid":0}`)}
 	cmdr.dispatch(t.Context(), cmd)
 
 	mu.Lock()
@@ -493,7 +493,7 @@ func TestAcknowledgementFailsDoesNotExecute(t *testing.T) {
 
 	sender := &recordingApplicationControlSender{}
 	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a", ApplicationControlSender: sender}, nil, nil)
-	cmd := command{
+	cmd := Command{
 		ID:          50,
 		CommandType: "set_application_control",
 		Payload:     json.RawMessage(`{"policy_id":7,"policy_version":1,"rules":[]}`),
@@ -530,7 +530,7 @@ func TestKillProcessAlreadyGone(t *testing.T) {
 
 	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
 	// math.MaxInt32 is well outside the pid range any real macOS/Linux process holds.
-	cmd := command{ID: 60, CommandType: "kill_process", Payload: json.RawMessage(`{"pid":2147483647}`)}
+	cmd := Command{ID: 60, CommandType: "kill_process", Payload: json.RawMessage(`{"pid":2147483647}`)}
 	cmdr.dispatch(t.Context(), cmd)
 
 	mu.Lock()
@@ -588,7 +588,7 @@ func TestKillProcessSuccessful(t *testing.T) {
 	cmdr := New(Config{ServerURL: srv.URL, HostID: "host-a"}, nil, nil)
 	payload, err := json.Marshal(map[string]int{"pid": pid})
 	require.NoError(t, err)
-	cmdr.dispatch(t.Context(), command{ID: 70, CommandType: "kill_process", Payload: payload})
+	cmdr.dispatch(t.Context(), Command{ID: 70, CommandType: "kill_process", Payload: payload})
 
 	mu.Lock()
 	defer mu.Unlock()

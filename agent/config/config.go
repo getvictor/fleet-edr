@@ -53,10 +53,14 @@ const (
 
 // Config is the resolved agent configuration.
 type Config struct {
-	ServerURL                string
-	EnrollSecret             string
-	TokenFile                string
-	ServerFingerprint        string
+	ServerURL         string
+	EnrollSecret      string
+	TokenFile         string
+	ServerFingerprint string
+	// ControlAddr is the server's reachable control-channel gRPC endpoint, e.g. "edr.example.com:8090" (the server's address, not a
+	// bind literal like ":8090"). Empty (default) keeps the agent on the GET /api/commands short-poll; set EDR_CONTROL_ADDR to open the
+	// persistent push stream (the poll then becomes the fallback floor). From #477.
+	ControlAddr              string
 	HostIDOverride           string
 	QueueDBPath              string
 	XPCService               string
@@ -110,6 +114,7 @@ func loadFrom(getenv func(string) string) (*Config, error) {
 	c.EnrollSecret = getenv("EDR_ENROLL_SECRET")
 	optional(&c.TokenFile, "EDR_TOKEN_FILE", getenv)
 	optional(&c.ServerFingerprint, "EDR_SERVER_FINGERPRINT", getenv)
+	optional(&c.ControlAddr, "EDR_CONTROL_ADDR", getenv)
 
 	c.AllowInsecure = getenv("EDR_ALLOW_INSECURE") == "1"
 	if c.ServerURL != "" {
