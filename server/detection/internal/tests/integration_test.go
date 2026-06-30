@@ -1563,7 +1563,11 @@ func TestService_CountOfflineHosts(t *testing.T) {
 
 func TestService_CountUnprocessed(t *testing.T) {
 	t.Parallel()
-	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	// Intake mode, NOT Full: this asserts that freshly ingested events sit in the EventLog backlog, so the processor loop must NOT be
+	// running. Under ModeFull the 20ms processor tick can claim (SKIP LOCKED) the just-inserted events before CountUnprocessed reads,
+	// draining the backlog to 0 under parallel load and flaking the assertion. ModeIntake wires the same service + EventLog (which
+	// CountUnprocessed counts via CountPending) but starts no consumer, so the count is deterministic.
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeIntake})
 	ctx := t.Context()
 
 	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
@@ -1574,7 +1578,7 @@ func TestService_CountUnprocessed(t *testing.T) {
 	count, err := d.Service().CountUnprocessed(ctx)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, count, int64(2),
-		"freshly inserted events start unprocessed (state 0 or 2)")
+		"freshly inserted events sit unprocessed in the EventLog backlog")
 }
 
 // ---- Bootstrap mode tests --------------------------------------------------
