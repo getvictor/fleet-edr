@@ -40,6 +40,9 @@ type Config struct {
 	// (the gateway pushes commands in real time), and the poll resumes the moment the stream drops. Nil means "always poll" (the control
 	// channel is disabled), which is the degraded floor.
 	StreamConnected func() bool
+	// Ledger is the durable dedup store shared with the control client so a command executed on the push path is not re-executed by the
+	// poll path after a stream drop (issue #558). Nil disables dedup (the poll path then relies only on the server's pending filter).
+	Ledger Ledger
 }
 
 // Commander polls the server for pending commands and dispatches them.
@@ -65,7 +68,7 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	return &Commander{
 		cfg:      cfg,
 		client:   client,
-		executor: NewExecutor(cfg.ApplicationControlSender, logger),
+		executor: NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger),
 		logger:   logger,
 	}
 }

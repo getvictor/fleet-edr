@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/fleetdm/edr/agent/coalesce"
 	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/fleetdm/edr/agent/commander"
+	"github.com/fleetdm/edr/agent/commandledger"
 	"github.com/fleetdm/edr/agent/config"
 	"github.com/fleetdm/edr/agent/controlclient"
 	"github.com/fleetdm/edr/agent/enrich"
@@ -158,6 +160,16 @@ func run() error {
 		return err
 	}
 	defer func() { _ = q.Close() }()
+
+	// commandLedger is the durable, cross-transport command dedup store (issue #558): both the poll path and the control client consult
+	// it through the shared executor, so a command's side effect runs at most once across transports and across restarts. It lives next
+	// to the event queue in the agent's state directory.
+	commandLedger, err := commandledger.Open(ctx, filepath.Join(filepath.Dir(cfg.QueueDBPath), "commands.db"), commandledger.Options{Logger: logger})
+	if err != nil {
+		logger.ErrorContext(ctx, "open command ledger", "err", err)
+		return err
+	}
+	defer func() { _ = commandLedger.Close() }()
 	// The Recorder is the single OTel write surface; the queue uses it for QueueDropped, the uploader uses it for
 	// EventsDroppedTooLarge, and the queue-depth observable gauge reads q.Depth() on every collection cycle. metrics.New
 	// returns a no-op-safe Recorder when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
@@ -212,14 +224,14 @@ func run() error {
 	// streamConnected is the shared flag the control channel raises while its stream is up so the commander suspends polling. Per-replica
 	// ephemeral state, lost on restart; the commander reads it, the control client sets it.
 	var streamConnected atomic.Bool
-	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, &streamConnected, logger)
-	if err := startControlClient(ctx, cfg, hostID, tokenProvider, esfDispatcher, &streamConnected, logger); err != nil {
+	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, &streamConnected, commandLedger, logger)
+	if err := startControlClient(ctx, cfg, hostID, tokenProvider, esfDispatcher, &streamConnected, commandLedger, logger); err != nil {
 		// Cancel first so the goroutines started above (receiver loops, uploader, commander, coalescer) wind down before the
 		// deferred queue close runs; otherwise the LIFO defers would close the queue while those goroutines still write to it.
 		cancel()
 		return err
 	}
-	go pruneLoop(ctx, q, config.DefaultPruneAge, logger)
+	go pruneLoop(ctx, q, commandLedger, config.DefaultPruneAge, logger)
 	startProcessReconciler(ctx, cfg, pidTable, q, tokenProvider, logger)
 
 	<-ctx.Done()
@@ -349,6 +361,7 @@ func startCommander(
 	appControlSender commander.ApplicationControlSender,
 	transport http.RoundTripper,
 	streamConnected *atomic.Bool,
+	ledger commander.Ledger,
 	logger *slog.Logger,
 ) {
 	if hostID == "" {
@@ -364,6 +377,8 @@ func startCommander(
 		ApplicationControlSender: appControlSender,
 		// Defer to the control channel while it is connected (the gateway pushes commands in real time); the poll is the fallback floor.
 		StreamConnected: streamConnected.Load,
+		// Shared durable dedup so the poll path does not re-execute a command the control client already ran (issue #558).
+		Ledger: ledger,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -385,6 +400,7 @@ func startControlClient(
 	tokenProvider enrollment.TokenProvider,
 	appControlSender commander.ApplicationControlSender,
 	streamConnected *atomic.Bool,
+	ledger commander.Ledger,
 	logger *slog.Logger,
 ) error {
 	if hostID == "" {
@@ -416,6 +432,7 @@ func startControlClient(
 		TokenFn:                  tokenProvider.Token,
 		OnAuthFail:               tokenProvider.OnUnauthorized,
 		ApplicationControlSender: appControlSender,
+		Ledger:                   ledger,
 		OnConnectedChange:        streamConnected.Store,
 		Logger:                   logger,
 	})
@@ -483,7 +500,7 @@ func startProcessReconciler(
 
 // pruneLoop periodically prunes uploaded events older than pruneAge from the
 // persistent queue.
-func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logger *slog.Logger) {
+func pruneLoop(ctx context.Context, q *queue.Queue, ledger *commandledger.Store, pruneAge time.Duration, logger *slog.Logger) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
@@ -497,6 +514,14 @@ func pruneLoop(ctx context.Context, q *queue.Queue, pruneAge time.Duration, logg
 				logger.WarnContext(ctx, "prune", "err", err)
 			case pruned > 0:
 				logger.InfoContext(ctx, "pruned old events", "count", pruned)
+			}
+			// Bound the command ledger on its own, longer retention: a command stays eligible for re-delivery until it leaves the
+			// server's pending state, so its dedup row must outlive any realistic offline-then-reconnect window (not the 24h event age),
+			// or a re-delivered kill_process could re-execute.
+			if n, err := ledger.Prune(ctx, config.DefaultCommandLedgerRetention); err != nil {
+				logger.WarnContext(ctx, "prune command ledger", "err", err)
+			} else if n > 0 {
+				logger.InfoContext(ctx, "pruned old command outcomes", "count", n)
 			}
 		}
 	}

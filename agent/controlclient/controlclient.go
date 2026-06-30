@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math/rand/v2"
-	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -23,9 +22,6 @@ import (
 const (
 	defaultInitialBackoff = 1 * time.Second
 	defaultMaxBackoff     = 30 * time.Second
-	// outcomeCacheCapacity bounds the remembered-outcomes map. Commands are infrequent (operator actions), so a small cache covers the
-	// re-delivery window; it is a per-agent ephemeral cache, lost on restart.
-	outcomeCacheCapacity = 256
 )
 
 // Config holds the control client's dependencies.
@@ -41,6 +37,9 @@ type Config struct {
 	// ApplicationControlSender is the XPC bridge handed to the shared executor; nil means set_application_control commands fail with a
 	// clear reason, matching the poll path.
 	ApplicationControlSender commander.ApplicationControlSender
+	// Ledger is the durable dedup store shared with the poll path so a command executed over the stream is not re-executed on a restart
+	// or by the poll path after a stream drop (issue #558). Nil disables dedup (tests).
+	Ledger commander.Ledger
 	// OnConnectedChange reports stream up (true) / down (false) so the commander can suspend / resume polling. Nil is allowed.
 	OnConnectedChange func(bool)
 	Logger            *slog.Logger
@@ -53,7 +52,6 @@ type Config struct {
 type Client struct {
 	cfg            Config
 	executor       *commander.Executor
-	outcomes       *outcomeCache
 	logger         *slog.Logger
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
@@ -84,8 +82,7 @@ func New(cfg Config) *Client {
 	}
 	return &Client{
 		cfg:            cfg,
-		executor:       commander.NewExecutor(cfg.ApplicationControlSender, logger),
-		outcomes:       newOutcomeCache(outcomeCacheCapacity),
+		executor:       commander.NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger),
 		logger:         logger,
 		initialBackoff: initial,
 		maxBackoff:     maxB,
@@ -160,9 +157,9 @@ func (c *Client) runStream(ctx context.Context) (bool, error) {
 	}
 }
 
-// handleCommand executes a pushed command and reports its outcome over the stream. Delivery is at-least-once: if the command has
-// already been executed (its outcome is cached), the agent re-reports the recorded outcome instead of running the side effect again, so
-// a re-delivery after a lost report still drives the command to terminal and a non-idempotent command (kill_process) is never re-run.
+// handleCommand executes a pushed command and reports its outcome over the stream. Delivery is at-least-once; the shared executor keys
+// execution on the durable command ledger, so a re-delivery of an already-executed command replays its recorded outcome instead of
+// re-running the side effect (a non-idempotent kill_process is never re-run), across both transports and across restarts (issue #558).
 // A non-nil return is a stream-send failure: the caller must tear the stream down and reconnect, since outcomes can no longer be
 // reported on it. A dropped or misrouted command (host mismatch) is not a send failure and returns nil.
 func (c *Client) handleCommand(ctx context.Context, stream control.ControlChannel_ConnectClient, pushed *control.Command) error {
@@ -182,23 +179,11 @@ func (c *Client) handleCommand(ctx context.Context, stream control.ControlChanne
 		CommandType: pushed.GetCommandType(),
 		Payload:     pushed.GetPayload(),
 	}
-	if prior, ok := c.outcomes.get(cmd.ID); ok {
-		// Re-delivery of an already-executed command: replay ack + the recorded terminal outcome (no side effect). The ack drives the
-		// server out of pending if its earlier ack was lost; an already-acked command makes the server reject the duplicate ack benignly.
-		if err := c.send(stream, cmd.ID, commander.StatusAcked, nil); err != nil {
-			return err
-		}
-		return c.send(stream, cmd.ID, prior.status, prior.result)
-	}
-	// sendErr captures a stream-send failure from inside the executor callback (the executor itself only logs report errors). The
-	// executor stops on the first report error (it skips the side effect if the ack send fails), so sendErr holds that failure;
-	// handleCommand returns it so runStream reconnects. This also surfaces send failures on the terminal "failed" reports, whose
-	// errors the executor's validation paths otherwise discard.
+	// sendErr captures a stream-send failure from inside the executor callback (the executor only logs report errors). The executor
+	// dedupes via the shared ledger, replaying a recorded outcome instead of re-running the side effect; either way each report goes
+	// through this callback. handleCommand returns the last send error so runStream reconnects on a one-way-broken stream.
 	var sendErr error
 	c.executor.Execute(ctx, cmd, func(_ context.Context, statusValue string, result json.RawMessage) error {
-		if statusValue == commander.StatusCompleted || statusValue == commander.StatusFailed {
-			c.outcomes.put(cmd.ID, cachedOutcome{status: statusValue, result: result})
-		}
 		sendErr = c.send(stream, cmd.ID, statusValue, result)
 		return sendErr
 	})
@@ -217,50 +202,6 @@ func (c *Client) setConnected(v bool) {
 	if c.cfg.OnConnectedChange != nil {
 		c.cfg.OnConnectedChange(v)
 	}
-}
-
-// cachedOutcome is a remembered terminal outcome for idempotent re-report.
-type cachedOutcome struct {
-	status string
-	result json.RawMessage
-}
-
-// outcomeCache is a bounded map of command id to terminal outcome with FIFO (insertion-order) eviction: a get does not change an
-// entry's position, so once the cache is full the oldest-inserted id is dropped first. It is a per-agent in-memory cache, lost on
-// restart, so it dedupes re-deliveries only within a single agent process. It does NOT make a restart-safe guarantee: a still-pending
-// command re-delivered after a restart can be executed again. For set_application_control that is a harmless idempotent snapshot
-// re-apply, but kill_process targets a bare PID, and PIDs can be reused, so a re-execution after restart could in principle signal an
-// unrelated process. Restart-safe dedupe for non-idempotent commands is tracked separately (see issue #558).
-type outcomeCache struct {
-	mu    sync.Mutex
-	m     map[int64]cachedOutcome
-	order []int64
-	cap   int
-}
-
-func newOutcomeCache(capacity int) *outcomeCache {
-	return &outcomeCache{m: make(map[int64]cachedOutcome, capacity), cap: capacity}
-}
-
-func (o *outcomeCache) get(id int64) (cachedOutcome, bool) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	oc, ok := o.m[id]
-	return oc, ok
-}
-
-func (o *outcomeCache) put(id int64, oc cachedOutcome) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if _, exists := o.m[id]; !exists {
-		if len(o.order) >= o.cap {
-			oldest := o.order[0]
-			o.order = o.order[1:]
-			delete(o.m, oldest)
-		}
-		o.order = append(o.order, id)
-	}
-	o.m[id] = oc
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/fleetdm/edr/agent/commandledger"
 	"github.com/fleetdm/edr/agent/controlclient"
 	"github.com/fleetdm/edr/internal/control"
 )
@@ -103,6 +105,12 @@ func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (isCo
 	)
 	require.NoError(t, err)
 
+	// A real durable ledger so re-delivery dedup (issue #558) is exercised end to end: the executor replays a recorded outcome instead
+	// of re-running the side effect.
+	ledger, err := commandledger.Open(t.Context(), filepath.Join(t.TempDir(), "commands.db"), commandledger.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ledger.Close() })
+
 	var connected bool
 	var authFailCount int
 	var mu sync.Mutex
@@ -111,6 +119,7 @@ func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (isCo
 		HostID:                   "host-a",
 		TokenFn:                  func() string { return "tok" },
 		ApplicationControlSender: sender,
+		Ledger:                   ledger,
 		OnAuthFail: func(context.Context) {
 			mu.Lock()
 			authFailCount++

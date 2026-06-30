@@ -30,6 +30,12 @@ const (
 	// an env knob).
 	DefaultPruneAge = 24 * time.Hour
 
+	// DefaultCommandLedgerRetention bounds the durable command-dedup ledger (issue #558). It is much longer than DefaultPruneAge because
+	// a command stays eligible for re-delivery until it leaves the server's pending state: a host offline for days then reconnecting can
+	// be re-offered a command it already ran, and pruning its dedup row too early would let a non-idempotent kill_process re-execute. 30
+	// days comfortably exceeds any realistic offline-then-reconnect window while keeping the (low-volume) command table bounded.
+	DefaultCommandLedgerRetention = 30 * 24 * time.Hour
+
 	// defaultProcessReconcileInterval is the default for EDR_PROCESS_RECONCILE_INTERVAL: how often the agent sweeps its proctable for
 	// missed exit events. 60s tracks the server's freshness reconciler but is closer to ground truth on a single host.
 	defaultProcessReconcileInterval = 60 * time.Second
