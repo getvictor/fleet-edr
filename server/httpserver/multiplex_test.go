@@ -23,12 +23,13 @@ import (
 )
 
 // grpcControlMux adapts a *grpc.Server to httpserver.ControlMux for the multiplex test: ServeHTTP is the gRPC-over-HTTP/2 handler and
-// Stop is a graceful stop, mirroring what the real control gateway does.
+// Stop force-stops the server. GracefulStop is avoided deliberately: it panics ("Drain is not implemented") once the server has served
+// via grpc.Server.ServeHTTP, which is the production path here; the real gateway's Stop likewise ends streams rather than GracefulStop.
 type grpcControlMux struct{ s *grpc.Server }
 
 func (g grpcControlMux) ServeHTTP(w http.ResponseWriter, r *http.Request) { g.s.ServeHTTP(w, r) }
 
-func (g grpcControlMux) Stop() { g.s.GracefulStop() }
+func (g grpcControlMux) Stop() { g.s.Stop() }
 
 func waitListening(t *testing.T, addr string) {
 	t.Helper()

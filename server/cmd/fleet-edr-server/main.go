@@ -221,11 +221,29 @@ func run() error {
 	}
 	// Multiplex the agent control-channel gRPC gateway onto the same listener as the REST/UI surface (issue #477): one port, one
 	// firewall rule, no separate control address to configure. TLS is terminated once at the shared listener (or by the front proxy),
-	// so the gateway's gRPC server runs without its own transport credentials. The watch loop drives cross-replica command delivery;
-	// RunAndShutdown owns the gateway's bounded graceful stop.
+	// so the gateway's gRPC server runs without its own transport credentials.
 	gw := responseCtx.BuildControlGateway(endpointCtx.Service(), detectionCtx.Service().RecordHostSeen)
-	go gw.Run(ctx)
-	return httpserver.RunAndShutdown(ctx, srv, gw, logger, drain, cfg.ShutdownDrain)
+	// Run the gateway's delivery loop on a context that SIGTERM does NOT cancel, so queued commands keep being pushed to still-connected
+	// agents throughout the shutdown drain window. RunAndShutdown calls control.Stop() after the drain window; controlChannel.Stop then
+	// cancels this loop and tears down the live streams. Tying the loop to the process context instead would kill delivery on SIGTERM
+	// while the streams stay up and the agents keep polling suppressed, stalling command delivery for the whole drain window.
+	gwCtx, gwCancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer gwCancel() // controlChannel.Stop cancels this on shutdown; the defer is a belt-and-suspenders guard against a context leak
+	go gw.Run(gwCtx)
+	return httpserver.RunAndShutdown(ctx, srv, controlChannel{ControlMux: gw, stopRun: gwCancel}, logger, drain, cfg.ShutdownDrain)
+}
+
+// controlChannel adapts the response control gateway to httpserver.ControlMux so shutdown also ends the gateway's delivery loop. The
+// gateway's ServeHTTP is promoted from the embedded interface; Stop first cancels the delivery-loop context (started with SIGTERM
+// cancellation stripped, so the loop survives the drain window) and then tears down the live streams via the gateway's own Stop.
+type controlChannel struct {
+	httpserver.ControlMux
+	stopRun context.CancelFunc
+}
+
+func (c controlChannel) Stop() {
+	c.stopRun()
+	c.ControlMux.Stop()
 }
 
 // openContexts wires every bounded context and applies each one's schema under a single MySQL advisory lock. Under a rolling

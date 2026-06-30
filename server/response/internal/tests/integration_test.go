@@ -447,7 +447,7 @@ func TestBuildControlGateway(t *testing.T) {
 	t.Parallel()
 	r := newResponse(t, nil)
 
-	gw := r.BuildControlGateway(stubVerifier{}, nil, nil)
+	gw := r.BuildControlGateway(stubVerifier{}, nil)
 	require.NotNil(t, gw)
 	require.NotNil(t, gw.GRPCServer())
 

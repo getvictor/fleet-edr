@@ -29,8 +29,9 @@ func (d *DrainState) BeginDrain() { d.draining.Store(true) }
 func (d *DrainState) IsDraining() bool { return d.draining.Load() }
 
 // ControlMux is the agent control-channel gateway as RunAndShutdown consumes it: an HTTP/2 handler (the gateway's gRPC server exposed
-// via grpc.Server.ServeHTTP) plus a bounded graceful stop. It is an interface so httpserver does not depend on the response context's
-// concrete gateway type. A nil ControlMux serves HTTP only (the ingest binary and tests).
+// via grpc.Server.ServeHTTP) plus a Stop that returns promptly after ending the long-lived control streams, so http.Server.Shutdown
+// can then drain. It is an interface so httpserver does not depend on the response context's concrete gateway type. A nil ControlMux
+// serves HTTP only (the ingest binary and tests).
 type ControlMux interface {
 	http.Handler
 	Stop()
@@ -53,10 +54,10 @@ type ControlMux interface {
 //
 // On ctx cancellation (SIGTERM) the server enters a drain phase before closing the listener: drain.BeginDrain() flips /readyz to
 // 503 so a load balancer stops routing new requests here, then the server stays up for drainDelay so the LB observes that and
-// removes the replica from rotation. In-flight and new requests are served throughout the drain window; only after it do the control
-// gateway's bounded graceful stop and srv.Shutdown close the listener and wait (up to ShutdownTimeout) for in-flight work to finish. A
-// nil drain or a zero drainDelay skips the drain phase (the single-process and test paths). The binary exits within drainDelay +
-// ShutdownTimeout.
+// removes the replica from rotation. In-flight and new requests are served throughout the drain window; only after it does the control
+// gateway's Stop end the long-lived control streams and srv.Shutdown close the listener and wait (up to ShutdownTimeout) for in-flight
+// work to finish. A nil drain or a zero drainDelay skips the drain phase (the single-process and test paths). The binary exits within
+// drainDelay + ShutdownTimeout.
 func RunAndShutdown(
 	ctx context.Context,
 	srv *http.Server,
@@ -110,8 +111,9 @@ func RunAndShutdown(
 		}
 	}
 
-	// Stop the control gateway first: its bounded GracefulStop drains in-flight RPCs and force-closes the long-lived control streams
-	// after the grace window, so they can't hold shutdown open. Then drain HTTP.
+	// Stop the control gateway first: Stop cancels the long-lived control streams so their handlers return, otherwise they would hold
+	// http.Server.Shutdown open until its deadline. (The gateway is served via grpc.Server.ServeHTTP, where grpc's own GracefulStop is
+	// unusable, so Stop ends the streams directly.) Then drain HTTP.
 	if control != nil {
 		control.Stop()
 	}

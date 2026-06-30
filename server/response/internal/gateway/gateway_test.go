@@ -315,9 +315,13 @@ func TestGatewayServeAndStop(t *testing.T) {
 	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{
 		Outcome: &control.Outcome{Id: 5, Status: "completed"},
 	}}))
+	// The server must actually receive and apply the outcome (recvLoop -> UpdateStatus): without this assertion the test would pass even
+	// if the client->server direction were broken, since Send buffers locally.
+	require.Eventually(t, func() bool { return src.updateCount() >= 1 }, 2*time.Second, 10*time.Millisecond,
+		"server applies the outcome reported over the bidi stream")
 
-	streamCancel() // end the client stream so GracefulStop can drain promptly instead of waiting out the grace window
+	streamCancel() // end the client stream so Stop's stream-cancel completes promptly
 	g.Stop()
 	require.NoError(t, httpSrv.Shutdown(context.WithoutCancel(runCtx)))
-	<-serveDone
+	require.ErrorIs(t, <-serveDone, http.ErrServerClosed, "Serve returns ErrServerClosed after Shutdown, not an unexpected failure")
 }
