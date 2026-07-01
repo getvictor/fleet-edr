@@ -70,6 +70,7 @@ func onlyDelivery(t *testing.T, db *sqlx.DB) deliveryState {
 	return s
 }
 
+// spec:alert-webhook-delivery/delivery-is-reliable-and-at-least-once/a-transient-failure-is-retried-then-delivered
 func TestWebhookWorker_RetryThenDeliver(t *testing.T) {
 	t.Parallel()
 	store, db, sealer := newWebhookStore(t)
@@ -109,6 +110,7 @@ func TestWebhookWorker_RetryThenDeliver(t *testing.T) {
 	assert.Equal(t, 200, *st.LastStatusCode)
 }
 
+// spec:alert-webhook-delivery/delivery-is-reliable-and-at-least-once/a-persistently-failing-delivery-is-marked-failed-after-the-cap
 func TestWebhookWorker_FailsAfterCap(t *testing.T) {
 	t.Parallel()
 	store, db, sealer := newWebhookStore(t)

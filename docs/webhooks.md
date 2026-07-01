@@ -32,6 +32,9 @@ The signing secret is required on create. On update, an empty secret keeps the s
 | `PUT /api/settings/webhooks/{id}`            | Update a destination.                                          |
 | `DELETE /api/settings/webhooks/{id}`         | Delete a destination and its queued deliveries.                |
 | `GET /api/settings/webhooks/{id}/deliveries` | Recent delivery outcomes for the destination (status readout). |
+| `POST /api/settings/webhooks/{id}/test`      | Send a signed test delivery and report the outcome.            |
+
+The console exposes a **Send test** action per destination (backed by the test endpoint): it signs and POSTs a synthetic `webhook.test` payload through the same egress guards as a real delivery and shows the immediate result, so you can confirm a destination works before relying on it. It creates no alert.
 
 ## Payload
 

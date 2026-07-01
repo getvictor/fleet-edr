@@ -20,6 +20,7 @@ afterEach(() => {
 });
 
 describe("Webhooks", () => {
+  // spec:web-ui/the-settings-area-manages-webhook-destinations/the-secret-field-is-write-only
   it("lists destinations and keeps the secret field write-only", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
     render(<Webhooks />);
@@ -40,6 +41,7 @@ describe("Webhooks", () => {
     expect(await screen.findByText("Disabled")).toBeInTheDocument();
   });
 
+  // spec:web-ui/the-settings-area-manages-webhook-destinations/an-admin-adds-a-destination-from-the-settings-area
   it("creates a destination and refreshes the list", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValueOnce([]).mockResolvedValueOnce([dest]);
     const create = vi.spyOn(api, "createWebhook").mockResolvedValue(dest);
@@ -191,6 +193,7 @@ describe("Webhooks", () => {
     expect(screen.getByText("-")).toBeInTheDocument();
   });
 
+  // spec:web-ui/the-settings-area-manages-webhook-destinations/an-operator-tests-a-destination-from-the-ui
   it("sends a test delivery and shows the outcome", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
     const send = vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: true, status_code: 200 });

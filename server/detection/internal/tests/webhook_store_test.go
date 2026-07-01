@@ -143,6 +143,7 @@ func TestWebhookDestinationStore_Validation(t *testing.T) {
 	})
 }
 
+// spec:alert-webhook-delivery/operators-can-test-a-destination-and-see-delivery-health/the-status-readout-reflects-the-latest-outcome
 func TestWebhookDestinationStore_DeliveriesReadout(t *testing.T) {
 	t.Parallel()
 	store, _, _ := newWebhookStore(t)
@@ -170,6 +171,7 @@ func TestWebhookDestinationStore_DeliveriesReadout(t *testing.T) {
 
 // TestWebhookDelivery_disabledDestinationNotClaimed pins that disabling a destination stops delivery of its already-queued rows: the
 // claim query filters on wd.enabled, so a delivery enqueued while the destination was enabled is no longer claimed once it is disabled.
+// spec:alert-webhook-delivery/operators-manage-webhook-destinations-with-a-sealed-write-only-secret/disabling-a-destination-stops-future-deliveries
 func TestWebhookDelivery_disabledDestinationNotClaimed(t *testing.T) {
 	t.Parallel()
 	store, _, _ := newWebhookStore(t)

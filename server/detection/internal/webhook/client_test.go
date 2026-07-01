@@ -59,6 +59,7 @@ func TestClient_DeliverSignsAndPosts(t *testing.T) {
 	assert.Equal(t, want, gotSig)
 }
 
+// spec:alert-webhook-delivery/outbound-delivery-is-protected-against-ssrf/a-redirect-to-an-internal-target-is-not-followed
 func TestClient_DoesNotFollowRedirect(t *testing.T) {
 	t.Parallel()
 	var reached bool
