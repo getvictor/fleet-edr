@@ -10,6 +10,7 @@
 - [x] 2.3 Build the gateway without transport credentials and serve it via `grpc.Server.ServeHTTP`; drop the separate listener and `EDR_CONTROL_ADDR`
 - [x] 2.4 Rework `Gateway.Stop` to cancel live streams (no `grpc.GracefulStop`, which panics under `ServeHTTP`); shutdown is driven by `http.Server.Shutdown`
 - [x] 2.5 Unit test: gRPC + HTTP/1.1 + HTTP/2 (including a reused HTTP/2 connection) coexist on one listener, TLS and plaintext; bidirectional control stream over net/http's HTTP/2
+- [x] 2.6 Clear the per-stream read and write deadlines for the `application/grpc` branch so the long-lived control stream is not torn down by the REST server's `ReadTimeout`/`WriteTimeout` (a ~10s reconnect flap observed in live QA); REST keeps its timeouts. Regression test holds a stream open past the timeouts
 
 ## 3. Agent: derive the endpoint, always on
 

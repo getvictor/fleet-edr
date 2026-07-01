@@ -40,4 +40,4 @@
 
 ## 6. QA
 
-- [ ] 6.1 Verify end to end on the dev server plus a live agent (edr-dev): queue a kill from the UI and confirm sub-second delivery over the stream and the offline/online flip on disconnect; confirm trace continuity across the stream in SigNoz
+- [x] 6.1 Verify end to end on the dev server plus a live agent (edr-dev): queue a kill from the UI and confirm sub-second delivery over the stream and the offline/online flip on disconnect; confirm trace continuity across the stream in SigNoz

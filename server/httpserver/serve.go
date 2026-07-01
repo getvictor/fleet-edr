@@ -137,6 +137,14 @@ func mountControlChannel(srv *http.Server, control ControlMux) {
 	base := srv.Handler
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			// The control channel is a long-lived bidirectional stream. On an HTTP/2 stream http.Server.ReadTimeout and WriteTimeout bound
+			// the WHOLE request/response, not a single message, so leaving them in force tears the control stream down at the REST server's
+			// timeout (a 10s read timeout in production) and forces the agent to reconnect on that cadence instead of holding one connection
+			// (issue #477). Clear both per-stream deadlines here; the REST/UI surface keeps the server's timeouts unchanged. If a transport
+			// cannot clear a deadline the stream still degrades to reconnect plus the retained short-poll, never to lost commands.
+			rc := http.NewResponseController(w)
+			_ = rc.SetReadDeadline(time.Time{})
+			_ = rc.SetWriteDeadline(time.Time{})
 			control.ServeHTTP(w, r)
 			return
 		}
