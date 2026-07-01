@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -86,5 +85,4 @@ func TestClient_BoundedResponseRead(t *testing.T) {
 	code, err := testClient().Deliver(context.Background(), srv.URL, "whd_3", 1, []byte(`{}`), []byte("s"))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusAccepted, code)
-	_ = strconv.Itoa(code)
 }

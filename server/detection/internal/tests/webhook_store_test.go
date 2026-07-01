@@ -9,6 +9,7 @@ package tests
 import (
 	"context"
 	"crypto/rand"
+	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -120,6 +121,7 @@ func TestWebhookDestinationStore_Validation(t *testing.T) {
 		{"non-https URL rejected", func(in *detapi.WebhookDestinationInput) { in.URL = "http://insecure.example.com" }, webhook.ErrBlockedURL},
 		{"private literal URL rejected", func(in *detapi.WebhookDestinationInput) { in.URL = "https://10.0.0.1/hook" }, webhook.ErrBlockedURL},
 		{"missing secret rejected", func(in *detapi.WebhookDestinationInput) { in.Secret = "" }, mysql.ErrWebhookSecretMissing},
+		{"over-long secret rejected", func(in *detapi.WebhookDestinationInput) { in.Secret = strings.Repeat("x", 300) }, mysql.ErrWebhookSecretTooLong},
 		{"empty name rejected", func(in *detapi.WebhookDestinationInput) { in.Name = "" }, mysql.ErrWebhookName},
 		{"unknown event type rejected", func(in *detapi.WebhookDestinationInput) { in.EventTypes = []string{"bogus"} }, mysql.ErrWebhookEventTypes},
 		{"no event types rejected", func(in *detapi.WebhookDestinationInput) { in.EventTypes = nil }, mysql.ErrWebhookEventTypes},
@@ -138,6 +140,31 @@ func TestWebhookDestinationStore_Validation(t *testing.T) {
 		assert.ErrorIs(t, store.UpdateWebhookDestination(ctx, 987654, base), mysql.ErrWebhookNotFound)
 		assert.ErrorIs(t, store.DeleteWebhookDestination(ctx, 987654), mysql.ErrWebhookNotFound)
 	})
+}
+
+func TestWebhookDestinationStore_DeliveriesReadout(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newWebhookStore(t)
+	ctx := context.Background()
+	destID := makeDest(t, store, "sink", detapi.SeverityLow, true, detapi.WebhookEventAlertCreated)
+	_, _, err := store.InsertAlert(ctx, highAlert("test:1"), nil)
+	require.NoError(t, err)
+
+	pending, err := store.ListWebhookDeliveries(ctx, destID, 50)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, detapi.WebhookDeliveryPending, pending[0].Status)
+	assert.Empty(t, pending[0].LastError)
+
+	// Mark it failed so the readout exercises the non-null last_status_code + last_error mapping.
+	require.NoError(t, store.MarkWebhookFailed(ctx, pending[0].ID, 503, "receiver unavailable"))
+	got, err := store.ListWebhookDeliveries(ctx, destID, 50)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, detapi.WebhookDeliveryFailed, got[0].Status)
+	require.NotNil(t, got[0].LastStatusCode)
+	assert.Equal(t, 503, *got[0].LastStatusCode)
+	assert.Equal(t, "receiver unavailable", got[0].LastError)
 }
 
 func TestWebhookDestinationStore_SealerUnset(t *testing.T) {

@@ -201,17 +201,11 @@ func New(deps Deps) (*Detection, error) {
 			Logger:   logger,
 		})
 
-		// Outbound webhook (issue #496): wire the sealer into the store and start the delivery worker only when a root secret is
-		// configured. Without it, the config surface rejects secret writes and no worker runs, so the feature is inert.
-		var webhookDelivery *pipeline.WebhookDeliveryRunner
-		if len(deps.WebhookSecretKey) > 0 {
-			sealer, sErr := secretseal.NewSealer(deps.WebhookSecretKey)
-			if sErr != nil {
-				return nil, fmt.Errorf("detection bootstrap: webhook sealer: %w", sErr)
-			}
-			store.SetWebhookSealer(sealer)
-			store.SetWebhookConsoleBaseURL(deps.WebhookConsoleBaseURL)
-			webhookDelivery = pipeline.NewWebhookDelivery(store, sealer, pipeline.WebhookDeliveryOptions{Logger: logger})
+		// Outbound webhook (issue #496): wire the sealer into the store and build the delivery worker (both only when a root secret
+		// is configured; see configureWebhookDelivery).
+		webhookDelivery, webhookErr := configureWebhookDelivery(store, deps, logger)
+		if webhookErr != nil {
+			return nil, webhookErr
 		}
 
 		det.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
@@ -252,6 +246,22 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 		Context:   "detection",
 		TableName: "detection_goose_db_version",
 	})
+}
+
+// configureWebhookDelivery wires the outbound-webhook secret sealer into the store and builds the delivery worker, but only when a
+// root secret is configured. Without one it returns (nil, nil): the config surface then rejects secret writes and no worker runs, so
+// the feature is inert. Factored out of New to keep New's cognitive complexity in bounds (issue #496).
+func configureWebhookDelivery(store *mysql.Store, deps Deps, logger *slog.Logger) (*pipeline.WebhookDeliveryRunner, error) {
+	if len(deps.WebhookSecretKey) == 0 {
+		return nil, nil
+	}
+	sealer, err := secretseal.NewSealer(deps.WebhookSecretKey)
+	if err != nil {
+		return nil, fmt.Errorf("detection bootstrap: webhook sealer: %w", err)
+	}
+	store.SetWebhookSealer(sealer)
+	store.SetWebhookConsoleBaseURL(deps.WebhookConsoleBaseURL)
+	return pipeline.NewWebhookDelivery(store, sealer, pipeline.WebhookDeliveryOptions{Logger: logger}), nil
 }
 
 // Service exposes the operator-facing api.Service. RecordHostSeen is

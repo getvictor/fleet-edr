@@ -45,21 +45,28 @@ func matchingWebhookDestinations(ctx context.Context, tx *sqlx.Tx, eventType, se
 	return ids, nil
 }
 
+// webhookEnqueueSpec bundles the per-event inputs for a fan-out so the enqueue helper stays under the parameter-count limit.
+type webhookEnqueueSpec struct {
+	eventType  string
+	alert      api.Alert
+	prevStatus string
+	dedupKey   string
+	occurredAt time.Time
+}
+
 // enqueueWebhookDeliveries inserts one pending outbox row per destination, all carrying the same alert snapshot but each with its own
 // delivery id (the webhook-id receivers dedup on). The dedup key makes the enqueue idempotent: a re-fired created event or a replayed
 // status transition collides on the (alert_id, destination_id, dedup_key) unique key and is a no-op rather than a second delivery.
-func (s *Store) enqueueWebhookDeliveries(
-	ctx context.Context, tx *sqlx.Tx, destIDs []int64, eventType string, alert api.Alert, prevStatus, dedupKey string, occurredAt time.Time,
-) error {
+func (s *Store) enqueueWebhookDeliveries(ctx context.Context, tx *sqlx.Tx, destIDs []int64, spec webhookEnqueueSpec) error {
 	for _, destID := range destIDs {
 		pubID := uuid.NewString()
 		payload, err := json.Marshal(webhook.Build(webhook.BuildParams{
 			EventID:        pubID,
-			EventType:      webhook.EventType(eventType),
-			OccurredAt:     occurredAt,
+			EventType:      webhook.EventType(spec.eventType),
+			OccurredAt:     spec.occurredAt,
 			Attempt:        1,
-			Alert:          alert,
-			PreviousStatus: prevStatus,
+			Alert:          spec.alert,
+			PreviousStatus: spec.prevStatus,
 			ConsoleBaseURL: s.webhookConsoleBaseURL,
 		}))
 		if err != nil {
@@ -69,7 +76,7 @@ func (s *Store) enqueueWebhookDeliveries(
 			INSERT INTO webhook_delivery (public_id, alert_id, destination_id, event_type, dedup_key, payload, next_attempt_at)
 			VALUES (?, ?, ?, ?, ?, ?, NOW(6))
 			ON DUPLICATE KEY UPDATE public_id = public_id`,
-			pubID, alert.ID, destID, eventType, dedupKey, payload); err != nil {
+			pubID, spec.alert.ID, destID, spec.eventType, spec.dedupKey, payload); err != nil {
 			return fmt.Errorf("insert webhook delivery: %w", err)
 		}
 	}
@@ -88,7 +95,9 @@ func (s *Store) enqueueNewAlertDeliveries(ctx context.Context, tx *sqlx.Tx, base
 	if err != nil {
 		return err
 	}
-	return s.enqueueWebhookDeliveries(ctx, tx, ids, api.WebhookEventAlertCreated, full, "", "created", full.CreatedAt)
+	return s.enqueueWebhookDeliveries(ctx, tx, ids, webhookEnqueueSpec{
+		eventType: api.WebhookEventAlertCreated, alert: full, dedupKey: "created", occurredAt: full.CreatedAt,
+	})
 }
 
 // enqueueStatusChangeDeliveries fans an alert status change out to destinations subscribed to status events, inside the status-update
@@ -104,5 +113,7 @@ func (s *Store) enqueueStatusChangeDeliveries(ctx context.Context, tx *sqlx.Tx, 
 		return err
 	}
 	dedupKey := fmt.Sprintf("status:%d", full.UpdatedAt.UnixMicro())
-	return s.enqueueWebhookDeliveries(ctx, tx, ids, api.WebhookEventAlertStatusChanged, full, prevStatus, dedupKey, full.UpdatedAt)
+	return s.enqueueWebhookDeliveries(ctx, tx, ids, webhookEnqueueSpec{
+		eventType: api.WebhookEventAlertStatusChanged, alert: full, prevStatus: prevStatus, dedupKey: dedupKey, occurredAt: full.UpdatedAt,
+	})
 }

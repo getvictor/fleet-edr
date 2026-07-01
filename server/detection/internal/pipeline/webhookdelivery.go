@@ -164,10 +164,10 @@ func (r *WebhookDeliveryRunner) deliver(ctx context.Context, c detapi.WebhookDel
 			r.logger.ErrorContext(ctx, "mark webhook delivered", "id", c.ID, "err", err)
 		}
 	case c.Attempt >= r.maxAttempts:
-		r.fail(ctx, c.ID, code, sendErrString(sendErr, code))
+		r.fail(ctx, c.ID, code, sendErrString(sendErr))
 	default:
 		next := r.now().Add(r.backoff(c.Attempt))
-		if err := r.store.RescheduleWebhookDelivery(ctx, c.ID, next, code, sendErrString(sendErr, code)); err != nil {
+		if err := r.store.RescheduleWebhookDelivery(ctx, c.ID, next, code, sendErrString(sendErr)); err != nil {
 			r.logger.ErrorContext(ctx, "reschedule webhook delivery", "id", c.ID, "err", err)
 		}
 	}
@@ -194,7 +194,7 @@ func (r *WebhookDeliveryRunner) backoff(attempt int) time.Duration {
 	return d
 }
 
-func sendErrString(err error, code int) string {
+func sendErrString(err error) string {
 	if err != nil {
 		return err.Error()
 	}

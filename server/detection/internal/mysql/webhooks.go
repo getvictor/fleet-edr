@@ -21,7 +21,12 @@ var (
 	ErrWebhookSecretMissing = errors.New("detection: webhook destination requires a signing secret")
 	ErrWebhookEventTypes    = errors.New("detection: webhook destination requires at least one valid event type")
 	ErrWebhookSeverity      = errors.New("detection: invalid webhook minimum severity")
+	ErrWebhookSecretTooLong = errors.New("detection: webhook signing secret is too long")
 )
+
+// maxWebhookSecretLen bounds the plaintext signing secret so its sealed form (nonce + ciphertext + tag) fits secret_sealed
+// VARBINARY(512) with headroom; a longer secret would otherwise fail the insert with a data-truncation error.
+const maxWebhookSecretLen = 256
 
 var validWebhookSeverities = map[string]bool{
 	detapi.SeverityLow: true, detapi.SeverityMedium: true, detapi.SeverityHigh: true, detapi.SeverityCritical: true,
@@ -73,6 +78,9 @@ const webhookDestinationCols = "id, name, url, secret_sealed, event_types, min_s
 func validateDestinationInput(in detapi.WebhookDestinationInput) (eventTypes, minSeverity string, err error) {
 	if strings.TrimSpace(in.Name) == "" {
 		return "", "", ErrWebhookName
+	}
+	if len(in.Secret) > maxWebhookSecretLen {
+		return "", "", ErrWebhookSecretTooLong
 	}
 	if err := webhook.ValidateURL(in.URL); err != nil {
 		return "", "", err

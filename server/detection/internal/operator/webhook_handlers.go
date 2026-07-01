@@ -24,6 +24,8 @@ const (
 	webhookBodyCap = 1 << 20 // 1 MiB
 	// webhookDeliveriesDefaultLimit caps the delivery-status readout when the caller does not supply ?limit=.
 	webhookDeliveriesDefaultLimit = 50
+	// webhookDeliveriesMaxLimit is the hard upper bound on ?limit= so an admin cannot force an unbounded read.
+	webhookDeliveriesMaxLimit = 500
 )
 
 // WebhookAdmin is the outbound-webhook configuration surface the operator handler serves. mysql.Store satisfies it. It is a dependency
@@ -37,8 +39,9 @@ type WebhookAdmin interface {
 	ListWebhookDeliveries(ctx context.Context, destinationID int64, limit int) ([]api.WebhookDelivery, error)
 }
 
-// SetWebhookAdmin installs the webhook configuration surface. Optional: when not set (a deployment with no root secret), the webhook
-// routes respond 503 webhook_not_configured. Bootstrap calls this after New.
+// SetWebhookAdmin installs the webhook configuration surface. Optional: when it is not set the webhook routes respond 503
+// webhook_not_configured. Bootstrap always wires it in ModeFull; a create that needs to seal a secret with no root secret configured
+// surfaces its own 503 from the store. Called after New.
 func (h *Handler) SetWebhookAdmin(a WebhookAdmin) { h.webhookAdmin = a }
 
 func (h *Handler) registerWebhookRoutes(mux httpserver.Router) {
@@ -147,7 +150,7 @@ func (h *Handler) handleListWebhookDeliveries(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	limit := httpserver.ParseIntParam(r, "limit", webhookDeliveriesDefaultLimit)
+	limit := min(httpserver.ParseIntParam(r, "limit", webhookDeliveriesDefaultLimit), webhookDeliveriesMaxLimit)
 	deliveries, err := h.webhookAdmin.ListWebhookDeliveries(r.Context(), id, limit)
 	if err != nil {
 		h.logger.ErrorContext(r.Context(), "list webhook deliveries", "err", err)
@@ -190,6 +193,7 @@ func (h *Handler) writeWebhookErr(w http.ResponseWriter, r *http.Request, err er
 		h.writeError(ctx, w, http.StatusServiceUnavailable, errWebhookNotConfigured)
 	case errors.Is(err, mysql.ErrWebhookName),
 		errors.Is(err, mysql.ErrWebhookSecretMissing),
+		errors.Is(err, mysql.ErrWebhookSecretTooLong),
 		errors.Is(err, mysql.ErrWebhookEventTypes),
 		errors.Is(err, mysql.ErrWebhookSeverity),
 		errors.Is(err, webhook.ErrBlockedURL):

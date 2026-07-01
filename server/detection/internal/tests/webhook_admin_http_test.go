@@ -30,8 +30,8 @@ func (denyAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource
 	return identityapi.Decision{Allow: false, Reason: "forbidden"}, nil
 }
 
-// webhookHTTPServer builds the operator handler over a real store and serves it. authz gates the routes; admin controls whether the
-// webhook surface is wired (nil models a deployment with no root secret).
+// webhookHTTPServer builds the operator handler over a real store and serves it. authz gates the routes; a nil admin defaults to the
+// store (the common case), while an explicit admin lets a caller inject a different surface.
 func webhookHTTPServer(t *testing.T, authz identityapi.AuthZ, admin operator.WebhookAdmin) *httptest.Server {
 	t.Helper()
 	store, _, _ := newWebhookStore(t)

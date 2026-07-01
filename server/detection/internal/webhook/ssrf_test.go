@@ -16,7 +16,7 @@ func TestValidateURL(t *testing.T) {
 		}
 	})
 
-	t.Run("spec:alert-webhook-delivery/outbound-delivery-is-protected-against-ssrf/a-destination-resolving-to-a-private-address-is-rejected-on-save", func(t *testing.T) {
+	t.Run("spec:alert-webhook-delivery/outbound-delivery-is-protected-against-ssrf/a-destination-given-as-a-blocked-address-literal-is-rejected-on-save", func(t *testing.T) {
 		t.Parallel()
 		for _, raw := range []string{
 			"https://127.0.0.1/hook",
