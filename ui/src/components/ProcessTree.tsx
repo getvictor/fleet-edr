@@ -10,6 +10,7 @@ import {
   NANOSECONDS_PER_MILLISECOND,
 } from "../constants";
 import { ProcessDetail } from "./ProcessDetail";
+import { HostHealthPanel } from "./HostHealthPanel";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import { PageHeader } from "./ui/PageHeader";
@@ -473,6 +474,8 @@ export function ProcessTreeView() {
         }
         actions={headerActions}
       />
+
+      {hostId ? <HostHealthPanel hostId={hostId} /> : null}
 
       {alertDetail && (
         <div className="alert-breadcrumb">

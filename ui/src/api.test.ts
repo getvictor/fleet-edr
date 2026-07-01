@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   listAlerts,
+  getHostHealth,
   createAppControlRule,
   setForbiddenHandler,
   setUnauthorizedHandler,
@@ -52,6 +53,16 @@ function stubFetch(body: unknown, status = 200, headers: Record<string, string> 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("getHostHealth", () => {
+  it("requests the per-host health endpoint with the host id encoded", async () => {
+    const fetchMock = stubFetch({ overall_status: "unknown", reported_at_ns: 0, components: null });
+    await getHostHealth("host/A");
+    expect(fetchMock).toHaveBeenCalled();
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("/hosts/host%2FA/health");
+  });
 });
 
 describe("listAlerts query-string composition", () => {

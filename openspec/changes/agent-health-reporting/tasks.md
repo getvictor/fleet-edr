@@ -20,29 +20,29 @@
 
 ## 4. Agent health registry
 
-- [ ] 4.1 `agent/health/`: concurrency-safe registry mapping component type to condition; `Set(type, status, reason, message)` stamps `last_transition_ns` only on a real status change
-- [ ] 4.2 Track per extension whether a session has ever been established, to distinguish `never_connected` from `connection_lost`
-- [ ] 4.3 Wire the ESF and network-extension receiver loops into the registry via the existing connect/disconnect paths and `OnConnected`/`OnDisconnected` hooks (`agent/receiver/loop.go`)
-- [ ] 4.4 Unit tests: connected -> healthy/activated; never-connected before first session; connection-lost after a drop; transition-timestamp stability
+- [x] 4.1 `agent/health/`: concurrency-safe registry mapping component type to condition; `Set(type, status, reason, message)` stamps `last_transition_ns` only on a real status change
+- [x] 4.2 Track per extension whether a session has ever been established, to distinguish `never_connected` from `connection_lost`
+- [x] 4.3 Wire the ESF and network-extension receiver loops into the registry via the existing connect/disconnect paths and `OnConnected`/`OnDisconnected` hooks (`agent/receiver/loop.go`)
+- [x] 4.4 Unit tests: connected -> healthy/activated; never-connected before first session; connection-lost after a drop; transition-timestamp stability
 
 ## 5. Agent status poster
 
-- [ ] 5.1 `agent/status/`: build a `StatusReport` from the registry and POST it to `POST /api/status` with the host token, reusing the enrollment HTTP client
-- [ ] 5.2 Cadence: post on startup, on transition (debounced ~2s), and on a ~60s periodic floor; clean ctx-cancel shutdown following the `RunRefresh` loop shape
-- [ ] 5.3 Wire the poster into `agent/cmd/fleet-edr-agent/main.go`
-- [ ] 5.4 Unit tests: startup post, transition-triggered post, debounce collapses a retry burst
+- [x] 5.1 `agent/health` Poster: build the snapshot from the registry and POST it to `POST /api/status` with the host token, reusing the agent HTTP client
+- [x] 5.2 Cadence: post on startup, on transition (debounced ~2s), and on a ~60s periodic floor; clean ctx-cancel shutdown following the `RunRefresh` loop shape
+- [x] 5.3 Wire the poster into `agent/cmd/fleet-edr-agent/main.go`
+- [x] 5.4 Unit tests: startup post, transition-triggered post, debounce collapses a retry burst
 
 ## 6. UI
 
-- [ ] 6.1 `ui/src/types.ts`: extend `HostSummary` with `overall_status`; add `ComponentHealth` and the host-detail health shape
-- [ ] 6.2 `ui/src/components/HostList.tsx`: health badge column driven by `overall_status`, reusing `Badge`, distinct from the online/offline pill; neutral badge for `unknown`
-- [ ] 6.3 Host detail conditions panel (in `ProcessTree.tsx` header or a small new component): per-component status badge, message, and "since" relative time from `last_transition_ns`
-- [ ] 6.4 vitest siblings (`*.test.tsx`) covering the badge-variant mapping, the unknown/empty states, and the conditions panel
+- [x] 6.1 `ui/src/types.ts`: extend `HostSummary` with `overall_status`; add `ComponentHealth` and the host-detail health shape
+- [x] 6.2 `ui/src/components/HostList.tsx`: health badge column driven by `overall_status`, reusing `Badge`, distinct from the online/offline pill; neutral badge for `unknown`
+- [x] 6.3 Host detail conditions panel (in `ProcessTree.tsx` header or a small new component): per-component status badge, message, and "since" relative time from `last_transition_ns`
+- [x] 6.4 vitest siblings (`*.test.tsx`) covering the badge-variant mapping, the unknown/empty states, and the conditions panel
 
 ## 7. Spec and QA
 
-- [ ] 7.1 Add spectrace markers from the new tests to the scenario IDs in the three delta specs
-- [ ] 7.2 `openspec validate agent-health-reporting --strict`; prose + dash + markdown lints
+- [x] 7.1 Add spectrace markers from the new tests to the scenario IDs in the three delta specs
+- [x] 7.2 `openspec validate agent-health-reporting --strict`; prose + dash + markdown lints
 - [ ] 7.3 Live QA on edr-qa: fresh install with the extensions not activated shows the host as needs-attention in the UI within a check-in interval, then activation flips it to healthy (the 2026-06-12 scenario #359 came from)
 
 ## 8. Follow-ups (not in this change)

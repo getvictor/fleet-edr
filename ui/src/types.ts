@@ -8,6 +8,28 @@ export interface HostSummary {
   os_version: string;
   event_count: number;
   last_seen_ns: number;
+  // overall_status is the server-computed agent-health rollup (issue #359): healthy | degraded | unhealthy | unknown. The server always
+  // sends it (COALESCE to "unknown" for a host that has never posted a status snapshot), so it is required, like hostname. It drives the
+  // Hosts-list health badge, distinct from the online/offline pill derived from last_seen_ns.
+  overall_status: string;
+}
+
+// ComponentHealth is one condition in a host's agent-health snapshot, mirroring the server's per-component shape. type and reason are
+// open vocabularies (a future signal needs no UI change); status is the same closed set as HostSummary.overall_status.
+export interface ComponentHealth {
+  type: string;
+  status: string;
+  reason?: string;
+  message?: string;
+  last_transition_ns: number;
+}
+
+// HostHealth is the response from GET /api/hosts/{host_id}/health: the rollup, the agent-stamped snapshot time, and the full component
+// conditions. A host with no snapshot yields overall_status "unknown" and null components.
+export interface HostHealth {
+  overall_status: string;
+  reported_at_ns: number;
+  components: ComponentHealth[] | null;
 }
 
 // Note: nanosecond timestamp fields (fork_time_ns, etc.) may lose precision
