@@ -5,6 +5,7 @@ import {
   updateWebhook,
   deleteWebhook,
   listWebhookDeliveries,
+  testWebhook,
   type WebhookDestination,
   type WebhookDestinationInput,
   type WebhookDelivery,
@@ -70,6 +71,7 @@ export function Webhooks() {
   const [saved, setSaved] = useState(false);
 
   const [deliveries, setDeliveries] = useState<{ id: number; rows: WebhookDelivery[] } | null>(null);
+  const [testResult, setTestResult] = useState<{ id: number; ok: boolean; message: string } | null>(null);
 
   // refresh reloads the list and handles its own error, so a reload failure after a successful create/update/delete surfaces as a
   // load error rather than being caught by the caller's try/catch and misreported as a save/delete failure (Copilot, Qodo).
@@ -154,6 +156,16 @@ export function Webhooks() {
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to delete webhook.");
+    }
+  }
+
+  async function sendTest(id: number) {
+    setTestResult(null);
+    try {
+      const r = await testWebhook(id);
+      setTestResult({ id, ok: r.ok, message: r.ok ? `Delivered (${String(r.status_code ?? "")})` : (r.error ?? "Test delivery failed") });
+    } catch (err: unknown) {
+      setTestResult({ id, ok: false, message: err instanceof Error ? err.message : "Test delivery failed" });
     }
   }
 
@@ -274,12 +286,20 @@ export function Webhooks() {
                     <Button type="button" variant="text-link" size="small" onClick={() => { setForm(toForm(d)); }}>
                       Edit
                     </Button>
+                    <Button type="button" variant="text-link" size="small" onClick={() => void sendTest(d.id)}>
+                      Send test
+                    </Button>
                     <Button type="button" variant="text-link" size="small" onClick={() => void viewDeliveries(d.id)}>
                       Deliveries
                     </Button>
                     <Button type="button" variant="text-link" size="small" onClick={() => void handleDelete(d.id)}>
                       Delete
                     </Button>
+                    {testResult !== null && testResult.id === d.id && (
+                      <span className={testResult.ok ? "webhooks__test-ok" : "webhooks__test-err"} role="status">
+                        {testResult.message}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

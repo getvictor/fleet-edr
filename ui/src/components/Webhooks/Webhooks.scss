@@ -12,8 +12,13 @@
     color: var(--color-danger, #b00020);
   }
 
-  &__saved {
+  &__saved,
+  &__test-ok {
     color: var(--color-success, #1b7f4b);
+  }
+
+  &__test-err {
+    color: var(--color-danger, #b00020);
   }
 
   &__events {

@@ -191,6 +191,27 @@ describe("Webhooks", () => {
     expect(screen.getByText("-")).toBeInTheDocument();
   });
 
+  it("sends a test delivery and shows the outcome", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    const send = vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: true, status_code: 200 });
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    await waitFor(() => {
+      expect(send).toHaveBeenCalledWith(1);
+    });
+    expect(await screen.findByText("Delivered (200)")).toBeInTheDocument();
+  });
+
+  it("shows a failed test delivery outcome", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: false, error: "connection refused" });
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("connection refused")).toBeInTheDocument();
+  });
+
   it("surfaces a deliveries load error", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
     vi.spyOn(api, "listWebhookDeliveries").mockRejectedValue(new Error("delivery boom"));
