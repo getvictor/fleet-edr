@@ -74,10 +74,26 @@ export interface ProcessNode extends Process {
   children?: ProcessNode[];
   network_connections?: EventRecord[];
   dns_queries?: EventRecord[];
+  // Present when the server collapsed a group of identical-path sibling processes into this node (issue #416). The node then renders
+  // as a "×N" badge instead of a single process; the embedded Process fields describe the earliest member (a representative), and
+  // `aggregated` carries the group's cardinality, exited/running split, fork-time span, and a capped sample the UI expands in place.
+  aggregated?: AggregatedSiblings;
   // UI-only annotation: when a subtree is collapsed or a system-path group is hidden,
   // the count of descendants that were dropped is stashed here so the renderer can
   // show a "+N" affordance on the surviving parent.
   _collapsedCount?: number;
+}
+
+// AggregatedSiblings mirrors the server's sibling-aggregation summary (issue #416). count is the full group size; exited_count and
+// running_count partition it; first_fork_ns / last_fork_ns bound the fork-time span; sample is a capped, fork-ordered slice of the
+// underlying members the UI materializes as children when the analyst expands the node.
+export interface AggregatedSiblings {
+  count: number;
+  exited_count: number;
+  running_count: number;
+  first_fork_ns: number;
+  last_fork_ns: number;
+  sample?: ProcessNode[];
 }
 
 export interface EventRecord {

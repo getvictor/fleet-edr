@@ -24,7 +24,7 @@ import (
 // of server/response/internal/operator/handler_test.go's fakeService for cross-package consistency.
 type fakeService struct {
 	listHosts         func(ctx context.Context) ([]api.HostSummary, error)
-	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.ProcessNode, error)
+	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool) ([]api.ProcessNode, error)
 	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error)
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
 	getAlert          func(ctx context.Context, id int64) (api.Alert, []string, error)
@@ -47,11 +47,11 @@ func (f fakeService) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return f.listHosts(ctx)
 }
 
-func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.ProcessNode, error) {
+func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool) ([]api.ProcessNode, error) {
 	if f.buildTree == nil {
 		panic("fakeService.BuildTree not set")
 	}
-	return f.buildTree(ctx, hostID, tr, limit)
+	return f.buildTree(ctx, hostID, tr, limit, flatten)
 }
 
 func (f fakeService) GetProcessDetail(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error) {
@@ -232,7 +232,7 @@ func TestHandleProcessTree(t *testing.T) {
 
 	t.Run("svc error returns 500", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool) ([]api.ProcessNode, error) {
 			return nil, errors.New("query failed")
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
@@ -244,7 +244,7 @@ func TestHandleProcessTree(t *testing.T) {
 
 	t.Run("nil roots normalized to empty array under roots key", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool) ([]api.ProcessNode, error) {
 			return nil, nil
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
@@ -259,7 +259,7 @@ func TestHandleProcessTree(t *testing.T) {
 	t.Run("limit param above max is clamped", func(t *testing.T) {
 		t.Parallel()
 		var sawLimit int
-		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, limit int) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, limit int, _ bool) ([]api.ProcessNode, error) {
 			sawLimit = limit
 			return nil, nil
 		}}
@@ -267,6 +267,80 @@ func TestHandleProcessTree(t *testing.T) {
 		resp := doGet(t, srv, "/api/hosts/host-a/tree?limit=999999")
 		_ = resp.Body.Close()
 		assert.Equal(t, processTreeMaxLimit, sawLimit, "an absurd limit MUST be clamped to processTreeMaxLimit")
+	})
+
+	// spec:server-rest-api/per-host-process-forest/an-operator-opts-out-of-aggregation-with-flatten
+	t.Run("flatten param threads through to the query; default is aggregate-on", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name        string
+			path        string
+			wantFlatten bool
+		}{
+			{"absent flatten defaults to aggregate-on", "/api/hosts/host-a/tree", false},
+			{"flatten=1 opts out", "/api/hosts/host-a/tree?flatten=1", true},
+			{"flatten=true opts out", "/api/hosts/host-a/tree?flatten=true", true},
+			{"flatten=0 stays aggregated", "/api/hosts/host-a/tree?flatten=0", false},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				var sawFlatten bool
+				svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, flatten bool) ([]api.ProcessNode, error) {
+					sawFlatten = flatten
+					return nil, nil
+				}}
+				srv := newOperatorServer(t, svc, allowAllAuthZ{})
+				resp := doGet(t, srv, tc.path)
+				_ = resp.Body.Close()
+				assert.Equal(t, tc.wantFlatten, sawFlatten)
+			})
+		}
+	})
+
+	// spec:server-rest-api/per-host-process-forest/repeated-identical-siblings-collapse-into-an-aggregated-node
+	t.Run("aggregated node wire shape is pinned", func(t *testing.T) {
+		t.Parallel()
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool) ([]api.ProcessNode, error) {
+			return []api.ProcessNode{{
+				Process: api.Process{ID: 10, HostID: "host-a", PID: 200, PPID: 100, Path: "/usr/bin/grep", ForkTimeNs: 1000},
+				Aggregated: &api.AggregatedSiblings{
+					Count: 3, ExitedCount: 2, RunningCount: 1, FirstForkNs: 1000, LastForkNs: 3000,
+					Sample: []api.ProcessNode{{Process: api.Process{ID: 10, PID: 200, Path: "/usr/bin/grep", ForkTimeNs: 1000}}},
+				},
+			}}, nil
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/hosts/host-a/tree")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var parsed struct {
+			Roots []struct {
+				Path       string `json:"path"`
+				Aggregated *struct {
+					Count        int   `json:"count"`
+					ExitedCount  int   `json:"exited_count"`
+					RunningCount int   `json:"running_count"`
+					FirstForkNs  int64 `json:"first_fork_ns"`
+					LastForkNs   int64 `json:"last_fork_ns"`
+					Sample       []struct {
+						PID int `json:"pid"`
+					} `json:"sample"`
+				} `json:"aggregated"`
+			} `json:"roots"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&parsed))
+		require.Len(t, parsed.Roots, 1)
+		node := parsed.Roots[0]
+		assert.Equal(t, "/usr/bin/grep", node.Path)
+		require.NotNil(t, node.Aggregated, "collapsed node MUST carry the aggregated summary")
+		assert.Equal(t, 3, node.Aggregated.Count)
+		assert.Equal(t, 2, node.Aggregated.ExitedCount)
+		assert.Equal(t, 1, node.Aggregated.RunningCount)
+		assert.Equal(t, int64(1000), node.Aggregated.FirstForkNs)
+		assert.Equal(t, int64(3000), node.Aggregated.LastForkNs)
+		require.Len(t, node.Aggregated.Sample, 1)
+		assert.Equal(t, 200, node.Aggregated.Sample[0].PID)
 	})
 }
 

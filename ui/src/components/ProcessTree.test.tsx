@@ -17,6 +17,11 @@ import { ProcessTreeView } from "./ProcessTree";
 beforeAll(() => {
   (SVGElement.prototype as unknown as { getBBox: () => DOMRect }).getBBox = () =>
     ({ x: 0, y: 0, width: 40, height: 12 }) as DOMRect;
+  // d3-zoom's defaultExtent reads width.baseVal.value / height.baseVal.value off the <svg>; jsdom implements neither, so a
+  // non-empty tree render throws. Stub benign dimensions so the zoom-attach path survives when we actually lay out a forest.
+  const dim = (value: number) => ({ baseVal: { value } });
+  Object.defineProperty(SVGSVGElement.prototype, "width", { configurable: true, get: () => dim(800) });
+  Object.defineProperty(SVGSVGElement.prototype, "height", { configurable: true, get: () => dim(600) });
 });
 
 function process(id: number, pid: number, ppid: number, path: string): ProcessNode {
@@ -113,6 +118,67 @@ describe("ProcessTreeView process-optional alert", () => {
 
     expect(await screen.findByText(/isn’t attributed to a single process/i)).toBeInTheDocument();
     expect(screen.queryByText(/No processes in this time range/i)).not.toBeInTheDocument();
+  });
+});
+
+// spec:web-ui/process-tree-visualization/repeated-siblings-render-as-an-aggregated-badge
+//
+// Issue #416: the server collapses repeated identical-path siblings into one node carrying a count. The tree MUST render that as a
+// "×N" badge, expand it in place to the sample on click, and expose a Flatten toggle that refetches the raw (un-aggregated) forest.
+describe("ProcessTreeView sibling aggregation", () => {
+  const aggregatedChild: ProcessNode = {
+    ...process(10, 200, 100, "/usr/bin/grep"),
+    fork_time_ns: 1000,
+    aggregated: {
+      count: 3,
+      exited_count: 2,
+      running_count: 1,
+      first_fork_ns: 1000,
+      last_fork_ns: 3000,
+      sample: [
+        { ...process(10, 200, 100, "/usr/bin/grep"), fork_time_ns: 1000 },
+        { ...process(11, 201, 100, "/usr/bin/grep"), fork_time_ns: 2000 },
+      ],
+    },
+  };
+  const aggregatedForest: ProcessNode[] = [
+    { ...process(1, 100, 1, "/bin/bash"), children: [aggregatedChild] },
+  ];
+
+  beforeEach(() => {
+    // Flatten/showSystem persist to localStorage; clear it so a prior test's toggle can't leak into this render.
+    localStorage.clear();
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+  });
+
+  it("renders a ×N badge for an aggregated group and expands to the sample on click", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: aggregatedForest });
+    renderTree("");
+
+    // The aggregated node reads as a group header, not a single pid.
+    const badge = await screen.findByText(/grep ×3/);
+    expect(badge).toBeInTheDocument();
+    // The underlying members are not shown until the node is expanded.
+    expect(screen.queryByText(/grep \(201\)/)).not.toBeInTheDocument();
+
+    fireEvent.click(badge);
+
+    // Expanding materializes the capped sample as children in place.
+    expect(await screen.findByText(/grep \(201\)/)).toBeInTheDocument();
+  });
+
+  it("Flatten toggle refetches the raw forest with flatten=true", async () => {
+    const spy = vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: aggregatedForest });
+    renderTree("");
+    await screen.findByText(/grep ×3/);
+
+    // Initial fetch is aggregated (flatten falsy).
+    expect(spy).toHaveBeenLastCalledWith("h1", expect.any(Number), expect.any(Number), undefined, false);
+
+    fireEvent.click(screen.getByLabelText("Flatten"));
+
+    // Flipping the toggle refetches asking for the un-aggregated forest.
+    expect(spy).toHaveBeenLastCalledWith("h1", expect.any(Number), expect.any(Number), undefined, true);
   });
 });
 

@@ -70,6 +70,7 @@ const LABEL_BG_EXTRA_HEIGHT = LABEL_BG_PAD_Y * 2;
 const SYSTEM_PATH_SEGMENTS = ["/System/Library/", "/usr/libexec/", "/Library/Apple/"];
 
 const SHOW_SYSTEM_STORAGE_KEY = "edr.processTree.showSystem";
+const FLATTEN_STORAGE_KEY = "edr.processTree.flatten";
 
 type D3PointNode = d3.HierarchyPointNode<D3Node>;
 
@@ -108,7 +109,19 @@ export function ProcessTreeView() {
       return false;
     }
   });
+  // Flatten opts out of server-side sibling aggregation (issue #416): when on, the tree fetch asks for the raw forest so an analyst
+  // sees every repeated exec as its own node instead of a collapsed "×N". Persisted across reloads like showSystem.
+  const [flatten, setFlatten] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(FLATTEN_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [collapsedIds, setCollapsedIds] = useState<Set<number>>(new Set());
+  // Aggregated "×N" nodes ship collapsed; expanding one materializes its capped sample as children in place (issue #416). Keyed by
+  // the aggregated node's representative row id.
+  const [expandedAggIds, setExpandedAggIds] = useState<Set<number>>(new Set());
   // Alert focus mode: when we arrived from an alert link, the tree defaults to showing only
   // the alerted process plus its ancestors and descendants (the "related processes only" view), so
   // the analyst isn't wading through a forest of unrelated background daemons. Toggleable.
@@ -130,6 +143,10 @@ export function ProcessTreeView() {
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
   }, [showSystem]);
+
+  useEffect(() => {
+    try { localStorage.setItem(FLATTEN_STORAGE_KEY, String(flatten)); } catch { /* ignore */ }
+  }, [flatten]);
 
   // Fetch the alert so we can render a breadcrumb with title/severity/timestamp.
   useEffect(() => {
@@ -214,6 +231,13 @@ export function ProcessTreeView() {
       const out: ProcessNode[] = [];
       for (const n of nodes) {
         if (!isVisible(n)) continue;
+        // An aggregated "×N" node ships childless; when the analyst expands it, its capped sample becomes its children in place
+        // (issue #416). Its own subtree is always the sample, so the generic collapse machinery below doesn't apply to it.
+        if (n.aggregated) {
+          const sample = expandedAggIds.has(n.id) ? apply(n.aggregated.sample ?? []) : undefined;
+          out.push({ ...n, children: sample });
+          continue;
+        }
         const kids = n.children ? apply(n.children) : undefined;
         if (applyCollapse && collapsedIds.has(n.id) && kids && kids.length > 0) {
           const collapsedTotal = kids.reduce((acc, c) => acc + 1 + countDescendants(c), 0);
@@ -225,10 +249,18 @@ export function ProcessTreeView() {
       return out;
     };
     return apply(roots);
-  }, [roots, showSystem, collapsedIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds]);
+  }, [roots, showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds]);
 
   const toggleCollapsed = useCallback((nodeId: number) => {
     setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
+      return next;
+    });
+  }, []);
+
+  const toggleAggExpanded = useCallback((nodeId: number) => {
+    setExpandedAggIds((prev) => {
       const next = new Set(prev);
       if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
       return next;
@@ -254,13 +286,13 @@ export function ProcessTreeView() {
     const range = TIME_RANGES[rangeIdx];
     const from = to - range.ms * NANOSECONDS_PER_MILLISECOND;
 
-    getProcessTree(hostId, from, to)
+    getProcessTree(hostId, from, to, undefined, flatten)
       .then((res) => { setRoots(res.roots); })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Unknown error");
       })
       .finally(() => { setLoading(false); });
-  }, [hostId, rangeIdx, searchParams]);
+  }, [hostId, rangeIdx, searchParams, flatten]);
 
   // Fetch alerts for this host to mark nodes with alert badges.
   useEffect(() => {
@@ -302,9 +334,11 @@ export function ProcessTreeView() {
       layoutNodesRef.current = [];
       return;
     }
-    const result = renderTree(svgRef.current, visibleRoots, setSelectedNode, alertProcessIds, collapsedIds, toggleCollapsed);
+    const result = renderTree(
+      svgRef.current, visibleRoots, setSelectedNode, alertProcessIds, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded,
+    );
     layoutNodesRef.current = result.nodes;
-  }, [visibleRoots, alertProcessIds, collapsedIds, toggleCollapsed]);
+  }, [visibleRoots, alertProcessIds, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded]);
 
   // Focus the currently-active match: scroll the canvas so the match sits near the
   // vertical centre, preserving the user's current zoom level and scroll position
@@ -450,6 +484,19 @@ export function ProcessTreeView() {
         />
         <span className="process-tree__toggle-switch" aria-hidden="true" />
         <span className="process-tree__toggle-label">Show system</span>
+      </label>
+      <label
+        className="process-tree__toggle"
+        title={flatten ? "Every process shown; repeated execs are not grouped" : "Repeated identical execs are grouped into ×N nodes"}
+      >
+        <input
+          type="checkbox"
+          className="process-tree__toggle-input"
+          checked={flatten}
+          onChange={(e) => { setFlatten(e.target.checked); }}
+        />
+        <span className="process-tree__toggle-switch" aria-hidden="true" />
+        <span className="process-tree__toggle-label">Flatten</span>
       </label>
       <button type="button" className="process-tree__action-btn" onClick={fetchTree}>
         Refresh
@@ -731,6 +778,8 @@ function renderTree(
   alertProcessIds: Set<number> = new Set(),
   collapsedIds: Set<number> = new Set(),
   onToggleCollapsed?: (nodeId: number) => void,
+  expandedAggIds: Set<number> = new Set(),
+  onToggleAggExpanded?: (nodeId: number) => void,
 ): RenderResult {
   const hierarchy = toD3Hierarchy(roots);
   const root = d3.hierarchy(hierarchy);
@@ -800,7 +849,14 @@ function renderTree(
     .attr("transform", (d) => `translate(${String(d.y)},${String(d.x)})`)
     .style("cursor", "pointer")
     .on("click", (_, d) => {
-      onSelect(d.data.data);
+      const p = d.data.data;
+      // An aggregated "×N" node has no single process to inspect; clicking it expands the group to its sample instead of opening a
+      // detail panel (issue #416). Sample children are ordinary process nodes, so their clicks fall through to onSelect.
+      if (p.aggregated) {
+        onToggleAggExpanded?.(p.id);
+        return;
+      }
+      onSelect(p);
     });
 
   node
@@ -811,8 +867,11 @@ function renderTree(
     // search-match ring get clipped by the label backdrop.
     .attr("r", (d) => (alertProcessIds.has(d.data.data.id) ? NODE_DOT_RADIUS_ALERTED : NODE_DOT_RADIUS_DEFAULT))
     .attr("fill", (d) => {
-      if (alertProcessIds.has(d.data.data.id)) return "#ff5c83"; // core-vibrant-red
-      if (d.data.data.exit_time_ns) return "#8b8fa2";
+      const p = d.data.data;
+      if (alertProcessIds.has(p.id)) return "#ff5c83"; // core-vibrant-red
+      // An aggregated group is "live" (green) when any member is still running; otherwise grey like a single exited process.
+      if (p.aggregated) return p.aggregated.running_count > 0 ? "#009a7d" : "#8b8fa2";
+      if (p.exit_time_ns) return "#8b8fa2";
       return "#009a7d";
     });
 
@@ -821,6 +880,7 @@ function renderTree(
   // Click events on the chevron stop propagation so they don't also fire the node-select handler.
   const chevronNodes = node.filter((d) => {
     const p = d.data.data;
+    if (p.aggregated) return true; // always expandable to its sample
     return (p.children !== undefined && p.children.length > 0) || collapsedIds.has(p.id);
   });
   chevronNodes
@@ -832,10 +892,19 @@ function renderTree(
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
     .attr("fill", "#515774")
     .style("cursor", "pointer")
-    .text((d) => (collapsedIds.has(d.data.data.id) ? "▶" : "▼"))
+    .text((d) => {
+      const p = d.data.data;
+      if (p.aggregated) return expandedAggIds.has(p.id) ? "▼" : "▶";
+      return collapsedIds.has(p.id) ? "▶" : "▼";
+    })
     .on("click", (event: MouseEvent, d) => {
       event.stopPropagation();
-      onToggleCollapsed?.(d.data.data.id);
+      const p = d.data.data;
+      if (p.aggregated) {
+        onToggleAggExpanded?.(p.id);
+        return;
+      }
+      onToggleCollapsed?.(p.id);
     });
 
   node
@@ -854,8 +923,12 @@ function renderTree(
     .attr("fill", (d) => (alertProcessIds.has(d.data.data.id) ? "#ff5c83" : "#192147"))
     .attr("font-weight", (d) => (alertProcessIds.has(d.data.data.id) ? "bold" : "normal"))
     .text((d) => {
+      const p = d.data.data;
+      // Aggregated nodes read as a group header ("grep ×1000"), not a single pid; the sample members carry the individual pids
+      // once the node is expanded.
+      if (p.aggregated) return `${d.data.name} ×${String(p.aggregated.count)}`;
       const base = `${d.data.name} (${String(d.data.pid)})`;
-      const hidden = d.data.data._collapsedCount;
+      const hidden = p._collapsedCount;
       return hidden && hidden > 0 ? `${base}  +${String(hidden)}` : base;
     });
 

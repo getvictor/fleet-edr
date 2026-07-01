@@ -142,7 +142,11 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 		limit = processTreeMaxLimit
 	}
 
-	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit)
+	// Sibling aggregation is on by default (issue #416); ?flatten=1 opts out and returns the raw forest for an analyst who wants
+	// every node.
+	flatten := httpserver.ParseBoolParam(r, "flatten", false)
+
+	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit, flatten)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
 		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)

@@ -42,6 +42,20 @@ func ParseInt64Param(r *http.Request, name string, defaultVal int64) int64 {
 	return v
 }
 
+// ParseBoolParam reads a boolean query parameter, returning defaultVal when the parameter is absent or unparseable. Accepts the
+// strconv.ParseBool set (1/t/T/TRUE/true/True and their false counterparts) so ?flatten=1 and ?flatten=true both read as true.
+func ParseBoolParam(r *http.Request, name string, defaultVal bool) bool {
+	s := r.URL.Query().Get(name)
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return defaultVal
+	}
+	return v
+}
+
 // ParseTimeRange reads ?from=<ns>&to=<ns> from the request. Defaults to the last hour when either parameter is absent or unparseable
 // so the operator UI's "show recent activity" page never returns 400.
 func ParseTimeRange(r *http.Request) TimeRange {
