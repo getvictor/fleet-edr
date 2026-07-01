@@ -19,7 +19,7 @@
 
 ## 4. Enqueue hook (transactional outbox)
 
-- [ ] 4.1 In the alert insert path (`server/detection/internal/mysql/alerts.go`), inside the existing transaction and only when a new alert is persisted, select enabled destinations matching source + severity and insert one `webhook_delivery` row each; the unique key makes a deduplicated alert a no-op
+- [ ] 4.1 In the alert insert path (`server/detection/internal/mysql/alerts.go`), inside the existing transaction and only when a new alert is persisted, select enabled destinations whose event-type filter includes the created event and whose minimum severity the alert meets, and insert one `webhook_delivery` row each; the unique key makes a deduplicated alert a no-op
 - [ ] 4.2 Wrap the alert status-update path in a transaction and enqueue one status-change delivery per matching subscribed destination in the same transaction
 - [ ] 4.3 Integration test against real MySQL: enqueue-on-create, no-enqueue-on-rollback, no-enqueue-when-none, dedup no-double, status-change enqueue
 
@@ -38,7 +38,7 @@
 ## 7. Delivery worker
 
 - [ ] 7.1 Add a delivery runner to the detection pipeline; claim due `pending` rows across replicas without in-process state (same claim pattern as the processor) so each attempt is taken once
-- [ ] 7.2 Sign each request HMAC-SHA256 over `id.timestamp.body` with `webhook-id`/`webhook-timestamp`/`webhook-signature` headers (Standard Webhooks)
+- [ ] 7.2 Sign each request HMAC-SHA256 over `id.timestamp.body` with `webhook-id`/`webhook-timestamp`/`webhook-signature` headers, the signature value formatted `v1,<base64>` (Standard Webhooks)
 - [ ] 7.3 On non-2xx or transport error, schedule exponential backoff up to the attempt cap, then mark `failed`; on 2xx mark `delivered`; record last status/error
 - [ ] 7.4 Wire the worker beside the existing background workers in `server/cmd/fleet-edr-server/main.go`; clean ctx-cancel shutdown
 - [ ] 7.5 Record delivery attempts/successes/failures through the existing OTel meter pipeline

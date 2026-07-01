@@ -6,7 +6,7 @@ The server is stateless and runs multiple replicas behind a load balancer (ADR-0
 
 This change ships a secure, enterprise-usable minimum: a generic HMAC-signed HTTP POST delivered through a transactional outbox, managed at runtime through the admin surface. It is deliberately not Slack-specific or SIEM-specific; it is the raw signed-POST primitive that a customer's own glue, a SOAR runbook, or a later vendor formatter all build on. Vendor payload transforms and additional hardening are tracked as unmilestoned follow-ups.
 
-## What Changes
+## What changes
 
 - Add operator-managed webhook destinations stored in the database, each carrying a name, an https URL, an encrypted signing secret, an event-type and minimum-severity filter, and an enabled toggle. The configuration is managed at runtime through an admin surface (the same shape as SSO configuration, #375), not through static environment or file config. The signing secret is sealed at rest and is never returned by any read of a destination.
 - On alert creation, and on an alert status change, durably queue one delivery for every enabled destination whose filter matches, in the same database transaction that persists the alert (or the status change). A queued delivery is therefore never lost if the process dies immediately after commit, and is never queued if the alert itself did not persist.
@@ -19,11 +19,11 @@ Out of scope, tracked as unmilestoned follow-ups (parent #496): zero-downtime se
 
 ## Capabilities
 
-### Added Capabilities
+### Added capabilities
 
 - `alert-webhook-delivery`: operator-managed webhook destinations with a sealed write-only secret; durable, atomic enqueue of a delivery per matching destination on alert creation and status change; a signed, versioned delivery payload; reliable at-least-once delivery with retries, backoff, bounded attempts, and multi-replica safety; SSRF-safe outbound egress; and a test-send plus delivery-status readout.
 
-### Modified Capabilities
+### Modified capabilities
 
 - `web-ui`: add the Webhooks section to the admin settings area, gated on `webhook.manage`, with a write-only secret field and a delivery-health readout.
 - `server-identity-authorization`: add the `webhook.manage` action and grant it to the admin role.
