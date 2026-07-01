@@ -36,12 +36,14 @@ type fakeSender struct {
 	lastTS     int64
 	lastBody   []byte
 	lastSecret []byte
+	ids        []string
 }
 
 func (f *fakeSender) Deliver(_ context.Context, url, id string, ts int64, body, secret []byte) (int, error) {
 	i := f.calls
 	f.calls++
 	f.lastURL, f.lastID, f.lastTS = url, id, ts
+	f.ids = append(f.ids, id)
 	f.lastBody = append([]byte(nil), body...)
 	f.lastSecret = append([]byte(nil), secret...)
 	if i >= len(f.responses) {
@@ -71,6 +73,7 @@ func onlyDelivery(t *testing.T, db *sqlx.DB) deliveryState {
 }
 
 // spec:alert-webhook-delivery/delivery-is-reliable-and-at-least-once/a-transient-failure-is-retried-then-delivered
+// spec:alert-webhook-delivery/delivery-is-reliable-and-at-least-once/repeated-attempts-share-a-stable-event-id
 func TestWebhookWorker_RetryThenDeliver(t *testing.T) {
 	t.Parallel()
 	store, db, sealer := newWebhookStore(t)
@@ -108,6 +111,10 @@ func TestWebhookWorker_RetryThenDeliver(t *testing.T) {
 	assert.Equal(t, string(detapi.WebhookDeliveryDelivered), st.Status)
 	require.NotNil(t, st.LastStatusCode)
 	assert.Equal(t, 200, *st.LastStatusCode)
+
+	// Both attempts carried the same delivery id, so a receiver dedups repeated attempts of one logical delivery.
+	require.Len(t, sender.ids, 2)
+	assert.Equal(t, sender.ids[0], sender.ids[1], "the delivery id is stable across retries")
 }
 
 // spec:alert-webhook-delivery/delivery-is-reliable-and-at-least-once/a-persistently-failing-delivery-is-marked-failed-after-the-cap

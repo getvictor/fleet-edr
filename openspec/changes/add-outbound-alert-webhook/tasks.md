@@ -14,7 +14,7 @@
 
 - [x] 3.1 Detection store: CRUD for `webhook_destination`; the secret is accepted only on create/update, sealed before write, and never selected back into the read model
 - [x] 3.2 Add the `webhook.manage` action to the identity authorization catalog and grant it to `admin` (not analyst/read-only)
-- [x] 3.3 Detection operator handler: `GET/POST/PUT/DELETE` destinations + `GET` delivery status, each gated via `identityapi.HTTPGate` on `webhook.manage` (via a `WebhookAdmin` seam so `api.Service` stays untouched); registered on the operator-session + CSRF allowlist. Test-send (`POST .../test`) is a fast-follow (needs the client + sealer in the admin path)
+- [x] 3.3 Detection operator handler: `GET/POST/PUT/DELETE` destinations + `GET` delivery status + `POST .../test` (test-send via `webhook.Tester`), each gated via `identityapi.HTTPGate` on `webhook.manage` (via a `WebhookAdmin` seam so `api.Service` stays untouched); registered on the operator-session + CSRF allowlist
 - [x] 3.4 Save-time validation: reject non-https URLs and hosts that resolve only to a blocked address (see task 6)
 
 ## 4. Enqueue hook (transactional outbox)
@@ -41,12 +41,12 @@
 - [x] 7.2 Sign each request HMAC-SHA256 over `id.timestamp.body` with `Webhook-Id`/`Webhook-Timestamp`/`Webhook-Signature` headers, the signature value formatted `v1,<base64>` (Standard Webhooks)
 - [x] 7.3 On non-2xx or transport error, schedule exponential backoff up to the attempt cap, then mark `failed`; on 2xx mark `delivered`; record last status/error
 - [x] 7.4 Wire the worker beside the existing background workers via detection bootstrap (started from `main.go` `runDetection`); clean ctx-cancel shutdown; keyring label `edr/webhook/secret-seal/v1`
-- [ ] 7.5 Record delivery attempts/successes/failures through the existing OTel meter pipeline (follow-up; DB delivery-status is the operable signal for MVP)
+- [~] 7.5 Record delivery attempts/successes/failures through the existing OTel meter pipeline. DEFERRED to a separate observability enhancement: not a #496 acceptance criterion or a spec scenario; the per-destination DB delivery-status readout is the operable signal for the MVP. Add when there is dashboard/alerting demand.
 - [x] 7.6 Integration test against real MySQL: 5xx-then-2xx redelivery, fail-after-cap (hung-receiver timeout covered by the client timeout; stable delivery id across attempts)
 
 ## 8. Config knobs
 
-- [ ] 8.1 Add worker cadence, base backoff, attempt cap, request timeout, and max response size to `server/config/config.go` with a `loadWebhookConfig` helper (follow-up; MVP uses conservative pipeline defaults)
+- [~] 8.1 Add worker cadence, base backoff, attempt cap, request timeout, and max response size env knobs. DEFERRED: adding operator env knobs with no demand would be speculative config surface (repo "no speculative edge cases" rule); the conservative pipeline defaults suffice. Promote to real knobs when a deployment needs to tune them.
 
 ## 9. UI
 
@@ -59,7 +59,7 @@
 ## 10. Docs + traceability + gates
 
 - [ ] 10.1 Document the receiver-side signature verification (header names, signed content, timestamp tolerance, dedup on event id) and the payload schema for integrators
-- [x] 10.2 Add `spec:` markers tying backend tests to this change's delta scenarios (`alert-webhook-delivery`, `server-identity-authorization`); UI `web-ui` markers land with the UI
+- [x] 10.2 Add `spec:` markers tying tests to every delta scenario: all 27 `alert-webhook-delivery`, 4 `web-ui`, and 2 `server-identity-authorization` scenarios are covered (durability/rollback/two-replica/hung-receiver/stable-id via real tests, not rewords); `spectrace check` reports 0 invalid references
 - [x] 10.3 `openspec validate add-outbound-alert-webhook --strict`; `go run ./tools/spectrace check`
-- [ ] 10.4 `go test ./server/...`, `go vet -tags integration ./...`, `task lint:go`, `task lint:dashes`, `cd ui && npm test` (backend + lint done; UI pending)
+- [x] 10.4 `go test`/`go vet -tags integration`, `task lint:go` (+ strict new-code), `task lint:dashes`, `cd ui && npm test` + lint all pass; full detection integration suite green
 - [ ] 10.5 Manual QA on the dev server (Chrome MCP): configure a destination pointing at a local receiver, fire an alert, confirm the signed POST arrives and verifies, confirm the delivery-status readout, and confirm an internal URL is refused
