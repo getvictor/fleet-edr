@@ -23,6 +23,11 @@ import (
 // minutes matches the SPIFFE guidance for hot-path workload identities.
 const defaultTokenTTL = 60 * time.Minute
 
+// maxReportClockSkew bounds how far into the future a status snapshot's reported_at_ns may sit before RecordStatus clamps it to now. It
+// absorbs benign NTP-scale clock skew while denying a wildly-future stamp the power to freeze a host's health row under the store's
+// last-writer-wins ordering (see RecordStatus).
+const maxReportClockSkew = 15 * time.Minute
+
 // hardwareUUIDPattern accepts the canonical hyphenated UUID form in either case. macOS IOPlatformUUID is uppercase-hyphenated. Future
 // platforms emitting unhyphenated 32-hex strings need a matching agent + regex update.
 var hardwareUUIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
@@ -221,6 +226,35 @@ func (s *service) recordRotationAudit(ctx context.Context, hostID, actor, reason
 			"action", string(identityapi.AuditEnrollmentRotateToken),
 			"err", err)
 	}
+}
+
+// RecordStatus validates the snapshot's component statuses at the boundary, computes the server-side rollup, and upserts the latest
+// per-host health row. Validation is the one closed-set check: a component status outside HealthStatus is rejected wholesale (nothing is
+// stored) so a malformed agent cannot poison the rollup; unknown type/reason strings pass through untouched so a future signal needs no
+// server change. The components are handed to the store as the JSON driver.Value the column persists (nil for SQL NULL when empty).
+func (s *service) RecordStatus(ctx context.Context, hostID string, report api.StatusReport) error {
+	for _, c := range report.Components {
+		if !c.Status.Valid() {
+			return api.ErrInvalidStatusReport
+		}
+	}
+	components, err := report.Components.Value()
+	if err != nil {
+		return fmt.Errorf("marshal components: %w", err)
+	}
+	overall := api.Rollup(report.Components)
+	// Clamp an implausibly-future snapshot time to now. The store orders last-writer-wins by reported_at_ns, so a wildly-future stamp (a
+	// clock-skewed or hostile agent) would otherwise permanently win the race and freeze this host's health row against every later
+	// correct report. Clamping still records the snapshot but denies it the power to lock out updates; benign NTP-scale skew stays under
+	// the tolerance and passes through unchanged.
+	reportedAtNs := report.ReportedAtNs
+	if now := time.Now(); reportedAtNs > now.Add(maxReportClockSkew).UnixNano() {
+		reportedAtNs = now.UnixNano()
+	}
+	if err := s.store.UpsertHostHealth(ctx, hostID, string(overall), components, reportedAtNs); err != nil {
+		return fmt.Errorf("record host status: %w", err)
+	}
+	return nil
 }
 
 func (s *service) List(ctx context.Context) ([]api.Enrollment, error) {

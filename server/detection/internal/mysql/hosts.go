@@ -2,6 +2,8 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,22 +11,42 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// ListHosts returns a summary of all hosts that have sent events. The LEFT JOIN reaches into the endpoint context's `enrollments`
-// table (same MySQL database, keyed on the shared host_id) to decorate each row with the enrollment hostname and OS version. LEFT so
-// a host that has sent events but never enrolled still returns; COALESCE folds the outer-join NULL into "" so the scan targets stay
-// plain strings.
+// ListHosts returns a summary of all hosts that have sent events. The LEFT JOINs reach into the endpoint context's `enrollments` and
+// `host_health` tables (same MySQL database, keyed on the shared host_id) to decorate each row with the enrollment hostname and OS
+// version and the agent-health rollup. LEFT so a host that has sent events but never enrolled or never posted health still returns;
+// COALESCE folds the outer-join NULLs into "" (strings) and HostHealthUnknown (rollup) so the scan targets stay plain strings.
 func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	var hosts []api.HostSummary
 	err := s.db.SelectContext(ctx, &hosts, `
 		SELECT h.host_id, COALESCE(e.hostname, '') AS hostname, COALESCE(e.os_version, '') AS os_version,
-		       h.event_count, h.last_seen_ns
+		       h.event_count, h.last_seen_ns, COALESCE(hh.overall_status, ?) AS overall_status
 		FROM hosts h
 		LEFT JOIN enrollments e ON e.host_id = h.host_id
-		ORDER BY h.last_seen_ns DESC`)
+		LEFT JOIN host_health hh ON hh.host_id = h.host_id
+		ORDER BY h.last_seen_ns DESC`, api.HostHealthUnknown)
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
 	}
 	return hosts, nil
+}
+
+// HostHealth returns the operator-facing agent-health detail for one host, reading the endpoint context's `host_health` table (same
+// database, shared host_id). A host with no recorded snapshot is not an error: it returns OverallStatus HostHealthUnknown with null
+// Components, matching how ListHosts COALESCEs the missing row, so the detail view renders "unknown" rather than 404ing a real host
+// that simply has not checked in health yet.
+func (s *Store) HostHealth(ctx context.Context, hostID string) (api.HostHealth, error) {
+	var h api.HostHealth
+	err := s.db.GetContext(ctx, &h, `
+		SELECT overall_status, reported_at_ns, components
+		FROM host_health
+		WHERE host_id = ?`, hostID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return api.HostHealth{OverallStatus: api.HostHealthUnknown}, nil
+	}
+	if err != nil {
+		return api.HostHealth{}, fmt.Errorf("query host health: %w", err)
+	}
+	return h, nil
 }
 
 // CountOfflineHosts returns how many rows in `hosts` have `last_seen_ns` at or before the cutoff (now minus threshold). Used by the OTel

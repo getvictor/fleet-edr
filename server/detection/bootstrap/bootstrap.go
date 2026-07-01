@@ -177,6 +177,9 @@ func New(deps Deps) (*Detection, error) {
 		// The webhook admin surface reads/writes destinations through the store. Wiring it always (independent of the sealer) keeps
 		// list/get/delete working; a create/update that needs to seal a secret returns a configured-error when no root secret is set.
 		det.operatorH.SetWebhookAdmin(store)
+		// The per-host agent-health detail (GET /api/hosts/{host_id}/health) reads the endpoint context's host_health table through the
+		// same store; wire it alongside the webhook admin surface (issue #359).
+		det.operatorH.SetHostHealth(store)
 
 		processor := pipeline.NewProcessor(
 			deps.EventLog,

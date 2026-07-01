@@ -1574,6 +1574,53 @@ func TestListHosts_DecoratesWithEnrollment(t *testing.T) {
 	assert.Empty(t, byID[bareHost].OSVersion, "un-enrolled host has an empty OS version")
 }
 
+// spec:server-host-status/the-host-api-surfaces-per-host-health/the-host-list-carries-the-overall-status
+// spec:server-host-status/the-host-api-surfaces-per-host-health/a-host-with-no-snapshot-still-lists-with-unknown-health
+// spec:server-host-status/the-host-api-surfaces-per-host-health/the-host-detail-carries-the-component-conditions
+//
+// The endpoint context writes host_health (POST /api/status); this detection-side test seeds a row directly and asserts the read paths:
+// ListHosts decorates each row with the rollup (COALESCEd to "unknown" for a host with no snapshot), and Store.HostHealth returns the
+// full component conditions for the detail view and "unknown" with no components for a host that never checked in.
+func TestListHosts_DecoratesWithHealth(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const reportedHost = "HEALTH-UUID-0001"
+	const silentHost = "HEALTH-UUID-0002"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, reportedHost, time.Now()))
+	require.NoError(t, d.Service().RecordHostSeen(ctx, silentHost, time.Now().Add(-time.Minute)))
+
+	components := `[{"type":"endpoint_security_extension","status":"unhealthy","reason":"never_connected","last_transition_ns":90}]`
+	_, err := d.Store().DB().ExecContext(ctx, `
+		INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
+		VALUES (?, ?, ?, ?)`,
+		reportedHost, "unhealthy", components, 100)
+	require.NoError(t, err)
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err)
+	byID := make(map[string]api.HostSummary, len(hosts))
+	for _, h := range hosts {
+		byID[h.HostID] = h
+	}
+	require.Contains(t, byID, reportedHost)
+	assert.Equal(t, "unhealthy", byID[reportedHost].OverallStatus, "a host with a snapshot carries its rollup")
+	require.Contains(t, byID, silentHost, "a host with events but no snapshot must still appear (LEFT JOIN)")
+	assert.Equal(t, api.HostHealthUnknown, byID[silentHost].OverallStatus, "a host with no snapshot COALESCEs to unknown")
+
+	detail, err := d.Store().HostHealth(ctx, reportedHost)
+	require.NoError(t, err)
+	assert.Equal(t, "unhealthy", detail.OverallStatus)
+	assert.EqualValues(t, 100, detail.ReportedAtNs)
+	assert.Contains(t, string(detail.Components), "never_connected", "the detail carries the component conditions verbatim")
+
+	silentDetail, err := d.Store().HostHealth(ctx, silentHost)
+	require.NoError(t, err)
+	assert.Equal(t, api.HostHealthUnknown, silentDetail.OverallStatus, "no snapshot yields unknown, not an error")
+	assert.Nil(t, []byte(silentDetail.Components), "no snapshot yields null components")
+}
+
 func TestService_CountOfflineHosts(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})

@@ -26,7 +26,10 @@ func (f fakeRefreshService) RefreshToken(context.Context, string) (api.RefreshRe
 func (f fakeRefreshService) Enroll(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
 	panic("not used")
 }
-func (f fakeRefreshService) VerifyToken(context.Context, string) (string, error)  { panic("not used") }
+func (f fakeRefreshService) VerifyToken(context.Context, string) (string, error) { panic("not used") }
+func (f fakeRefreshService) RecordStatus(context.Context, string, api.StatusReport) error {
+	panic("not used")
+}
 func (f fakeRefreshService) List(context.Context) ([]api.Enrollment, error)       { panic("not used") }
 func (f fakeRefreshService) Get(context.Context, string) (*api.Enrollment, error) { panic("not used") }
 func (f fakeRefreshService) Revoke(context.Context, string, string, string) error { panic("not used") }

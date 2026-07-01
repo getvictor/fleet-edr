@@ -73,4 +73,9 @@ var (
 	// ErrNotFound is returned by Get / Revoke when the host_id has no
 	// enrollment row.
 	ErrNotFound = errors.New("endpoint: enrollment not found")
+
+	// ErrInvalidStatusReport is returned by Service.RecordStatus when a status snapshot carries a component whose status is outside the
+	// closed HealthStatus set. The check-in handler maps it to 400. Unknown component type/reason strings do NOT trigger it: only the
+	// status enum is held to a closed set, so a future signal the server does not yet recognize is still accepted and stored.
+	ErrInvalidStatusReport = errors.New("endpoint: invalid status report")
 )

@@ -729,11 +729,13 @@ func registerHostRoutes(mux *http.ServeMux, d muxDeps) {
 	hostMux := http.NewServeMux()
 	hostMux.Handle("POST /api/events", d.detectionCtx.Service().IngestHandler())
 	hostMux.Handle("POST /api/token/refresh", d.endpointCtx.TokenRefreshHandler())
+	hostMux.Handle("POST /api/status", d.endpointCtx.StatusHandler())
 	d.responseCtx.RegisterAgentRoutes(hostMux)
 	hostProtected := hostTokenMW(hostMux)
 	for _, p := range []string{
 		"POST /api/events",
 		"POST /api/token/refresh",
+		"POST /api/status",
 		"GET /api/commands",
 		"PUT /api/commands/{id}",
 	} {
