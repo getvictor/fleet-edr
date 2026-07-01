@@ -34,6 +34,9 @@ type DNSC2Beacon struct{}
 
 func (r *DNSC2Beacon) ID() string { return "dns_c2_beacon" }
 
+// SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
+func (r *DNSC2Beacon) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *DNSC2Beacon) DisplayName() string { return "DNS C2 beacon" }
 

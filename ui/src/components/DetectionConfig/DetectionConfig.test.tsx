@@ -33,6 +33,9 @@ const makeRuleEntry = (over: Partial<RuleDocEntry> = {}): RuleDocEntry => ({
   id: "suspicious_exec",
   techniques: ["T1059"],
   doc: makeRuleDoc(),
+  // Mirrors the real suspicious_exec supported set (issue #520): parent path glob plus signature dimensions. Tests that need a
+  // different set (e.g. a path-only rule) override this.
+  supported_exclusion_match_types: ["parent_path_glob", "team_id", "signing_id", "cdhash"],
   ...over,
 });
 
@@ -184,9 +187,10 @@ describe("DetectionConfig", () => {
     fireEvent.click(screen.getByRole("button", { name: /add exclusion/i }));
 
     await waitFor(() => {
+      // Selecting the rule defaulted the match type to its first supported type (parent_path_glob for suspicious_exec).
       expect(create).toHaveBeenCalledWith({
         rule_id: "suspicious_exec",
-        match_type: "path_glob",
+        match_type: "parent_path_glob",
         value: "*/foo/*",
         reason: "benign tool",
       });
@@ -215,6 +219,63 @@ describe("DetectionConfig", () => {
     renderPage();
     await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
     expect(screen.getByRole("button", { name: /add exclusion/i })).toBeDisabled();
+  });
+
+  // The match-type picker offers ONLY the match types the selected rule consults (issue #520), in canonical display order, so an
+  // operator cannot create an exclusion the rule would silently ignore.
+  // spec:web-ui/detection-configuration-admin-views/exclusion-match-type-picker-offers-only-the-supported-types-for-a-rule
+  it("offers only the selected rule's supported match types, in display order", async () => {
+    stubReads({
+      rules: [
+        makeRuleEntry({
+          id: "suspicious_exec",
+          doc: makeRuleDoc({ title: "Suspicious execution" }),
+          supported_exclusion_match_types: ["team_id", "cdhash", "parent_path_glob"],
+        }),
+      ],
+    });
+    renderPage();
+    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+
+    // Before a rule is picked the match-type select is disabled with a prompt option.
+    const matchSelect = screen.getByLabelText("Match type");
+    expect(matchSelect).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
+    // Options are the supported set intersected with the canonical order (parent_path_glob, team_id, cdhash), not the raw eight.
+    const options = within(screen.getByLabelText("Match type")).getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["parent_path_glob", "team_id", "cdhash"]);
+    expect(screen.getByLabelText("Match type")).not.toBeDisabled();
+  });
+
+  // Switching rules re-scopes the picker to the newly selected rule and resets the selection so a stale unsupported type can't submit.
+  it("resets the match-type selection when the rule changes", async () => {
+    stubReads({
+      rules: [
+        makeRuleEntry({ id: "suspicious_exec", doc: makeRuleDoc({ title: "Suspicious execution" }),
+          supported_exclusion_match_types: ["parent_path_glob", "team_id"] }),
+        makeRuleEntry({ id: "sudoers_tamper", doc: makeRuleDoc({ title: "Sudoers tamper" }),
+          supported_exclusion_match_types: ["path_glob"] }),
+      ],
+    });
+    const create = vi.spyOn(api, "createDetectionExclusion").mockResolvedValue(makeExclusion());
+    renderPage();
+    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
+    expect(screen.getByLabelText("Match type")).toHaveValue("parent_path_glob");
+
+    fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "sudoers_tamper" } });
+    expect(screen.getByLabelText("Match type")).toHaveValue("path_glob");
+    const options = within(screen.getByLabelText("Match type")).getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["path_glob"]);
+
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "/etc/sudoers" } });
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "package manager" } });
+    fireEvent.click(screen.getByRole("button", { name: /add exclusion/i }));
+    await waitFor(() => {
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ rule_id: "sudoers_tamper", match_type: "path_glob" }));
+    });
   });
 
   it("deletes an exclusion with an audit reason", async () => {

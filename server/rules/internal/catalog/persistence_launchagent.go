@@ -24,6 +24,11 @@ type PersistenceLaunchAgent struct {
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
 
+// SupportedExclusionMatchTypes lists the match types this rule consults: the LaunchAgent plist writer path glob (issue #520).
+func (r *PersistenceLaunchAgent) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
+	return []api.ExclusionMatchType{api.ExclusionMatchPathGlob}
+}
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *PersistenceLaunchAgent) DisplayName() string { return "LaunchAgent persistence" }
 

@@ -24,6 +24,9 @@ type DyldInsert struct{}
 
 func (r *DyldInsert) ID() string { return "dyld_insert" }
 
+// SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
+func (r *DyldInsert) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *DyldInsert) DisplayName() string { return "DYLD injection on exec" }
 

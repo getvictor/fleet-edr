@@ -61,6 +61,18 @@ type SuspiciousExec struct {
 
 func (r *SuspiciousExec) ID() string { return "suspicious_exec" }
 
+// SupportedExclusionMatchTypes lists the match types parentExcluded consults: the non-shell parent's path glob plus its code-signing
+// identity (team_id / signing_id / cdhash), so an operator can exclude a benign signed parent (e.g. a Developer-ID developer tool) by
+// its non-spoofable signature rather than a path glob a writable-directory attacker can land inside (issue #520).
+func (r *SuspiciousExec) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
+	return []api.ExclusionMatchType{
+		api.ExclusionMatchParentPathGlob,
+		api.ExclusionMatchTeamID,
+		api.ExclusionMatchSigningID,
+		api.ExclusionMatchCDHash,
+	}
+}
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519). Both trigger arms (the
 // temp-path exec and the outbound network_connect) emit this one title; which arm fired lives in the finding Description, so the
 // alert maps 1:1 to the one rule an operator can look up (SIEM/Sigma catalog convention) rather than forking into two titles.
@@ -510,14 +522,34 @@ func (r *SuspiciousExec) makeExecFinding(
 	}
 }
 
-// parentExcluded reports whether the given non-shell parent process is excluded for hostID (match type parent_path_glob, value = the
-// parent path). A nil parent (shell parented at launchd, or parent not yet materialised) never matches: those are the cases the rule
-// must continue to flag because there's no human-attested entry point. Glob semantics live in the resolver (api.GlobMatch).
+// parentExcluded reports whether the given non-shell parent process is excluded for hostID. It matches four dimensions of the parent
+// (issue #520): the path glob (match type parent_path_glob) and the parent's already-persisted code-signing identity (team_id,
+// signing_id, cdhash). The signature dimensions let an operator exclude a benign signed parent (e.g. a Developer-ID developer tool
+// such as Claude Code) by a non-spoofable identifier rather than a path glob an attacker who can write to /tmp can land inside. A nil
+// parent (shell parented at launchd, or parent not yet materialised) never matches: those are the cases the rule must continue to
+// flag because there's no human-attested entry point. Glob semantics live in the resolver (api.GlobMatch).
 func (r *SuspiciousExec) parentExcluded(parent *api.Process, hostID string) bool {
 	if r.Exclusions == nil || parent == nil {
 		return false
 	}
-	return r.Exclusions.Excluded(r.ID(), api.ExclusionMatchParentPathGlob, parent.Path, hostID)
+	if r.Exclusions.Excluded(r.ID(), api.ExclusionMatchParentPathGlob, parent.Path, hostID) {
+		return true
+	}
+	if len(parent.CodeSigning) > 0 {
+		var cs codeSigningJSON
+		// A malformed blob is unexpected (the agent writes it), so a decode error just means "no signature to match on" rather than a
+		// rule failure: fall through to the cdhash check.
+		if err := json.Unmarshal(parent.CodeSigning, &cs); err == nil {
+			if cs.TeamID != "" && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchTeamID, cs.TeamID, hostID) {
+				return true
+			}
+			if cs.SigningID != "" && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchSigningID, cs.SigningID, hostID) {
+				return true
+			}
+		}
+	}
+	return parent.CDHash != nil && *parent.CDHash != "" &&
+		r.Exclusions.Excluded(r.ID(), api.ExclusionMatchCDHash, *parent.CDHash, hostID)
 }
 
 // dnsPort is the well-known DNS port. An outbound connection to it to a local-resolver-class address is name resolution against the

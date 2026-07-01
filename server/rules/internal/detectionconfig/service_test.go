@@ -67,6 +67,86 @@ func TestService_CreateExclusion_PersistsResolvesAndAudits(t *testing.T) {
 	assert.Equal(t, "Claude Code CLI", ev.Payload["reason"])
 }
 
+// TestService_CreateExclusion_ValidatesSupport covers the (rule_id, match_type) validation wired via SetRuleExclusionSupport
+// (issue #520): with the capability map set, an unsupported pair, an unknown rule, and a rule that accepts no exclusions are all
+// rejected as ErrInvalidRequest, while a supported pair persists. When the map is left unset (the default), validation is skipped so
+// the store-level tests keep working.
+//
+// spec:server-detection-rules-engine/durable-detection-configuration-surface/creating-an-exclusion-for-a-match-type-the-rule-does-not-consult-is-rejected
+// spec:server-detection-rules-engine/durable-detection-configuration-surface/creating-an-exclusion-for-an-unknown-rule-is-rejected
+func TestService_CreateExclusion_ValidatesSupport(t *testing.T) {
+	t.Parallel()
+	actor := &identityapi.Actor{Principal: identityapi.UserPrincipal(1, "ops@fleetdm.com")}
+	support := map[string][]api.ExclusionMatchType{
+		"suspicious_exec": {api.ExclusionMatchParentPathGlob, api.ExclusionMatchTeamID},
+		"dns_c2_beacon":   {},
+	}
+
+	t.Run("supported pair persists", func(t *testing.T) {
+		t.Parallel()
+		svc := newService(t, &fakeAudit{})
+		svc.SetRuleExclusionSupport(support)
+		excl, err := svc.CreateExclusion(context.Background(), actor, "benign", detectionconfig.CreateExclusionInput{
+			RuleID: "suspicious_exec", MatchType: api.ExclusionMatchTeamID, Value: "Q6L2SF6YDW",
+		})
+		require.NoError(t, err)
+		assert.NotZero(t, excl.ID)
+	})
+
+	t.Run("unsupported match type for the rule is rejected", func(t *testing.T) {
+		t.Parallel()
+		svc := newService(t, &fakeAudit{})
+		svc.SetRuleExclusionSupport(support)
+		_, err := svc.CreateExclusion(context.Background(), actor, "benign", detectionconfig.CreateExclusionInput{
+			RuleID: "suspicious_exec", MatchType: api.ExclusionMatchDomain, Value: "example.com",
+		})
+		require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "does not support match_type")
+	})
+
+	t.Run("unknown rule id is rejected", func(t *testing.T) {
+		t.Parallel()
+		svc := newService(t, &fakeAudit{})
+		svc.SetRuleExclusionSupport(support)
+		_, err := svc.CreateExclusion(context.Background(), actor, "benign", detectionconfig.CreateExclusionInput{
+			RuleID: "no_such_rule", MatchType: api.ExclusionMatchTeamID, Value: "X",
+		})
+		require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "does not name a registered rule")
+	})
+
+	t.Run("empty rule id is rejected", func(t *testing.T) {
+		t.Parallel()
+		svc := newService(t, &fakeAudit{})
+		svc.SetRuleExclusionSupport(support)
+		_, err := svc.CreateExclusion(context.Background(), actor, "benign", detectionconfig.CreateExclusionInput{
+			RuleID: "", MatchType: api.ExclusionMatchTeamID, Value: "X",
+		})
+		require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "does not name a registered rule")
+	})
+
+	t.Run("rule that accepts no exclusions is rejected", func(t *testing.T) {
+		t.Parallel()
+		svc := newService(t, &fakeAudit{})
+		svc.SetRuleExclusionSupport(support)
+		_, err := svc.CreateExclusion(context.Background(), actor, "benign", detectionconfig.CreateExclusionInput{
+			RuleID: "dns_c2_beacon", MatchType: api.ExclusionMatchDomain, Value: "example.com",
+		})
+		require.ErrorIs(t, err, detectionconfig.ErrInvalidRequest)
+		assert.Contains(t, err.Error(), "does not accept exclusions")
+	})
+
+	t.Run("validation skipped when support map unset", func(t *testing.T) {
+		t.Parallel()
+		svc := newService(t, &fakeAudit{}) // no SetRuleExclusionSupport
+		_, err := svc.CreateExclusion(context.Background(), actor, "benign", detectionconfig.CreateExclusionInput{
+			RuleID: "anything", MatchType: api.ExclusionMatchDomain, Value: "example.com",
+		})
+		require.NoError(t, err, "with no capability map wired the pair check is skipped")
+	})
+}
+
 func TestService_UpsertRuleSetting_ResolvesAndAudits(t *testing.T) {
 	t.Parallel()
 	audit := &fakeAudit{}

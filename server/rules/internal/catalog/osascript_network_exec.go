@@ -36,6 +36,9 @@ type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
 
+// SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
+func (r *OsascriptNetworkExec) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *OsascriptNetworkExec) DisplayName() string { return "AppleScript dropper" }
 

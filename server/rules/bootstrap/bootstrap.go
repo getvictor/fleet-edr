@@ -89,6 +89,15 @@ func New(deps Deps) (*Rules, error) {
 	rules := catalog.New(detectionConfigSvc)
 	svc := service.New(rules, logger)
 
+	// Inject the per-rule exclusion-support map (issue #520) built from the live rule set so the create-exclusion API rejects a
+	// (rule_id, match_type) pair no rule consults, and a rule_id that names no registered rule. Single source of truth: each rule's
+	// SupportedExclusionMatchTypes(), the same set GET /api/rules surfaces to the admin UI.
+	exclusionSupport := make(map[string][]api.ExclusionMatchType, len(rules))
+	for _, r := range rules {
+		exclusionSupport[r.ID()] = r.SupportedExclusionMatchTypes()
+	}
+	detectionConfigSvc.SetRuleExclusionSupport(exclusionSupport)
+
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
 
@@ -219,9 +228,10 @@ func (c catalogList) List() []api.RuleMetadata {
 	out := make([]api.RuleMetadata, 0, len(c))
 	for _, r := range c {
 		out = append(out, api.RuleMetadata{
-			ID:         r.ID(),
-			Techniques: r.Techniques(),
-			Doc:        r.Doc(),
+			ID:                           r.ID(),
+			Techniques:                   r.Techniques(),
+			Doc:                          r.Doc(),
+			SupportedExclusionMatchTypes: r.SupportedExclusionMatchTypes(),
 		})
 	}
 	return out

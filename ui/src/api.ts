@@ -417,6 +417,10 @@ export interface RuleDocEntry {
   id: string;
   techniques: string[];
   doc: RuleDoc;
+  // The exclusion match types this rule actually consults (issue #520). The detection-tuning exclusion editor offers only these for
+  // the selected rule, so an operator cannot create an exclusion the rule would silently ignore. Optional so an older server response
+  // that predates the field degrades to "offer nothing".
+  supported_exclusion_match_types?: string[];
 }
 
 // fetchRuleDocs returns every registered detection rule with its operator-
