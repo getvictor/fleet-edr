@@ -1,22 +1,22 @@
 ## 1. Wire format
 
-- [ ] 1.1 Define `StatusReport` (agent version, reported-at, `[]ComponentHealth`) and `ComponentHealth` (`type`, `status`, `reason`, `message`, `last_transition_ns`) in `server/endpoint/api/types.go` with JSON tags; `status` documented as the closed set `healthy|degraded|unhealthy|unknown`
-- [ ] 1.2 PBT round-trip (`Marshal ∘ Unmarshal == identity`) with `pgregory.net/rapid`, plus an example-based wire pin of the endpoint-security + network-extension snapshot shape
-- [ ] 1.3 `Scan ∘ Value == identity` for the JSON `components` column type
+- [x] 1.1 Define `StatusReport` (agent version, reported-at, `[]ComponentHealth`) and `ComponentHealth` (`type`, `status`, `reason`, `message`, `last_transition_ns`) in `server/endpoint/api/status.go` with JSON tags; `status` is the closed `HealthStatus` set `healthy|degraded|unhealthy|unknown` with a `Valid()` boundary check
+- [x] 1.2 PBT round-trip (`Marshal ∘ Unmarshal == identity`) with `pgregory.net/rapid`, plus an example-based wire pin of the endpoint-security + network-extension snapshot shape
+- [x] 1.3 `Scan ∘ Value == identity` for the `Components` JSON column type
 
 ## 2. Server persistence and check-in (endpoint context)
 
-- [ ] 2.1 Migration `server/endpoint/migrations/00005_host_health.sql` (`+goose Up`/`Down`): `host_health` (host_id PK, overall_status VARCHAR(16), components JSON, reported_at_ns BIGINT, updated_at TIMESTAMP), index on `overall_status`; Down drops the table
-- [ ] 2.2 Store: last-writer-wins upsert keyed on `host_id`; read latest snapshot for one host; read overall status for the host list
-- [ ] 2.3 Service: validate `status` against the closed set at the boundary (reject unknown status, accept unknown `type`/`reason`); compute the worst-of rollup (`unhealthy` > `degraded` > `healthy`; empty -> `unknown`)
-- [ ] 2.4 Handler `POST /api/status` behind the host-token middleware (`server/endpoint/internal/middleware/hosttoken.go`); optionally bump `last_seen_ns` as a liveness side effect without removing the command-poll heartbeat
-- [ ] 2.5 Table-driven + integration tests (real MySQL via `testdb/full.Open`): upsert replaces prior, unknown type stored verbatim, invalid status rejected, unauthenticated rejected, rollup matrix
+- [x] 2.1 Migration `server/endpoint/migrations/00005_host_health.sql` (`+goose Up`/`Down`): `host_health` (host_id PK, overall_status VARCHAR(16), components JSON NULL, reported_at_ns BIGINT, updated_at TIMESTAMP), index on `overall_status`; Down drops the table
+- [x] 2.2 Store `UpsertHostHealth`: last-writer-wins upsert keyed on `host_id`, guarded by an IF/GREATEST on `reported_at_ns` so a stale post cannot clobber a fresher snapshot (`server/endpoint/internal/mysql/health.go`)
+- [x] 2.3 Service `RecordStatus`: validate `status` against the closed set at the boundary (reject unknown status wholesale, accept unknown `type`/`reason`); compute the worst-of rollup via `api.Rollup` (`unhealthy` > `degraded` > `healthy`; empty -> `unknown`)
+- [x] 2.4 Handler `POST /api/status` behind the host-token middleware, reading the pinned host_id; mounted in the host-token mux in `cmd/main`
+- [x] 2.5 Table-driven (`Rollup`), handler unit (all branches), and integration tests (real MySQL): upsert replaces prior, last-writer-wins, unknown type stored verbatim, invalid status 400, unauthenticated 401
 
 ## 3. Host API surface
 
-- [ ] 3.1 Add `OverallStatus` to `HostSummary` (`server/detection/api/types.go`) and a `LEFT JOIN host_health` with `COALESCE(overall_status,'unknown')` in `ListHosts` (`server/detection/internal/mysql/hosts.go`), mirroring the existing enrollments join
-- [ ] 3.2 Add the full component list to the single-host detail response
-- [ ] 3.3 Integration test: post a snapshot, then the host list carries `overall_status` and the detail carries the components; a host with no snapshot lists as `unknown`
+- [x] 3.1 Add `OverallStatus` to `HostSummary` (`server/detection/api/types.go`) and a `LEFT JOIN host_health` with `COALESCE(overall_status, HostHealthUnknown)` in `ListHosts` (`server/detection/internal/mysql/hosts.go`), mirroring the existing enrollments join
+- [x] 3.2 Add `GET /api/hosts/{host_id}/health` returning the full component list via a `HostHealthReader` seam on the operator handler (mirrors the `WebhookAdmin` seam so `api.Service` and its mocks stay untouched); store `HostHealth` read passes components through as raw JSON
+- [x] 3.3 Integration test: seed a snapshot, then the host list carries `overall_status` and the detail carries the components; a host with no snapshot lists + reads as `unknown`
 
 ## 4. Agent health registry
 

@@ -65,6 +65,7 @@ type Handler struct {
 	audit         identityapi.AuditRecorder
 	webhookAdmin  WebhookAdmin
 	webhookTester webhookTester
+	hostHealth    HostHealthReader
 	logger        *slog.Logger
 }
 
@@ -92,6 +93,7 @@ func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 // RegisterRoutes registers the operator routes on the given mux.
 func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/hosts", h.handleListHosts)
+	mux.HandleFunc("GET /api/hosts/{host_id}/health", h.handleHostHealth)
 	mux.HandleFunc("GET /api/hosts/{host_id}/tree", h.handleProcessTree)
 	mux.HandleFunc("GET /api/hosts/{host_id}/processes/{pid}", h.handleProcessDetail)
 

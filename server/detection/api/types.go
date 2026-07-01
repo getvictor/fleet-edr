@@ -93,6 +93,24 @@ type HostSummary struct {
 	OSVersion  string `db:"os_version" json:"os_version"`
 	EventCount int64  `db:"event_count" json:"event_count"`
 	LastSeenNs int64  `db:"last_seen_ns" json:"last_seen_ns"`
+	// OverallStatus is the server-computed agent-health rollup for the host (issue #359), sourced from the endpoint context's host_health
+	// table (LEFT JOIN in ListHosts) and COALESCEd to HostHealthUnknown for a host that has never posted a status snapshot. It is the
+	// Hosts-list badge signal, distinct from the online/offline pill the UI derives from LastSeenNs.
+	OverallStatus string `db:"overall_status" json:"overall_status"`
+}
+
+// HostHealthUnknown is the overall-status value for a host with no recorded status snapshot: the agent has never checked in health, so
+// the server knows nothing rather than asserting healthy. Matches the endpoint context's HealthUnknown spelling across the shared DB.
+const HostHealthUnknown = "unknown"
+
+// HostHealth is the operator-facing per-host agent-health detail served at GET /api/hosts/{host_id}/health. OverallStatus is the
+// server-computed rollup; ReportedAtNs is the agent-stamped snapshot time; Components is the full ComponentHealth list exactly as the
+// agent sent it, passed through as raw JSON so a new component type needs no server change. A host with no snapshot yields
+// OverallStatus HostHealthUnknown and null Components.
+type HostHealth struct {
+	OverallStatus string      `db:"overall_status" json:"overall_status"`
+	ReportedAtNs  int64       `db:"reported_at_ns" json:"reported_at_ns"`
+	Components    NullRawJSON `db:"components" json:"components"`
 }
 
 // Host is the operator-visible row from the hosts summary table. Mirrors HostSummary but adds updated_at; both are kept distinct
