@@ -59,6 +59,26 @@ func TestClient_DeliverSignsAndPosts(t *testing.T) {
 	assert.Equal(t, want, gotSig)
 }
 
+// TestClient_HungReceiverTimesOut proves the per-request timeout bounds a hung receiver, so one slow destination cannot stall the
+// delivery worker's progress through the rest of the queue.
+// spec:alert-webhook-delivery/delivery-is-reliable-and-at-least-once/a-hung-receiver-does-not-stall-other-deliveries
+func TestClient_HungReceiverTimesOut(t *testing.T) {
+	t.Parallel()
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-block // hang until the test tears down
+	}))
+	defer srv.Close()
+	defer close(block)
+
+	start := time.Now()
+	code, err := newClient(150*time.Millisecond, 64*1024, allowLoopback).Deliver(context.Background(), srv.URL, "id", 1, []byte("{}"), []byte("s"))
+	require.Error(t, err, "a hung receiver must surface as a timeout error, not block forever")
+	assert.Zero(t, code)
+	assert.Less(t, time.Since(start), 3*time.Second, "the per-request timeout bounds the attempt")
+}
+
+// spec:alert-webhook-delivery/outbound-delivery-is-protected-against-ssrf/a-redirect-to-an-internal-target-is-not-followed
 func TestClient_DoesNotFollowRedirect(t *testing.T) {
 	t.Parallel()
 	var reached bool

@@ -379,3 +379,35 @@ func TestAllow_SSOManage_OnlyAdminAndSuperAdmin(t *testing.T) {
 		})
 	}
 }
+
+// webhook.manage gates the outbound-webhook configuration surface (issue #496). The seeded matrix grants it to admin explicitly and to
+// super_admin via the wildcard; analyst, senior_analyst, and auditor must be denied.
+// spec:server-identity-authorization/a-webhook-management-permission-gates-the-webhook-configuration-surface/the-admin-role-holds-the-webhook-management-action
+// spec:server-identity-authorization/a-webhook-management-permission-gates-the-webhook-configuration-surface/the-analyst-role-does-not-hold-the-webhook-management-action
+func TestAllow_WebhookManage_OnlyAdminAndSuperAdmin(t *testing.T) {
+	t.Parallel()
+	e, _ := newEngine(t)
+	cases := []struct {
+		roleID    string
+		wantAllow bool
+	}{
+		{"super_admin", true},
+		{"admin", true},
+		{"senior_analyst", false},
+		{"analyst", false},
+		{"auditor", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.roleID, func(t *testing.T) {
+			t.Parallel()
+			actor := actorWithRoles(1, "default", globalBinding(tc.roleID, "default"))
+			ctx := api.WithActor(t.Context(), actor)
+			d, err := e.Allow(ctx, api.ActionWebhookManage, api.Resource{Type: "webhook"})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAllow, d.Allow, "decision %+v", d)
+			if !tc.wantAllow {
+				assert.Equal(t, api.ReasonNoMatchingRule, d.Reason)
+			}
+		})
+	}
+}

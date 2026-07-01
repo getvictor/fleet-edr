@@ -38,4 +38,15 @@ describe("SettingsLayout", () => {
     expect(screen.getByRole("link", { name: "Service accounts" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Single sign-on" })).not.toHaveAttribute("aria-current");
   });
+
+  // spec:web-ui/the-settings-area-manages-webhook-destinations/the-webhooks-section-is-hidden-without-the-manage-grant
+  it("shows the Webhooks section only with webhook.manage", () => {
+    renderLayout([PermissionAction.WebhookManage]);
+    expect(screen.getByRole("link", { name: "Webhooks" })).toHaveAttribute("href", "/admin/settings/webhooks");
+  });
+
+  it("hides the Webhooks section without webhook.manage", () => {
+    renderLayout([PermissionAction.ServiceAccountRead]);
+    expect(screen.queryByRole("link", { name: "Webhooks" })).not.toBeInTheDocument();
+  });
 });

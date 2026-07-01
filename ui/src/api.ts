@@ -778,6 +778,11 @@ export async function listWebhookDeliveries(id: number): Promise<WebhookDelivery
   return fetchJSON<WebhookDelivery[]>(`/settings/webhooks/${String(id)}/deliveries`);
 }
 
+// testWebhook sends a signed test delivery to the destination and returns the immediate outcome; it creates no alert.
+export async function testWebhook(id: number): Promise<{ ok: boolean; status_code?: number; error?: string }> {
+  return fetchJSON<{ ok: boolean; status_code?: number; error?: string }>(`/settings/webhooks/${String(id)}/test`, { method: "POST" });
+}
+
 // --- Service accounts (issue #376) ----------------------------------------------
 
 // ServiceAccount is the read shape from GET /api/settings/service-accounts. The secret is

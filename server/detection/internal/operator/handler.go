@@ -60,11 +60,12 @@ type alertDetailResponse struct {
 
 // Handler serves the operator-facing detection routes.
 type Handler struct {
-	svc          api.Service
-	authz        identityapi.AuthZ
-	audit        identityapi.AuditRecorder
-	webhookAdmin WebhookAdmin
-	logger       *slog.Logger
+	svc           api.Service
+	authz         identityapi.AuthZ
+	audit         identityapi.AuditRecorder
+	webhookAdmin  WebhookAdmin
+	webhookTester webhookTester
+	logger        *slog.Logger
 }
 
 // New creates a detection operator handler. authz is the authorization chokepoint every privileged route gates on; callers also

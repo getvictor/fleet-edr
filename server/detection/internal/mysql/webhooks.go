@@ -150,6 +150,23 @@ func (s *Store) ListWebhookDestinations(ctx context.Context) ([]detapi.WebhookDe
 	return out, nil
 }
 
+// LoadWebhookDestinationForDelivery returns a destination's URL and sealed signing secret for the test-send path, which needs the
+// sealed bytes the read model deliberately omits. Returns ErrWebhookNotFound for an unknown id.
+func (s *Store) LoadWebhookDestinationForDelivery(ctx context.Context, id int64) (url string, sealed []byte, err error) {
+	var row struct {
+		URL          string `db:"url"`
+		SecretSealed []byte `db:"secret_sealed"`
+	}
+	getErr := s.db.GetContext(ctx, &row, "SELECT url, secret_sealed FROM webhook_destination WHERE id = ?", id)
+	if errors.Is(getErr, sql.ErrNoRows) {
+		return "", nil, ErrWebhookNotFound
+	}
+	if getErr != nil {
+		return "", nil, fmt.Errorf("load webhook destination %d for delivery: %w", id, getErr)
+	}
+	return row.URL, row.SecretSealed, nil
+}
+
 // GetWebhookDestination returns one destination or ErrWebhookNotFound.
 func (s *Store) GetWebhookDestination(ctx context.Context, id int64) (detapi.WebhookDestination, error) {
 	var r webhookDestinationRow

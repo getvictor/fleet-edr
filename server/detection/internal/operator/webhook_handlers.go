@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 
@@ -37,6 +38,14 @@ type WebhookAdmin interface {
 	UpdateWebhookDestination(ctx context.Context, id int64, in api.WebhookDestinationInput) error
 	DeleteWebhookDestination(ctx context.Context, id int64) error
 	ListWebhookDeliveries(ctx context.Context, destinationID int64, limit int) ([]api.WebhookDelivery, error)
+	LoadWebhookDestinationForDelivery(ctx context.Context, id int64) (url string, sealed []byte, err error)
+}
+
+// webhookTester sends a signed test delivery to a destination and returns the HTTP status (0 on a transport/SSRF-block error). It is
+// separate from WebhookAdmin because it lives in the webhook package (which the store imports for URL validation), so folding it into
+// the store-backed admin surface would create an import cycle. webhook.Tester satisfies it.
+type webhookTester interface {
+	SendTest(ctx context.Context, url string, sealed []byte) (int, error)
 }
 
 // SetWebhookAdmin installs the webhook configuration surface. Optional: when it is not set the webhook routes respond 503
@@ -44,12 +53,62 @@ type WebhookAdmin interface {
 // surfaces its own 503 from the store. Called after New.
 func (h *Handler) SetWebhookAdmin(a WebhookAdmin) { h.webhookAdmin = a }
 
+// SetWebhookTester installs the test-send capability. Optional: without it (no root secret configured) the test-send route responds
+// 503. Bootstrap wires it alongside the delivery worker when a root secret is present.
+func (h *Handler) SetWebhookTester(t webhookTester) { h.webhookTester = t }
+
 func (h *Handler) registerWebhookRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/settings/webhooks", h.handleListWebhooks)
 	mux.HandleFunc("POST /api/settings/webhooks", h.handleCreateWebhook)
 	mux.HandleFunc("PUT /api/settings/webhooks/{id}", h.handleUpdateWebhook)
 	mux.HandleFunc("DELETE /api/settings/webhooks/{id}", h.handleDeleteWebhook)
 	mux.HandleFunc("GET /api/settings/webhooks/{id}/deliveries", h.handleListWebhookDeliveries)
+	mux.HandleFunc("POST /api/settings/webhooks/{id}/test", h.handleTestWebhook)
+}
+
+// handleTestWebhook sends a signed test delivery to a destination and reports the immediate outcome, without creating an alert. It is
+// gated on webhook.manage and subject to the same SSRF guards + signing as a real delivery.
+func (h *Handler) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
+	if !h.gateWebhook(w, r) {
+		return
+	}
+	if h.webhookTester == nil {
+		h.writeError(r.Context(), w, http.StatusServiceUnavailable, errWebhookNotConfigured)
+		return
+	}
+	id, ok := h.webhookID(w, r)
+	if !ok {
+		return
+	}
+	url, sealed, err := h.webhookAdmin.LoadWebhookDestinationForDelivery(r.Context(), id)
+	if err != nil {
+		h.writeWebhookErr(w, r, err)
+		return
+	}
+	code, sendErr := h.webhookTester.SendTest(r.Context(), url, sealed)
+	resp := map[string]any{"ok": sendErr == nil && code >= 200 && code < 300, "status_code": code}
+	if sendErr != nil {
+		// Never echo sendErr.Error() verbatim: the SSRF guard names the resolved blocked address and transport errors carry
+		// host:port detail, so returning the raw string would disclose internal network topology to an operator who only controls
+		// the hostname (and pin the response contract to unstable stdlib error text). Map to a stable, safe reason; log the detail.
+		h.logger.WarnContext(r.Context(), "webhook test-send failed", "destination_id", id, "err", sendErr)
+		resp["error"] = testSendReason(sendErr)
+	}
+	h.writeJSON(w, r, resp)
+}
+
+// testSendReason maps a delivery error to a stable, operator-safe reason. It intentionally drops the underlying error text so the API
+// neither leaks the SSRF-resolved internal address nor depends on unstable stdlib error strings; the full error is logged server-side.
+func testSendReason(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, webhook.ErrBlockedURL):
+		return "destination address is not allowed"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "request timed out"
+	default:
+		return "delivery failed"
+	}
 }
 
 // gateWebhook runs the shared authz + configured checks every webhook route funnels through. It returns false (and has written the

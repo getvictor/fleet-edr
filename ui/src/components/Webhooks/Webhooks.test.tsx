@@ -20,6 +20,7 @@ afterEach(() => {
 });
 
 describe("Webhooks", () => {
+  // spec:web-ui/the-settings-area-manages-webhook-destinations/the-secret-field-is-write-only
   it("lists destinations and keeps the secret field write-only", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
     render(<Webhooks />);
@@ -40,6 +41,7 @@ describe("Webhooks", () => {
     expect(await screen.findByText("Disabled")).toBeInTheDocument();
   });
 
+  // spec:web-ui/the-settings-area-manages-webhook-destinations/an-admin-adds-a-destination-from-the-settings-area
   it("creates a destination and refreshes the list", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValueOnce([]).mockResolvedValueOnce([dest]);
     const create = vi.spyOn(api, "createWebhook").mockResolvedValue(dest);
@@ -189,6 +191,38 @@ describe("Webhooks", () => {
     expect(screen.getByText("failed")).toBeInTheDocument();
     // The pending row has no status code, rendering the "-" fallback.
     expect(screen.getByText("-")).toBeInTheDocument();
+  });
+
+  // spec:web-ui/the-settings-area-manages-webhook-destinations/an-operator-tests-a-destination-from-the-ui
+  it("sends a test delivery and shows the outcome", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    const send = vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: true, status_code: 200 });
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    await waitFor(() => {
+      expect(send).toHaveBeenCalledWith(1);
+    });
+    expect(await screen.findByText("Delivered (200)")).toBeInTheDocument();
+  });
+
+  it("shows a failed test delivery outcome", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: false, error: "connection refused" });
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("connection refused")).toBeInTheDocument();
+  });
+
+  it("shows the HTTP status code when a test delivery fails without an error message", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    // A non-2xx receiver response carries no transport error, so the status code is the only diagnostic to surface.
+    vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: false, status_code: 500 });
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("Failed (500)")).toBeInTheDocument();
   });
 
   it("surfaces a deliveries load error", async () => {

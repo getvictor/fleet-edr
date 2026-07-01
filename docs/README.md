@@ -13,6 +13,7 @@ Operator-facing documentation for Fleet EDR. For developer setup see the repo-ro
 | Deploying specifically via Fleet MDM                                      | [`fleet-deployment.md`](fleet-deployment.md)         |
 | Upgrading, rotating secrets, recovering from a wiped server, reading logs | [`operations.md`](operations.md)                     |
 | Integrating with the server's HTTP API                                    | [`api.md`](api.md)                                   |
+| Delivering alerts to an external endpoint over a signed webhook           | [`webhooks.md`](webhooks.md)                         |
 | Understanding how the pieces fit together                                 | [`architecture.md`](architecture.md)                 |
 | Setting up Okta or another OIDC IdP for operator login                    | [`okta-setup.md`](okta-setup.md)                     |
 | Recovering when SSO is unavailable, registering a second security key     | [`breakglass.md`](breakglass.md)                     |

@@ -20,6 +20,9 @@ type EventType string
 const (
 	EventAlertCreated       EventType = "alert.created"
 	EventAlertStatusChanged EventType = "alert.status_changed"
+	// EventTest is the event type of an operator-initiated test delivery. It is never enqueued from an alert; only the test-send path
+	// emits it, so a receiver can recognize and ignore a connectivity probe.
+	EventTest EventType = "webhook.test"
 )
 
 // Envelope is the versioned JSON body POSTed to a destination. It is built once at enqueue and stored verbatim in the outbox, so the
