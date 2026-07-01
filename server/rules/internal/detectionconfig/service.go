@@ -2,8 +2,11 @@ package detectionconfig
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -22,6 +25,11 @@ type Service struct {
 	audit      identityapi.AuditRecorder
 	logger     *slog.Logger
 	snap       atomic.Pointer[Snapshot]
+	// ruleExclusionSupport maps each registered rule id to the exclusion match types it consults (issue #520), injected by bootstrap
+	// from the live rule set via SetRuleExclusionSupport. CreateExclusion validates the (rule_id, match_type) pair against it. Nil when
+	// unset (non-production constructors / tests), in which case the validation is skipped. Set once during wiring, then read-only, so
+	// it needs no synchronization (same posture as audit / membership).
+	ruleExclusionSupport map[string][]api.ExclusionMatchType
 }
 
 var (
@@ -45,6 +53,45 @@ func NewService(store *Store, membership Membership, audit identityapi.AuditReco
 	return s
 }
 
+// SetRuleExclusionSupport injects the per-rule map of exclusion match types the catalog rules consult (issue #520), built by bootstrap
+// from the live rule set. CreateExclusion validates the (rule_id, match_type) pair against it so an operator cannot store an exclusion
+// a rule would silently ignore, and so a rule_id that names no registered rule is rejected. Set post-construction (mirrors
+// SetPrincipalLabelResolver / SetAudit); when left unset the validation is skipped, keeping non-production constructors and the
+// store-level tests working. Production always wires it.
+func (s *Service) SetRuleExclusionSupport(support map[string][]api.ExclusionMatchType) {
+	s.ruleExclusionSupport = support
+}
+
+// validateExclusionSupport rejects a create-exclusion request whose rule_id names no registered rule, or whose match_type the target
+// rule does not consult (issue #520). A nil support map (never wired) skips the check. Returns ErrInvalidRequest so the handler maps
+// it to HTTP 400.
+func (s *Service) validateExclusionSupport(in CreateExclusionInput) error {
+	if s.ruleExclusionSupport == nil {
+		return nil
+	}
+	supported, ok := s.ruleExclusionSupport[in.RuleID]
+	if !ok {
+		return fmt.Errorf("%w: rule_id %q does not name a registered rule", ErrInvalidRequest, in.RuleID)
+	}
+	if len(supported) == 0 {
+		return fmt.Errorf("%w: rule %q does not accept exclusions", ErrInvalidRequest, in.RuleID)
+	}
+	if slices.Contains(supported, in.MatchType) {
+		return nil
+	}
+	return fmt.Errorf("%w: rule %q does not support match_type %q; supported match types: %s",
+		ErrInvalidRequest, in.RuleID, in.MatchType, joinMatchTypes(supported))
+}
+
+// joinMatchTypes renders a rule's supported match types for the rejection message, in the rule's declared order.
+func joinMatchTypes(mts []api.ExclusionMatchType) string {
+	parts := make([]string, len(mts))
+	for i, mt := range mts {
+		parts[i] = string(mt)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // ListExclusions / ListRuleSettings are read passthroughs to the store for the operator surface.
 func (s *Service) ListExclusions(ctx context.Context) ([]api.DetectionExclusion, error) {
 	return s.store.ListExclusions(ctx)
@@ -60,6 +107,9 @@ func (s *Service) CreateExclusion(
 	ctx context.Context, actor *identityapi.Actor, reason string, in CreateExclusionInput,
 ) (api.DetectionExclusion, error) {
 	in.Actor = actorIdentifier(actor)
+	if err := s.validateExclusionSupport(in); err != nil {
+		return api.DetectionExclusion{}, err
+	}
 	excl, err := s.store.CreateExclusion(ctx, in)
 	if err != nil {
 		return api.DetectionExclusion{}, err

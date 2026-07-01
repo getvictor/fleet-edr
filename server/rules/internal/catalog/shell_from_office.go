@@ -19,6 +19,9 @@ type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 
+// SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
+func (r *ShellFromOffice) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *ShellFromOffice) DisplayName() string { return "Shell spawned by Microsoft Office" }
 

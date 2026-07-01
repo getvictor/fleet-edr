@@ -33,6 +33,7 @@ func (r *stubRule) Doc() rulesapi.Documentation {
 func (r *stubRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
 	return nil, nil
 }
+func (r *stubRule) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
 
 func TestEngine_RegisterAccumulates(t *testing.T) {
 	t.Parallel()

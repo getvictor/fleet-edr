@@ -477,6 +477,86 @@ func TestSuspiciousExec_ParentAllowlistSuppresses(t *testing.T) {
 	})
 }
 
+// TestSuspiciousExec_ParentSignatureExclusion covers signature-based parent exclusions (issue #520): an operator can suppress a benign
+// signed parent by its non-spoofable code-signing identity (team_id / signing_id / cdhash) read from the parent's already-persisted
+// process record, and an unsigned lookalike at a benign-looking path is NOT suppressed by such an exclusion. This is the concrete win
+// that lets team_id=Q6L2SF6YDW replace a spoofable `*/claude/versions/*` path glob for a Developer-ID tool like Claude Code.
+//
+// spec:server-detection-rules-engine/signature-based-parent-exclusions/a-signed-parent-is-suppressed-by-its-team-id
+// spec:server-detection-rules-engine/signature-based-parent-exclusions/an-unsigned-lookalike-parent-is-not-suppressed
+func TestSuspiciousExec_ParentSignatureExclusion(t *testing.T) {
+	t.Parallel()
+
+	const (
+		teamID    = "Q6L2SF6YDW"
+		signingID = "com.anthropic.claude-code"
+		cdhash    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+	// signed parent -> /bin/sh -> /tmp/payload. parentExtra embeds a code_signing blob + cdhash on the parent exec so the graph
+	// persists them on the process record parentExcluded reads; passing "" models an attacker's unsigned /tmp lookalike.
+	makeEvents := func(parentPath, parentExtra string) []api.Event {
+		return []api.Event{
+			{EventID: "fork-parent", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+			{EventID: "exec-parent", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"` + parentPath + `","args":["claude"],"uid":501,"gid":20` + parentExtra + `}`)},
+			{EventID: "fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+			{EventID: "exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh"],"uid":501,"gid":20}`)},
+			{EventID: "fork-payload", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
+				Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+			{EventID: "exec-payload", HostID: "host-a", TimestampNs: 3100, EventType: "exec",
+				Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+		}
+	}
+	signedExtra := `,"code_signing":{"team_id":"` + teamID + `","signing_id":"` + signingID +
+		`","flags":0,"is_platform_binary":false},"cdhash":"` + cdhash + `"`
+	const signedParentPath = "/Applications/Claude.app/Contents/MacOS/claude"
+
+	suppressCases := []struct {
+		name string
+		excl fakeExcl
+	}{
+		{"team_id suppresses", fakeExcl{ruleID: "suspicious_exec", matchType: api.ExclusionMatchTeamID, value: teamID}},
+		{"signing_id suppresses", fakeExcl{ruleID: "suspicious_exec", matchType: api.ExclusionMatchSigningID, value: signingID}},
+		{"cdhash suppresses", fakeExcl{ruleID: "suspicious_exec", matchType: api.ExclusionMatchCDHash, value: cdhash}},
+	}
+	for _, tc := range suppressCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCatalogStore(t)
+			ctx := t.Context()
+			events := makeEvents(signedParentPath, signedExtra)
+			require.NoError(t, s.InsertEvents(ctx, events))
+			materialize(t, s, events)
+
+			rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{tc.excl}}}
+			findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+			require.NoError(t, err)
+			assert.Empty(t, findings, "signed parent matched by its signing identity must suppress the finding")
+		})
+	}
+
+	t.Run("unsigned lookalike parent is not suppressed by a team_id exclusion", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		// The attacker's lookalike: an unsigned binary at a path that resembles the benign tool. It carries no code_signing, so the
+		// team_id exclusion cannot match even though a `*/claude/versions/*` path glob would have.
+		events := makeEvents("/tmp/claude/versions/1.0/claude", "")
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{Exclusions: &fakeExclusions{entries: []fakeExcl{
+			{ruleID: "suspicious_exec", matchType: api.ExclusionMatchTeamID, value: teamID},
+		}}}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		require.Len(t, findings, 1, "an unsigned parent has no team_id, so the signature exclusion must not suppress it")
+	})
+}
+
 // Cross-batch race: in production the agent flushes events ~once per second while a real chain completes in ~150ms, so when the
 // cadence boundary lands mid-chain the shell exec arrives in batch N and the temp-binary exec in batch N+1. Forward-direction matching
 // missed the chain entirely under those conditions because at batch N's Evaluate the temp-binary descendant hadn't been materialised.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -225,6 +226,29 @@ func TestDetectionConfigHandler_CreateExclusion(t *testing.T) {
 			resp.Body.Close()
 		})
 	}
+}
+
+// TestDetectionConfigHandler_CreateExclusion_UnsupportedPairMessage pins that the service's (rule_id, match_type) rejection message
+// (issue #520) reaches the client in the 400 body, so an operator sees WHY the pair was rejected and which match types are supported,
+// rather than a bare status code.
+func TestDetectionConfigHandler_CreateExclusion_UnsupportedPairMessage(t *testing.T) {
+	t.Parallel()
+	svc := &fakeDCService{createErr: fmt.Errorf("%w: %s", detectionconfig.ErrInvalidRequest,
+		`rule "suspicious_exec" does not support match_type "domain"; supported match types: parent_path_glob, team_id`)}
+	srv := dcServer(t, svc, true)
+	resp := dcDo(t, srv, http.MethodPost, "/api/v1/detection-config/exclusions",
+		`{"rule_id":"suspicious_exec","match_type":"domain","value":"example.com","reason":"r"}`)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var body struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "detection_config.invalid_input", body.Error)
+	assert.Contains(t, body.Message, `does not support match_type "domain"`)
+	assert.Contains(t, body.Message, "supported match types: parent_path_glob, team_id")
 }
 
 func TestDetectionConfigHandler_DeleteExclusion(t *testing.T) {

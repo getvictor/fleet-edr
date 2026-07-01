@@ -44,6 +44,11 @@ type PrivilegeLaunchdPlistWrite struct {
 
 func (r *PrivilegeLaunchdPlistWrite) ID() string { return "privilege_launchd_plist_write" }
 
+// SupportedExclusionMatchTypes lists the match types this rule consults: the registered executable's signing team ID (issue #520).
+func (r *PrivilegeLaunchdPlistWrite) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
+	return []api.ExclusionMatchType{api.ExclusionMatchTeamID}
+}
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519). The ID stays the stale-but-stable
 // snake_case identifier (renaming it is a migration-backed change); the prose name reflects what the rule actually detects today.
 func (r *PrivilegeLaunchdPlistWrite) DisplayName() string { return "LaunchDaemon persistence" }
@@ -98,10 +103,13 @@ type btmLaunchItemAddPayload struct {
 	InstigatorCodeSigning *codeSigningJSON `json:"instigator_code_signing"`
 }
 
-// codeSigningJSON mirrors the extension's CodeSigning wire struct. The executable decision consumes team_id and
-// is_platform_binary; the instigator copy carries the same shape but is forensic-only.
+// codeSigningJSON mirrors the extension's CodeSigning wire struct (schema/events.json `code_signing`). The executable decision here
+// consumes team_id and is_platform_binary; suspicious_exec's signature exclusions (issue #520) also read signing_id off the same
+// stored blob, so the field lives here rather than in a second near-identical struct. The instigator copy carries the same shape but
+// is forensic-only.
 type codeSigningJSON struct {
 	TeamID           string `json:"team_id"`
+	SigningID        string `json:"signing_id"`
 	IsPlatformBinary bool   `json:"is_platform_binary"`
 }
 

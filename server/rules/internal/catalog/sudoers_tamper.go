@@ -52,6 +52,11 @@ type SudoersTamper struct {
 
 func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
 
+// SupportedExclusionMatchTypes lists the match types this rule consults: the sudoers writer path glob (issue #520).
+func (r *SudoersTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
+	return []api.ExclusionMatchType{api.ExclusionMatchPathGlob}
+}
+
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *SudoersTamper) DisplayName() string { return "Sudoers tamper" }
 

@@ -80,6 +80,12 @@ type Rule interface {
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
 	// mutate state. Returning an error skips the rule for this batch (logged at WARN); returning nil findings is the common case.
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
+	// SupportedExclusionMatchTypes returns the exclusion match types this rule consults at evaluation time, i.e. the match types it
+	// passes to the ExclusionResolver. It returns an empty slice for a rule that consults no exclusions. This is the single source of
+	// truth (issue #520) the create-exclusion API validates against and the admin UI's match-type picker derives from, so a rule can
+	// never offer an exclusion dimension it silently ignores. The catalog guard test asserts a rule never queries a match type outside
+	// this set.
+	SupportedExclusionMatchTypes() []ExclusionMatchType
 }
 
 // RuleMetadata is the per-rule descriptor the operator endpoints render. Used in two surfaces: GET /api/rules (the operator handler
@@ -90,6 +96,9 @@ type RuleMetadata struct {
 	ID         string
 	Techniques []string
 	Doc        Documentation
+	// SupportedExclusionMatchTypes mirrors the rule's SupportedExclusionMatchTypes() (issue #520). Surfaced on GET /api/rules so the
+	// admin UI offers only the match types the rule consults, and validated against by the create-exclusion API.
+	SupportedExclusionMatchTypes []ExclusionMatchType
 }
 
 // Documentation is the structured per-rule descriptor consumed by the

@@ -31,6 +31,9 @@ const applicationControlBlockEventType = "application_control_block"
 
 func (r *ApplicationControlBlock) ID() string { return "application_control_block" }
 
+// SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
+func (r *ApplicationControlBlock) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
+
 // DisplayName is the canonical name for the rule's catalog entry (Doc().Title). Unlike the other rules, the alert this rule raises
 // does NOT carry DisplayName as its title: each block event maps to a finding whose RuleID is the matched app-control rule
 // (`app_control:<n>`, not this catalog ID) and whose title is computed per block (`Application blocked: <binary>`), so the operator

@@ -19,7 +19,9 @@ import { Input, Select } from "../ui/Input";
 import { ReasonModal } from "./ReasonModal";
 import "./DetectionConfig.scss";
 
-// The match types the exclusion editor offers, mirroring api.ExclusionMatchType server-side.
+// The canonical display order for exclusion match types, mirroring api.ExclusionMatchType server-side. The editor never offers all of
+// these at once: it filters this list down to the match types the selected rule actually consults (issue #520), sourced from that
+// rule's supported_exclusion_match_types on GET /api/rules.
 const MATCH_TYPES = [
   "path_glob",
   "parent_path_glob",
@@ -89,7 +91,8 @@ export function DetectionConfig() {
 
   // Add-exclusion form state. formExpires is an optional YYYY-MM-DD from a date input; converted to an RFC3339 end-of-day instant.
   const [formRuleID, setFormRuleID] = useState("");
-  const [formMatchType, setFormMatchType] = useState<string>(MATCH_TYPES[0]);
+  // Empty until a rule is selected: the match-type picker is populated from the chosen rule's supported set (issue #520).
+  const [formMatchType, setFormMatchType] = useState<string>("");
   const [formValue, setFormValue] = useState("");
   const [formReason, setFormReason] = useState("");
   const [formExpires, setFormExpires] = useState("");
@@ -105,6 +108,18 @@ export function DetectionConfig() {
     () => [...rules].sort((a, b) => a.doc.title.localeCompare(b.doc.title)),
     [rules],
   );
+  // supportedMatchTypesFor returns, in canonical display order, the match types the given rule consults (issue #520). The exclusion
+  // editor offers only these, so an operator cannot store a (rule, match type) pair the rule ignores. A rule with no supported types
+  // (or an unknown id) yields an empty list, which disables the match-type picker.
+  const supportedMatchTypesFor = useCallback(
+    (ruleID: string): string[] => {
+      const supported = rules.find((r) => r.id === ruleID)?.supported_exclusion_match_types ?? [];
+      return MATCH_TYPES.filter((m) => supported.includes(m));
+    },
+    [rules],
+  );
+  const supportedMatchTypes = useMemo(() => supportedMatchTypesFor(formRuleID), [supportedMatchTypesFor, formRuleID]);
+
   // The rule-modes table orders by declared severity (critical first), where muting a rule is most consequential, then
   // alphabetically by title within a severity band.
   const rulesBySeverity = useMemo(
@@ -226,7 +241,7 @@ export function DetectionConfig() {
     setModalError(null);
   }, []);
 
-  const addDisabled = !formRuleID || !formValue.trim() || !formReason.trim();
+  const addDisabled = !formRuleID || !formMatchType || !formValue.trim() || !formReason.trim();
 
   return (
     <>
@@ -245,13 +260,22 @@ export function DetectionConfig() {
             {canWrite && (
               <div className="detection-config__form">
                 <Select label="Rule" id="dc-rule" inline={false} value={formRuleID}
-                  onChange={(e) => { setFormRuleID(e.target.value); }}>
+                  onChange={(e) => {
+                    // Selecting a rule narrows the match-type picker to that rule's supported set and resets the selection to the
+                    // first supported type, so a stale unsupported match type from a previous rule can never be submitted.
+                    const ruleID = e.target.value;
+                    setFormRuleID(ruleID);
+                    setFormMatchType(supportedMatchTypesFor(ruleID)[0] ?? "");
+                  }}>
                   <option value="">Select a rule...</option>
                   {rulesByName.map((r) => <option key={r.id} value={r.id}>{r.doc.title}</option>)}
                 </Select>
                 <Select label="Match type" id="dc-match" inline={false} value={formMatchType}
+                  disabled={supportedMatchTypes.length === 0}
                   onChange={(e) => { setFormMatchType(e.target.value); }}>
-                  {MATCH_TYPES.map((m) => <option key={m} value={m}>{m}</option>)}
+                  {supportedMatchTypes.length === 0
+                    ? <option value="">Select a rule first...</option>
+                    : supportedMatchTypes.map((m) => <option key={m} value={m}>{m}</option>)}
                 </Select>
                 <div className="detection-config__form-field--full">
                   <Input label="Value" id="dc-value" value={formValue} onChange={(e) => { setFormValue(e.target.value); }}

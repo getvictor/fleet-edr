@@ -36,9 +36,10 @@ func (s *Service) List() []api.RuleMetadata {
 	out := make([]api.RuleMetadata, 0, len(s.rules))
 	for _, r := range s.rules {
 		out = append(out, api.RuleMetadata{
-			ID:         r.ID(),
-			Techniques: r.Techniques(),
-			Doc:        r.Doc(),
+			ID:                           r.ID(),
+			Techniques:                   r.Techniques(),
+			Doc:                          r.Doc(),
+			SupportedExclusionMatchTypes: r.SupportedExclusionMatchTypes(),
 		})
 	}
 	return out

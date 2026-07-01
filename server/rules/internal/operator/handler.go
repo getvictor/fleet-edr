@@ -68,14 +68,23 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		ID         string            `json:"id"`
 		Techniques []string          `json:"techniques"`
 		Doc        api.Documentation `json:"doc"`
+		// SupportedExclusionMatchTypes lets the admin UI's exclusion editor offer only the match types the rule actually consults
+		// (issue #520). Always a JSON array (never null) so the UI can iterate without a nil guard: a rule that consults no exclusions
+		// serializes []. Additive field; the existing consumers (RuleDetail.tsx, gen-rule-docs) ignore it.
+		SupportedExclusionMatchTypes []api.ExclusionMatchType `json:"supported_exclusion_match_types"`
 	}
 	rules := h.svc.List()
 	out := make([]ruleResponse, 0, len(rules))
 	for _, rm := range rules {
+		matchTypes := rm.SupportedExclusionMatchTypes
+		if matchTypes == nil {
+			matchTypes = []api.ExclusionMatchType{}
+		}
 		out = append(out, ruleResponse{
-			ID:         rm.ID,
-			Techniques: rm.Techniques,
-			Doc:        rm.Doc,
+			ID:                           rm.ID,
+			Techniques:                   rm.Techniques,
+			Doc:                          rm.Doc,
+			SupportedExclusionMatchTypes: matchTypes,
 		})
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})

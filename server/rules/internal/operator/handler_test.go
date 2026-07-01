@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
@@ -79,4 +80,44 @@ func TestHandler_ATTACKCoverage_NoRules(t *testing.T) {
 		assert.NotNil(t, layer.Techniques, "techniques field MUST be present (empty array), not omitted")
 		assert.Empty(t, layer.Techniques, "with zero registered rules, the coverage layer MUST carry zero techniques")
 	})
+}
+
+// TestHandler_ListRules_SupportedExclusionMatchTypes pins that GET /api/rules surfaces each rule's supported exclusion match types
+// (issue #520), the field the admin UI's exclusion editor uses to offer only the match types a rule consults. A consuming rule
+// carries its declared list; a rule that consults no exclusions MUST carry an empty array (never null) so the UI can iterate without
+// a nil guard.
+//
+// spec:server-detection-rules-engine/durable-detection-configuration-surface/the-rule-catalog-exposes-per-rule-supported-exclusion-match-types
+func TestHandler_ListRules_SupportedExclusionMatchTypes(t *testing.T) {
+	t.Parallel()
+	svc := service.New(catalog.New(nil), slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		Rules []struct {
+			ID                           string   `json:"id"`
+			SupportedExclusionMatchTypes []string `json:"supported_exclusion_match_types"`
+		} `json:"rules"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+
+	byID := map[string][]string{}
+	for _, r := range body.Rules {
+		assert.NotNilf(t, r.SupportedExclusionMatchTypes, "rule %q MUST carry an array, not null", r.ID)
+		byID[r.ID] = r.SupportedExclusionMatchTypes
+	}
+	assert.Equal(t, []string{"parent_path_glob", "team_id", "signing_id", "cdhash"}, byID["suspicious_exec"])
+	assert.Equal(t, []string{"path_glob"}, byID["sudoers_tamper"])
+	assert.Empty(t, byID["dns_c2_beacon"], "a rule that consults no exclusions offers an empty set")
 }
