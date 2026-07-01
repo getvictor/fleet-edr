@@ -91,10 +91,7 @@ func TestBuild_roundTrip(t *testing.T) {
 				nsec := rapid.Int64Range(0, 999_999_999).Draw(rt, label+"_nsec")
 				return time.Unix(sec, nsec).UTC()
 			}
-			eventType := EventAlertCreated
-			if rapid.Bool().Draw(rt, "isStatusChange") {
-				eventType = EventAlertStatusChanged
-			}
+			eventType := rapid.SampledFrom([]EventType{EventAlertCreated, EventAlertStatusChanged, EventTest}).Draw(rt, "eventType")
 			var resolved *time.Time
 			if rapid.Bool().Draw(rt, "hasResolved") {
 				r := utcTime("resolved")
