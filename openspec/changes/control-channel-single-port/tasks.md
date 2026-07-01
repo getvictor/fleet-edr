@@ -19,5 +19,5 @@
 
 ## 4. Deployment
 
-- [ ] 4.1 Quickstart Caddy reverse-proxies to the upstream over h2c so the control stream is forwarded
+- [x] 4.1 Quickstart Caddy reverse-proxies to the upstream over h2c so the control stream is forwarded
 - [ ] 4.2 Validate the proxied control stream on the notarized RC (covered by the agent/extension RC re-test, #557)

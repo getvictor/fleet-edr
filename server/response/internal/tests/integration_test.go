@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -23,7 +24,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
+	"github.com/fleetdm/edr/internal/control"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
@@ -455,4 +460,92 @@ func TestBuildControlGateway(t *testing.T) {
 	// gateway package tests).
 	_, err := r.Service().Insert(t.Context(), "host-a", "kill_process", json.RawMessage(`{"pid":1}`))
 	require.NoError(t, err)
+}
+
+// TestControlGatewayPushLifecycle_RealMySQL is the integration-fidelity counterpart to the gateway package's in-memory delivery test
+// (issue #477, tasks.md 5.1): a command queued for a connected agent is pushed over the bidirectional stream and its ack-then-complete
+// outcomes are applied through the REAL response service against MySQL, so the commands row walks pending -> acked -> completed exactly as
+// the poll path (TestUpdateStatus_LifecycleHappyPath) does. The gateway is driven through its production entry point (grpc.Server.ServeHTTP
+// behind a net/http HTTP/2 server speaking cleartext h2c, how cmd/main multiplexes it onto the shared listener), and the command is queued
+// via Service.Insert, whose fast-path notifier (wired by BuildControlGateway) pushes it to the live connection.
+func TestControlGatewayPushLifecycle_RealMySQL(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	gw := r.BuildControlGateway(stubVerifier{}, nil)
+
+	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	httpSrv := &http.Server{Handler: gw, Protocols: protocols, ReadHeaderTimeout: 5 * time.Second}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- httpSrv.Serve(lis) }()
+	runCtx, runCancel := context.WithCancel(t.Context())
+	go gw.Run(runCtx)
+	t.Cleanup(func() {
+		runCancel()
+		gw.Stop()
+		require.NoError(t, httpSrv.Shutdown(context.WithoutCancel(runCtx)))
+		require.ErrorIs(t, <-serveDone, http.ErrServerClosed)
+	})
+
+	cc, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cc.Close() })
+
+	streamCtx, streamCancel := context.WithCancel(controlConnectCtx("tok-a"))
+	defer streamCancel()
+	stream, err := control.NewControlChannelClient(cc).Connect(streamCtx)
+	require.NoError(t, err)
+
+	// Queue a command through the real service; the fast-path notifier pushes it to the live connection (the 1s watch is the backstop).
+	ctx := t.Context()
+	id, err := r.Service().Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"pid":42}`))
+	require.NoError(t, err)
+
+	// Server -> agent: the pushed command arrives over the stream, byte-stable with the commands row.
+	frame, err := stream.Recv()
+	require.NoError(t, err)
+	cmd := frame.GetCommand()
+	require.NotNil(t, cmd)
+	assert.Equal(t, id, cmd.GetId())
+	assert.Equal(t, "kill_process", cmd.GetCommandType())
+	assert.Equal(t, "host-a", cmd.GetHostId())
+	assert.JSONEq(t, `{"pid":42}`, string(cmd.GetPayload()))
+
+	// The row is still pending until the agent reports an outcome.
+	got, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusPending, got.Status)
+
+	// Agent -> server: ack, then complete. Both flow through the unchanged UpdateStatus lifecycle against MySQL.
+	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{Outcome: &control.Outcome{
+		Id: id, Status: string(api.StatusAcked),
+	}}}))
+	require.Eventually(t, func() bool {
+		got, err := r.Service().Get(ctx, id)
+		return err == nil && got.Status == api.StatusAcked
+	}, 2*time.Second, 10*time.Millisecond, "ack applied to MySQL over the stream")
+
+	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{Outcome: &control.Outcome{
+		Id: id, Status: string(api.StatusCompleted), Result: []byte(`{"killed_pid":42}`),
+	}}}))
+	require.Eventually(t, func() bool {
+		got, err := r.Service().Get(ctx, id)
+		return err == nil && got.Status == api.StatusCompleted
+	}, 2*time.Second, 10*time.Millisecond, "completion applied to MySQL over the stream")
+
+	// Final DB state matches the poll path: terminal completed, with ack/complete timestamps and the result persisted.
+	got, err = r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusCompleted, got.Status)
+	require.NotNil(t, got.AckedAt)
+	require.NotNil(t, got.CompletedAt)
+	assert.JSONEq(t, `{"killed_pid":42}`, string(got.Result))
+}
+
+// controlConnectCtx builds the outgoing gRPC context carrying the host bearer token the gateway's auth interceptor reads from metadata.
+func controlConnectCtx(token string) context.Context {
+	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
 }
