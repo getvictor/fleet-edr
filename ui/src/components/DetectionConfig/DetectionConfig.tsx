@@ -108,13 +108,17 @@ export function DetectionConfig() {
     () => [...rules].sort((a, b) => a.doc.title.localeCompare(b.doc.title)),
     [rules],
   );
-  // supportedMatchTypesFor returns, in canonical display order, the match types the given rule consults (issue #520). The exclusion
+  // supportedMatchTypesFor returns the match types the given rule consults (issue #520), in canonical display order. The exclusion
   // editor offers only these, so an operator cannot store a (rule, match type) pair the rule ignores. A rule with no supported types
-  // (or an unknown id) yields an empty list, which disables the match-type picker.
+  // (or an unknown id) yields an empty list, which disables the match-type picker. The server is the source of truth: any supported
+  // value not in the UI's canonical MATCH_TYPES order (e.g. a match type a newer server added while this bundle is version-skewed) is
+  // still offered, appended after the known ones, so the editor stays functional across a rolling deploy rather than silently hiding it.
   const supportedMatchTypesFor = useCallback(
     (ruleID: string): string[] => {
       const supported = rules.find((r) => r.id === ruleID)?.supported_exclusion_match_types ?? [];
-      return MATCH_TYPES.filter((m) => supported.includes(m));
+      const known = MATCH_TYPES.filter((m) => supported.includes(m));
+      const unknown = supported.filter((m) => !(MATCH_TYPES as readonly string[]).includes(m));
+      return [...known, ...unknown];
     },
     [rules],
   );

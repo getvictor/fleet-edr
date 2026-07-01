@@ -81,10 +81,10 @@ type Rule interface {
 	// mutate state. Returning an error skips the rule for this batch (logged at WARN); returning nil findings is the common case.
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 	// SupportedExclusionMatchTypes returns the exclusion match types this rule consults at evaluation time, i.e. the match types it
-	// passes to the ExclusionResolver. It returns an empty slice for a rule that consults no exclusions. This is the single source of
-	// truth (issue #520) the create-exclusion API validates against and the admin UI's match-type picker derives from, so a rule can
-	// never offer an exclusion dimension it silently ignores. The catalog guard test asserts a rule never queries a match type outside
-	// this set.
+	// passes to the ExclusionResolver. It returns no match types (nil or an empty slice, treated alike) for a rule that consults no
+	// exclusions. This is the single source of truth (issue #520) the create-exclusion API validates against and the admin UI's
+	// match-type picker derives from, so a rule can never offer an exclusion dimension it silently ignores. The catalog guard test
+	// asserts a rule never queries a match type outside this set.
 	SupportedExclusionMatchTypes() []ExclusionMatchType
 }
 

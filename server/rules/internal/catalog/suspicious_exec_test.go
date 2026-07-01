@@ -514,6 +514,22 @@ func TestSuspiciousExec_ParentSignatureExclusion(t *testing.T) {
 		`","flags":0,"is_platform_binary":false},"cdhash":"` + cdhash + `"`
 	const signedParentPath = "/Applications/Claude.app/Contents/MacOS/claude"
 
+	// Baseline: the signed fixture must be detection-positive with NO exclusion. Without this, a regression that stops the fixture
+	// firing for an unrelated reason would let every suppression subtest below pass vacuously (they only assert zero findings).
+	t.Run("signed parent fires without an exclusion", func(t *testing.T) {
+		t.Parallel()
+		s := openCatalogStore(t)
+		ctx := t.Context()
+		events := makeEvents(signedParentPath, signedExtra)
+		require.NoError(t, s.InsertEvents(ctx, events))
+		materialize(t, s, events)
+
+		rule := &SuspiciousExec{}
+		findings, err := rule.Evaluate(ctx, events, s.GraphReader())
+		require.NoError(t, err)
+		require.Len(t, findings, 1, "signed parent fixture must fire before the suppression cases assert it is suppressed")
+	})
+
 	suppressCases := []struct {
 		name string
 		excl fakeExcl
