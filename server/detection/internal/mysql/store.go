@@ -7,6 +7,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/internal/secretseal"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
@@ -17,7 +18,16 @@ type Store struct {
 	db      *sqlx.DB
 	archive visibilityapi.EventArchive
 	logger  *slog.Logger
+
+	// webhookSealer seals per-destination webhook signing secrets at rest (issue #496). It is set-once construction-phase config
+	// (SetWebhookSealer, wired by detection/bootstrap before the loops start), so the webhook config methods that write a secret
+	// require it to be set; nil means the deployment did not configure a root secret and destination writes are rejected.
+	webhookSealer *secretseal.Sealer
 }
+
+// SetWebhookSealer wires the sealer used to encrypt webhook signing secrets at rest. Like SetMetrics it is set-once during
+// construction, before any request or loop reads it, so it is not guarded for concurrent mutation.
+func (s *Store) SetWebhookSealer(sealer *secretseal.Sealer) { s.webhookSealer = sealer }
 
 // New returns a Store wrapping the provided db handle and event archive. Schema is applied separately via detection/bootstrap.ApplySchema;
 // New just hands back the read/write surface. archive is required: post-cutover the detection store has no MySQL events table to read, so

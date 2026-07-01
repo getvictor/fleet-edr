@@ -13,6 +13,7 @@ import (
 )
 
 func TestSign(t *testing.T) {
+	t.Parallel()
 	const (
 		id   = "whd_0192f3c4-5678-7abc-9def-0123456789ab"
 		ts   = int64(1_767_225_600)
@@ -24,6 +25,7 @@ func TestSign(t *testing.T) {
 	// convention gets the same value. Re-expressing the signed-content construction here pins it: dropping the id or reordering
 	// the parts in Sign would break this independent recomputation.
 	t.Run("spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/the-signature-verifies-with-the-shared-secret-and-differs-by-secret", func(t *testing.T) {
+		t.Parallel()
 		signedContent := id + "." + strconv.FormatInt(ts, 10) + "." + body
 		mac := hmac.New(sha256.New, secret)
 		mac.Write([]byte(signedContent))
@@ -37,6 +39,7 @@ func TestSign(t *testing.T) {
 	})
 
 	t.Run("is deterministic and v1-prefixed", func(t *testing.T) {
+		t.Parallel()
 		first := Sign(id, ts, []byte(body), secret)
 		second := Sign(id, ts, []byte(body), secret)
 		assert.Equal(t, first, second, "same inputs must yield the same signature")
@@ -44,6 +47,7 @@ func TestSign(t *testing.T) {
 	})
 
 	t.Run("binds the timestamp", func(t *testing.T) {
+		t.Parallel()
 		assert.NotEqual(t, Sign(id, ts, []byte(body), secret), Sign(id, ts+1, []byte(body), secret),
 			"changing the timestamp must change the signature so receivers can reject replays")
 	})

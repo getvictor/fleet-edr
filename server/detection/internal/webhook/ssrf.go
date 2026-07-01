@@ -32,7 +32,7 @@ func blockedIP(ip net.IP) bool {
 func ValidateURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%w: parse: %v", ErrBlockedURL, err)
+		return fmt.Errorf("%w: parse: %w", ErrBlockedURL, err)
 	}
 	if u.Scheme != "https" {
 		return fmt.Errorf("%w: scheme must be https", ErrBlockedURL)

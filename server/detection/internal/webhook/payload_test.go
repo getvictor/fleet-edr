@@ -14,7 +14,9 @@ import (
 )
 
 func TestBuild_creationEnvelope(t *testing.T) {
+	t.Parallel()
 	t.Run("spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/a-creation-event-carries-the-versioned-alert-envelope", func(t *testing.T) {
+		t.Parallel()
 		created := time.Unix(1_767_225_600, 0).UTC()
 		env := Build(BuildParams{
 			EventID:        "whd_abc",
@@ -44,7 +46,9 @@ func TestBuild_creationEnvelope(t *testing.T) {
 }
 
 func TestBuild_statusChangeCarriesPreviousStatus(t *testing.T) {
+	t.Parallel()
 	t.Run("spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/a-status-change-event-carries-the-previous-status", func(t *testing.T) {
+		t.Parallel()
 		env := Build(BuildParams{
 			EventID: "whd_def", EventType: EventAlertStatusChanged, Attempt: 1,
 			PreviousStatus: "open",
@@ -57,12 +61,15 @@ func TestBuild_statusChangeCarriesPreviousStatus(t *testing.T) {
 }
 
 func TestBuild_processLessOmitsProcess(t *testing.T) {
+	t.Parallel()
 	env := Build(BuildParams{EventID: "x", EventType: EventAlertCreated, Alert: detapi.Alert{ID: 1, ProcessID: 0}})
 	assert.Nil(t, env.Process, "process id 0 means a process-less alert; the process block is omitted")
 }
 
 func TestBuild_payloadNeverContainsSecret(t *testing.T) {
+	t.Parallel()
 	t.Run("spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/the-payload-never-contains-the-signing-secret", func(t *testing.T) {
+		t.Parallel()
 		// The envelope is built purely from the alert and event metadata; there is no field through which a secret could leak.
 		// This test pins that by scanning the serialized body for a sentinel that a bug wiring the secret in would surface.
 		env := Build(BuildParams{EventID: "x", EventType: EventAlertCreated, Alert: detapi.Alert{ID: 1, HostID: "h"}})
@@ -75,7 +82,9 @@ func TestBuild_payloadNeverContainsSecret(t *testing.T) {
 // TestBuild_roundTrip is the property-based wire-shape check: Marshal followed by Unmarshal reproduces the same document for any
 // generated alert + event metadata. Times are drawn as UTC instants so RFC3339 serialization round-trips exactly.
 func TestBuild_roundTrip(t *testing.T) {
+	t.Parallel()
 	t.Run("spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/the-envelope-round-trips", func(t *testing.T) {
+		t.Parallel()
 		rapid.Check(t, func(rt *rapid.T) {
 			utcTime := func(label string) time.Time {
 				sec := rapid.Int64Range(0, 4_102_444_800).Draw(rt, label+"_sec")
