@@ -24,6 +24,7 @@ dependenciesRules:
         - "**.identity.testkit"
         - "**.attrkeys"
         - "**.httpserver"
+        - "**.secretseal"  # shared AES-256-GCM sealer: ssoconfig seals the OIDC client secret with it (issue #496 extracted it)
         - "**.testdb"
 
   # endpoint context internals.
@@ -93,6 +94,7 @@ dependenciesRules:
         - "**.visibility.api"  # ADR-0015 cutover: intake fans out to EventLog/EventArchive, the processor claims from EventLog, and correlation/evidence read the EventArchive
         - "**.sqlhelpers"
         - "**.coordination.leader"  # MySQL-advisory-lock leader coordinator: pipeline.Runner gates retention + process-TTL on it
+        - "**.secretseal"  # shared AES-256-GCM sealer: the store seals webhook signing secrets, the delivery worker opens them (issue #496)
         - "**.testdb"
 
   # observability context internals (issue #374). A sixth bounded context (an amendment to ADR-0004's
