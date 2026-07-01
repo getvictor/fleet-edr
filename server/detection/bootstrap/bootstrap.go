@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/internal/secretseal"
 	"github.com/fleetdm/edr/server/coordination/leader"
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/engine"
@@ -90,6 +91,15 @@ type Deps struct {
 	// nil runs them directly (single-replica deployments and tests). cmd/main wires a MySQL-advisory-lock coordinator.
 	Coordinator leader.Coordinator
 
+	// WebhookSecretKey seals per-destination outbound-webhook signing secrets at rest (keyring label edr/webhook/secret-seal/v1,
+	// issue #496). Optional: when empty the webhook config surface is inert (secret writes are rejected) and the delivery worker is
+	// not started, so a deployment without a root secret behaves as if the feature is off. cmd/main wires
+	// keyring.Derive(WebhookSecretSealLabel).
+	WebhookSecretKey []byte
+	// WebhookConsoleBaseURL is the deployment external URL used to build the console deep link in delivery payloads. Optional; an
+	// empty value yields a relative link.
+	WebhookConsoleBaseURL string
+
 	// EventLog is the visibility work queue intake appends to and the processor claims from (ADR-0015). EventArchive is the durable
 	// ClickHouse event lake intake writes to and correlation/evidence reads from. Both are REQUIRED in ModeFull and ModeIntake (the
 	// intake handler fans out to both); cmd/main wires visibilityCtx.EventLog() / EventArchive().
@@ -163,6 +173,9 @@ func New(deps Deps) (*Detection, error) {
 		}
 		det.operatorH = operator.New(det.svc, deps.AuthZ, logger)
 		det.operatorH.SetAudit(deps.Audit)
+		// The webhook admin surface reads/writes destinations through the store. Wiring it always (independent of the sealer) keeps
+		// list/get/delete working; a create/update that needs to seal a secret returns a configured-error when no root secret is set.
+		det.operatorH.SetWebhookAdmin(store)
 
 		processor := pipeline.NewProcessor(
 			deps.EventLog,
@@ -187,13 +200,22 @@ func New(deps Deps) (*Detection, error) {
 			Interval: deps.QueuePruneInterval,
 			Logger:   logger,
 		})
+
+		// Outbound webhook (issue #496): wire the sealer into the store and build the delivery worker (both only when a root secret
+		// is configured; see configureWebhookDelivery).
+		webhookDelivery, webhookErr := configureWebhookDelivery(store, deps, logger)
+		if webhookErr != nil {
+			return nil, webhookErr
+		}
+
 		det.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
-			Processor:   processor,
-			ProcessTTL:  processTTL,
-			Retention:   retention,
-			QueuePrune:  queuePrune,
-			DB:          deps.DB,
-			Coordinator: deps.Coordinator,
+			Processor:       processor,
+			ProcessTTL:      processTTL,
+			Retention:       retention,
+			QueuePrune:      queuePrune,
+			WebhookDelivery: webhookDelivery,
+			DB:              deps.DB,
+			Coordinator:     deps.Coordinator,
 		})
 	} else {
 		// Intake-only: still expose a service with the intake handler
@@ -224,6 +246,22 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 		Context:   "detection",
 		TableName: "detection_goose_db_version",
 	})
+}
+
+// configureWebhookDelivery wires the outbound-webhook secret sealer into the store and builds the delivery worker, but only when a
+// root secret is configured. Without one it returns (nil, nil): the config surface then rejects secret writes and no worker runs, so
+// the feature is inert. Factored out of New to keep New's cognitive complexity in bounds (issue #496).
+func configureWebhookDelivery(store *mysql.Store, deps Deps, logger *slog.Logger) (*pipeline.WebhookDeliveryRunner, error) {
+	if len(deps.WebhookSecretKey) == 0 {
+		return nil, nil
+	}
+	sealer, err := secretseal.NewSealer(deps.WebhookSecretKey)
+	if err != nil {
+		return nil, fmt.Errorf("detection bootstrap: webhook sealer: %w", err)
+	}
+	store.SetWebhookSealer(sealer)
+	store.SetWebhookConsoleBaseURL(deps.WebhookConsoleBaseURL)
+	return pipeline.NewWebhookDelivery(store, sealer, pipeline.WebhookDeliveryOptions{Logger: logger}), nil
 }
 
 // Service exposes the operator-facing api.Service. RecordHostSeen is

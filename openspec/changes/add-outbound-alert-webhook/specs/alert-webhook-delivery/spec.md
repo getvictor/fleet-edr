@@ -132,7 +132,7 @@ The delivery worker SHALL attempt each queued delivery until the receiver return
 
 ### Requirement: Outbound delivery is protected against SSRF
 
-A destination URL SHALL use https. The system SHALL NOT deliver to, and SHALL NOT follow a redirect to, a URL whose host resolves to a loopback, private, link-local (including the cloud instance-metadata address), or unique-local address, evaluated against the address actually resolved at delivery time. A destination whose URL is not https, or whose host resolves only to a blocked address, SHALL be rejected when an operator saves it.
+A destination URL SHALL use https. The system SHALL NOT deliver to, and SHALL NOT follow a redirect to, a URL whose host resolves to a loopback, private, link-local (including the cloud instance-metadata address), or unique-local address, evaluated against the address actually resolved at delivery time (the authoritative check, which closes the DNS-rebinding gap). When an operator saves a destination, a URL that is not https, or that is given as a blocked-address IP literal, SHALL be rejected for fast feedback.
 
 #### Scenario: A non-https destination URL is rejected on save
 
@@ -140,10 +140,10 @@ A destination URL SHALL use https. The system SHALL NOT deliver to, and SHALL NO
 - **WHEN** they save a destination with an `http://` URL
 - **THEN** the save is rejected
 
-#### Scenario: A destination resolving to a private address is rejected on save
+#### Scenario: A destination given as a blocked-address literal is rejected on save
 
 - **GIVEN** an operator holding `webhook.manage`
-- **WHEN** they save a destination whose host resolves only to a private address
+- **WHEN** they save a destination whose URL host is a blocked-address IP literal (loopback, private, or the metadata address)
 - **THEN** the save is rejected
 
 #### Scenario: A host that resolves to the metadata address at send time is not delivered

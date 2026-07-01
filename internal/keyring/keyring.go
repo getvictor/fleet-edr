@@ -35,6 +35,10 @@ const (
 	// Distinct from the host-token label so the two self-validating token families are cryptographically separated even though both
 	// are HMAC over the same root. The literal matches ADR-0013 and the openspec change artifacts.
 	ServiceAccountTokenSigningLabel = "edr/service-account-token/sign/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
+	// WebhookSecretSealLabel derives the AES-256-GCM key that seals outbound-webhook per-destination signing secrets at rest (issue
+	// #496). Distinct from the OIDC label so the two sealed-secret families are cryptographically separated; rotating EDR_SECRET_KEY
+	// (or bumping this version) makes stored destination secrets undecryptable, after which an operator re-enters them.
+	WebhookSecretSealLabel = "edr/webhook/secret-seal/v1" //nolint:gosec // G101: HKDF domain-separation label, not a credential
 )
 
 // derivedKeyLen is the byte length of every derived key. 32 bytes is a full HMAC-SHA256 key and an ample HMAC/AEAD key budget.

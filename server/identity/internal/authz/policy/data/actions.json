@@ -17,6 +17,7 @@
     "user.invite",
     "user.manage",
     "sso.manage",
+    "webhook.manage",
     "service_account.read",
     "service_account.create",
     "service_account.rotate",

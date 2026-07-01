@@ -106,6 +106,14 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 		return 0, false, err
 	}
 
+	// Only a fresh alert enqueues webhook deliveries; a re-fired dedup (created == false) must not re-notify. The enqueue runs in
+	// this same transaction so a queued delivery is durable with the alert and never queued if the insert rolls back (issue #496).
+	if created {
+		if err := s.enqueueNewAlertDeliveries(ctx, tx, a, alertID); err != nil {
+			return 0, false, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, false, fmt.Errorf("commit insert alert: %w", err)
 	}
@@ -265,17 +273,24 @@ func (s *Store) GetAlertEventPayloads(ctx context.Context, alertID int64) ([]api
 // user is also NOT validated here; the service uses the UserExists
 // closure to enforce that before calling.
 func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.AlertStatus, actorID string) error {
-	var exists int64
-	if err := s.db.GetContext(ctx, &exists, "SELECT id FROM alerts WHERE id = ?", id); err != nil {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx for update alert status: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Capture the pre-update status before the write so the status-change payload can carry previous_status. A missing row is the
+	// not-found path.
+	var prevStatus string
+	if err := tx.GetContext(ctx, &prevStatus, "SELECT status FROM alerts WHERE id = ?", id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return api.ErrAlertNotFound
 		}
 		return fmt.Errorf("check alert existence %d: %w", id, err)
 	}
 
-	var err error
 	if status == api.AlertStatusResolved {
-		_, err = s.db.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			UPDATE alerts
 			SET status = ?,
 			    resolved_at = IFNULL(resolved_at, NOW(6)),
@@ -283,7 +298,7 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.Aler
 			WHERE id = ?
 		`, string(status), actorID, actorID, id)
 	} else {
-		_, err = s.db.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			UPDATE alerts
 			SET status = ?,
 			    resolved_at = NULL,
@@ -293,6 +308,15 @@ func (s *Store) UpdateAlertStatus(ctx context.Context, id int64, status api.Aler
 	}
 	if err != nil {
 		return fmt.Errorf("update alert status %d: %w", id, err)
+	}
+
+	// Enqueue the status-change delivery in the same transaction so it is durable with the status write (issue #496).
+	if err := s.enqueueStatusChangeDeliveries(ctx, tx, id, prevStatus); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update alert status %d: %w", id, err)
 	}
 	return nil
 }

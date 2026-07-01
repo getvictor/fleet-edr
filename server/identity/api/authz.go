@@ -64,6 +64,10 @@ const (
 	// super_admin; the admin settings read/update/test-connection handlers funnel through the chokepoint on this action.
 	ActionSSOManage Action = "sso.manage"
 
+	// Outbound alert webhook management (issue #496). Gates the admin surface that creates, lists, updates, tests, and deletes
+	// webhook destinations and reads their delivery status. Held by admin + super_admin; analyst and read-only never hold it.
+	ActionWebhookManage Action = "webhook.manage"
+
 	// Service-account management (issue #376, ADR-0013). Gates the admin surface that creates, lists, rotates, and revokes
 	// non-human API principals. Held by admin + super_admin. A service account may itself never bind to a role granting these
 	// actions, so it cannot mint or escalate other service accounts.
@@ -117,6 +121,7 @@ func RegisteredActions() []Action {
 		ActionEnrollmentRead, ActionEnrollmentRevoke, ActionEnrollmentRotateToken,
 		ActionUserRead, ActionUserInvite, ActionUserManage,
 		ActionSSOManage,
+		ActionWebhookManage,
 		ActionServiceAccountRead, ActionServiceAccountCreate, ActionServiceAccountRotate, ActionServiceAccountRevoke,
 		ActionAuditRead,
 		ActionAppControlRead,

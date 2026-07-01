@@ -1,13 +1,14 @@
-package ssoconfig_test
+package secretseal_test
 
 import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/fleetdm/edr/server/identity/internal/ssoconfig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
+
+	"github.com/fleetdm/edr/internal/secretseal"
 )
 
 func newKey(t *testing.T) []byte {
@@ -23,7 +24,7 @@ func newKey(t *testing.T) []byte {
 // plaintext, and two seals of the same plaintext differ (fresh nonce per Seal).
 func TestSealer_roundTrip(t *testing.T) {
 	t.Parallel()
-	s, err := ssoconfig.NewSealer(newKey(t))
+	s, err := secretseal.NewSealer(newKey(t))
 	require.NoError(t, err)
 
 	rapid.Check(t, func(rt *rapid.T) {
@@ -49,9 +50,9 @@ func TestSealer_roundTrip(t *testing.T) {
 
 func TestSealer_openWithWrongKeyFails(t *testing.T) {
 	t.Parallel()
-	sealer, err := ssoconfig.NewSealer(newKey(t))
+	sealer, err := secretseal.NewSealer(newKey(t))
 	require.NoError(t, err)
-	other, err := ssoconfig.NewSealer(newKey(t))
+	other, err := secretseal.NewSealer(newKey(t))
 	require.NoError(t, err)
 
 	sealed, err := sealer.Seal([]byte("super-secret-client-secret"))
@@ -63,7 +64,7 @@ func TestSealer_openWithWrongKeyFails(t *testing.T) {
 
 func TestSealer_openRejectsTamperedOrShort(t *testing.T) {
 	t.Parallel()
-	s, err := ssoconfig.NewSealer(newKey(t))
+	s, err := secretseal.NewSealer(newKey(t))
 	require.NoError(t, err)
 
 	t.Run("too short", func(t *testing.T) {
@@ -84,6 +85,6 @@ func TestSealer_openRejectsTamperedOrShort(t *testing.T) {
 
 func TestNewSealer_rejectsBadKeyLength(t *testing.T) {
 	t.Parallel()
-	_, err := ssoconfig.NewSealer([]byte("too-short"))
+	_, err := secretseal.NewSealer([]byte("too-short"))
 	require.Error(t, err)
 }
