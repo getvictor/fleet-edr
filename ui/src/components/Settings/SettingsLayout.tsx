@@ -10,6 +10,7 @@ import "./SettingsLayout.scss";
 // omitted; the server chokepoint remains the authority (ADR-0012).
 const SECTIONS = [
   { to: "/admin/settings/sso", label: "Single sign-on", action: PermissionAction.SSOManage },
+  { to: "/admin/settings/webhooks", label: "Webhooks", action: PermissionAction.WebhookManage },
   { to: "/admin/settings/users", label: "Users", action: PermissionAction.UserRead },
   { to: "/admin/settings/service-accounts", label: "Service accounts", action: PermissionAction.ServiceAccountRead },
 ] as const;

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -25,8 +26,12 @@ func testClient() *Client { return newClient(5*time.Second, 64*1024, allowLoopba
 func TestClient_DeliverSignsAndPosts(t *testing.T) {
 	t.Parallel()
 	secret := []byte("shared-secret")
+	// The handler runs on the server goroutine; guard the captured request fields so the test's reads don't race the writes.
+	var mu sync.Mutex
 	var gotID, gotTS, gotSig, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		gotID = r.Header.Get(HeaderID)
 		gotTS = r.Header.Get(HeaderTimestamp)
 		gotSig = r.Header.Get(HeaderSignature)
@@ -41,6 +46,8 @@ func TestClient_DeliverSignsAndPosts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, code)
 
+	mu.Lock()
+	defer mu.Unlock()
 	assert.Equal(t, "whd_1", gotID)
 	assert.Equal(t, "1767225600", gotTS)
 	assert.Equal(t, string(body), gotBody)

@@ -38,7 +38,7 @@ func (s *Store) ClaimDueWebhookDeliveries(ctx context.Context, limit int, lease 
 		SELECT d.id, d.public_id, d.attempt, d.payload, wd.url, wd.secret_sealed
 		FROM webhook_delivery d
 		JOIN webhook_destination wd ON wd.id = d.destination_id
-		WHERE d.status = 'pending' AND d.next_attempt_at <= NOW(6)
+		WHERE d.status = 'pending' AND d.next_attempt_at <= NOW(6) AND wd.enabled = 1
 		ORDER BY d.next_attempt_at
 		LIMIT ?
 		FOR UPDATE OF d SKIP LOCKED`, limit); err != nil {

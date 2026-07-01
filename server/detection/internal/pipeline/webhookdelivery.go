@@ -144,6 +144,8 @@ func (r *WebhookDeliveryRunner) deliver(ctx context.Context, c detapi.WebhookDel
 		r.fail(ctx, c.ID, 0, "unseal destination secret: "+err.Error())
 		return
 	}
+	// Zero the plaintext signing secret once we're done with it so it does not linger in memory beyond this delivery.
+	defer clear(secret)
 	// Overlay the current attempt number onto the stored point-in-time envelope, then sign the exact bytes we send.
 	var env webhook.Envelope
 	if err := json.Unmarshal(c.Payload, &env); err != nil {

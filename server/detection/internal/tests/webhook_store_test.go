@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
@@ -165,6 +166,26 @@ func TestWebhookDestinationStore_DeliveriesReadout(t *testing.T) {
 	require.NotNil(t, got[0].LastStatusCode)
 	assert.Equal(t, 503, *got[0].LastStatusCode)
 	assert.Equal(t, "receiver unavailable", got[0].LastError)
+}
+
+// TestWebhookDelivery_disabledDestinationNotClaimed pins that disabling a destination stops delivery of its already-queued rows: the
+// claim query filters on wd.enabled, so a delivery enqueued while the destination was enabled is no longer claimed once it is disabled.
+func TestWebhookDelivery_disabledDestinationNotClaimed(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newWebhookStore(t)
+	ctx := context.Background()
+	destID := makeDest(t, store, "sink", detapi.SeverityLow, true, detapi.WebhookEventAlertCreated)
+	_, _, err := store.InsertAlert(ctx, highAlert("test:1"), nil)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpdateWebhookDestination(ctx, destID, detapi.WebhookDestinationInput{
+		Name: "sink", URL: "https://hooks.example.com/sink",
+		EventTypes: []string{detapi.WebhookEventAlertCreated}, MinSeverity: detapi.SeverityLow, Enabled: false,
+	}))
+
+	claims, err := store.ClaimDueWebhookDeliveries(ctx, 10, time.Minute)
+	require.NoError(t, err)
+	assert.Empty(t, claims, "a disabled destination's queued deliveries must not be claimed")
 }
 
 func TestWebhookDestinationStore_SealerUnset(t *testing.T) {
