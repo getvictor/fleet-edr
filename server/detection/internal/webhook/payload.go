@@ -99,10 +99,15 @@ func Build(p BuildParams) Envelope {
 			Techniques:     []string(p.Alert.Techniques),
 			CreatedAt:      p.Alert.CreatedAt,
 			UpdatedAt:      p.Alert.UpdatedAt,
-			ResolvedAt:     p.Alert.ResolvedAt,
 		},
 		Host:  HostBody{ID: p.Alert.HostID},
 		Links: Links{Console: consoleLink(p.ConsoleBaseURL, p.Alert.ID)},
+	}
+	// Copy ResolvedAt by value rather than aliasing the caller's pointer, so a later mutation of the source alert cannot reach into
+	// an already-built envelope.
+	if p.Alert.ResolvedAt != nil {
+		resolved := *p.Alert.ResolvedAt
+		e.Alert.ResolvedAt = &resolved
 	}
 	if p.Alert.ProcessID != 0 {
 		e.Process = &ProcessBody{PID: p.Alert.ProcessID}

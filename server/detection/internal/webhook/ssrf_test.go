@@ -22,6 +22,7 @@ func TestValidateURL(t *testing.T) {
 			"https://127.0.0.1/hook",
 			"https://10.0.0.5/hook",
 			"https://192.168.1.10/hook",
+			"https://100.64.0.1/hook", // RFC 6598 carrier-grade NAT
 			"https://169.254.169.254/latest/meta-data",
 			"https://[::1]/hook",
 			"https://[fd00::1]/hook",
@@ -45,13 +46,14 @@ func TestDialControl(t *testing.T) {
 			"169.254.169.254:443", // cloud instance-metadata
 			"127.0.0.1:443",
 			"10.1.2.3:443",
+			"100.64.0.1:443", // RFC 6598 carrier-grade NAT
 			"[::1]:443",
 			"[::ffff:169.254.169.254]:443", // IPv4-mapped IPv6 form of the metadata address
 		}
 		for _, addr := range blocked {
 			err := DialControl("tcp", addr, nil)
 			require.Error(t, err, "must refuse to dial %q", addr)
-			assert.Contains(t, err.Error(), "blocked address")
+			assert.ErrorIs(t, err, ErrBlockedURL, "a dial-time block must be branchable via errors.Is like a save-time block")
 		}
 	})
 
