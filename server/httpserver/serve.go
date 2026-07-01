@@ -67,7 +67,7 @@ func RunAndShutdown(
 	drainDelay time.Duration,
 ) error {
 	if control != nil {
-		mountControlChannel(srv, control)
+		mountControlChannel(srv, control, logger)
 	}
 
 	serverErr := make(chan error, 1)
@@ -133,7 +133,7 @@ func RunAndShutdown(
 // mountControlChannel wraps srv.Handler so application/grpc HTTP/2 requests are dispatched to the control gateway and all other
 // requests to the original REST/UI handler. In the plaintext (proxy-terminated) mode it also enables cleartext HTTP/2 so the front
 // proxy can forward gRPC; over TLS, HTTP/2 comes from ALPN.
-func mountControlChannel(srv *http.Server, control ControlMux) {
+func mountControlChannel(srv *http.Server, control ControlMux, logger *slog.Logger) {
 	base := srv.Handler
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
@@ -141,10 +141,15 @@ func mountControlChannel(srv *http.Server, control ControlMux) {
 			// the WHOLE request/response, not a single message, so leaving them in force tears the control stream down at the REST server's
 			// timeout (a 10s read timeout in production) and forces the agent to reconnect on that cadence instead of holding one connection
 			// (issue #477). Clear both per-stream deadlines here; the REST/UI surface keeps the server's timeouts unchanged. If a transport
-			// cannot clear a deadline the stream still degrades to reconnect plus the retained short-poll, never to lost commands.
+			// cannot clear a deadline the stream still degrades to reconnect plus the retained short-poll, never to lost commands; we log the
+			// refusal rather than silently accepting the shorter-lived stream so the flap has a breadcrumb.
 			rc := http.NewResponseController(w)
-			_ = rc.SetReadDeadline(time.Time{})
-			_ = rc.SetWriteDeadline(time.Time{})
+			if err := rc.SetReadDeadline(time.Time{}); err != nil {
+				logger.WarnContext(r.Context(), "control channel: could not clear read deadline; stream will honor the REST read timeout", "err", err)
+			}
+			if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+				logger.WarnContext(r.Context(), "control channel: could not clear write deadline; stream will honor the REST write timeout", "err", err)
+			}
 			control.ServeHTTP(w, r)
 			return
 		}

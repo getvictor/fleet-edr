@@ -197,6 +197,7 @@ func TestGatewayLiveness(t *testing.T) {
 	t.Cleanup(func() { _ = cc.Close() })
 
 	streamCtx, streamCancel := context.WithCancel(connectCtx("tok-a"))
+	t.Cleanup(streamCancel) // always tear the client stream down, even if the test fails before the disconnect step
 	_, err = control.NewControlChannelClient(cc).Connect(streamCtx)
 	require.NoError(t, err)
 
@@ -205,11 +206,22 @@ func TestGatewayLiveness(t *testing.T) {
 	require.Eventually(t, func() bool { return hb.count("host-a") >= 2 }, 2*time.Second, 5*time.Millisecond,
 		"connection presence advances last-seen without a poll or upload")
 
-	// Disconnect: the connection deregisters and the bumps stop, so the host's last-seen no longer advances and it ages to offline.
+	// Disconnect: the connection deregisters and the maintain goroutine stops bumping last-seen, so the host's last-seen no longer
+	// advances and it ages to offline. Wait for the bump count to go quiescent before snapshotting: the maintain select can take one last
+	// liveness tick after cancellation (select picks a ready case at random), so snapshotting immediately after reg.len()==0 could race a
+	// final in-flight bump.
 	streamCancel()
 	require.Eventually(t, func() bool { return g.reg.len() == 0 }, 2*time.Second, 10*time.Millisecond)
-	settled := hb.count("host-a")
-	time.Sleep(4 * g.livenessInterval) // let several liveness ticks pass with no live connection
+	var settled int
+	require.Eventually(t, func() bool {
+		c := hb.count("host-a")
+		if c == settled {
+			return true
+		}
+		settled = c
+		return false
+	}, 2*time.Second, 2*g.livenessInterval, "last-seen bumps stop after disconnect")
+	time.Sleep(4 * g.livenessInterval) // confirm no further bump over several liveness ticks with no live connection
 	assert.Equal(t, settled, hb.count("host-a"), "no last-seen bump after the connection drops")
 }
 

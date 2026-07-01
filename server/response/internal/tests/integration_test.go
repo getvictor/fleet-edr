@@ -486,7 +486,11 @@ func TestControlGatewayPushLifecycle_RealMySQL(t *testing.T) {
 	t.Cleanup(func() {
 		runCancel()
 		gw.Stop()
-		require.NoError(t, httpSrv.Shutdown(context.WithoutCancel(runCtx)))
+		// Bound the shutdown so a regression that wedges the stream fails the test instead of hanging the run, mirroring
+		// httpserver.RunAndShutdown's own timeout-bounded shutdown context.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(runCtx), 15*time.Second)
+		defer shutdownCancel()
+		require.NoError(t, httpSrv.Shutdown(shutdownCtx))
 		require.ErrorIs(t, <-serveDone, http.ErrServerClosed)
 	})
 
