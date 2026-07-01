@@ -225,6 +225,26 @@ describe("Webhooks", () => {
     expect(await screen.findByText("Failed (500)")).toBeInTheDocument();
   });
 
+  it("falls back to a generic message when a failed test has neither error nor status code", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    // The ultimate fallback arm: not ok, and the response carries no diagnostic detail at all.
+    vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: false });
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("Test delivery failed")).toBeInTheDocument();
+  });
+
+  it("surfaces a thrown error from the test-send request", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    // A rejected request (e.g. a network failure before any response) is caught and shown to the operator.
+    vi.spyOn(api, "testWebhook").mockRejectedValue(new Error("network down"));
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("network down")).toBeInTheDocument();
+  });
+
   it("surfaces a deliveries load error", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
     vi.spyOn(api, "listWebhookDeliveries").mockRejectedValue(new Error("delivery boom"));
