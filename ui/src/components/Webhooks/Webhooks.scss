@@ -1,0 +1,63 @@
+.webhooks {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+
+  h3 {
+    margin-top: 0;
+  }
+
+  &__error,
+  &__save-error {
+    color: var(--color-danger, #b00020);
+  }
+
+  &__saved {
+    color: var(--color-success, #1b7f4b);
+  }
+
+  &__events {
+    display: flex;
+    gap: 1.5rem;
+    border: none;
+    padding: 0;
+    margin: 0.75rem 0;
+
+    legend {
+      padding: 0;
+      font-weight: 600;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+  }
+
+  &__enabled {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0.5rem 0;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+
+    th,
+    td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--color-border, #e2e2e2);
+      vertical-align: top;
+    }
+  }
+}

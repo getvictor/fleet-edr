@@ -717,6 +717,67 @@ export async function testSSOConnection(issuer: string): Promise<{ ok: boolean; 
   });
 }
 
+// --- Outbound alert webhooks (issue #496) ---------------------------------------
+
+// WebhookDestination is the read shape from GET /api/settings/webhooks. The signing secret is NEVER returned: secret_set only reports
+// whether one is stored. event_types is the subscribed set ("alert.created" and/or "alert.status_changed").
+export interface WebhookDestination {
+  id: number;
+  name: string;
+  url: string;
+  event_types: string[];
+  min_severity: string;
+  enabled: boolean;
+  secret_set: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// WebhookDestinationInput is the create/update body. secret is write-only: required on create, omitted or empty on update to keep the
+// stored one.
+export interface WebhookDestinationInput {
+  name: string;
+  url: string;
+  event_types: string[];
+  min_severity: string;
+  enabled: boolean;
+  secret?: string;
+}
+
+// WebhookDelivery is one row of the per-destination delivery-status readout. It carries no payload or secret.
+export interface WebhookDelivery {
+  id: number;
+  destination_id: number;
+  event_type: string;
+  status: string;
+  attempt: number;
+  last_status_code?: number;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+  next_attempt_at: string;
+}
+
+export async function listWebhooks(): Promise<WebhookDestination[]> {
+  return fetchJSON<WebhookDestination[]>("/settings/webhooks");
+}
+
+export async function createWebhook(req: WebhookDestinationInput): Promise<WebhookDestination> {
+  return fetchJSON<WebhookDestination>("/settings/webhooks", { method: "POST", body: JSON.stringify(req) });
+}
+
+export async function updateWebhook(id: number, req: WebhookDestinationInput): Promise<WebhookDestination> {
+  return fetchJSON<WebhookDestination>(`/settings/webhooks/${String(id)}`, { method: "PUT", body: JSON.stringify(req) });
+}
+
+export async function deleteWebhook(id: number): Promise<void> {
+  await fetchJSON<unknown>(`/settings/webhooks/${String(id)}`, { method: "DELETE" });
+}
+
+export async function listWebhookDeliveries(id: number): Promise<WebhookDelivery[]> {
+  return fetchJSON<WebhookDelivery[]>(`/settings/webhooks/${String(id)}/deliveries`);
+}
+
 // --- Service accounts (issue #376) ----------------------------------------------
 
 // ServiceAccount is the read shape from GET /api/settings/service-accounts. The secret is

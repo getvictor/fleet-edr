@@ -27,6 +27,7 @@ export const PermissionAction = {
   DetectionConfigRead: "detection_config.read",
   DetectionConfigWrite: "detection_config.write",
   SSOManage: "sso.manage",
+  WebhookManage: "webhook.manage",
   ServiceAccountRead: "service_account.read",
   UserRead: "user.read",
   UserManage: "user.manage",

@@ -8,6 +8,7 @@ import { ApplicationControlRoutes } from "./components/ApplicationControl/Applic
 import { DetectionConfig } from "./components/DetectionConfig/DetectionConfig";
 import { RuleDetail } from "./components/RuleDetail";
 import { SSOSettings } from "./components/SSOSettings/SSOSettings";
+import { Webhooks } from "./components/Webhooks/Webhooks";
 import { ServiceAccounts } from "./components/ServiceAccounts/ServiceAccounts";
 import { Users } from "./components/Users/Users";
 import { SettingsLayout } from "./components/Settings/SettingsLayout";
@@ -174,6 +175,14 @@ export function AuthedApp() {
             element={(
               <RequirePermission action={PermissionAction.SSOManage} surface="Single sign-on settings">
                 <SettingsLayout><SSOSettings /></SettingsLayout>
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/admin/settings/webhooks"
+            element={(
+              <RequirePermission action={PermissionAction.WebhookManage} surface="Webhooks">
+                <SettingsLayout><Webhooks /></SettingsLayout>
               </RequirePermission>
             )}
           />
