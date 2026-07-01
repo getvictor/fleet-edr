@@ -23,11 +23,19 @@ type Store struct {
 	// (SetWebhookSealer, wired by detection/bootstrap before the loops start), so the webhook config methods that write a secret
 	// require it to be set; nil means the deployment did not configure a root secret and destination writes are rejected.
 	webhookSealer *secretseal.Sealer
+
+	// webhookConsoleBaseURL is the deployment external URL used to derive the console deep link in delivery payloads. Set-once
+	// construction-phase config; an empty value yields a relative link in the payload.
+	webhookConsoleBaseURL string
 }
 
 // SetWebhookSealer wires the sealer used to encrypt webhook signing secrets at rest. Like SetMetrics it is set-once during
 // construction, before any request or loop reads it, so it is not guarded for concurrent mutation.
 func (s *Store) SetWebhookSealer(sealer *secretseal.Sealer) { s.webhookSealer = sealer }
+
+// SetWebhookConsoleBaseURL wires the deployment external URL used to build the console deep link in delivery payloads. Set-once
+// construction-phase config, like SetWebhookSealer.
+func (s *Store) SetWebhookConsoleBaseURL(u string) { s.webhookConsoleBaseURL = u }
 
 // New returns a Store wrapping the provided db handle and event archive. Schema is applied separately via detection/bootstrap.ApplySchema;
 // New just hands back the read/write surface. archive is required: post-cutover the detection store has no MySQL events table to read, so
