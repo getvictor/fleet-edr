@@ -12,6 +12,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Added
 
 - **Self-contained alert evidence.** An alert now captures the full envelopes of its triggering events at creation time, so the evidence stays readable even after the underlying events age out of retention. The alert-detail API response gains an `events` array alongside `event_ids` (see `docs/api/openapi.yaml`).
+- **Agent health check-in (server foundation).** The agent can report its health as an extensible per-component snapshot through a new host-token-authed `POST /api/status`, persisted last-writer-wins as the latest state per host. Each component carries a closed status (`healthy`/`degraded`/`unhealthy`/`unknown`) that the server rolls up into one per-host state; the Hosts list gains `overall_status` and a new `GET /api/hosts/{host_id}/health` returns the full component conditions. System-extension activation (endpoint security + network extension) is the first signal, surfacing the previously invisible case of a host that enrolls but whose sensor never activates (issue #359). The agent reporter and the Hosts UI badge + detail panel land in a follow-up.
 
 ### Changed
 
