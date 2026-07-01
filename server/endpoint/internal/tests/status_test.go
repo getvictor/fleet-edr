@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
@@ -111,6 +112,30 @@ func TestRecordStatus_HTTP_LastWriterWins(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, string(api.HealthUnhealthy), row.OverallStatus, "a stale post must not overwrite a fresher snapshot")
 	assert.EqualValues(t, 200, row.ReportedAtNs)
+}
+
+// TestRecordStatus_HTTP_FutureTimestampClamped proves a wildly-future snapshot time cannot freeze the host's health row: the future
+// stamp is clamped to ~now on write, so a subsequent correctly-stamped report still wins the last-writer-wins race.
+func TestRecordStatus_HTTP_FutureTimestampClamped(t *testing.T) {
+	t.Parallel()
+	uuid := "66666666-6666-6666-6666-666666666666"
+	_, db, srv, token := statusFixture(t, uuid)
+
+	farFuture := time.Now().Add(72 * time.Hour).UnixNano()
+	unhealthy := fmt.Sprintf(`{"agent_version":"0.4.0","reported_at_ns":%d,"components":[{"type":"network_extension","status":"unhealthy","last_transition_ns":1}]}`, farFuture)
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, unhealthy))
+
+	row, ok := readHealth(t, db, uuid)
+	require.True(t, ok)
+	assert.Less(t, row.ReportedAtNs, farFuture, "a far-future reported_at_ns must be clamped, not stored verbatim")
+
+	// A later, correctly-stamped healthy report must win rather than being locked out by the clamped-but-still-recent prior row.
+	healthy := fmt.Sprintf(`{"agent_version":"0.4.0","reported_at_ns":%d,"components":[{"type":"network_extension","status":"healthy","last_transition_ns":2}]}`, time.Now().UnixNano())
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, healthy))
+
+	row, ok = readHealth(t, db, uuid)
+	require.True(t, ok)
+	assert.Equal(t, string(api.HealthHealthy), row.OverallStatus, "a clamped future stamp must not freeze the row against later reports")
 }
 
 // spec:server-host-status/the-server-accepts-and-persists-a-host-status-snapshot/an-unknown-component-type-is-stored-verbatim

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 )
 
@@ -13,6 +14,12 @@ import (
 // api.Service, matching the WebhookAdmin seam, so the alert/host read interface and its test mocks stay untouched (issue #359).
 type HostHealthReader interface {
 	HostHealth(ctx context.Context, hostID string) (api.HostHealth, error)
+}
+
+// registerHostHealthRoutes wires the per-host health route. Kept in this file (not handler.go) alongside handleHostHealth so the whole
+// route + gate + handler unit is co-located, matching registerWebhookRoutes.
+func (h *Handler) registerHostHealthRoutes(mux httpserver.Router) {
+	mux.HandleFunc("GET /api/hosts/{host_id}/health", h.handleHostHealth)
 }
 
 // SetHostHealth installs the per-host health read surface. Bootstrap wires it with the detection store in ModeFull; when it is not set

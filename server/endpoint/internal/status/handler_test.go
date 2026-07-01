@@ -99,6 +99,22 @@ func TestServeHTTP_BadJSON(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "invalid_json")
 }
 
+func TestServeHTTP_OversizedBodyMaps413(t *testing.T) {
+	t.Parallel()
+	svc := fakeStatusService{record: func(context.Context, string, api.StatusReport) error {
+		t.Fatal("RecordStatus must not be called on an over-cap body")
+		return nil
+	}}
+	// A valid-JSON prefix followed by padding that pushes the body past maxStatusBodyBytes (16 KiB): MaxBytesReader trips mid-decode
+	// and the handler must return 413 body_too_large (the agent-facing convention), not 400 invalid_json.
+	huge := `{"agent_version":"` + strings.Repeat("a", 32*1024) + `"}`
+
+	rec := serve(t, svc, "host-1", huge)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Contains(t, rec.Body.String(), "body_too_large")
+}
+
 func TestServeHTTP_InvalidStatusMaps400(t *testing.T) {
 	t.Parallel()
 	svc := fakeStatusService{record: func(context.Context, string, api.StatusReport) error {

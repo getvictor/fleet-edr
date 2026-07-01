@@ -50,6 +50,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxStatusBodyBytes)
 	var report api.StatusReport
 	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+		// Distinguish an over-cap body (413) from malformed JSON (400), matching the event ingest handler: the agent's uploader
+		// classifies 400 as a generic client error but routes 413 differently, so folding "too large" into invalid_json would drive
+		// the wrong client-side recovery.
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body_too_large"})
+			return
+		}
 		httpserver.NoStoreJSON(ctx, h.logger, w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
 		return
 	}

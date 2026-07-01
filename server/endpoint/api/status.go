@@ -73,8 +73,9 @@ type StatusReport struct {
 // and a host with no components rolls up to HealthUnknown rather than storing "[]".
 type Components []ComponentHealth
 
-// Scan implements sql.Scanner. SQL NULL and an empty payload both decode to a nil slice; a []byte is copied before unmarshal so the
-// result does not alias the driver's reused scratch buffer.
+// Scan implements sql.Scanner. SQL NULL and an empty payload both decode to a nil slice. A non-empty payload is unmarshaled directly:
+// json.Unmarshal allocates fresh values for every field and does not retain the input slice, so the result never aliases the driver's
+// reused scratch buffer (unlike NullRawJSON, which must copy because it stores the raw bytes verbatim).
 func (c *Components) Scan(value any) error {
 	if value == nil {
 		*c = nil

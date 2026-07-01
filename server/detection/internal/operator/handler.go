@@ -93,7 +93,6 @@ func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 // RegisterRoutes registers the operator routes on the given mux.
 func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/hosts", h.handleListHosts)
-	mux.HandleFunc("GET /api/hosts/{host_id}/health", h.handleHostHealth)
 	mux.HandleFunc("GET /api/hosts/{host_id}/tree", h.handleProcessTree)
 	mux.HandleFunc("GET /api/hosts/{host_id}/processes/{pid}", h.handleProcessDetail)
 
@@ -101,6 +100,7 @@ func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/alerts/{id}", h.handleGetAlert)
 	mux.HandleFunc("PUT /api/alerts/{id}", h.handleUpdateAlertStatus)
 
+	h.registerHostHealthRoutes(mux)
 	h.registerWebhookRoutes(mux)
 }
 

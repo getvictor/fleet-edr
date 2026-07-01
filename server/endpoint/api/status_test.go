@@ -72,23 +72,23 @@ func TestHealthStatus_Valid(t *testing.T) {
 func TestComponents_Scan(t *testing.T) {
 	t.Parallel()
 
-	var fromNil api.Components
+	fromNil := api.Components(nil)
 	require.NoError(t, fromNil.Scan(nil))
 	assert.Nil(t, fromNil, "SQL NULL scans to a nil slice")
 
-	var fromEmpty api.Components
+	fromEmpty := api.Components(nil)
 	require.NoError(t, fromEmpty.Scan([]byte{}))
 	assert.Nil(t, fromEmpty, "an empty payload scans to a nil slice")
 
-	var fromBytes api.Components
+	fromBytes := api.Components(nil)
 	require.NoError(t, fromBytes.Scan([]byte(`[{"type":"network_extension","status":"healthy","last_transition_ns":7}]`)))
 	assert.Equal(t, api.Components{{Type: api.ComponentNetworkExtension, Status: api.HealthHealthy, LastTransitionNs: 7}}, fromBytes)
 
-	var fromStr api.Components
+	fromStr := api.Components(nil)
 	require.NoError(t, fromStr.Scan(`[{"type":"x","status":"unknown","last_transition_ns":0}]`))
 	assert.Equal(t, api.Components{{Type: "x", Status: api.HealthUnknown}}, fromStr)
 
-	var bad api.Components
+	bad := api.Components(nil)
 	err := bad.Scan(42)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported type")
@@ -195,7 +195,7 @@ func TestComponents_ScanValueProperty(t *testing.T) {
 		val, err := original.Value()
 		require.NoError(rt, err)
 
-		var rebuilt api.Components
+		rebuilt := api.Components(nil)
 		if val == nil {
 			require.NoError(rt, rebuilt.Scan(nil))
 			assert.Nil(rt, rebuilt)
