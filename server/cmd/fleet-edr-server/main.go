@@ -308,6 +308,7 @@ func openContexts(
 	}
 	if detectionCtx, err = openDetection(ctx, logger, db, cfg, detectionWiring{
 		identity: identityCtx, visibility: visibilityCtx, isDraining: drain.IsDraining, coord: coord,
+		webhookSecretKey: kr.Derive(keyring.WebhookSecretSealLabel),
 	}); err != nil {
 		return
 	}
@@ -398,10 +399,11 @@ func openIdentity(
 // detectionWiring bundles the cross-context handles openDetection threads into the detection bootstrap, keeping its signature under the
 // parameter-count limit.
 type detectionWiring struct {
-	identity   *identitybootstrap.Identity
-	visibility *visibilitybootstrap.Visibility
-	isDraining func() bool
-	coord      leader.Coordinator
+	identity         *identitybootstrap.Identity
+	visibility       *visibilitybootstrap.Visibility
+	isDraining       func() bool
+	coord            leader.Coordinator
+	webhookSecretKey []byte
 }
 
 func openDetection(
@@ -435,6 +437,7 @@ func openDetection(
 		Coordinator:          w.coord,
 		EventLog:             w.visibility.EventLog(),
 		EventArchive:         w.visibility.EventArchive(),
+		WebhookSecretKey:     w.webhookSecretKey,
 	})
 	if err != nil {
 		logger.ErrorContext(ctx, "open detection", "err", err)

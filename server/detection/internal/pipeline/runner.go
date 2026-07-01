@@ -27,20 +27,22 @@ const (
 // honours ctx cancellation independently. Run returns when all of them
 // have returned.
 type Runner struct {
-	processor   *Processor
-	processTTL  *ProcessTTLRunner
-	retention   *RetentionRunner
-	queuePrune  *QueuePruneRunner
-	coordinator leader.Coordinator
+	processor       *Processor
+	processTTL      *ProcessTTLRunner
+	retention       *RetentionRunner
+	queuePrune      *QueuePruneRunner
+	webhookDelivery *WebhookDeliveryRunner
+	coordinator     leader.Coordinator
 }
 
 // RunnerOptions bundles what the Runner needs from its callers.
 type RunnerOptions struct {
-	Processor  *Processor
-	ProcessTTL *ProcessTTLRunner
-	Retention  *RetentionRunner
-	QueuePrune *QueuePruneRunner
-	DB         *sqlx.DB
+	Processor       *Processor
+	ProcessTTL      *ProcessTTLRunner
+	Retention       *RetentionRunner
+	QueuePrune      *QueuePruneRunner
+	WebhookDelivery *WebhookDeliveryRunner
+	DB              *sqlx.DB
 	// Coordinator gates the single-replica periodic tasks (processTTL + retention) so they run on exactly one replica at a time.
 	// Nil disables coordination: the tasks run directly on this process, which is correct for a single-replica deployment and for
 	// tests. The processor is never gated: it scales across replicas via SKIP LOCKED.
@@ -51,11 +53,12 @@ type RunnerOptions struct {
 // be nil to disable that loop (e.g. ModeIntake disables all three).
 func NewRunner(opts RunnerOptions) *Runner {
 	return &Runner{
-		processor:   opts.Processor,
-		processTTL:  opts.ProcessTTL,
-		retention:   opts.Retention,
-		queuePrune:  opts.QueuePrune,
-		coordinator: opts.Coordinator,
+		processor:       opts.Processor,
+		processTTL:      opts.ProcessTTL,
+		retention:       opts.Retention,
+		queuePrune:      opts.QueuePrune,
+		webhookDelivery: opts.WebhookDelivery,
+		coordinator:     opts.Coordinator,
 	}
 }
 
@@ -82,6 +85,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		// across every replica rather than running on only one.
 		wg.Go(func() {
 			_ = r.processor.Run(ctx)
+		})
+	}
+	if r.webhookDelivery != nil {
+		// Not leader-gated: the delivery worker leases disjoint outbox rows via SELECT ... FOR UPDATE OF ... SKIP LOCKED, so it
+		// scales across replicas the same way the processor does.
+		wg.Go(func() {
+			r.webhookDelivery.Loop(ctx)
 		})
 	}
 	if r.processTTL != nil {

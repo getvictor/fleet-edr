@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/fleetdm/edr/internal/secretseal"
 	"github.com/fleetdm/edr/server/coordination/leader"
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/engine"
@@ -89,6 +90,15 @@ type Deps struct {
 	// Coordinator gates the single-replica periodic tasks (retention + process-TTL) so they run on exactly one replica. Optional:
 	// nil runs them directly (single-replica deployments and tests). cmd/main wires a MySQL-advisory-lock coordinator.
 	Coordinator leader.Coordinator
+
+	// WebhookSecretKey seals per-destination outbound-webhook signing secrets at rest (keyring label edr/webhook/secret-seal/v1,
+	// issue #496). Optional: when empty the webhook config surface is inert (secret writes are rejected) and the delivery worker is
+	// not started, so a deployment without a root secret behaves as if the feature is off. cmd/main wires
+	// keyring.Derive(WebhookSecretSealLabel).
+	WebhookSecretKey []byte
+	// WebhookConsoleBaseURL is the deployment external URL used to build the console deep link in delivery payloads. Optional; an
+	// empty value yields a relative link.
+	WebhookConsoleBaseURL string
 
 	// EventLog is the visibility work queue intake appends to and the processor claims from (ADR-0015). EventArchive is the durable
 	// ClickHouse event lake intake writes to and correlation/evidence reads from. Both are REQUIRED in ModeFull and ModeIntake (the
@@ -187,13 +197,28 @@ func New(deps Deps) (*Detection, error) {
 			Interval: deps.QueuePruneInterval,
 			Logger:   logger,
 		})
+
+		// Outbound webhook (issue #496): wire the sealer into the store and start the delivery worker only when a root secret is
+		// configured. Without it, the config surface rejects secret writes and no worker runs, so the feature is inert.
+		var webhookDelivery *pipeline.WebhookDeliveryRunner
+		if len(deps.WebhookSecretKey) > 0 {
+			sealer, sErr := secretseal.NewSealer(deps.WebhookSecretKey)
+			if sErr != nil {
+				return nil, fmt.Errorf("detection bootstrap: webhook sealer: %w", sErr)
+			}
+			store.SetWebhookSealer(sealer)
+			store.SetWebhookConsoleBaseURL(deps.WebhookConsoleBaseURL)
+			webhookDelivery = pipeline.NewWebhookDelivery(store, sealer, pipeline.WebhookDeliveryOptions{Logger: logger})
+		}
+
 		det.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
-			Processor:   processor,
-			ProcessTTL:  processTTL,
-			Retention:   retention,
-			QueuePrune:  queuePrune,
-			DB:          deps.DB,
-			Coordinator: deps.Coordinator,
+			Processor:       processor,
+			ProcessTTL:      processTTL,
+			Retention:       retention,
+			QueuePrune:      queuePrune,
+			WebhookDelivery: webhookDelivery,
+			DB:              deps.DB,
+			Coordinator:     deps.Coordinator,
 		})
 	} else {
 		// Intake-only: still expose a service with the intake handler

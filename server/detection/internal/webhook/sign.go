@@ -7,12 +7,14 @@ import (
 	"strconv"
 )
 
-// Standard Webhooks signature headers (standardwebhooks.com). Receivers recompute the signature over the same id.timestamp.body
-// content with the shared secret and reject a request whose timestamp is outside their tolerance window.
+// Standard Webhooks signature headers (standardwebhooks.com). The spec names them webhook-id / webhook-timestamp /
+// webhook-signature; these use the canonical HTTP header casing, which is byte-for-byte what net/http transmits and what receivers
+// match (HTTP header names are case-insensitive, so a Standard Webhooks verifier reading "webhook-id" still finds "Webhook-Id").
+// Receivers recompute the signature over the same id.timestamp.body content and reject a timestamp outside their tolerance window.
 const (
-	HeaderID        = "webhook-id"
-	HeaderTimestamp = "webhook-timestamp"
-	HeaderSignature = "webhook-signature"
+	HeaderID        = "Webhook-Id"
+	HeaderTimestamp = "Webhook-Timestamp"
+	HeaderSignature = "Webhook-Signature"
 )
 
 // signatureVersion prefixes the signature value per the Standard Webhooks convention, leaving room for future MAC schemes.

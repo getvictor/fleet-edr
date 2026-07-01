@@ -35,6 +35,18 @@ const (
 	WebhookEventAlertStatusChanged = "alert.status_changed"
 )
 
+// WebhookDeliveryClaim is one outbox row leased to the delivery worker: enough to sign and POST it. Payload is the stored envelope
+// (the worker overlays the current attempt number before signing); SecretSealed is the destination's sealed signing secret, opened by
+// the worker. Attempt is the post-increment attempt number for this send.
+type WebhookDeliveryClaim struct {
+	ID           int64
+	PublicID     string
+	Attempt      int
+	URL          string
+	Payload      []byte
+	SecretSealed []byte
+}
+
 // WebhookDeliveryStatus is the outbox row lifecycle: pending until a 2xx or the retry cap, then delivered or failed.
 type WebhookDeliveryStatus string
 
