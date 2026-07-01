@@ -173,6 +173,9 @@ func New(deps Deps) (*Detection, error) {
 		}
 		det.operatorH = operator.New(det.svc, deps.AuthZ, logger)
 		det.operatorH.SetAudit(deps.Audit)
+		// The webhook admin surface reads/writes destinations through the store. Wiring it always (independent of the sealer) keeps
+		// list/get/delete working; a create/update that needs to seal a secret returns a configured-error when no root secret is set.
+		det.operatorH.SetWebhookAdmin(store)
 
 		processor := pipeline.NewProcessor(
 			deps.EventLog,

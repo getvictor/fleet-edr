@@ -106,6 +106,44 @@ func (s *Store) MarkWebhookFailed(ctx context.Context, id int64, statusCode int,
 	return nil
 }
 
+// ListWebhookDeliveries returns the most recent deliveries for a destination (newest first), for the operator delivery-status readout.
+// It carries no payload or secret.
+func (s *Store) ListWebhookDeliveries(ctx context.Context, destinationID int64, limit int) ([]detapi.WebhookDelivery, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var rows []struct {
+		ID             int64     `db:"id"`
+		DestinationID  int64     `db:"destination_id"`
+		EventType      string    `db:"event_type"`
+		Status         string    `db:"status"`
+		Attempt        int       `db:"attempt"`
+		LastStatusCode *int      `db:"last_status_code"`
+		LastError      *string   `db:"last_error"`
+		CreatedAt      time.Time `db:"created_at"`
+		UpdatedAt      time.Time `db:"updated_at"`
+		NextAttemptAt  time.Time `db:"next_attempt_at"`
+	}
+	if err := s.db.SelectContext(ctx, &rows, `
+		SELECT id, destination_id, event_type, status, attempt, last_status_code, last_error, created_at, updated_at, next_attempt_at
+		FROM webhook_delivery WHERE destination_id = ? ORDER BY id DESC LIMIT ?`, destinationID, limit); err != nil {
+		return nil, fmt.Errorf("list webhook deliveries for destination %d: %w", destinationID, err)
+	}
+	out := make([]detapi.WebhookDelivery, 0, len(rows))
+	for _, r := range rows {
+		lastErr := ""
+		if r.LastError != nil {
+			lastErr = *r.LastError
+		}
+		out = append(out, detapi.WebhookDelivery{
+			ID: r.ID, DestinationID: r.DestinationID, EventType: r.EventType, Status: detapi.WebhookDeliveryStatus(r.Status),
+			Attempt: r.Attempt, LastStatusCode: r.LastStatusCode, LastError: lastErr,
+			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, NextAttemptAt: r.NextAttemptAt,
+		})
+	}
+	return out, nil
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

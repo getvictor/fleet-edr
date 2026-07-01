@@ -47,6 +47,21 @@ type WebhookDeliveryClaim struct {
 	SecretSealed []byte
 }
 
+// WebhookDelivery is the operator-facing delivery-status read model: the outcome of one queued delivery, surfaced so an operator can
+// confirm a destination is healthy. It does not carry the payload or any secret.
+type WebhookDelivery struct {
+	ID             int64                 `json:"id"`
+	DestinationID  int64                 `json:"destination_id"`
+	EventType      string                `json:"event_type"`
+	Status         WebhookDeliveryStatus `json:"status"`
+	Attempt        int                   `json:"attempt"`
+	LastStatusCode *int                  `json:"last_status_code,omitempty"`
+	LastError      string                `json:"last_error,omitempty"`
+	CreatedAt      time.Time             `json:"created_at"`
+	UpdatedAt      time.Time             `json:"updated_at"`
+	NextAttemptAt  time.Time             `json:"next_attempt_at"`
+}
+
 // WebhookDeliveryStatus is the outbox row lifecycle: pending until a 2xx or the retry cap, then delivered or failed.
 type WebhookDeliveryStatus string
 

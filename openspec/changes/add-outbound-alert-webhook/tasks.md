@@ -14,7 +14,7 @@
 
 - [x] 3.1 Detection store: CRUD for `webhook_destination`; the secret is accepted only on create/update, sealed before write, and never selected back into the read model
 - [x] 3.2 Add the `webhook.manage` action to the identity authorization catalog and grant it to `admin` (not analyst/read-only)
-- [ ] 3.3 Detection operator handler: `GET/POST/PUT/DELETE` destinations, `POST` test-send, `GET` delivery status, each gated via `identityapi.HTTPGate` on `webhook.manage`; register on the operator-session + CSRF allowlist
+- [x] 3.3 Detection operator handler: `GET/POST/PUT/DELETE` destinations + `GET` delivery status, each gated via `identityapi.HTTPGate` on `webhook.manage` (via a `WebhookAdmin` seam so `api.Service` stays untouched); registered on the operator-session + CSRF allowlist. Test-send (`POST .../test`) is a fast-follow (needs the client + sealer in the admin path)
 - [x] 3.4 Save-time validation: reject non-https URLs and hosts that resolve only to a blocked address (see task 6)
 
 ## 4. Enqueue hook (transactional outbox)

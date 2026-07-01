@@ -60,10 +60,11 @@ type alertDetailResponse struct {
 
 // Handler serves the operator-facing detection routes.
 type Handler struct {
-	svc    api.Service
-	authz  identityapi.AuthZ
-	audit  identityapi.AuditRecorder
-	logger *slog.Logger
+	svc          api.Service
+	authz        identityapi.AuthZ
+	audit        identityapi.AuditRecorder
+	webhookAdmin WebhookAdmin
+	logger       *slog.Logger
 }
 
 // New creates a detection operator handler. authz is the authorization chokepoint every privileged route gates on; callers also
@@ -96,6 +97,8 @@ func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/alerts", h.handleListAlerts)
 	mux.HandleFunc("GET /api/alerts/{id}", h.handleGetAlert)
 	mux.HandleFunc("PUT /api/alerts/{id}", h.handleUpdateAlertStatus)
+
+	h.registerWebhookRoutes(mux)
 }
 
 func (h *Handler) handleListHosts(w http.ResponseWriter, r *http.Request) {
