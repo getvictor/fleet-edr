@@ -32,6 +32,7 @@ import (
 	"github.com/fleetdm/edr/agent/controlclient"
 	"github.com/fleetdm/edr/agent/enrich"
 	"github.com/fleetdm/edr/agent/enrollment"
+	"github.com/fleetdm/edr/agent/health"
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/metrics"
 	"github.com/fleetdm/edr/agent/proctable"
@@ -201,6 +202,16 @@ func run() error {
 	coalescer := coalesce.New(config.DefaultNetworkCoalesceWindow, q.Enqueue, logger)
 	go coalescer.Run(ctx)
 
+	// healthRegistry tracks each system extension's XPC connectivity as an agent-health condition (issue #359). Register the components
+	// BEFORE starting their loops so the first status check-in already reports a not-yet-activated extension (unhealthy/never_connected),
+	// which is exactly the fresh-install gap this feature surfaces. Only register the network extension when it is enabled, so a
+	// deliberately-disabled NE is not reported as unhealthy.
+	healthRegistry := health.NewRegistry()
+	healthRegistry.Register(health.ComponentEndpointSecurityExtension, "Security extension")
+	if cfg.NetXPCService != "" {
+		healthRegistry.Register(health.ComponentNetworkExtension, "Network extension")
+	}
+
 	pidTable := proctable.New()
 	go startReceiverLoop(ctx, receiverLoopParams{
 		logger:      logger,
@@ -209,6 +220,8 @@ func run() error {
 		pt:          pidTable,
 		updateTable: true,
 		dispatcher:  esfDispatcher,
+		health:      healthRegistry,
+		component:   health.ComponentEndpointSecurityExtension,
 	})
 	if cfg.NetXPCService != "" {
 		go startReceiverLoop(ctx, receiverLoopParams{
@@ -217,9 +230,21 @@ func run() error {
 			enqueue:      coalescer.Handle,
 			pt:           pidTable,
 			upgradeProbe: func() bool { return receiver.NEUpgradePending(ctx) },
+			health:       healthRegistry,
+			component:    health.ComponentNetworkExtension,
 		})
 	}
 	go runUploader(ctx, up, logger)
+
+	// Report agent health to the server on startup, on each extension transition, and periodically (issue #359).
+	go health.NewPoster(health.Options{
+		Registry:     healthRegistry,
+		Client:       httpClient,
+		BaseURL:      cfg.ServerURL,
+		Tokens:       tokenProvider,
+		AgentVersion: version,
+		Logger:       logger,
+	}).Run(ctx)
 
 	// streamConnected is the shared flag the control channel raises while its stream is up so the commander suspends polling. Per-replica
 	// ephemeral state, lost on restart; the commander reads it, the control client sets it.
@@ -542,6 +567,10 @@ type receiverLoopParams struct {
 	updateTable  bool
 	dispatcher   *receiver.Dispatcher
 	upgradeProbe func() bool
+	// health + component wire this service's connect/disconnect transitions into the agent-health registry (issue #359). Both must be
+	// set together; when either is nil the loop reports no health for the service.
+	health    *health.Registry
+	component string
 }
 
 func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
@@ -565,6 +594,23 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	if p.dispatcher != nil {
 		hooks.OnConnected = p.dispatcher.Set
 		hooks.OnDisconnected = p.dispatcher.Clear
+	}
+	// Compose the agent-health transitions on top of any dispatcher wiring: a successful connect marks the component healthy, a drop
+	// marks it connection_lost (issue #359). Composed (not overwritten) so the ESF loop still publishes into the dispatcher.
+	if p.health != nil && p.component != "" {
+		priorConnected, priorDisconnected := hooks.OnConnected, hooks.OnDisconnected
+		hooks.OnConnected = func(c receiver.Connector) {
+			if priorConnected != nil {
+				priorConnected(c)
+			}
+			p.health.MarkConnected(p.component)
+		}
+		hooks.OnDisconnected = func() {
+			if priorDisconnected != nil {
+				priorDisconnected()
+			}
+			p.health.MarkDisconnected(p.component)
+		}
 	}
 	// Only the network-extension loop wires UpgradeProbe (nil for ESF): after a staged upgrade the NE's nesessionmanager-owned
 	// Mach service stays bound to the terminated old version until reboot, so a sustained NE connect failure paired with a
