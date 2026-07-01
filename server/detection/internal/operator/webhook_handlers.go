@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 
@@ -87,9 +88,27 @@ func (h *Handler) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 	code, sendErr := h.webhookTester.SendTest(r.Context(), url, sealed)
 	resp := map[string]any{"ok": sendErr == nil && code >= 200 && code < 300, "status_code": code}
 	if sendErr != nil {
-		resp["error"] = sendErr.Error()
+		// Never echo sendErr.Error() verbatim: the SSRF guard names the resolved blocked address and transport errors carry
+		// host:port detail, so returning the raw string would disclose internal network topology to an operator who only controls
+		// the hostname (and pin the response contract to unstable stdlib error text). Map to a stable, safe reason; log the detail.
+		h.logger.WarnContext(r.Context(), "webhook test-send failed", "destination_id", id, "err", sendErr)
+		resp["error"] = testSendReason(sendErr)
 	}
 	h.writeJSON(w, r, resp)
+}
+
+// testSendReason maps a delivery error to a stable, operator-safe reason. It intentionally drops the underlying error text so the API
+// neither leaks the SSRF-resolved internal address nor depends on unstable stdlib error strings; the full error is logged server-side.
+func testSendReason(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, webhook.ErrBlockedURL):
+		return "destination address is not allowed"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "request timed out"
+	default:
+		return "delivery failed"
+	}
 }
 
 // gateWebhook runs the shared authz + configured checks every webhook route funnels through. It returns false (and has written the

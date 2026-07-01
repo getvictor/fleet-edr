@@ -163,7 +163,8 @@ export function Webhooks() {
     setTestResult(null);
     try {
       const r = await testWebhook(id);
-      setTestResult({ id, ok: r.ok, message: r.ok ? `Delivered (${String(r.status_code ?? "")})` : (r.error ?? "Test delivery failed") });
+      const failMessage = r.error ?? (r.status_code ? `Failed (${String(r.status_code)})` : "Test delivery failed");
+      setTestResult({ id, ok: r.ok, message: r.ok ? `Delivered (${String(r.status_code ?? "")})` : failMessage });
     } catch (err: unknown) {
       setTestResult({ id, ok: false, message: err instanceof Error ? err.message : "Test delivery failed" });
     }

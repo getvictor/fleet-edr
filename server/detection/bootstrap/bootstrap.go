@@ -254,8 +254,8 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 }
 
 // configureWebhookDelivery wires the outbound-webhook secret sealer into the store and builds the delivery worker, but only when a
-// root secret is configured. Without one it returns (nil, nil): the config surface then rejects secret writes and no worker runs, so
-// the feature is inert. Factored out of New to keep New's cognitive complexity in bounds (issue #496).
+// root secret is configured. Without one it returns (nil, nil, nil): the config surface then rejects secret writes and no worker
+// runs, so the feature is inert. Factored out of New to keep New's cognitive complexity in bounds (issue #496).
 const (
 	webhookRequestTimeout   = 10 * time.Second
 	webhookMaxResponseBytes = 64 * 1024

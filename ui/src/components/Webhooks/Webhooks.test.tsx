@@ -215,6 +215,16 @@ describe("Webhooks", () => {
     expect(await screen.findByText("connection refused")).toBeInTheDocument();
   });
 
+  it("shows the HTTP status code when a test delivery fails without an error message", async () => {
+    vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
+    // A non-2xx receiver response carries no transport error, so the status code is the only diagnostic to surface.
+    vi.spyOn(api, "testWebhook").mockResolvedValue({ ok: false, status_code: 500 });
+    render(<Webhooks />);
+    await screen.findByText("pd");
+    fireEvent.click(screen.getByRole("button", { name: "Send test" }));
+    expect(await screen.findByText("Failed (500)")).toBeInTheDocument();
+  });
+
   it("surfaces a deliveries load error", async () => {
     vi.spyOn(api, "listWebhooks").mockResolvedValue([dest]);
     vi.spyOn(api, "listWebhookDeliveries").mockRejectedValue(new Error("delivery boom"));
