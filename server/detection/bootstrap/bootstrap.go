@@ -20,6 +20,7 @@ import (
 	"github.com/fleetdm/edr/server/detection/internal/operator"
 	"github.com/fleetdm/edr/server/detection/internal/pipeline"
 	"github.com/fleetdm/edr/server/detection/internal/service"
+	"github.com/fleetdm/edr/server/detection/internal/webhook"
 	detectionmigrations "github.com/fleetdm/edr/server/detection/migrations"
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
@@ -203,9 +204,13 @@ func New(deps Deps) (*Detection, error) {
 
 		// Outbound webhook (issue #496): wire the sealer into the store and build the delivery worker (both only when a root secret
 		// is configured; see configureWebhookDelivery).
-		webhookDelivery, webhookErr := configureWebhookDelivery(store, deps, logger)
+		webhookDelivery, webhookTester, webhookErr := configureWebhookDelivery(store, deps, logger)
 		if webhookErr != nil {
 			return nil, webhookErr
+		}
+		// Guard the typed-nil: only install the tester when one was built, so the handler's nil check stays honest.
+		if webhookTester != nil {
+			det.operatorH.SetWebhookTester(webhookTester)
 		}
 
 		det.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
@@ -251,17 +256,26 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 // configureWebhookDelivery wires the outbound-webhook secret sealer into the store and builds the delivery worker, but only when a
 // root secret is configured. Without one it returns (nil, nil): the config surface then rejects secret writes and no worker runs, so
 // the feature is inert. Factored out of New to keep New's cognitive complexity in bounds (issue #496).
-func configureWebhookDelivery(store *mysql.Store, deps Deps, logger *slog.Logger) (*pipeline.WebhookDeliveryRunner, error) {
+const (
+	webhookRequestTimeout   = 10 * time.Second
+	webhookMaxResponseBytes = 64 * 1024
+)
+
+func configureWebhookDelivery(store *mysql.Store, deps Deps, logger *slog.Logger) (*pipeline.WebhookDeliveryRunner, *webhook.Tester, error) {
 	if len(deps.WebhookSecretKey) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	sealer, err := secretseal.NewSealer(deps.WebhookSecretKey)
 	if err != nil {
-		return nil, fmt.Errorf("detection bootstrap: webhook sealer: %w", err)
+		return nil, nil, fmt.Errorf("detection bootstrap: webhook sealer: %w", err)
 	}
 	store.SetWebhookSealer(sealer)
 	store.SetWebhookConsoleBaseURL(deps.WebhookConsoleBaseURL)
-	return pipeline.NewWebhookDelivery(store, sealer, pipeline.WebhookDeliveryOptions{Logger: logger}), nil
+	// One SSRF-hardened client backs both the worker and the test-send path.
+	client := webhook.NewClient(webhookRequestTimeout, webhookMaxResponseBytes)
+	worker := pipeline.NewWebhookDelivery(store, sealer, pipeline.WebhookDeliveryOptions{Logger: logger, Sender: client})
+	tester := webhook.NewTester(client, sealer, deps.WebhookConsoleBaseURL)
+	return worker, tester, nil
 }
 
 // Service exposes the operator-facing api.Service. RecordHostSeen is

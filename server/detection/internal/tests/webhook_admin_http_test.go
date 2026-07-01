@@ -170,3 +170,61 @@ func TestWebhookAdminHTTP_NotConfigured(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
+
+type fakeWebhookTester struct {
+	code       int
+	err        error
+	calls      int
+	lastURL    string
+	lastSealed []byte
+}
+
+func (f *fakeWebhookTester) SendTest(_ context.Context, url string, sealed []byte) (int, error) {
+	f.calls++
+	f.lastURL = url
+	f.lastSealed = append([]byte(nil), sealed...)
+	return f.code, f.err
+}
+
+func TestWebhookAdminHTTP_TestSend(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newWebhookStore(t)
+	svc := service.New(store, nil, nil, nil, nil, discardLog())
+	h := operator.New(svc, allowAllAuthZ{}, discardLog())
+	h.SetWebhookAdmin(store)
+	fake := &fakeWebhookTester{code: 200}
+	h.SetWebhookTester(fake)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	id, err := store.CreateWebhookDestination(context.Background(), detapi.WebhookDestinationInput{
+		Name: "pd", URL: "https://hooks.example.com/edr",
+		EventTypes: []string{detapi.WebhookEventAlertCreated}, MinSeverity: detapi.SeverityLow, Enabled: true, Secret: "sekret",
+	})
+	require.NoError(t, err)
+
+	resp := doJSON(t, srv, http.MethodPost, "/api/settings/webhooks/"+strconv.FormatInt(id, 10)+"/test", nil)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out struct {
+		OK         bool `json:"ok"`
+		StatusCode int  `json:"status_code"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	assert.True(t, out.OK)
+	assert.Equal(t, 200, out.StatusCode)
+	assert.Equal(t, 1, fake.calls)
+	assert.Equal(t, "https://hooks.example.com/edr", fake.lastURL, "the handler loads the destination URL and hands it to the tester")
+	assert.NotEmpty(t, fake.lastSealed, "the sealed secret is passed to the tester")
+}
+
+func TestWebhookAdminHTTP_TestSendNotConfigured(t *testing.T) {
+	t.Parallel()
+	// Admin surface wired but no tester (no root secret): the test route reports not-configured.
+	srv := webhookHTTPServer(t, allowAllAuthZ{}, nil)
+	resp := doJSON(t, srv, http.MethodPost, "/api/settings/webhooks/1/test", nil)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+}
