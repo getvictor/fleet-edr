@@ -17,6 +17,7 @@ const makeHost = (over: Partial<HostSummary> = {}): HostSummary => ({
   os_version: "macOS 26.0",
   event_count: 1234,
   last_seen_ns: minutesAgoNs(1),
+  overall_status: "healthy",
   ...over,
 });
 
@@ -68,6 +69,16 @@ describe("HostList rendering", () => {
     renderList();
     const cell = await screen.findByText("128,944");
     expect(cell).toHaveClass("host-list__events-col");
+  });
+
+  // spec:web-ui/the-hosts-list-surfaces-per-host-health/an-unhealthy-host-shows-a-needs-attention-badge
+  it("renders a health badge from overall_status, distinct from the online/offline pill", async () => {
+    mockHosts([makeHost({ overall_status: "unhealthy" })]);
+    renderList();
+    // The unhealthy rollup surfaces as a "needs attention" badge; the online/offline pill still shows separately.
+    const badge = await screen.findByText("needs attention");
+    expect(badge).toHaveClass("badge--critical");
+    expect(screen.getByText("online")).toBeInTheDocument();
   });
 });
 

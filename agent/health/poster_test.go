@@ -56,6 +56,7 @@ func newTestPoster(t *testing.T, srv *httptest.Server, tokens TokenSource, reg *
 	})
 }
 
+// spec:agent-status-reporting/the-agent-posts-an-idempotent-status-snapshot/a-post-carries-the-full-component-list
 func TestPoster_PostSendsSnapshot(t *testing.T) {
 	t.Parallel()
 	hits := make(chan capturedReq, 4)
@@ -127,6 +128,7 @@ func TestPoster_SkipsWhenNotEnrolled(t *testing.T) {
 	assert.EqualValues(t, 0, tokens.unauthorized.Load(), "an empty token is not a 401; do not re-enroll")
 }
 
+// spec:agent-status-reporting/the-agent-reports-on-startup-on-transition-and-periodically/a-status-change-triggers-a-post
 func TestPoster_RunPostsOnStartupTransitionAndStops(t *testing.T) {
 	t.Parallel()
 	hits := make(chan capturedReq, 16)

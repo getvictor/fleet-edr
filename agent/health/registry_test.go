@@ -27,6 +27,7 @@ func TestNewRegistry_WallClockSeedsAndTransitions(t *testing.T) {
 	assert.Equal(t, StatusHealthy, r.Snapshot()[0].Status)
 }
 
+// spec:agent-status-reporting/the-agent-distinguishes-never-connected-from-connection-lost-per-extension/a-fresh-install-with-an-unactivated-extension-reports-never-connected
 func TestRegistry_SeedsNeverConnected(t *testing.T) {
 	t.Parallel()
 	r := newRegistryWithClock(fixedClock(100))
@@ -43,6 +44,8 @@ func TestRegistry_SeedsNeverConnected(t *testing.T) {
 	}, snap[0])
 }
 
+// spec:agent-status-reporting/the-agent-maintains-a-per-component-health-registry/a-connected-extension-is-healthy
+// spec:agent-status-reporting/the-agent-distinguishes-never-connected-from-connection-lost-per-extension/a-dropped-session-reports-connection-lost
 func TestRegistry_MarkConnectedThenLost(t *testing.T) {
 	t.Parallel()
 	r := newRegistryWithClock(seqClock(1000))
@@ -76,6 +79,7 @@ func TestRegistry_DisconnectBeforeConnectStaysNeverConnected(t *testing.T) {
 	assert.Empty(t, drainChanged(r), "no transition means no Changed pulse")
 }
 
+// spec:agent-status-reporting/the-agent-maintains-a-per-component-health-registry/the-last-transition-timestamp-is-stable-across-unchanged-reads
 func TestRegistry_StampStableAcrossUnchangedConnect(t *testing.T) {
 	t.Parallel()
 	r := newRegistryWithClock(seqClock(1))

@@ -2,14 +2,11 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listHosts } from "../api";
 import type { HostSummary } from "../types";
-import {
-  MILLISECONDS_PER_DAY,
-  MILLISECONDS_PER_HOUR,
-  MILLISECONDS_PER_MINUTE,
-  NANOSECONDS_PER_MILLISECOND,
-} from "../constants";
+import { MILLISECONDS_PER_MINUTE, NANOSECONDS_PER_MILLISECOND } from "../constants";
+import { formatRelativeNs } from "../time";
 import { Table, EmptyState } from "./ui/Table";
 import { StatCard, SummaryStrip } from "./ui/StatCard";
+import { HealthBadge } from "./ui/HealthBadge";
 import "./HostList.scss";
 
 // "offline" is last_seen > 5 min old. The agent polls every 5 s, so 5 min
@@ -64,6 +61,7 @@ export function HostList() {
               <tr>
                 <th>Host</th>
                 <th>Status</th>
+                <th>Health</th>
                 <th className="host-list__events-col">Events</th>
                 <th>Last seen</th>
               </tr>
@@ -100,8 +98,11 @@ export function HostList() {
                     <td>
                       <span className={pillClass}>{rowOnline ? "online" : "offline"}</span>
                     </td>
+                    <td>
+                      <HealthBadge status={h.overall_status} />
+                    </td>
                     <td className="host-list__events-col">{h.event_count.toLocaleString()}</td>
-                    <td>{formatRelative(h.last_seen_ns)}</td>
+                    <td>{formatRelativeNs(h.last_seen_ns)}</td>
                   </tr>
                 );
               })}
@@ -116,13 +117,4 @@ export function HostList() {
 function isOnline(lastSeenNs: number): boolean {
   if (lastSeenNs === 0) return false;
   return Date.now() - lastSeenNs / NANOSECONDS_PER_MILLISECOND < offlineThresholdMs;
-}
-
-function formatRelative(ns: number): string {
-  if (ns === 0) return "never";
-  const diff = Date.now() - ns / NANOSECONDS_PER_MILLISECOND;
-  if (diff < MILLISECONDS_PER_MINUTE) return "just now";
-  if (diff < MILLISECONDS_PER_HOUR) return `${String(Math.floor(diff / MILLISECONDS_PER_MINUTE))}m ago`;
-  if (diff < MILLISECONDS_PER_DAY) return `${String(Math.floor(diff / MILLISECONDS_PER_HOUR))}h ago`;
-  return `${String(Math.floor(diff / MILLISECONDS_PER_DAY))}d ago`;
 }
