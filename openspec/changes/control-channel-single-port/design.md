@@ -16,6 +16,10 @@ The first implementation used `cmux` to split gRPC from REST by sniffing the con
 
 Because the gateway is served via `grpc.Server.ServeHTTP` (riding net/http's HTTP/2 server), `grpc.Server.GracefulStop` is unusable: its `serverHandlerTransport` has no `Drain`, so GracefulStop panics. Shutdown is instead driven by `http.Server.Shutdown`, with the gateway cancelling its live streams so their handlers return promptly: `Gateway.Stop` marks the gateway closing (a connection accepted mid-shutdown is rejected) and cancels every registered connection's context. The control streams are long-lived and would otherwise hold `http.Server.Shutdown` open until its deadline. The agent's keep-alive PINGs need no special server policy: net/http's HTTP/2 server answers them without gRPC's strict ping-flood GOAWAY, so the previous keepalive-enforcement option is dropped.
 
+## Per-stream deadlines cleared for the control channel
+
+Sharing the REST `http.Server` means the control stream inherits its per-request `ReadTimeout` and `WriteTimeout`. On an HTTP/2 stream those bound the whole request/response, not one message, so a 10s `ReadTimeout` tears the long-lived stream down every 10s (observed in live QA as a ~10s reconnect flap, and in SigNoz as a run of 10s `ControlChannel/Connect` spans ending in `i/o timeout`). The multiplexer clears both deadlines for the `application/grpc` branch via `http.NewResponseController` (`SetReadDeadline`/`SetWriteDeadline` to the zero time) before delegating to the gateway; the REST and UI surface keeps its timeouts. Delivery still degrades safely if a transport ever refuses the clear: the agent reconnects and the retained short-poll remains the floor, so no command is lost.
+
 ## Deployment
 
 In the quickstart / single-VM model a front proxy (Caddy) terminates the public TLS and reverse-proxies to the server's plaintext port. The proxy SHALL forward to the upstream over HTTP/2 cleartext (h2c) so the bidirectional control stream is carried, not just HTTP/1.1 REST. The server's plaintext mode accepts h2c for exactly this.

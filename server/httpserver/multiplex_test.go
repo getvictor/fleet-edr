@@ -131,6 +131,67 @@ func TestRunAndShutdown_MultiplexesGRPCAndHTTP(t *testing.T) {
 	}
 }
 
+// TestRunAndShutdown_ControlStreamOutlivesServerTimeouts is a regression for the single-port control channel (issue #477): the shared
+// http.Server's ReadTimeout/WriteTimeout bound a whole HTTP/2 stream, so leaving them in force would tear the long-lived agent control
+// stream down on that cadence (a 10s read timeout in production, observed as a ~10s reconnect flap in live QA) rather than holding one
+// connection. mountControlChannel must clear both per-stream deadlines for the application/grpc branch, while REST keeps the timeouts. A
+// server-streaming health Watch stands in for the control stream: it is held open well past the server's Read/Write timeouts and must
+// still deliver a later status change.
+//
+// spec:server-configuration/the-agent-control-channel-shares-the-main-server-listener/control-stream-not-bounded-by-rest-timeouts
+func TestRunAndShutdown_ControlStreamOutlivesServerTimeouts(t *testing.T) {
+	t.Parallel()
+	addr := freeAddr(t)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           http.NewServeMux(),
+		ReadHeaderTimeout: 5 * time.Second,
+		// Deliberately short: without the deadline clear in mountControlChannel the http2 server tears the stream down at ~250ms.
+		ReadTimeout:  250 * time.Millisecond,
+		WriteTimeout: 250 * time.Millisecond,
+	}
+
+	grpcSrv := grpc.NewServer()
+	hs := health.NewServer()
+	hs.SetServingStatus("svc", healthpb.HealthCheckResponse_SERVING)
+	healthpb.RegisterHealthServer(grpcSrv, hs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- httpserver.RunAndShutdown(ctx, srv, grpcControlMux{s: grpcSrv}, slog.Default(), nil, 0)
+	}()
+	waitListening(t, addr)
+
+	cc, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	defer func() { _ = cc.Close() }()
+
+	streamCtx, streamCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer streamCancel()
+	watch, err := healthpb.NewHealthClient(cc).Watch(streamCtx, &healthpb.HealthCheckRequest{Service: "svc"})
+	require.NoError(t, err)
+	first, err := watch.Recv()
+	require.NoError(t, err)
+	require.Equal(t, healthpb.HealthCheckResponse_SERVING, first.GetStatus())
+
+	// Hold the stream idle well past the server's 250ms Read/Write timeouts, then push a status change over it. Without the fix the stream
+	// is already dead and this Recv errors; with the fix the stream is still up and delivers the change.
+	time.Sleep(1 * time.Second)
+	hs.SetServingStatus("svc", healthpb.HealthCheckResponse_NOT_SERVING)
+	second, err := watch.Recv()
+	require.NoError(t, err, "control-style stream must outlive the REST server's Read/Write timeouts")
+	assert.Equal(t, healthpb.HealthCheckResponse_NOT_SERVING, second.GetStatus())
+
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "graceful shutdown returns nil")
+	case <-time.After(httpserver.ShutdownTimeout + 2*time.Second):
+		t.Fatal("RunAndShutdown did not return after ctx cancel")
+	}
+}
+
 func httpGet(t *testing.T, c *http.Client, url string) (body, proto string) {
 	t.Helper()
 	resp, err := c.Get(url) //nolint:noctx // short-lived test client

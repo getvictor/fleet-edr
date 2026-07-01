@@ -141,6 +141,90 @@ func connectCtx(token string) context.Context {
 	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
 }
 
+// recordingHeartbeat counts last-seen bumps per host so the liveness test can assert connection presence advances last-seen (and that
+// the bumps stop once the connection drops), standing in for the detection.RecordHostSeen closure cmd/main wires in production.
+type recordingHeartbeat struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func newRecordingHeartbeat() *recordingHeartbeat {
+	return &recordingHeartbeat{calls: make(map[string]int)}
+}
+
+func (h *recordingHeartbeat) bump(_ context.Context, hostID string, _ time.Time) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls[hostID]++
+	return nil
+}
+
+func (h *recordingHeartbeat) count(hostID string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls[hostID]
+}
+
+// TestGatewayLiveness pins connection-presence liveness (issue #477, tasks.md 5.7): while a host holds a control connection the gateway
+// advances its last-seen via the injected heartbeat WITHOUT any command poll or telemetry upload, and once the connection drops the bumps
+// stop so the host ages to offline. Delivery and revocation intervals are pushed out of the way so the test isolates the liveness path.
+func TestGatewayLiveness(t *testing.T) {
+	t.Parallel()
+	hb := newRecordingHeartbeat()
+	ver := newFakeVerifier()
+	ver.add("tok-a", "host-a")
+
+	g := New(Deps{Source: newFakeSource(), Verifier: ver, Heartbeat: hb.bump})
+	g.livenessInterval = 20 * time.Millisecond
+	g.watchInterval = time.Hour      // the watch would only deliver commands; keep it out of this test
+	g.revocationInterval = time.Hour // the token stays valid; don't let the re-check tear the connection down
+
+	lis := bufconn.Listen(1 << 20)
+	go func() { _ = g.GRPCServer().Serve(lis) }()
+	runCtx, runCancel := context.WithCancel(t.Context())
+	go g.Run(runCtx)
+	t.Cleanup(func() {
+		runCancel()
+		g.GRPCServer().Stop()
+		_ = lis.Close()
+	})
+
+	cc, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cc.Close() })
+
+	streamCtx, streamCancel := context.WithCancel(connectCtx("tok-a"))
+	t.Cleanup(streamCancel) // always tear the client stream down, even if the test fails before the disconnect step
+	_, err = control.NewControlChannelClient(cc).Connect(streamCtx)
+	require.NoError(t, err)
+
+	// Connection presence alone advances last-seen: no ListForHost poll, no upload happened, yet the heartbeat fires (once on connect,
+	// then on the liveness cadence).
+	require.Eventually(t, func() bool { return hb.count("host-a") >= 2 }, 2*time.Second, 5*time.Millisecond,
+		"connection presence advances last-seen without a poll or upload")
+
+	// Disconnect: the connection deregisters and the maintain goroutine stops bumping last-seen, so the host's last-seen no longer
+	// advances and it ages to offline. Wait for the bump count to go quiescent before snapshotting: the maintain select can take one last
+	// liveness tick after cancellation (select picks a ready case at random), so snapshotting immediately after reg.len()==0 could race a
+	// final in-flight bump.
+	streamCancel()
+	require.Eventually(t, func() bool { return g.reg.len() == 0 }, 2*time.Second, 10*time.Millisecond)
+	var settled int
+	require.Eventually(t, func() bool {
+		c := hb.count("host-a")
+		if c == settled {
+			return true
+		}
+		settled = c
+		return false
+	}, 2*time.Second, 2*g.livenessInterval, "last-seen bumps stop after disconnect")
+	time.Sleep(4 * g.livenessInterval) // confirm no further bump over several liveness ticks with no live connection
+	assert.Equal(t, settled, hb.count("host-a"), "no last-seen bump after the connection drops")
+}
+
 func TestGateway(t *testing.T) {
 	t.Parallel()
 	t.Run("valid token delivers a pending command and records its outcome", func(t *testing.T) {
