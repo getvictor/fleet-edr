@@ -71,8 +71,14 @@ export function Webhooks() {
 
   const [deliveries, setDeliveries] = useState<{ id: number; rows: WebhookDelivery[] } | null>(null);
 
+  // refresh reloads the list and handles its own error, so a reload failure after a successful create/update/delete surfaces as a
+  // load error rather than being caught by the caller's try/catch and misreported as a save/delete failure (Copilot, Qodo).
   async function refresh() {
-    setDestinations(await listWebhooks());
+    try {
+      setDestinations(await listWebhooks());
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to reload webhooks");
+    }
   }
 
   useEffect(() => {
@@ -140,6 +146,7 @@ export function Webhooks() {
   }
 
   async function handleDelete(id: number) {
+    if (!globalThis.confirm("Delete this webhook destination? Queued deliveries to it are discarded.")) return;
     try {
       await deleteWebhook(id);
       if (deliveries?.id === id) setDeliveries(null);
