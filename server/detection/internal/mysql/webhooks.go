@@ -37,15 +37,15 @@ var validWebhookEventTypes = map[string]bool{
 }
 
 type webhookDestinationRow struct {
-	ID           int64     `db:"id"`
-	Name         string    `db:"name"`
-	URL          string    `db:"url"`
-	SecretSealed []byte    `db:"secret_sealed"`
-	EventTypes   string    `db:"event_types"`
-	MinSeverity  string    `db:"min_severity"`
-	Enabled      bool      `db:"enabled"`
-	CreatedAt    time.Time `db:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at"`
+	ID          int64     `db:"id"`
+	Name        string    `db:"name"`
+	URL         string    `db:"url"`
+	SecretSet   bool      `db:"secret_set"`
+	EventTypes  string    `db:"event_types"`
+	MinSeverity string    `db:"min_severity"`
+	Enabled     bool      `db:"enabled"`
+	CreatedAt   time.Time `db:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at"`
 }
 
 func (r webhookDestinationRow) toAPI() detapi.WebhookDestination {
@@ -56,7 +56,7 @@ func (r webhookDestinationRow) toAPI() detapi.WebhookDestination {
 		EventTypes:  splitSet(r.EventTypes),
 		MinSeverity: r.MinSeverity,
 		Enabled:     r.Enabled,
-		SecretSet:   len(r.SecretSealed) > 0,
+		SecretSet:   r.SecretSet,
 		CreatedAt:   r.CreatedAt,
 		UpdatedAt:   r.UpdatedAt,
 	}
@@ -71,7 +71,10 @@ func splitSet(v string) []string {
 	return strings.Split(v, ",")
 }
 
-const webhookDestinationCols = "id, name, url, secret_sealed, event_types, min_severity, enabled, created_at, updated_at"
+// webhookDestinationCols computes secret_set in SQL rather than selecting secret_sealed, so the sealed signing secret is never pulled
+// into process memory for the read model (the column is NOT NULL, so a destination always has one). The delivery worker reads the
+// sealed bytes through its own claim query, not this one.
+const webhookDestinationCols = "id, name, url, (LENGTH(secret_sealed) > 0) AS secret_set, event_types, min_severity, enabled, created_at, updated_at"
 
 // validateDestinationInput checks the operator input and returns the normalized event-types SET string and minimum severity. URL
 // validation reuses the delivery-side SSRF guard so a non-https or blocked-literal URL is rejected at save time.
