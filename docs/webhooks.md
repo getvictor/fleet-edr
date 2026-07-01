@@ -1,6 +1,6 @@
 # Outbound alert webhooks
 
-Fleet EDR can POST every alert to an HTTP endpoint you control, so alerts reach your team (Slack, PagerDuty, a SIEM, a SOAR runbook, or your own glue) in seconds instead of waiting for someone to open the console. This page covers configuring destinations, the payload shape, and how a receiver verifies a delivery. It describes the backend (API) surface; the console settings page is a separate follow-up.
+Fleet EDR can POST every alert to an HTTP endpoint you control, so alerts reach your team (Slack, PagerDuty, a SIEM, a SOAR runbook, or your own glue) in seconds instead of waiting for someone to open the console. This page covers configuring destinations, the payload shape, and how a receiver verifies a delivery. Operators manage destinations under Admin, Settings, Webhooks in the console, backed by the API described here.
 
 Related: deferred hardening and vendor-specific formatters are tracked in [issue #565](https://github.com/getvictor/fleet-edr/issues/565). Feature proposal: [issue #496](https://github.com/getvictor/fleet-edr/issues/496).
 
@@ -10,7 +10,7 @@ A delivery fires when an alert is created, and (for destinations subscribed to i
 
 ## Configuring destinations
 
-Destination management requires the `webhook.manage` permission (granted to the admin role). It is exposed as an operator API under the session cookie plus CSRF boundary. A destination has:
+Destination management requires the `webhook.manage` permission (granted to the admin role). The console page and the operator API both sit under the session cookie plus CSRF boundary. A destination has:
 
 | Field          | Meaning                                                                                    |
 | -------------- | ------------------------------------------------------------------------------------------ |
