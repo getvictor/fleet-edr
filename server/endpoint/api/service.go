@@ -27,6 +27,12 @@ type Service interface {
 	// List returns operator-visible enrollment rows.
 	List(ctx context.Context) ([]Enrollment, error)
 
+	// RecordStatus persists the latest agent health snapshot for hostID, last-writer-wins ordered by the snapshot's ReportedAtNs, and
+	// computes + stores the server-side overall rollup. Called by the host-token-authed POST /api/status check-in (the host_id is the
+	// authenticated identity the middleware pinned, not a body field). Returns ErrInvalidStatusReport when a component carries a status
+	// outside the closed HealthStatus set; unknown component type/reason strings are accepted and stored verbatim.
+	RecordStatus(ctx context.Context, hostID string, report StatusReport) error
+
 	// Get returns a single enrollment row. Returns ErrNotFound when the
 	// host_id has no enrollment.
 	Get(ctx context.Context, hostID string) (*Enrollment, error)

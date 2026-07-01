@@ -223,6 +223,27 @@ func (s *service) recordRotationAudit(ctx context.Context, hostID, actor, reason
 	}
 }
 
+// RecordStatus validates the snapshot's component statuses at the boundary, computes the server-side rollup, and upserts the latest
+// per-host health row. Validation is the one closed-set check: a component status outside HealthStatus is rejected wholesale (nothing is
+// stored) so a malformed agent cannot poison the rollup; unknown type/reason strings pass through untouched so a future signal needs no
+// server change. The components are handed to the store as the JSON driver.Value the column persists (nil for SQL NULL when empty).
+func (s *service) RecordStatus(ctx context.Context, hostID string, report api.StatusReport) error {
+	for _, c := range report.Components {
+		if !c.Status.Valid() {
+			return api.ErrInvalidStatusReport
+		}
+	}
+	components, err := report.Components.Value()
+	if err != nil {
+		return fmt.Errorf("marshal components: %w", err)
+	}
+	overall := api.Rollup(report.Components)
+	if err := s.store.UpsertHostHealth(ctx, hostID, string(overall), components, report.ReportedAtNs); err != nil {
+		return fmt.Errorf("record host status: %w", err)
+	}
+	return nil
+}
+
 func (s *service) List(ctx context.Context) ([]api.Enrollment, error) {
 	rows, err := s.store.List(ctx)
 	if err != nil {

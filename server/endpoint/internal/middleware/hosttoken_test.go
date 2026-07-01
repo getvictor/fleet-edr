@@ -29,6 +29,9 @@ func (f fakeService) Enroll(context.Context, api.EnrollRequest, string) (api.Enr
 func (f fakeService) VerifyToken(ctx context.Context, token string) (string, error) {
 	return f.verifyToken(ctx, token)
 }
+func (f fakeService) RecordStatus(context.Context, string, api.StatusReport) error {
+	panic("not implemented in fakeService")
+}
 func (f fakeService) List(context.Context) ([]api.Enrollment, error) {
 	panic("not implemented in fakeService")
 }

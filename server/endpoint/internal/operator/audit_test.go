@@ -41,6 +41,9 @@ func (f fakeRevokeService) Revoke(ctx context.Context, hostID, reason, actor str
 }
 func (f fakeRevokeService) CountActive(context.Context) (int, error)        { panic("not used") }
 func (f fakeRevokeService) ActiveHostIDs(context.Context) ([]string, error) { panic("not used") }
+func (f fakeRevokeService) RecordStatus(context.Context, string, api.StatusReport) error {
+	panic("not used")
+}
 func (f fakeRevokeService) RotateToken(ctx context.Context, hostID, actor, reason string) error {
 	if f.rotate == nil {
 		panic("fake.RotateToken not set")

@@ -18,6 +18,7 @@ import (
 	"github.com/fleetdm/edr/server/endpoint/internal/revocation"
 	"github.com/fleetdm/edr/server/endpoint/internal/service"
 	"github.com/fleetdm/edr/server/endpoint/internal/signedtoken"
+	"github.com/fleetdm/edr/server/endpoint/internal/status"
 	"github.com/fleetdm/edr/server/endpoint/internal/token"
 	endpointmigrations "github.com/fleetdm/edr/server/endpoint/migrations"
 	"github.com/fleetdm/edr/server/httpserver"
@@ -66,6 +67,7 @@ type Endpoint struct {
 	enrollH     *enroll.Handler
 	operatorH   *operator.Handler
 	tokenH      *token.Handler
+	statusH     *status.Handler
 	hostTokenMW func(http.Handler) http.Handler
 	snapshot    *revocation.Snapshot
 	db          *sqlx.DB
@@ -118,6 +120,7 @@ func New(deps Deps) (*Endpoint, error) {
 		}),
 		operatorH:   opH,
 		tokenH:      token.New(svc, logger),
+		statusH:     status.New(svc, logger),
 		hostTokenMW: middleware.HostToken(svc, logger),
 		snapshot:    snapshot,
 		db:          deps.DB,
@@ -155,6 +158,10 @@ func (e *Endpoint) HostTokenMiddleware() func(http.Handler) http.Handler { retur
 // TokenRefreshHandler returns the POST /api/token/refresh handler. cmd/main mounts it inside the host-token-protected mux so it shares
 // the same authentication as the other agent routes.
 func (e *Endpoint) TokenRefreshHandler() http.Handler { return e.tokenH }
+
+// StatusHandler returns the POST /api/status agent-health check-in handler. cmd/main mounts it inside the host-token-protected mux so it
+// shares the same authentication as the other agent routes; the handler reads the host_id the middleware pinned.
+func (e *Endpoint) StatusHandler() http.Handler { return e.statusH }
 
 // RevocationSnapshot returns the per-replica revocation snapshot so cmd/main can trigger an initial synchronous load before serving and
 // run the background refresh loop. Per ADR-0010 it is a perf cache, safe to lose.

@@ -103,3 +103,29 @@ func (c Components) Value() (driver.Value, error) {
 	}
 	return json.Marshal(c)
 }
+
+// Rollup computes the server-side overall health for a host from its component conditions: the worst status present. The precedence is
+// unhealthy over degraded over healthy; a host with no reported component is unknown. The agent never sends this value; the server
+// derives and stores it so the "what counts as unhealthy" policy can change without an agent redeploy. A component carrying the unknown
+// status (a valid but not-actionable state) does not by itself condemn the host, so with at least one component present and none
+// unhealthy or degraded the host rolls up to healthy; the unknown component still surfaces individually in the detail panel.
+func Rollup(components Components) HealthStatus {
+	if len(components) == 0 {
+		return HealthUnknown
+	}
+	hasDegraded := false
+	for _, c := range components {
+		switch c.Status {
+		case HealthUnhealthy:
+			return HealthUnhealthy
+		case HealthDegraded:
+			hasDegraded = true
+		case HealthHealthy, HealthUnknown:
+			// Neither raises the rollup: healthy is the floor, and a lone unknown component does not by itself condemn the host.
+		}
+	}
+	if hasDegraded {
+		return HealthDegraded
+	}
+	return HealthHealthy
+}

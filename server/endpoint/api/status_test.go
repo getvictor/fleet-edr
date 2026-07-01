@@ -94,6 +94,37 @@ func TestComponents_Scan(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported type")
 }
 
+// TestRollup covers the server-side worst-of rollup across the status precedence.
+//
+// spec:server-host-status/the-server-computes-an-overall-host-health-rollup/one-unhealthy-component-makes-the-host-unhealthy
+// spec:server-host-status/the-server-computes-an-overall-host-health-rollup/a-host-with-no-snapshot-rolls-up-to-unknown
+// spec:server-host-status/the-server-computes-an-overall-host-health-rollup/all-healthy-components-roll-up-to-healthy
+func TestRollup(t *testing.T) {
+	t.Parallel()
+	comp := func(s api.HealthStatus) api.ComponentHealth { return api.ComponentHealth{Type: "c", Status: s} }
+	cases := []struct {
+		name string
+		in   api.Components
+		want api.HealthStatus
+	}{
+		{"nil is unknown", nil, api.HealthUnknown},
+		{"empty is unknown", api.Components{}, api.HealthUnknown},
+		{"all healthy is healthy", api.Components{comp(api.HealthHealthy), comp(api.HealthHealthy)}, api.HealthHealthy},
+		{"one unhealthy is unhealthy", api.Components{comp(api.HealthHealthy), comp(api.HealthUnhealthy)}, api.HealthUnhealthy},
+		{"one degraded is degraded", api.Components{comp(api.HealthHealthy), comp(api.HealthDegraded)}, api.HealthDegraded},
+		{"unhealthy beats degraded", api.Components{comp(api.HealthDegraded), comp(api.HealthUnhealthy)}, api.HealthUnhealthy},
+		{"unhealthy first still unhealthy", api.Components{comp(api.HealthUnhealthy), comp(api.HealthDegraded)}, api.HealthUnhealthy},
+		{"lone unknown component rolls up healthy", api.Components{comp(api.HealthUnknown)}, api.HealthHealthy},
+		{"healthy plus unknown is healthy", api.Components{comp(api.HealthHealthy), comp(api.HealthUnknown)}, api.HealthHealthy},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, api.Rollup(tc.in))
+		})
+	}
+}
+
 func TestComponents_Value(t *testing.T) {
 	t.Parallel()
 
