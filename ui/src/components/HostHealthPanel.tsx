@@ -22,6 +22,15 @@ export function HostHealthPanel({ hostId }: { readonly hostId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Reset per-host state on every hostId change: React Router re-renders this component with a new hostId without unmounting, so
+    // without the reset a prior host's snapshot (or a prior transient failure that latched `failed`) would persist and could keep the
+    // panel stuck hidden or showing stale data.
+    // Reset per-host state on hostId change so a prior host's data or a latched failure does not persist (React Router re-renders
+    // without unmounting). Disable set-state-in-effect for the synchronous reset, matching the same pattern in ProcessTree.tsx.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setHealth(null);
+    setFailed(false);
+    /* eslint-enable react-hooks/set-state-in-effect */
     getHostHealth(hostId)
       .then((h) => {
         if (!cancelled) setHealth(h);

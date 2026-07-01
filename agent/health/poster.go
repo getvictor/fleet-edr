@@ -116,9 +116,9 @@ func (p *Poster) waitDebounce(ctx context.Context) bool {
 		case <-ctx.Done():
 			return false
 		case <-p.reg.Changed():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			// Restart the debounce window. On Go 1.23+ a stopped/reset timer never delivers a stale value, so no manual channel drain is
+			// needed (and the old `if !Stop() { <-C }` drain can block); Stop then Reset is the current idiom.
+			timer.Stop()
 			timer.Reset(p.debounce)
 		case <-timer.C:
 			return true

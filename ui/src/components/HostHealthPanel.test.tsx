@@ -68,4 +68,20 @@ describe("HostHealthPanel", () => {
     });
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("recovers on a hostId change after a transient failure (does not stay stuck hidden)", async () => {
+    const spy = vi
+      .spyOn(api, "getHostHealth")
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce({ overall_status: "healthy", reported_at_ns: nowNs(), components: [] });
+
+    const { rerender, container } = render(<HostHealthPanel hostId="h1" />);
+    await waitFor(() => {
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+    expect(container).toBeEmptyDOMElement(); // failed on the first host
+
+    rerender(<HostHealthPanel hostId="h2" />); // new host: state must reset and the panel recover
+    expect(await screen.findByText(/no component health reported/i)).toBeInTheDocument();
+  });
 });
