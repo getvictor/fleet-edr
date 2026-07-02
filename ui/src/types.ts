@@ -18,6 +18,10 @@ export interface HostSummary {
   // UI falls back to host_id / a placeholder dash on the empty value.
   hostname: string;
   os_version: string;
+  // platform is the host's operating system (darwin | windows | linux), from the enrollment row joined into the hosts summary. The
+  // server always sends it (COALESCE to ""); an un-enrolled host carries an empty string, which the UI renders as "unknown". See
+  // formatPlatform in HostList.
+  platform: string;
   event_count: number;
   last_seen_ns: number;
   // overall_status is the server-computed agent-health rollup (issue #359): healthy | degraded | unhealthy | unknown. The server always

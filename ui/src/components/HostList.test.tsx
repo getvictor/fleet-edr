@@ -15,6 +15,7 @@ const makeHost = (over: Partial<HostSummary> = {}): HostSummary => ({
   host_id: "UUID-DEFAULT",
   hostname: "host.local",
   os_version: "macOS 26.0",
+  platform: "darwin",
   event_count: 1234,
   last_seen_ns: minutesAgoNs(1),
   overall_status: "healthy",
@@ -69,6 +70,20 @@ describe("HostList rendering", () => {
     renderList();
     const cell = await screen.findByText("128,944");
     expect(cell).toHaveClass("host-list__events-col");
+  });
+
+  // spec:web-ui/host-list-is-the-home-view/host-rows-show-the-host-platform
+  it("shows a per-host platform label, mapping darwin to macOS and an empty platform to unknown", async () => {
+    mockHosts([
+      makeHost({ host_id: "mac", hostname: "mac.local", platform: "darwin" }),
+      makeHost({ host_id: "win", hostname: "win.local", platform: "windows" }),
+      makeHost({ host_id: "bare", hostname: "bare.local", platform: "" }),
+    ]);
+    renderList();
+    const rowFor = async (hostname: string) => (await screen.findByText(hostname)).closest("tr") as HTMLElement;
+    expect(within(await rowFor("mac.local")).getByText("macOS")).toBeInTheDocument();
+    expect(within(await rowFor("win.local")).getByText("Windows")).toBeInTheDocument();
+    expect(within(await rowFor("bare.local")).getByText("unknown")).toBeInTheDocument();
   });
 
   // spec:web-ui/the-hosts-list-surfaces-per-host-health/an-unhealthy-host-shows-a-needs-attention-badge

@@ -103,9 +103,12 @@ const (
 // (alert counts, status pill) can land without touching Host's wire shape. Hostname and OSVersion are sourced from the endpoint
 // context's enrollments table (LEFT JOIN in ListHosts) and are empty for a host that has sent events but carries no enrollment row.
 type HostSummary struct {
-	HostID     string `db:"host_id" json:"host_id"`
-	Hostname   string `db:"hostname" json:"hostname"`
-	OSVersion  string `db:"os_version" json:"os_version"`
+	HostID    string `db:"host_id" json:"host_id"`
+	Hostname  string `db:"hostname" json:"hostname"`
+	OSVersion string `db:"os_version" json:"os_version"`
+	// Platform is the host's operating system (one of the Platform* values), sourced from the endpoint context's enrollments table
+	// (LEFT JOIN in ListHosts) and COALESCEd to "" for a host that has sent events but never enrolled. The UI maps it to a display label.
+	Platform   string `db:"platform" json:"platform"`
 	EventCount int64  `db:"event_count" json:"event_count"`
 	LastSeenNs int64  `db:"last_seen_ns" json:"last_seen_ns"`
 	// OverallStatus is the server-computed agent-health rollup for the host (issue #359), sourced from the endpoint context's host_health
@@ -137,6 +140,7 @@ type HostHealth struct {
 type HostDetail struct {
 	HostID                string `db:"host_id" json:"host_id"`
 	Hostname              string `db:"hostname" json:"hostname"`
+	Platform              string `db:"platform" json:"platform"`
 	OSName                string `db:"os_name" json:"os_name"`
 	OSVersion             string `db:"os_version" json:"os_version"`
 	OSBuild               string `db:"os_build" json:"os_build"`

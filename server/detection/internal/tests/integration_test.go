@@ -1532,10 +1532,11 @@ func TestRecordHostSeen_AdvancesLastSeen(t *testing.T) {
 }
 
 // spec:server-rest-api/list-enrolled-hosts/host-list-rows-carry-enrollment-hostname-and-os-version
+// spec:server-rest-api/list-enrolled-hosts/host-list-rows-carry-the-host-platform
 //
-// ListHosts LEFT JOINs the endpoint context's enrollments table to decorate each row with the enrollment hostname + OS version. A
-// host that has been seen but never enrolled still returns, with both fields empty. Pins the cross-context decoration the refined
-// hosts page renders (hostname over UUID, Platform column) and the LEFT-not-INNER join semantics that keep bare hosts visible.
+// ListHosts LEFT JOINs the endpoint context's enrollments table to decorate each row with the enrollment hostname, OS version, and
+// platform. A host that has been seen but never enrolled still returns, with those fields empty. Pins the cross-context decoration the
+// refined hosts page renders (hostname over UUID, Platform column) and the LEFT-not-INNER join semantics that keep bare hosts visible.
 func TestListHosts_DecoratesWithEnrollment(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
@@ -1550,9 +1551,9 @@ func TestListHosts_DecoratesWithEnrollment(t *testing.T) {
 	// columns without a default need values; enrolled_at defaults to CURRENT_TIMESTAMP. The opaque host-token columns were dropped
 	// with the move to self-validating signed tokens, so they are no longer part of the row.
 	_, err := d.Store().DB().ExecContext(ctx, `
-		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, source_ip)
-		VALUES (?, ?, ?, ?, ?)`,
-		enrolledHost, "eng-lopez-mbp.local", "1.2.3", "macOS 26.0", "203.0.113.7")
+		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, platform, source_ip)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		enrolledHost, "eng-lopez-mbp.local", "1.2.3", "macOS 26.0", "windows", "203.0.113.7")
 	require.NoError(t, err)
 
 	hosts, err := d.Service().ListHosts(ctx)
@@ -1569,10 +1570,12 @@ func TestListHosts_DecoratesWithEnrollment(t *testing.T) {
 	require.Contains(t, byID, enrolledHost)
 	assert.Equal(t, "eng-lopez-mbp.local", byID[enrolledHost].Hostname, "enrolled host carries its enrollment hostname")
 	assert.Equal(t, "macOS 26.0", byID[enrolledHost].OSVersion, "enrolled host carries its enrollment OS version")
+	assert.Equal(t, "windows", byID[enrolledHost].Platform, "enrolled host carries its enrollment platform")
 
 	require.Contains(t, byID, bareHost, "a host with events but no enrollment row must still appear (LEFT JOIN, not INNER)")
 	assert.Empty(t, byID[bareHost].Hostname, "un-enrolled host has an empty hostname")
 	assert.Empty(t, byID[bareHost].OSVersion, "un-enrolled host has an empty OS version")
+	assert.Empty(t, byID[bareHost].Platform, "un-enrolled host has an empty platform")
 }
 
 // spec:server-host-status/the-host-api-surfaces-per-host-health/the-host-list-carries-the-overall-status

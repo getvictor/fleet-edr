@@ -1,7 +1,9 @@
-// Package hostid derives the macOS hardware UUID (IOPlatformUUID) for use as a stable host identifier. This matches what the system
-// extension stamps into each event envelope, so the agent's command poller can be addressed by the same id that appears in the UI and
-// server.
+//go:build darwin
+
 package hostid
+
+// This file is the macOS host-identity source: it derives the hardware UUID (IOPlatformUUID) via ioreg. Other platforms provide their
+// own Get in hostid_windows.go and hostid_other.go. The package doc lives in doc.go so it is present on every build.
 
 import (
 	"bytes"

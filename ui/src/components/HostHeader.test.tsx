@@ -12,6 +12,7 @@ function detailFixture(overrides: Partial<HostDetail> = {}): HostDetail {
   return {
     host_id: "93DFC6F5-763D-5075-B305-8AC145D12F96",
     hostname: "mac-01.local",
+    platform: "darwin",
     os_name: "macOS",
     os_version: "26.4",
     os_build: "25E123",

@@ -69,7 +69,7 @@ func NewExecutor(sender ApplicationControlSender, ledger Ledger, logger *slog.Lo
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Executor{sender: sender, ledger: ledger, kill: syscall.Kill, logger: logger}
+	return &Executor{sender: sender, ledger: ledger, kill: defaultKill, logger: logger}
 }
 
 // Execute drives one command through the acknowledged-then-completed-or-failed lifecycle, deduplicated by command identity via the

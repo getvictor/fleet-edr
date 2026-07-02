@@ -68,6 +68,19 @@ tasks:
     cmds:
       - go build ./agent/...
 
+  build:agent:windows:
+    desc: |
+      Cross-compile the agent for windows on amd64 and arm64 as a compile-only invariant check (ADR-0018, Phase 0 of Windows support).
+      Like build:agent:linux this produces no binary (the package pattern targets multiple packages); it proves the build-tag split in
+      agent/commander (kill), agent/reconcile (liveness probe), agent/hostid (MachineGuid), and agent/config (ProgramData paths) compiles
+      cleanly for Windows. CGO_ENABLED=0 keeps the check independent of a local C cross-toolchain. `go vet` runs the same matrix so a
+      Windows-only type error surfaces here rather than on a Windows runner.
+    cmds:
+      - GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./agent/...
+      - GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build ./agent/...
+      - GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./agent/...
+      - GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go vet ./agent/...
+
   build:agent:headless:
     desc: |
       Build the headless agent binary (UAT plan M2) for linux/amd64 into

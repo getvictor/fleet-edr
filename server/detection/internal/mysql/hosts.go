@@ -19,6 +19,7 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	var hosts []api.HostSummary
 	err := s.db.SelectContext(ctx, &hosts, `
 		SELECT h.host_id, COALESCE(e.hostname, '') AS hostname, COALESCE(e.os_version, '') AS os_version,
+		       COALESCE(e.platform, '') AS platform,
 		       h.event_count, h.last_seen_ns, COALESCE(hh.overall_status, ?) AS overall_status
 		FROM hosts h
 		LEFT JOIN enrollments e ON e.host_id = h.host_id
@@ -40,6 +41,7 @@ func (s *Store) HostDetail(ctx context.Context, hostID string) (api.HostDetail, 
 	err := s.db.GetContext(ctx, &d, `
 		SELECT h.host_id,
 		       COALESCE(e.hostname, '')      AS hostname,
+		       COALESCE(e.platform, '')      AS platform,
 		       COALESCE(e.os_name, '')       AS os_name,
 		       COALESCE(e.os_version, '')    AS os_version,
 		       COALESCE(e.os_build, '')      AS os_build,

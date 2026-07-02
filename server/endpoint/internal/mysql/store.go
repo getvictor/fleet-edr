@@ -19,6 +19,7 @@ type Enrollment struct {
 	Hostname     string     `db:"hostname" json:"hostname"`
 	AgentVersion string     `db:"agent_version" json:"agent_version"`
 	OSVersion    string     `db:"os_version" json:"os_version"`
+	Platform     string     `db:"platform" json:"platform"`
 	SourceIP     string     `db:"source_ip" json:"source_ip"`
 	EnrolledAt   time.Time  `db:"enrolled_at" json:"enrolled_at"`
 	ExpiresAt    *time.Time `db:"expires_at" json:"expires_at,omitempty"`
@@ -45,6 +46,7 @@ type RegisterRequest struct {
 	Hostname     string
 	AgentVersion string
 	OSVersion    string
+	Platform     string
 	SourceIP     string
 }
 
@@ -66,18 +68,19 @@ type RegisterResult struct {
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
 	now := time.Now().UTC()
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, source_ip, enrolled_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, platform, source_ip, enrolled_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 			hostname      = VALUES(hostname),
 			agent_version = VALUES(agent_version),
 			os_version    = VALUES(os_version),
+			platform      = VALUES(platform),
 			source_ip     = VALUES(source_ip),
 			enrolled_at   = VALUES(enrolled_at),
 			revoked_at    = NULL,
 			revoke_reason = NULL,
 			revoked_by    = NULL
-	`, req.HostID, req.Hostname, req.AgentVersion, req.OSVersion, req.SourceIP, now); err != nil {
+	`, req.HostID, req.Hostname, req.AgentVersion, req.OSVersion, req.Platform, req.SourceIP, now); err != nil {
 		return nil, fmt.Errorf("upsert enrollment: %w", err)
 	}
 
@@ -118,7 +121,7 @@ func (s *Store) ActiveHostIDs(ctx context.Context) ([]string, error) {
 func (s *Store) List(ctx context.Context) ([]Enrollment, error) {
 	var rows []Enrollment
 	err := s.db.SelectContext(ctx, &rows, `
-		SELECT host_id, hostname, agent_version, os_version, source_ip,
+		SELECT host_id, hostname, agent_version, os_version, platform, source_ip,
 		       enrolled_at, expires_at, revoked_at, revoke_reason, revoked_by
 		FROM enrollments
 		ORDER BY enrolled_at DESC
@@ -133,7 +136,7 @@ func (s *Store) List(ctx context.Context) ([]Enrollment, error) {
 func (s *Store) Get(ctx context.Context, hostID string) (*Enrollment, error) {
 	var e Enrollment
 	err := s.db.GetContext(ctx, &e, `
-		SELECT host_id, hostname, agent_version, os_version, source_ip,
+		SELECT host_id, hostname, agent_version, os_version, platform, source_ip,
 		       enrolled_at, expires_at, revoked_at, revoke_reason, revoked_by
 		FROM enrollments
 		WHERE host_id = ?
