@@ -44,6 +44,16 @@ func resolveSubjectProcess(ctx context.Context, s api.GraphReader, evt api.Event
 // withinMaterializationGrace reports whether an event ingested at ingestedAtNs is still young enough (relative to nowNs) for a
 // missing subject process to be treated as retryable. A zero ingest stamp (fixture replay, unit tests, or a path that never stamped
 // it) is never in grace, preserving the historical skip semantics for those inputs.
+//
+// The window is symmetric: a NEGATIVE age (the ingest stamp is ahead of this replica's clock) is in grace only up to the same
+// bound. Small negative ages are legitimate and must stay in grace: the ingest stamp comes from whichever replica accepted the
+// event, and cross-replica skew of milliseconds-to-seconds lands exactly in the window where the race retry matters. But an
+// unbounded negative branch would let a badly future-dated stamp (a replica with a broken clock) keep the batch retrying until the
+// local clock catches up, so the cap bounds the worst case at roughly twice the grace instead of indefinitely.
 func withinMaterializationGrace(ingestedAtNs, nowNs int64) bool {
-	return ingestedAtNs > 0 && nowNs-ingestedAtNs < int64(processMaterializationGrace)
+	if ingestedAtNs <= 0 {
+		return false
+	}
+	age := nowNs - ingestedAtNs
+	return age > -int64(processMaterializationGrace) && age < int64(processMaterializationGrace)
 }

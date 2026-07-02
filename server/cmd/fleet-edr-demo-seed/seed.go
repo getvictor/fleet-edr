@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -257,10 +256,17 @@ func (s *seeder) seedUserIfConfigured(ctx context.Context) error {
 	return nil
 }
 
-// alreadySeeded reports whether the headline detection alert already exists, used to make the seeder idempotent across restarts.
+// alreadySeeded reports whether the headline detection alert already exists on a demo host, used to make the seeder idempotent
+// across restarts. The host scope keeps a real deployment's own credential_keychain_dump alert (a genuine detection, not demo data)
+// from convincing a mis-pointed seeder that the demo is already present.
 func (s *seeder) alreadySeeded(ctx context.Context) (bool, error) {
+	inClause, hostArgs, err := demoHostScope()
+	if err != nil {
+		return false, err
+	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM alerts WHERE rule_id = ?`, keychainRuleID).Scan(&n); err != nil {
+	query := `SELECT COUNT(*) FROM alerts WHERE rule_id = ? AND ` + inClause
+	if err := s.db.QueryRowContext(ctx, query, append([]any{keychainRuleID}, hostArgs...)...).Scan(&n); err != nil {
 		return false, err
 	}
 	return n > 0, nil
@@ -273,20 +279,12 @@ func (s *seeder) alreadySeeded(ctx context.Context) (bool, error) {
 // timing (and the device-vs-ingest and event-vs-alert ordering the detail/correlation views depend on), so the demo reads as
 // recent activity after every `up` without re-replaying. No-op when no replayed event/process rows exist yet.
 func (s *seeder) refreshTimestamps(ctx context.Context) error {
-	// Scope every read and write below to the demo's own hosts. The seeder takes an operator-supplied DSN and alreadySeeded keys
-	// on a real rule id (credential_keychain_dump), so an unscoped refresh pointed at a live DB would rewrite real timelines. The
-	// IN clause bounds the blast radius to the embedded corpus's host UUIDs, which a real deployment will never contain.
-	hostIDs, err := demoHostIDs()
+	// Scope every read and write below to the demo's own hosts. The seeder takes an operator-supplied DSN, so an unscoped refresh
+	// pointed at a live DB would rewrite real timelines. The IN clause bounds the blast radius to the embedded corpus's host UUIDs,
+	// which a real deployment will never contain.
+	inClause, hostArgs, err := demoHostScope()
 	if err != nil {
 		return err
-	}
-	if len(hostIDs) == 0 {
-		return nil
-	}
-	inClause := "host_id IN (" + strings.Repeat("?,", len(hostIDs)-1) + "?)"
-	hostArgs := make([]any, len(hostIDs))
-	for i, id := range hostIDs {
-		hostArgs[i] = id
 	}
 
 	var newestNs sql.NullInt64
@@ -403,9 +401,13 @@ func (s *seeder) waitForProcess(ctx context.Context, hostID string, pid int) err
 // the seeder exit 0 on that partial state, deferring the failure to the Playwright smoke where it is much harder to debug.
 func (s *seeder) verify(ctx context.Context) error {
 	expected := expectedDetectionRules()
+	inClause, hostArgs, err := demoHostScope()
+	if err != nil {
+		return err
+	}
 	var last demoCounts
-	err := s.poll(ctx, s.cfg.verifyTimeout, func() (bool, error) {
-		c, err := s.counts(ctx)
+	err = s.poll(ctx, s.cfg.verifyTimeout, func() (bool, error) {
+		c, err := s.counts(ctx, inClause, hostArgs)
 		if err != nil {
 			return false, err
 		}
@@ -455,21 +457,23 @@ type demoCounts struct {
 	detectionRuleIDs map[string]bool
 }
 
-// counts reads the current process + alert tallies from the database.
-func (s *seeder) counts(ctx context.Context) (demoCounts, error) {
+// counts reads the current process + alert tallies from the database, scoped by the caller's demo-host IN clause so pre-existing
+// rows on a real deployment (or leftovers from another tool sharing the DB) can never satisfy the verify predicate.
+func (s *seeder) counts(ctx context.Context, inClause string, hostArgs []any) (demoCounts, error) {
 	var c demoCounts
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM processes`).Scan(&c.processes); err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM processes WHERE `+inClause, hostArgs...).Scan(&c.processes); err != nil {
 		return c, fmt.Errorf("count processes: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alerts WHERE source = 'detection'`).Scan(&c.detectionAlerts); err != nil {
+		`SELECT COUNT(*) FROM alerts WHERE source = 'detection' AND `+inClause, hostArgs...).Scan(&c.detectionAlerts); err != nil {
 		return c, fmt.Errorf("count detection alerts: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM alerts WHERE source = 'application_control'`).Scan(&c.appControlAlerts); err != nil {
+		`SELECT COUNT(*) FROM alerts WHERE source = 'application_control' AND `+inClause, hostArgs...).Scan(&c.appControlAlerts); err != nil {
 		return c, fmt.Errorf("count app-control alerts: %w", err)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT rule_id FROM alerts WHERE source = 'detection'`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT rule_id FROM alerts WHERE source = 'detection' AND `+inClause, hostArgs...)
 	if err != nil {
 		return c, fmt.Errorf("list fired detection rules: %w", err)
 	}

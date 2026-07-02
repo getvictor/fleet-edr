@@ -76,8 +76,11 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
 	s := newSeeder(config{}, db, testHTTPClient(), discardLogger())
+	inClause, hostArgs, err := demoHostScope()
+	require.NoError(t, err)
+	demoHost := firstDemoHostID(t)
 
-	c, err := s.counts(ctx)
+	c, err := s.counts(ctx, inClause, hostArgs)
 	require.NoError(t, err)
 	assert.Equal(t, demoCounts{detectionRuleIDs: map[string]bool{}}, c)
 
@@ -85,19 +88,27 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, seeded)
 
-	insertProcess(t, db, "HOST-A", 100)
-	insertAlert(t, db, "HOST-A", "sudoers_tamper", "detection", "high")
-	insertAlert(t, db, "HOST-A", "demo_blocklist_binary", "application_control", "high")
-	insertAlert(t, db, "HOST-A", keychainRuleID, "detection", "high")
+	// Rows on a NON-demo host: none of them may satisfy the scoped predicates, even the keychain marker alreadySeeded keys on.
+	insertProcess(t, db, "HOST-UNRELATED", 50)
+	insertAlert(t, db, "HOST-UNRELATED", keychainRuleID, "detection", "high")
 
-	c, err = s.counts(ctx)
+	insertProcess(t, db, demoHost, 100)
+	insertAlert(t, db, demoHost, "sudoers_tamper", "detection", "high")
+	insertAlert(t, db, demoHost, "demo_blocklist_binary", "application_control", "high")
+
+	c, err = s.counts(ctx, inClause, hostArgs)
 	require.NoError(t, err)
-	assert.Equal(t, 1, c.processes)
-	assert.Equal(t, 2, c.detectionAlerts)
+	assert.Equal(t, 1, c.processes, "the unrelated host's process is outside the demo scope")
+	assert.Equal(t, 1, c.detectionAlerts, "the unrelated host's keychain alert is outside the demo scope")
 	assert.Equal(t, 1, c.appControlAlerts)
-	assert.Equal(t, map[string]bool{"sudoers_tamper": true, keychainRuleID: true}, c.detectionRuleIDs,
-		"per-rule fired set feeds verify's per-ExpectRule predicate")
+	assert.Equal(t, map[string]bool{"sudoers_tamper": true}, c.detectionRuleIDs,
+		"per-rule fired set feeds verify's per-ExpectRule predicate; scoped to demo hosts")
 
+	seeded, err = s.alreadySeeded(ctx)
+	require.NoError(t, err)
+	assert.False(t, seeded, "a real deployment's own keychain alert must not read as demo-already-seeded")
+
+	insertAlert(t, db, demoHost, keychainRuleID, "detection", "high")
 	seeded, err = s.alreadySeeded(ctx)
 	require.NoError(t, err)
 	assert.True(t, seeded)
@@ -180,10 +191,11 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	// run the real processor, so weaveAttack's waitForProcess + verify need their rows seeded directly).
 	acHost, acPID := appControlTarget(t)
 	insertProcess(t, db, acHost, acPID)
-	// One detection alert per woven attack's expected rule + an app-control alert, so verify's per-rule predicate is satisfied.
-	// The keychain alert is inserted by the loop, so alreadySeeded would normally short-circuit the replay; force runs it anyway.
+	// One detection alert per woven attack's expected rule + an app-control alert, on a DEMO host so the scoped verify counts
+	// them. The keychain alert is inserted by the loop, so alreadySeeded would normally short-circuit the replay; force runs it
+	// anyway.
 	for _, rule := range expectedDetectionRules() {
-		insertAlert(t, db, "HOST-SEED", rule, "detection", "high")
+		insertAlert(t, db, acHost, rule, "detection", "high")
 	}
 	insertAlert(t, db, acHost, "demo_blocklist_binary", "application_control", "high")
 
@@ -342,7 +354,9 @@ func TestRunSkipsWhenAlreadySeeded(t *testing.T) {
 	db := full.Open(t)
 	ctx := t.Context()
 	insertRole(t, db, "senior_analyst")
-	insertAlert(t, db, "HOST-OLD", keychainRuleID, "detection", "high")
+	// The marker alert must sit on a DEMO host: alreadySeeded is scoped to the demo's own host UUIDs so a real deployment's
+	// keychain alert can't read as demo data.
+	insertAlert(t, db, firstDemoHostID(t), keychainRuleID, "detection", "high")
 
 	var enrollCalls atomic.Int32
 	ts := demoServer(t, &enrollCalls)
@@ -358,4 +372,30 @@ func TestRunSkipsWhenAlreadySeeded(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM users WHERE email = 'demo@fleet-edr.local'`).Scan(&userCount))
 	assert.Equal(t, 1, userCount)
+}
+
+// TestVerifyReportsMissingRule exercises the tightened per-rule predicate's failure path (the exact shape of the 2026-07-02
+// nightly loss): every expected rule except one has fired, and verify must time out with an error that NAMES the missing rule
+// instead of passing on "any detection alert".
+func TestVerifyReportsMissingRule(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+	s := newSeeder(config{pollInterval: time.Millisecond, verifyTimeout: 30 * time.Millisecond}, db, testHTTPClient(), discardLogger())
+
+	demoHost := firstDemoHostID(t)
+
+	expected := expectedDetectionRules()
+	require.Greater(t, len(expected), 1, "the manifest weaves more than one detection rule")
+	withheld := expected[0]
+
+	insertProcess(t, db, demoHost, 100)
+	insertAlert(t, db, demoHost, "demo_blocklist_binary", "application_control", "high")
+	for _, rule := range expected[1:] {
+		insertAlert(t, db, demoHost, rule, "detection", "high")
+	}
+
+	err := s.verify(ctx)
+	require.Error(t, err, "verify must fail when one expected rule never fired")
+	assert.Contains(t, err.Error(), withheld, "the timeout error names the missing rule")
 }

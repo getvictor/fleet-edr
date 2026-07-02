@@ -6,8 +6,10 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/fleetdm/edr/test/fakeagent"
@@ -134,6 +136,26 @@ func demoHostIDs() ([]string, error) {
 		ids = append(ids, hostID)
 	}
 	return ids, nil
+}
+
+// demoHostScope returns a SQL `host_id IN (...)` clause plus its bind args covering every manifest host, so the seeder's reads and
+// writes (refreshTimestamps, alreadySeeded, verify) all bound themselves to the demo's own rows. Against a mis-pointed DSN, or a
+// database that already carries real alerts, an unscoped read could satisfy the seeded/verified predicates with rows the demo never
+// produced.
+func demoHostScope() (string, []any, error) {
+	hostIDs, err := demoHostIDs()
+	if err != nil {
+		return "", nil, err
+	}
+	if len(hostIDs) == 0 {
+		return "", nil, errors.New("host manifest resolved to no host ids")
+	}
+	inClause := "host_id IN (" + strings.Repeat("?,", len(hostIDs)-1) + "?)"
+	args := make([]any, len(hostIDs))
+	for i, id := range hostIDs {
+		args[i] = id
+	}
+	return inClause, args, nil
 }
 
 // shiftEnvelopesToRecent rewrites every envelope's timestamp so the latest event lands recentTailOffset before now, preserving the

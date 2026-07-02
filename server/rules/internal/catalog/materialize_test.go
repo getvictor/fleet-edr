@@ -60,7 +60,8 @@ func TestResolveSubjectProcess_StaleMissSkipsSilently(t *testing.T) {
 }
 
 // TestWithinMaterializationGrace pins the window edges: a zero ingest stamp (fixture replay, unit tests) is never in grace so those
-// inputs keep the historical skip semantics, and the boundary is exclusive at exactly the grace age.
+// inputs keep the historical skip semantics, the boundary is exclusive at exactly the grace age, and the window is symmetric so a
+// modestly future-dated stamp (cross-replica clock skew) is in grace while a badly future-dated one cannot retry indefinitely.
 func TestWithinMaterializationGrace(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UnixNano()
@@ -74,6 +75,8 @@ func TestWithinMaterializationGrace(t *testing.T) {
 		{"one second old", now - int64(time.Second), true},
 		{"exactly at the grace age", now - int64(processMaterializationGrace), false},
 		{"well past the grace age", now - int64(processMaterializationGrace) - int64(time.Minute), false},
+		{"future-dated within the skew allowance", now + int64(time.Second), true},
+		{"future-dated beyond the grace bound", now + int64(processMaterializationGrace) + int64(time.Minute), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

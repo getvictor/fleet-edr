@@ -13,6 +13,7 @@
 ## 3. Demo seeder verify
 
 - [x] 3.1 `verify` polls for a fired alert per woven attack's `ExpectRule` and names the missing rules in its timeout error.
+- [x] 3.2 Scope `verify`'s counts and `alreadySeeded` to the demo's captured host UUIDs (shared `demoHostScope` helper, reused by `refreshTimestamps`), so unrelated rows can never satisfy the predicates.
 
 ## 4. Tests
 
