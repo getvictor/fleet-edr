@@ -68,23 +68,31 @@ func parseStringPlist(buf []byte) (map[string]string, error) {
 		if !ok {
 			continue
 		}
-		switch se.Name.Local {
-		case "key":
-			if err := dec.DecodeElement(&key, &se); err != nil {
-				return nil, err
-			}
-		case "string":
-			var v string
-			if err := dec.DecodeElement(&v, &se); err != nil {
-				return nil, err
-			}
-			if key != "" {
-				kv[key] = v
-				key = ""
-			}
-		default:
-			// A non-string value type (integer, array, dict): the pending key does not apply to it.
-			key = ""
+		if err := applyPlistElement(dec, se, &key, kv); err != nil {
+			return nil, err
 		}
+	}
+}
+
+// applyPlistElement decodes one XML element into the key/value map, mutating *keyPtr to track the <key> token preceding each value.
+// Extracted from parseStringPlist so the driver loop stays flat (the same shape as the enrollment package's plist reader).
+func applyPlistElement(dec *xml.Decoder, se xml.StartElement, keyPtr *string, kv map[string]string) error {
+	switch se.Name.Local {
+	case "key":
+		return dec.DecodeElement(keyPtr, &se)
+	case "string":
+		var v string
+		if err := dec.DecodeElement(&v, &se); err != nil {
+			return err
+		}
+		if *keyPtr != "" {
+			kv[*keyPtr] = v
+			*keyPtr = ""
+		}
+		return nil
+	default:
+		// A non-string value type (integer, array, dict): the pending key does not apply to it.
+		*keyPtr = ""
+		return nil
 	}
 }

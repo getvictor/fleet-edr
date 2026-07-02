@@ -175,11 +175,10 @@ func inventoryGen() *rapid.Generator[*api.Inventory] {
 			return nil
 		}
 		return &api.Inventory{
-			Hostname:     rapid.StringMatching(`[ -~]{0,32}`).Draw(rt, "hostname"),
-			OSName:       rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_name"),
-			OSVersion:    rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_version"),
-			OSBuild:      rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_build"),
-			AgentVersion: rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "inv_agent_version"),
+			Hostname:  rapid.StringMatching(`[ -~]{0,32}`).Draw(rt, "hostname"),
+			OSName:    rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_name"),
+			OSVersion: rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_version"),
+			OSBuild:   rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_build"),
 		}
 	})
 }

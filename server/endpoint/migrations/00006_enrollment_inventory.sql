@@ -5,7 +5,9 @@
 -- agent_version / os_version columns (which the check-in also refreshes); enrolled_at keeps recording enrollment time.
 -- inventory_reported_at_ns is the agent-stamped time of the report that last wrote the identity fields: it orders concurrent check-ins
 -- across replicas (same last-writer-wins role reported_at_ns plays on host_health) and lets a reader show identity staleness honestly.
--- Zero means no check-in has refreshed this row yet (the values are the enroll-time snapshot).
+-- Zero means no check-in has refreshed this row yet. Note a re-enroll also refreshes hostname/os_version/agent_version (its ON
+-- DUPLICATE KEY path) without touching this stamp or os_name/os_build, so the stamp dates the last CHECK-IN write, not the identity
+-- values' provenance.
 ALTER TABLE enrollments
 	ADD COLUMN os_name VARCHAR(255) NOT NULL DEFAULT '',
 	ADD COLUMN os_build VARCHAR(255) NOT NULL DEFAULT '',

@@ -238,21 +238,22 @@ func run() error {
 	go runUploader(ctx, up, logger)
 
 	// Report agent health to the server on startup, on each extension transition, and periodically (issue #359). Every post also
-	// carries the host inventory block (issue #579) so identity stays fresh without a re-enroll; collected once here since identity
-	// changes coincide with a daemon restart in practice (an OS upgrade reboots, an agent upgrade restarts the daemon).
-	hostInfo := hostinfo.Collect()
+	// carries the host inventory block (issue #579), re-collected per post (a hostname syscall plus one small file read) so a hostname
+	// rename or OS upgrade reaches the server within one check-in interval without an agent restart.
 	go health.NewPoster(health.Options{
 		Registry:     healthRegistry,
 		Client:       httpClient,
 		BaseURL:      cfg.ServerURL,
 		Tokens:       tokenProvider,
 		AgentVersion: version,
-		Inventory: &health.Inventory{
-			Hostname:     hostInfo.Hostname,
-			OSName:       hostInfo.OSName,
-			OSVersion:    hostInfo.OSVersion,
-			OSBuild:      hostInfo.OSBuild,
-			AgentVersion: version,
+		InventoryFn: func() *health.Inventory {
+			info := hostinfo.Collect()
+			return &health.Inventory{
+				Hostname:  info.Hostname,
+				OSName:    info.OSName,
+				OSVersion: info.OSVersion,
+				OSBuild:   info.OSBuild,
+			}
 		},
 		Logger: logger,
 	}).Run(ctx)

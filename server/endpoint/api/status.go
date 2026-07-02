@@ -66,21 +66,23 @@ type StatusReport struct {
 	AgentVersion string     `json:"agent_version"`
 	ReportedAtNs int64      `json:"reported_at_ns"`
 	Components   Components `json:"components"`
-	// Inventory is the host identity block (issue #579): the latest self-reported hostname, OS identity, and agent version. nil means
-	// the agent made no inventory claim (an older agent), and the server leaves the host's identity record untouched; present-but-empty
-	// fields are stored as claimed. Optional so the snapshot contract stays additive in both directions.
+	// Inventory is the host identity block (issue #579): the latest self-reported hostname and OS identity. nil means the agent made
+	// no inventory claim (an older agent), and the server leaves the host's identity record untouched. An empty field inside a present
+	// block means "source unavailable" (a degraded collector), and the server preserves the previously recorded value rather than
+	// blanking it. Optional so the snapshot contract stays additive in both directions. The agent's version is NOT repeated here; it
+	// rides the report's top-level agent_version field.
 	Inventory *Inventory `json:"inventory,omitempty"`
 }
 
 // Inventory is the self-reported host identity carried on a status report. It refreshes the enrollment-time identity snapshot on every
 // check-in, so a hostname rename, OS upgrade, or agent upgrade reaches the console without a re-enroll. All fields are open strings the
-// server stores verbatim: inventory is claim, not attestation, under the same trust model as the enrollment fields it refreshes.
+// server stores verbatim when non-empty: inventory is claim, not attestation, under the same trust model as the enrollment fields it
+// refreshes.
 type Inventory struct {
-	Hostname     string `json:"hostname"`
-	OSName       string `json:"os_name"`
-	OSVersion    string `json:"os_version"`
-	OSBuild      string `json:"os_build"`
-	AgentVersion string `json:"agent_version"`
+	Hostname  string `json:"hostname"`
+	OSName    string `json:"os_name"`
+	OSVersion string `json:"os_version"`
+	OSBuild   string `json:"os_build"`
 }
 
 // Components is the list of component conditions persisted as a single MySQL JSON column and also carried on the wire. It mirrors the

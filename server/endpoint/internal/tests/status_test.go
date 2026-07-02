@@ -212,7 +212,7 @@ func TestRecordStatus_HTTP_InventoryRefreshesIdentity(t *testing.T) {
 
 	body := `{"agent_version":"0.5.0","reported_at_ns":300,
 		"components":[{"type":"network_extension","status":"healthy","last_transition_ns":1}],
-		"inventory":{"hostname":"renamed.local","os_name":"macOS","os_version":"26.4","os_build":"25E123","agent_version":"0.5.0"}}`
+		"inventory":{"hostname":"renamed.local","os_name":"macOS","os_version":"26.4","os_build":"25E123"}}`
 	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, body))
 
 	after := readIdentity(t, db, uuid)
@@ -226,7 +226,7 @@ func TestRecordStatus_HTTP_InventoryRefreshesIdentity(t *testing.T) {
 	// A stale (older reported_at_ns) inventory must not clobber the fresher identity, mirroring the health row's LWW guard.
 	stale := `{"agent_version":"0.4.0","reported_at_ns":200,
 		"components":[{"type":"network_extension","status":"healthy","last_transition_ns":1}],
-		"inventory":{"hostname":"old.local","os_name":"macOS","os_version":"26.3","os_build":"25D000","agent_version":"0.4.0"}}`
+		"inventory":{"hostname":"old.local","os_name":"macOS","os_version":"26.3","os_build":"25D000"}}`
 	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, stale))
 	assert.Equal(t, "renamed.local", readIdentity(t, db, uuid).Hostname, "a stale inventory must not overwrite a fresher one")
 }
@@ -255,8 +255,34 @@ func TestRecordStatus_HTTP_RejectedReportWritesNoInventory(t *testing.T) {
 	before := readIdentity(t, db, uuid)
 	body := `{"agent_version":"0.4.0","reported_at_ns":100,
 		"components":[{"type":"network_extension","status":"borked","last_transition_ns":1}],
-		"inventory":{"hostname":"evil.local","os_name":"macOS","os_version":"26.4","os_build":"25E123","agent_version":"0.4.0"}}`
+		"inventory":{"hostname":"evil.local","os_name":"macOS","os_version":"26.4","os_build":"25E123"}}`
 	require.Equal(t, http.StatusBadRequest, postStatus(t, srv, token, body))
 
 	assert.Equal(t, before, readIdentity(t, db, uuid), "a rejected snapshot must write neither health nor identity")
+}
+
+// spec:server-host-status/server-persists-inventory-from-the-status-check-in/empty-inventory-fields-preserve-recorded-identity
+func TestRecordStatus_HTTP_EmptyInventoryFieldsPreserveIdentity(t *testing.T) {
+	t.Parallel()
+	uuid := "AAAA5790-0000-4000-8000-000000000002"
+	_, db, srv, token := statusFixture(t, uuid)
+
+	full := `{"agent_version":"0.5.0","reported_at_ns":300,
+		"components":[{"type":"network_extension","status":"healthy","last_transition_ns":1}],
+		"inventory":{"hostname":"good.local","os_name":"macOS","os_version":"26.4","os_build":"25E123"}}`
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, full))
+
+	// A degraded collector (SystemVersion.plist unreadable, e.g. mid-OS-upgrade) posts empty OS fields; those must preserve the
+	// recorded values rather than blanking known-good identity, while the non-empty hostname still refreshes.
+	degraded := `{"agent_version":"0.5.0","reported_at_ns":400,
+		"components":[{"type":"network_extension","status":"healthy","last_transition_ns":1}],
+		"inventory":{"hostname":"still-good.local","os_name":"","os_version":"","os_build":""}}`
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, degraded))
+
+	after := readIdentity(t, db, uuid)
+	assert.Equal(t, "still-good.local", after.Hostname, "a non-empty field still refreshes")
+	assert.Equal(t, "macOS", after.OSName, "an empty field must preserve the recorded value")
+	assert.Equal(t, "26.4", after.OSVersion)
+	assert.Equal(t, "25E123", after.OSBuild)
+	assert.EqualValues(t, 400, after.InventoryReportedAtNs, "the stamp still advances so LWW ordering holds")
 }

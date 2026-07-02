@@ -50,12 +50,8 @@ func newTestPoster(t *testing.T, srv *httptest.Server, tokens TokenSource, reg *
 		BaseURL:      srv.URL,
 		Tokens:       tokens,
 		AgentVersion: "0.4.0",
-		Inventory: &Inventory{
-			Hostname:     "mac-01.local",
-			OSName:       "macOS",
-			OSVersion:    "26.4",
-			OSBuild:      "25E123",
-			AgentVersion: "0.4.0",
+		InventoryFn: func() *Inventory {
+			return &Inventory{Hostname: "mac-01.local", OSName: "macOS", OSVersion: "26.4", OSBuild: "25E123"}
 		},
 		Interval: 20 * time.Millisecond,
 		Debounce: 5 * time.Millisecond,
@@ -91,7 +87,6 @@ func TestPoster_PostSendsSnapshot(t *testing.T) {
 	assert.Equal(t, "macOS", got.Inventory.OSName)
 	assert.Equal(t, "26.4", got.Inventory.OSVersion)
 	assert.Equal(t, "25E123", got.Inventory.OSBuild)
-	assert.Equal(t, "0.4.0", got.Inventory.AgentVersion)
 }
 
 func TestPoster_UnauthorizedTriggersReenroll(t *testing.T) {
