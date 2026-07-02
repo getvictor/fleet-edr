@@ -4,15 +4,15 @@ import * as d3 from "d3";
 import { getAlertDetail, getProcessTree, listAlerts } from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
 import {
-  HOURS_PER_DAY,
-  MILLISECONDS_PER_HOUR,
-  MILLISECONDS_PER_MINUTE,
   NANOSECONDS_PER_MILLISECOND,
 } from "../constants";
 import { ProcessDetail } from "./ProcessDetail";
 import { HostHealthPanel } from "./HostHealthPanel";
 import { HostHeader } from "./HostHeader";
 import { buildNodeTooltip, nodeEvidenceMarked, type NodeTooltip } from "./node-tooltip";
+import { TimeRangeControl } from "./TimeRangeControl";
+import { ActivityHistogram } from "./ActivityHistogram";
+import { DEFAULT_ALERT_WINDOW_MS, DEFAULT_LIVE_WINDOW_MS, windowBounds, type TimeWindow, type WindowBounds } from "../timewindow";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import "./ProcessTree.scss";
@@ -25,20 +25,6 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
 };
 
 // Time-range presets surfaced in the UI's segmented picker. The labels are
-// authoritative; the ms values derive from them so the lint catch the next
-// "wait, that's a 26-hour range" typo.
-const RANGE_15_MINUTES_IN_MINUTES = 15;
-const RANGE_6_HOURS_IN_HOURS = 6;
-const TIME_RANGES: { label: string; ms: number }[] = [
-  { label: "15 min", ms: RANGE_15_MINUTES_IN_MINUTES * MILLISECONDS_PER_MINUTE },
-  { label: "1 hour", ms: MILLISECONDS_PER_HOUR },
-  { label: "6 hours", ms: RANGE_6_HOURS_IN_HOURS * MILLISECONDS_PER_HOUR },
-  { label: "24 hours", ms: HOURS_PER_DAY * MILLISECONDS_PER_HOUR },
-];
-
-// Indexes into TIME_RANGES used by the default-window-on-mount logic.
-const DEFAULT_RANGE_IDX_LIVE = 1; // 1 hour
-const DEFAULT_RANGE_IDX_FROM_ALERT = 3; // 24 hours
 
 // d3 layout + render constants. Tuned by hand; collected here so a future
 // "make labels bigger" change touches one block instead of every selector.
@@ -107,11 +93,26 @@ export function ProcessTreeView() {
   const matchesRef = useRef<D3PointNode[]>([]);
   const [roots, setRoots] = useState<ProcessNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
-  // Default to 24h window when navigating from an alert (alert times may be days old);
-  // otherwise default to 1h for the live view.
-  const [rangeIdx, setRangeIdx] = useState(
-    () => (searchParams.get("at") ? DEFAULT_RANGE_IDX_FROM_ALERT : DEFAULT_RANGE_IDX_LIVE),
-  );
+  // The page's single time source (issue #581). Arriving from an alert anchors a wide window at the alert time (the alert-pivot
+  // requirement's default); otherwise a live 1h window. Every consumer (tree fetch, histogram, control label) reads windowBounds
+  // of this one value. refreshTick re-resolves a relative window's "now" on demand (the Refresh action).
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>(() => {
+    const parsedAt = Number(searchParams.get("at"));
+    return Number.isFinite(parsedAt) && parsedAt > 0
+      ? { kind: "relative", ms: DEFAULT_ALERT_WINDOW_MS, anchorNs: parsedAt * NANOSECONDS_PER_MILLISECOND }
+      : { kind: "relative", ms: DEFAULT_LIVE_WINDOW_MS };
+  });
+  const [refreshTick, setRefreshTick] = useState(0);
+  // Resolved bounds live in state and are computed in an effect (clock reads are impure during render): a relative window's "now"
+  // advances only on a window change or an explicit Refresh (refreshTick). null until the first resolution; consumers guard.
+  const [bounds, setBounds] = useState<WindowBounds | null>(null);
+  useEffect(() => {
+    // Disable set-state-in-effect for the synchronous resolution, matching HostHealthPanel; the effect exists precisely to read the
+    // clock outside render.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setBounds(windowBounds(timeWindow, Date.now()));
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [timeWindow, refreshTick]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
@@ -289,31 +290,17 @@ export function ProcessTreeView() {
   }, []);
 
   const fetchTree = useCallback(() => {
-    if (!hostId) return;
+    if (!hostId || !bounds) return;
     setLoading(true);
     setError(null);
 
-    // Anchor the window on the alert time when arriving from the alert list; fall back to now.
-    // Validate the parsed value: a malformed ?at= would otherwise produce NaN, propagate
-    // through the multiplication, and land an invalid range on getProcessTree.
-    const atParam = searchParams.get("at");
-    const parsedAt = atParam ? Number(atParam) : Number.NaN;
-    const anchorMs = Number.isFinite(parsedAt) ? parsedAt : Date.now();
-    const to = anchorMs * NANOSECONDS_PER_MILLISECOND;
-    // rangeIdx is the user's pick from the segmented control above; it's
-    // bounded to [0, TIME_RANGES.length-1] by the click handlers, so this
-    // bracket access is safe even though the static analyzer can't prove it.
-    // eslint-disable-next-line security/detect-object-injection
-    const range = TIME_RANGES[rangeIdx];
-    const from = to - range.ms * NANOSECONDS_PER_MILLISECOND;
-
-    getProcessTree(hostId, from, to, undefined, flatten)
+    getProcessTree(hostId, bounds.fromNs, bounds.toNs, undefined, flatten)
       .then((res) => { setRoots(res.roots); })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Unknown error");
       })
       .finally(() => { setLoading(false); });
-  }, [hostId, rangeIdx, searchParams, flatten]);
+  }, [hostId, bounds, flatten]);
 
   // Fetch alerts for this host to mark nodes with alert badges.
   useEffect(() => {
@@ -490,19 +477,7 @@ export function ProcessTreeView() {
           </span>
         )}
       </div>
-      <fieldset className="process-tree__range">
-        <legend className="visually-hidden">Time range</legend>
-        {TIME_RANGES.map((r, i) => (
-          <button
-            key={r.label}
-            type="button"
-            className={`process-tree__range-item${i === rangeIdx ? " process-tree__range-item--active" : ""}`}
-            onClick={() => { setRangeIdx(i); }}
-          >
-            {r.label}
-          </button>
-        ))}
-      </fieldset>
+      <TimeRangeControl window={timeWindow} onChange={setTimeWindow} />
       <label
         className="process-tree__toggle"
         title={showSystem ? "System processes shown" : "System processes hidden"}
@@ -529,7 +504,7 @@ export function ProcessTreeView() {
         <span className="process-tree__toggle-switch" aria-hidden="true" />
         <span className="process-tree__toggle-label">Flatten</span>
       </label>
-      <button type="button" className="process-tree__action-btn" onClick={fetchTree}>
+      <button type="button" className="process-tree__action-btn" onClick={() => { setRefreshTick((t) => t + 1); }}>
         Refresh
       </button>
     </div>
@@ -631,6 +606,14 @@ export function ProcessTreeView() {
         <p className="process-tree__status">No processes in this time range.</p>
       )}
 
+      {bounds && (
+        <ActivityHistogram
+          hostId={hostId}
+          fromNs={bounds.fromNs}
+          toNs={bounds.toNs}
+          onSelectBucket={(fromNs, toNs) => { setTimeWindow({ kind: "absolute", fromNs, toNs }); }}
+        />
+      )}
       <div className="process-tree__layout">
         <div className="process-tree__canvas">
           <svg ref={svgRef} />

@@ -319,3 +319,20 @@ describe("ProcessTreeView conviction evidence", () => {
     });
   });
 });
+
+// spec:web-ui/host-page-time-navigation/alert-entry-keeps-its-anchored-window
+describe("ProcessTreeView alert-entry window", () => {
+  it("fetches a 24h window ending at the alert time", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...launchDaemonAlert, process_id: 2 });
+    const atMs = 1750248000000;
+    renderTree(`?alert=7&process=2&at=${String(atMs)}`);
+    await waitFor(() => {
+      expect(api.getProcessTree).toHaveBeenCalled();
+    });
+    const NS_PER_MS = 1_000_000;
+    const DAY_NS = 24 * 3600 * 1000 * NS_PER_MS;
+    const [, fromNs, toNs] = vi.mocked(api.getProcessTree).mock.calls[0];
+    expect(toNs).toBe(atMs * NS_PER_MS);
+    expect(toNs - fromNs).toBe(DAY_NS);
+  });
+});

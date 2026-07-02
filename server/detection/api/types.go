@@ -153,6 +153,22 @@ type HostDetail struct {
 	OverallStatus         string `db:"overall_status" json:"overall_status"`
 }
 
+// ActivityHistogram is the response of GET /api/hosts/{host_id}/activity-histogram (issue #581): process-start counts per time
+// bucket over a requested window. BucketNs is server-derived from the window so the bucket count stays bounded; Buckets is sparse
+// (empty buckets are omitted) and Total is the sum of all counts, which equals the number of process starts in the window.
+type ActivityHistogram struct {
+	BucketNs int64            `json:"bucket_ns"`
+	Total    int64            `json:"total"`
+	Buckets  []ActivityBucket `json:"buckets"`
+}
+
+// ActivityBucket is one histogram bar: the bucket's inclusive start (aligned to the window's origin) and the count of process
+// starts whose fork_time_ns falls inside [StartNs, StartNs+BucketNs).
+type ActivityBucket struct {
+	StartNs int64 `db:"start_ns" json:"start_ns"`
+	Count   int64 `db:"count" json:"count"`
+}
+
 // Host is the operator-visible row from the hosts summary table. Mirrors HostSummary but adds updated_at; both are kept distinct
 // because the operator list endpoint historically returned the HostSummary shape and the UI snapshots it.
 type Host struct {

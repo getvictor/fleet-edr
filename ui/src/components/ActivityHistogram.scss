@@ -1,0 +1,38 @@
+@use "../styles/var/colors" as *;
+
+// Activity strip (issue #581): thin single-hue bars on the page surface, 2px gaps, baseline-anchored fills. Text stays in ink
+// tokens (the accessible label carries the numbers); the hue carries only "activity".
+.activity-histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 48px;
+  margin-bottom: 0.5rem;
+
+  &__bar {
+    flex: 1 1 0;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+
+    &:disabled {
+      cursor: default;
+    }
+
+    &:hover:not(:disabled) .activity-histogram__fill,
+    &:focus-visible .activity-histogram__fill {
+      background: $core-fleet-green-over;
+    }
+  }
+
+  &__fill {
+    display: block;
+    width: 100%;
+    background: $core-fleet-green;
+    border-radius: 2px 2px 0 0;
+  }
+}

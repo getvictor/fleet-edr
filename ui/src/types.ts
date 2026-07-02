@@ -120,6 +120,19 @@ export interface AggregatedSiblings {
   sample?: ProcessNode[];
 }
 
+// ActivityHistogram is the response from GET /api/hosts/{host_id}/activity-histogram (issue #581): process-start counts per
+// server-derived time bucket. buckets is sparse (empty buckets are omitted); total is the sum of counts.
+export interface ActivityHistogram {
+  bucket_ns: number;
+  total: number;
+  buckets: ActivityBucket[] | null;
+}
+
+export interface ActivityBucket {
+  start_ns: number;
+  count: number;
+}
+
 export interface EventRecord {
   event_id: string;
   host_id: string;

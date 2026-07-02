@@ -181,6 +181,7 @@ func New(deps Deps) (*Detection, error) {
 		// same store; wire it alongside the webhook admin surface (issue #359).
 		det.operatorH.SetHostHealth(store)
 		det.operatorH.SetHostDetail(store)
+		det.operatorH.SetActivityHistogram(store)
 
 		processor := pipeline.NewProcessor(
 			deps.EventLog,

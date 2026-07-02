@@ -3188,3 +3188,49 @@ func TestStore_HostDetail(t *testing.T) {
 	_, err = d.Store().HostDetail(ctx, "NO-SUCH-HOST")
 	require.ErrorIs(t, err, sql.ErrNoRows, "an unknown host id surfaces sql.ErrNoRows for the handler's 404")
 }
+
+// spec:server-rest-api/host-activity-histogram-endpoint/bucketed-counts-cover-the-window
+// spec:server-rest-api/host-activity-histogram-endpoint/bucket-size-scales-with-the-window
+//
+// Store.ActivityHistogram buckets process starts for the host page's activity strip (issue #581): counts sum to the window's start
+// total, each start lands in the bucket containing its fork time, and the bucket size grows with the window so the bar count stays
+// bounded.
+func TestStore_ActivityHistogram(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "HIST-UUID-0001"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+	// Window [0, 1h); 1-minute buckets (3600s / 60). Three starts in minute 0, one in minute 59, one exactly on a bucket boundary,
+	// plus one OUTSIDE the window that must not count.
+	minute := int64(60 * 1_000_000_000)
+	forks := []int64{5, 10, 30, 59*minute + 1, 2 * minute, 3600 * 1_000_000_000}
+	for i, forkNs := range forks {
+		_, err := d.Store().DB().ExecContext(ctx, `
+			INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns)
+			VALUES (?, ?, 1, '/bin/tool', ?)`, host, 1000+i, forkNs)
+		require.NoError(t, err)
+	}
+
+	hist, err := d.Store().ActivityHistogram(ctx, host, 0, 3600*1_000_000_000)
+	require.NoError(t, err)
+	assert.EqualValues(t, minute, hist.BucketNs, "a 1h window buckets by minute")
+	assert.EqualValues(t, 5, hist.Total, "the start on the window's exclusive end must not count")
+	var sum int64
+	byStart := map[int64]int64{}
+	for _, b := range hist.Buckets {
+		sum += b.Count
+		byStart[b.StartNs] = b.Count
+	}
+	assert.Equal(t, hist.Total, sum, "bucket counts sum to the total")
+	assert.EqualValues(t, 3, byStart[0], "three starts in the first minute")
+	assert.EqualValues(t, 1, byStart[59*minute], "one start in the last minute")
+	assert.EqualValues(t, 1, byStart[2*minute], "a start exactly on a bucket boundary lands in that bucket")
+
+	// An order-of-magnitude wider window derives a proportionally wider bucket (bounded bar count), floored to whole seconds.
+	wide, err := d.Store().ActivityHistogram(ctx, host, 0, 36000*1_000_000_000)
+	require.NoError(t, err)
+	assert.EqualValues(t, 600*1_000_000_000, wide.BucketNs, "a 10h window buckets by 10 minutes")
+	assert.EqualValues(t, 6, wide.Total, "the wider window now contains the sixth start")
+}
