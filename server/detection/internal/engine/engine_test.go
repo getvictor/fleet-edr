@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,4 +121,43 @@ func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
 		assert.Equal(t, int64(0), alertCount, "stub rule returned no findings; alert_count MUST reflect that")
 	}
 	assert.True(t, found, "no recorded span carried rule_id=stub-rule-x; the rule_id attr is the spec's primary key")
+}
+
+// failingRule is a stub whose Evaluate always returns the configured error, so the tests below can pin which error classes the
+// engine swallows versus propagates.
+type failingRule struct {
+	stubRule
+	err error
+}
+
+func (r *failingRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	return nil, r.err
+}
+
+// TestEngine_Evaluate_PropagatesNotYetMaterialized pins the retry contract for the materialization race: an Evaluate error wrapping
+// rulesapi.ErrProcessNotYetMaterialized must surface to the processor (which nacks and retries the batch), while an ordinary rule
+// failure keeps the historical log-and-swallow isolation so one buggy rule cannot wedge the pipeline.
+// spec:server-detection-rules-engine/retryable-evaluation-on-unmaterialized-subject-process/a-young-event-s-subject-process-row-is-missing
+func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not-yet-materialized error fails the batch", func(t *testing.T) {
+		t.Parallel()
+		e := New(nil, nil)
+		e.Register(&failingRule{
+			stubRule: stubRule{id: "racy-rule"},
+			err:      fmt.Errorf("event x references pid 7: %w", rulesapi.ErrProcessNotYetMaterialized),
+		})
+		err := e.Evaluate(t.Context(), nil)
+		require.ErrorIs(t, err, rulesapi.ErrProcessNotYetMaterialized,
+			"the sentinel must reach the processor so the batch is nacked and re-evaluated")
+	})
+
+	t.Run("ordinary rule failure is swallowed", func(t *testing.T) {
+		t.Parallel()
+		e := New(nil, nil)
+		e.Register(&failingRule{stubRule: stubRule{id: "buggy-rule"}, err: errors.New("boom")})
+		require.NoError(t, e.Evaluate(t.Context(), nil),
+			"a non-retryable rule failure keeps per-rule isolation: logged, not batch-fatal")
+	})
 }

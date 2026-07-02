@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -79,8 +80,9 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 
 // Evaluate runs all registered rules against the event batch.
 // Findings are persisted as alerts. Rule evaluation failures are
-// logged and skipped, but alert persistence failures are returned so
-// the caller can retry the batch.
+// logged and skipped, but alert persistence failures and retryable
+// not-yet-materialized subject-process misses are returned so the
+// caller can retry the batch.
 //
 // Snapshot exec events (issue #11: ESF baseline enumeration) are
 // filtered out before rule evaluation. Those events describe
@@ -103,7 +105,8 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 // evaluateRule opens a per-rule span carrying rule_id (observability-instrumentation spec) so detection latency and alert counts
 // can be grouped by rule in downstream dashboards. The span is annotated with alert_count after the rule returns; on rule-evaluate
 // failure the span records the error and the loop continues (per-rule isolation). Returns a non-nil error ONLY when alert
-// persistence fails: rule-evaluation errors are logged + swallowed so a buggy rule doesn't block the rest.
+// persistence fails or the rule reported a retryable rulesapi.ErrProcessNotYetMaterialized: other rule-evaluation errors are
+// logged + swallowed so a buggy rule doesn't block the rest.
 func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []api.Event) error {
 	ctx, span := tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
@@ -116,6 +119,13 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 	findings, err := rule.Evaluate(ctx, live, e.store)
 	if err != nil {
 		span.RecordError(err)
+		if errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
+			// A concurrently processed batch has not committed this event's subject process row yet (intra-replica workers since
+			// issue #535, cross-replica claimers per ADR-0011). This is a retryable ordering condition, not a rule bug: fail the
+			// batch so the processor nacks it and re-evaluates once the row lands. Alert dedup makes the re-run idempotent, and
+			// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
+			return fmt.Errorf("rule %s: %w", rule.ID(), err)
+		}
 		e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
 		return nil
 	}

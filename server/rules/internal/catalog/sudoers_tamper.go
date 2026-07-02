@@ -163,13 +163,13 @@ func (r *SudoersTamper) evalEvent(
 		return nil, nil
 	}
 
-	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 	if err != nil {
-		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
+		return nil, err
 	}
 	if proc == nil {
-		// Defensive: race against process materialisation. Same shape
-		// as credential_keychain_dump / privilege_launchd_plist_write.
+		// The writer's row never materialized within the grace window (resolveSubjectProcess raises the retryable
+		// ErrProcessNotYetMaterialized while inside it), so there is no process to link the finding to.
 		return nil, nil
 	}
 

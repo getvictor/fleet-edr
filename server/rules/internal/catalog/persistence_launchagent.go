@@ -112,11 +112,12 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	if plistPath == "" || !launchAgentPath.MatchString(plistPath) || r.excluded(plistPath, evt.HostID) {
 		return nil, nil
 	}
-	// Look up the process row so the alert can link to the process detail view. If it's not yet materialised we skip; the next batch
-	// re-evaluates once the processor lands the row. Safer than firing an alert we can't pivot from.
-	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	// Look up the process row so the alert can link to the process detail view. A young miss raises the retryable
+	// ErrProcessNotYetMaterialized so the batch is re-evaluated once the processor lands the row; a stale miss skips. Safer than
+	// firing an alert we can't pivot from.
+	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 	if err != nil {
-		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
+		return nil, err
 	}
 	if proc == nil {
 		return nil, nil

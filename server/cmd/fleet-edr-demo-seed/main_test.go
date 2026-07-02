@@ -60,7 +60,9 @@ func TestDBErrorsPropagate(t *testing.T) {
 	s := newSeeder(config{pollInterval: time.Millisecond, verifyTimeout: 30 * time.Millisecond}, badDB(t), testHTTPClient(), discardLogger())
 	ctx := context.Background()
 
-	_, err := s.counts(ctx)
+	inClause, hostArgs, scopeErr := demoHostScope()
+	require.NoError(t, scopeErr)
+	_, err := s.counts(ctx, inClause, hostArgs)
 	require.Error(t, err)
 
 	_, err = s.alreadySeeded(ctx)

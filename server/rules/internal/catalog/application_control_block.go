@@ -90,9 +90,9 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 		if p.RuleID == "" || p.Severity == "" {
 			continue
 		}
-		proc, err := gr.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+		proc, err := resolveSubjectProcess(ctx, gr, evt, p.PID)
 		if err != nil {
-			return nil, fmt.Errorf("application control block: get process pid %d: %w", p.PID, err)
+			return nil, fmt.Errorf("application control block: %w", err)
 		}
 		if proc == nil {
 			continue
