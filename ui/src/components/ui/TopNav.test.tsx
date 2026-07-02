@@ -7,9 +7,9 @@ import { TopNav } from "./TopNav";
 import { PermissionsProvider } from "../../permissions";
 import { PermissionAction } from "../../permissions-core";
 
-function renderNav(permissions: string[] | undefined, children: ReactNode = null) {
+function renderNav(permissions: string[] | undefined, children: ReactNode = null, initialPath = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialPath]}>
       <PermissionsProvider permissions={permissions}>
         <TopNav user={{ id: 1, email: "op@example.com" }} authMethod="oidc" onLogout={() => undefined} />
         {children}
@@ -17,6 +17,8 @@ function renderNav(permissions: string[] | undefined, children: ReactNode = null
     </MemoryRouter>,
   );
 }
+
+const ALL_NAV_PERMISSIONS = [PermissionAction.AlertRead, PermissionAction.HostRead, PermissionAction.AppControlRead];
 
 describe("TopNav capability gating", () => {
   // spec:web-ui/navigation-and-action-affordances-are-capability-gated/application-control-entry-hidden-without-read-access
@@ -52,5 +54,26 @@ describe("TopNav capability gating", () => {
     expect(screen.getByRole("link", { name: "Hosts" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Application control" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Coverage" })).toBeInTheDocument();
+  });
+});
+
+describe("TopNav alert-first order and active state", () => {
+  // spec:web-ui/alert-first-navigation-order/navigation-lists-alerts-first
+  it("lists entries in the order Alerts, Hosts, Application control, Coverage", () => {
+    renderNav(ALL_NAV_PERMISSIONS);
+    const labels = screen.getAllByRole("link").map((link) => link.textContent);
+    expect(labels).toEqual(["Alerts", "Hosts", "Application control", "Coverage"]);
+  });
+
+  // spec:web-ui/alert-first-navigation-order/hosts-entry-active-on-host-detail
+  it("marks Hosts active on a host's process tree route", () => {
+    renderNav(ALL_NAV_PERMISSIONS, null, "/hosts/ABC-123");
+    expect(screen.getByRole("link", { name: "Hosts" })).toHaveClass("top-nav__link--active");
+    expect(screen.getByRole("link", { name: "Alerts" })).not.toHaveClass("top-nav__link--active");
+  });
+
+  it("marks Hosts active on the host list route", () => {
+    renderNav(ALL_NAV_PERMISSIONS, null, "/hosts");
+    expect(screen.getByRole("link", { name: "Hosts" })).toHaveClass("top-nav__link--active");
   });
 });

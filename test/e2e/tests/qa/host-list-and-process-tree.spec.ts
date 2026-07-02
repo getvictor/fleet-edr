@@ -72,7 +72,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
 
   test("empty state: signed-in admin with no hosts sees the empty-state copy", async () => {
     const p = requirePage();
-    await p.goto("/ui/");
+    await p.goto("/ui/hosts");
     // The HostList component renders an EmptyState with this exact text when hosts.length === 0. Asserting on the literal copy
     // means a future operator-visible copy edit surfaces here too.
     await expect(p.getByText("No hosts reporting yet.")).toBeVisible({ timeout: 10_000 });
@@ -80,14 +80,14 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
     await expect(p.locator("table")).toHaveCount(0);
   });
 
-  // spec:web-ui/host-list-is-the-home-view/host-list-renders-rows-for-enrolled-hosts
+  // spec:web-ui/host-list-page/host-list-renders-rows-for-enrolled-hosts
   test("many hosts: enrol 25 hosts via enrollHostsBatch -> all render in <tr>", async ({ agent }) => {
     const p = requirePage();
     const BATCH_SIZE = 25;
     const hosts = await agent.enrollHostsBatch(BATCH_SIZE);
     expect(hosts).toHaveLength(BATCH_SIZE);
 
-    await p.goto("/ui/");
+    await p.goto("/ui/hosts");
     // Wait on row count rather than a specific selector so layout tweaks (e.g. row className changes) don't break the assertion.
     await expect
       .poll(() => p.locator("tbody tr").count(), { timeout: 10_000, message: "host list never reached expected row count" })
@@ -149,7 +149,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
       await db.end();
     }
 
-    await p.goto("/ui/");
+    await p.goto("/ui/hosts");
     for (const d of driven) {
       const row = p.locator("tr").filter({ has: p.getByText(d.hostId, { exact: true }) });
       await expect(row).toBeVisible({ timeout: 10_000 });
@@ -161,7 +161,7 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
     }
   });
 
-  // spec:web-ui/host-list-is-the-home-view/clicking-a-host-opens-its-process-tree
+  // spec:web-ui/host-list-page/clicking-a-host-opens-its-process-tree
   // spec:web-ui/process-tree-visualization/process-tree-renders-for-a-host
   test("process tree: process-tree-deep -> /ui/hosts/<id> renders the host page", async ({ agent }) => {
     const p = requirePage();
