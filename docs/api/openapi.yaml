@@ -255,6 +255,12 @@ paths:
         - name: limit
           in: query
           schema: {type: integer, minimum: 1, maximum: 5000, default: 2000}
+        - name: flatten
+          in: query
+          description: >-
+            When true, opt out of sibling aggregation and return the raw forest with every node. By default the response
+            collapses repeated identical-path leaf siblings under the same parent into aggregated `×N` nodes (issue #416).
+          schema: {type: boolean, default: false}
       responses:
         "200":
           description: Forest of process roots
@@ -985,6 +991,28 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/ProcessNode"
+            aggregated:
+              $ref: "#/components/schemas/AggregatedSiblings"
+
+    AggregatedSiblings:
+      type: object
+      description: >-
+        Present when this node is a collapsed group of identical-path sibling processes rather than a single process
+        (issue #416). The enclosing node then renders as a `×N` badge; its own process fields describe the earliest member
+        (a representative), `children` is empty, and `sample` carries a capped, fork-ordered slice of the underlying
+        members the UI can expand in place. Absent from a normal (non-aggregated) node.
+      required: [count, exited_count, running_count, first_fork_ns, last_fork_ns]
+      properties:
+        count: {type: integer, description: Total members in the group.}
+        exited_count: {type: integer, description: Members with an observed or synthesized exit.}
+        running_count: {type: integer, description: Members still running (no exit).}
+        first_fork_ns: {type: integer, format: int64, description: Earliest fork time in the group, ns since epoch.}
+        last_fork_ns: {type: integer, format: int64, description: Latest fork time in the group, ns since epoch.}
+        sample:
+          type: array
+          description: Capped, fork-ordered sample of the underlying members (never the whole group).
+          items:
+            $ref: "#/components/schemas/ProcessNode"
 
     Alert:
       type: object

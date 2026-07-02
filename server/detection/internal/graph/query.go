@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -269,6 +270,12 @@ func aggregateGroup(members []api.ProcessNode) api.ProcessNode {
 	rep.Children = nil
 	rep.NetworkConnections = nil
 	rep.DNSQueries = nil
+	// The aggregated node carries the earliest member's identity fields (path, hashes, signing) for display, but it is a group
+	// header, not that member: the member itself is also in Sample with its real id. Give the header a synthetic negative id (the
+	// negation of the representative's real, positive, unique row id) so it can never collide with the sample member it represents,
+	// with any other aggregated node, or with a real row id in the UI's id-keyed paths (alert-dot highlighting, find-by-id, the
+	// collapse/expand sets). Row ids are auto-increment positive, so the negation is unique and unambiguous.
+	rep.ID = -members[0].ID
 	rep.Aggregated = agg
 	return rep
 }
@@ -282,12 +289,19 @@ func nodeFirstForkNs(n api.ProcessNode) int64 {
 	return n.ForkTimeNs
 }
 
-// aggregationKey is the binary-identity grouping key for sibling aggregation: same path AND same content hash AND same code-directory
-// hash. sha256 (binary content) and cdhash (code-signing directory) stand in for "signing identity" so a path reused by a different
-// binary is not collapsed; a NULL hash contributes an empty segment, so two hash-less rows of the same path still group. The NUL
-// separator keeps segments from running together (a path ending in a hex-looking suffix cannot collide with a hash).
+// aggregationKey is the grouping key for sibling aggregation: same parent AND same path AND same content hash AND same code-directory
+// hash. PPID is part of the key because the top-level aggregateSiblings call runs over buildForest's roots, and a node lands in that
+// root list whenever its real parent is unresolvable in this dataset (parent forked outside the time window, or genuinely absent),
+// regardless of the parent PID value. Without PPID in the key, two orphaned top-level leaves with the same binary but distinct
+// real parents would fold into one node, erasing the lineage distinction an analyst relies on. For the recursive (non-root) case PPID
+// is a no-op: buildForest guarantees a node's children all share its PID as their PPID. sha256 (binary content) and cdhash
+// (code-signing directory) stand in for "signing identity" so a path reused by a different binary is not collapsed; a NULL hash
+// contributes an empty segment, so two hash-less rows of the same path still group. The NUL separator keeps segments from running
+// together (a path ending in a hex-looking suffix cannot collide with a hash).
 func aggregationKey(n api.ProcessNode) string {
 	var sb strings.Builder
+	sb.WriteString(strconv.Itoa(n.PPID))
+	sb.WriteByte(0)
 	sb.WriteString(n.Path)
 	sb.WriteByte(0)
 	if n.SHA256 != nil {

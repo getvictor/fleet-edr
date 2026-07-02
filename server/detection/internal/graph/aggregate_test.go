@@ -9,9 +9,14 @@ import (
 	"pgregory.net/rapid"
 )
 
-// leaf builds a childless ProcessNode with the identity fields aggregation groups on.
+// leaf builds a childless ProcessNode with the identity fields aggregation groups on. ppid=1 is the shared default so the common
+// same-parent case does not have to spell it out; leafP sets an explicit parent for the cross-parent no-merge cases.
 func leaf(id int64, path string, sha string, forkNs int64, exited bool) api.ProcessNode {
-	p := api.Process{ID: id, PID: int(id), Path: path, ForkTimeNs: forkNs}
+	return leafP(id, 1, path, sha, forkNs, exited)
+}
+
+func leafP(id int64, ppid int, path string, sha string, forkNs int64, exited bool) api.ProcessNode {
+	p := api.Process{ID: id, PID: int(id), PPID: ppid, Path: path, ForkTimeNs: forkNs}
 	if sha != "" {
 		p.SHA256 = new(sha)
 	}
@@ -41,9 +46,24 @@ func TestAggregateSiblings_TableCases(t *testing.T) {
 		assert.Equal(t, 1, agg.RunningCount)
 		assert.Equal(t, int64(100), agg.FirstForkNs)
 		assert.Equal(t, int64(300), agg.LastForkNs)
-		// Representative is the earliest member; its identity is carried on the node.
-		assert.Equal(t, int64(1), out[0].ID)
+		// The node is a group header, not the representative row: its id is the negation of the earliest member's id (1) so it
+		// cannot collide with that member, which also appears in the sample with its real positive id.
+		assert.Equal(t, int64(-1), out[0].ID)
+		assert.Equal(t, int64(1), agg.Sample[0].ID, "the representative is still present in the sample with its real id")
 		assert.Nil(t, out[0].Children)
+	})
+
+	t.Run("same binary under different parents does not merge (root-level lineage guard)", func(t *testing.T) {
+		t.Parallel()
+		// buildForest puts a leaf in the root list when its real parent is outside the dataset; two such orphans can share a
+		// path + binary yet come from distinct lineages. They must stay separate nodes.
+		out := aggregateSiblings([]api.ProcessNode{
+			leafP(1, 100, "/usr/bin/grep", "grepsha", 10, true),
+			leafP(2, 200, "/usr/bin/grep", "grepsha", 20, true),
+		})
+		require.Len(t, out, 2, "identical binary under different PPIDs must not fold into one node")
+		assert.Nil(t, out[0].Aggregated)
+		assert.Nil(t, out[1].Aggregated)
 	})
 
 	t.Run("a singleton group stays an individual node (no ×1 badge)", func(t *testing.T) {
@@ -144,6 +164,8 @@ func TestAggregateSiblings_PBT(t *testing.T) {
 	paths := []string{"/usr/bin/grep", "/bin/ls", "/usr/bin/docker", "/usr/bin/python3"}
 	shas := []string{"", "sha-A", "sha-B"}
 
+	ppids := []int{1, 100, 200} // vary parent identity so the no-merge invariant also covers cross-parent (root-level) folding
+
 	rapid.Check(t, func(rt *rapid.T) {
 		n := rapid.IntRange(0, 60).Draw(rt, "n")
 		in := make([]api.ProcessNode, 0, n)
@@ -151,11 +173,12 @@ func TestAggregateSiblings_PBT(t *testing.T) {
 		inputIDs := make(map[int64]bool)
 		for i := range n {
 			id := int64(i + 1) // unique, non-zero
+			ppid := rapid.SampledFrom(ppids).Draw(rt, "ppid")
 			path := rapid.SampledFrom(paths).Draw(rt, "path")
 			sha := rapid.SampledFrom(shas).Draw(rt, "sha")
 			forkNs := rapid.Int64Range(1, 500).Draw(rt, "fork")
 			exited := rapid.Bool().Draw(rt, "exited")
-			node := leaf(id, path, sha, forkNs, exited)
+			node := leafP(id, ppid, path, sha, forkNs, exited)
 			in = append(in, node)
 			expectedByKey[aggregationKeyForNode(node)]++
 			inputIDs[id] = true
@@ -183,6 +206,11 @@ func TestAggregateSiblings_PBT(t *testing.T) {
 			}
 			agg := node.Aggregated
 			require.GreaterOrEqual(t, agg.Count, aggregateMinGroup, "a collapsed group must have >= aggregateMinGroup members")
+			// The group header carries a synthetic negative id so it never collides with a real (positive) member id, including
+			// the representative that also sits in the sample. Track it in seenIDs to prove uniqueness across headers too.
+			assert.Negative(t, node.ID, "an aggregated node's id must be synthetic (negative)")
+			assert.False(t, seenIDs[node.ID], "an aggregated node's synthetic id must be unique")
+			seenIDs[node.ID] = true
 			totalLeaves += agg.Count
 			actualByKey[aggregationKeyForNode(node)] += agg.Count
 			// Internal consistency.

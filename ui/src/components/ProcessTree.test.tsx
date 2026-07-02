@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import * as api from "../api";
@@ -167,6 +167,23 @@ describe("ProcessTreeView sibling aggregation", () => {
     expect(await screen.findByText(/grep \(201\)/)).toBeInTheDocument();
   });
 
+  it("expands via the chevron and collapses on a second activation", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: aggregatedForest });
+    const { container } = renderTree("");
+    await screen.findByText(/grep ×3/);
+
+    // The aggregated node ships collapsed, so its chevron is the only "▶" in this single-group forest. Clicking the chevron
+    // (not the label) exercises the chevron-side expand path.
+    const collapsedChevron = [...container.querySelectorAll("text.node__chevron")].find((c) => c.textContent === "▶");
+    expect(collapsedChevron).toBeTruthy();
+    fireEvent.click(collapsedChevron as Element);
+    expect(await screen.findByText(/grep \(201\)/)).toBeInTheDocument();
+
+    // A second activation collapses the group again (the toggle's delete branch).
+    fireEvent.click(screen.getByText(/grep ×3/));
+    await waitFor(() => { expect(screen.queryByText(/grep \(201\)/)).not.toBeInTheDocument(); });
+  });
+
   it("Flatten toggle refetches the raw forest with flatten=true", async () => {
     const spy = vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: aggregatedForest });
     renderTree("");
@@ -179,6 +196,36 @@ describe("ProcessTreeView sibling aggregation", () => {
 
     // Flipping the toggle refetches asking for the un-aggregated forest.
     expect(spy).toHaveBeenLastCalledWith("h1", expect.any(Number), expect.any(Number), undefined, true);
+  });
+
+  it("selects a normal process, colors an alerted and an exited node, and toggles a normal chevron", async () => {
+    // A forest mixing the aggregated group with two plain leaves: one alerted (red dot), one exited (grey dot). Bash is a normal
+    // parent so its chevron drives the generic subtree collapse, distinct from the aggregated expand.
+    const alertedLeaf: ProcessNode = { ...process(30, 300, 100, "/usr/bin/curl"), fork_time_ns: 100 };
+    const exitedLeaf: ProcessNode = { ...process(20, 500, 100, "/usr/bin/sleep"), fork_time_ns: 100, exit_time_ns: 200 };
+    const forest: ProcessNode[] = [
+      { ...process(1, 100, 1, "/bin/bash"), children: [aggregatedChild, alertedLeaf, exitedLeaf] },
+    ];
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    // Alert on the curl leaf so alertProcessIds drives its red dot.
+    vi.spyOn(api, "listAlerts").mockResolvedValue([
+      { id: 1, host_id: "h1", rule_id: "r", source: "detection", severity: "high", title: "t", description: "",
+        process_id: 30, status: "open", created_at: "", updated_at: "" },
+    ]);
+    vi.spyOn(api, "getProcessDetail").mockResolvedValue({ process: exitedLeaf, network_connections: [], dns_queries: [] });
+
+    const { container } = renderTree("");
+    await screen.findByText(/curl \(300\)/);
+
+    // Clicking a normal (non-aggregated) node opens the detail panel rather than expanding.
+    fireEvent.click(screen.getByText(/sleep \(500\)/));
+    await screen.findByText(/curl \(300\)/); // still rendered; selection does not collapse the tree
+
+    // Toggling bash's chevron collapses its subtree (the generic collapse path, not the aggregated one).
+    const chevrons = container.querySelectorAll("text.node__chevron");
+    expect(chevrons.length).toBeGreaterThan(0);
+    fireEvent.click(chevrons[0]);
+    await waitFor(() => { expect(screen.queryByText(/curl \(300\)/)).not.toBeInTheDocument(); });
   });
 });
 

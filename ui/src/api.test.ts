@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   listAlerts,
   getHostHealth,
+  getProcessTree,
   createAppControlRule,
   setForbiddenHandler,
   setUnauthorizedHandler,
@@ -62,6 +63,24 @@ describe("getHostHealth", () => {
     expect(fetchMock).toHaveBeenCalled();
     const [target] = fetchMock.mock.calls[0] as [URL];
     expect(target.toString()).toContain("/hosts/host%2FA/health");
+  });
+});
+
+describe("getProcessTree flatten parameter (issue #416)", () => {
+  it("omits flatten by default so the response is aggregated", async () => {
+    const fetchMock = stubFetch({ roots: [] });
+    await getProcessTree("host-a", 1000, 2000);
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/hosts/host-a/tree?from=1000&to=2000&limit=2000");
+    expect(url).not.toContain("flatten");
+  });
+
+  it("appends flatten=1 when the caller opts out of aggregation", async () => {
+    const fetchMock = stubFetch({ roots: [] });
+    await getProcessTree("host-a", 1000, 2000, 2000, true);
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("flatten=1");
   });
 });
 

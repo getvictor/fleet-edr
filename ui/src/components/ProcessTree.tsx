@@ -79,6 +79,17 @@ interface RenderResult {
   nodes: D3PointNode[];
 }
 
+// TreeInteractions bundles the node-state + callbacks renderTree needs so its signature stays under the parameter cap. alertProcessIds
+// drives the alert dot; collapsedIds/onToggleCollapsed drive the generic subtree collapse; expandedAggIds/onToggleAggExpanded drive
+// the issue-#416 aggregated-node expand.
+interface TreeInteractions {
+  alertProcessIds: Set<number>;
+  collapsedIds: Set<number>;
+  onToggleCollapsed?: (nodeId: number) => void;
+  expandedAggIds: Set<number>;
+  onToggleAggExpanded?: (nodeId: number) => void;
+}
+
 export function ProcessTreeView() {
   const { hostId } = useParams<{ hostId: string }>();
   const [searchParams] = useSearchParams();
@@ -334,9 +345,13 @@ export function ProcessTreeView() {
       layoutNodesRef.current = [];
       return;
     }
-    const result = renderTree(
-      svgRef.current, visibleRoots, setSelectedNode, alertProcessIds, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded,
-    );
+    const result = renderTree(svgRef.current, visibleRoots, setSelectedNode, {
+      alertProcessIds,
+      collapsedIds,
+      onToggleCollapsed: toggleCollapsed,
+      expandedAggIds,
+      onToggleAggExpanded: toggleAggExpanded,
+    });
     layoutNodesRef.current = result.nodes;
   }, [visibleRoots, alertProcessIds, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded]);
 
@@ -775,12 +790,9 @@ function renderTree(
   svg: SVGSVGElement,
   roots: ProcessNode[],
   onSelect: (node: ProcessNode) => void,
-  alertProcessIds: Set<number> = new Set(),
-  collapsedIds: Set<number> = new Set(),
-  onToggleCollapsed?: (nodeId: number) => void,
-  expandedAggIds: Set<number> = new Set(),
-  onToggleAggExpanded?: (nodeId: number) => void,
+  interactions: TreeInteractions,
 ): RenderResult {
+  const { alertProcessIds, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded } = interactions;
   const hierarchy = toD3Hierarchy(roots);
   const root = d3.hierarchy(hierarchy);
 
