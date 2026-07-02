@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -108,6 +109,72 @@ func TestEnroll_HappyPath(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	assert.Equal(t, testUUID, out.HostID)
 	assert.NotEmpty(t, out.HostToken)
+}
+
+// spec:agent-enrollment/enrollment-reports-the-agent-platform/an-enrollment-without-a-platform-defaults-to-darwin
+//
+// The handler normalizes an absent platform to darwin (the legacy-agent default) and forwards a recognized platform verbatim, so the
+// service (and the enrollment row it writes) always sees a concrete platform.
+func TestEnroll_PlatformNormalizedAndForwarded(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name         string
+		sent         map[string]string
+		wantPlatform string
+	}{
+		{"absent normalizes to darwin", map[string]string{}, api.PlatformDarwin},
+		{"windows forwarded", map[string]string{"platform": "windows"}, api.PlatformWindows},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got api.EnrollRequest
+			svc := fakeService{
+				enroll: func(_ context.Context, req api.EnrollRequest, _ string) (api.EnrollResponse, error) {
+					got = req
+					return api.EnrollResponse{
+						HostID: req.HardwareUUID,
+						// #nosec G101 -- test fixture: not a real credential.
+						HostToken: "token-bytes-43-chars-long-for-the-fake-svc",
+					}, nil
+				},
+			}
+			srv := newServer(t, svc, 30)
+			body := map[string]string{
+				"enroll_secret": "s", "hardware_uuid": testUUID,
+				"hostname": "h", "os_version": "o", "agent_version": "v",
+			}
+			maps.Copy(body, tc.sent)
+			resp := postEnroll(t, srv, body)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tc.wantPlatform, got.Platform)
+		})
+	}
+}
+
+// spec:agent-enrollment/enrollment-reports-the-agent-platform/an-enrollment-with-an-unknown-platform-is-rejected
+//
+// A non-empty platform that is not one of the recognized values is a body-shape error: the handler rejects it with 400 bad_body before
+// reaching the service, mirroring the event-ingestion contract's unknown-platform rejection.
+func TestEnroll_InvalidPlatformRejected(t *testing.T) {
+	t.Parallel()
+	svc := fakeService{
+		enroll: func(context.Context, api.EnrollRequest, string) (api.EnrollResponse, error) {
+			t.Fatal("service must not be called when the platform is invalid")
+			return api.EnrollResponse{}, nil
+		},
+	}
+	srv := newServer(t, svc, 30)
+	resp := postEnroll(t, srv, map[string]string{
+		"enroll_secret": "s", "hardware_uuid": testUUID,
+		"hostname": "h", "os_version": "o", "agent_version": "v", "platform": "beos",
+	})
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var body errBody
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "bad_body", body.Error)
 }
 
 func TestEnroll_SecretMismatch(t *testing.T) {

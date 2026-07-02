@@ -14,6 +14,7 @@ type Enrollment struct {
 	Hostname     string     `db:"hostname" json:"hostname"`
 	AgentVersion string     `db:"agent_version" json:"agent_version"`
 	OSVersion    string     `db:"os_version" json:"os_version"`
+	Platform     string     `db:"platform" json:"platform"`
 	SourceIP     string     `db:"source_ip" json:"source_ip"`
 	EnrolledAt   time.Time  `db:"enrolled_at" json:"enrolled_at"`
 	ExpiresAt    *time.Time `db:"expires_at" json:"expires_at,omitempty"`
@@ -30,6 +31,39 @@ type EnrollRequest struct {
 	Hostname     string `json:"hostname"`
 	OSVersion    string `json:"os_version"`
 	AgentVersion string `json:"agent_version"`
+	// Platform is the agent's operating system, one of the Platform* constants. Optional on the wire so an agent predating the
+	// platform-aware contract (ADR-0018) still enrolls; the server normalizes an absent value to PlatformDarwin.
+	Platform string `json:"platform"`
+}
+
+// Platform values an agent may report at enrollment. This mirrors the canonical set in the visibility bounded context
+// (visibilityapi.Platform*): arch-go forbids an endpoint-context import of visibility/api, so the small closed vocabulary is duplicated
+// here with the same values, matching the existing cross-context mirror pattern (see the AlertSource constants in rules/api). The values
+// match Go's runtime.GOOS so the agent reports its platform without a translation table.
+const (
+	PlatformDarwin  = "darwin"
+	PlatformWindows = "windows"
+	PlatformLinux   = "linux"
+)
+
+// IsValidPlatform reports whether platform is one of the recognized platform values. The enroll handler rejects a non-empty value that
+// is not.
+func IsValidPlatform(platform string) bool {
+	switch platform {
+	case PlatformDarwin, PlatformWindows, PlatformLinux:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizePlatform maps an empty platform to PlatformDarwin (an agent predating the platform-aware contract is macOS-only) and returns
+// any other value unchanged. Callers validate a non-empty value with IsValidPlatform first; NormalizePlatform does not reject.
+func NormalizePlatform(platform string) string {
+	if platform == "" {
+		return PlatformDarwin
+	}
+	return platform
 }
 
 // EnrollResponse is what the agent receives. HostToken is a self-validating signed token (see internal/signedtoken): it carries the
