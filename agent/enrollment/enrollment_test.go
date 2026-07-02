@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -305,4 +306,15 @@ func TestEnsure_RefusesServerURLMismatch(t *testing.T) {
 	require.Error(t, err, "ServerURL mismatch on day-two must surface as an error")
 	assert.Contains(t, err.Error(), "server_url",
 		"the error must identify the mismatched server_url so an operator knows whether to delete the file or re-point the URL")
+}
+
+// spec:agent-status-reporting/enrollment-reports-friendly-os-identity/fresh-enrollment-carries-the-os-product-version
+func TestOSVersion_ReportsFriendlyProductVersion(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "darwin" {
+		t.Skip("SystemVersion.plist is macOS-only; elsewhere osVersion falls back to the platform token")
+	}
+	v := osVersion()
+	assert.NotEqual(t, "darwin", v, "enrollment must carry the OS product version, not the Go platform token")
+	assert.Regexp(t, `^\d+(\.\d+)*$`, v, "expected a dotted product version like 26.4")
 }

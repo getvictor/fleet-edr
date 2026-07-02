@@ -30,10 +30,14 @@ type Options struct {
 	BaseURL      string
 	Tokens       TokenSource
 	AgentVersion string
-	Interval     time.Duration
-	Debounce     time.Duration
-	Logger       *slog.Logger
-	NowNs        func() int64
+	// InventoryFn supplies the host identity block included in every post (issue #579). Optional: nil sends no inventory claim and the
+	// server leaves the host's identity record untouched. Called per post so a hostname rename or OS change reaches the server within
+	// one interval without an agent restart; the collector is a hostname syscall plus one small file read, cheap at this cadence.
+	InventoryFn func() *Inventory
+	Interval    time.Duration
+	Debounce    time.Duration
+	Logger      *slog.Logger
+	NowNs       func() int64
 }
 
 // Poster reports the registry's current health to POST /api/status: once at startup, again on any status transition (debounced), and on
@@ -45,6 +49,7 @@ type Poster struct {
 	baseURL      string
 	tokens       TokenSource
 	agentVersion string
+	inventoryFn  func() *Inventory
 	interval     time.Duration
 	debounce     time.Duration
 	logger       *slog.Logger
@@ -78,6 +83,7 @@ func NewPoster(opts Options) *Poster {
 		baseURL:      opts.BaseURL,
 		tokens:       opts.Tokens,
 		agentVersion: opts.AgentVersion,
+		inventoryFn:  opts.InventoryFn,
 		interval:     interval,
 		debounce:     debounce,
 		logger:       logger,
@@ -126,6 +132,14 @@ func (p *Poster) waitDebounce(ctx context.Context) bool {
 	}
 }
 
+// collectInventory invokes the wired collector, or reports no claim when none is wired (tests, minimal builds).
+func (p *Poster) collectInventory() *Inventory {
+	if p.inventoryFn == nil {
+		return nil
+	}
+	return p.inventoryFn()
+}
+
 // post builds and sends one snapshot. Failures are logged and dropped, not retried: the next tick or transition re-sends the current
 // state, so a transient failure self-heals without the poster holding retry state.
 func (p *Poster) post(ctx context.Context) {
@@ -139,6 +153,7 @@ func (p *Poster) post(ctx context.Context) {
 		AgentVersion: p.agentVersion,
 		ReportedAtNs: p.nowNs(),
 		Components:   p.reg.Snapshot(),
+		Inventory:    p.collectInventory(),
 	})
 	if err != nil {
 		p.logger.ErrorContext(ctx, "status check-in marshal", "err", err)

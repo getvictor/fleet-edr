@@ -48,6 +48,18 @@ type report struct {
 	AgentVersion string      `json:"agent_version"`
 	ReportedAtNs int64       `json:"reported_at_ns"`
 	Components   []Component `json:"components"`
+	Inventory    *Inventory  `json:"inventory,omitempty"`
+}
+
+// Inventory is the host identity block carried on every status report (issue #579): the server refreshes the host's enrollment-time
+// identity from it, so a hostname rename or OS upgrade reaches the console without a re-enroll (the agent's version rides the report's
+// top-level agent_version field). The JSON tags match the server's api.Inventory exactly. Fields whose source was unavailable are sent
+// empty; the server preserves its previously stored value for an empty field.
+type Inventory struct {
+	Hostname  string `json:"hostname"`
+	OSName    string `json:"os_name"`
+	OSVersion string `json:"os_version"`
+	OSBuild   string `json:"os_build"`
 }
 
 // componentState is the registry's mutable per-component record. everConnected distinguishes a component that has never established a

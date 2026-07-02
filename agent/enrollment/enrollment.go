@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/agent/hostid"
+	"github.com/fleetdm/edr/agent/hostinfo"
 )
 
 const (
@@ -643,7 +644,13 @@ func hostname() string {
 	return h
 }
 
+// osVersion reports the friendly OS product version (for example "26.4") for the enrollment payload, so a fresh enroll records the
+// same identity the status check-in refreshes (issue #579). Falls back to the Go platform token when the OS metadata source is
+// unavailable (a non-macOS dev or CI environment).
 func osVersion() string {
+	if v := hostinfo.Collect().OSVersion; v != "" {
+		return v
+	}
 	return runtime.GOOS
 }
 
