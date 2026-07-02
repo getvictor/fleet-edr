@@ -78,7 +78,9 @@ type Rule interface {
 	// attestation: the compile error is the gate.
 	Doc() Documentation
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
-	// mutate state. Returning an error skips the rule for this batch (logged at WARN); returning nil findings is the common case.
+	// mutate state. Returning an error skips the rule for this batch (logged at WARN), except an error wrapping
+	// ErrProcessNotYetMaterialized, which the engine propagates so the processor retries the whole batch. Returning nil findings is
+	// the common case.
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 	// SupportedExclusionMatchTypes returns the exclusion match types this rule consults at evaluation time, i.e. the match types it
 	// passes to the ExclusionResolver. It returns no match types (nil or an empty slice, treated alike) for a rule that consults no
@@ -87,6 +89,16 @@ type Rule interface {
 	// asserts a rule never queries a match type outside this set.
 	SupportedExclusionMatchTypes() []ExclusionMatchType
 }
+
+// ErrProcessNotYetMaterialized signals that rule evaluation saw an event whose own (subject) process row has not been written by
+// the graph builder yet. Since intra-replica processor concurrency (issue #535) two claim batches of the same host can be in flight
+// at once, so an event can be evaluated before the concurrent batch carrying its fork/exec commits; the same window exists across
+// replicas (ADR-0011). The engine treats an Evaluate error wrapping this sentinel as retryable, unlike ordinary rule failures
+// (which are logged and swallowed): it fails the batch so the processor nacks it and re-evaluates once the row lands. Alert dedup
+// makes the re-run idempotent. Rules raise it only while the event is younger than the materialization grace window, so an event
+// whose process genuinely never materializes (e.g. a pre-capture pid) degrades to the historical silent skip instead of retrying
+// forever.
+var ErrProcessNotYetMaterialized = errors.New("rules: subject process not yet materialized")
 
 // RuleMetadata is the per-rule descriptor the operator endpoints render. Used in two surfaces: GET /api/rules (the operator handler
 // maps the fields into a JSON-tagged ruleResponse struct, so the wire shape lives in rules/internal/operator and isn't on this

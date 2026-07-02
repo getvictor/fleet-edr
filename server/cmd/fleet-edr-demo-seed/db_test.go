@@ -79,7 +79,7 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 
 	c, err := s.counts(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, demoCounts{}, c)
+	assert.Equal(t, demoCounts{detectionRuleIDs: map[string]bool{}}, c)
 
 	seeded, err := s.alreadySeeded(ctx)
 	require.NoError(t, err)
@@ -95,6 +95,8 @@ func TestCountsAndAlreadySeeded(t *testing.T) {
 	assert.Equal(t, 1, c.processes)
 	assert.Equal(t, 2, c.detectionAlerts)
 	assert.Equal(t, 1, c.appControlAlerts)
+	assert.Equal(t, map[string]bool{"sudoers_tamper": true, keychainRuleID: true}, c.detectionRuleIDs,
+		"per-rule fired set feeds verify's per-ExpectRule predicate")
 
 	seeded, err = s.alreadySeeded(ctx)
 	require.NoError(t, err)
@@ -178,16 +180,20 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	// run the real processor, so weaveAttack's waitForProcess + verify need their rows seeded directly).
 	acHost, acPID := appControlTarget(t)
 	insertProcess(t, db, acHost, acPID)
-	// A detection + an app-control alert so verify's predicate is satisfied. No keychain alert, so alreadySeeded stays false and
-	// the full replay path runs.
-	insertAlert(t, db, "HOST-SEED", "sudoers_tamper", "detection", "high")
+	// One detection alert per woven attack's expected rule + an app-control alert, so verify's per-rule predicate is satisfied.
+	// The keychain alert is inserted by the loop, so alreadySeeded would normally short-circuit the replay; force runs it anyway.
+	for _, rule := range expectedDetectionRules() {
+		insertAlert(t, db, "HOST-SEED", rule, "detection", "high")
+	}
 	insertAlert(t, db, acHost, "demo_blocklist_binary", "application_control", "high")
 
 	var enrollCalls atomic.Int32
 	ts := demoServer(t, &enrollCalls)
 	defer ts.Close()
 
-	s := newSeeder(runTestConfig(ts.URL), db, testHTTPClient(), discardLogger())
+	cfg := runTestConfig(ts.URL)
+	cfg.force = true
+	s := newSeeder(cfg, db, testHTTPClient(), discardLogger())
 	require.NoError(t, s.run(ctx))
 
 	assert.Equal(t, len(hostManifest), int(enrollCalls.Load()),

@@ -106,9 +106,9 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 		return nil, nil
 	}
 
-	proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 	if err != nil {
-		return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
+		return nil, err
 	}
 	if proc == nil {
 		return nil, nil

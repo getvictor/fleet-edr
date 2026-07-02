@@ -102,15 +102,13 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			continue
 		}
 
-		proc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+		proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 		if err != nil {
-			return nil, fmt.Errorf("get process pid %d: %w", p.PID, err)
+			return nil, err
 		}
 		if proc == nil {
-			// Defensive: the exec event landed but the process row isn't materialised (e.g. a race where ingestion
-			// delivered the exec before the builder's ProcessBatch ran). Skip this event: we have no process_id to link
-			// the finding to, and the engine won't re-feed this batch. In practice the processor loop always materialises
-			// before detection runs, so this branch is a defensive guard, not a dropped-alert path.
+			// The exec's own row never materialized within the grace window (a young miss raises the retryable
+			// ErrProcessNotYetMaterialized instead), so there is no process_id to link the finding to.
 			continue
 		}
 

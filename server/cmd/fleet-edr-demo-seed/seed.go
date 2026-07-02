@@ -397,9 +397,12 @@ func (s *seeder) waitForProcess(ctx context.Context, hostID string, pid int) err
 	})
 }
 
-// verify polls until the processor has materialised a process graph, at least one detection alert, and at least one app-control
-// alert, or verifyTimeout elapses.
+// verify polls until the processor has materialised a process graph, a fired alert for EVERY woven attack's expected rule, and at
+// least one app-control alert, or verifyTimeout elapses. Per rule rather than "any detection alert": a processing race can drop
+// exactly one rule's alert while the rest fire (the 2026-07-02 nightly lost only sudoers_tamper), and an any-alert predicate lets
+// the seeder exit 0 on that partial state, deferring the failure to the Playwright smoke where it is much harder to debug.
 func (s *seeder) verify(ctx context.Context) error {
+	expected := expectedDetectionRules()
 	var last demoCounts
 	err := s.poll(ctx, s.cfg.verifyTimeout, func() (bool, error) {
 		c, err := s.counts(ctx)
@@ -407,15 +410,40 @@ func (s *seeder) verify(ctx context.Context) error {
 			return false, err
 		}
 		last = c
-		s.logger.DebugContext(ctx, "verify counts",
-			"processes", c.processes, "detection_alerts", c.detectionAlerts, "app_control_alerts", c.appControlAlerts)
-		return c.processes > 0 && c.detectionAlerts > 0 && c.appControlAlerts > 0, nil
+		s.logger.DebugContext(ctx, "verify counts", "processes", c.processes,
+			"detection_alerts", c.detectionAlerts, "app_control_alerts", c.appControlAlerts,
+			"missing_rules", missingRules(expected, c.detectionRuleIDs))
+		return c.processes > 0 && c.appControlAlerts > 0 && len(missingRules(expected, c.detectionRuleIDs)) == 0, nil
 	})
 	if err != nil {
-		return fmt.Errorf("%w (processes=%d detection_alerts=%d app_control_alerts=%d)",
-			err, last.processes, last.detectionAlerts, last.appControlAlerts)
+		return fmt.Errorf("%w (processes=%d detection_alerts=%d app_control_alerts=%d missing_rules=%v)",
+			err, last.processes, last.detectionAlerts, last.appControlAlerts, missingRules(expected, last.detectionRuleIDs))
 	}
 	return nil
+}
+
+// expectedDetectionRules returns the catalog rule ids the woven attacks are expected to trip, in manifest order.
+func expectedDetectionRules() []string {
+	var rules []string
+	for _, h := range hostManifest {
+		for _, atk := range h.Attacks {
+			if atk.Kind == kindAttack && atk.ExpectRule != "" {
+				rules = append(rules, atk.ExpectRule)
+			}
+		}
+	}
+	return rules
+}
+
+// missingRules returns the expected rule ids that have no fired alert yet, preserving expected order for a stable error message.
+func missingRules(expected []string, fired map[string]bool) []string {
+	var missing []string
+	for _, r := range expected {
+		if !fired[r] {
+			missing = append(missing, r)
+		}
+	}
+	return missing
 }
 
 // demoCounts is the materialised-data tally verify checks.
@@ -423,6 +451,8 @@ type demoCounts struct {
 	processes        int
 	detectionAlerts  int
 	appControlAlerts int
+	// detectionRuleIDs is the set of rule ids with at least one detection-source alert, so verify can assert per expected rule.
+	detectionRuleIDs map[string]bool
 }
 
 // counts reads the current process + alert tallies from the database.
@@ -438,6 +468,22 @@ func (s *seeder) counts(ctx context.Context) (demoCounts, error) {
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM alerts WHERE source = 'application_control'`).Scan(&c.appControlAlerts); err != nil {
 		return c, fmt.Errorf("count app-control alerts: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT rule_id FROM alerts WHERE source = 'detection'`)
+	if err != nil {
+		return c, fmt.Errorf("list fired detection rules: %w", err)
+	}
+	defer rows.Close()
+	c.detectionRuleIDs = make(map[string]bool)
+	for rows.Next() {
+		var ruleID string
+		if err := rows.Scan(&ruleID); err != nil {
+			return c, fmt.Errorf("scan fired detection rule: %w", err)
+		}
+		c.detectionRuleIDs[ruleID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return c, fmt.Errorf("iterate fired detection rules: %w", err)
 	}
 	return c, nil
 }

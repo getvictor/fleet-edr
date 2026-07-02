@@ -186,13 +186,13 @@ func (r *OsascriptNetworkExec) evalEvent(
 		return nil, 0, nil
 	}
 
-	tempExecProc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	tempExecProc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("get temp-exec pid %d: %w", p.PID, err)
+		return nil, 0, err
 	}
 	if tempExecProc == nil {
-		// Defensive: race against materialisation. Same shape as
-		// credential_keychain_dump and friends.
+		// The temp-exec's own row never materialized within the grace window (a young miss raises the retryable
+		// ErrProcessNotYetMaterialized instead). Same shape as credential_keychain_dump and friends.
 		return nil, 0, nil
 	}
 

@@ -226,9 +226,9 @@ func (r *SuspiciousExec) evalExec(
 
 	// We need the temp-exec process record either way: for the finding's
 	// ProcessID link, and (in the arm-2 case) to walk its re-exec chain.
-	tempProc, err := s.GetProcessByPID(ctx, evt.HostID, p.PID, evt.TimestampNs)
+	tempProc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("get temp-exec pid %d: %w", p.PID, err)
+		return nil, 0, err
 	}
 	if tempProc == nil {
 		return nil, 0, nil

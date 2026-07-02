@@ -11,6 +11,8 @@ import (
 type dbExecQuerier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	// QueryContext lets verify list the distinct fired detection rule ids (a multi-row read, unlike the count scalars above).
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	// BeginTx lets refreshTimestamps slide every replayed column atomically: a partial shift would desync the
 	// device-vs-ingest and event-vs-alert ordering the detail/correlation views depend on.
 	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
