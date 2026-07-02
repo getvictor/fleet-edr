@@ -4,6 +4,7 @@ import { listHosts } from "../api";
 import type { HostSummary } from "../types";
 import { MILLISECONDS_PER_MINUTE, NANOSECONDS_PER_MILLISECOND } from "../constants";
 import { formatRelativeNs } from "../time";
+import { formatPlatform } from "../platform";
 import { Table, EmptyState } from "./ui/Table";
 import { StatCard, SummaryStrip } from "./ui/StatCard";
 import { HealthBadge } from "./ui/HealthBadge";
@@ -60,6 +61,7 @@ export function HostList() {
             <thead>
               <tr>
                 <th>Host</th>
+                <th>Platform</th>
                 <th>Status</th>
                 <th>Health</th>
                 <th className="host-list__events-col">Events</th>
@@ -95,6 +97,7 @@ export function HostList() {
                         <div className="host-list__hostname">{h.host_id}</div>
                       )}
                     </td>
+                    <td>{formatPlatform(h.platform)}</td>
                     <td>
                       <span className={pillClass}>{rowOnline ? "online" : "offline"}</span>
                     </td>

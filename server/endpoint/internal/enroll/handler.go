@@ -75,6 +75,7 @@ type enrollRequest struct {
 	Hostname     string `json:"hostname"`
 	OSVersion    string `json:"os_version"`
 	AgentVersion string `json:"agent_version"`
+	Platform     string `json:"platform"`
 }
 
 // String redacts the enroll secret. Guards against a future
@@ -82,7 +83,7 @@ type enrollRequest struct {
 func (r enrollRequest) String() string {
 	return "enrollRequest{hardware_uuid=" + r.HardwareUUID + " hostname=" + r.Hostname +
 		" os_version=" + r.OSVersion + " agent_version=" + r.AgentVersion +
-		" enroll_secret=REDACTED}"
+		" platform=" + r.Platform + " enroll_secret=REDACTED}"
 }
 
 type enrollResponse struct {
@@ -127,6 +128,13 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			attrEnrollReason, "bad_body", "missing_fields", true)
 		return
 	}
+	// platform is optional (a legacy agent omits it); a present value must be recognized. An absent value is normalized to darwin below,
+	// so every enrollment row carries a concrete platform (ADR-0018).
+	if req.Platform != "" && !api.IsValidPlatform(req.Platform) {
+		h.failf(ctx, w, http.StatusBadRequest, "bad_body", failInfo{IP: ip, HostID: req.HardwareUUID},
+			attrEnrollReason, "bad_body", "invalid_platform", true)
+		return
+	}
 
 	apiReq := api.EnrollRequest{
 		EnrollSecret: req.EnrollSecret,
@@ -134,6 +142,7 @@ func (h *Handler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		Hostname:     req.Hostname,
 		OSVersion:    req.OSVersion,
 		AgentVersion: req.AgentVersion,
+		Platform:     api.NormalizePlatform(req.Platform),
 	}
 	res, err := h.svc.Enroll(ctx, apiReq, ip)
 	switch {

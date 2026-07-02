@@ -114,6 +114,7 @@ func (s *service) Enroll(ctx context.Context, req api.EnrollRequest, sourceIP st
 		Hostname:     req.Hostname,
 		AgentVersion: req.AgentVersion,
 		OSVersion:    req.OSVersion,
+		Platform:     req.Platform,
 		SourceIP:     sourceIP,
 	})
 	if err != nil {
@@ -325,6 +326,7 @@ func toAPIEnrollment(r mysql.Enrollment) api.Enrollment {
 		Hostname:     r.Hostname,
 		AgentVersion: r.AgentVersion,
 		OSVersion:    r.OSVersion,
+		Platform:     r.Platform,
 		SourceIP:     r.SourceIP,
 		EnrolledAt:   r.EnrolledAt,
 		ExpiresAt:    r.ExpiresAt,

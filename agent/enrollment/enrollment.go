@@ -346,6 +346,10 @@ func (p *provider) enroll(ctx context.Context) error {
 		"hostname":      hostname(),
 		"os_version":    osVersion(),
 		"agent_version": p.opts.AgentVersion,
+		// platform is the agent's operating system, one of the server's Platform* values. It matches runtime.GOOS (the same source
+		// osVersion() reports today) and lets the server tag the host and scope detection rules by platform (ADR-0018). Distinct from
+		// os_version, which stays GOOS-valued for now; a real OS version string is a separate follow-up.
+		"platform": runtime.GOOS,
 	}
 	body, _ := json.Marshal(payload)
 

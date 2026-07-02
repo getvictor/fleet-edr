@@ -65,6 +65,39 @@ func fakeEnrollServer(t *testing.T, secret, wantToken string, hits *atomic.Int64
 // post-conditions that the algorithm is required to produce. The day-two half is the second Ensure
 // call: same TokenFile path, NO EnrollSecret in opts; the function loads the persisted token without
 // re-hitting the server, and tp2.HostID/tp2.Token equal the first-boot values.
+// spec:agent-enrollment/enrollment-reports-the-agent-platform/the-enrollment-request-includes-the-agent-platform
+//
+// The agent stamps its platform (runtime.GOOS) on the enroll payload so the server can tag the host and scope detection rules by
+// platform (ADR-0018). Distinct from os_version, which the agent also sends as runtime.GOOS today.
+func TestEnsure_SendsPlatform(t *testing.T) {
+	t.Parallel()
+	var gotPlatform atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		gotPlatform.Store(body["platform"])
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"host_id":     body["hardware_uuid"],
+			"host_token":  "tok-abcdefghijklmnopqrstuvwxyz0123456789012",
+			"enrolled_at": "2026-07-02T00:00:00Z",
+		})
+	}))
+	defer srv.Close()
+
+	_, err := Ensure(t.Context(), Options{
+		ServerURL:      srv.URL,
+		EnrollSecret:   "secret",
+		TokenFile:      filepath.Join(t.TempDir(), "enrolled.plist"),
+		HostIDOverride: testUUID,
+		AgentVersion:   "0.0.1-test",
+		AllowInsecure:  true,
+		Logger:         slog.Default(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, runtime.GOOS, gotPlatform.Load(), "enroll payload carries the agent platform")
+}
+
 func TestEnsure_FirstBootEnrolls(t *testing.T) {
 	t.Parallel()
 	srv := fakeEnrollServer(t, "secret", "tok-abcdefghijklmnopqrstuvwxyz0123456789012", nil)
