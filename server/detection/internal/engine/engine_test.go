@@ -21,6 +21,12 @@ import (
 type stubRule struct {
 	id         string
 	techniques []string
+	// platforms overrides the rule's target platforms; nil defaults to darwin so existing tests behave as before the platform-scoping
+	// change. received captures the events the most recent Evaluate saw and calls counts invocations, so the scoping test can assert
+	// what a rule was (or was not) handed.
+	platforms []rulesapi.Platform
+	received  []api.Event
+	calls     int
 }
 
 func (r *stubRule) ID() string           { return r.id }
@@ -32,10 +38,18 @@ func (r *stubRule) Doc() rulesapi.Documentation {
 		Severity: rulesapi.SeverityHigh,
 	}
 }
-func (r *stubRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+func (r *stubRule) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	r.calls++
+	r.received = events
 	return nil, nil
 }
 func (r *stubRule) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r *stubRule) Platforms() []rulesapi.Platform {
+	if r.platforms == nil {
+		return []rulesapi.Platform{rulesapi.PlatformDarwin}
+	}
+	return r.platforms
+}
 
 func TestEngine_RegisterAccumulates(t *testing.T) {
 	t.Parallel()
@@ -69,6 +83,51 @@ func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
 type stubProvider struct{ rules []rulesapi.Rule }
 
 func (s stubProvider) ActiveRules() []rulesapi.Rule { return s.rules }
+
+func eventIDs(events []api.Event) []string {
+	ids := make([]string, len(events))
+	for i := range events {
+		ids[i] = events[i].EventID
+	}
+	return ids
+}
+
+// spec:server-detection-rules-engine/platform-scoped-rule-evaluation/a-darwin-only-rule-does-not-see-windows-events
+// spec:server-detection-rules-engine/platform-scoped-rule-evaluation/a-mixed-platform-batch-is-filtered-per-rule
+// spec:server-detection-rules-engine/platform-scoped-rule-evaluation/an-event-without-a-platform-is-evaluated-as-darwin
+//
+// The engine hands each rule only the events whose platform is in the rule's declared set (ADR-0018). A darwin rule and a windows rule
+// evaluating one mixed batch each see only their platform's events, and an event carrying no platform is scoped as darwin. Stubs return
+// no findings, so persistFinding is never reached and a nil store is safe; the assertions read each stub's captured events + call count.
+func TestEngine_Evaluate_ScopesEventsByPlatform(t *testing.T) {
+	t.Parallel()
+	darwinRule := &stubRule{id: "darwin-rule", platforms: []rulesapi.Platform{rulesapi.PlatformDarwin}}
+	windowsRule := &stubRule{id: "windows-rule", platforms: []rulesapi.Platform{rulesapi.PlatformWindows}}
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{darwinRule, windowsRule}})
+
+	batch := []api.Event{
+		{EventID: "d", HostID: "h", TimestampNs: 1, EventType: "exec", Platform: "darwin", Payload: []byte("{}")},
+		{EventID: "w", HostID: "h", TimestampNs: 2, EventType: "exec", Platform: "windows", Payload: []byte("{}")},
+		{EventID: "legacy", HostID: "h", TimestampNs: 3, EventType: "exec", Payload: []byte("{}")}, // no platform -> darwin
+	}
+	require.NoError(t, e.Evaluate(context.Background(), batch))
+
+	require.Equal(t, 1, darwinRule.calls)
+	assert.ElementsMatch(t, []string{"d", "legacy"}, eventIDs(darwinRule.received),
+		"the darwin rule sees the darwin event and the platform-less event normalized to darwin, not the windows event")
+	require.Equal(t, 1, windowsRule.calls)
+	assert.Equal(t, []string{"w"}, eventIDs(windowsRule.received), "the windows rule sees only the windows event")
+
+	// A windows-only rule against an all-darwin batch has no matching events, so the engine skips it entirely (Evaluate never called).
+	winOnly := &stubRule{id: "win-only", platforms: []rulesapi.Platform{rulesapi.PlatformWindows}}
+	e2 := New(nil, nil)
+	e2.LoadActive(stubProvider{rules: []rulesapi.Rule{winOnly}})
+	require.NoError(t, e2.Evaluate(context.Background(), []api.Event{
+		{EventID: "d", HostID: "h", TimestampNs: 1, EventType: "exec", Platform: "darwin", Payload: []byte("{}")},
+	}))
+	assert.Zero(t, winOnly.calls, "a rule with no matching-platform events in the batch is not evaluated")
+}
 
 // spec:observability-instrumentation/trace-propagation-through-the-request-pipeline/detection-spans-carry-rule-context
 //
@@ -138,6 +197,11 @@ func (r *failingRule) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.Grap
 func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
 	t.Parallel()
 
+	// A rule is only evaluated when the batch has an event for its platform (ADR-0018), so these cases pass one darwin-scoped event
+	// (no platform normalizes to darwin, matching the default-darwin stub) rather than a nil batch: with nil, platform scoping would
+	// skip the rule and its error would never be produced.
+	batch := []api.Event{{EventID: "e", HostID: "h", TimestampNs: 1, EventType: "exec", Payload: []byte("{}")}}
+
 	t.Run("not-yet-materialized error fails the batch", func(t *testing.T) {
 		t.Parallel()
 		e := New(nil, nil)
@@ -145,7 +209,7 @@ func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
 			stubRule: stubRule{id: "racy-rule"},
 			err:      fmt.Errorf("event x references pid 7: %w", rulesapi.ErrProcessNotYetMaterialized),
 		})
-		err := e.Evaluate(t.Context(), nil)
+		err := e.Evaluate(t.Context(), batch)
 		require.ErrorIs(t, err, rulesapi.ErrProcessNotYetMaterialized,
 			"the sentinel must reach the processor so the batch is nacked and re-evaluated")
 	})
@@ -154,7 +218,7 @@ func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
 		t.Parallel()
 		e := New(nil, nil)
 		e.Register(&failingRule{stubRule: stubRule{id: "buggy-rule"}, err: errors.New("boom")})
-		require.NoError(t, e.Evaluate(t.Context(), nil),
+		require.NoError(t, e.Evaluate(t.Context(), batch),
 			"a non-retryable rule failure keeps per-rule isolation: logged, not batch-fatal")
 	})
 }

@@ -77,6 +77,7 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 			ID:         r.ID(),
 			Techniques: r.Techniques(),
 			Doc:        r.Doc(),
+			Platforms:  r.Platforms(),
 		})
 	}
 	return out
@@ -120,7 +121,14 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal.
 	span.SetAttributes(attribute.Int("alert_count", 0))
 
-	findings, err := rule.Evaluate(ctx, live, e.store)
+	// Scope the batch to the rule's target platforms (ADR-0018): a macOS-only rule never sees a Windows event. With nothing left after
+	// scoping there is nothing to evaluate, so skip the rule with alert_count=0 already stamped.
+	scoped := platformScopedEvents(rule.Platforms(), live)
+	if len(scoped) == 0 {
+		return nil
+	}
+
+	findings, err := rule.Evaluate(ctx, scoped, e.store)
 	if err != nil {
 		span.RecordError(err)
 		if errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {

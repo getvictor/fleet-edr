@@ -72,6 +72,9 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		// (issue #520). Always a JSON array (never null) so the UI can iterate without a nil guard: a rule that consults no exclusions
 		// serializes []. Additive field; the existing consumers (RuleDetail.tsx, gen-rule-docs) ignore it.
 		SupportedExclusionMatchTypes []api.ExclusionMatchType `json:"supported_exclusion_match_types"`
+		// Platforms lists the operating systems the rule applies to (ADR-0018). Always a JSON array (never null) so the UI can iterate
+		// without a nil guard. Additive field; existing consumers ignore it.
+		Platforms []api.Platform `json:"platforms"`
 	}
 	rules := h.svc.List()
 	out := make([]ruleResponse, 0, len(rules))
@@ -80,11 +83,16 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		if matchTypes == nil {
 			matchTypes = []api.ExclusionMatchType{}
 		}
+		platforms := rm.Platforms
+		if platforms == nil {
+			platforms = []api.Platform{}
+		}
 		out = append(out, ruleResponse{
 			ID:                           rm.ID,
 			Techniques:                   rm.Techniques,
 			Doc:                          rm.Doc,
 			SupportedExclusionMatchTypes: matchTypes,
+			Platforms:                    platforms,
 		})
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})
