@@ -100,6 +100,32 @@ func TestHandleIngest_FanOut(t *testing.T) {
 		assert.Equal(t, "e-fork", archive.inserted[0][0].EventID)
 	})
 
+	t.Run("spec:server-event-ingestion/platform-tagged-event-envelope/platform-survives-the-queue-to-rule-evaluation", func(t *testing.T) {
+		t.Parallel()
+		archive := &fakeEventArchive{}
+		queue := &fakeEventLog{}
+		h := New(nil, nil, BuildInfo{}, queue, archive)
+
+		// A windows event and a legacy event with no platform. The engine claims from the queue, so the platform the queue receives is
+		// the platform rule evaluation sees: the windows value passes through and the absent one is normalized to darwin at intake.
+		const platformBody = `[` +
+			`{"event_id":"e-win","host_id":"host-a","timestamp_ns":1000,"event_type":"exec","platform":"windows","payload":{}},` +
+			`{"event_id":"e-legacy","host_id":"host-a","timestamp_ns":1001,"event_type":"exec","payload":{}}` +
+			`]`
+		// Fail the queue append so the store (host-summary) write is never reached, but only after the queue captured the events.
+		queue.appendErr = errors.New("stop before the store write")
+		rec := postBatch(t, h, platformBody)
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
+		require.Len(t, queue.appended, 1)
+		require.Len(t, queue.appended[0], 2)
+		byID := map[string]string{
+			queue.appended[0][0].EventID: queue.appended[0][0].Platform,
+			queue.appended[0][1].EventID: queue.appended[0][1].Platform,
+		}
+		assert.Equal(t, "windows", byID["e-win"], "a windows event reaches the queue tagged windows")
+		assert.Equal(t, api.PlatformDarwin, byID["e-legacy"], "an event with no platform is normalized to darwin before the queue")
+	})
+
 	t.Run("ingested_at_ns is server-stamped, not agent-controlled", func(t *testing.T) {
 		t.Parallel()
 		archive := &fakeEventArchive{}

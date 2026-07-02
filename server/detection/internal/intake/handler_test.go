@@ -74,6 +74,57 @@ func TestParseAndValidateIngestBody_ContentNeutral(t *testing.T) {
 	})
 }
 
+// TestParseAndValidateIngestBody_Platform pins the platform-aware event contract at the ingest boundary (ADR-0018): a recognized
+// platform is accepted as-is, an absent platform is normalized to darwin (the legacy-agent default), and an unrecognized non-empty
+// platform is rejected with invalid_platform_at_<i> before it can reach a store.
+func TestParseAndValidateIngestBody_Platform(t *testing.T) {
+	t.Parallel()
+	const host = "host-a"
+
+	t.Run("spec:server-event-ingestion/platform-tagged-event-envelope/an-event-carrying-a-valid-platform-is-accepted", func(t *testing.T) {
+		t.Parallel()
+		body := `[{"event_id":"e1","host_id":"host-a","timestamp_ns":1,"event_type":"exec","platform":"windows","payload":{}}]`
+		events, status, errCode := ParseAndValidateIngestBody([]byte(body), host)
+		require.Equal(t, http.StatusOK, status)
+		require.Empty(t, errCode)
+		require.Len(t, events, 1)
+		assert.Equal(t, "windows", events[0].Platform)
+	})
+
+	t.Run("spec:server-event-ingestion/platform-tagged-event-envelope/an-event-without-a-platform-is-normalized-to-darwin", func(t *testing.T) {
+		t.Parallel()
+		body := `[{"event_id":"e1","host_id":"host-a","timestamp_ns":1,"event_type":"exec","payload":{}}]`
+		events, status, errCode := ParseAndValidateIngestBody([]byte(body), host)
+		require.Equal(t, http.StatusOK, status)
+		require.Empty(t, errCode)
+		require.Len(t, events, 1)
+		assert.Equal(t, api.PlatformDarwin, events[0].Platform, "absent platform normalizes to darwin")
+	})
+
+	t.Run("spec:server-event-ingestion/platform-tagged-event-envelope/an-event-with-an-unknown-platform-is-rejected", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name string
+			body string
+			code string
+		}{
+			{"unknown value", `[{"event_id":"e1","host_id":"host-a","timestamp_ns":1,"event_type":"exec","platform":"beos","payload":{}}]`, "invalid_platform_at_0"},
+			{"unknown at second index", `[` +
+				`{"event_id":"e1","host_id":"host-a","timestamp_ns":1,"event_type":"exec","platform":"darwin","payload":{}},` +
+				`{"event_id":"e2","host_id":"host-a","timestamp_ns":2,"event_type":"exec","platform":"solaris","payload":{}}]`, "invalid_platform_at_1"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				events, status, errCode := ParseAndValidateIngestBody([]byte(tc.body), host)
+				assert.Equal(t, http.StatusBadRequest, status)
+				assert.Equal(t, tc.code, errCode)
+				assert.Nil(t, events)
+			})
+		}
+	})
+}
+
 // TestPartitionHeartbeats pins the ingest-time split that keeps snapshot_heartbeat events out of the persisted set while still
 // surfacing their freshness bump (issue #408): the events to store exclude every heartbeat, and the returned bumps carry the PID +
 // timestamp of each well-formed heartbeat. A heartbeat with an unparseable payload or a zero PID is dropped without a bump and

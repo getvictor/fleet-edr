@@ -104,6 +104,7 @@ func archiveEvent(id, host, etype string, ts int64, pid int) visibilityapi.Event
 		TimestampNs:  ts,
 		IngestedAtNs: ts + 1,
 		EventType:    etype,
+		Platform:     "darwin",
 		Payload:      json.RawMessage(`{"pid":` + strconv.Itoa(pid) + `}`),
 	}
 }
@@ -130,6 +131,7 @@ func TestEventArchive_InsertAndCorrelationRead(t *testing.T) {
 	}
 	assert.Equal(t, []string{"nc1", "dns1"}, ids, "only this pid's network_connect + dns_query, ordered by timestamp")
 	assert.JSONEq(t, `{"pid":42}`, string(got[0].Payload), "payload round-trips from the archive")
+	assert.Equal(t, "darwin", got[0].Platform, "platform round-trips from the archive")
 }
 
 func TestEventArchive_ErrorsOnClosedConnection(t *testing.T) {
@@ -174,6 +176,7 @@ func TestEventArchive_EventsByIDs(t *testing.T) {
 	ids := []string{got[0].EventID, got[1].EventID}
 	assert.Equal(t, []string{"ev-a", "ev-b"}, ids, "ordered by (timestamp_ns, event_id) regardless of request order")
 	assert.Equal(t, "network_connect", got[0].EventType)
+	assert.Equal(t, "darwin", got[0].Platform, "platform round-trips from the archive via EventsByIDs")
 	assert.JSONEq(t, `{"pid":1}`, string(got[0].Payload), "payload round-trips from the archive")
 
 	empty, err := arch.EventsByIDs(ctx, nil)

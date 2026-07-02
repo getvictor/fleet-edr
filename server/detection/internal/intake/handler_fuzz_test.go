@@ -21,7 +21,7 @@ import (
 //     call in a defer/recover sanity net so a panic surfaces as a test failure with the offending input attached.
 //  2. Contract: every (status, errCode) tuple is one of the documented set:
 //     {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
-//     (413, "too_many_events")}.
+//     (400, "invalid_platform_at_<i>"), (413, "too_many_events")}.
 //     Anything else (an undocumented status, a stray errCode, a 200 returned for a body that obviously isn't a well-formed
 //     []api.Event) is a finding. The 413 body-byte cap is enforced upstream (readBodyWithCap) and the 500 store-insert path
 //     is downstream of this function; the fuzz keeps its blast radius to the parse + validate surface so the harness needs
@@ -106,6 +106,11 @@ func assertOKContract(t *testing.T, body []byte, events []api.Event, errCode str
 			t.Fatalf("status 200 returned event[%d] with host_id %q != pinned %q for body %q",
 				i, e.HostID, pinnedHostID, body)
 		}
+		// A 200 event always carries a concrete, valid platform: intake rejects an unknown value and normalizes an absent one to
+		// darwin, so nothing invalid or empty ever reaches a store.
+		if !api.IsValidPlatform(e.Platform) {
+			t.Fatalf("status 200 returned event[%d] with invalid platform %q for body %q", i, e.Platform, body)
+		}
 	}
 	if len(events) > MaxIngestEventsPerRequest {
 		t.Fatalf("status 200 returned %d events; exceeds MaxIngestEventsPerRequest=%d for body %q",
@@ -120,9 +125,9 @@ func assertOKContract(t *testing.T, body []byte, events []api.Event, errCode str
 	}
 }
 
-// assertBadRequestErrCode pins the 400-error-code vocabulary: only invalid_json, host_id_mismatch, and missing_fields_at_<i>
-// are acceptable codes; a stray errCode is a finding. The three accepted codes have explicit branches; the default branch
-// fails the test on anything else (Copilot #279: the prior phrasing implied 4 documented codes; there are 3 + a guard).
+// assertBadRequestErrCode pins the 400-error-code vocabulary: only invalid_json, host_id_mismatch, missing_fields_at_<i>, and
+// invalid_platform_at_<i> are acceptable codes; a stray errCode is a finding. The accepted codes have explicit branches; the default
+// branch fails the test on anything else.
 func assertBadRequestErrCode(t *testing.T, body []byte, errCode string, pinnedHostID string) {
 	t.Helper()
 	switch {
@@ -134,6 +139,8 @@ func assertBadRequestErrCode(t *testing.T, body []byte, errCode string, pinnedHo
 		_ = pinnedHostID
 	case strings.HasPrefix(errCode, "missing_fields_at_"):
 		// Implies an event at some index missed one of {event_id, host_id, event_type, timestamp_ns}.
+	case strings.HasPrefix(errCode, "invalid_platform_at_"):
+		// Implies an event at some index carried a non-empty platform that is not one of {darwin, windows, linux}.
 	default:
 		t.Fatalf("status 400 returned with undocumented errCode %q for body %q", errCode, body)
 	}
@@ -169,6 +176,11 @@ func seedCorpus(f *testing.F) {
 	f.Add([]byte(`[{"event_id":"e1"}]`))                                                                   // only event_id
 	f.Add([]byte(`[{"event_id":"e1","host_id":"fuzz-pinned-host"}]`))                                      // missing event_type + timestamp_ns
 	f.Add([]byte(`[{"event_id":"e1","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":0}]`)) // timestamp_ns zero is a miss
+
+	// platform shapes. A recognized platform is accepted (200); an unrecognized non-empty platform is invalid_platform_at_<i>;
+	// an absent platform is normalized to darwin and accepted.
+	f.Add([]byte(`[{"event_id":"e1","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1,"platform":"windows","payload":{}}]`))
+	f.Add([]byte(`[{"event_id":"e1","host_id":"fuzz-pinned-host","event_type":"exec","timestamp_ns":1,"platform":"beos","payload":{}}]`))
 
 	// host_id_mismatch shapes.
 	f.Add([]byte(`[{"event_id":"e1","host_id":"other-host","event_type":"exec","timestamp_ns":1,"payload":{}}]`))
