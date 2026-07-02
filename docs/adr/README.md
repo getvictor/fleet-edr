@@ -40,6 +40,7 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0015](0015-clickhouse-visibility-store.md) | ClickHouse event store in a new `visibility` bounded context | Proposed |
 | [0016](0016-event-delivery-substrate.md) | Event delivery: database-backed work queue now, streaming substrate at scale | Accepted |
 | [0017](0017-unified-principal-model.md) | Unified principal model: one typed actor identity for users and service accounts | Proposed |
+| [0018](0018-windows-platform-strategy.md) | Windows platform strategy: phased Windows agent, platform-agnostic contract, driverless first | Proposed |
 
 ## Tooling
 
