@@ -76,7 +76,7 @@ describe("ProcessDetail metadata", () => {
           gid: 20,
           sha256: "abc123",
           cdhash: "d".repeat(40),
-          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 0, is_platform_binary: true },
+          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true },
           exec_time_ns: 20 * NS,
           exit_time_ns: 30 * NS,
           exit_code: 1,
@@ -103,6 +103,12 @@ describe("ProcessDetail metadata", () => {
     expect(screen.getByText("unsigned")).toBeInTheDocument();
   });
 
+  it("shows no verdict for a fork-only node (inherited image, matching the tooltip's rule)", () => {
+    render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
+    expect(screen.queryByText("unsigned")).not.toBeInTheDocument();
+    expect(screen.queryByText("Signing")).not.toBeInTheDocument();
+  });
+
   // spec:web-ui/process-detail-content/evidence-fields-copy-in-one-click
   it("offers one-click copy for every evidence field", () => {
     render(
@@ -112,7 +118,7 @@ describe("ProcessDetail metadata", () => {
           args: ["curl", "https://evil.example"],
           sha256: "abc123",
           cdhash: "d".repeat(40),
-          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 0, is_platform_binary: true },
+          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true },
         })}
         onClose={vi.fn()}
       />,

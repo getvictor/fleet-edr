@@ -22,6 +22,7 @@ import { Button } from "./ui/Button";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 import { deriveSigningVerdict, type SigningVerdictKind } from "../signing";
+import { formatCommandLine } from "../cmdline";
 import { Can } from "../permissions";
 import { PermissionAction } from "../permissions-core";
 import "./ProcessDetail.scss";
@@ -48,6 +49,7 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
 // signature at all, medium for ad-hoc), a verifiable Developer ID reads informational, and platform/signed are neutral facts.
 const VERDICT_BADGE: Record<SigningVerdictKind, BadgeVariant> = {
   unsigned: "high",
+  invalid: "high",
   "ad-hoc": "medium",
   "developer-id": "info",
   platform: "neutral",
@@ -208,8 +210,8 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
           <>
             <dt>Args</dt>
             <dd className="process-detail__break process-detail__copyable">
-              {node.args.join(" ")}
-              <CopyButton value={node.args.join(" ")} label="Copy command line" />
+              {formatCommandLine(node.args, node.path)}
+              <CopyButton value={formatCommandLine(node.args, node.path)} label="Copy command line" />
             </dd>
           </>
         )}
@@ -243,10 +245,16 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
             </dd>
           </>
         )}
-        <dt>Signing</dt>
-        <dd>
-          <Badge variant={VERDICT_BADGE[verdict.kind]}>{verdict.label}</Badge>
-        </dd>
+        {/* Fork-only nodes (no exec yet) run the parent's inherited image and carry no signature of their own; a verdict there
+            would be a false conviction, matching the tree tooltip's rule. */}
+        {node.exec_time_ns && (
+          <>
+            <dt>Signing</dt>
+            <dd>
+              <Badge variant={VERDICT_BADGE[verdict.kind]}>{verdict.label}</Badge>
+            </dd>
+          </>
+        )}
         {node.code_signing?.signing_id && (
           <>
             <dt>Signing ID</dt>

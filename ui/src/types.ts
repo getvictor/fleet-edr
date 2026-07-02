@@ -56,7 +56,9 @@ export interface HostHealth {
 // slightly imprecise. If exact ns precision is needed, switch to string
 // representation.
 // CodeSigning mirrors the wire's code_signing object (schema/events.json): the raw ESF identifiers plus the kernel CS_* flags
-// bitmask. The extension omits the whole block when both identifiers are absent, so a missing block means "unsigned".
+// bitmask. The extension omits the whole block when both identifiers are absent, so a missing block on an EXEC'D process means
+// "unsigned". A fork-only process (no exec yet) also has no block because it runs its parent's inherited image; that absence is not
+// an unsigned conviction, and verdict call sites must gate on exec_time_ns (see deriveSigningVerdict's callers).
 export interface CodeSigning {
   team_id: string;
   signing_id: string;

@@ -1,5 +1,6 @@
 import type { ProcessNode } from "../types";
 import { deriveSigningVerdict, isEvidenceMarked } from "../signing";
+import { formatCommandLine } from "../cmdline";
 
 // NodeTooltip is the hover content for a process node (issue #580): the conviction evidence an analyst reads while walking a chain,
 // without opening the detail panel. Built by a pure function so the enrolled/unsigned/aggregated shapes are testable without
@@ -18,7 +19,7 @@ export function buildNodeTooltip(p: ProcessNode): NodeTooltip {
   const verdict = p.exec_time_ns ? deriveSigningVerdict(p.code_signing) : undefined;
   return {
     title: basename(p.path) || `PID ${String(p.pid)}`,
-    commandLine: p.args && p.args.length > 0 ? p.args.join(" ") : p.path,
+    commandLine: formatCommandLine(p.args, p.path),
     verdictLabel: verdict?.label,
     marked: verdict !== undefined && isEvidenceMarked(verdict),
     // An aggregated node collapses identical-path siblings; the group key includes binary identity, so the representative's command
@@ -35,6 +36,7 @@ export function nodeEvidenceMarked(p: ProcessNode): boolean {
 }
 
 function basename(path: string): string {
-  const idx = path.lastIndexOf("/");
+  // Both separators: Windows hosts are landing (ADR-0018) and their paths use backslashes.
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return idx >= 0 ? path.slice(idx + 1) : path;
 }

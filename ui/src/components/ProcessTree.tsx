@@ -48,10 +48,11 @@ const TREE_MARGIN_PX = 40;
 const TREE_ZOOM_MIN = 0.2;
 const TREE_ZOOM_MAX = 3;
 const NODE_DOT_RADIUS_DEFAULT = 5;
-// Evidence marker + tooltip layout (issue #580): the amber ring's stroke width, and how far the hover card sits from the pointer so
-// it never occludes the node being read.
-const EVIDENCE_RING_WIDTH = 2.5;
+// Evidence tooltip layout (issue #580): how far the hover card sits from the pointer, and the room reserved so a card near the
+// right/bottom viewport edge clamps back into view instead of rendering off-screen (width tracks the card's 34rem max-width).
 const TOOLTIP_POINTER_OFFSET_PX = 14;
+const TOOLTIP_CLAMP_WIDTH_PX = 560;
+const TOOLTIP_CLAMP_HEIGHT_PX = 170;
 const NODE_DOT_RADIUS_ALERTED = 8;
 const CHEVRON_DX = -14;
 const CHEVRON_DY = 4;
@@ -634,7 +635,10 @@ export function ProcessTreeView() {
         <div className="process-tree__canvas">
           <svg ref={svgRef} />
           {hoverTip && (
-            <div className="process-tree__tooltip" role="tooltip" style={{ left: hoverTip.x + TOOLTIP_POINTER_OFFSET_PX, top: hoverTip.y + TOOLTIP_POINTER_OFFSET_PX }}>
+            <div className="process-tree__tooltip" role="tooltip" style={{
+                left: Math.min(hoverTip.x + TOOLTIP_POINTER_OFFSET_PX, window.innerWidth - TOOLTIP_CLAMP_WIDTH_PX),
+                top: Math.min(hoverTip.y + TOOLTIP_POINTER_OFFSET_PX, window.innerHeight - TOOLTIP_CLAMP_HEIGHT_PX),
+              }}>
               <div className="process-tree__tooltip-title">{hoverTip.tooltip.title}</div>
               {hoverTip.tooltip.groupNote && <div className="process-tree__tooltip-group">{hoverTip.tooltip.groupNote}</div>}
               <div className="process-tree__tooltip-cmdline">{hoverTip.tooltip.commandLine}</div>
@@ -870,7 +874,9 @@ function renderTree(
     .selectAll("g.node")
     .data(nodes.filter((n) => n.data.pid !== 0 || roots.length === 1))
     .join("g")
-    .attr("class", "node")
+    // node--evidence drives the amber ring via CSS (ProcessTree.scss) rather than presentation attributes, so the search-match
+    // ring's class rule cannot silently override it (CSS rules beat SVG presentation attributes).
+    .attr("class", (d) => (nodeEvidenceMarked(d.data.data) ? "node node--evidence" : "node"))
     .attr("transform", (d) => `translate(${String(d.y)},${String(d.x)})`)
     .style("cursor", "pointer")
     .on("click", (_, d) => {
@@ -906,11 +912,7 @@ function renderTree(
       if (p.aggregated) return p.aggregated.running_count > 0 ? "#009a7d" : "#8b8fa2";
       if (p.exit_time_ns) return "#8b8fa2";
       return "#009a7d";
-    })
-    // Evidence marker (issue #580): an amber ring ($ui-warning #ebbc43; D3 uses literal hex like the alert red above) on exec'd
-    // nodes whose signature is ad-hoc or absent. Stroke, not fill, so the alerted/exited/running fill semantics stay readable.
-    .attr("stroke", (d) => (nodeEvidenceMarked(d.data.data) ? "#ebbc43" : "none"))
-    .attr("stroke-width", (d) => (nodeEvidenceMarked(d.data.data) ? EVIDENCE_RING_WIDTH : 0));
+    });
 
   // Collapse/expand chevron. Sits in front of the dot. Only rendered when a node has
   // children in the underlying data OR has been collapsed (so we can expand it back).

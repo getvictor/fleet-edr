@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 
-import { CS_ADHOC, deriveSigningVerdict, isEvidenceMarked } from "./signing";
+import { CS_ADHOC, CS_VALID, deriveSigningVerdict, isEvidenceMarked } from "./signing";
 import type { CodeSigning } from "./types";
 
+// Default flags carry CS_VALID: every process that passed AMFI at exec has it, so fixtures model reality unless a case is
+// explicitly about an invalidated signature.
 function cs(overrides: Partial<CodeSigning>): CodeSigning {
-  return { team_id: "", signing_id: "", flags: 0, is_platform_binary: false, ...overrides };
+  return { team_id: "", signing_id: "", flags: CS_VALID, is_platform_binary: false, ...overrides };
 }
 
 // spec:web-ui/process-detail-content/verdict-distinguishes-the-signer-categories
@@ -12,8 +14,14 @@ describe("deriveSigningVerdict", () => {
   const cases: { name: string; input: CodeSigning | undefined; kind: string; label: string }[] = [
     { name: "no code-signing block is unsigned", input: undefined, kind: "unsigned", label: "unsigned" },
     {
+      name: "a cleared CS_VALID bit wins over the identifiers",
+      input: cs({ signing_id: "com.vendor.tool", team_id: "FDG8Q7N4CC", flags: 0 }),
+      kind: "invalid",
+      label: "invalid signature",
+    },
+    {
       name: "ad-hoc flag wins even with identifiers present",
-      input: cs({ signing_id: "local-build", team_id: "FDG8Q7N4CC", flags: CS_ADHOC | 0x100 }),
+      input: cs({ signing_id: "local-build", team_id: "FDG8Q7N4CC", flags: CS_VALID | CS_ADHOC | 0x100 }),
       kind: "ad-hoc",
       label: "ad-hoc signature",
     },
@@ -43,6 +51,12 @@ describe("deriveSigningVerdict", () => {
       kind: "signed",
       label: "signed",
     },
+    {
+      name: "a block with empty identifiers is unsigned, not signed",
+      input: cs({}),
+      kind: "unsigned",
+      label: "unsigned",
+    },
   ];
   it.each(cases)("$name", ({ input, kind, label }) => {
     const v = deriveSigningVerdict(input);
@@ -52,9 +66,10 @@ describe("deriveSigningVerdict", () => {
 });
 
 describe("isEvidenceMarked", () => {
-  it("marks unsigned and ad-hoc, nothing else", () => {
+  it("marks unsigned, ad-hoc, and invalid, nothing else", () => {
     expect(isEvidenceMarked(deriveSigningVerdict(undefined))).toBe(true);
-    expect(isEvidenceMarked(deriveSigningVerdict(cs({ flags: CS_ADHOC })))).toBe(true);
+    expect(isEvidenceMarked(deriveSigningVerdict(cs({ flags: CS_VALID | CS_ADHOC })))).toBe(true);
+    expect(isEvidenceMarked(deriveSigningVerdict(cs({ signing_id: "x", flags: 0 })))).toBe(true);
     expect(isEvidenceMarked(deriveSigningVerdict(cs({ team_id: "T" })))).toBe(false);
     expect(isEvidenceMarked(deriveSigningVerdict(cs({ is_platform_binary: true })))).toBe(false);
     expect(isEvidenceMarked(deriveSigningVerdict(cs({ signing_id: "x" })))).toBe(false);

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import { buildNodeTooltip, nodeEvidenceMarked } from "./node-tooltip";
 import type { ProcessNode } from "../types";
-import { CS_ADHOC } from "../signing";
+import { CS_ADHOC, CS_VALID } from "../signing";
 
 function node(overrides: Partial<ProcessNode>): ProcessNode {
   return {
@@ -23,7 +23,7 @@ describe("buildNodeTooltip", () => {
     const tip = buildNodeTooltip(
       node({
         args: ["/usr/local/bin/tool", "-ibck", "payload.zip"],
-        code_signing: { team_id: "FDG8Q7N4CC", signing_id: "com.vendor.tool", flags: 0, is_platform_binary: false },
+        code_signing: { team_id: "FDG8Q7N4CC", signing_id: "com.vendor.tool", flags: CS_VALID, is_platform_binary: false },
       }),
     );
     expect(tip.title).toBe("tool");
@@ -40,6 +40,13 @@ describe("buildNodeTooltip", () => {
     expect(tip.marked).toBe(true);
   });
 
+  it("never renders an empty command line and splits Windows paths on backslashes", () => {
+    const empty = buildNodeTooltip(node({ path: "", args: undefined }));
+    expect(empty.commandLine).toBe("(unknown)");
+    const win = buildNodeTooltip(node({ path: "C:\\Windows\\System32\\cmd.exe", args: undefined }));
+    expect(win.title).toBe("cmd.exe");
+  });
+
   it("renders no verdict for a fork-only node (inherited image, not a conviction)", () => {
     const tip = buildNodeTooltip(node({ exec_time_ns: undefined, code_signing: undefined }));
     expect(tip.verdictLabel).toBeUndefined();
@@ -51,7 +58,7 @@ describe("buildNodeTooltip", () => {
     const tip = buildNodeTooltip(
       node({
         args: ["/usr/bin/grep", "-r", "needle"],
-        code_signing: { team_id: "", signing_id: "com.apple.grep", flags: 0, is_platform_binary: true },
+        code_signing: { team_id: "", signing_id: "com.apple.grep", flags: CS_VALID, is_platform_binary: true },
         aggregated: { count: 1000, exited_count: 990, running_count: 10, first_fork_ns: 1, last_fork_ns: 2 },
       }),
     );
@@ -67,12 +74,12 @@ describe("nodeEvidenceMarked", () => {
     expect(nodeEvidenceMarked(node({ code_signing: undefined }))).toBe(true);
     expect(
       nodeEvidenceMarked(
-        node({ code_signing: { team_id: "", signing_id: "local", flags: CS_ADHOC, is_platform_binary: false } }),
+        node({ code_signing: { team_id: "", signing_id: "local", flags: CS_VALID | CS_ADHOC, is_platform_binary: false } }),
       ),
     ).toBe(true);
     expect(
       nodeEvidenceMarked(
-        node({ code_signing: { team_id: "", signing_id: "com.apple.zsh", flags: 0, is_platform_binary: true } }),
+        node({ code_signing: { team_id: "", signing_id: "com.apple.zsh", flags: CS_VALID, is_platform_binary: true } }),
       ),
     ).toBe(false);
     expect(nodeEvidenceMarked(node({ exec_time_ns: undefined, code_signing: undefined }))).toBe(false);
