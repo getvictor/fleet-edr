@@ -1006,8 +1006,8 @@ components:
         count: {type: integer, description: Total members in the group.}
         exited_count: {type: integer, description: Members with an observed or synthesized exit.}
         running_count: {type: integer, description: Members still running (no exit).}
-        first_fork_ns: {type: integer, format: int64, description: Earliest fork time in the group, ns since epoch.}
-        last_fork_ns: {type: integer, format: int64, description: Latest fork time in the group, ns since epoch.}
+        first_fork_ns: {type: integer, format: int64, description: "Earliest fork time in the group, ns since epoch."}
+        last_fork_ns: {type: integer, format: int64, description: "Latest fork time in the group, ns since epoch."}
         sample:
           type: array
           description: Capped, fork-ordered sample of the underlying members (never the whole group).
