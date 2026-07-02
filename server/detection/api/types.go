@@ -35,6 +35,21 @@ var (
 // visibilityapi.Event.
 type Event = visibilityapi.Event
 
+// Platform constants and helpers are defined in the visibility context (the canonical event owner, ADR-0015) and re-exported here so
+// detection code scopes rules and validates events without importing the visibility package directly, the same re-export pattern the
+// Severity constants use. NormalizePlatform maps an empty (legacy-agent) platform to PlatformDarwin.
+const (
+	PlatformDarwin  = visibilityapi.PlatformDarwin
+	PlatformWindows = visibilityapi.PlatformWindows
+	PlatformLinux   = visibilityapi.PlatformLinux
+)
+
+// IsValidPlatform reports whether platform is one of the recognized platform values.
+func IsValidPlatform(platform string) bool { return visibilityapi.IsValidPlatform(platform) }
+
+// NormalizePlatform maps an empty platform to PlatformDarwin and returns any other value unchanged.
+func NormalizePlatform(platform string) string { return visibilityapi.NormalizePlatform(platform) }
+
 // Process represents a materialized process record built from
 // fork/exec/exit events. Wire shape preserved from server/store.Process.
 type Process struct {

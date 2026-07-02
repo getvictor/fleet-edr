@@ -25,7 +25,7 @@ const (
 	deadlockMaxAttempts = 5
 	deadlockBackoffStep = 5 * time.Millisecond
 
-	// appendChunkRows caps a single multi-row INSERT at 500 events (6 placeholders each, well under MySQL's 65535-placeholder and
+	// appendChunkRows caps a single multi-row INSERT at 500 events (7 placeholders each, well under MySQL's 65535-placeholder and
 	// 4 MB max_allowed_packet ceilings).
 	appendChunkRows = 500
 
@@ -34,7 +34,7 @@ const (
 	// contract. Set well above the longest expected per-batch processing time so a live worker is never double-served.
 	claimLeaseNs = int64(5 * time.Minute)
 
-	insertPrefix = `INSERT IGNORE INTO event_queue (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) VALUES `
+	insertPrefix = `INSERT IGNORE INTO event_queue (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload) VALUES `
 )
 
 // Store is the MySQL-backed EventLog. It holds the shared *sqlx.DB pool cmd/main opens once via server/bootstrap.OpenDB; closing the
@@ -83,14 +83,14 @@ func (s *Store) appendOnce(ctx context.Context, events []api.Event) error {
 
 func appendArgs(chunk []api.Event) ([]string, []any, error) {
 	placeholders := make([]string, len(chunk))
-	args := make([]any, 0, len(chunk)*6)
+	args := make([]any, 0, len(chunk)*7)
 	for i := range chunk {
 		payloadBytes, err := json.Marshal(chunk[i].Payload)
 		if err != nil {
 			return nil, nil, fmt.Errorf("marshal payload for %s: %w", chunk[i].EventID, err)
 		}
-		placeholders[i] = "(?, ?, ?, ?, ?, ?)"
-		args = append(args, chunk[i].EventID, chunk[i].HostID, chunk[i].TimestampNs, chunk[i].IngestedAtNs, chunk[i].EventType, payloadBytes)
+		placeholders[i] = "(?, ?, ?, ?, ?, ?, ?)"
+		args = append(args, chunk[i].EventID, chunk[i].HostID, chunk[i].TimestampNs, chunk[i].IngestedAtNs, chunk[i].EventType, chunk[i].Platform, payloadBytes)
 	}
 	return placeholders, args, nil
 }
@@ -133,7 +133,7 @@ func (s *Store) claimOnce(ctx context.Context, limit int) ([]api.Event, error) {
 	cutoff := time.Now().UnixNano() - claimLeaseNs
 	var events []api.Event
 	err = tx.SelectContext(ctx, &events, `
-		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
+		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM event_queue
 		WHERE processed = 0 OR (processed = 2 AND claimed_at_ns < ?)
 		ORDER BY host_id, timestamp_ns

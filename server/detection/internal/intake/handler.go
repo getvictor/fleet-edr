@@ -31,10 +31,10 @@ const MaxIngestEventsPerRequest = 10_000
 // ParseAndValidateIngestBody is the parse + per-event validation half of POST /api/events, lifted out of handleIngest so the fuzz
 // harness can drive it without a full HTTP server + Detection store. Returns (events, http.StatusOK, "") on success, or
 // (4xx/5xx, errCode) on parse / validation failure. The error codes are the same stable set the HTTP handler emits:
-// "invalid_json", "missing_fields_at_<i>", "host_id_mismatch", "too_many_events". The body-byte cap (413 body_too_large) is
-// upstream of this function (in readBodyWithCap); the store-insert (5xx) is downstream. The fuzz contract is therefore: every
-// output MUST be one of {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
-// (413, "too_many_events")}; anything else is a finding.
+// "invalid_json", "missing_fields_at_<i>", "host_id_mismatch", "invalid_platform_at_<i>", "too_many_events". The body-byte cap
+// (413 body_too_large) is upstream of this function (in readBodyWithCap); the store-insert (5xx) is downstream. The fuzz contract is
+// therefore: every output MUST be one of {(200, ""), (400, "invalid_json"), (400, "missing_fields_at_<i>"), (400, "host_id_mismatch"),
+// (400, "invalid_platform_at_<i>"), (413, "too_many_events")}; anything else is a finding.
 //
 // too_many_events is 413 not 400 (Copilot #276). The agent's uploader classifies 400 as a generic clientError that goes
 // through the #253 quarantine path, so a misconfigured agent posting an over-cap batch would have every event in the batch
@@ -97,6 +97,12 @@ func streamDecodeEvents(dec *json.Decoder, pinnedHostID string) ([]api.Event, in
 		if e.HostID != pinnedHostID {
 			return nil, http.StatusBadRequest, "host_id_mismatch"
 		}
+		// Platform is optional on the wire. A non-empty value must be one of the recognized platforms; an absent value is normalized
+		// to darwin (the legacy-agent default, ADR-0018) so every stored and enqueued event carries a concrete platform for rule scoping.
+		if e.Platform != "" && !visibilityapi.IsValidPlatform(e.Platform) {
+			return nil, http.StatusBadRequest, "invalid_platform_at_" + strconv.Itoa(i)
+		}
+		e.Platform = visibilityapi.NormalizePlatform(e.Platform)
 		events = append(events, e)
 	}
 	return events, http.StatusOK, ""

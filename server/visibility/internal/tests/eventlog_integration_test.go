@@ -95,6 +95,32 @@ func TestEventLog_AppendClaimAckNack(t *testing.T) {
 	assert.Equal(t, []string{"e2"}, ids(reclaimed))
 }
 
+func TestEventLog_PlatformRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := newEventLog(t)
+
+	// Append a windows, a darwin, and a legacy (no platform) row, then claim them back. The queue must carry platform through the
+	// claim so the detection engine can scope rules by it; a row written before the platform column existed round-trips as the column
+	// default (empty), which the engine treats as darwin.
+	require.NoError(t, log.Append(ctx, []visibilityapi.Event{
+		{EventID: "win", HostID: "h1", TimestampNs: 100, IngestedAtNs: 101, EventType: "exec", Platform: "windows", Payload: json.RawMessage(`{"pid":1}`)},
+		{EventID: "mac", HostID: "h1", TimestampNs: 200, IngestedAtNs: 201, EventType: "exec", Platform: "darwin", Payload: json.RawMessage(`{"pid":2}`)},
+		{EventID: "leg", HostID: "h1", TimestampNs: 300, IngestedAtNs: 301, EventType: "exec", Payload: json.RawMessage(`{"pid":3}`)},
+	}))
+
+	claimed, err := log.Claim(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 3)
+	byID := make(map[string]string, len(claimed))
+	for _, e := range claimed {
+		byID[e.EventID] = e.Platform
+	}
+	assert.Equal(t, "windows", byID["win"])
+	assert.Equal(t, "darwin", byID["mac"])
+	assert.Empty(t, byID["leg"], "a row written with no platform round-trips as the column default; intake normalizes to darwin upstream")
+}
+
 func TestEventLog_IdempotentAppend(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

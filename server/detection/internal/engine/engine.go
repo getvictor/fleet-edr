@@ -15,10 +15,10 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
-// tracer is the OTel tracer this package opens per-rule spans on so downstream dashboards can group detection latency + alert
-// counts by rule_id without having to parse log lines. observability-instrumentation spec pins the rule_id + alert_count
-// attribute shape.
-var tracer = otel.Tracer("server/detection/engine")
+// tracerName is the instrumentation-scope name for the OTel tracer the engine opens per-rule spans on, so downstream dashboards can
+// group detection latency + alert counts by rule_id without parsing log lines. observability-instrumentation spec pins the rule_id +
+// alert_count attribute shape.
+const tracerName = "server/detection/engine"
 
 // Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
 // api.GraphReader through the same interface and dispatch stays non-allocating.
@@ -28,6 +28,10 @@ type Engine struct {
 	logger       *slog.Logger
 	metrics      api.MetricsRecorder
 	modeResolver rulesapi.RuleModeResolver
+	// tracer is per-Engine rather than a package global so a test can install its own tracer on its own Engine instance without a data
+	// race against another parallel test (a package-level var mutated by one test is read by evaluateRule in another). Production always
+	// gets the same named tracer via New.
+	tracer trace.Tracer
 }
 
 // New creates a detection engine backed by the given store.
@@ -35,7 +39,7 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Engine{store: s, logger: logger}
+	return &Engine{store: s, logger: logger, tracer: otel.Tracer(tracerName)}
 }
 
 // SetMetrics installs the OTel counter hook. Safe to call after New.
@@ -108,7 +112,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 // persistence fails or the rule reported a retryable rulesapi.ErrProcessNotYetMaterialized: other rule-evaluation errors are
 // logged + swallowed so a buggy rule doesn't block the rest.
 func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []api.Event) error {
-	ctx, span := tracer.Start(ctx, "detection.rule.evaluate",
+	ctx, span := e.tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
 	defer span.End()
 	// Stamp alert_count=0 up front so dashboards grouping by rule_id see a consistent attribute set across success and failure

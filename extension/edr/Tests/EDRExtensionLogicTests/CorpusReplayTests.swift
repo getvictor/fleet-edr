@@ -226,6 +226,7 @@ final class CorpusReplayTests: XCTestCase {
             hostID: sentinelHostID,
             timestampNs: sentinelTimestampNs,
             eventType: eventType,
+            platform: EventPlatform.macOS,
             payload: payload
         )
         return try canonicalEncoder.encode(envelope)
