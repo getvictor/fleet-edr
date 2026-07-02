@@ -66,6 +66,7 @@ type Handler struct {
 	webhookAdmin  WebhookAdmin
 	webhookTester webhookTester
 	hostHealth    HostHealthReader
+	hostDetail    HostDetailReader
 	logger        *slog.Logger
 }
 
@@ -101,6 +102,7 @@ func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("PUT /api/alerts/{id}", h.handleUpdateAlertStatus)
 
 	h.registerHostHealthRoutes(mux)
+	h.registerHostDetailRoutes(mux)
 	h.registerWebhookRoutes(mux)
 }
 

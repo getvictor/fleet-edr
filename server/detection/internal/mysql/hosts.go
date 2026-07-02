@@ -31,6 +31,39 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return hosts, nil
 }
 
+// HostDetail returns the single-host identity + liveness view for the host page header (issue #579). Same cross-context posture as
+// ListHosts: FROM hosts (an unknown id is sql.ErrNoRows, which the handler maps to 404), LEFT JOINs into the endpoint context's
+// enrollments and host_health so a host that has sent events but never enrolled or never checked in still returns, with COALESCEd
+// empty identity and an unknown rollup. enrolled_at converts to UnixNano in SQL (UNIX_TIMESTAMP handles the session-timezone
+// conversion for the TIMESTAMP column) so the scan target stays a plain int64 in the codebase's ns convention.
+func (s *Store) HostDetail(ctx context.Context, hostID string) (api.HostDetail, error) {
+	var d api.HostDetail
+	err := s.db.GetContext(ctx, &d, `
+		SELECT h.host_id,
+		       COALESCE(e.hostname, '')      AS hostname,
+		       COALESCE(e.platform, '')      AS platform,
+		       COALESCE(e.os_name, '')       AS os_name,
+		       COALESCE(e.os_version, '')    AS os_version,
+		       COALESCE(e.os_build, '')      AS os_build,
+		       COALESCE(e.agent_version, '') AS agent_version,
+		       COALESCE(e.source_ip, '')     AS source_ip,
+		       CAST(COALESCE(UNIX_TIMESTAMP(e.enrolled_at), 0) * 1000000000 AS SIGNED) AS enrolled_at_ns,
+		       COALESCE(e.inventory_reported_at_ns, 0) AS inventory_reported_at_ns,
+		       h.event_count, h.last_seen_ns,
+		       COALESCE(hh.overall_status, ?) AS overall_status
+		FROM hosts h
+		LEFT JOIN enrollments e ON e.host_id = h.host_id
+		LEFT JOIN host_health hh ON hh.host_id = h.host_id
+		WHERE h.host_id = ?`, api.HostHealthUnknown, hostID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return api.HostDetail{}, err
+		}
+		return api.HostDetail{}, fmt.Errorf("query host detail: %w", err)
+	}
+	return d, nil
+}
+
 // HostHealth returns the operator-facing agent-health detail for one host, reading the endpoint context's `host_health` table (same
 // database, shared host_id). A host with no recorded snapshot is not an error: it returns OverallStatus HostHealthUnknown with null
 // Components, matching how ListHosts COALESCEs the missing row, so the detail view renders "unknown" rather than 404ing a real host

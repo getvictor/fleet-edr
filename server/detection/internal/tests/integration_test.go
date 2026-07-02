@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -3120,4 +3121,55 @@ func flattenPaths(forest []api.ProcessNode) []string {
 		out = append(out, flattenPaths(root.Children)...)
 	}
 	return out
+}
+
+// spec:server-rest-api/host-detail-endpoint/operator-fetches-host-detail
+// spec:server-rest-api/host-detail-endpoint/never-enrolled-host-returns-empty-identity
+//
+// Store.HostDetail joins the hosts row with the endpoint context's enrollments and host_health tables for the host page header
+// (issue #579). Seeds the cross-context rows directly, mirroring TestListHosts_DecoratesWithHealth.
+func TestStore_HostDetail(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const enrolledHost = "DETAIL-UUID-0001"
+	const bareHost = "DETAIL-UUID-0002"
+	seen := time.Now()
+	require.NoError(t, d.Service().RecordHostSeen(ctx, enrolledHost, seen))
+	require.NoError(t, d.Service().RecordHostSeen(ctx, bareHost, seen.Add(-time.Minute)))
+
+	_, err := d.Store().DB().ExecContext(ctx, `
+		INSERT INTO enrollments (host_id, hostname, agent_version, os_version, os_name, os_build, source_ip, inventory_reported_at_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		enrolledHost, "mac-01.local", "0.5.0", "26.4", "macOS", "25E123", "203.0.113.7", 4200)
+	require.NoError(t, err)
+	_, err = d.Store().DB().ExecContext(ctx, `
+		INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
+		VALUES (?, ?, NULL, ?)`, enrolledHost, "healthy", 100)
+	require.NoError(t, err)
+
+	detail, err := d.Store().HostDetail(ctx, enrolledHost)
+	require.NoError(t, err)
+	assert.Equal(t, enrolledHost, detail.HostID)
+	assert.Equal(t, "mac-01.local", detail.Hostname)
+	assert.Equal(t, "macOS", detail.OSName)
+	assert.Equal(t, "26.4", detail.OSVersion)
+	assert.Equal(t, "25E123", detail.OSBuild)
+	assert.Equal(t, "0.5.0", detail.AgentVersion)
+	assert.Equal(t, "203.0.113.7", detail.SourceIP)
+	assert.EqualValues(t, 4200, detail.InventoryReportedAtNs)
+	assert.Positive(t, detail.EnrolledAtNs, "enrolled_at defaults to CURRENT_TIMESTAMP and converts to UnixNano")
+	assert.Equal(t, "healthy", detail.OverallStatus)
+	assert.Positive(t, detail.LastSeenNs)
+
+	bare, err := d.Store().HostDetail(ctx, bareHost)
+	require.NoError(t, err, "a host with events but no enrollment row must still return (LEFT JOIN)")
+	assert.Empty(t, bare.Hostname)
+	assert.Empty(t, bare.OSName)
+	assert.Zero(t, bare.EnrolledAtNs)
+	assert.Equal(t, api.HostHealthUnknown, bare.OverallStatus)
+
+	_, err = d.Store().HostDetail(ctx, "NO-SUCH-HOST")
+	require.ErrorIs(t, err, sql.ErrNoRows, "an unknown host id surfaces sql.ErrNoRows for the handler's 404")
 }

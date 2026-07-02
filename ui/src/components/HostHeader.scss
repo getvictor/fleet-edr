@@ -1,0 +1,22 @@
+.host-header__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.host-header__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+
+  > span + span::before {
+    content: "·";
+    margin: 0 0.5rem;
+    color: var(--color-text-tertiary, #8b8fa2);
+  }
+}
+
+.host-header__host-id {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+}

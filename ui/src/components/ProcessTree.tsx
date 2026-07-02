@@ -11,9 +11,9 @@ import {
 } from "../constants";
 import { ProcessDetail } from "./ProcessDetail";
 import { HostHealthPanel } from "./HostHealthPanel";
+import { HostHeader } from "./HostHeader";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
-import { PageHeader } from "./ui/PageHeader";
 import "./ProcessTree.scss";
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
@@ -521,21 +521,7 @@ export function ProcessTreeView() {
 
   return (
     <>
-      <PageHeader
-        title={
-          <span className="process-tree__title">
-            {/* "Hosts" lives in the top nav already, so repeating it here is
-                noise. Link the host id itself to the bare host page so the
-                operator can click out of an alert-context view (drops the
-                ?alert=…&process=…&at=… query params) back to the full host
-                tree without round-tripping through the host list. */}
-            <Link to={`/hosts/${encodeURIComponent(hostId)}`} className="process-tree__host-link">
-              {hostId}
-            </Link>
-          </span>
-        }
-        actions={headerActions}
-      />
+      <HostHeader hostId={hostId} actions={headerActions} />
 
       {hostId ? <HostHealthPanel hostId={hostId} /> : null}
 

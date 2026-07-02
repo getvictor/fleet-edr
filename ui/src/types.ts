@@ -1,3 +1,15 @@
+// HostDetail is the response from GET /api/hosts/{host_id}: the identity + liveness view the host page header renders (issue #579).
+// Extends the list row with the identity fields the enrollment row carries (kept fresh by the agent's inventory check-in; empty
+// strings mean never enrolled or source unavailable). enrolled_at_ns / inventory_reported_at_ns are UnixNano (0 = never).
+export interface HostDetail extends HostSummary {
+  os_name: string;
+  os_build: string;
+  agent_version: string;
+  source_ip: string;
+  enrolled_at_ns: number;
+  inventory_reported_at_ns: number;
+}
+
 export interface HostSummary {
   host_id: string;
   // hostname + os_version come from the endpoint enrollment row joined into the

@@ -131,6 +131,28 @@ type HostHealth struct {
 	Components    NullRawJSON `db:"components" json:"components"`
 }
 
+// HostDetail is the single-host identity + liveness view served at GET /api/hosts/{host_id} (issue #579): everything the host page's
+// header renders in one row. Identity fields come from the endpoint context's enrollments table (kept fresh by the inventory check-in;
+// empty for a host that has sent events but never enrolled); liveness comes from the hosts row; OverallStatus is the same health
+// rollup the list carries. InventoryReportedAtNs is the agent-stamped time of the report that last refreshed identity (zero when no
+// check-in has, so the reader can present identity staleness honestly); EnrolledAtNs is the enrollment time as UnixNano (zero for a
+// never-enrolled host), matching the ns-int64 convention of LastSeenNs.
+type HostDetail struct {
+	HostID                string `db:"host_id" json:"host_id"`
+	Hostname              string `db:"hostname" json:"hostname"`
+	Platform              string `db:"platform" json:"platform"`
+	OSName                string `db:"os_name" json:"os_name"`
+	OSVersion             string `db:"os_version" json:"os_version"`
+	OSBuild               string `db:"os_build" json:"os_build"`
+	AgentVersion          string `db:"agent_version" json:"agent_version"`
+	SourceIP              string `db:"source_ip" json:"source_ip"`
+	EnrolledAtNs          int64  `db:"enrolled_at_ns" json:"enrolled_at_ns"`
+	InventoryReportedAtNs int64  `db:"inventory_reported_at_ns" json:"inventory_reported_at_ns"`
+	EventCount            int64  `db:"event_count" json:"event_count"`
+	LastSeenNs            int64  `db:"last_seen_ns" json:"last_seen_ns"`
+	OverallStatus         string `db:"overall_status" json:"overall_status"`
+}
+
 // Host is the operator-visible row from the hosts summary table. Mirrors HostSummary but adds updated_at; both are kept distinct
 // because the operator list endpoint historically returned the HostSummary shape and the UI snapshots it.
 type Host struct {
