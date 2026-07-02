@@ -94,6 +94,10 @@
           "minimum": 0,
           "description": "Optional. Kernel PID generation (audit_token_to_pidversion) of the exec'd process, read from its audit token. Lets the server correlate flows to the exact process generation independently of PID reuse. Absent on agents that predate this field."
         },
+        "create_time_ns": {
+          "type": "integer",
+          "description": "Optional. Windows process creation time in Unix nanoseconds (from the kernel FILETIME). The platform-neutral pid_epoch (ADR-0018): the Windows analogue of macOS pidversion, disambiguating PID reuse. Absent on macOS events (which carry pidversion instead)."
+        },
         "cdhash": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$",
@@ -128,6 +132,10 @@
           "type": "string",
           "enum": ["event", "host_reconciled"],
           "description": "Optional. 'host_reconciled' tags exits synthesized by the agent's kill(pid,0) reconciliation pass when the kernel-observed exit event went missing (issue #6 client half). Absent or 'event' means the kernel observed the exit."
+        },
+        "create_time_ns": {
+          "type": "integer",
+          "description": "Optional. Windows process creation time in Unix nanoseconds (the pid_epoch, ADR-0018), so an exit can be paired with the exec of the same (pid, create-time) generation. Absent on macOS events."
         }
       }
     },

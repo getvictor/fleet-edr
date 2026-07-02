@@ -203,38 +203,25 @@ func run() error {
 	coalescer := coalesce.New(config.DefaultNetworkCoalesceWindow, q.Enqueue, logger)
 	go coalescer.Run(ctx)
 
-	// healthRegistry tracks each system extension's XPC connectivity as an agent-health condition (issue #359). Register the components
-	// BEFORE starting their loops so the first status check-in already reports a not-yet-activated extension (unhealthy/never_connected),
-	// which is exactly the fresh-install gap this feature surfaces. Only register the network extension when it is enabled, so a
-	// deliberately-disabled NE is not reported as unhealthy.
+	// healthRegistry tracks each telemetry sensor's connectivity as an agent-health condition (issue #359); the poster below reports it.
+	// pidTable is the in-memory process table the sensor loops update and the reconciler sweeps. Both are created here because they
+	// outlive the sensor start (the poster and reconciler use them), then handed to the platform sensor seam.
 	healthRegistry := health.NewRegistry()
-	healthRegistry.Register(health.ComponentEndpointSecurityExtension, "Security extension")
-	if cfg.NetXPCService != "" {
-		healthRegistry.Register(health.ComponentNetworkExtension, "Network extension")
-	}
-
 	pidTable := proctable.New()
-	go startReceiverLoop(ctx, receiverLoopParams{
-		logger:      logger,
-		xpcService:  cfg.XPCService,
-		enqueue:     coalescer.Handle,
-		pt:          pidTable,
-		updateTable: true,
-		dispatcher:  esfDispatcher,
-		health:      healthRegistry,
-		component:   health.ComponentEndpointSecurityExtension,
+
+	// Start the platform's telemetry sensor(s): the macOS ESF + network-extension XPC loops, or the Windows ETW sensor. Each variant
+	// registers its own health components before starting (so the first status check-in already reports a not-yet-active sensor, the
+	// fresh-install gap issue #359 surfaces) and drives its loop(s) through the shared receiver.Loop machinery. See
+	// sensors_notwindows.go / sensors_windows.go.
+	startTelemetrySensors(ctx, telemetryDeps{
+		logger:        logger,
+		cfg:           cfg,
+		enqueue:       coalescer.Handle,
+		pidTable:      pidTable,
+		health:        healthRegistry,
+		esfDispatcher: esfDispatcher,
+		hostID:        hostID,
 	})
-	if cfg.NetXPCService != "" {
-		go startReceiverLoop(ctx, receiverLoopParams{
-			logger:       logger,
-			xpcService:   cfg.NetXPCService,
-			enqueue:      coalescer.Handle,
-			pt:           pidTable,
-			upgradeProbe: func() bool { return receiver.NEUpgradePending(ctx) },
-			health:       healthRegistry,
-			component:    health.ComponentNetworkExtension,
-		})
-	}
 	go runUploader(ctx, up, logger)
 
 	// Report agent health to the server on startup, on each extension transition, and periodically (issue #359). Every post also
@@ -583,11 +570,17 @@ type receiverLoopParams struct {
 	// set together; when either is nil the loop reports no health for the service.
 	health    *health.Registry
 	component string
+	// connectorFactory overrides how the loop builds its Connector. Nil uses the default XPC receiver (macOS); the Windows sensor seam
+	// sets it to build an ETW-backed Connector instead, so both platforms share the same reconnect/backoff/heartbeat + health machinery.
+	connectorFactory func() receiver.Connector
 }
 
 func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
-	factory := func() receiver.Connector {
-		return receiver.New(p.xpcService, receiverEventBuffer)
+	factory := p.connectorFactory
+	if factory == nil {
+		factory = func() receiver.Connector {
+			return receiver.New(p.xpcService, receiverEventBuffer)
+		}
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
