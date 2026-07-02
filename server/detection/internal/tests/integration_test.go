@@ -93,6 +93,9 @@ func (r *stubRule) Evaluate(_ context.Context, events []api.Event, _ rulesapi.Gr
 }
 
 func (r *stubRule) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r *stubRule) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
 
 // stubProvider satisfies the rules.api.RuleProvider shape Engine.LoadActive
 // consumes (inline interface).
@@ -143,6 +146,9 @@ func (r *multiPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesap
 }
 
 func (r *multiPIDStub) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r *multiPIDStub) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
 
 // fixedPIDStub emits one finding per "trigger" event with a configured ProcessID. Used by
 // TestEngine_PersistenceFailureSurfacesError to force the FK violation deterministically: a ProcessID that's nowhere
@@ -187,6 +193,9 @@ func (r *fixedPIDStub) Evaluate(_ context.Context, events []api.Event, _ rulesap
 }
 
 func (r *fixedPIDStub) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r *fixedPIDStub) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
 
 // errorStub returns an error from Evaluate. Used by TestEngine_OneRuleErrorsRestContinue to prove the engine's
 // per-rule loop isolates failures: the error is logged and the loop continues to the next rule.
@@ -204,6 +213,9 @@ func (r *errorStub) Evaluate(_ context.Context, _ []api.Event, _ rulesapi.GraphR
 }
 
 func (r *errorStub) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r *errorStub) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
 
 // execFiringStub fires one finding per "exec" event the rule sees. Used by TestEngine_SnapshotExecExcludedFromEvaluation
 // to prove the engine filters snapshot exec events BEFORE rule evaluation: if the rule never sees the snapshot=true
@@ -249,6 +261,9 @@ func (r *execFiringStub) Evaluate(_ context.Context, events []api.Event, _ rules
 }
 
 func (r *execFiringStub) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r *execFiringStub) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
 
 // recordingMetrics captures every hook invocation so tests can assert
 // observability survived the phase-5 wiring rewrite.

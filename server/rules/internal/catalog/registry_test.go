@@ -39,6 +39,23 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	}
 }
 
+// spec:server-detection-rules-engine/platform-scoped-rule-evaluation/every-cataloged-rule-declares-at-least-one-valid-platform
+//
+// The api.Rule interface requires Platforms(), so a rule cannot ship without declaring its target platforms (ADR-0018). This guard
+// asserts every registered rule returns a non-empty set and that every value is a recognized platform, so the engine's platform
+// scoping always has a concrete, valid set to filter against. Every current rule targets darwin; a future Windows or Linux rule must
+// still pass this check.
+func TestAll_DeclareValidPlatforms(t *testing.T) {
+	t.Parallel()
+	for _, r := range New(nil) {
+		platforms := r.Platforms()
+		require.NotEmpty(t, platforms, "rule %s must declare at least one platform", r.ID())
+		for _, p := range platforms {
+			assert.Truef(t, api.IsValidPlatform(p), "rule %s declares invalid platform %q", r.ID(), p)
+		}
+	}
+}
+
 // spec:server-admin-surface/per-rule-documentation-endpoint/rule-with-config-knobs
 //
 // For every shipped rule that declares operator-tunable config knobs, the doc.Config entries MUST each

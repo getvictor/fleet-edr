@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // snapshotMarker is the field-name fast-path used to short-circuit the snapshot-exec filter. The vast majority of exec events don't
@@ -43,6 +44,34 @@ func filterSnapshotEvents(events []api.Event) []api.Event {
 				continue
 			}
 			out = append(out, evt)
+		}
+		return out
+	}
+	return events
+}
+
+// platformScopedEvents returns the subset of events whose platform is in the rule's target set (ADR-0018). An event carrying no
+// platform is treated as darwin, the legacy-agent default, so a pre-platform-contract event still reaches the macOS rules. The common
+// single-platform batch returns the input slice verbatim (every event matches or none do), so a homogeneous fleet pays no per-rule
+// allocation; a mixed-platform batch is copied down to the matching subset.
+func platformScopedEvents(platforms []rulesapi.Platform, events []api.Event) []api.Event {
+	set := make(map[string]struct{}, len(platforms))
+	for _, p := range platforms {
+		set[string(p)] = struct{}{}
+	}
+	// Mirror filterSnapshotEvents: the common all-match batch returns the input verbatim, and only the first non-matching event
+	// triggers a copy of the matching prefix. Keeping the prefix-slice inside the loop (where the index is proven in range) is also
+	// what keeps nilaway's flow analysis happy on a nil batch.
+	for i := range events {
+		if _, ok := set[api.NormalizePlatform(events[i].Platform)]; ok {
+			continue
+		}
+		out := make([]api.Event, 0, len(events)-1)
+		out = append(out, events[:i]...)
+		for j := i + 1; j < len(events); j++ {
+			if _, ok := set[api.NormalizePlatform(events[j].Platform)]; ok {
+				out = append(out, events[j])
+			}
 		}
 		return out
 	}

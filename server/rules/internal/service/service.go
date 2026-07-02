@@ -40,6 +40,7 @@ func (s *Service) List() []api.RuleMetadata {
 			Techniques:                   r.Techniques(),
 			Doc:                          r.Doc(),
 			SupportedExclusionMatchTypes: r.SupportedExclusionMatchTypes(),
+			Platforms:                    r.Platforms(),
 		})
 	}
 	return out

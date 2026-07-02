@@ -77,6 +77,11 @@ type Rule interface {
 	// tools/gen-rule-docs reads it directly. Required (not optional) so a new rule cannot ship without a description and a severity
 	// attestation: the compile error is the gate.
 	Doc() Documentation
+	// Platforms returns the operating systems the rule targets, one or more of the Platform* values. The engine evaluates the rule only
+	// against events whose platform is in this set (ADR-0018), so a macOS-tradecraft rule never fires on a Windows event. Required (not
+	// optional) so a new rule cannot ship without a platform attestation: the compile error is the gate, like Doc(). The catalog guard
+	// test asserts every registered rule returns a non-empty set of valid platforms.
+	Platforms() []Platform
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
 	// mutate state. Returning an error skips the rule for this batch (logged at WARN), except an error wrapping
 	// ErrProcessNotYetMaterialized, which the engine propagates so the processor retries the whole batch. Returning nil findings is
@@ -111,6 +116,9 @@ type RuleMetadata struct {
 	// SupportedExclusionMatchTypes mirrors the rule's SupportedExclusionMatchTypes() (issue #520). Surfaced on GET /api/rules so the
 	// admin UI offers only the match types the rule consults, and validated against by the create-exclusion API.
 	SupportedExclusionMatchTypes []ExclusionMatchType
+	// Platforms mirrors the rule's Platforms() (ADR-0018). Surfaced on GET /api/rules so operators can see which operating systems a
+	// rule applies to.
+	Platforms []Platform
 }
 
 // Documentation is the structured per-rule descriptor consumed by the

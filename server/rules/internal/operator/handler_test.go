@@ -121,3 +121,38 @@ func TestHandler_ListRules_SupportedExclusionMatchTypes(t *testing.T) {
 	assert.Equal(t, []string{"path_glob"}, byID["sudoers_tamper"])
 	assert.Empty(t, byID["dns_c2_beacon"], "a rule that consults no exclusions offers an empty set")
 }
+
+// spec:server-detection-rules-engine/registered-rule-catalog/rule-metadata-reports-target-platforms
+//
+// GET /api/rules surfaces each rule's target platforms (ADR-0018) so operators can see which operating systems a rule applies to. Every
+// current catalog rule targets darwin; the field is always a JSON array (never null) so the UI can iterate without a nil guard.
+func TestHandler_ListRules_Platforms(t *testing.T) {
+	t.Parallel()
+	svc := service.New(catalog.New(nil), slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		Rules []struct {
+			ID        string   `json:"id"`
+			Platforms []string `json:"platforms"`
+		} `json:"rules"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+
+	require.NotEmpty(t, body.Rules)
+	for _, r := range body.Rules {
+		assert.NotNilf(t, r.Platforms, "rule %q MUST carry a platforms array, not null", r.ID)
+		assert.Equalf(t, []string{"darwin"}, r.Platforms, "rule %q targets darwin", r.ID)
+	}
+}
