@@ -84,13 +84,10 @@ func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
-	// Override ONLY the package-level tracer var (no otel.SetTracerProvider call) so go test's package-parallel scheduler can't race
-	// this with another package's instrumentation. Restore on cleanup so the next test in this package sees the production tracer.
-	prevTracer := tracer
-	tracer = tp.Tracer("server/detection/engine")
-	t.Cleanup(func() { tracer = prevTracer })
-
+	// Install the recording tracer on THIS Engine instance (not a package global) so parallel tests never race on shared tracer state:
+	// evaluateRule reads e.tracer, so each test's Engine carries its own. No otel.SetTracerProvider call, so nothing global is mutated.
 	e := New(nil, nil)
+	e.tracer = tp.Tracer("server/detection/engine")
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-rule-x"}}})
 
 	require.NoError(t, e.Evaluate(t.Context(), nil))
