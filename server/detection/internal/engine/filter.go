@@ -59,24 +59,23 @@ func platformScopedEvents(platforms []rulesapi.Platform, events []api.Event) []a
 	for _, p := range platforms {
 		set[string(p)] = struct{}{}
 	}
-	firstMiss := -1
+	// Mirror filterSnapshotEvents: the common all-match batch returns the input verbatim, and only the first non-matching event
+	// triggers a copy of the matching prefix. Keeping the prefix-slice inside the loop (where the index is proven in range) is also
+	// what keeps nilaway's flow analysis happy on a nil batch.
 	for i := range events {
-		if _, ok := set[api.NormalizePlatform(events[i].Platform)]; !ok {
-			firstMiss = i
-			break
-		}
-	}
-	if firstMiss == -1 {
-		return events
-	}
-	out := make([]api.Event, 0, len(events)-1)
-	out = append(out, events[:firstMiss]...)
-	for i := firstMiss + 1; i < len(events); i++ {
 		if _, ok := set[api.NormalizePlatform(events[i].Platform)]; ok {
-			out = append(out, events[i])
+			continue
 		}
+		out := make([]api.Event, 0, len(events)-1)
+		out = append(out, events[:i]...)
+		for j := i + 1; j < len(events); j++ {
+			if _, ok := set[api.NormalizePlatform(events[j].Platform)]; ok {
+				out = append(out, events[j])
+			}
+		}
+		return out
 	}
-	return out
+	return events
 }
 
 // isPlumbingEvent returns true for events that flow through ingest + graph but should not reach rule evaluation. Centralised here
