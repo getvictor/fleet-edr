@@ -257,6 +257,27 @@ type ProcessNode struct {
 	Children           []ProcessNode `json:"children,omitempty"`
 	NetworkConnections []Event       `json:"network_connections,omitempty"`
 	DNSQueries         []Event       `json:"dns_queries,omitempty"`
+	// Aggregated, when non-nil, marks this node as a collapsed group of identical-path sibling processes rather than a single process
+	// (issue #416): a parent that spawned N childless children of the same path + binary identity renders as one `×N` node instead of N
+	// dots. The embedded Process carries the earliest member as a representative (so the node has a path, PID, and signing identity to
+	// display and to open a detail panel on), Children is nil, and the group's cardinality, exited/running split, and fork-time span
+	// live in Aggregated. Only leaf children are collapsed, so a child with its own subtree is never folded away and stays an
+	// individual node.
+	Aggregated *AggregatedSiblings `json:"aggregated,omitempty"`
+}
+
+// AggregatedSiblings summarizes a group of identical-path sibling processes collapsed into one ProcessNode (issue #416). Count is the
+// full group size; ExitedCount + RunningCount partition it by liveness (a running member has no exit_time_ns); FirstForkNs / LastForkNs
+// bound the group's fork-time span. Sample is a capped, fork-time-ordered slice of the underlying members (never the whole group) so the
+// UI can expand the node in place without a second round trip; when Count exceeds len(Sample) the UI shows "showing K of N". The full
+// per-member fetch is the lazy-expand story (#421); until it lands the sample is the expand surface.
+type AggregatedSiblings struct {
+	Count        int           `json:"count"`
+	ExitedCount  int           `json:"exited_count"`
+	RunningCount int           `json:"running_count"`
+	FirstForkNs  int64         `json:"first_fork_ns"`
+	LastForkNs   int64         `json:"last_fork_ns"`
+	Sample       []ProcessNode `json:"sample,omitempty"`
 }
 
 // ProcessDetail is the wire shape of GET /api/hosts/{id}/processes/{pid}.

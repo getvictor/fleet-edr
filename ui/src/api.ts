@@ -310,10 +310,13 @@ export async function getProcessTree(
   hostId: string,
   fromNs: number,
   toNs: number,
-  limit = 2000
+  limit = 2000,
+  // flatten opts out of server-side sibling aggregation (issue #416): the raw forest with every node, not the collapsed "×N" nodes.
+  flatten = false
 ): Promise<TreeResponse> {
+  const flattenParam = flatten ? "&flatten=1" : "";
   return fetchJSON<TreeResponse>(
-    `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}`
+    `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}${flattenParam}`
   );
 }
 

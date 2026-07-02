@@ -2,10 +2,23 @@ package graph
 
 import (
 	"context"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
 )
+
+// aggregateMinGroup is the smallest identical-path sibling group that collapses into a single `×N` node (issue #416). At 2, any pair
+// of repeated childless execs under one parent already aggregates, which is what the acceptance criteria ("a parent that spawned N
+// identical-path children renders as one node") asks for; a singleton group stays an ordinary node.
+const aggregateMinGroup = 2
+
+// aggregateSampleCap bounds how many underlying members an aggregated node carries inline so the UI can expand the group in place
+// without a second round trip. The point of aggregation is to shrink the payload, so the sample is deliberately small; the full
+// per-member fetch is the lazy-expand story (#421). A group of grep×1000 ships one node plus this many rows, not a thousand.
+const aggregateSampleCap = 8
 
 // Query provides process tree and detail lookups.
 type Query struct {
@@ -17,14 +30,20 @@ func NewQuery(s *mysql.Store) *Query {
 	return &Query{store: s}
 }
 
-// BuildTree returns a forest of process trees for the given host
-// and time range.
-func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.ProcessNode, error) {
+// BuildTree returns a forest of process trees for the given host and time range. Unless flatten is set, repeated identical-path leaf
+// siblings under the same parent are collapsed into a single aggregated node (issue #416) so a busy host's grep×1000 / jspawnhelper×240
+// churn renders as a handful of `×N` nodes rather than thousands of dots. flatten opts out and returns the raw forest for an analyst
+// who wants every node.
+func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool) ([]api.ProcessNode, error) {
 	procs, err := q.store.GetProcessTree(ctx, hostID, tr, limit)
 	if err != nil {
 		return nil, err
 	}
-	return buildForest(procs), nil
+	forest := buildForest(procs)
+	if flatten {
+		return forest, nil
+	}
+	return aggregateSiblings(forest), nil
 }
 
 // GetProcessDetail returns a process with its network connections, DNS queries, and re-exec chain. Method name matches the
@@ -154,6 +173,145 @@ func indexProcesses(procs []api.Process) (map[int64]*api.ProcessNode, map[int]in
 		}
 	}
 	return nodeMap, pidToID
+}
+
+// aggregateSiblings collapses repeated identical-path leaf siblings under each parent into a single aggregated node (issue #416),
+// recursively over the whole forest. It is a pure transform: the input forest is never mutated, and the total number of underlying
+// processes is preserved (the sum of each aggregated node's Count plus one per individual node equals the input leaf count at every
+// level).
+//
+// Only leaf children (no children of their own) are eligible to fold: a child that has its own subtree stays an individual node so
+// its descendants are never silently dropped before the lazy-expand story (#421) can re-fetch them. Grouping is keyed on the binary
+// identity (path + sha256 + cdhash), so two execs of the same path but different binaries are not merged. A group below
+// aggregateMinGroup stays individual (a `×1` badge would be noise). Output siblings are ordered by first fork time (then row id) so
+// the result is deterministic regardless of the map-iteration order buildForest produced.
+func aggregateSiblings(forest []api.ProcessNode) []api.ProcessNode {
+	if len(forest) == 0 {
+		return forest
+	}
+	out := make([]api.ProcessNode, 0, len(forest))
+	var leaves []api.ProcessNode
+	for i := range forest {
+		n := forest[i]
+		if len(n.Children) > 0 {
+			// Non-leaf: keep it individual and recurse so its own children aggregate too.
+			n.Children = aggregateSiblings(n.Children)
+			out = append(out, n)
+			continue
+		}
+		leaves = append(leaves, n)
+	}
+	out = append(out, groupLeaves(leaves)...)
+	slices.SortFunc(out, func(a, b api.ProcessNode) int {
+		if d := nodeFirstForkNs(a) - nodeFirstForkNs(b); d != 0 {
+			return int(min(max(d, -1), 1))
+		}
+		return int(min(max(a.ID-b.ID, -1), 1))
+	})
+	return out
+}
+
+// groupLeaves partitions leaf siblings by binary identity and folds every group of at least aggregateMinGroup members into one
+// aggregated node; smaller groups pass through unchanged. Group order within the returned slice is not significant: aggregateSiblings
+// re-sorts the merged output by fork time.
+func groupLeaves(leaves []api.ProcessNode) []api.ProcessNode {
+	if len(leaves) == 0 {
+		return nil
+	}
+	// order preserves first-seen key order so grouping is deterministic before the caller's fork-time sort.
+	groups := make(map[string][]api.ProcessNode, len(leaves))
+	var order []string
+	for _, n := range leaves {
+		k := aggregationKey(n)
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], n)
+	}
+	out := make([]api.ProcessNode, 0, len(order))
+	for _, k := range order {
+		members := groups[k]
+		if len(members) < aggregateMinGroup {
+			out = append(out, members...)
+			continue
+		}
+		out = append(out, aggregateGroup(members))
+	}
+	return out
+}
+
+// aggregateGroup builds one aggregated node from a group of identical-identity leaf members (len >= aggregateMinGroup). The earliest
+// member (by fork time, then id) is the representative whose Process fields the node carries; the summary counts and fork-time span
+// cover the full group, and Sample is the first aggregateSampleCap members in fork order.
+func aggregateGroup(members []api.ProcessNode) api.ProcessNode {
+	slices.SortFunc(members, func(a, b api.ProcessNode) int {
+		if a.ForkTimeNs != b.ForkTimeNs {
+			return int(min(max(a.ForkTimeNs-b.ForkTimeNs, -1), 1))
+		}
+		return int(min(max(a.ID-b.ID, -1), 1))
+	})
+	agg := &api.AggregatedSiblings{
+		Count:       len(members),
+		FirstForkNs: members[0].ForkTimeNs,
+		LastForkNs:  members[len(members)-1].ForkTimeNs,
+	}
+	for i := range members {
+		if members[i].ExitTimeNs != nil {
+			agg.ExitedCount++
+		} else {
+			agg.RunningCount++
+		}
+	}
+	sampleN := min(len(members), aggregateSampleCap)
+	agg.Sample = make([]api.ProcessNode, sampleN)
+	copy(agg.Sample, members[:sampleN])
+
+	rep := members[0]
+	rep.Children = nil
+	rep.NetworkConnections = nil
+	rep.DNSQueries = nil
+	// The aggregated node carries the earliest member's identity fields (path, hashes, signing) for display, but it is a group
+	// header, not that member: the member itself is also in Sample with its real id. Give the header a synthetic negative id (the
+	// negation of the representative's real, positive, unique row id) so it can never collide with the sample member it represents,
+	// with any other aggregated node, or with a real row id in the UI's id-keyed paths (alert-dot highlighting, find-by-id, the
+	// collapse/expand sets). Row ids are auto-increment positive, so the negation is unique and unambiguous.
+	rep.ID = -members[0].ID
+	rep.Aggregated = agg
+	return rep
+}
+
+// nodeFirstForkNs returns the fork time an aggregated node sorts on: the group's earliest fork for a collapsed node, the row's own
+// fork time otherwise.
+func nodeFirstForkNs(n api.ProcessNode) int64 {
+	if n.Aggregated != nil {
+		return n.Aggregated.FirstForkNs
+	}
+	return n.ForkTimeNs
+}
+
+// aggregationKey is the grouping key for sibling aggregation: same parent AND same path AND same content hash AND same code-directory
+// hash. PPID is part of the key because the top-level aggregateSiblings call runs over buildForest's roots, and a node lands in that
+// root list whenever its real parent is unresolvable in this dataset (parent forked outside the time window, or genuinely absent),
+// regardless of the parent PID value. Without PPID in the key, two orphaned top-level leaves with the same binary but distinct
+// real parents would fold into one node, erasing the lineage distinction an analyst relies on. For the recursive (non-root) case PPID
+// is a no-op: buildForest guarantees a node's children all share its PID as their PPID. sha256 (binary content) and cdhash
+// (code-signing directory) stand in for "signing identity" so a path reused by a different binary is not collapsed; a NULL hash
+// contributes an empty segment, so two hash-less rows of the same path still group. The NUL separator keeps segments from running
+// together (a path ending in a hex-looking suffix cannot collide with a hash).
+func aggregationKey(n api.ProcessNode) string {
+	var sb strings.Builder
+	sb.WriteString(strconv.Itoa(n.PPID))
+	sb.WriteByte(0)
+	sb.WriteString(n.Path)
+	sb.WriteByte(0)
+	if n.SHA256 != nil {
+		sb.WriteString(*n.SHA256)
+	}
+	sb.WriteByte(0)
+	if n.CDHash != nil {
+		sb.WriteString(*n.CDHash)
+	}
+	return sb.String()
 }
 
 func filterByType(events []api.Event, eventType string) []api.Event {

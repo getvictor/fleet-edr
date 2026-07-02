@@ -1862,7 +1862,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	// "/bin/sh"]`).
 	require.Eventually(t, func() bool {
 		tree, err := d.Service().BuildTree(ctx, "h",
-			api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100)
+			api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100, true)
 		if err != nil {
 			return false
 		}
@@ -1875,7 +1875,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "expected /usr/bin/python3 -> /bin/sh -> /tmp/payload chain to materialise")
 
 	tree, err := d.Service().BuildTree(ctx, "h",
-		api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100)
+		api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100, true)
 	require.NoError(t, err)
 	assert.NotEmpty(t, tree, "BuildTree must return at least one root")
 

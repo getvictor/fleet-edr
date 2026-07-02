@@ -20,7 +20,9 @@ import (
 type Service interface {
 	// Operator reads.
 	ListHosts(ctx context.Context) ([]HostSummary, error)
-	BuildTree(ctx context.Context, hostID string, tr TimeRange, limit int) ([]ProcessNode, error)
+	// BuildTree returns the per-host process forest for the window. Unless flatten is set, repeated identical-path leaf siblings are
+	// collapsed into aggregated `×N` nodes (issue #416); flatten returns the raw forest.
+	BuildTree(ctx context.Context, hostID string, tr TimeRange, limit int, flatten bool) ([]ProcessNode, error)
 	GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*ProcessDetail, error)
 	ListAlerts(ctx context.Context, filter AlertFilter) ([]Alert, error)
 	GetAlert(ctx context.Context, id int64) (Alert, []string, error) // alert + correlated event IDs
