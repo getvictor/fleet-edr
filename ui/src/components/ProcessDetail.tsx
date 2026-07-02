@@ -17,9 +17,12 @@ import { useReauthRetry } from "../hooks/useReauthRetry";
 import { NetworkConnections } from "./NetworkConnections";
 import { ReauthModal } from "./ReauthModal";
 import { Card } from "./ui/Card";
+import { CopyButton } from "./ui/CopyButton";
 import { Button } from "./ui/Button";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
+import { deriveSigningVerdict, type SigningVerdictKind } from "../signing";
+import { formatCommandLine } from "../cmdline";
 import { Can } from "../permissions";
 import { PermissionAction } from "../permissions-core";
 import "./ProcessDetail.scss";
@@ -40,6 +43,17 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
   high: "high",
   medium: "medium",
   low: "low",
+};
+
+// VERDICT_BADGE maps the signer category to the panel badge's tone: the two identity-less categories read as attention (high for no
+// signature at all, medium for ad-hoc), a verifiable Developer ID reads informational, and platform/signed are neutral facts.
+const VERDICT_BADGE: Record<SigningVerdictKind, BadgeVariant> = {
+  unsigned: "high",
+  invalid: "high",
+  "ad-hoc": "medium",
+  "developer-id": "info",
+  platform: "neutral",
+  signed: "neutral",
 };
 
 export function ProcessDetail({ hostId, node, onClose }: Props) {
@@ -161,6 +175,8 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       .catch(() => { /* ignore */ });
   };
 
+  const verdict = deriveSigningVerdict(node.code_signing);
+
   const killDisabled = killSending
     || (killCommand !== null
       && killCommand.status !== "completed"
@@ -186,11 +202,17 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         <dt>PPID</dt>
         <dd>{node.ppid}</dd>
         <dt>Path</dt>
-        <dd className="process-detail__break">{node.path || "(unknown)"}</dd>
+        <dd className="process-detail__break process-detail__copyable">
+          {node.path || "(unknown)"}
+          {node.path && <CopyButton value={node.path} label="Copy path" />}
+        </dd>
         {node.args && (
           <>
             <dt>Args</dt>
-            <dd className="process-detail__break">{node.args.join(" ")}</dd>
+            <dd className="process-detail__break process-detail__copyable">
+              {formatCommandLine(node.args, node.path)}
+              <CopyButton value={formatCommandLine(node.args, node.path)} label="Copy command line" />
+            </dd>
           </>
         )}
         {node.uid !== undefined && (
@@ -208,15 +230,46 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         {node.sha256 && (
           <>
             <dt>SHA256</dt>
-            <dd className="process-detail__hash">{node.sha256}</dd>
+            <dd className="process-detail__hash process-detail__copyable">
+              {node.sha256}
+              <CopyButton value={node.sha256} label="Copy SHA256" />
+            </dd>
           </>
         )}
-        {node.code_signing && (
+        {node.cdhash && (
+          <>
+            <dt>CDHash</dt>
+            <dd className="process-detail__hash process-detail__copyable">
+              {node.cdhash}
+              <CopyButton value={node.cdhash} label="Copy cdhash" />
+            </dd>
+          </>
+        )}
+        {/* Fork-only nodes (no exec yet) run the parent's inherited image and carry no signature of their own; a verdict there
+            would be a false conviction, matching the tree tooltip's rule. */}
+        {node.exec_time_ns && (
           <>
             <dt>Signing</dt>
             <dd>
+              <Badge variant={VERDICT_BADGE[verdict.kind]}>{verdict.label}</Badge>
+            </dd>
+          </>
+        )}
+        {node.code_signing?.signing_id && (
+          <>
+            <dt>Signing ID</dt>
+            <dd className="process-detail__break process-detail__copyable">
               {node.code_signing.signing_id}
-              {node.code_signing.is_platform_binary ? " (platform)" : ""}
+              <CopyButton value={node.code_signing.signing_id} label="Copy signing id" />
+            </dd>
+          </>
+        )}
+        {node.code_signing?.team_id && (
+          <>
+            <dt>Team ID</dt>
+            <dd className="process-detail__copyable">
+              {node.code_signing.team_id}
+              <CopyButton value={node.code_signing.team_id} label="Copy team id" />
             </dd>
           </>
         )}

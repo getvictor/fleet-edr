@@ -65,6 +65,7 @@ afterEach(() => {
 });
 
 describe("ProcessDetail metadata", () => {
+  // spec:web-ui/process-detail-content/process-detail-surfaces-investigation-fields
   it("renders the core process fields and optional metadata when present", () => {
     render(
       <ProcessDetail
@@ -74,7 +75,8 @@ describe("ProcessDetail metadata", () => {
           uid: 501,
           gid: 20,
           sha256: "abc123",
-          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 0, is_platform_binary: true },
+          cdhash: "d".repeat(40),
+          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true },
           exec_time_ns: 20 * NS,
           exit_time_ns: 30 * NS,
           exit_code: 1,
@@ -87,8 +89,43 @@ describe("ProcessDetail metadata", () => {
     expect(screen.getByText("curl https://evil.example")).toBeInTheDocument();
     expect(screen.getByText("501")).toBeInTheDocument();
     expect(screen.getByText("abc123")).toBeInTheDocument();
-    expect(screen.getByText(/com\.apple\.curl \(platform\)/)).toBeInTheDocument();
+    // The signing block renders as a derived verdict plus the raw identifiers; team id outranks the platform flag (issue #187).
+    expect(screen.getByText("Developer ID (Team T)")).toBeInTheDocument();
+    expect(screen.getByText("com.apple.curl")).toBeInTheDocument();
+    expect(screen.getByText("T")).toBeInTheDocument();
+    expect(screen.getByText("d".repeat(40))).toBeInTheDocument();
     expect(screen.getByText(/code 1/)).toBeInTheDocument();
+  });
+
+  // spec:web-ui/process-detail-content/verdict-distinguishes-the-signer-categories
+  it("shows the unsigned verdict when no code-signing block was reported", () => {
+    render(<ProcessDetail hostId="h1" node={makeNode({ exec_time_ns: 20 * NS })} onClose={vi.fn()} />);
+    expect(screen.getByText("unsigned")).toBeInTheDocument();
+  });
+
+  it("shows no verdict for a fork-only node (inherited image, matching the tooltip's rule)", () => {
+    render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
+    expect(screen.queryByText("unsigned")).not.toBeInTheDocument();
+    expect(screen.queryByText("Signing")).not.toBeInTheDocument();
+  });
+
+  // spec:web-ui/process-detail-content/evidence-fields-copy-in-one-click
+  it("offers one-click copy for every evidence field", () => {
+    render(
+      <ProcessDetail
+        hostId="h1"
+        node={makeNode({
+          args: ["curl", "https://evil.example"],
+          sha256: "abc123",
+          cdhash: "d".repeat(40),
+          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true },
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    for (const label of ["Copy command line", "Copy path", "Copy SHA256", "Copy cdhash", "Copy signing id", "Copy team id"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
   });
 
   it("falls back to (unknown) for an empty path", () => {

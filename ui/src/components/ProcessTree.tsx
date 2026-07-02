@@ -12,6 +12,7 @@ import {
 import { ProcessDetail } from "./ProcessDetail";
 import { HostHealthPanel } from "./HostHealthPanel";
 import { HostHeader } from "./HostHeader";
+import { buildNodeTooltip, nodeEvidenceMarked, type NodeTooltip } from "./node-tooltip";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import "./ProcessTree.scss";
@@ -47,6 +48,11 @@ const TREE_MARGIN_PX = 40;
 const TREE_ZOOM_MIN = 0.2;
 const TREE_ZOOM_MAX = 3;
 const NODE_DOT_RADIUS_DEFAULT = 5;
+// Evidence tooltip layout (issue #580): how far the hover card sits from the pointer, and the room reserved so a card near the
+// right/bottom viewport edge clamps back into view instead of rendering off-screen (width tracks the card's 34rem max-width).
+const TOOLTIP_POINTER_OFFSET_PX = 14;
+const TOOLTIP_CLAMP_WIDTH_PX = 560;
+const TOOLTIP_CLAMP_HEIGHT_PX = 170;
 const NODE_DOT_RADIUS_ALERTED = 8;
 const CHEVRON_DX = -14;
 const CHEVRON_DY = 4;
@@ -88,6 +94,8 @@ interface TreeInteractions {
   onToggleCollapsed?: (nodeId: number) => void;
   expandedAggIds: Set<number>;
   onToggleAggExpanded?: (nodeId: number) => void;
+  // onHover reports pointer entry/exit over a node so the component can render the evidence tooltip (issue #580); null clears it.
+  onHover?: (hover: { x: number; y: number; tooltip: NodeTooltip } | null) => void;
 }
 
 export function ProcessTreeView() {
@@ -107,6 +115,8 @@ export function ProcessTreeView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
+  // hoverTip is the evidence tooltip's position + content (issue #580); null when no node is hovered.
+  const [hoverTip, setHoverTip] = useState<{ x: number; y: number; tooltip: NodeTooltip } | null>(null);
   const [query, setQuery] = useState("");
   const [matchIdx, setMatchIdx] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
@@ -345,12 +355,18 @@ export function ProcessTreeView() {
       layoutNodesRef.current = [];
       return;
     }
+    // Clear any lingering tooltip before re-rendering: a collapse/expand can remove the hovered node without a mouseleave firing.
+    // Disable set-state-in-effect for the synchronous reset, matching HostHealthPanel.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setHoverTip(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
     const result = renderTree(svgRef.current, visibleRoots, setSelectedNode, {
       alertProcessIds,
       collapsedIds,
       onToggleCollapsed: toggleCollapsed,
       expandedAggIds,
       onToggleAggExpanded: toggleAggExpanded,
+      onHover: setHoverTip,
     });
     layoutNodesRef.current = result.nodes;
   }, [visibleRoots, alertProcessIds, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded]);
@@ -618,6 +634,21 @@ export function ProcessTreeView() {
       <div className="process-tree__layout">
         <div className="process-tree__canvas">
           <svg ref={svgRef} />
+          {hoverTip && (
+            <div className="process-tree__tooltip" role="tooltip" style={{
+                left: Math.min(hoverTip.x + TOOLTIP_POINTER_OFFSET_PX, window.innerWidth - TOOLTIP_CLAMP_WIDTH_PX),
+                top: Math.min(hoverTip.y + TOOLTIP_POINTER_OFFSET_PX, window.innerHeight - TOOLTIP_CLAMP_HEIGHT_PX),
+              }}>
+              <div className="process-tree__tooltip-title">{hoverTip.tooltip.title}</div>
+              {hoverTip.tooltip.groupNote && <div className="process-tree__tooltip-group">{hoverTip.tooltip.groupNote}</div>}
+              <div className="process-tree__tooltip-cmdline">{hoverTip.tooltip.commandLine}</div>
+              {hoverTip.tooltip.verdictLabel && (
+                <div className={`process-tree__tooltip-verdict${hoverTip.tooltip.marked ? " process-tree__tooltip-verdict--marked" : ""}`}>
+                  {hoverTip.tooltip.verdictLabel}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {selectedNode && (
           <aside className="process-tree__detail">
@@ -778,7 +809,7 @@ function renderTree(
   onSelect: (node: ProcessNode) => void,
   interactions: TreeInteractions,
 ): RenderResult {
-  const { alertProcessIds, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded } = interactions;
+  const { alertProcessIds, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded, onHover } = interactions;
   const hierarchy = toD3Hierarchy(roots);
   const root = d3.hierarchy(hierarchy);
 
@@ -843,7 +874,9 @@ function renderTree(
     .selectAll("g.node")
     .data(nodes.filter((n) => n.data.pid !== 0 || roots.length === 1))
     .join("g")
-    .attr("class", "node")
+    // node--evidence drives the amber ring via CSS (ProcessTree.scss) rather than presentation attributes, so the search-match
+    // ring's class rule cannot silently override it (CSS rules beat SVG presentation attributes).
+    .attr("class", (d) => (nodeEvidenceMarked(d.data.data) ? "node node--evidence" : "node"))
     .attr("transform", (d) => `translate(${String(d.y)},${String(d.x)})`)
     .style("cursor", "pointer")
     .on("click", (_, d) => {
@@ -855,6 +888,14 @@ function renderTree(
         return;
       }
       onSelect(p);
+    })
+    // Evidence tooltip (issue #580): positioned at the pointer on entry; not cursor-following, so hover costs one render, not one
+    // per pixel. mouseleave clears it; the click-through detail panel remains the full surface.
+    .on("mouseenter", (event: MouseEvent, d) => {
+      onHover?.({ x: event.clientX, y: event.clientY, tooltip: buildNodeTooltip(d.data.data) });
+    })
+    .on("mouseleave", () => {
+      onHover?.(null);
     });
 
   node

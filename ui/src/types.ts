@@ -55,6 +55,17 @@ export interface HostHealth {
 // passing back to the API as opaque values, but arithmetic on them may be
 // slightly imprecise. If exact ns precision is needed, switch to string
 // representation.
+// CodeSigning mirrors the wire's code_signing object (schema/events.json): the raw ESF identifiers plus the kernel CS_* flags
+// bitmask. The extension omits the whole block when both identifiers are absent, so a missing block on an EXEC'D process means
+// "unsigned". A fork-only process (no exec yet) also has no block because it runs its parent's inherited image; that absence is not
+// an unsigned conviction, and verdict call sites must gate on exec_time_ns (see deriveSigningVerdict's callers).
+export interface CodeSigning {
+  team_id: string;
+  signing_id: string;
+  flags: number;
+  is_platform_binary: boolean;
+}
+
 export interface Process {
   id: number;
   host_id: string;
@@ -64,13 +75,10 @@ export interface Process {
   args?: string[];
   uid?: number;
   gid?: number;
-  code_signing?: {
-    team_id: string;
-    signing_id: string;
-    flags: number;
-    is_platform_binary: boolean;
-  };
+  code_signing?: CodeSigning;
   sha256?: string;
+  // cdhash is the 40-hex SHA-1 of the code directory, present for Hardened-Runtime binaries only.
+  cdhash?: string;
   fork_time_ns: number;
   exec_time_ns?: number;
   exit_time_ns?: number;

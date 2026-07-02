@@ -366,6 +366,13 @@
     font-weight: $bold;
   }
 
+  // Evidence ring (issue #580): amber on exec'd ad-hoc/unsigned/invalid nodes. Declared AFTER .node--match so a search-highlighted
+  // evidence node keeps its amber ring (equal specificity: source order wins); the match rule still enlarges the dot.
+  svg .node--evidence .node__dot {
+    stroke: $ui-warning;
+    stroke-width: 2.5;
+  }
+
   svg .link--path {
     stroke: $core-fleet-green;
     stroke-width: 2;
@@ -376,6 +383,45 @@
 
     &:hover {
       fill: $core-fleet-green;
+    }
+  }
+}
+
+// Evidence tooltip (issue #580): fixed-position hover card with the command line + signing verdict.
+.process-tree__tooltip {
+  position: fixed;
+  z-index: 30;
+  max-width: 34rem;
+  padding: 0.5rem 0.75rem;
+  background: $core-fleet-black;
+  color: #fff;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(25 33 71 / 30%);
+  pointer-events: none;
+  font-size: 0.8rem;
+
+  &-title {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+
+  &-group {
+    color: $ui-fleet-black-33;
+    margin-bottom: 0.25rem;
+  }
+
+  &-cmdline {
+    font-family: ui-monospace, sfmono-regular, Menlo, monospace;
+    word-break: break-all;
+    margin-bottom: 0.25rem;
+  }
+
+  &-verdict {
+    color: $ui-fleet-black-33;
+
+    &--marked {
+      color: $ui-warning; // matches the node's evidence ring
+      font-weight: 600;
     }
   }
 }
