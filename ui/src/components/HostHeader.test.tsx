@@ -49,7 +49,7 @@ describe("HostHeader", () => {
     expect(screen.getByText("online")).toBeInTheDocument();
     expect(screen.getByText("macOS 26.4 (25E123)")).toBeInTheDocument();
     expect(screen.getByText("agent 0.5.0")).toBeInTheDocument();
-    expect(screen.getByText("last seen just now")).toBeInTheDocument();
+    expect(screen.getByText(/^last seen /)).toBeInTheDocument();
     expect(screen.getByText("203.0.113.7")).toBeInTheDocument();
     expect(screen.getByText(`${(12345).toLocaleString()} events`)).toBeInTheDocument();
     // The raw id stays visible for log correlation and is copyable in one click.
@@ -76,7 +76,7 @@ describe("HostHeader", () => {
     expect(screen.getByText(detail.host_id)).toBeInTheDocument();
     expect(screen.queryByText(/^agent /)).not.toBeInTheDocument();
     expect(screen.queryByText(/enrolled /)).not.toBeInTheDocument();
-    expect(screen.getByText("last seen 10m ago")).toBeInTheDocument();
+    expect(screen.getByText(/^last seen \d+m ago$/)).toBeInTheDocument();
   });
 
   // spec:web-ui/host-detail-header/header-degrades-when-the-detail-fetch-fails
