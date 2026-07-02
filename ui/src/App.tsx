@@ -16,9 +16,10 @@ import { Login } from "./components/Login";
 import { BreakGlassSetup } from "./components/BreakGlassSetup";
 import { BreakGlassLogin } from "./components/BreakGlassLogin";
 import { TopNav } from "./components/ui/TopNav";
+import { firstPermittedRoute } from "./components/ui/nav-links";
 import { currentSession, logout, Unauthorized401Error, SessionInfo, setForbiddenHandler, setUnauthorizedHandler } from "./api";
 import { PermissionsProvider, RequirePermission } from "./permissions";
-import { PermissionAction } from "./permissions-core";
+import { PermissionAction, useCan } from "./permissions-core";
 import { createDedupedRunner } from "./dedupe";
 
 type AuthState =
@@ -48,6 +49,13 @@ export function App() {
       </Routes>
     </BrowserRouter>
   );
+}
+
+// HomeRedirect lands "/" on the alert queue (the analyst's entry point), or on the
+// first nav entry the operator's permission set confers when alert.read is absent.
+function HomeRedirect() {
+  const can = useCan();
+  return <Navigate to={firstPermittedRoute(can)} replace />;
 }
 
 // AuthedApp is everything behind the /api/session gate. On mount it
@@ -151,7 +159,8 @@ export function AuthedApp() {
       />
       <main className="app-page">
         <Routes>
-          <Route path="/" element={<HostList />} />
+          <Route path="/" element={<HomeRedirect />} />
+          <Route path="/hosts" element={<HostList />} />
           <Route path="/alerts" element={<AlertList />} />
           <Route
             path="/app-control/*"

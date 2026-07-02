@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { AuthedApp } from "./App";
 import { setUnauthorizedHandler, setForbiddenHandler } from "./api";
+import { PermissionAction } from "./permissions-core";
 
 // AuthedApp gates the app on a live session. On mount it probes GET /api/session; on a 401 there it
 // renders the login page. The regression this suite pins: a session that lapses MID-USE (a background
@@ -72,6 +73,34 @@ afterEach(() => {
   setForbiddenHandler(null);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+// stubAuthedSession routes GET /api/session to an authed session carrying the given
+// permission set, and every list endpoint to an empty 200 result so the home redirect's
+// destination page mounts to its empty state instead of tripping the 401 handler.
+function stubAuthedSession(permissions: string[]): void {
+  const mock = vi.fn((input: unknown): Promise<FakeResponse> => {
+    const url = String(input);
+    if (url.includes("/api/session")) return Promise.resolve(makeResponse({ ...authedSession, permissions }, 200));
+    return Promise.resolve(makeResponse([], 200));
+  });
+  vi.stubGlobal("fetch", mock);
+}
+
+describe("home view routing", () => {
+  // spec:web-ui/alert-list-is-the-home-view/root-routes-to-the-alert-list
+  it("lands on the alert list at the root for an operator with alert.read", async () => {
+    stubAuthedSession([PermissionAction.AlertRead, PermissionAction.HostRead]);
+    renderAuthedApp();
+    expect(await screen.findByText("No alerts found.")).toBeInTheDocument();
+  });
+
+  // spec:web-ui/alert-list-is-the-home-view/operator-without-alert-read-lands-on-their-first-permitted-surface
+  it("lands on the hosts page at the root for an operator without alert.read", async () => {
+    stubAuthedSession([PermissionAction.HostRead]);
+    renderAuthedApp();
+    expect(await screen.findByText("No hosts reporting yet.")).toBeInTheDocument();
+  });
 });
 
 describe("AuthedApp mid-session expiry", () => {
