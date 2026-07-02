@@ -2,6 +2,7 @@ package config
 
 import (
 	"maps"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +12,24 @@ import (
 
 func envMap(pairs map[string]string) func(string) string {
 	return func(k string) string { return pairs[k] }
+}
+
+// spec:agent-configuration/default-file-locations-are-platform-specific/the-agent-resolves-platform-appropriate-default-paths
+//
+// The default configuration-file, event-queue, and enrollment-token locations are resolved from the platform (ADR-0018): the Unix paths
+// on macOS and Linux, and %ProgramData%\FleetEDR on Windows (paths_*.go). This runs on the macOS CI runner and pins the darwin values
+// plus the DefaultConfFile wiring; the Windows values are compile-checked by build:agent:windows.
+func TestPlatformDefaultPaths(t *testing.T) {
+	t.Parallel()
+	assert.NotEmpty(t, platformConfFile)
+	assert.NotEmpty(t, platformQueueDBPath)
+	assert.NotEmpty(t, platformTokenFile)
+	assert.Equal(t, platformConfFile, DefaultConfFile, "DefaultConfFile is wired to the platform default")
+	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+		assert.Equal(t, "/etc/fleet-edr.conf", platformConfFile)
+		assert.Equal(t, "/var/db/fleet-edr/events.db", platformQueueDBPath)
+		assert.Equal(t, "/var/db/fleet-edr/enrolled.plist", platformTokenFile)
+	}
 }
 
 func TestLoad(t *testing.T) {

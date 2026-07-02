@@ -24,7 +24,6 @@ const (
 	// (verified on edr-qa: "receiver connected" to group.com.fleetdm.edr.networkextension across many sessions). #300
 	// switched this to a team-prefixed name on a false premise and silently broke NE event delivery.
 	defaultNetXPCService = "group.com.fleetdm.edr.networkextension"
-	defaultQueueDBPath   = "/var/db/fleet-edr/events.db"
 
 	// DefaultPruneAge drops uploaded events older than 24h from the local SQLite queue. Wired into the prune loop at boot (no longer
 	// an env knob).
@@ -99,10 +98,10 @@ func loadFromEnv(getenv func(string) string, lookupEnv LookupEnvFunc) (*Config, 
 }
 
 func loadFrom(getenv func(string) string) (*Config, error) {
-	//nolint:gosec // "enrolled.plist" is a path, not a credential.
+	//nolint:gosec // platformTokenFile is a path, not a credential.
 	c := Config{
-		TokenFile:                "/var/db/fleet-edr/enrolled.plist",
-		QueueDBPath:              defaultQueueDBPath,
+		TokenFile:                platformTokenFile,
+		QueueDBPath:              platformQueueDBPath,
 		XPCService:               defaultXPCService,
 		NetXPCService:            defaultNetXPCService,
 		ProcessReconcileInterval: defaultProcessReconcileInterval,

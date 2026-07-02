@@ -136,7 +136,7 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 		opts.Now = time.Now
 	}
 	if opts.Kill == nil {
-		opts.Kill = syscall.Kill
+		opts.Kill = defaultKill
 	}
 	return &Reconciler{
 		pt:         pt,
