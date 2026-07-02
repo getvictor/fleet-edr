@@ -8,6 +8,7 @@
 // session-probe endpoint.
 import type {
   HostSummary,
+  HostDetail,
   HostHealth,
   TreeResponse,
   ProcessDetail,
@@ -318,6 +319,10 @@ export async function getProcessTree(
   return fetchJSON<TreeResponse>(
     `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}${flattenParam}`
   );
+}
+
+export async function getHostDetail(hostId: string): Promise<HostDetail> {
+  return fetchJSON<HostDetail>(`/hosts/${encodeURIComponent(hostId)}`);
 }
 
 export async function getHostHealth(hostId: string): Promise<HostHealth> {

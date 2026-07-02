@@ -13,6 +13,11 @@ export const MILLISECONDS_PER_MINUTE = MILLISECONDS_PER_SECOND * SECONDS_PER_MIN
 export const MILLISECONDS_PER_HOUR = MILLISECONDS_PER_MINUTE * MINUTES_PER_HOUR;
 export const MILLISECONDS_PER_DAY = MILLISECONDS_PER_HOUR * HOURS_PER_DAY;
 
+// "offline" is last_seen > 5 min old. The agent polls every 5 s, so 5 min is 60x the polling interval: well past any transient network
+// blip but fast enough that a crashed agent shows up quickly in the UI. Shared by the Hosts list and the host detail header via
+// time.ts's isOnline, and mirrored by the server's edr.offline.hosts gauge cutoff.
+export const OFFLINE_THRESHOLD_MINUTES = 5;
+
 // HTTP status codes the UI handles directly. Defined here rather than relying
 // on a string literal table so the lint allow-list stays tight.
 export const HTTP_STATUS_NO_CONTENT = 204;

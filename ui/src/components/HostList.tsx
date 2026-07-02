@@ -2,18 +2,11 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listHosts } from "../api";
 import type { HostSummary } from "../types";
-import { MILLISECONDS_PER_MINUTE, NANOSECONDS_PER_MILLISECOND } from "../constants";
-import { formatRelativeNs } from "../time";
+import { formatRelativeNs, isOnline } from "../time";
 import { Table, EmptyState } from "./ui/Table";
 import { StatCard, SummaryStrip } from "./ui/StatCard";
 import { HealthBadge } from "./ui/HealthBadge";
 import "./HostList.scss";
-
-// "offline" is last_seen > 5 min old. The agent polls every 5 s, so 5 min
-// is 60× the polling interval: well past any transient network blip but
-// fast enough that a crashed agent shows up quickly in the UI.
-const OFFLINE_THRESHOLD_MINUTES = 5;
-const offlineThresholdMs = OFFLINE_THRESHOLD_MINUTES * MILLISECONDS_PER_MINUTE;
 
 export function HostList() {
   const [hosts, setHosts] = useState<HostSummary[]>([]);
@@ -114,7 +107,3 @@ export function HostList() {
   );
 }
 
-function isOnline(lastSeenNs: number): boolean {
-  if (lastSeenNs === 0) return false;
-  return Date.now() - lastSeenNs / NANOSECONDS_PER_MILLISECOND < offlineThresholdMs;
-}

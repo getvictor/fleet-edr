@@ -180,6 +180,7 @@ func New(deps Deps) (*Detection, error) {
 		// The per-host agent-health detail (GET /api/hosts/{host_id}/health) reads the endpoint context's host_health table through the
 		// same store; wire it alongside the webhook admin surface (issue #359).
 		det.operatorH.SetHostHealth(store)
+		det.operatorH.SetHostDetail(store)
 
 		processor := pipeline.NewProcessor(
 			deps.EventLog,
