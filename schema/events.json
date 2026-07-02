@@ -22,6 +22,11 @@
       "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add"],
       "description": "Type of endpoint security event"
     },
+    "platform": {
+      "type": "string",
+      "enum": ["darwin", "windows", "linux"],
+      "description": "Operating system that produced the event. Optional on the wire: an agent predating the platform-aware contract omits it and the server normalizes an absent value to darwin."
+    },
     "payload": {
       "oneOf": [
         { "$ref": "#/definitions/exec_payload" },

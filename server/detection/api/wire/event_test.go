@@ -93,7 +93,10 @@ func eventGen() *rapid.Generator[api.Event] {
 			TimestampNs:  rapid.Int64().Draw(t, "ts_ns"),
 			IngestedAtNs: rapid.Int64().Draw(t, "ingested_ns"),
 			EventType:    rapid.SampledFrom([]string{"fork", "exec", "exit", "open", "network_connect", "dns_query"}).Draw(t, "event_type"),
-			Payload:      payload,
+			// Platform uses omitempty like IngestedAtNs: the empty value is a legacy agent that never set it (server normalizes it to
+			// darwin at intake). Sample the empty case alongside the three valid values so the round-trip covers the omitempty branch.
+			Platform: rapid.SampledFrom([]string{"", "darwin", "windows", "linux"}).Draw(t, "platform"),
+			Payload:  payload,
 		}
 	})
 }
@@ -128,6 +131,9 @@ func TestWire_RoundTripProperty(t *testing.T) {
 			if batch[i].IngestedAtNs != 0 {
 				assert.Equal(rt, batch[i].IngestedAtNs, got[i].IngestedAtNs, "ingested_at_ns at i=%d", i)
 			}
+			// Platform uses omitempty: an empty value disappears on the wire and decodes back to empty. A non-empty value must
+			// round-trip exactly.
+			assert.Equal(rt, batch[i].Platform, got[i].Platform, "platform at i=%d", i)
 		}
 	})
 }

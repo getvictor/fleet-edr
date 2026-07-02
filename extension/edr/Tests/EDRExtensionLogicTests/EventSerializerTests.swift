@@ -263,20 +263,34 @@ final class EventSerializerTests: XCTestCase {
             hostID: "AAAA0001-0000-0000-0000-000000000001",
             timestampNs: 1_700_000_000_000_000_000,
             eventType: "fork",
+            platform: EventPlatform.macOS,
             payload: payload
         )
         let encoded = try encoder.encode(envelope)
         let json = String(data: encoded, encoding: .utf8) ?? ""
-        // event_id, host_id, timestamp_ns, event_type, payload must all be present
+        // event_id, host_id, timestamp_ns, event_type, platform, payload must all be present
         // with snake_case wire keys and the payload nested as-is.
         XCTAssertTrue(json.contains("\"event_id\":\"11111111-1111-1111-1111-111111111111\""))
         XCTAssertTrue(json.contains("\"host_id\":\"AAAA0001-0000-0000-0000-000000000001\""))
         XCTAssertTrue(json.contains("\"event_type\":\"fork\""))
+        XCTAssertTrue(json.contains("\"platform\":\"darwin\""))
         XCTAssertTrue(json.contains("\"timestamp_ns\":1700000000000000000"))
         XCTAssertTrue(json.contains("\"payload\":{\"child_pid\":11,\"parent_pid\":10}"))
         let decoded = try decoder.decode(EventEnvelope<ForkPayload>.self, from: encoded)
         XCTAssertEqual(decoded.eventType, "fork")
+        XCTAssertEqual(decoded.platform, "darwin")
         XCTAssertEqual(decoded.payload.childPid, 11)
         XCTAssertEqual(decoded.timestampNs, 1_700_000_000_000_000_000)
+    }
+
+    // spec:endpoint-event-collection/serialized-events-declare-their-platform/an-esf-event-envelope-carries-the-darwin-platform
+    //
+    // The serializer stamps platform=darwin on every envelope (ADR-0018). The server scopes detection rules by platform and surfaces
+    // it in the hosts view; a macOS extension always declares darwin.
+    func testEnvelopeStampsDarwinPlatform() throws {
+        let serializer = EventSerializer()
+        let data = try XCTUnwrap(serializer.serialize(eventType: "fork", payload: ForkPayload(childPid: 2, parentPid: 1, pidVersion: nil)))
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(obj?["platform"] as? String, "darwin")
     }
 }

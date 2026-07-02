@@ -73,7 +73,7 @@ func (s *Store) Insert(ctx context.Context, events []api.Event) error {
 		return fmt.Errorf("begin clickhouse batch: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
-	stmt, err := tx.PrepareContext(ctx, "INSERT INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload)")
+	stmt, err := tx.PrepareContext(ctx, "INSERT INTO events (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload)")
 	if err != nil {
 		return fmt.Errorf("prepare clickhouse insert: %w", err)
 	}
@@ -85,7 +85,7 @@ func (s *Store) Insert(ctx context.Context, events []api.Event) error {
 		}
 		// Pass the payload bytes directly; the clickhouse-go driver binds []byte to a String column without the extra string copy.
 		if _, err := stmt.ExecContext(ctx, events[i].EventID, events[i].HostID, events[i].TimestampNs,
-			events[i].IngestedAtNs, events[i].EventType, payload); err != nil {
+			events[i].IngestedAtNs, events[i].EventType, events[i].Platform, payload); err != nil {
 			return fmt.Errorf("append clickhouse row %s: %w", events[i].EventID, err)
 		}
 	}
@@ -101,7 +101,7 @@ func (s *Store) Insert(ctx context.Context, events []api.Event) error {
 // materialized column extracted from the payload.
 func (s *Store) NetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr httpserver.TimeRange) ([]api.Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload
+		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM events FINAL
 		WHERE host_id = ? AND event_type IN ('network_connect', 'dns_query') AND pid = ?
 		  AND ingested_at_ns >= ? AND ingested_at_ns <= ?
@@ -126,7 +126,7 @@ func (s *Store) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := "SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload FROM events FINAL WHERE event_id IN (" +
+	query := "SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload FROM events FINAL WHERE event_id IN (" +
 		strings.Join(placeholders, ", ") + ") ORDER BY timestamp_ns, event_id"
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -135,16 +135,16 @@ func (s *Store) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event
 	return scanEvents(rows)
 }
 
-// scanEvents drains rows of the standard event projection (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, payload) into
-// a slice and closes them. The String payload is scanned into a []byte (database/sql copies the driver's string into it) and handed to
-// json.RawMessage, since database/sql cannot assign a string driver value straight into json.RawMessage.
+// scanEvents drains rows of the standard event projection (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform,
+// payload) into a slice and closes them. The String payload is scanned into a []byte (database/sql copies the driver's string into it)
+// and handed to json.RawMessage, since database/sql cannot assign a string driver value straight into json.RawMessage.
 func scanEvents(rows *sql.Rows) ([]api.Event, error) {
 	defer rows.Close() //nolint:errcheck
 	var events []api.Event
 	for rows.Next() {
 		var e api.Event
 		var payload []byte
-		if err := rows.Scan(&e.EventID, &e.HostID, &e.TimestampNs, &e.IngestedAtNs, &e.EventType, &payload); err != nil {
+		if err := rows.Scan(&e.EventID, &e.HostID, &e.TimestampNs, &e.IngestedAtNs, &e.EventType, &e.Platform, &payload); err != nil {
 			return nil, fmt.Errorf("scan clickhouse event: %w", err)
 		}
 		e.Payload = payload

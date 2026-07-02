@@ -269,6 +269,10 @@ struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {
     let hostID: String
     let timestampNs: UInt64
     let eventType: String
+    // platform is the operating system that produced the event. This extension is macOS-only, so it always stamps EventPlatform.macOS.
+    // The field is part of the platform-aware event contract (ADR-0018): the server scopes detection rules by it and surfaces it in the
+    // hosts view. A future Windows or Linux agent stamps its own value.
+    let platform: String
     let payload: P
 
     enum CodingKeys: String, CodingKey {
@@ -276,8 +280,15 @@ struct EventEnvelope<P: Codable & Sendable>: Codable, Sendable {
         case hostID = "host_id"
         case timestampNs = "timestamp_ns"
         case eventType = "event_type"
+        case platform
         case payload
     }
+}
+
+/// The platform value stamped on every event envelope this macOS extension produces. Matches the server's PlatformDarwin constant and
+/// Go's runtime.GOOS on macOS.
+enum EventPlatform {
+    static let macOS = "darwin"
 }
 
 // MARK: Serializer
@@ -302,6 +313,7 @@ final class EventSerializer: Sendable {
             hostID: hostID,
             timestampNs: UInt64(clock_gettime_nsec_np(CLOCK_REALTIME)),
             eventType: eventType,
+            platform: EventPlatform.macOS,
             payload: payload
         )
 
