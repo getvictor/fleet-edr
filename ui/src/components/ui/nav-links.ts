@@ -1,4 +1,4 @@
-import { PermissionAction } from "../../permissions-core";
+import { PermissionAction, PermissionActionValue } from "../../permissions-core";
 
 export interface NavLink {
   to: string;
@@ -8,7 +8,7 @@ export interface NavLink {
   // a dedicated read action (wave-1 Coverage has no `coverage.read`), so it shows for
   // every authenticated operator. Hiding is presentation only; the server still
   // enforces every read on the destination surface.
-  action?: string;
+  action?: PermissionActionValue;
 }
 
 export const NAV_LINKS: NavLink[] = [
