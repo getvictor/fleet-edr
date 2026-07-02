@@ -34,6 +34,7 @@ import (
 	"github.com/fleetdm/edr/agent/enrollment"
 	"github.com/fleetdm/edr/agent/health"
 	"github.com/fleetdm/edr/agent/hostid"
+	"github.com/fleetdm/edr/agent/hostinfo"
 	"github.com/fleetdm/edr/agent/metrics"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
@@ -236,14 +237,24 @@ func run() error {
 	}
 	go runUploader(ctx, up, logger)
 
-	// Report agent health to the server on startup, on each extension transition, and periodically (issue #359).
+	// Report agent health to the server on startup, on each extension transition, and periodically (issue #359). Every post also
+	// carries the host inventory block (issue #579) so identity stays fresh without a re-enroll; collected once here since identity
+	// changes coincide with a daemon restart in practice (an OS upgrade reboots, an agent upgrade restarts the daemon).
+	hostInfo := hostinfo.Collect()
 	go health.NewPoster(health.Options{
 		Registry:     healthRegistry,
 		Client:       httpClient,
 		BaseURL:      cfg.ServerURL,
 		Tokens:       tokenProvider,
 		AgentVersion: version,
-		Logger:       logger,
+		Inventory: &health.Inventory{
+			Hostname:     hostInfo.Hostname,
+			OSName:       hostInfo.OSName,
+			OSVersion:    hostInfo.OSVersion,
+			OSBuild:      hostInfo.OSBuild,
+			AgentVersion: version,
+		},
+		Logger: logger,
 	}).Run(ctx)
 
 	// streamConnected is the shared flag the control channel raises while its stream is up so the commander suspends polling. Per-replica

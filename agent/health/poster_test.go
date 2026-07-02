@@ -50,9 +50,16 @@ func newTestPoster(t *testing.T, srv *httptest.Server, tokens TokenSource, reg *
 		BaseURL:      srv.URL,
 		Tokens:       tokens,
 		AgentVersion: "0.4.0",
-		Interval:     20 * time.Millisecond,
-		Debounce:     5 * time.Millisecond,
-		NowNs:        fixedClock(1234),
+		Inventory: &Inventory{
+			Hostname:     "mac-01.local",
+			OSName:       "macOS",
+			OSVersion:    "26.4",
+			OSBuild:      "25E123",
+			AgentVersion: "0.4.0",
+		},
+		Interval: 20 * time.Millisecond,
+		Debounce: 5 * time.Millisecond,
+		NowNs:    fixedClock(1234),
 	})
 }
 
@@ -78,6 +85,13 @@ func TestPoster_PostSendsSnapshot(t *testing.T) {
 	require.Len(t, got.Components, 1)
 	assert.Equal(t, ComponentNetworkExtension, got.Components[0].Type)
 	assert.Equal(t, StatusHealthy, got.Components[0].Status)
+	// spec:agent-status-reporting/status-report-carries-host-inventory/inventory-is-included-in-the-status-post
+	require.NotNil(t, got.Inventory)
+	assert.Equal(t, "mac-01.local", got.Inventory.Hostname)
+	assert.Equal(t, "macOS", got.Inventory.OSName)
+	assert.Equal(t, "26.4", got.Inventory.OSVersion)
+	assert.Equal(t, "25E123", got.Inventory.OSBuild)
+	assert.Equal(t, "0.4.0", got.Inventory.AgentVersion)
 }
 
 func TestPoster_UnauthorizedTriggersReenroll(t *testing.T) {

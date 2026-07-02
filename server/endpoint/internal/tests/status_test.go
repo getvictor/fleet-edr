@@ -179,3 +179,84 @@ func TestRecordStatus_HTTP_Unauthenticated(t *testing.T) {
 	_, ok := readHealth(t, db, uuid)
 	assert.False(t, ok, "an unauthenticated check-in must store nothing")
 }
+
+// --- Inventory on the check-in (issue #579) ---------------------------------
+
+type identityRow struct {
+	Hostname              string `db:"hostname"`
+	OSName                string `db:"os_name"`
+	OSVersion             string `db:"os_version"`
+	OSBuild               string `db:"os_build"`
+	AgentVersion          string `db:"agent_version"`
+	InventoryReportedAtNs int64  `db:"inventory_reported_at_ns"`
+}
+
+func readIdentity(t *testing.T, db *sqlx.DB, hostID string) identityRow {
+	t.Helper()
+	var row identityRow
+	require.NoError(t, db.GetContext(t.Context(), &row,
+		`SELECT hostname, os_name, os_version, os_build, agent_version, inventory_reported_at_ns
+		 FROM enrollments WHERE host_id = ?`, hostID))
+	return row
+}
+
+// spec:server-host-status/server-persists-inventory-from-the-status-check-in/check-in-refreshes-identity-after-an-os-upgrade
+func TestRecordStatus_HTTP_InventoryRefreshesIdentity(t *testing.T) {
+	t.Parallel()
+	uuid := "77777777-7777-7777-7777-777777777777"
+	_, db, srv, token := statusFixture(t, uuid)
+
+	before := readIdentity(t, db, uuid)
+	require.Equal(t, "macOS 26", before.OSVersion, "fixture enrolls with the pre-upgrade snapshot")
+	require.Zero(t, before.InventoryReportedAtNs)
+
+	body := `{"agent_version":"0.5.0","reported_at_ns":300,
+		"components":[{"type":"network_extension","status":"healthy","last_transition_ns":1}],
+		"inventory":{"hostname":"renamed.local","os_name":"macOS","os_version":"26.4","os_build":"25E123","agent_version":"0.5.0"}}`
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, body))
+
+	after := readIdentity(t, db, uuid)
+	assert.Equal(t, "renamed.local", after.Hostname)
+	assert.Equal(t, "macOS", after.OSName)
+	assert.Equal(t, "26.4", after.OSVersion)
+	assert.Equal(t, "25E123", after.OSBuild)
+	assert.Equal(t, "0.5.0", after.AgentVersion)
+	assert.EqualValues(t, 300, after.InventoryReportedAtNs)
+
+	// A stale (older reported_at_ns) inventory must not clobber the fresher identity, mirroring the health row's LWW guard.
+	stale := `{"agent_version":"0.4.0","reported_at_ns":200,
+		"components":[{"type":"network_extension","status":"healthy","last_transition_ns":1}],
+		"inventory":{"hostname":"old.local","os_name":"macOS","os_version":"26.3","os_build":"25D000","agent_version":"0.4.0"}}`
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, stale))
+	assert.Equal(t, "renamed.local", readIdentity(t, db, uuid).Hostname, "a stale inventory must not overwrite a fresher one")
+}
+
+// spec:server-host-status/server-persists-inventory-from-the-status-check-in/report-without-inventory-leaves-identity-untouched
+func TestRecordStatus_HTTP_NoInventoryLeavesIdentityUntouched(t *testing.T) {
+	t.Parallel()
+	uuid := "88888888-8888-8888-8888-888888888888"
+	_, db, srv, token := statusFixture(t, uuid)
+
+	before := readIdentity(t, db, uuid)
+	body := `{"agent_version":"0.4.0","reported_at_ns":100,"components":[{"type":"network_extension","status":"healthy","last_transition_ns":1}]}`
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, body))
+
+	_, ok := readHealth(t, db, uuid)
+	require.True(t, ok, "the health snapshot itself is stored")
+	assert.Equal(t, before, readIdentity(t, db, uuid), "an inventory-less report (older agent) must not touch identity")
+}
+
+// spec:server-host-status/server-persists-inventory-from-the-status-check-in/rejected-report-does-not-write-inventory
+func TestRecordStatus_HTTP_RejectedReportWritesNoInventory(t *testing.T) {
+	t.Parallel()
+	uuid := "99999999-9999-9999-9999-999999999999"
+	_, db, srv, token := statusFixture(t, uuid)
+
+	before := readIdentity(t, db, uuid)
+	body := `{"agent_version":"0.4.0","reported_at_ns":100,
+		"components":[{"type":"network_extension","status":"borked","last_transition_ns":1}],
+		"inventory":{"hostname":"evil.local","os_name":"macOS","os_version":"26.4","os_build":"25E123","agent_version":"0.4.0"}}`
+	require.Equal(t, http.StatusBadRequest, postStatus(t, srv, token, body))
+
+	assert.Equal(t, before, readIdentity(t, db, uuid), "a rejected snapshot must write neither health nor identity")
+}

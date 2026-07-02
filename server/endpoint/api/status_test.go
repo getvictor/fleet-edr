@@ -167,6 +167,23 @@ func componentsGen() *rapid.Generator[api.Components] {
 	})
 }
 
+// inventoryGen draws either no inventory claim (nil, the older-agent shape) or a full block of printable fields, so the round-trip
+// property covers both the omitted and the present-but-arbitrary cases.
+func inventoryGen() *rapid.Generator[*api.Inventory] {
+	return rapid.Custom(func(rt *rapid.T) *api.Inventory {
+		if !rapid.Bool().Draw(rt, "has_inventory") {
+			return nil
+		}
+		return &api.Inventory{
+			Hostname:     rapid.StringMatching(`[ -~]{0,32}`).Draw(rt, "hostname"),
+			OSName:       rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_name"),
+			OSVersion:    rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_version"),
+			OSBuild:      rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "os_build"),
+			AgentVersion: rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "inv_agent_version"),
+		}
+	})
+}
+
 // TestStatusReport_RoundTripProperty: Unmarshal(Marshal(r)) == r for any report. The wire contract must not lose or mangle a field.
 func TestStatusReport_RoundTripProperty(t *testing.T) {
 	t.Parallel()
@@ -175,6 +192,7 @@ func TestStatusReport_RoundTripProperty(t *testing.T) {
 			AgentVersion: rapid.StringMatching(`[ -~]{0,16}`).Draw(rt, "agent_version"),
 			ReportedAtNs: rapid.Int64().Draw(rt, "reported_at_ns"),
 			Components:   componentsGen().Draw(rt, "components"),
+			Inventory:    inventoryGen().Draw(rt, "inventory"),
 		}
 
 		out, err := json.Marshal(report)

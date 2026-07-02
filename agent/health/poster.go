@@ -30,10 +30,14 @@ type Options struct {
 	BaseURL      string
 	Tokens       TokenSource
 	AgentVersion string
-	Interval     time.Duration
-	Debounce     time.Duration
-	Logger       *slog.Logger
-	NowNs        func() int64
+	// Inventory is the host identity block included in every post (issue #579). Optional: nil sends no inventory claim and the server
+	// leaves the host's identity record untouched. Collected once at wiring time; identity changes reach the server on the next agent
+	// restart, which is when they occur in practice (an OS upgrade reboots, an agent upgrade restarts the daemon).
+	Inventory *Inventory
+	Interval  time.Duration
+	Debounce  time.Duration
+	Logger    *slog.Logger
+	NowNs     func() int64
 }
 
 // Poster reports the registry's current health to POST /api/status: once at startup, again on any status transition (debounced), and on
@@ -45,6 +49,7 @@ type Poster struct {
 	baseURL      string
 	tokens       TokenSource
 	agentVersion string
+	inventory    *Inventory
 	interval     time.Duration
 	debounce     time.Duration
 	logger       *slog.Logger
@@ -78,6 +83,7 @@ func NewPoster(opts Options) *Poster {
 		baseURL:      opts.BaseURL,
 		tokens:       opts.Tokens,
 		agentVersion: opts.AgentVersion,
+		inventory:    opts.Inventory,
 		interval:     interval,
 		debounce:     debounce,
 		logger:       logger,
@@ -139,6 +145,7 @@ func (p *Poster) post(ctx context.Context) {
 		AgentVersion: p.agentVersion,
 		ReportedAtNs: p.nowNs(),
 		Components:   p.reg.Snapshot(),
+		Inventory:    p.inventory,
 	})
 	if err != nil {
 		p.logger.ErrorContext(ctx, "status check-in marshal", "err", err)

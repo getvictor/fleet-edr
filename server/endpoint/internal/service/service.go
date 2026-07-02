@@ -254,6 +254,21 @@ func (s *service) RecordStatus(ctx context.Context, hostID string, report api.St
 	if err := s.store.UpsertHostHealth(ctx, hostID, string(overall), components, reportedAtNs); err != nil {
 		return fmt.Errorf("record host status: %w", err)
 	}
+	// Inventory rides the same snapshot (issue #579): when present it refreshes the enrollment row's identity fields, so a hostname
+	// rename or OS/agent upgrade reaches the console within one check-in interval instead of waiting for a forced re-enroll. Absent
+	// inventory (an older agent) touches nothing. Persisted only after the snapshot passed validation above, so a rejected report
+	// writes neither health nor identity.
+	if inv := report.Inventory; inv != nil {
+		if err := s.store.UpdateInventory(ctx, hostID, mysql.InventoryUpdate{
+			Hostname:     inv.Hostname,
+			OSName:       inv.OSName,
+			OSVersion:    inv.OSVersion,
+			OSBuild:      inv.OSBuild,
+			AgentVersion: inv.AgentVersion,
+		}, reportedAtNs); err != nil {
+			return fmt.Errorf("record host inventory: %w", err)
+		}
+	}
 	return nil
 }
 
