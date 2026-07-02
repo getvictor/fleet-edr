@@ -147,6 +147,14 @@ jobs:
         # integration job unblocked.
         run: task build:agent:headless
 
+      - name: Cross-build agent for windows (ADR-0018 Phase 0 invariant)
+        # The agent's Go core must compile for windows/amd64 and windows/arm64 so
+        # the Windows agent (ADR-0018) can build. The kill, liveness-probe,
+        # host-id, and config-path build-tag splits select their Windows variants;
+        # go vet runs the same matrix so a Windows-only type error surfaces here
+        # rather than on a Windows runner (which does not exist in CI yet).
+        run: task build:agent:windows
+
       - name: Run agent tests with coverage
         run: task test:go:agent:coverage
 
