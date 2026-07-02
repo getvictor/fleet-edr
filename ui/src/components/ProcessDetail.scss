@@ -146,3 +146,11 @@
     gap: $pad-xsmall;
   }
 }
+
+// Copy affordances on evidence rows (issue #580): keep the icon button on the text baseline without reflowing the value.
+.process-detail__copyable {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
