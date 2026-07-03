@@ -1,14 +1,16 @@
 // Package receiver: Loop owns the reconnect/backoff/heartbeat machinery that
-// drives a single XPC service's connection lifecycle. It depends on the
-// Connector interface (production: *Receiver, tests: a stub) so the loop
-// semantics (exponential backoff, post-success reset, heartbeat-driven
-// reconnect, clean shutdown) can be exercised without standing up a real
-// Mach service. The agent main wires one Loop per service (ESF + network
-// extension) plus a Dispatcher so outbound application_control pushes can
-// route to whichever connector is currently active.
+// drives a single connector's connection lifecycle. It depends on the
+// Connector interface (production on macOS: *Receiver over XPC; on Windows:
+// the agent/wintel ETW sensor; tests: a stub) so the loop semantics
+// (exponential backoff, post-success reset, heartbeat-driven reconnect, clean
+// shutdown) can be exercised without standing up a real event source. The
+// agent main wires one Loop per source (macOS ESF + network extension, or the
+// Windows ETW sensor) plus a Dispatcher so outbound application_control pushes
+// can route to whichever connector is currently active.
 //
-// This file is build-tag-free: the Loop talks to Connector, never to CGo,
-// so the same loop code runs on linux against the non-darwin stub.
+// This file is build-tag-free: the Loop talks to Connector, never to CGo, so
+// the same loop code runs on every platform (darwin XPC, the linux stub, and
+// the Windows ETW sensor).
 package receiver
 
 import (
@@ -37,9 +39,10 @@ const (
 	staleProbeAfterFailures = 3
 )
 
-// Connector represents a single XPC connection's lifecycle. Production code satisfies it with *Receiver; tests pass a deterministic
-// stub. The Loop constructs one fresh Connector per reconnect cycle via a ConnectorFactory, so a Connector's Connect / Disconnect
-// contract only needs to support one connect followed by one disconnect: re-use across cycles is not required.
+// Connector represents a single event source's connection lifecycle. Production code satisfies it with *Receiver (macOS XPC) or the
+// agent/wintel ETW sensor (Windows); tests pass a deterministic stub. The Loop constructs one fresh Connector per reconnect cycle via
+// a ConnectorFactory, so a Connector's Connect / Disconnect contract only needs to support one connect followed by one disconnect:
+// re-use across cycles is not required.
 type Connector interface {
 	Connect() error
 	Disconnect()
@@ -96,7 +99,7 @@ type LoopHooks struct {
 	UpgradeProbe func() bool
 }
 
-// Loop runs a single XPC service's connect/reconnect/event-pump cycle. Build one with NewLoop and call Run(ctx) in its own goroutine.
+// Loop runs a single connector's connect/reconnect/event-pump cycle. Build one with NewLoop and call Run(ctx) in its own goroutine.
 // Run blocks until ctx is cancelled.
 type Loop struct {
 	factory ConnectorFactory
@@ -221,7 +224,7 @@ func (l *Loop) logConnectFailure(ctx context.Context, err error) {
 // pipeEvents reads from the connector's event + error channels and dispatches
 // to OnEvent until ctx is cancelled, the connector errors, or the heartbeat
 // detects a silently-dead channel. Returns true if the caller should
-// reconnect (XPC error or heartbeat failure), false if ctx was cancelled.
+// reconnect (connector error or heartbeat failure), false if ctx was cancelled.
 //
 // The heartbeat goroutine is the agent's positive liveness probe (issue #178)
 // for the case where macOS XPC silently routes an open connection to a stale
@@ -245,13 +248,13 @@ func (l *Loop) pipeEvents(ctx context.Context, conn Connector) bool {
 		case <-ctx.Done():
 			return false
 		case <-heartbeatFailed:
-			// Heartbeat ping did not get a "hello-ack" within the timeout. The XPC channel is one-way dead even though no error
-			// event arrived. Reconnect to bind a fresh Mach port.
-			l.logger.WarnContext(ctx, "xpc heartbeat failed, reconnecting", "service", l.cfg.ServiceName)
+			// Heartbeat ping did not get an ack within the timeout: the connection is one-way dead even though no error event arrived
+			// (on macOS this is XPC silently routed to a stale Mach port). Reconnect to establish a fresh session.
+			l.logger.WarnContext(ctx, "connector heartbeat failed, reconnecting", "service", l.cfg.ServiceName)
 			return true
 		case evt, ok := <-eventsCh:
 			if !ok {
-				l.logger.WarnContext(ctx, "xpc events channel closed, reconnecting", "service", l.cfg.ServiceName)
+				l.logger.WarnContext(ctx, "connector events channel closed, reconnecting", "service", l.cfg.ServiceName)
 				return true
 			}
 			if l.hooks.OnEvent != nil {
@@ -259,13 +262,13 @@ func (l *Loop) pipeEvents(ctx context.Context, conn Connector) bool {
 			}
 		case errCode, ok := <-errorsCh:
 			if !ok {
-				l.logger.WarnContext(ctx, "xpc errors channel closed, reconnecting", "service", l.cfg.ServiceName)
+				l.logger.WarnContext(ctx, "connector errors channel closed, reconnecting", "service", l.cfg.ServiceName)
 				return true
 			}
-			// All XPC error codes force a reconnect today; the classification is for log fidelity so SigNoz operators can tell
+			// All connector error codes force a reconnect today; the classification is for log fidelity so SigNoz operators can tell
 			// expected transient codes apart from unexpected ones at a glance. service is included so concurrent ESF +
 			// network-extension loops produce distinguishable log lines.
-			l.logger.WarnContext(ctx, "xpc error",
+			l.logger.WarnContext(ctx, "connector error",
 				"service", l.cfg.ServiceName,
 				"code", errCode,
 				"expected", errCode == ErrorConnectionInvalid ||
@@ -290,7 +293,7 @@ func (l *Loop) runHeartbeat(ctx context.Context, conn Connector, done <-chan str
 			return
 		case <-ticker.C:
 			if err := conn.Ping(l.cfg.HeartbeatTimeout); err != nil {
-				l.logger.WarnContext(ctx, "xpc heartbeat ping failed", "service", l.cfg.ServiceName, "err", err)
+				l.logger.WarnContext(ctx, "connector heartbeat ping failed", "service", l.cfg.ServiceName, "err", err)
 				select {
 				case failed <- struct{}{}:
 				default:

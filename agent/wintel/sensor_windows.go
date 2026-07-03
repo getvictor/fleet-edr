@@ -27,6 +27,11 @@ const (
 	eventProcessStop            = 2
 )
 
+// SensorLabel is the log/heartbeat identity for the Windows ETW sensor. The agent uses it as the receiver.Loop ServiceName AND the
+// sensor stamps it as the drop-warning "service", so every Windows sensor log line (connect/heartbeat/error and dropped-event) shares
+// one value for correlation. It is deliberately distinct from sessionName, which is the OS ETW session object name, not a log label.
+const SensorLabel = "windows-etw"
+
 // ErrUnsupported is returned by SendApplicationControl: application-control enforcement is a privileged-tier (ELAM/PPL) capability the
 // driverless sensor does not provide yet (ADR-0018, Phase 3).
 var ErrUnsupported = errors.New("wintel: application control not supported on the driverless Windows sensor")
@@ -39,6 +44,7 @@ type Sensor struct {
 	logger *slog.Logger
 	events chan receiver.Event
 	errs   chan int
+	drops  *receiver.DropReporter // coalesces "channel full" drop warnings so a burst does not flood the log
 
 	mu        sync.Mutex
 	session   *etw.Session
@@ -59,6 +65,7 @@ func New(hostID string, eventBuf int, logger *slog.Logger) *Sensor {
 		logger: logger,
 		events: make(chan receiver.Event, eventBuf),
 		errs:   make(chan int, 8),
+		drops:  receiver.NewDropReporter(),
 	}
 }
 
@@ -111,7 +118,9 @@ func (s *Sensor) Connect() error {
 }
 
 // handle maps a Kernel-Process event to an envelope and enqueues it. Runs on the ProcessTrace thread; it must not block, so a full
-// Events() buffer drops the event with a warning rather than stalling the trace (which would lose events kernel-side anyway).
+// Events() buffer drops the event rather than stalling the trace (which would lose events kernel-side anyway). The drop is delivered
+// through receiver.TryDeliverEvent so it shares the macOS receiver's non-blocking send + coalesced "channel full" warning instead of
+// logging one line per dropped event.
 func (s *Sensor) handle(r etw.Record) {
 	var data []byte
 	var err error
@@ -127,11 +136,7 @@ func (s *Sensor) handle(r etw.Record) {
 		s.logger.Warn("etw map event", "event_id", r.EventID(), "err", err)
 		return
 	}
-	select {
-	case s.events <- receiver.Event{Data: data}:
-	default:
-		s.logger.Warn("etw event dropped: buffer full")
-	}
+	receiver.TryDeliverEvent(s.events, receiver.Event{Data: data}, SensorLabel, s.drops)
 }
 
 func (s *Sensor) execFromRecord(r etw.Record) ([]byte, error) {

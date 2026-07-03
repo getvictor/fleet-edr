@@ -10,10 +10,6 @@ import (
 	"github.com/fleetdm/edr/agent/wintel"
 )
 
-// windowsSensorLabel is the receiver.Loop ServiceName for the ETW sensor: a log/heartbeat label, not an XPC service name (the Windows
-// sensor has no Mach service). Kept distinct so operator logs read "windows-etw" rather than an empty service.
-const windowsSensorLabel = "windows-etw"
-
 // startTelemetrySensors starts the Windows telemetry sensor: one ETW Kernel-Process consumer driven through the shared receiver.Loop
 // (reconnect/backoff/heartbeat + health). The loop's connectorFactory builds a fresh wintel.Sensor per connect, mirroring how the macOS
 // loops build a fresh XPC receiver. The health component is registered before the loop starts so the first status check-in already
@@ -21,13 +17,15 @@ const windowsSensorLabel = "windows-etw"
 func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 	d.health.Register(health.ComponentWindowsETWSensor, "Windows ETW sensor")
 	go startReceiverLoop(ctx, receiverLoopParams{
-		logger:      d.logger,
-		xpcService:  windowsSensorLabel,
-		enqueue:     d.enqueue,
-		pt:          d.pidTable,
-		updateTable: true,
-		health:      d.health,
-		component:   health.ComponentWindowsETWSensor,
+		logger: d.logger,
+		// serviceLabel is only a log/heartbeat label on Windows (no Mach service); wintel.SensorLabel is the single source of truth so
+		// the loop's "service" matches the sensor's drop-warning "service".
+		serviceLabel: wintel.SensorLabel,
+		enqueue:      d.enqueue,
+		pt:           d.pidTable,
+		updateTable:  true,
+		health:       d.health,
+		component:    health.ComponentWindowsETWSensor,
 		connectorFactory: func() receiver.Connector {
 			return wintel.New(d.hostID, receiverEventBuffer, d.logger)
 		},

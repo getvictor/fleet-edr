@@ -21,19 +21,19 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 	}
 
 	go startReceiverLoop(ctx, receiverLoopParams{
-		logger:      d.logger,
-		xpcService:  d.cfg.XPCService,
-		enqueue:     d.enqueue,
-		pt:          d.pidTable,
-		updateTable: true,
-		dispatcher:  d.esfDispatcher,
-		health:      d.health,
-		component:   health.ComponentEndpointSecurityExtension,
+		logger:       d.logger,
+		serviceLabel: d.cfg.XPCService,
+		enqueue:      d.enqueue,
+		pt:           d.pidTable,
+		updateTable:  true,
+		dispatcher:   d.esfDispatcher,
+		health:       d.health,
+		component:    health.ComponentEndpointSecurityExtension,
 	})
 	if d.cfg.NetXPCService != "" {
 		go startReceiverLoop(ctx, receiverLoopParams{
 			logger:       d.logger,
-			xpcService:   d.cfg.NetXPCService,
+			serviceLabel: d.cfg.NetXPCService,
 			enqueue:      d.enqueue,
 			pt:           d.pidTable,
 			upgradeProbe: func() bool { return receiver.NEUpgradePending(ctx) },

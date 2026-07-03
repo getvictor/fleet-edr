@@ -559,8 +559,10 @@ func pruneLoop(ctx context.Context, q *queue.Queue, ledger *commandledger.Store,
 // receiverLoopParams configures startReceiverLoop. ctx is passed separately so the call sites read like a normal context-first
 // function; everything else is grouped here. dispatcher may be nil for non-ESF services that do not receive outbound pushes.
 type receiverLoopParams struct {
-	logger       *slog.Logger
-	xpcService   string
+	logger *slog.Logger
+	// serviceLabel scopes this loop's log lines (the "service" field) and, for the default macOS factory, is the XPC Mach service
+	// name passed to receiver.New. When connectorFactory is set (the Windows ETW sensor) it is only a log/heartbeat label.
+	serviceLabel string
 	enqueue      func(context.Context, []byte) error
 	pt           *proctable.Table
 	updateTable  bool
@@ -579,7 +581,7 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	factory := p.connectorFactory
 	if factory == nil {
 		factory = func() receiver.Connector {
-			return receiver.New(p.xpcService, receiverEventBuffer)
+			return receiver.New(p.serviceLabel, receiverEventBuffer)
 		}
 	}
 	hooks := receiver.LoopHooks{
@@ -622,7 +624,7 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	// pending-uninstall old version means "reboot required", not "needs approval" (#399).
 	hooks.UpgradeProbe = p.upgradeProbe
 	loop := receiver.NewLoop(factory, receiver.LoopConfig{
-		ServiceName:       p.xpcService,
+		ServiceName:       p.serviceLabel,
 		HeartbeatInterval: xpcHeartbeatInterval,
 		HeartbeatTimeout:  xpcHeartbeatPingTimeout,
 	}, hooks, p.logger)

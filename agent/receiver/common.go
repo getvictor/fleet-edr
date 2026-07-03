@@ -47,7 +47,7 @@ func SetLogger(l *slog.Logger) {
 }
 
 // getLogger returns the package-level logger or slog.Default if none has been installed. Lives in common.go (rather than the
-// darwin/cgo receiver.go) so non-darwin builds can use it AND so tryDeliverEvent below is reachable from tests without CGo.
+// darwin/cgo receiver.go) so non-darwin builds can use it AND so TryDeliverEvent below is reachable from tests without CGo.
 func getLogger() *slog.Logger {
 	if l := logger.Load(); l != nil {
 		return l
@@ -62,26 +62,29 @@ func getLogger() *slog.Logger {
 // warning per interval carrying the dropped-event count.
 const dropWarnInterval = 5 * time.Second
 
-// dropReporter coalesces a single receiver's "channel full" warnings so a burst of drops does not flood the log. Each Receiver
-// owns one reporter (one Mach service per receiver), which is why the state is a single counter rather than a per-service map and
-// why there is no package-level global: keeping it on the Receiver gives clean test isolation and avoids cross-receiver lock
-// contention on the drop path. It tracks the drops accumulated since the last emitted warning and when that warning fired.
-type dropReporter struct {
+// DropReporter coalesces a single event source's "channel full" warnings so a burst of drops does not flood the log. Each source
+// owns one reporter (the macOS receiver owns one per Mach service; the Windows ETW sensor owns one), which is why the state is a
+// single counter rather than a per-service map and why there is no package-level global: keeping it on the owner gives clean test
+// isolation and avoids cross-source lock contention on the drop path. It tracks the drops accumulated since the last emitted warning
+// and when that warning fired. It is exported so non-receiver event sources (e.g. agent/wintel's ETW sensor) reuse the same
+// coalescing rather than reimplementing per-drop logging.
+type DropReporter struct {
 	mu       sync.Mutex
 	pending  int64            // drops accumulated since the last emitted warning, not yet reflected in any log line
 	lastEmit time.Time        // when the last warning fired; zero until the first drop is reported
 	now      func() time.Time // seam for deterministic tests; defaults to time.Now
 }
 
-func newDropReporter() *dropReporter {
-	return &dropReporter{now: time.Now}
+// NewDropReporter returns a DropReporter using the wall clock. Each event source builds one.
+func NewDropReporter() *DropReporter {
+	return &DropReporter{now: time.Now}
 }
 
 // record registers one dropped event. It returns (count, true) when a warning should be emitted now, where count is the number
 // of drops the warning accounts for (this drop plus any suppressed since the last warning), or (0, false) when the drop is
 // suppressed. Suppressed drops stay in pending and are reported by the next warning that crosses the interval, so the only
 // undercount is a trailing partial window after drops stop entirely, at which point the condition has already been logged.
-func (r *dropReporter) record() (int64, bool) {
+func (r *DropReporter) record() (int64, bool) {
 	// Nil-receiver guard: a Receiver always builds its reporter in New, so production never passes nil, but a future refactor or
 	// partial init might. Degrade safely by surfacing every drop (count 1, emit) rather than panicking on the kernel-adjacent
 	// drop path or silently swallowing the loss. Calling a method on a nil pointer is legal in Go as long as we don't deref it.
@@ -90,6 +93,11 @@ func (r *dropReporter) record() (int64, bool) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A zero-value DropReporter (built as &DropReporter{} rather than via NewDropReporter, now reachable since the type is exported)
+	// has a nil clock; default it here so record never nil-panics on the drop path.
+	if r.now == nil {
+		r.now = time.Now
+	}
 	r.pending++
 	now := r.now()
 	if r.lastEmit.IsZero() || now.Sub(r.lastEmit) >= dropWarnInterval {
@@ -101,14 +109,15 @@ func (r *dropReporter) record() (int64, bool) {
 	return 0, false
 }
 
-// tryDeliverEvent does a non-blocking send of evt onto ch. When ch's buffer is full it DROPS the event without blocking the
+// TryDeliverEvent does a non-blocking send of evt onto ch. When ch's buffer is full it DROPS the event without blocking the
 // caller and surfaces the loss via a rate-limited warning naming serviceName and the dropped-event count, throttled by dr. The
-// production CGo onEvent callback uses this so a slow downstream consumer cannot back-pressure into the XPC kernel side; tests
-// exercise it directly to pin the drop-and-warn contract without needing a live Mach service. The dropped-event arm is the
-// agent-xpc-receiver "downstream consumer falls behind" scenario: the receiver MUST keep reading subsequent events from the
-// connector, so the send is non-blocking and the loss is surfaced via a warning rather than a returned error. The warning is
-// coalesced per receiver (see dropReporter) so a sustained overflow does not flood the log.
-func tryDeliverEvent(ch chan<- Event, evt Event, serviceName string, dr *dropReporter) {
+// production CGo onEvent callback uses this so a slow downstream consumer cannot back-pressure into the XPC kernel side, and the
+// Windows ETW sensor (agent/wintel) uses it so its ProcessTrace callback shares the same non-blocking drop-and-coalesce behaviour;
+// tests exercise it directly to pin the drop-and-warn contract without needing a live event source. The dropped-event arm is the
+// agent-xpc-receiver "downstream consumer falls behind" scenario: the source MUST keep reading subsequent events, so the send is
+// non-blocking and the loss is surfaced via a warning rather than a returned error. The warning is coalesced per source (see
+// DropReporter) so a sustained overflow does not flood the log.
+func TryDeliverEvent(ch chan<- Event, evt Event, serviceName string, dr *DropReporter) {
 	select {
 	case ch <- evt:
 	default:
