@@ -164,11 +164,13 @@ func (s *Sensor) exitFromRecord(r etw.Record) ([]byte, error) {
 		return nil, fmt.Errorf("etw exit: missing required fields (pid=%d okPID=%v createTime=%d okCT=%v)", pid, okPID, createFT, okCT)
 	}
 	exitCode, _ := r.Uint32("ExitCode") // best-effort: 0 is a legitimate (success) exit code, so a missing/zero value is not fatal
-	// A Windows exit code is an unsigned DWORD; NTSTATUS/HRESULT-style crash codes (e.g. 0xC0000005) have the high bit set. Widen the
-	// uint32 straight to int (non-negative on 64-bit) rather than through int32, which would flip those into misleading negatives.
+	// A Windows exit code is an unsigned DWORD, but the server's shared exit_code contract is a signed INT (used by macOS too). Reinterpret
+	// the DWORD as int32 so NTSTATUS/HRESULT crash codes (e.g. 0xC0000005) land in signed-int range instead of overflowing the column and
+	// failing ingestion. This is bit-lossless: the raw DWORD is recoverable as uint32(int32(v)), and signed is the conventional display for
+	// such codes (0xC0000005 -> -1073741819). Widening the whole path to BIGINT for unsigned display would be a separate cross-context change.
 	return exitEnvelope(uuid.NewString(), s.hostID, time.Now().UnixNano(), exitPayload{
 		PID:          int(pid),
-		ExitCode:     int(exitCode),
+		ExitCode:     int(int32(exitCode)),
 		CreateTimeNs: filetimeToUnixNano(createFT),
 	})
 }
