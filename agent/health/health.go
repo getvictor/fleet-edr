@@ -25,6 +25,9 @@ const (
 const (
 	ComponentEndpointSecurityExtension = "endpoint_security_extension"
 	ComponentNetworkExtension          = "network_extension"
+	// ComponentWindowsETWSensor is the health component for the Windows ETW process sensor (ADR-0018). The component vocabulary is open
+	// (the server stores unrecognized types verbatim), so adding a platform-specific component needs no server change.
+	ComponentWindowsETWSensor = "windows_etw_sensor"
 
 	reasonActivated      = "activated"
 	reasonNeverConnected = "never_connected"
