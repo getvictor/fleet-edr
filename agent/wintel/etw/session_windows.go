@@ -56,13 +56,18 @@ func StartSession(name string) (*Session, error) {
 // EnableProvider enables a manifest provider on the session, matching any of the keyword bits (0 means all keywords). Level is fixed at
 // informational, which is what the process/network/dns providers emit their lifecycle events at.
 func (s *Session) EnableProvider(guid windows.GUID, matchAnyKeyword uint64) error {
+	// EnableTraceEx2(TraceHandle, ProviderId, ControlCode, Level, MatchAnyKeyword, MatchAllKeyword, Timeout, EnableParameters).
+	// MatchAnyKeyword and MatchAllKeyword are each a full ULONGLONG; on the x64/ARM64 targets a uintptr syscall argument is 64-bit, so
+	// each occupies exactly one argument slot. MatchAllKeyword is 0 (do not require every keyword bit); passing matchAnyKeyword>>32 here
+	// was wrong (it treated the call as the 32-bit ABI that splits a 64-bit value across two slots) and would misconfigure any provider
+	// whose keyword uses the upper 32 bits.
 	r, _, _ := procEnableTraceEx2.Call(
 		uintptr(s.handle),
 		uintptr(unsafe.Pointer(&guid)),
 		eventControlCodeEnable,
 		traceLevelInformation,
 		uintptr(matchAnyKeyword),
-		uintptr(matchAnyKeyword>>32),
+		0,
 		0,
 		0,
 	)

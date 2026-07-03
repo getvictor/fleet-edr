@@ -16,6 +16,12 @@ var (
 	procCloseTrace   = advapi32.NewProc("CloseTrace")
 )
 
+// eventRecordCallbackPtr is the single, process-wide stdcall stub for the ETW EVENT_RECORD callback. windows.NewCallback allocates a
+// runtime stub that is never released and the process is capped at a small number of them, so it is created once here rather than per
+// OpenConsumer (which would leak a stub on every reconnect and eventually panic). The callback carries no closure state; it dispatches
+// through the handlerReg package-global.
+var eventRecordCallbackPtr = windows.NewCallback(eventRecordCallback)
+
 // handlerReg holds the single active consumer's handler. ETW's EVENT_RECORD callback (installed via windows.NewCallback) carries no Go
 // closure state, and the agent runs exactly one ETW consumer, so the handler is kept in a package-global guarded by a mutex rather than
 // threaded through EVENT_RECORD.UserContext. OpenConsumer rejects a second concurrent consumer so this stays unambiguous.
@@ -54,7 +60,7 @@ func OpenConsumer(sessionName string, handler func(Record)) (*Consumer, error) {
 	var logfile eventTraceLogfile
 	logfile.LoggerName = &nameU16[0]
 	logfile.ProcessTraceMode = processTraceModeRealTime | processTraceModeEventRec
-	logfile.Callback = windows.NewCallback(eventRecordCallback)
+	logfile.Callback = eventRecordCallbackPtr
 
 	trace, _, _ := procOpenTraceW.Call(uintptr(unsafe.Pointer(&logfile)))
 	if trace == invalidProcessTraceHandle {
@@ -100,8 +106,12 @@ func eventRecordCallback(rec *eventRecord) uintptr {
 	handlerReg.mu.Lock()
 	h := handlerReg.handler
 	handlerReg.mu.Unlock()
-	if h != nil {
-		h(Record{p: rec})
+	if h == nil {
+		return 0
 	}
+	// A panic must not unwind across the OS callback boundary: that would tear down the ProcessTrace thread and crash the agent. Fail
+	// closed by recovering here, which drops the offending event and lets tracing continue.
+	defer func() { _ = recover() }()
+	h(Record{p: rec})
 	return 0
 }

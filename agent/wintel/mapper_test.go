@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 )
 
 func TestFiletimeToUnixNano(t *testing.T) {
@@ -93,6 +94,90 @@ func TestExecEnvelope_ArgsAlwaysArray(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"args":[]`)
 	assert.NotContains(t, string(b), `"args":null`)
+}
+
+// envelopeHeader mirrors the envelope's non-payload fields for decoding in the round-trip properties below.
+type envelopeHeader struct {
+	EventID     string          `json:"event_id"`
+	HostID      string          `json:"host_id"`
+	TimestampNs int64           `json:"timestamp_ns"`
+	EventType   string          `json:"event_type"`
+	Platform    string          `json:"platform"`
+	Payload     json.RawMessage `json:"payload"`
+}
+
+// TestExecEnvelope_RoundTripProperty is the mandated wire-format round-trip PBT for the Windows exec envelope (CLAUDE.md: a new
+// wire-format struct ships Marshal . Unmarshal == identity). It pins that every field the agent stamps survives a JSON round-trip, so a
+// future field rename or tag change that silently drops data fails here.
+// spec:windows-event-collection/windows-process-telemetry-via-etw/a-process-start-becomes-an-exec-envelope
+func TestExecEnvelope_RoundTripProperty(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		in := execPayload{
+			PID:          rapid.Int().Draw(rt, "pid"),
+			PPID:         rapid.Int().Draw(rt, "ppid"),
+			Path:         rapid.String().Draw(rt, "path"),
+			Args:         rapid.SliceOf(rapid.String()).Draw(rt, "args"),
+			Cwd:          rapid.String().Draw(rt, "cwd"),
+			UID:          rapid.Int().Draw(rt, "uid"),
+			GID:          rapid.Int().Draw(rt, "gid"),
+			CreateTimeNs: rapid.Int64().Draw(rt, "create_time_ns"),
+		}
+		eventID := rapid.String().Draw(rt, "event_id")
+		hostID := rapid.String().Draw(rt, "host_id")
+		tsNs := rapid.Int64().Draw(rt, "timestamp_ns")
+
+		b, err := execEnvelope(eventID, hostID, tsNs, in)
+		require.NoError(rt, err)
+
+		var env envelopeHeader
+		require.NoError(rt, json.Unmarshal(b, &env))
+		assert.Equal(rt, eventID, env.EventID)
+		assert.Equal(rt, hostID, env.HostID)
+		assert.Equal(rt, tsNs, env.TimestampNs)
+		assert.Equal(rt, "exec", env.EventType)
+		assert.Equal(rt, platformWindows, env.Platform)
+
+		var got execPayload
+		require.NoError(rt, json.Unmarshal(env.Payload, &got))
+		// execEnvelope normalizes a nil Args to an empty slice so the wire never carries null; expect that on the way back.
+		want := in
+		if want.Args == nil {
+			want.Args = []string{}
+		}
+		assert.Equal(rt, want, got)
+	})
+}
+
+// TestExitEnvelope_RoundTripProperty is the exit-envelope half of the mandated wire-format round-trip PBT.
+// spec:windows-event-collection/windows-process-telemetry-via-etw/a-process-stop-becomes-an-exit-envelope
+func TestExitEnvelope_RoundTripProperty(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		in := exitPayload{
+			PID:          rapid.Int().Draw(rt, "pid"),
+			ExitCode:     rapid.Int().Draw(rt, "exit_code"),
+			CreateTimeNs: rapid.Int64().Draw(rt, "create_time_ns"),
+		}
+		eventID := rapid.String().Draw(rt, "event_id")
+		hostID := rapid.String().Draw(rt, "host_id")
+		tsNs := rapid.Int64().Draw(rt, "timestamp_ns")
+
+		b, err := exitEnvelope(eventID, hostID, tsNs, in)
+		require.NoError(rt, err)
+
+		var env envelopeHeader
+		require.NoError(rt, json.Unmarshal(b, &env))
+		assert.Equal(rt, eventID, env.EventID)
+		assert.Equal(rt, hostID, env.HostID)
+		assert.Equal(rt, tsNs, env.TimestampNs)
+		assert.Equal(rt, "exit", env.EventType)
+		assert.Equal(rt, platformWindows, env.Platform)
+
+		var got exitPayload
+		require.NoError(rt, json.Unmarshal(env.Payload, &got))
+		assert.Equal(rt, in, got)
+	})
 }
 
 // spec:windows-event-collection/windows-process-telemetry-via-etw/a-process-stop-becomes-an-exit-envelope

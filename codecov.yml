@@ -99,6 +99,9 @@ comment:
 # sonar.coverage.exclusions in sync.
 ignore:
   - "**/cmd/**/main.go"
+  # Process-startup wiring (the platform sensor seam) is untestable glue in the same class as main.go; the receiver loops it
+  # spawns lived inline in main.go (excluded above) before ADR-0018 extracted them into per-platform sensors*.go files.
+  - "**/cmd/**/sensors*.go"
   - "ui/vite.config.ts"
   - "server/detection/testharness/**"
   - "schema/**"
@@ -108,3 +111,7 @@ ignore:
   - "server/httpserver/**"
   - "test/**"
   - "tools/**"
+  # Platform-specific Go files compile only on their target GOOS, so the Linux/macOS coverage runners never exercise them.
+  # Sonar excludes the same globs (sonar.coverage.exclusions); keep the two lists in sync.
+  - "**/*_windows.go"
+  - "**/*_other.go"

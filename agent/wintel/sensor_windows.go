@@ -4,6 +4,7 @@ package wintel
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -44,6 +45,7 @@ type Sensor struct {
 	consumer  *etw.Consumer
 	deviceMap map[string]string
 	running   bool
+	wg        sync.WaitGroup // tracks the ProcessTrace goroutine so Disconnect can wait for it before closing the trace
 }
 
 // New builds a Windows ETW sensor. eventBuf sizes the Events() channel; hostID is stamped on every envelope (the agent authors the
@@ -85,7 +87,9 @@ func (s *Sensor) Connect() error {
 	s.consumer = consumer
 	s.running = true
 
+	s.wg.Add(1)
 	go func() {
+		defer s.wg.Done()
 		// Process blocks until the session is stopped (Disconnect) or errors. A non-nil return while we still think we are running is a
 		// dropped session: signal the loop so it reconnects.
 		perr := consumer.Process()
@@ -131,10 +135,15 @@ func (s *Sensor) handle(r etw.Record) {
 }
 
 func (s *Sensor) execFromRecord(r etw.Record) ([]byte, error) {
-	pid, _ := r.Uint32("ProcessID")
-	ppid, _ := r.Uint32("ParentProcessID")
-	createFT, _ := r.Int64("CreateTime")
+	pid, okPID := r.Uint32("ProcessID")
+	createFT, okCT := r.Int64("CreateTime")
 	image := ntPathToDOS(r.UTF16String("ImageName"), s.deviceMap)
+	// pid, the process-create time (the pid_epoch), and the image path are required: an event missing any of them cannot be correlated
+	// or acted on, so drop it rather than emit a degenerate envelope (pid=0 / empty path / epoch=0) that would corrupt exec/exit pairing.
+	if !okPID || pid == 0 || !okCT || createFT == 0 || image == "" {
+		return nil, fmt.Errorf("etw exec: missing required fields (pid=%d okPID=%v createTime=%d okCT=%v image=%q)", pid, okPID, createFT, okCT, image)
+	}
+	ppid, _ := r.Uint32("ParentProcessID") // best-effort: not every start event carries a parent, and 0 is acceptable for root-ish procs
 	return execEnvelope(uuid.NewString(), s.hostID, time.Now().UnixNano(), execPayload{
 		PID:          int(pid),
 		PPID:         int(ppid),
@@ -148,9 +157,13 @@ func (s *Sensor) execFromRecord(r etw.Record) ([]byte, error) {
 }
 
 func (s *Sensor) exitFromRecord(r etw.Record) ([]byte, error) {
-	pid, _ := r.Uint32("ProcessID")
-	exitCode, _ := r.Uint32("ExitCode")
-	createFT, _ := r.Int64("CreateTime")
+	pid, okPID := r.Uint32("ProcessID")
+	createFT, okCT := r.Int64("CreateTime")
+	// pid and the pid_epoch are required to pair this exit with its exec generation; without them the exit is unattributable, so drop it.
+	if !okPID || pid == 0 || !okCT || createFT == 0 {
+		return nil, fmt.Errorf("etw exit: missing required fields (pid=%d okPID=%v createTime=%d okCT=%v)", pid, okPID, createFT, okCT)
+	}
+	exitCode, _ := r.Uint32("ExitCode") // best-effort: 0 is a legitimate (success) exit code, so a missing/zero value is not fatal
 	return exitEnvelope(uuid.NewString(), s.hostID, time.Now().UnixNano(), exitPayload{
 		PID:          int(pid),
 		ExitCode:     int(int32(exitCode)),
@@ -178,7 +191,8 @@ func (s *Sensor) Ping(_ time.Duration) error {
 // SendApplicationControl is unsupported on the driverless sensor.
 func (s *Sensor) SendApplicationControl(_ []byte) error { return ErrUnsupported }
 
-// Disconnect stops the session (which unblocks ProcessTrace) and closes the consumer.
+// Disconnect stops the session (which unblocks ProcessTrace) and closes the consumer. It waits for the ProcessTrace goroutine to return
+// between the two so CloseTrace never races an active ProcessTrace and a subsequent Connect never overlaps a still-draining session.
 func (s *Sensor) Disconnect() {
 	s.mu.Lock()
 	sess, consumer := s.session, s.consumer
@@ -188,6 +202,9 @@ func (s *Sensor) Disconnect() {
 	if sess != nil {
 		_ = sess.Stop()
 	}
+	// Stop() unblocks Process(); wait for that goroutine to fully exit before closing the trace handle. Do not hold s.mu here: the
+	// goroutine takes it on the way out, so waiting under the lock would deadlock.
+	s.wg.Wait()
 	if consumer != nil {
 		_ = consumer.Close()
 	}
