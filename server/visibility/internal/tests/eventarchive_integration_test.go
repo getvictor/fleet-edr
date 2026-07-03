@@ -197,3 +197,117 @@ func TestEventArchive_IdempotentInsert(t *testing.T) {
 	got := readNetworkEvents(t, arch, "h1", 7, 1, httpserver.TimeRange{FromNs: 0, ToNs: base + 1_000_000})
 	assert.Len(t, got, 1, "FINAL collapses the at-least-once duplicate to a single row")
 }
+
+// archiveNetEvent builds a network_connect or dns_query event carrying the artifact field the fleet-wide search matches on
+// (remote_address for connections, query_name for DNS). base + offset keeps ingested_date inside the 30-day TTL window.
+func archiveArtifactEvent(id, host, etype string, ts int64, artifact string) visibilityapi.Event {
+	field := "remote_address"
+	if etype == "dns_query" {
+		field = "query_name"
+	}
+	payload, _ := json.Marshal(map[string]any{"pid": 1, field: artifact})
+	return visibilityapi.Event{
+		EventID:      id,
+		HostID:       host,
+		TimestampNs:  ts,
+		IngestedAtNs: ts + 1,
+		EventType:    etype,
+		Platform:     "darwin",
+		Payload:      payload,
+	}
+}
+
+// spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/connection-search-finds-a-remote-address-across-hosts
+// spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/dns-search-finds-a-query-name-across-hosts
+// spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/host-filter-scopes-the-search
+func TestEventArchive_SearchEvents(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+	base := time.Now().UnixNano()
+	const badIP = "203.0.113.7"
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
+		archiveArtifactEvent("c-a", "hostA", "network_connect", base+10, badIP),
+		archiveArtifactEvent("c-b", "hostB", "network_connect", base+20, badIP),
+		archiveArtifactEvent("c-other", "hostA", "network_connect", base+30, "10.0.0.1"), // different IP
+		archiveArtifactEvent("d-a", "hostA", "dns_query", base+40, "evil.example"),
+		archiveArtifactEvent("d-b", "hostB", "dns_query", base+50, "evil.example"),
+		archiveArtifactEvent("d-other", "hostA", "dns_query", base+60, "good.example"), // different domain
+	}))
+	window := httpserver.TimeRange{FromNs: 0, ToNs: base + 1_000_000}
+
+	// Connection search: the bad IP on both hosts, not the other IP.
+	res, err := arch.SearchEvents(ctx, visibilityapi.EventSearchFilter{
+		EventType: "network_connect", Value: badIP, FromNs: window.FromNs, ToNs: window.ToNs,
+	}, "", 50)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, res.TotalMatched)
+	ids := eventIDSet(res.Events)
+	assert.True(t, ids["c-a"] && ids["c-b"] && !ids["c-other"], "matches the bad IP on both hosts, excludes the other IP")
+
+	// DNS search: the domain on both hosts, not the other domain.
+	res, err = arch.SearchEvents(ctx, visibilityapi.EventSearchFilter{
+		EventType: "dns_query", Value: "evil.example", FromNs: window.FromNs, ToNs: window.ToNs,
+	}, "", 50)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, res.TotalMatched)
+	ids = eventIDSet(res.Events)
+	assert.True(t, ids["d-a"] && ids["d-b"] && !ids["d-other"], "matches the domain on both hosts, excludes the other domain")
+
+	// Host filter scopes the connection search to one host.
+	res, err = arch.SearchEvents(ctx, visibilityapi.EventSearchFilter{
+		EventType: "network_connect", Value: badIP, HostID: "hostB", FromNs: window.FromNs, ToNs: window.ToNs,
+	}, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Events, 1)
+	assert.Equal(t, "hostB", res.Events[0].HostID)
+}
+
+// spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/keyset-pagination-is-stable-and-complete
+func TestEventArchive_SearchEventsPagination(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+	base := time.Now().UnixNano()
+	const ip = "198.51.100.4"
+	const total = 12
+	batch := make([]visibilityapi.Event, total)
+	for i := range total {
+		// Some share a timestamp so the (timestamp_ns, event_id) compound keyset is exercised, not timestamp alone.
+		batch[i] = archiveArtifactEvent("p-"+strconv.Itoa(i), "hostA", "network_connect", base+int64(i/3), ip)
+	}
+	require.NoError(t, arch.Insert(ctx, batch))
+	window := httpserver.TimeRange{FromNs: 0, ToNs: base + 1_000_000}
+
+	full, err := arch.SearchEvents(ctx, visibilityapi.EventSearchFilter{EventType: "network_connect", Value: ip, FromNs: window.FromNs, ToNs: window.ToNs}, "", total+5)
+	require.NoError(t, err)
+	require.Len(t, full.Events, total)
+	want := make([]string, len(full.Events))
+	for i, e := range full.Events {
+		want[i] = e.EventID
+	}
+
+	// Page size 5: concatenation of pages reproduces the unpaginated order exactly, no dupes, no skips.
+	var got []string
+	cursor := ""
+	for {
+		page, err := arch.SearchEvents(ctx, visibilityapi.EventSearchFilter{EventType: "network_connect", Value: ip, FromNs: window.FromNs, ToNs: window.ToNs}, cursor, 5)
+		require.NoError(t, err)
+		for _, e := range page.Events {
+			got = append(got, e.EventID)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	assert.Equal(t, want, got, "paging reproduces the full newest-first order exactly")
+}
+
+func eventIDSet(events []visibilityapi.Event) map[string]bool {
+	m := make(map[string]bool, len(events))
+	for _, e := range events {
+		m[e.EventID] = true
+	}
+	return m
+}

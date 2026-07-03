@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 
 	"github.com/fleetdm/edr/server/httpserver"
 )
@@ -29,4 +30,32 @@ type EventArchive interface {
 	// it to snapshot a finding's triggering events into durable per-alert storage (alert_event_payloads) that outlives the archive's
 	// retention window. IDs with no surviving event (already aged out) are omitted rather than erroring, so capture stays best-effort.
 	EventsByIDs(ctx context.Context, eventIDs []string) ([]Event, error)
+
+	// SearchEvents runs the fleet-wide hunting search over the archive (issue #582): events of filter.EventType whose artifact value
+	// matches (remote address for network_connect, query name for dns_query), newest-first, keyset-paged from cursor. Returns up to
+	// limit events, a next cursor when more remain, and total_matched (the full match count independent of the page). A malformed
+	// cursor is a caller error.
+	SearchEvents(ctx context.Context, filter EventSearchFilter, cursor string, limit int) (EventSearchResult, error)
 }
+
+// EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class
+// (network_connect matches on remote address, dns_query on query name); Value is the exact artifact to match. HostID empty means every
+// host. FromNs/ToNs bound ingest time; zero means unbounded on that side.
+type EventSearchFilter struct {
+	EventType string
+	Value     string
+	HostID    string
+	FromNs    int64
+	ToNs      int64
+}
+
+// EventSearchResult is one page of a fleet-wide event search plus pagination and total metadata. NextCursor is empty on the last
+// page; TotalMatched counts every matching event independent of the page.
+type EventSearchResult struct {
+	Events       []Event `json:"events"`
+	NextCursor   string  `json:"next_cursor,omitempty"`
+	TotalMatched int64   `json:"total_matched"`
+}
+
+// ErrInvalidEventCursor is returned by SearchEvents when the pagination cursor does not decode. The operator handler maps it to 400.
+var ErrInvalidEventCursor = errors.New("visibility: invalid event search cursor")

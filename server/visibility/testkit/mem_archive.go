@@ -2,8 +2,12 @@ package testkit
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/fleetdm/edr/server/httpserver"
@@ -118,6 +122,132 @@ func (m *MemArchive) EventsByIDs(_ context.Context, eventIDs []string) ([]api.Ev
 		return out[i].EventID < out[j].EventID
 	})
 	return out, nil
+}
+
+// SearchEvents mirrors the ClickHouse fleet-wide search: events of the filter's type whose artifact value matches (remote_address for
+// network_connect, query_name for dns_query), optional host + ingest window, newest-first, keyset-paged over (timestamp_ns, event_id).
+func (m *MemArchive) SearchEvents(_ context.Context, filter api.EventSearchFilter, cursor string, limit int) (api.EventSearchResult, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	field, err := searchFieldForType(filter.EventType)
+	if err != nil {
+		return api.EventSearchResult{}, err
+	}
+	var cur *memEventCursor
+	if cursor != "" {
+		c, err := decodeMemEventCursor(cursor)
+		if err != nil {
+			return api.EventSearchResult{}, err
+		}
+		cur = &c
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var matched []api.Event
+	for _, id := range m.order {
+		e := m.byID[id]
+		if e.EventType != filter.EventType || payloadString(e.Payload, field) != filter.Value {
+			continue
+		}
+		if filter.HostID != "" && e.HostID != filter.HostID {
+			continue
+		}
+		if filter.FromNs > 0 && e.IngestedAtNs < filter.FromNs {
+			continue
+		}
+		if filter.ToNs > 0 && e.IngestedAtNs > filter.ToNs {
+			continue
+		}
+		matched = append(matched, e)
+	}
+	// Newest-first by (timestamp_ns, event_id), the archive's search order.
+	sort.SliceStable(matched, func(i, j int) bool {
+		if matched[i].TimestampNs != matched[j].TimestampNs {
+			return matched[i].TimestampNs > matched[j].TimestampNs
+		}
+		return matched[i].EventID > matched[j].EventID
+	})
+
+	total := int64(len(matched))
+	if cur != nil {
+		kept := matched[:0:0]
+		for _, e := range matched {
+			if e.TimestampNs < cur.timestampNs || (e.TimestampNs == cur.timestampNs && e.EventID < cur.eventID) {
+				kept = append(kept, e)
+			}
+		}
+		matched = kept
+	}
+
+	result := api.EventSearchResult{TotalMatched: total}
+	if len(matched) > limit {
+		last := matched[limit-1]
+		result.NextCursor = encodeMemEventCursor(memEventCursor{timestampNs: last.TimestampNs, eventID: last.EventID})
+		matched = matched[:limit]
+	}
+	result.Events = matched
+	return result, nil
+}
+
+// searchFieldForType maps an event type to the payload field its artifact search matches, mirroring the ClickHouse materialized column.
+func searchFieldForType(eventType string) (string, error) {
+	switch eventType {
+	case "network_connect":
+		return "remote_address", nil
+	case "dns_query":
+		return "query_name", nil
+	default:
+		return "", fmt.Errorf("mem archive search: unsupported event type %q", eventType)
+	}
+}
+
+// payloadString extracts a string field from an event payload, mirroring the archive's JSONExtractString / materialized column.
+func payloadString(payload json.RawMessage, field string) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return ""
+	}
+	raw, ok := m[field]
+	if !ok {
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	return v
+}
+
+// memEventCursor / its codec mirror the ClickHouse event cursor (base64url of "timestamp_ns:event_id") so the fake and the real store
+// speak the same opaque token, and a handler test can pass a cursor from one to the other.
+type memEventCursor struct {
+	timestampNs int64
+	eventID     string
+}
+
+func encodeMemEventCursor(c memEventCursor) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(c.timestampNs, 10) + ":" + c.eventID))
+}
+
+func decodeMemEventCursor(token string) (memEventCursor, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return memEventCursor{}, fmt.Errorf("%w: not base64url: %w", api.ErrInvalidEventCursor, err)
+	}
+	ts, id, ok := strings.Cut(string(raw), ":")
+	if !ok {
+		return memEventCursor{}, fmt.Errorf("%w: missing ts:event_id separator", api.ErrInvalidEventCursor)
+	}
+	tsNs, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return memEventCursor{}, fmt.Errorf("%w: timestamp_ns: %w", api.ErrInvalidEventCursor, err)
+	}
+	return memEventCursor{timestampNs: tsNs, eventID: id}, nil
 }
 
 // payloadPID extracts the pid field the network/dns payloads carry, mirroring the archive's materialized pid column. A payload without
