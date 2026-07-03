@@ -169,6 +169,29 @@ type ActivityBucket struct {
 	Count   int64 `db:"count" json:"count"`
 }
 
+// ProcessSearchFilter is the set of composable predicates for the fleet-wide process search (issue #582). Every field is optional;
+// a zero value means "no constraint on this dimension", and the store ANDs the non-zero ones in SQL. HostID absent means every host
+// (the search is fleet-wide by default). Signing is a derived verdict class (unsigned | ad-hoc | platform | developer-id | signed)
+// matching the UI's node-tooltip vocabulary; the store expresses it over the code_signing JSON.
+type ProcessSearchFilter struct {
+	HostID     string
+	Path       string // substring match
+	Hash       string // exact SHA-256
+	UID        *int
+	FromNs     int64
+	ToNs       int64
+	ExitReason string
+	Signing    string
+}
+
+// ProcessSearchResult is one page of a fleet-wide process search plus the pagination and total metadata. NextCursor is empty on the
+// last page. TotalMatched counts every row matching the filter independent of the page size, so the UI can show "N results".
+type ProcessSearchResult struct {
+	Rows         []Process `json:"rows"`
+	NextCursor   string    `json:"next_cursor,omitempty"`
+	TotalMatched int64     `json:"total_matched"`
+}
+
 // Host is the operator-visible row from the hosts summary table. Mirrors HostSummary but adds updated_at; both are kept distinct
 // because the operator list endpoint historically returned the HostSummary shape and the UI snapshots it.
 type Host struct {
@@ -354,6 +377,10 @@ var (
 	// ErrAlertNotFound is returned by GetAlert / UpdateAlertStatus
 	// when the id doesn't exist.
 	ErrAlertNotFound = errors.New("detection: alert not found")
+
+	// ErrInvalidCursor is returned by SearchProcesses when the pagination cursor does not decode. Mapped to 400 by the handler so a
+	// client that hands back a garbled token gets a clean rejection rather than a silent full scan.
+	ErrInvalidCursor = errors.New("detection: invalid search cursor")
 
 	// ErrInvalidAlertTransition is returned when UpdateAlertStatus is called with a status that doesn't follow from the row's current
 	// status (e.g. resolved -> open). Mapped to 400 by the operator handler.

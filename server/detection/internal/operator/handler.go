@@ -29,6 +29,7 @@ const (
 	errInvalidStatus      = "invalid_status"
 	errInvalidStatusTrans = "invalid_status_transition"
 	errInvalidUser        = "invalid_user"
+	errInvalidCursor      = "invalid_cursor"
 
 	// processTreeDefaultLimit is the row cap when the caller does not supply ?limit=. Sized to fit a typical analyst's investigation
 	// without paging.
@@ -69,6 +70,7 @@ type Handler struct {
 	hostHealth    HostHealthReader
 	hostDetail    HostDetailReader
 	histogram     ActivityHistogramReader
+	processSearch ProcessSearchReader
 	logger        *slog.Logger
 }
 
@@ -106,6 +108,7 @@ func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	h.registerHostHealthRoutes(mux)
 	h.registerHostDetailRoutes(mux)
 	h.registerHistogramRoutes(mux)
+	h.registerSearchRoutes(mux)
 	h.registerWebhookRoutes(mux)
 }
 
