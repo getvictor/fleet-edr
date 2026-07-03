@@ -85,7 +85,7 @@ jobs:
       - name: Create UI dist placeholder for embed
         run: mkdir -p server/ui/dist && touch server/ui/dist/.gitkeep
 
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
 
@@ -138,7 +138,7 @@ jobs:
       # zizmor convention. Update SHA if a newer v4 release is preferred.
       - name: Cache custom golangci-lint binary
         id: cache-golangci-custom
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: tmp/golangci-lint-custom
           key: golangci-custom-${{ runner.os }}-${{ hashFiles('.custom-gcl.yml', 'tools/comment-wrap-check/lint/go.mod', 'tools/comment-wrap-check/lint/go.sum', 'tools/comment-wrap-check/lint/*.go') }}
