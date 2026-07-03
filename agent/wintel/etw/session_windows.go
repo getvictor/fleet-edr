@@ -16,6 +16,11 @@ var (
 	procControlTraceW  = advapi32.NewProc("ControlTraceW")
 )
 
+// errorWMIInstanceNotFound is ERROR_WMI_INSTANCE_NOT_FOUND, what ControlTraceW(STOP) returns when no session with the name exists.
+// Stop treats it as already-stopped so teardown is idempotent (a double Stop, or a Stop racing a session that ended on its own, is not
+// an error).
+const errorWMIInstanceNotFound = 4201
+
 // Session is a real-time ETW trace session. Start one, enable one or more providers on it, then open a Consumer against its name to
 // read events. Stop releases the kernel session; a leaked session survives process exit, so callers must Stop on shutdown.
 type Session struct {
@@ -80,9 +85,10 @@ func (s *Session) EnableProvider(guid windows.GUID, matchAnyKeyword uint64) erro
 // Name returns the session's logger name, which a Consumer opens against.
 func (s *Session) Name() string { return windows.UTF16ToString(s.name) }
 
-// Stop stops the kernel session. Safe to call once; a stopped session's name can be reused by a later StartSession.
+// Stop stops the kernel session. Idempotent: a stopped or never-created session reports ERROR_WMI_INSTANCE_NOT_FOUND, which is treated
+// as success so teardown does not warn on the common already-stopped path. A stopped session's name can be reused by a later StartSession.
 func (s *Session) Stop() error {
-	if r := stopByName(s.name); r != 0 {
+	if r := stopByName(s.name); r != 0 && r != errorWMIInstanceNotFound {
 		return fmt.Errorf("etw: ControlTraceW(stop): %w", windows.Errno(r))
 	}
 	return nil

@@ -164,9 +164,11 @@ func (s *Sensor) exitFromRecord(r etw.Record) ([]byte, error) {
 		return nil, fmt.Errorf("etw exit: missing required fields (pid=%d okPID=%v createTime=%d okCT=%v)", pid, okPID, createFT, okCT)
 	}
 	exitCode, _ := r.Uint32("ExitCode") // best-effort: 0 is a legitimate (success) exit code, so a missing/zero value is not fatal
+	// A Windows exit code is an unsigned DWORD; NTSTATUS/HRESULT-style crash codes (e.g. 0xC0000005) have the high bit set. Widen the
+	// uint32 straight to int (non-negative on 64-bit) rather than through int32, which would flip those into misleading negatives.
 	return exitEnvelope(uuid.NewString(), s.hostID, time.Now().UnixNano(), exitPayload{
 		PID:          int(pid),
-		ExitCode:     int(int32(exitCode)),
+		ExitCode:     int(exitCode),
 		CreateTimeNs: filetimeToUnixNano(createFT),
 	})
 }

@@ -96,6 +96,7 @@
         },
         "create_time_ns": {
           "type": "integer",
+          "minimum": 0,
           "description": "Optional. Windows process creation time in Unix nanoseconds (from the kernel FILETIME). The platform-neutral pid_epoch (ADR-0018): the Windows analogue of macOS pidversion, disambiguating PID reuse. Absent on macOS events (which carry pidversion instead)."
         },
         "cdhash": {
@@ -135,6 +136,7 @@
         },
         "create_time_ns": {
           "type": "integer",
+          "minimum": 0,
           "description": "Optional. Windows process creation time in Unix nanoseconds (the pid_epoch, ADR-0018), so an exit can be paired with the exec of the same (pid, create-time) generation. Absent on macOS events."
         }
       }

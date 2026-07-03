@@ -83,12 +83,17 @@ func (r Record) Int64(name string) (int64, bool) {
 	return int64(binary.LittleEndian.Uint64(b)), true
 }
 
-// UTF16String decodes a UTF-16 string property to a Go string (empty if absent).
+// UTF16String decodes a UTF-16 string property to a Go string (empty if absent). The code units are read little-endian via
+// encoding/binary rather than reinterpreting the []byte as []uint16 through unsafe: the byte buffer is not guaranteed to be 2-byte
+// aligned for a uint16 view on every architecture (ARM64), and this keeps the decode path alignment-safe.
 func (r Record) UTF16String(name string) string {
 	b, err := r.GetProperty(name)
 	if err != nil || len(b) < 2 {
 		return ""
 	}
-	u16 := unsafe.Slice((*uint16)(unsafe.Pointer(&b[0])), len(b)/2)
+	u16 := make([]uint16, len(b)/2)
+	for i := range u16 {
+		u16[i] = binary.LittleEndian.Uint16(b[i*2:])
+	}
 	return windows.UTF16ToString(u16)
 }
