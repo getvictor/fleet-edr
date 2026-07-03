@@ -191,8 +191,11 @@ func (s *Sensor) Ping(_ time.Duration) error {
 // SendApplicationControl is unsupported on the driverless sensor.
 func (s *Sensor) SendApplicationControl(_ []byte) error { return ErrUnsupported }
 
-// Disconnect stops the session (which unblocks ProcessTrace) and closes the consumer. It waits for the ProcessTrace goroutine to return
-// between the two so CloseTrace never races an active ProcessTrace and a subsequent Connect never overlaps a still-draining session.
+// Disconnect tears the sensor down and waits for the ProcessTrace goroutine to exit, so a subsequent Connect never overlaps a
+// still-draining session. Order is load-bearing: CloseTrace is what actually unblocks a blocked ProcessTrace (it returns
+// ERROR_CTX_CLOSE_PENDING and tells ProcessTrace to drain its buffers and return), so Close MUST run before the wait. Waiting first
+// would deadlock if Stop() alone does not unblock ProcessTrace. Stop errors are logged but not fatal: Close still unblocks the goroutine,
+// so the wait cannot hang on a failed Stop.
 func (s *Sensor) Disconnect() {
 	s.mu.Lock()
 	sess, consumer := s.session, s.consumer
@@ -200,12 +203,16 @@ func (s *Sensor) Disconnect() {
 	s.running = false
 	s.mu.Unlock()
 	if sess != nil {
-		_ = sess.Stop()
+		if err := sess.Stop(); err != nil {
+			s.logger.Warn("etw stop session", "err", err)
+		}
 	}
-	// Stop() unblocks Process(); wait for that goroutine to fully exit before closing the trace handle. Do not hold s.mu here: the
-	// goroutine takes it on the way out, so waiting under the lock would deadlock.
-	s.wg.Wait()
 	if consumer != nil {
-		_ = consumer.Close()
+		if err := consumer.Close(); err != nil {
+			s.logger.Warn("etw close consumer", "err", err)
+		}
 	}
+	// Close() has signalled ProcessTrace to return; now wait for the goroutine to actually exit. Do not hold s.mu here: the goroutine
+	// takes it on the way out, so waiting under the lock would deadlock.
+	s.wg.Wait()
 }

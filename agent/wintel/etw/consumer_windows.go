@@ -81,8 +81,9 @@ func (c *Consumer) Process() error {
 	return nil
 }
 
-// Close closes the trace handle and releases the process-global handler slot. Call after Process returns (i.e. after the session is
-// stopped), since CloseTrace on an actively-processed trace races ProcessTrace.
+// Close closes the trace handle and releases the process-global handler slot. Closing a real-time trace while ProcessTrace is still
+// running is the documented way to unblock it: CloseTrace returns ERROR_CTX_CLOSE_PENDING (treated as success below) and ProcessTrace
+// then drains its buffers and returns. So the teardown order is Close (to stop Process) and only then wait for the Process goroutine.
 func (c *Consumer) Close() error {
 	r, _, _ := procCloseTrace.Call(c.trace)
 	releaseHandler()
