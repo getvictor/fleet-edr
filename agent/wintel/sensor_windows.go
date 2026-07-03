@@ -27,6 +27,11 @@ const (
 	eventProcessStop            = 2
 )
 
+// SensorLabel is the log/heartbeat identity for the Windows ETW sensor. The agent uses it as the receiver.Loop ServiceName AND the
+// sensor stamps it as the drop-warning "service", so every Windows sensor log line (connect/heartbeat/error and dropped-event) shares
+// one value for correlation. It is deliberately distinct from sessionName, which is the OS ETW session object name, not a log label.
+const SensorLabel = "windows-etw"
+
 // ErrUnsupported is returned by SendApplicationControl: application-control enforcement is a privileged-tier (ELAM/PPL) capability the
 // driverless sensor does not provide yet (ADR-0018, Phase 3).
 var ErrUnsupported = errors.New("wintel: application control not supported on the driverless Windows sensor")
@@ -131,7 +136,7 @@ func (s *Sensor) handle(r etw.Record) {
 		s.logger.Warn("etw map event", "event_id", r.EventID(), "err", err)
 		return
 	}
-	receiver.TryDeliverEvent(s.events, receiver.Event{Data: data}, sessionName, s.drops)
+	receiver.TryDeliverEvent(s.events, receiver.Event{Data: data}, SensorLabel, s.drops)
 }
 
 func (s *Sensor) execFromRecord(r etw.Record) ([]byte, error) {

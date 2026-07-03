@@ -191,7 +191,7 @@ func (r *Receiver) Disconnect() {
 	receiversMu.Unlock()
 }
 
-// onEvent is called from C (via callbacks.go) when an XPC event message arrives. The drop-on-full + warn behaviour lives in tryDeliverEvent (common.go); see TestTryDeliverEvent_DropsAndWarnsOnFullChannel for the agent-xpc-receiver "downstream consumer falls behind" contract.
+// onEvent is called from C (via callbacks.go) when an XPC event message arrives. The drop-on-full + warn behaviour lives in TryDeliverEvent (common.go); see TestTryDeliverEvent_DropsAndWarnsOnFullChannel for the agent-xpc-receiver "downstream consumer falls behind" contract.
 func onEvent(receiverID int, data unsafe.Pointer, length int) {
 	receiversMu.Lock()
 	recv := receivers[receiverID]

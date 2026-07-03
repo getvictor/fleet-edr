@@ -224,7 +224,7 @@ func (l *Loop) logConnectFailure(ctx context.Context, err error) {
 // pipeEvents reads from the connector's event + error channels and dispatches
 // to OnEvent until ctx is cancelled, the connector errors, or the heartbeat
 // detects a silently-dead channel. Returns true if the caller should
-// reconnect (XPC error or heartbeat failure), false if ctx was cancelled.
+// reconnect (connector error or heartbeat failure), false if ctx was cancelled.
 //
 // The heartbeat goroutine is the agent's positive liveness probe (issue #178)
 // for the case where macOS XPC silently routes an open connection to a stale
@@ -248,8 +248,8 @@ func (l *Loop) pipeEvents(ctx context.Context, conn Connector) bool {
 		case <-ctx.Done():
 			return false
 		case <-heartbeatFailed:
-			// Heartbeat ping did not get a "hello-ack" within the timeout. The XPC channel is one-way dead even though no error
-			// event arrived. Reconnect to bind a fresh Mach port.
+			// Heartbeat ping did not get an ack within the timeout: the connection is one-way dead even though no error event arrived
+			// (on macOS this is XPC silently routed to a stale Mach port). Reconnect to establish a fresh session.
 			l.logger.WarnContext(ctx, "connector heartbeat failed, reconnecting", "service", l.cfg.ServiceName)
 			return true
 		case evt, ok := <-eventsCh:

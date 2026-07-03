@@ -35,7 +35,7 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) { //nolint:par
 	lockedWriter := &mutexWriter{w: &buf, mu: &mu}
 	SetLogger(slog.New(slog.NewTextHandler(lockedWriter, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	// Buffer of 1 so the second send fills the channel and the third TryDeliverEvent call hits the drop branch.
+	// Buffer of 1 so the first send fills the channel and the second TryDeliverEvent call hits the drop branch.
 	ch := make(chan Event, 1)
 	first := Event{Data: []byte("first")}
 	dropped := Event{Data: []byte("dropped")}

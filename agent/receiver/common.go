@@ -93,6 +93,11 @@ func (r *DropReporter) record() (int64, bool) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// A zero-value DropReporter (built as &DropReporter{} rather than via NewDropReporter, now reachable since the type is exported)
+	// has a nil clock; default it here so record never nil-panics on the drop path.
+	if r.now == nil {
+		r.now = time.Now
+	}
 	r.pending++
 	now := r.now()
 	if r.lastEmit.IsZero() || now.Sub(r.lastEmit) >= dropWarnInterval {
