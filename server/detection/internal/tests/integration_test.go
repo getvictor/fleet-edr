@@ -29,6 +29,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/bootstrap"
@@ -3240,4 +3241,133 @@ func TestStore_ActivityHistogram(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 2*1_000_000_000, band.BucketNs, "a 60-120s window rounds the bucket up to 2s to keep the bar count bounded")
 	assert.LessOrEqual(t, 119*1_000_000_000/band.BucketNs, int64(60), "the bar count stays at or under the target")
+}
+
+// searchSeed is one process row for the fleet-wide search tests. CodeSigning is the raw JSON the extension would send; empty means
+// the block is absent (the exec'd-unsigned case). ExecTimeNs zero leaves exec_time_ns NULL (a fork-only row).
+type searchSeed struct {
+	HostID      string
+	PID         int
+	ForkNs      int64
+	ExecNs      int64
+	SHA         string
+	CodeSigning string
+	UID         int
+}
+
+// seedSearchProcess inserts one searchSeed row directly (the fast path for asserting the store query, per the repo test matrix).
+func seedSearchProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection, seed searchSeed) {
+	t.Helper()
+	var cs, execNs any
+	if seed.CodeSigning != "" {
+		cs = seed.CodeSigning
+	}
+	if seed.ExecNs != 0 {
+		execNs = seed.ExecNs
+	}
+	_, err := d.Store().DB().ExecContext(ctx, `
+		INSERT INTO processes (host_id, pid, ppid, path, uid, code_signing, sha256, fork_time_ns, exec_time_ns)
+		VALUES (?, ?, 1, '/usr/bin/tool', ?, ?, ?, ?, ?)`, seed.HostID, seed.PID, seed.UID, cs, seed.SHA, seed.ForkNs, execNs)
+	require.NoError(t, err)
+}
+
+// spec:server-rest-api/fleet-wide-process-search-endpoint/filters-compose-across-hosts
+// spec:server-rest-api/fleet-wide-process-search-endpoint/hash-search-spans-hosts
+// spec:server-rest-api/fleet-wide-process-search-endpoint/host-filter-scopes-to-one-host
+func TestStore_SearchProcesses_Filters(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const hostA, hostB = "SRCH-A", "SRCH-B"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, hostA, time.Now()))
+	require.NoError(t, d.Service().RecordHostSeen(ctx, hostB, time.Now()))
+	const sharedHash = "deadbeef"
+	platform := `{"team_id":"","signing_id":"com.apple.tool","flags":1,"is_platform_binary":true}`
+	adhoc := `{"team_id":"","signing_id":"local","flags":3,"is_platform_binary":false}`
+	// hostA: an exec'd unsigned root-uid proc, a platform proc sharing the hash, and an ad-hoc proc (must NOT count as unsigned).
+	// hostB: a platform proc sharing the hash, and a fork-only row (exec NULL, must NOT count as unsigned).
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: hostA, PID: 100, ForkNs: 1000, ExecNs: 1001, SHA: "aaaa", UID: 0})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: hostA, PID: 101, ForkNs: 1100, ExecNs: 1101, SHA: sharedHash, CodeSigning: platform, UID: 501})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: hostA, PID: 102, ForkNs: 1150, ExecNs: 1151, SHA: "cccc", CodeSigning: adhoc, UID: 0})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: hostB, PID: 200, ForkNs: 1200, ExecNs: 1201, SHA: sharedHash, CodeSigning: platform, UID: 501})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: hostB, PID: 201, ForkNs: 1300, SHA: "bbbb", UID: 0})
+
+	// Compose: unsigned AND uid 0 -> only the exec'd unsigned root proc (hostA/100). The ad-hoc proc (uid 0) and the fork-only row
+	// (uid 0, exec NULL) must be excluded, matching the UI verdict semantics.
+	uid0 := 0
+	res, err := d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{Signing: "unsigned", UID: &uid0}, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	assert.Equal(t, hostA, res.Rows[0].HostID)
+	assert.EqualValues(t, 100, res.Rows[0].PID)
+	assert.EqualValues(t, 1, res.TotalMatched)
+
+	// ad-hoc is its own class, not unsigned.
+	res, err = d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{Signing: "ad-hoc"}, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	assert.EqualValues(t, 102, res.Rows[0].PID)
+
+	// Hash spans hosts: both platform procs, one per host.
+	res, err = d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{Hash: sharedHash}, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 2)
+	hosts := map[string]bool{res.Rows[0].HostID: true, res.Rows[1].HostID: true}
+	assert.True(t, hosts[hostA] && hosts[hostB], "the shared hash matches on both hosts")
+
+	// host_id scopes the same match set to one host.
+	res, err = d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{Hash: sharedHash, HostID: hostB}, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	assert.Equal(t, hostB, res.Rows[0].HostID)
+
+	// platform signing class matches the two platform procs.
+	res, err = d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{Signing: "platform"}, "", 50)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, res.TotalMatched)
+}
+
+// spec:server-rest-api/fleet-wide-process-search-endpoint/keyset-pagination-is-stable-and-complete
+func TestStore_SearchProcesses_PaginationProperty(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "SRCH-PAGE"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+	const total = 25
+	for i := range total {
+		// Some rows share a fork instant so the compound (fork_time_ns, id) keyset (not fork_time_ns alone) is exercised.
+		seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 1000 + i, ForkNs: int64(i/3+1) * 1000, ExecNs: 1, SHA: "h"})
+	}
+
+	// Ground truth: the unpaginated newest-first order.
+	full, err := d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{HostID: host}, "", total+10)
+	require.NoError(t, err)
+	require.Len(t, full.Rows, total)
+	wantIDs := make([]int64, len(full.Rows))
+	for i, r := range full.Rows {
+		wantIDs[i] = r.ID
+	}
+
+	// For ANY page size, paging to exhaustion reproduces the unpaginated set in the same order, no dupes, no skips.
+	rapid.Check(t, func(rt *rapid.T) {
+		pageSize := rapid.IntRange(1, total+2).Draw(rt, "pageSize")
+		var gotIDs []int64
+		cursor := ""
+		for {
+			page, err := d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{HostID: host}, cursor, pageSize)
+			require.NoError(rt, err)
+			require.LessOrEqual(rt, len(page.Rows), pageSize)
+			for _, r := range page.Rows {
+				gotIDs = append(gotIDs, r.ID)
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			cursor = page.NextCursor
+		}
+		assert.Equal(rt, wantIDs, gotIDs, "paging with size %d must reproduce the full order exactly", pageSize)
+	})
 }
