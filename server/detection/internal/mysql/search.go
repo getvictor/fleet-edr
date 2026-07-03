@@ -8,9 +8,13 @@ import (
 	"github.com/fleetdm/edr/server/detection/api"
 )
 
-// csAdhocFlag is the kernel CS_ADHOC status bit (CS_ADHOC in <kern/cs_blobs.h>), the same bit the UI's deriveSigningVerdict reads.
-// Kept in sync with ui/src/signing.ts CS_ADHOC; the signing filter below classifies over the code_signing JSON using it.
-const csAdhocFlag = 0x2
+// The kernel code-signing status bits the signing filter interprets, matching ui/src/signing.ts (CS_VALID / CS_ADHOC in
+// <kern/cs_blobs.h>). The classification below mirrors deriveSigningVerdict's decision order exactly so a server-side signing filter
+// and the UI's node verdict agree on every process.
+const (
+	csValidFlag = 0x1
+	csAdhocFlag = 0x2
+)
 
 // searchProcessColumns is the shared projection for the search, matching api.Process's db tags (same set GetProcessTree selects).
 const searchProcessColumns = `id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
@@ -26,6 +30,11 @@ const searchProcessColumns = `id, host_id, pid, ppid, path, args, uid, gid, code
 // total order. `(fork_time_ns, id) < (?, ?)` in row-value form means "strictly older than the last row of the previous page",
 // which stays correct as new rows are ingested at the head between page requests (unlike OFFSET, which would skip or repeat).
 func (s *Store) SearchProcesses(ctx context.Context, filter api.ProcessSearchFilter, cursor string, limit int) (api.ProcessSearchResult, error) {
+	// Clamp defensively so the store is safe against a bad internal caller: limit+1 fetch and the rows[limit-1] cursor pick below
+	// both assume limit >= 1, independent of the handler's own clamp.
+	if limit < 1 {
+		limit = 1
+	}
 	where, args := buildSearchWhere(filter)
 
 	var total int64
@@ -43,8 +52,10 @@ func (s *Store) SearchProcesses(ctx context.Context, filter api.ProcessSearchFil
 		if err != nil {
 			return api.ProcessSearchResult{}, err
 		}
-		pageWhere = append(pageWhere, "(fork_time_ns < ? OR (fork_time_ns = ? AND id < ?))")
-		pageArgs = append(pageArgs, c.forkTimeNs, c.forkTimeNs, c.id)
+		// Row-value comparison expresses "strictly older than the cursor row" over the compound key directly, so the optimizer can
+		// range-scan idx_processes_fork_id instead of evaluating an OR chain.
+		pageWhere = append(pageWhere, "(fork_time_ns, id) < (?, ?)")
+		pageArgs = append(pageArgs, c.forkTimeNs, c.id)
 	}
 
 	// Fetch one extra row: its presence tells us another page exists without a second query, and it becomes the next cursor.
@@ -76,7 +87,7 @@ func buildSearchWhere(filter api.ProcessSearchFilter) ([]string, []any) {
 		args = append(args, filter.HostID)
 	}
 	if filter.Path != "" {
-		where = append(where, "path LIKE ?")
+		where = append(where, `path LIKE ? ESCAPE '\\'`)
 		args = append(args, "%"+escapeLike(filter.Path)+"%")
 	}
 	if filter.Hash != "" {
@@ -99,37 +110,49 @@ func buildSearchWhere(filter api.ProcessSearchFilter) ([]string, []any) {
 		where = append(where, "exit_reason = ?")
 		args = append(args, filter.ExitReason)
 	}
-	if pred, sarg, ok := signingPredicate(filter.Signing); ok {
+	if pred, ok := signingClassSQL(filter.Signing); ok {
 		where = append(where, pred)
-		args = append(args, sarg...)
 	}
 	return where, args
 }
 
-// signingPredicate expresses a signer-class filter over the code_signing JSON, matching deriveSigningVerdict's decision order so the
-// server filter and the UI verdict agree. Returns ok=false for an empty or unrecognized class (no constraint added).
-func signingPredicate(class string) (string, []any, bool) {
+// Signing-class SQL fragments over the code_signing JSON, built once and composed below so no predicate literal repeats. Each uses
+// COALESCE so a missing or partial JSON key (e.g. an empty {} block) takes a definite default rather than NULL (which would make
+// every comparison NULL/false and silently drop the row). fmt formats the static CS_* bitmasks in once; there is no caller input here.
+var (
+	csValid    = fmt.Sprintf("(COALESCE(CAST(JSON_EXTRACT(code_signing, '$.flags') AS UNSIGNED), 0) & %d) <> 0", csValidFlag)
+	csAdhoc    = fmt.Sprintf("(COALESCE(CAST(JSON_EXTRACT(code_signing, '$.flags') AS UNSIGNED), 0) & %d) <> 0", csAdhocFlag)
+	csTeam     = "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.team_id')), '')"
+	csSID      = "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.signing_id')), '')"
+	csPlatform = "COALESCE(CAST(JSON_EXTRACT(code_signing, '$.is_platform_binary') AS UNSIGNED), 0) = 1"
+	// csValidNoTeam is the shared prefix for the classes deriveSigningVerdict reaches after ruling out invalid, ad-hoc, and a team
+	// id: a block that passed AMFI, is not ad-hoc, and carries no team. platform / signed / unsigned then split off it by the
+	// platform flag and the signing id.
+	csValidNoTeam = "(" + csValid + " AND NOT " + csAdhoc + " AND " + csTeam + " = '')"
+)
+
+// signingClassSQL maps a signer class to a predicate mirroring deriveSigningVerdict's decision order (ui/src/signing.ts): no block
+// (or a residual block with no signing id) is unsigned; a cleared CS_VALID bit is invalid; then ad-hoc, then a team id is
+// developer-id, then the platform flag, then a signing-id-only residual is signed. The classes are mutually exclusive by
+// construction, so the server filter partitions rows the same way the UI labels a node. The unsigned class additionally requires an
+// exec, since a fork-only row has no signature to judge (matching the UI's fork-only suppression).
+func signingClassSQL(class string) (string, bool) {
 	switch class {
 	case "unsigned":
-		// No code_signing block, or a block carrying no identity, reads unsigned (mirrors deriveSigningVerdict's null + empty-id cases).
-		return "(code_signing IS NULL OR (JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.signing_id')) = '' " +
-			"AND JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.team_id')) = ''))", nil, true
+		return "(exec_time_ns IS NOT NULL AND (code_signing IS NULL OR (" +
+			csValidNoTeam + " AND NOT (" + csPlatform + ") AND " + csSID + " = '')))", true
+	case "invalid":
+		return "(code_signing IS NOT NULL AND NOT " + csValid + ")", true
 	case "ad-hoc":
-		return "(code_signing IS NOT NULL AND (JSON_EXTRACT(code_signing, '$.flags') & ?) <> 0)", []any{csAdhocFlag}, true
+		return "(code_signing IS NOT NULL AND " + csValid + " AND " + csAdhoc + ")", true
 	case "developer-id":
-		return "(code_signing IS NOT NULL AND (JSON_EXTRACT(code_signing, '$.flags') & ?) = 0 " +
-			"AND JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.team_id')) <> '')", []any{csAdhocFlag}, true
+		return "(code_signing IS NOT NULL AND " + csValid + " AND NOT " + csAdhoc + " AND " + csTeam + " <> '')", true
 	case "platform":
-		return "(code_signing IS NOT NULL AND (JSON_EXTRACT(code_signing, '$.flags') & ?) = 0 " +
-			"AND JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.team_id')) = '' " +
-			"AND JSON_EXTRACT(code_signing, '$.is_platform_binary') = true)", []any{csAdhocFlag}, true
+		return "(code_signing IS NOT NULL AND " + csValidNoTeam + " AND (" + csPlatform + "))", true
 	case "signed":
-		return "(code_signing IS NOT NULL AND (JSON_EXTRACT(code_signing, '$.flags') & ?) = 0 " +
-			"AND JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.team_id')) = '' " +
-			"AND JSON_EXTRACT(code_signing, '$.is_platform_binary') = false " +
-			"AND JSON_UNQUOTE(JSON_EXTRACT(code_signing, '$.signing_id')) <> '')", []any{csAdhocFlag}, true
+		return "(code_signing IS NOT NULL AND " + csValidNoTeam + " AND NOT (" + csPlatform + ") AND " + csSID + " <> '')", true
 	default:
-		return "", nil, false
+		return "", false
 	}
 }
 

@@ -113,6 +113,32 @@ func TestHandleProcessSearch_MalformedCursorIs400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+func TestHandleProcessSearch_RejectsBadInput(t *testing.T) {
+	t.Parallel()
+	sr := fakeProcessSearch{fn: func(context.Context, api.ProcessSearchFilter, string, int) (api.ProcessSearchResult, error) {
+		t.Fatal("reader must not be reached for a rejected request")
+		return api.ProcessSearchResult{}, nil
+	}}
+	srv := newSearchServer(t, sr, allowAllAuthZ{})
+
+	cases := []struct{ name, query string }{
+		{"unknown signing class", "?signing=notarized"},
+		{"misspelled signing class", "?signing=platfor" + "m_typo"},
+		{"unparseable from", "?from=abc"},
+		{"negative from", "?from=-100"},
+		{"unparseable to", "?to=notanumber"},
+		{"negative uid", "?uid=-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := doGet(t, srv, "/api/search/processes"+tc.query)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+}
+
 func TestHandleProcessSearch_InvalidUidIs400(t *testing.T) {
 	t.Parallel()
 	sr := fakeProcessSearch{fn: func(context.Context, api.ProcessSearchFilter, string, int) (api.ProcessSearchResult, error) {

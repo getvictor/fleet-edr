@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -17,6 +18,13 @@ const (
 	searchDefaultLimit = 50
 	searchMaxLimit     = 200
 )
+
+// validSigningClasses is the accepted signing filter vocabulary, matching signingClassSQL and the UI's SigningVerdictKind. A value
+// outside this set is a 400 rather than a silently-unfiltered fleet query, since an analyst must be able to trust that the filter
+// they typed was applied.
+var validSigningClasses = map[string]bool{
+	"unsigned": true, "invalid": true, "ad-hoc": true, "developer-id": true, "platform": true, "signed": true,
+}
 
 // ProcessSearchReader is the fleet-wide process search surface the operator handler serves at GET /api/search/processes (issue #582).
 // mysql.Store satisfies it. A dependency distinct from api.Service, matching the HostDetailReader seam, so the alert/host read
@@ -55,12 +63,27 @@ func (h *Handler) handleProcessSearch(w http.ResponseWriter, r *http.Request) {
 		Hash:       q.Get("hash"),
 		ExitReason: q.Get("exit_reason"),
 		Signing:    q.Get("signing"),
-		FromNs:     httpserver.ParseInt64Param(r, "from", 0),
-		ToNs:       httpserver.ParseInt64Param(r, "to", 0),
 	}
+	if sc := filter.Signing; sc != "" && !validSigningClasses[sc] {
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidSigning)
+		return
+	}
+	// Parse from/to strictly: ParseInt64Param would silently default an unparseable value to 0, turning a mistyped or negative bound
+	// into an unbounded fleet scan (COUNT included) instead of a rejected request. A present-but-bad or negative bound is a 400.
+	fromNs, ok := parseNonNegativeParam(q, "from")
+	if !ok {
+		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)
+		return
+	}
+	toNs, ok := parseNonNegativeParam(q, "to")
+	if !ok {
+		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)
+		return
+	}
+	filter.FromNs, filter.ToNs = fromNs, toNs
 	if raw := q.Get("uid"); raw != "" {
 		uid, err := strconv.Atoi(raw)
-		if err != nil {
+		if err != nil || uid < 0 {
 			h.writeError(ctx, w, http.StatusBadRequest, errInvalidUser)
 			return
 		}
@@ -86,4 +109,18 @@ func (h *Handler) handleProcessSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeJSON(w, r, result)
+}
+
+// parseNonNegativeParam reads an optional non-negative int64 query param. Absent -> (0, true), meaning "no bound". Present but
+// unparseable or negative -> (0, false) so the caller returns 400 rather than treating a bad bound as unbounded.
+func parseNonNegativeParam(q url.Values, name string) (int64, bool) {
+	raw := q.Get(name)
+	if raw == "" {
+		return 0, true
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 0 {
+		return 0, false
+	}
+	return v, true
 }

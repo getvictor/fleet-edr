@@ -30,6 +30,7 @@ const (
 	errInvalidStatusTrans = "invalid_status_transition"
 	errInvalidUser        = "invalid_user"
 	errInvalidCursor      = "invalid_cursor"
+	errInvalidSigning     = "invalid_signing"
 
 	// processTreeDefaultLimit is the row cap when the caller does not supply ?limit=. Sized to fit a typical analyst's investigation
 	// without paging.
