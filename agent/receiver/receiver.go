@@ -35,7 +35,7 @@ type Receiver struct {
 	connected   bool
 	handle      int           // C bridge connection handle, -1 when not connected
 	receiverID  int           // ID used to route C callbacks to this receiver
-	drops       *dropReporter // coalesces "channel full" drop warnings for this receiver's service
+	drops       *DropReporter // coalesces "channel full" drop warnings for this receiver's service
 }
 
 // Registry of active receivers, keyed by receiverID.
@@ -59,7 +59,7 @@ func New(serviceName string, eventBuf int) *Receiver {
 		errors:      make(chan int, 8),
 		handle:      -1,
 		receiverID:  id,
-		drops:       newDropReporter(),
+		drops:       NewDropReporter(),
 	}
 }
 
@@ -202,7 +202,7 @@ func onEvent(receiverID int, data unsafe.Pointer, length int) {
 	}
 
 	buf := C.GoBytes(data, C.int(length))
-	tryDeliverEvent(recv.events, Event{Data: buf}, recv.serviceName, recv.drops)
+	TryDeliverEvent(recv.events, Event{Data: buf}, recv.serviceName, recv.drops)
 }
 
 // onError is called from C (via callbacks.go) when an XPC connection error occurs.

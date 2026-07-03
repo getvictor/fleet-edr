@@ -21,13 +21,13 @@ const windowsSensorLabel = "windows-etw"
 func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 	d.health.Register(health.ComponentWindowsETWSensor, "Windows ETW sensor")
 	go startReceiverLoop(ctx, receiverLoopParams{
-		logger:      d.logger,
-		xpcService:  windowsSensorLabel,
-		enqueue:     d.enqueue,
-		pt:          d.pidTable,
-		updateTable: true,
-		health:      d.health,
-		component:   health.ComponentWindowsETWSensor,
+		logger:       d.logger,
+		serviceLabel: windowsSensorLabel,
+		enqueue:      d.enqueue,
+		pt:           d.pidTable,
+		updateTable:  true,
+		health:       d.health,
+		component:    health.ComponentWindowsETWSensor,
 		connectorFactory: func() receiver.Connector {
 			return wintel.New(d.hostID, receiverEventBuffer, d.logger)
 		},

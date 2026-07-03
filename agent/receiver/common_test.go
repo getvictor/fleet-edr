@@ -14,7 +14,7 @@ import (
 // spec:agent-xpc-receiver/events-flow-into-the-queue-without-blocking-the-receiver/downstream-consumer-falls-behind
 //
 // Pins the receiver's drop-and-warn contract for a slow downstream consumer: when the events channel is full,
-// tryDeliverEvent MUST NOT block (so the XPC kernel callback returns promptly and the receiver continues reading
+// TryDeliverEvent MUST NOT block (so the XPC kernel callback returns promptly and the receiver continues reading
 // subsequent events), MUST drop the affected event, and MUST emit a warning identifying the affected service so
 // operators see the loss in SigNoz. The production CGo onEvent callback (receiver.go) delegates to this helper so
 // the test exercises exactly the production drop path without standing up a Mach service.
@@ -24,9 +24,9 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) { //nolint:par
 	t.Cleanup(func() { logger.Store(prev) })
 
 	// A fresh per-receiver reporter keeps this test isolated without touching any shared global.
-	dr := newDropReporter()
+	dr := NewDropReporter()
 
-	// Capture warn-level output to assert on the log line. A bytes.Buffer + mutex is enough since the test drives tryDeliverEvent
+	// Capture warn-level output to assert on the log line. A bytes.Buffer + mutex is enough since the test drives TryDeliverEvent
 	// synchronously from a single goroutine; the lock is defensive against a future test that runs the helper concurrently.
 	var (
 		mu  sync.Mutex
@@ -35,24 +35,24 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) { //nolint:par
 	lockedWriter := &mutexWriter{w: &buf, mu: &mu}
 	SetLogger(slog.New(slog.NewTextHandler(lockedWriter, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	// Buffer of 1 so the second send fills the channel and the third tryDeliverEvent call hits the drop branch.
+	// Buffer of 1 so the second send fills the channel and the third TryDeliverEvent call hits the drop branch.
 	ch := make(chan Event, 1)
 	first := Event{Data: []byte("first")}
 	dropped := Event{Data: []byte("dropped")}
 
-	tryDeliverEvent(ch, first, "svc-xpc", dr)
+	TryDeliverEvent(ch, first, "svc-xpc", dr)
 	// Channel now full. The next call MUST drop without blocking. If the implementation regressed to a blocking send, the test
 	// would otherwise deadlock until go test's package-level timeout (default 10m). Use a tight time.After timeout so a regression
 	// fails the test in a second instead of hanging the suite.
 	done := make(chan struct{})
 	go func() {
-		tryDeliverEvent(ch, dropped, "svc-xpc", dr)
+		TryDeliverEvent(ch, dropped, "svc-xpc", dr)
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("tryDeliverEvent did not return within 1s on a full channel; non-blocking contract regressed")
+		t.Fatal("TryDeliverEvent did not return within 1s on a full channel; non-blocking contract regressed")
 	}
 
 	// Surviving event in the channel is the first one; the dropped one was discarded.
@@ -71,12 +71,12 @@ func TestTryDeliverEvent_DropsAndWarnsOnFullChannel(t *testing.T) { //nolint:par
 
 	// The receiver continues reading: a fresh send (after the test drained `first`) succeeds.
 	next := Event{Data: []byte("next")}
-	tryDeliverEvent(ch, next, "svc-xpc", dr)
+	TryDeliverEvent(ch, next, "svc-xpc", dr)
 	got = <-ch
 	assert.Equal(t, "next", string(got.Data), "after a drop, the receiver MUST keep accepting subsequent events")
 }
 
-// Happy-path companion: when the channel has space, tryDeliverEvent delivers the event and emits no warning. Pins the "no spurious
+// Happy-path companion: when the channel has space, TryDeliverEvent delivers the event and emits no warning. Pins the "no spurious
 // log lines under steady-state load" half of the contract; a regression that logged on every successful delivery would surface here.
 func TestTryDeliverEvent_DeliversWhenChannelHasSpace(t *testing.T) { //nolint:paralleltest // swaps package-global logger; serial
 	prev := logger.Load()
@@ -88,10 +88,10 @@ func TestTryDeliverEvent_DeliversWhenChannelHasSpace(t *testing.T) { //nolint:pa
 	)
 	SetLogger(slog.New(slog.NewTextHandler(&mutexWriter{w: &buf, mu: &mu}, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	dr := newDropReporter()
+	dr := NewDropReporter()
 	ch := make(chan Event, 4)
 	for _, b := range [][]byte{[]byte("a"), []byte("b"), []byte("c")} {
-		tryDeliverEvent(ch, Event{Data: b}, "svc-xpc", dr)
+		TryDeliverEvent(ch, Event{Data: b}, "svc-xpc", dr)
 	}
 	require.Len(t, ch, 3, "three sends MUST land when the channel has room")
 
@@ -106,11 +106,11 @@ func TestTryDeliverEvent_DeliversWhenChannelHasSpace(t *testing.T) { //nolint:pa
 // Pins the rate-limiting half of the drop-and-warn contract: a sustained overflow MUST NOT emit one warning per dropped event
 // (which floods the agent log when a slow consumer falls behind). The first drop after a quiet period warns immediately so the
 // onset is visible; further drops within dropWarnInterval are counted and folded into the next summary, which carries the
-// accumulated dropped-event count. Driven through dropReporter with a fake clock so the window boundary is deterministic.
+// accumulated dropped-event count. Driven through DropReporter with a fake clock so the window boundary is deterministic.
 func TestDropReporter_CoalescesSustainedDrops(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(0, 0)
-	r := newDropReporter()
+	r := NewDropReporter()
 	r.now = func() time.Time { return now }
 
 	// First drop: emits immediately, accounting for exactly one event.
@@ -133,7 +133,7 @@ func TestDropReporter_CoalescesSustainedDrops(t *testing.T) {
 
 	// Each receiver owns its own reporter, so a second reporter's window is independent: its first drop warns even while r is
 	// mid-throttle. This is what gives the two receiver loops (system + network extension) independent drop accounting.
-	other := newDropReporter()
+	other := NewDropReporter()
 	other.now = func() time.Time { return now }
 	count, emit = other.record()
 	require.True(t, emit, "a separate reporter MUST warn on its own first drop, not share another receiver's throttle")
@@ -144,7 +144,7 @@ func TestDropReporter_CoalescesSustainedDrops(t *testing.T) {
 // refactor passing nil: record degrades to "surface every drop" (count 1, emit) rather than crashing the receiver callback.
 func TestDropReporter_NilReporterDoesNotPanic(t *testing.T) {
 	t.Parallel()
-	var r *dropReporter
+	var r *DropReporter
 	count, emit := r.record()
 	require.True(t, emit, "a nil reporter MUST surface the drop rather than swallow it")
 	assert.Equal(t, int64(1), count, "a nil reporter accounts for the single drop")
