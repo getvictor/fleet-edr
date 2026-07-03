@@ -41,7 +41,9 @@ func (h *Handler) handleActivityHistogram(w http.ResponseWriter, r *http.Request
 	}
 	fromNs, errFrom := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
 	toNs, errTo := strconv.ParseInt(r.URL.Query().Get("to"), 10, 64)
-	if errFrom != nil || errTo != nil || fromNs >= toNs {
+	// Timestamps are positive ns since the Unix epoch; rejecting non-positive bounds keeps window math (toNs-fromNs) well-defined
+	// on this public endpoint even though the UI never produces them.
+	if errFrom != nil || errTo != nil || fromNs <= 0 || toNs <= 0 || fromNs >= toNs {
 		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)
 		return
 	}

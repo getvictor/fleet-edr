@@ -42,13 +42,19 @@ export function ActivityHistogram({ hostId, fromNs, toNs, onSelectBucket }: Acti
     };
   }, [hostId, fromNs, toNs]);
 
-  if (!hist || hist.total === 0) return null;
+  // Guard a non-positive bucket size: a malformed response would otherwise make the index math below produce no slots (or, with the
+  // old accumulate-by-bucket loop, spin forever). Render nothing rather than hang.
+  if (!hist || hist.total === 0 || hist.bucket_ns <= 0) return null;
 
   const counts = new Map<number, number>();
   for (const b of hist.buckets ?? []) counts.set(b.start_ns, b.count);
+  // Iterate by bucket INDEX and multiply, never accumulate: ns timestamps exceed Number.MAX_SAFE_INTEGER, so repeated += would
+  // drift off the server's exact bucket starts and miss the counts map.
+  const slotCount = Math.ceil((toNs - fromNs) / hist.bucket_ns);
   const slots: { startNs: number; count: number }[] = [];
   let max = 0;
-  for (let startNs = fromNs; startNs < toNs; startNs += hist.bucket_ns) {
+  for (let i = 0; i < slotCount; i += 1) {
+    const startNs = fromNs + i * hist.bucket_ns;
     const count = counts.get(startNs) ?? 0;
     if (count > max) max = count;
     slots.push({ startNs, count });
@@ -57,7 +63,10 @@ export function ActivityHistogram({ hostId, fromNs, toNs, onSelectBucket }: Acti
   return (
     <div className="activity-histogram" aria-label="Process starts over the selected window">
       {slots.map((slot) => {
-        const label = `${formatBucketTime(slot.startNs)} to ${formatBucketTime(slot.startNs + hist.bucket_ns)}: ${String(slot.count)} process starts`;
+        // Clamp the last (possibly partial) bucket's end to the window: selecting startNs+bucket_ns unclamped would fetch past toNs,
+        // beyond what the bar represents.
+        const bucketEndNs = Math.min(slot.startNs + hist.bucket_ns, toNs);
+        const label = `${formatBucketTime(slot.startNs)} to ${formatBucketTime(bucketEndNs)}: ${String(slot.count)} process starts`;
         return (
           <button
             key={slot.startNs}
@@ -66,7 +75,7 @@ export function ActivityHistogram({ hostId, fromNs, toNs, onSelectBucket }: Acti
             disabled={slot.count === 0}
             aria-label={`${label}. Narrow the window to this bucket.`}
             title={label}
-            onClick={() => { onSelectBucket(slot.startNs, slot.startNs + hist.bucket_ns); }}
+            onClick={() => { onSelectBucket(slot.startNs, bucketEndNs); }}
           >
             <span
               className="activity-histogram__fill"

@@ -3233,4 +3233,11 @@ func TestStore_ActivityHistogram(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 600*1_000_000_000, wide.BucketNs, "a 10h window buckets by 10 minutes")
 	assert.EqualValues(t, 6, wide.Total, "the wider window now contains the sixth start")
+
+	// A 119s window's per-bucket target (119/60 ~= 1.98s) must round UP to 2s, not floor to 1s, or the bar count would double past
+	// the 60 cap (CodeRabbit review). ceil keeps the count bounded.
+	band, err := d.Store().ActivityHistogram(ctx, host, 0, 119*1_000_000_000)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2*1_000_000_000, band.BucketNs, "a 60-120s window rounds the bucket up to 2s to keep the bar count bounded")
+	assert.LessOrEqual(t, 119*1_000_000_000/band.BucketNs, int64(60), "the bar count stays at or under the target")
 }

@@ -12,7 +12,7 @@ import { HostHeader } from "./HostHeader";
 import { buildNodeTooltip, nodeEvidenceMarked, type NodeTooltip } from "./node-tooltip";
 import { TimeRangeControl } from "./TimeRangeControl";
 import { ActivityHistogram } from "./ActivityHistogram";
-import { DEFAULT_ALERT_WINDOW_MS, DEFAULT_LIVE_WINDOW_MS, windowBounds, type TimeWindow, type WindowBounds } from "../timewindow";
+import { DEFAULT_ALERT_WINDOW_MS, DEFAULT_LIVE_WINDOW_MS, windowBounds, type TimeWindow } from "../timewindow";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import "./ProcessTree.scss";
@@ -23,8 +23,6 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
   medium: "medium",
   low: "low",
 };
-
-// Time-range presets surfaced in the UI's segmented picker. The labels are
 
 // d3 layout + render constants. Tuned by hand; collected here so a future
 // "make labels bigger" change touches one block instead of every selector.
@@ -95,24 +93,36 @@ export function ProcessTreeView() {
   const [selectedNode, setSelectedNode] = useState<ProcessNode | null>(null);
   // The page's single time source (issue #581). Arriving from an alert anchors a wide window at the alert time (the alert-pivot
   // requirement's default); otherwise a live 1h window. Every consumer (tree fetch, histogram, control label) reads windowBounds
-  // of this one value. refreshTick re-resolves a relative window's "now" on demand (the Refresh action).
+  // of this one value; a relative window's "now" is the frozen nowMs below, re-captured only by the Refresh action.
   const [timeWindow, setTimeWindow] = useState<TimeWindow>(() => {
     const parsedAt = Number(searchParams.get("at"));
     return Number.isFinite(parsedAt) && parsedAt > 0
       ? { kind: "relative", ms: DEFAULT_ALERT_WINDOW_MS, anchorNs: parsedAt * NANOSECONDS_PER_MILLISECOND }
       : { kind: "relative", ms: DEFAULT_LIVE_WINDOW_MS };
   });
-  const [refreshTick, setRefreshTick] = useState(0);
-  // Resolved bounds live in state and are computed in an effect (clock reads are impure during render): a relative window's "now"
-  // advances only on a window change or an explicit Refresh (refreshTick). null until the first resolution; consumers guard.
-  const [bounds, setBounds] = useState<WindowBounds | null>(null);
+  // The alert anchor lives in the ?at= param. React Router keeps this component mounted when the param changes (e.g. the alert
+  // breadcrumb's "back to host" link drops it), so re-derive the entry window whenever ?at= transitions rather than only on mount.
+  const atParam = searchParams.get("at");
+  const lastAtRef = useRef<string | null>(atParam);
   useEffect(() => {
-    // Disable set-state-in-effect for the synchronous resolution, matching HostHealthPanel; the effect exists precisely to read the
-    // clock outside render.
-    /* eslint-disable react-hooks/set-state-in-effect */
-    setBounds(windowBounds(timeWindow, Date.now()));
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [timeWindow, refreshTick]);
+    if (lastAtRef.current === atParam) return;
+    lastAtRef.current = atParam;
+    const parsedAt = Number(atParam);
+     
+    setTimeWindow(
+      Number.isFinite(parsedAt) && parsedAt > 0
+        ? { kind: "relative", ms: DEFAULT_ALERT_WINDOW_MS, anchorNs: parsedAt * NANOSECONDS_PER_MILLISECOND }
+        : { kind: "relative", ms: DEFAULT_LIVE_WINDOW_MS },
+    );
+     
+  }, [atParam]);
+
+  // nowMs is the page's single frozen "now": captured once on mount and re-captured only on Refresh, never read live during render.
+  // Every relative-window resolution (bounds here, the shift arrows, the absolute-picker draft) uses this one value, so a relative
+  // window that has been on screen a while cannot resolve to a moving clock in one place and a stale one in another.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  // bounds is pure over (timeWindow, nowMs): both are state, so no clock read happens during render and there is no mount double-render.
+  const bounds = useMemo(() => windowBounds(timeWindow, nowMs), [timeWindow, nowMs]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
@@ -290,16 +300,20 @@ export function ProcessTreeView() {
   }, []);
 
   const fetchTree = useCallback(() => {
-    if (!hostId || !bounds) return;
+    if (!hostId) return;
     setLoading(true);
     setError(null);
 
+    // Stale-response guard: bounds changes can overlap (rapid preset picks, histogram clicks), and an older tree response landing
+    // after a newer one would paint the wrong window. Ignore all but the latest in-flight request, mirroring the alert fetch.
+    let cancelled = false;
     getProcessTree(hostId, bounds.fromNs, bounds.toNs, undefined, flatten)
-      .then((res) => { setRoots(res.roots); })
+      .then((res) => { if (!cancelled) setRoots(res.roots); })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Unknown error");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unknown error");
       })
-      .finally(() => { setLoading(false); });
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [hostId, bounds, flatten]);
 
   // Fetch alerts for this host to mark nodes with alert badges.
@@ -477,7 +491,7 @@ export function ProcessTreeView() {
           </span>
         )}
       </div>
-      <TimeRangeControl window={timeWindow} onChange={setTimeWindow} />
+      <TimeRangeControl window={timeWindow} nowMs={nowMs} onChange={setTimeWindow} />
       <label
         className="process-tree__toggle"
         title={showSystem ? "System processes shown" : "System processes hidden"}
@@ -504,7 +518,7 @@ export function ProcessTreeView() {
         <span className="process-tree__toggle-switch" aria-hidden="true" />
         <span className="process-tree__toggle-label">Flatten</span>
       </label>
-      <button type="button" className="process-tree__action-btn" onClick={() => { setRefreshTick((t) => t + 1); }}>
+      <button type="button" className="process-tree__action-btn" onClick={() => { setNowMs(Date.now()); }}>
         Refresh
       </button>
     </div>
@@ -606,14 +620,12 @@ export function ProcessTreeView() {
         <p className="process-tree__status">No processes in this time range.</p>
       )}
 
-      {bounds && (
-        <ActivityHistogram
-          hostId={hostId}
-          fromNs={bounds.fromNs}
-          toNs={bounds.toNs}
-          onSelectBucket={(fromNs, toNs) => { setTimeWindow({ kind: "absolute", fromNs, toNs }); }}
-        />
-      )}
+      <ActivityHistogram
+        hostId={hostId}
+        fromNs={bounds.fromNs}
+        toNs={bounds.toNs}
+        onSelectBucket={(fromNs, toNs) => { setTimeWindow({ kind: "absolute", fromNs, toNs }); }}
+      />
       <div className="process-tree__layout">
         <div className="process-tree__canvas">
           <svg ref={svgRef} />

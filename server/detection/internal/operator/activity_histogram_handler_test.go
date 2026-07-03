@@ -45,11 +45,11 @@ func TestHandleActivityHistogram_Success(t *testing.T) {
 	}}
 	srv := newHistogramServer(t, hr, allowAllAuthZ{})
 
-	resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram?from=0&to=3600000000000")
+	resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram?from=1&to=3600000000000")
 	defer resp.Body.Close()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.EqualValues(t, 0, gotFrom)
+	assert.EqualValues(t, 1, gotFrom)
 	assert.EqualValues(t, 3_600_000_000_000, gotTo)
 	var got api.ActivityHistogram
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
@@ -66,17 +66,32 @@ func TestHandleActivityHistogram_BadWindow(t *testing.T) {
 		return api.ActivityHistogram{}, nil
 	}}, allowAllAuthZ{})
 
-	for _, query := range []string{"?from=100&to=100", "?from=200&to=100", "?from=x&to=100", "?to=100", ""} {
-		resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram"+query)
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "query %q", query)
-		resp.Body.Close()
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{"equal from and to", "?from=100&to=100"},
+		{"from after to", "?from=200&to=100"},
+		{"non-numeric from", "?from=x&to=100"},
+		{"missing from", "?to=100"},
+		{"non-positive from", "?from=0&to=100"},
+		{"negative from", "?from=-5&to=100"},
+		{"no window params", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram"+tc.query)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
 	}
 }
 
 func TestHandleActivityHistogram_UnwiredIs503(t *testing.T) {
 	t.Parallel()
 	srv := newHistogramServer(t, nil, allowAllAuthZ{})
-	resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram?from=0&to=100")
+	resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram?from=1&to=100")
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
@@ -87,7 +102,7 @@ func TestHandleActivityHistogram_DeniedByAuthz(t *testing.T) {
 		t.Fatal("reader must not be reached when authz denies")
 		return api.ActivityHistogram{}, nil
 	}}, denyAllAuthZ{})
-	resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram?from=0&to=100")
+	resp := doGet(t, srv, "/api/hosts/host-a/activity-histogram?from=1&to=100")
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }

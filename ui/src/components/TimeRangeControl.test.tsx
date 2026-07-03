@@ -19,7 +19,7 @@ afterEach(() => {
 
 function renderControl(window: TimeWindow) {
   const onChange = vi.fn();
-  render(<TimeRangeControl window={window} onChange={onChange} />);
+  render(<TimeRangeControl window={window} nowMs={NOW.getTime()} onChange={onChange} />);
   return onChange;
 }
 

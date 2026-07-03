@@ -35,6 +35,15 @@ describe("ActivityHistogram", () => {
     expect(onSelect).toHaveBeenCalledWith(120 * SEC, 180 * SEC);
   });
 
+  it("renders nothing for a zero bucket size (would otherwise hang the render loop)", async () => {
+    vi.spyOn(api, "getActivityHistogram").mockResolvedValue({ bucket_ns: 0, total: 5, buckets: [{ start_ns: 0, count: 5 }] });
+    const { container } = render(<ActivityHistogram hostId="h1" fromNs={0} toNs={SEC} onSelectBucket={vi.fn()} />);
+    await waitFor(() => {
+      expect(api.getActivityHistogram).toHaveBeenCalled();
+    });
+    expect(container.firstChild).toBeNull();
+  });
+
   it("renders nothing for an empty window or a failed fetch", async () => {
     vi.spyOn(api, "getActivityHistogram").mockResolvedValue({ bucket_ns: SEC, total: 0, buckets: null });
     const { container, rerender } = render(<ActivityHistogram hostId="h1" fromNs={0} toNs={SEC} onSelectBucket={vi.fn()} />);
