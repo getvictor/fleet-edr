@@ -23,6 +23,7 @@ const (
 	errNotFound           = "not_found"
 	errInvalidJSONBody    = "invalid_json"
 	errHostIDRequired     = "host_id_required"
+	errBadWindow          = "bad_window"
 	errInvalidPID         = "invalid_pid"
 	errInvalidAlertID     = "invalid_alert_id"
 	errInvalidStatus      = "invalid_status"
@@ -67,6 +68,7 @@ type Handler struct {
 	webhookTester webhookTester
 	hostHealth    HostHealthReader
 	hostDetail    HostDetailReader
+	histogram     ActivityHistogramReader
 	logger        *slog.Logger
 }
 
@@ -103,6 +105,7 @@ func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 
 	h.registerHostHealthRoutes(mux)
 	h.registerHostDetailRoutes(mux)
+	h.registerHistogramRoutes(mux)
 	h.registerWebhookRoutes(mux)
 }
 

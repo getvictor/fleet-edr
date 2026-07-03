@@ -7,6 +7,7 @@
 // session JSON shape (including the CSRF token) and is the UI's
 // session-probe endpoint.
 import type {
+  ActivityHistogram,
   HostSummary,
   HostDetail,
   HostHealth,
@@ -323,6 +324,12 @@ export async function getProcessTree(
 
 export async function getHostDetail(hostId: string): Promise<HostDetail> {
   return fetchJSON<HostDetail>(`/hosts/${encodeURIComponent(hostId)}`);
+}
+
+export async function getActivityHistogram(hostId: string, fromNs: number, toNs: number): Promise<ActivityHistogram> {
+  return fetchJSON<ActivityHistogram>(
+    `/hosts/${encodeURIComponent(hostId)}/activity-histogram?from=${String(fromNs)}&to=${String(toNs)}`
+  );
 }
 
 export async function getHostHealth(hostId: string): Promise<HostHealth> {

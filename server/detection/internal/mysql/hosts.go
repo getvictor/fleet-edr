@@ -83,6 +83,43 @@ func (s *Store) HostHealth(ctx context.Context, hostID string) (api.HostHealth, 
 	return h, nil
 }
 
+// histogramTargetBuckets bounds how many bars a window produces: the bucket size is the window divided by this, floored to whole
+// seconds (minimum 1s), so a 1h window yields 1-minute buckets and a 7d window yields ~2.8h buckets.
+const histogramTargetBuckets = 60
+
+// ceilDiv returns ceil(a/b) for positive a and b.
+func ceilDiv(a, b int64) int64 {
+	return (a + b - 1) / b
+}
+
+// ActivityHistogram counts process starts per time bucket over [fromNs, toNs) for the host page's activity strip (issue #581). A
+// pure GROUP BY over fork_time_ns: starts, not tree-overlap rows, so long-lived processes do not smear across every bucket and no
+// join is needed. Buckets are sparse (only non-empty ones return); Total is their sum by construction.
+func (s *Store) ActivityHistogram(ctx context.Context, hostID string, fromNs, toNs int64) (api.ActivityHistogram, error) {
+	window := toNs - fromNs
+	// Bucket = the per-bar target (window / 60) rounded UP to a whole second, so the bar count never exceeds the target: flooring a
+	// target in [1s, 2s) (a 60-120s window) back to 1s would double the bar count for that band, breaking the bounded-count
+	// guarantee. ceilDiv both times; a 1s floor covers sub-minute windows.
+	sec := int64(time.Second)
+	perBucket := ceilDiv(window, histogramTargetBuckets)
+	bucketNs := max(ceilDiv(perBucket, sec)*sec, sec)
+	var rows []api.ActivityBucket
+	err := s.db.SelectContext(ctx, &rows, `
+		SELECT ? + ((fork_time_ns-?) DIV ?) * ? AS start_ns, COUNT(*) AS count
+		FROM processes
+		WHERE host_id = ? AND fork_time_ns >= ? AND fork_time_ns < ?
+		GROUP BY start_ns
+		ORDER BY start_ns`, fromNs, fromNs, bucketNs, bucketNs, hostID, fromNs, toNs)
+	if err != nil {
+		return api.ActivityHistogram{}, fmt.Errorf("query activity histogram: %w", err)
+	}
+	out := api.ActivityHistogram{BucketNs: bucketNs, Buckets: rows}
+	for _, b := range rows {
+		out.Total += b.Count
+	}
+	return out, nil
+}
+
 // CountOfflineHosts returns how many rows in `hosts` have `last_seen_ns` at or before the cutoff (now minus threshold). Used by the OTel
 // `edr.offline.hosts` gauge. The `<=` boundary matches HostList.tsx's predicate so the UI pill and gauge agree on hosts seen exactly
 // at the cutoff. A host with last_seen_ns == 0 (never seen) counts as offline.
