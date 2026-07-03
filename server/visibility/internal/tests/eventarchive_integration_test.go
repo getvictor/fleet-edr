@@ -198,7 +198,7 @@ func TestEventArchive_IdempotentInsert(t *testing.T) {
 	assert.Len(t, got, 1, "FINAL collapses the at-least-once duplicate to a single row")
 }
 
-// archiveNetEvent builds a network_connect or dns_query event carrying the artifact field the fleet-wide search matches on
+// archiveArtifactEvent builds a network_connect or dns_query event carrying the artifact field the fleet-wide search matches on
 // (remote_address for connections, query_name for DNS). base + offset keeps ingested_date inside the 30-day TTL window.
 func archiveArtifactEvent(id, host, etype string, ts int64, artifact string) visibilityapi.Event {
 	field := "remote_address"

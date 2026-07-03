@@ -18,7 +18,7 @@
 ## 4. Verification
 
 - [x] 4.1 `go test ./server/visibility/... ./server/detection/...` + integration with `EDR_TEST_DSN` and `EDR_CLICKHOUSE_TEST_DSN`, `go vet -tags integration ./...`, `task lint:go`, `tools/spectrace check --strict`, `openspec validate --all --strict`
-- [x] 4.2 Manual QA on the dev server: seed connection/dns events, curl `/api/search/connections` and `/dns` fleet-wide and host-scoped, verify cursor paging + total_matched + missing-value 400
+- [x] 4.2 Manual QA on the dev server: seed connection/dns events, curl `/api/search/connections` and `/api/search/dns` fleet-wide and host-scoped, verify cursor paging + total_matched + missing-value 400
 
 ## 5. Docs
 

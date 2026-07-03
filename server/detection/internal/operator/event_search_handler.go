@@ -67,6 +67,12 @@ func (h *Handler) serveEventSearch(w http.ResponseWriter, r *http.Request, event
 		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)
 		return
 	}
+	// An inverted window (both bounds present, from after to) matches nothing; reject it as a bad request rather than silently
+	// returning zero results.
+	if fromNs > 0 && toNs > 0 && fromNs > toNs {
+		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)
+		return
+	}
 
 	limit := parseSearchLimit(q)
 	result, err := h.eventSearch.SearchEvents(ctx, visibilityapi.EventSearchFilter{

@@ -118,9 +118,11 @@ func TestHandleEventSearch_BadWindowIs400(t *testing.T) {
 	}}
 	srv := newEventSearchServer(t, er, allowAllAuthZ{})
 
-	resp := doGet(t, srv, "/api/search/connections?remote_address=1.2.3.4&from=-5")
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	for _, query := range []string{"?remote_address=1.2.3.4&from=-5", "?remote_address=1.2.3.4&from=200&to=100"} {
+		resp := doGet(t, srv, "/api/search/connections"+query)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "query %q", query)
+		resp.Body.Close()
+	}
 }
 
 func TestHandleEventSearch_UnwiredIs503(t *testing.T) {

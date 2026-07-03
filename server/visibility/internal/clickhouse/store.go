@@ -135,19 +135,6 @@ func (s *Store) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event
 	return scanEvents(rows)
 }
 
-// searchColumnForType maps an event type to the materialized column its artifact search matches: network connections by remote
-// address, DNS queries by query name. An unknown type yields ok=false (the handler restricts the type, so this is a guard).
-func searchColumnForType(eventType string) (string, bool) {
-	switch eventType {
-	case "network_connect":
-		return "remote_address", true
-	case "dns_query":
-		return "query_name", true
-	default:
-		return "", false
-	}
-}
-
 // SearchEvents runs the fleet-wide connection/DNS artifact search (issue #582): events of filter.EventType whose materialized artifact
 // column equals filter.Value, newest-first, keyset-paged over (timestamp_ns, event_id). FINAL collapses ReplacingMergeTree duplicates.
 // Matching the materialized column (not JSONExtract inline) lets the bloom skip index prune granules. total_matched is the full match
@@ -156,7 +143,7 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 	if limit < 1 {
 		limit = 1
 	}
-	col, ok := searchColumnForType(filter.EventType)
+	col, ok := api.ArtifactField(filter.EventType)
 	if !ok {
 		return api.EventSearchResult{}, fmt.Errorf("clickhouse search: unsupported event type %q", filter.EventType)
 	}
@@ -177,20 +164,21 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 	}
 	whereSQL := strings.Join(where, " AND ")
 
-	var total uint64
-	if err := s.db.GetContext(ctx, &total, "SELECT count() FROM events FINAL WHERE "+whereSQL, args...); err != nil {
-		return api.EventSearchResult{}, fmt.Errorf("clickhouse search count: %w", err)
-	}
-
+	// Decode the cursor before the COUNT so a malformed cursor is a cheap 400, not a full archive count followed by a 400.
 	pageWhere := whereSQL
 	pageArgs := append([]any(nil), args...)
 	if cursor != "" {
-		c, err := decodeEventCursor(cursor)
+		c, err := api.DecodeEventCursor(cursor)
 		if err != nil {
 			return api.EventSearchResult{}, err
 		}
 		pageWhere += " AND (timestamp_ns, event_id) < (?, ?)"
-		pageArgs = append(pageArgs, c.timestampNs, c.eventID)
+		pageArgs = append(pageArgs, c.TimestampNs, c.EventID)
+	}
+
+	var total uint64
+	if err := s.db.GetContext(ctx, &total, "SELECT count() FROM events FINAL WHERE "+whereSQL, args...); err != nil {
+		return api.EventSearchResult{}, fmt.Errorf("clickhouse search count: %w", err)
 	}
 	pageArgs = append(pageArgs, limit+1)
 
@@ -207,7 +195,7 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 	result := api.EventSearchResult{TotalMatched: int64(total)}
 	if len(events) > limit {
 		last := events[limit-1]
-		result.NextCursor = encodeEventCursor(eventCursor{timestampNs: last.TimestampNs, eventID: last.EventID})
+		result.NextCursor = api.EncodeEventCursor(api.EventCursor{TimestampNs: last.TimestampNs, EventID: last.EventID})
 		events = events[:limit]
 	}
 	result.Events = events
