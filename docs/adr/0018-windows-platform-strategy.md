@@ -82,6 +82,31 @@ These findings, gathered 2026-07-02, are why Phase 3 is contingent rather than s
 
 **Fold the platform contract and the rule scoping into the macOS envelope opportunistically as the Windows sensor is written.** Rejected. That is the "shallow cross-platform story baked in late" failure ADR-0002 warned against. Landing the contract first, deliberately and with the identity and signing abstractions designed up front, is the right order of operations.
 
+## Amendment (2026-07-03): enforcement without MVI, macOS/Windows feature parity, and language strategy
+
+Three clarifications after the first Windows sensor landed (the ETW process sensor) and after deeper research into what the Microsoft Virus Initiative (MVI) actually gates.
+
+### Enforcement does not require MVI or a kernel driver
+
+The original Decision implied that application control and response actions belong to the privileged Phase 3 tier. That is wrong for the common cases, and the phasing is revised accordingly.
+
+- Network quarantine and host isolation are achievable in user mode via the Windows Filtering Platform (WFP): an elevated service adds high-precedence block filters at the ALE layers with a permit exception for the agent's management channel, which is how commercial EDRs isolate a host. No kernel driver, no MVI.
+- Application and execution blocking are achievable without MVI via WDAC (App Control for Business), an OS-enforced allow or deny policy keyed on hash, signer, or path (policy-based, with some update latency); or, for real-time programmatic deny with the agent's own logic, a kernel process-notify callback driver, which needs WHCP signing (an EV certificate plus Partner Center attestation) but still not MVI.
+- What MVI actually gates is the anti-tamper and deep-telemetry tier: an ELAM-signed driver, running the agent service as a Protected Process Light so a local administrator cannot disable it, and the Microsoft-Windows-Threat-Intelligence ETW provider (in-memory injection, credential-theft signals). The catch is that WFP and WDAC enforcement are defeatable by an admin-level attacker (WFP-manipulation tools such as EDRSilencer, or a malicious WDAC policy), so MVI is how enforcement becomes tamper-resistant, not how it is obtained.
+
+Revised phasing: basic response actions (WFP isolation, WDAC block) move into the driverless phase alongside telemetry; tamper-resistance and deep detection remain the MVI-gated tier. This maps onto the reserved `isolate` command and the `SendApplicationControl` path already in the codebase, which the Windows sensor can implement via WFP and WDAC without MVI. MVI itself remains a heavy, EDR-only-unfriendly lift (it requires a commercially available real-time antimalware product and an annual independent AV-lab certification), so it is a later track, not an MVP dependency.
+
+### macOS and Windows agents track relative feature parity
+
+Once the Windows agent exists, the macOS and Windows agents are kept at relative feature parity: neither platform is allowed to race ahead. A new capability is designed against the shared event contract and landed on both sensors together (and Linux when it exists), rather than shipping on one platform and backfilling the other later. The shared Go core and the platform sensor seam exist precisely to make parallel per-platform work cheap, and future feature work is expected to target both platforms at once. This parity expectation is now an explicit design constraint on new agent work, not an aspiration.
+
+### Language strategy: Go-first for reuse, Swift where Apple forces it, Rust where needed
+
+- The portable agent (queue, uploader, enrollment, control channel, command ledger, health, metrics, config, process graph, reconciler) and the user-mode sensors are Go, because that is what lets the macOS, Windows, and later Linux agents share the majority of the agent code and the wire contract. Reuse is real today: the entire Go daemon and the server-side pipeline are shared; only the per-OS sensor is not (and cannot be, since it binds an OS-specific telemetry API).
+- Swift is used only for the macOS ESF system extension, which Apple requires to link EndpointSecurity.framework inside a sandboxed, entitled, notarized process.
+- Rust is the intended language for future Windows components where it is needed: performance-critical or security-sensitive user-mode code (for example a high-volume ETW provider parser, or the tamper-sensitive service). A Windows kernel driver, if the privileged tier is pursued, is C/C++ per the WDK; Rust's place is user mode.
+- Go garbage collection and telemetry are not a first-order concern at the event rates these sensors handle (process, network, and DNS events are hundreds to low-thousands per second; modern Go GC pauses are concurrent and sub-millisecond), and ETW's own kernel buffers decouple a brief consumer stall from loss (a slow consumer drops via the session's EventsLost rather than blocking the kernel). The real cost is per-event allocation churn (TDH buffers, string decode, JSON marshal), which is throughput rather than pause and is addressed with allocation discipline (buffer reuse) before any rewrite. Posture: instrument dropped and lost events and GC, keep the ETW callback allocation-light, and reach for Rust surgically for a specific provider that measurement proves too hot, not preemptively. Note the asymmetry the parity goal must account for: on macOS the hot sensor path is Swift (no GC) and Go only relays bytes, whereas on Windows the hot path is Go, so Windows leans on the runtime harder.
+
 ## References
 
 - Issue #587 (Windows agent support epic), which this ADR anchors.
@@ -94,3 +119,6 @@ These findings, gathered 2026-07-02, are why Phase 3 is contingent rather than s
 - Windows Resiliency Initiative: https://blogs.windows.com/windowsexperience/2025/06/26/the-windows-resiliency-initiative-building-resilience-for-a-future-ready-enterprise/ and https://www.cybersecuritydive.com/news/microsoft-windows-resilience-initiative-security-kernel/813416/.
 - Cross-signed kernel driver trust removal: https://techcommunity.microsoft.com/blog/windows-itpro-blog/advancing-windows-driver-security-removing-trust-for-the-cross-signed-driver-pro/4504818.
 - Native Sysmon in Windows: https://learn.microsoft.com/en-us/windows/security/operating-system-security/sysmon/overview.
+- Windows Filtering Platform (user-mode filters for network isolation): https://learn.microsoft.com/en-us/windows/win32/fwp/windows-filtering-platform-start-page.
+- WDAC / App Control for Business (OS-enforced application blocking): https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/appcontrol.
+- MVI membership application (reviewed monthly): linked from the MVI criteria page above.
