@@ -154,3 +154,9 @@
   gap: 0.35rem;
   flex-wrap: wrap;
 }
+
+// Search pivot link on an evidence row (issue #582): sits beside the copy button, low-emphasis until hover.
+.process-detail__pivot {
+  font-size: 0.75rem;
+  white-space: nowrap;
+}

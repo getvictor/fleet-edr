@@ -10,6 +10,7 @@ import type {
   ActivityHistogram,
   HostSummary,
   HostDetail,
+  ProcessSearchResult,
   HostHealth,
   TreeResponse,
   ProcessDetail,
@@ -344,6 +345,33 @@ export async function getProcessDetail(
   return fetchJSON<ProcessDetail>(
     `/hosts/${encodeURIComponent(hostId)}/processes/${String(pid)}?at=${String(atNs)}`
   );
+}
+
+// ProcessSearchFilter mirrors the fleet-wide process search endpoint's query params (issue #582); every field is optional and ANDed
+// server-side. Empty strings are omitted from the query.
+export interface ProcessSearchFilter {
+  host_id?: string;
+  path?: string;
+  hash?: string;
+  uid?: string;
+  signing?: string;
+  from?: string;
+  to?: string;
+}
+
+export async function searchProcesses(filter: ProcessSearchFilter, cursor?: string): Promise<ProcessSearchResult> {
+  const query = new URLSearchParams();
+  const set = (key: string, value: string | undefined) => { if (value) query.set(key, value); };
+  set("host_id", filter.host_id);
+  set("path", filter.path);
+  set("hash", filter.hash);
+  set("uid", filter.uid);
+  set("signing", filter.signing);
+  set("from", filter.from);
+  set("to", filter.to);
+  set("cursor", cursor);
+  const qs = query.toString();
+  return fetchJSON<ProcessSearchResult>(`/search/processes${qs ? `?${qs}` : ""}`);
 }
 
 export async function listAlerts(params?: {

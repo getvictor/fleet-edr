@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import {
   getProcessDetail,
   listAlertsByProcessId,
@@ -47,6 +48,17 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
 
 // VERDICT_BADGE maps the signer category to the panel badge's tone: the two identity-less categories read as attention (high for no
 // signature at all, medium for ad-hoc), a verifiable Developer ID reads informational, and platform/signed are neutral facts.
+// SearchPivot is the "search all hosts for this artifact" affordance next to an evidence row (issue #582): a link to the fleet-wide
+// search pre-filtered by one param. Rendered only for artifacts the search endpoint can filter (path, hash, uid, signing verdict).
+function SearchPivot({ param, value, label }: { readonly param: string; readonly value: string; readonly label: string }) {
+  const qs = new URLSearchParams({ [param]: value }).toString();
+  return (
+    <Link className="process-detail__pivot" to={`/search?${qs}`} aria-label={label} title={label}>
+      Search all hosts
+    </Link>
+  );
+}
+
 const VERDICT_BADGE: Record<SigningVerdictKind, BadgeVariant> = {
   unsigned: "high",
   invalid: "high",
@@ -205,6 +217,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         <dd className="process-detail__break process-detail__copyable">
           {node.path || "(unknown)"}
           {node.path && <CopyButton value={node.path} label="Copy path" />}
+          {node.path && <SearchPivot param="path" value={node.path} label="Search all hosts for this path" />}
         </dd>
         {node.args && (
           <>
@@ -218,7 +231,10 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         {node.uid !== undefined && (
           <>
             <dt>UID</dt>
-            <dd>{node.uid}</dd>
+            <dd className="process-detail__copyable">
+              {node.uid}
+              <SearchPivot param="uid" value={String(node.uid)} label="Search all hosts for this UID" />
+            </dd>
           </>
         )}
         {node.gid !== undefined && (
@@ -233,6 +249,7 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
             <dd className="process-detail__hash process-detail__copyable">
               {node.sha256}
               <CopyButton value={node.sha256} label="Copy SHA256" />
+              <SearchPivot param="hash" value={node.sha256} label="Search all hosts for this hash" />
             </dd>
           </>
         )}
@@ -250,8 +267,9 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         {node.exec_time_ns && (
           <>
             <dt>Signing</dt>
-            <dd>
+            <dd className="process-detail__copyable">
               <Badge variant={VERDICT_BADGE[verdict.kind]}>{verdict.label}</Badge>
+              <SearchPivot param="signing" value={verdict.kind} label="Search all hosts for this signing verdict" />
             </dd>
           </>
         )}

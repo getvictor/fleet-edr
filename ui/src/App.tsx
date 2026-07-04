@@ -6,6 +6,7 @@ import { AlertList } from "./components/AlertList";
 import { AttackCoverage } from "./components/AttackCoverage";
 import { ApplicationControlRoutes } from "./components/ApplicationControl/ApplicationControlRoutes";
 import { DetectionConfig } from "./components/DetectionConfig/DetectionConfig";
+import { SearchPage } from "./components/Search/SearchPage";
 import { RuleDetail } from "./components/RuleDetail";
 import { SSOSettings } from "./components/SSOSettings/SSOSettings";
 import { Webhooks } from "./components/Webhooks/Webhooks";
@@ -175,6 +176,14 @@ export function AuthedApp() {
             element={(
               <RequirePermission action={PermissionAction.DetectionConfigRead} surface="Detection tuning">
                 <DetectionConfig />
+              </RequirePermission>
+            )}
+          />
+          <Route
+            path="/search"
+            element={(
+              <RequirePermission action={PermissionAction.ProcessRead} surface="Search">
+                <SearchPage />
               </RequirePermission>
             )}
           />

@@ -1,0 +1,26 @@
+@use "../../styles/var/colors" as *;
+
+.search-page {
+  &__count {
+    color: $ui-fleet-black-50;
+    font-size: 0.85rem;
+    margin: 0 0 0.5rem;
+  }
+
+  &__mono {
+    font-family: ui-monospace, sfmono-regular, Menlo, monospace;
+    font-size: 0.85rem;
+  }
+
+  &__cmdline {
+    max-width: 32rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__more {
+    margin-top: 0.75rem;
+    text-align: center;
+  }
+}

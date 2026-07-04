@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { ReactElement } from "react";
 import { ProcessDetail } from "./ProcessDetail";
 import { PermissionsProvider } from "../permissions";
 import * as api from "../api";
 import type { ProcessNode, ProcessDetail as ProcessDetailType, Alert, Command } from "../types";
+
+// ProcessDetail now renders search-pivot <Link>s, so every render needs a router context. Wrap RTL's render so the existing call
+// sites stay unchanged.
+function render(ui: ReactElement) {
+  return rtlRender(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 // ProcessDetail renders one process's metadata, its re-exec chain, network activity, and
 // per-process alerts, plus the reauth-gated kill action. Tests pin the metadata fields,
@@ -126,6 +134,42 @@ describe("ProcessDetail metadata", () => {
     for (const label of ["Copy command line", "Copy path", "Copy SHA256", "Copy cdhash", "Copy signing id", "Copy team id"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
+  });
+
+  // spec:web-ui/host-page-search-pivots/pivoting-from-a-hash-searches-the-fleet
+  it("offers search-all-hosts pivots for the filterable artifacts", () => {
+    render(
+      <ProcessDetail
+        hostId="h1"
+        node={makeNode({
+          path: "/usr/bin/curl",
+          uid: 0,
+          sha256: "abc123",
+          exec_time_ns: 20 * NS,
+          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true },
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Search all hosts for this hash" })).toHaveAttribute("href", "/search?hash=abc123");
+    expect(screen.getByRole("link", { name: "Search all hosts for this path" })).toHaveAttribute("href", "/search?path=%2Fusr%2Fbin%2Fcurl");
+    expect(screen.getByRole("link", { name: "Search all hosts for this UID" })).toHaveAttribute("href", "/search?uid=0");
+    // Team T + platform flag -> developer-id verdict; the pivot carries the verdict kind, not the raw signing id.
+    expect(screen.getByRole("link", { name: "Search all hosts for this signing verdict" })).toHaveAttribute("href", "/search?signing=developer-id");
+  });
+
+  // spec:web-ui/host-page-search-pivots/unfilterable-artifacts-have-no-pivot
+  it("does not pivot on signing id or team id (no server filter for them)", () => {
+    render(
+      <ProcessDetail
+        hostId="h1"
+        node={makeNode({ exec_time_ns: 20 * NS, code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true } })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Copy signing id" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /signing id/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /team id/i })).not.toBeInTheDocument();
   });
 
   it("falls back to (unknown) for an empty path", () => {
