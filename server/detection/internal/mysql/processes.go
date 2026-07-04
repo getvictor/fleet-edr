@@ -436,8 +436,8 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 // EventAlreadyApplied reports whether a process row for (hostID, pid) already records eventID as the event that created it
 // (source_event_id) or applied its current exec image / exit (exec_event_id / exit_event_id). The graph builder calls this before
 // mutating so a re-processed event (a batch nack from a retryable detection miss, or a claim-lease-expiry re-offer, replays the same
-// events) is a no-op instead of duplicating a generation or closing the wrong one (migration 00011). Backed by
-// uk_processes_source_event for the source-id probe; the exec/exit probes fall back to the (host_id, pid, ...) indexes.
+// events) is a no-op instead of duplicating a generation or closing the wrong one (migration 00011). The (host_id, pid) predicate is
+// served by idx_processes_host_pid; the three event-id columns are OR-matched within that pid's (few) rows.
 func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int, eventID string) (bool, error) {
 	var exists bool
 	err := s.db.GetContext(ctx, &exists, `

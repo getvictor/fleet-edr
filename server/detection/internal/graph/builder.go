@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -491,17 +492,27 @@ func (b *Builder) handleExit(ctx context.Context, w processStore, evt api.Event)
 		return err
 	}
 	if affected == 0 {
-		// Issue #176: no row to update. This is the post-restart race window where the extension's snapshot enumerator saw the PID
-		// but emitted its synthetic exec AFTER the live NOTIFY_EXIT for the same PID landed at the server. Buffer the exit so the
-		// inbound snapshot exec can consume it and synthesise an already-exited row, rather than insert a phantom alive row that
-		// survives until 6h TTL reconciliation. Reason is preserved so the synthesised row's exit_reason reflects host_reconciled
-		// vs event correctly.
-		b.bufferPendingExit(evt.HostID, p.PID, pendingExit{
-			exitTimeNs:       evt.TimestampNs,
-			exitIngestedAtNs: evt.IngestedAtNs,
-			exitCode:         p.ExitCode,
-			exitReason:       reason,
-		})
+		// Issue #176: the genuine no-row case is the post-restart race where the extension's snapshot enumerator saw the PID but
+		// emitted its synthetic exec AFTER the live NOTIFY_EXIT landed. Buffer the exit so the inbound snapshot exec can consume it and
+		// synthesise an already-exited row, rather than a phantom alive row that survives until 6h TTL reconciliation. Reason is
+		// preserved so the synthesised row's exit_reason reflects host_reconciled vs event correctly.
+		//
+		// UpdateProcessExit can now also affect 0 rows via its fork_time_ns <= exit bound (migration 00011): on re-processing, the only
+		// live row for the pid may have forked AFTER this exit, so the exit is stale for the current generation and must NOT be buffered
+		// (a later snapshot exec would wrongly consume it and mark that row exited). Buffer only when no live row exists for the pid at
+		// all, i.e. the real exit-before-fork race, not the fork-time-bound no-op.
+		live, err := w.GetProcessByPID(ctx, evt.HostID, p.PID, math.MaxInt64)
+		if err != nil {
+			return err
+		}
+		if live == nil {
+			b.bufferPendingExit(evt.HostID, p.PID, pendingExit{
+				exitTimeNs:       evt.TimestampNs,
+				exitIngestedAtNs: evt.IngestedAtNs,
+				exitCode:         p.ExitCode,
+				exitReason:       reason,
+			})
+		}
 	}
 	return nil
 }
