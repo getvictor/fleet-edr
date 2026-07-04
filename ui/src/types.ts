@@ -94,6 +94,14 @@ export interface Process {
   previous_exec_id?: number;
 }
 
+// ProcessSearchResult is the response from GET /api/search/processes (issue #582): a page of matching processes across all hosts,
+// the opaque keyset cursor for the next page (absent on the last), and the full match count independent of the page.
+export interface ProcessSearchResult {
+  rows: Process[];
+  next_cursor?: string;
+  total_matched: number;
+}
+
 export interface ProcessNode extends Process {
   children?: ProcessNode[];
   network_connections?: EventRecord[];

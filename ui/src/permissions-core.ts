@@ -17,6 +17,7 @@ import { createContext, useCallback, useContext, useMemo } from "react";
 // full action registry: only actions that gate a visible affordance need an entry.
 export const PermissionAction = {
   HostRead: "host.read",
+  ProcessRead: "process.read",
   AlertRead: "alert.read",
   AlertComment: "alert.comment",
   AlertAcknowledge: "alert.acknowledge",
