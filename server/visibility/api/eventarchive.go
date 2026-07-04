@@ -36,6 +36,25 @@ type EventArchive interface {
 	// limit events, a next cursor when more remain, and total_matched (the full match count independent of the page). A malformed
 	// cursor is a caller error.
 	SearchEvents(ctx context.Context, filter EventSearchFilter, cursor string, limit int) (EventSearchResult, error)
+
+	// HostTimeline returns one host's investigation events (exec, network_connect, dns_query) interleaved in event-time order,
+	// newest-first, over the filter's event-time window, optionally narrowed to a subset of those types and to a case-insensitive
+	// payload substring (issue #583). Keyset-paged over (timestamp_ns, event_id) from cursor, up to limit events, with a next cursor
+	// when more remain and total_matched independent of the page. Shares the EventSearchResult page shape and EventCursor codec with
+	// SearchEvents. A malformed cursor is a caller error.
+	HostTimeline(ctx context.Context, filter HostTimelineFilter, cursor string, limit int) (EventSearchResult, error)
+}
+
+// HostTimelineFilter selects events for one host's merged event timeline (issue #583). HostID is required. FromNs/ToNs bound event
+// time (timestamp_ns, what the host page's time window means), zero meaning unbounded on that side. EventTypes narrows to a subset of
+// the timeline event classes (empty means all of them). Text, when non-empty, keeps only events whose raw payload contains it
+// case-insensitively.
+type HostTimelineFilter struct {
+	HostID     string
+	FromNs     int64
+	ToNs       int64
+	EventTypes []string
+	Text       string
 }
 
 // EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class

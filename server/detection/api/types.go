@@ -40,6 +40,9 @@ type Event = visibilityapi.Event
 type EventSearchFilter = visibilityapi.EventSearchFilter
 type EventSearchResult = visibilityapi.EventSearchResult
 
+// HostTimelineFilter aliases the visibility host-event-timeline filter (issue #583), the same re-export pattern the search types use.
+type HostTimelineFilter = visibilityapi.HostTimelineFilter
+
 // Platform constants and helpers are defined in the visibility context (the canonical event owner, ADR-0015) and re-exported here so
 // detection code scopes rules and validates events without importing the visibility package directly, the same re-export pattern the
 // Severity constants use. NormalizePlatform maps an empty (legacy-agent) platform to PlatformDarwin.

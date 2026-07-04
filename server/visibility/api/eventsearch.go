@@ -15,6 +15,21 @@ const (
 	fieldQueryName     = "query_name"
 )
 
+// TimelineEventTypes is the ordered allowlist of event classes the host event timeline surfaces (issue #583): a process starting a
+// new image, an outbound/inbound connection, and a DNS resolution. fork/exit lineage is the graph's job, not the flat stream. Shared
+// by the ClickHouse store, the fake, and the handler so the allowlist lives in one place.
+func TimelineEventTypes() []string { return []string{"exec", "network_connect", "dns_query"} }
+
+// IsTimelineEventType reports whether eventType is one the timeline surfaces. The handler uses it to reject an unrecognized ?type=.
+func IsTimelineEventType(eventType string) bool {
+	switch eventType {
+	case "exec", "network_connect", "dns_query":
+		return true
+	default:
+		return false
+	}
+}
+
 // ArtifactField returns the payload/column field a fleet-wide search of eventType matches against, and ok=false for a type that has
 // no artifact search. Callers (the ClickHouse store, the in-memory fake, the handler) share this one mapping.
 func ArtifactField(eventType string) (string, bool) {

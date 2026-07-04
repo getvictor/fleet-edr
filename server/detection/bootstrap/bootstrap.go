@@ -184,6 +184,7 @@ func New(deps Deps) (*Detection, error) {
 		det.operatorH.SetActivityHistogram(store)
 		det.operatorH.SetProcessSearch(store)
 		det.operatorH.SetEventSearch(store)
+		det.operatorH.SetHostTimeline(store)
 
 		processor := pipeline.NewProcessor(
 			deps.EventLog,

@@ -528,3 +528,9 @@ func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, p
 func (s *Store) SearchEvents(ctx context.Context, filter visibilityapi.EventSearchFilter, cursor string, limit int) (visibilityapi.EventSearchResult, error) {
 	return s.archive.SearchEvents(ctx, filter, cursor, limit)
 }
+
+// HostTimeline delegates the host-scoped merged event timeline (issue #583) to the visibility EventArchive, the same post-cutover
+// delegation SearchEvents uses: the events live in ClickHouse, and the operator's host-timeline reader seam reaches the detection store.
+func (s *Store) HostTimeline(ctx context.Context, filter visibilityapi.HostTimelineFilter, cursor string, limit int) (visibilityapi.EventSearchResult, error) {
+	return s.archive.HostTimeline(ctx, filter, cursor, limit)
+}

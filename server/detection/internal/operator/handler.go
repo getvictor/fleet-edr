@@ -32,6 +32,7 @@ const (
 	errInvalidCursor      = "invalid_cursor"
 	errInvalidSigning     = "invalid_signing"
 	errMissingArtifact    = "missing_artifact_value"
+	errInvalidEventType   = "invalid_event_type"
 
 	// processTreeDefaultLimit is the row cap when the caller does not supply ?limit=. Sized to fit a typical analyst's investigation
 	// without paging.
@@ -74,6 +75,7 @@ type Handler struct {
 	histogram     ActivityHistogramReader
 	processSearch ProcessSearchReader
 	eventSearch   EventSearchReader
+	hostTimeline  HostTimelineReader
 	logger        *slog.Logger
 }
 
@@ -113,6 +115,7 @@ func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	h.registerHistogramRoutes(mux)
 	h.registerSearchRoutes(mux)
 	h.registerEventSearchRoutes(mux)
+	h.registerHostTimelineRoutes(mux)
 	h.registerWebhookRoutes(mux)
 }
 

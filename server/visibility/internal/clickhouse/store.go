@@ -140,9 +140,6 @@ func (s *Store) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event
 // Matching the materialized column (not JSONExtract inline) lets the bloom skip index prune granules. total_matched is the full match
 // count independent of the page. An empty cursor starts at the newest event.
 func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, cursor string, limit int) (api.EventSearchResult, error) {
-	if limit < 1 {
-		limit = 1
-	}
 	col, ok := api.ArtifactField(filter.EventType)
 	if !ok {
 		return api.EventSearchResult{}, fmt.Errorf("clickhouse search: unsupported event type %q", filter.EventType)
@@ -163,10 +160,53 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 		args = append(args, filter.ToNs)
 	}
 	whereSQL := strings.Join(where, " AND ")
+	return s.pageEventsByKeyset(ctx, whereSQL, args, cursor, limit)
+}
 
-	// Decode the cursor before the COUNT so a malformed cursor is a cheap 400, not a full archive count followed by a 400.
-	pageWhere := whereSQL
-	pageArgs := append([]any(nil), args...)
+// HostTimeline returns one host's exec/network_connect/dns_query events interleaved in event-time order, newest-first (issue #583):
+// host + event_type IN the requested (or all timeline) classes + timestamp_ns within the window + optional case-insensitive payload
+// substring, keyset-paged over (timestamp_ns, event_id). The window bounds event time (timestamp_ns), unlike SearchEvents which bounds
+// ingest time. FINAL collapses ReplacingMergeTree duplicates; total_matched is the full match count independent of the page.
+func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter, cursor string, limit int) (api.EventSearchResult, error) {
+	types := filter.EventTypes
+	if len(types) == 0 {
+		types = api.TimelineEventTypes()
+	}
+	where := []string{"host_id = ?"}
+	args := []any{filter.HostID}
+	placeholders := make([]string, len(types))
+	for i, t := range types {
+		placeholders[i] = "?"
+		args = append(args, t)
+	}
+	where = append(where, "event_type IN ("+strings.Join(placeholders, ", ")+")")
+	if filter.FromNs > 0 {
+		where = append(where, "timestamp_ns >= ?")
+		args = append(args, filter.FromNs)
+	}
+	if filter.ToNs > 0 {
+		where = append(where, "timestamp_ns <= ?")
+		args = append(args, filter.ToNs)
+	}
+	if filter.Text != "" {
+		// Substring over the raw payload matches a path, address, hostname, or query name without per-type field logic; the host +
+		// window + type predicate has already pruned the granule set, so the un-indexed scan runs over a bounded slice.
+		where = append(where, "positionCaseInsensitiveUTF8(payload, ?) > 0")
+		args = append(args, filter.Text)
+	}
+	return s.pageEventsByKeyset(ctx, strings.Join(where, " AND "), args, cursor, limit)
+}
+
+// pageEventsByKeyset runs the shared newest-first keyset page behind both the fleet-wide search and the host timeline: it counts every
+// row matching baseWhere/baseArgs, then fetches up to limit events strictly before the cursor position ordered (timestamp_ns,
+// event_id) DESC, returning a next cursor when more remain. baseWhere is the full filter predicate with no cursor clause; baseArgs are
+// its positional args in order. The cursor is decoded before the COUNT so a malformed cursor is a cheap 400, not a full count first.
+func (s *Store) pageEventsByKeyset(ctx context.Context, baseWhere string, baseArgs []any, cursor string, limit int) (api.EventSearchResult, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	pageWhere := baseWhere
+	pageArgs := append([]any(nil), baseArgs...)
 	if cursor != "" {
 		c, err := api.DecodeEventCursor(cursor)
 		if err != nil {
@@ -177,15 +217,15 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 	}
 
 	var total uint64
-	if err := s.db.GetContext(ctx, &total, "SELECT count() FROM events FINAL WHERE "+whereSQL, args...); err != nil {
-		return api.EventSearchResult{}, fmt.Errorf("clickhouse search count: %w", err)
+	if err := s.db.GetContext(ctx, &total, "SELECT count() FROM events FINAL WHERE "+baseWhere, baseArgs...); err != nil {
+		return api.EventSearchResult{}, fmt.Errorf("clickhouse event page count: %w", err)
 	}
 	pageArgs = append(pageArgs, limit+1)
 
 	rows, err := s.db.QueryContext(ctx, "SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload "+
 		"FROM events FINAL WHERE "+pageWhere+" ORDER BY timestamp_ns DESC, event_id DESC LIMIT ?", pageArgs...)
 	if err != nil {
-		return api.EventSearchResult{}, fmt.Errorf("clickhouse search events: %w", err)
+		return api.EventSearchResult{}, fmt.Errorf("clickhouse event page: %w", err)
 	}
 	events, err := scanEvents(rows)
 	if err != nil {
