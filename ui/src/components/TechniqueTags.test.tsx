@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import type { ReactElement } from "react";
 import { TechniqueTags } from "./TechniqueTags";
 
-function renderTags(ui: React.ReactElement) {
+function renderTags(ui: ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
 

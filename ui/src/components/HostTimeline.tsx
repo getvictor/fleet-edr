@@ -11,9 +11,38 @@ import { SearchResultsFrame } from "./Search/SearchResultsFrame";
 import { formatNs, basename, hostPort } from "./Search/format";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 
-// EventTechniques maps a triggering event id to the alert's rule + technique ids, so a timeline row for that event shows the MITRE
-// tags (issue #585). Keyed by event id because a timeline event carries the OS pid, not the alert's process DB id.
-type EventTechniques = Map<string, { ruleId: string; techniques: string[] }>;
+// EventTechniques maps a triggering event id to the alerting rules' technique ids, so a timeline row for that event shows the MITRE
+// tags (issue #585). Keyed by event id because a timeline event carries the OS pid, not the alert's process DB id. The value is a
+// list because one event can trigger more than one alert (one entry per rule, each linking to its own rule page).
+type EventTechniques = Map<string, { ruleId: string; techniques: string[] }[]>;
+
+// Cap how many alerts we fetch details for, so a host in an alert storm cannot fan out into hundreds of concurrent getAlertDetail
+// requests. Tagging the most recent alerts' events is enough for the overlay; the cap is best-effort, not a correctness bound.
+const MAX_ALERT_DETAIL_FETCHES = 50;
+
+// buildEventTechniques resolves a host's triggering-event -> technique-tags map: its open + acknowledged alerts (each list fetched
+// resiliently so one failing status still yields the other), the alerting rules' event ids via getAlertDetail, grouped by event id.
+// Extracted to module scope so the effect stays shallow (avoids deep function nesting).
+async function buildEventTechniques(hostID: string): Promise<EventTechniques> {
+  const [open, acked] = await Promise.all([
+    listAlerts({ host_id: hostID, status: "open", limit: 1000 }).catch(() => []),
+    listAlerts({ host_id: hostID, status: "acknowledged", limit: 1000 }).catch(() => []),
+  ]);
+  const withTechniques = [...open, ...acked].filter((a) => (a.techniques ?? []).length > 0).slice(0, MAX_ALERT_DETAIL_FETCHES);
+  const detailed = await Promise.all(
+    withTechniques.map(async (a) => ({ alert: a, detail: await getAlertDetail(a.id).catch(() => null) })),
+  );
+  const map: EventTechniques = new Map();
+  for (const { alert, detail } of detailed) {
+    if (!detail) continue;
+    for (const eid of detail.event_ids) {
+      const entry = map.get(eid) ?? [];
+      entry.push({ ruleId: alert.rule_id, techniques: alert.techniques ?? [] });
+      map.set(eid, entry);
+    }
+  }
+  return map;
+}
 
 interface Props {
   readonly hostId: string;
@@ -83,30 +112,12 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
   // a failed fetch just leaves rows untagged.
   const [eventTechniques, setEventTechniques] = useState<EventTechniques>(new Map());
   useEffect(() => {
-    // Object-ref cancellation flag: a bare `let cancelled` is narrowed to its literal by TS's flow analysis inside the async IIFE
-    // (tripping no-unnecessary-condition on the guard), whereas a property read is treated as a plain boolean.
-    const live = { current: true };
-    void (async () => {
-      try {
-        const [open, acked] = await Promise.all([
-          listAlerts({ host_id: hostId, status: "open", limit: 1000 }),
-          listAlerts({ host_id: hostId, status: "acknowledged", limit: 1000 }),
-        ]);
-        const withTechniques = [...open, ...acked].filter((a) => (a.techniques ?? []).length > 0);
-        const detailed = await Promise.all(
-          withTechniques.map(async (a) => ({ alert: a, detail: await getAlertDetail(a.id).catch(() => null) })),
-        );
-        if (!live.current) return;
-        const map: EventTechniques = new Map();
-        for (const { alert, detail } of detailed) {
-          if (!detail) continue;
-          for (const eid of detail.event_ids) map.set(eid, { ruleId: alert.rule_id, techniques: alert.techniques ?? [] });
-        }
-        setEventTechniques(map);
-      } catch {
-        /* technique tags are best-effort */
-      }
-    })();
+    const live = { current: true }; // object ref (not a bare let) so the guard read is a boolean, not a TS-narrowed literal
+    // Clear on host change so a slow/failed fetch cannot leave the previous host's tags on this host's rows.
+    setEventTechniques(new Map()); // eslint-disable-line react-hooks/set-state-in-effect -- reset request-scoped state on host change
+    buildEventTechniques(hostId)
+      .then((map) => { if (live.current) setEventTechniques(map); })
+      .catch(() => { /* technique tags are best-effort */ });
     return () => { live.current = false; };
   }, [hostId]);
 
@@ -178,7 +189,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
             {rows.map((evt) => {
               const pid = evt.payload.pid; // every timeline payload has pid
               const emphasized = emphasizePid !== undefined && pid === emphasizePid;
-              const tech = eventTechniques.get(evt.event_id);
+              const techEntries = eventTechniques.get(evt.event_id) ?? [];
               return (
                 <tr key={evt.event_id} className={emphasized ? "host-timeline__row--emphasis" : undefined}>
                   <td>{formatNs(evt.timestamp_ns)}</td>
@@ -187,8 +198,8 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
                     <Link to={nodePivot(hostId, pid, evt.timestamp_ns)}>{processLabel(evt)}</Link>
                   </td>
                   <td className="host-timeline__mono host-timeline__detail">{detailCell(evt)}</td>
-                  {/* Technique tags on a row whose event triggered an alert (issue #585), linked to the rule doc page. */}
-                  <td>{tech ? <TechniqueTags techniques={tech.techniques} ruleId={tech.ruleId} /> : null}</td>
+                  {/* Technique tags on a row whose event triggered one or more alerts (issue #585), each linked to its rule doc page. */}
+                  <td>{techEntries.map((t) => <TechniqueTags key={t.ruleId} techniques={t.techniques} ruleId={t.ruleId} />)}</td>
                 </tr>
               );
             })}

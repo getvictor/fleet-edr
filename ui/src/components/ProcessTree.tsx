@@ -335,9 +335,15 @@ export function ProcessTreeView() {
   useEffect(() => {
     if (!hostId) return;
     let cancelled = false;
+    // Clear on host change so a slow/failed fetch cannot leave the previous host's alert dots + tooltip techniques on this host.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setAlertProcessIds(new Set());
+    setTechniquesByNodeId(new Map());
+    /* eslint-enable react-hooks/set-state-in-effect */
     Promise.all([
-      listAlerts({ host_id: hostId, status: "open", limit: 1000 }),
-      listAlerts({ host_id: hostId, status: "acknowledged", limit: 1000 }),
+      // Per-request catch so one failing status still marks nodes from the other; the badges are best-effort.
+      listAlerts({ host_id: hostId, status: "open", limit: 1000 }).catch(() => []),
+      listAlerts({ host_id: hostId, status: "acknowledged", limit: 1000 }).catch(() => []),
     ])
       .then(([open, acked]) => {
         if (cancelled) return;
@@ -932,7 +938,8 @@ function renderTree(
   onSelect: (node: ProcessNode) => void,
   interactions: TreeInteractions,
 ): RenderResult {
-  const { alertProcessIds, techniquesByNodeId, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded, onHover } = interactions;
+  const { alertProcessIds, techniquesByNodeId, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded, onHover } =
+    interactions;
   const hierarchy = toD3Hierarchy(roots);
   const root = d3.hierarchy(hierarchy);
 

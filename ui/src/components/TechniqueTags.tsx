@@ -15,15 +15,22 @@ interface Props {
 // panel, and the timeline row, so the three sites stay consistent and a future tactic-color change lands in one place.
 export function TechniqueTags({ techniques, ruleId, className }: Props) {
   if (!techniques || techniques.length === 0) return null;
+  // Dedupe so a duplicated technique id in the alert payload does not produce repeated badges or duplicate React keys.
+  const unique = [...new Set(techniques)];
   return (
     <span className={className ? `technique-tags ${className}` : "technique-tags"}>
-      {techniques.map((t) =>
-        ruleId !== undefined ? (
-          <Link key={t} className="technique-tags__link" to={`/rules/${encodeURIComponent(ruleId)}`} title={`Open the ${ruleId} rule documentation`}>
+      {unique.map((t) =>
+        ruleId === undefined ? (
+          <Badge key={t} variant="neutral">{t}</Badge>
+        ) : (
+          <Link
+            key={t}
+            className="technique-tags__link"
+            to={`/rules/${encodeURIComponent(ruleId)}`}
+            title={`Open the ${ruleId} rule documentation`}
+          >
             <Badge variant="neutral">{t}</Badge>
           </Link>
-        ) : (
-          <Badge key={t} variant="neutral">{t}</Badge>
         ),
       )}
     </span>
