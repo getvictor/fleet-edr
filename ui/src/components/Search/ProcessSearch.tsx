@@ -7,7 +7,6 @@ import { Badge } from "../ui/Badge";
 import { FilterChips, type FilterField } from "./FilterChips";
 import { useCursorList, type CursorPage } from "./useCursorList";
 import { SearchResultsFrame } from "./SearchResultsFrame";
-import { useHostNames } from "./useHostNames";
 import { formatNs, basename } from "./format";
 import { deriveSigningVerdict } from "../../signing";
 import { NANOSECONDS_PER_MILLISECOND } from "../../constants";
@@ -37,8 +36,8 @@ const FILTER_KEYS = FILTER_FIELDS.map((f) => f.key);
 
 // ProcessSearch is the process mode of the fleet-wide search page (issue #582): filter chips over GET /api/search/processes, a
 // keyset-paginated result table, and rows that pivot into the host's process tree. Its filter state lives in the URL so a pivot is a
-// link and the page is bookmarkable.
-export function ProcessSearch() {
+// link and the page is bookmarkable. hostNames (resolved once by the parent) decorates rows with a name over the bare host id.
+export function ProcessSearch({ hostNames }: { readonly hostNames: Map<string, string> }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   // The active filter is exactly the whitelisted params present in the URL, as a plain key->value record (built with
@@ -59,7 +58,6 @@ export function ProcessSearch() {
     [filterKey], // eslint-disable-line react-hooks/exhaustive-deps -- filter is captured; filterKey is its stable identity
   );
   const { rows, total, loading, error, hasMore, loadMore } = useCursorList(filterKey, fetchPage);
-  const hostNames = useHostNames();
 
   const setFilter = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams);

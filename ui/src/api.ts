@@ -403,7 +403,8 @@ export async function searchEvents(mode: EventSearchMode, filter: EventSearchFil
   set("to", filter.to);
   set("cursor", cursor);
   const qs = query.toString();
-  return fetchJSON<EventSearchResult>(`/search/${mode}${qs ? `?${qs}` : ""}`);
+  const suffix = qs ? `?${qs}` : "";
+  return fetchJSON<EventSearchResult>(`/search/${mode}${suffix}`);
 }
 
 export async function listAlerts(params?: {

@@ -19,15 +19,20 @@ interface Props {
 }
 
 // SearchResultsFrame is the shared result shell for every search mode (issue #582): it owns the prompt / error / searching / empty /
-// count / load-more states so each mode supplies only its table. Driven by the useCursorList state a mode passes down.
+// count / load-more states so each mode supplies only its table. Driven by the useCursorList state a mode passes down. An error with
+// no rows replaces the table; an error with rows already shown (e.g. a failed "Load more") renders inline above them so the operator
+// keeps the results they had and can retry, rather than losing the page to a full error state.
 export function SearchResultsFrame({ loading, error, count, total, hasMore, onLoadMore, emptyLabel, prompt, children }: Props) {
   if (prompt !== undefined && prompt !== null) return <EmptyState>{prompt}</EmptyState>;
-  if (error) return <EmptyState>Error: {error}</EmptyState>;
-  if (loading && count === 0) return <EmptyState>Searching...</EmptyState>;
-  if (count === 0) return <EmptyState>{emptyLabel}</EmptyState>;
+  if (count === 0) {
+    if (error) return <EmptyState>Error: {error}</EmptyState>;
+    if (loading) return <EmptyState>Searching...</EmptyState>;
+    return <EmptyState>{emptyLabel}</EmptyState>;
+  }
 
   return (
     <>
+      {error && <p className="search-page__error" role="alert">Error: {error}</p>}
       <p className="search-page__count">
         Showing {count.toLocaleString()} of {total.toLocaleString()} matches
       </p>

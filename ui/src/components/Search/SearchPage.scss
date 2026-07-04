@@ -33,6 +33,13 @@
     margin: 0 0 0.5rem;
   }
 
+  // Inline error shown above already-loaded rows (e.g. a failed "Load more") so the operator keeps the results they had.
+  &__error {
+    color: $core-vibrant-red;
+    font-size: 0.85rem;
+    margin: 0 0 0.5rem;
+  }
+
   &__mono {
     font-family: ui-monospace, sfmono-regular, Menlo, monospace;
     font-size: 0.85rem;

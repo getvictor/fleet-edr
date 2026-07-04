@@ -5,6 +5,8 @@ import type {
   NetworkConnectPayload,
   DNSQueryPayload,
 } from "../types";
+import { eventArtifactParam, type EventSearchMode } from "../api";
+import { hostPort } from "./Search/format";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 import "./NetworkConnections.scss";
 
@@ -60,8 +62,8 @@ export function NetworkConnections({
               {grouped.map((g) => (
                 <tr key={g.key}>
                   <td>
-                    {g.remote_address}:{g.remote_port}
-                    <SearchFleetLink mode="connections" param="remote_address" value={g.remote_address} artifact="address" />
+                    {hostPort(g.remote_address, g.remote_port)}
+                    <SearchFleetLink mode="connections" value={g.remote_address} artifact="address" />
                   </td>
                   <td>
                     {g.protocol}
@@ -95,7 +97,7 @@ export function NetworkConnections({
                   <tr key={evt.event_id}>
                     <td>
                       {p.query_name}
-                      <SearchFleetLink mode="dns" param="query_name" value={p.query_name} artifact="domain" />
+                      <SearchFleetLink mode="dns" value={p.query_name} artifact="domain" />
                     </td>
                     <td>{p.query_type}</td>
                     <td>{p.response_addresses?.join(", ") || "-"}</td>
@@ -112,22 +114,20 @@ export function NetworkConnections({
 }
 
 // SearchFleetLink is the "who else talked to this" pivot on a network row (issue #582): a link to the fleet-wide search pre-filtered
-// to this artifact in the matching mode (a remote address opens connection search, a domain opens DNS search). Built with
-// URLSearchParams.set (not a computed object key) so the param name stays a plain string for the query.
+// to this artifact in the matching mode (a remote address opens connection search, a domain opens DNS search). The artifact query
+// param comes from eventArtifactParam so the pivot and the API layer share one mapping and cannot drift.
 function SearchFleetLink({
   mode,
-  param,
   value,
   artifact,
 }: {
-  readonly mode: "connections" | "dns";
-  readonly param: string;
+  readonly mode: EventSearchMode;
   readonly value: string;
   readonly artifact: string;
 }) {
   const qs = new URLSearchParams();
   qs.set("mode", mode);
-  qs.set(param, value);
+  qs.set(eventArtifactParam(mode), value);
   const label = `Search all hosts for this ${artifact}`;
   return (
     <Link className="net-pivot" to={`/search?${qs.toString()}`} aria-label={label} title={label}>

@@ -6,8 +6,7 @@ import { Table } from "../ui/Table";
 import { FilterChips, type FilterField } from "./FilterChips";
 import { useCursorList, type CursorPage } from "./useCursorList";
 import { SearchResultsFrame } from "./SearchResultsFrame";
-import { useHostNames } from "./useHostNames";
-import { formatNs, basename } from "./format";
+import { formatNs, basename, hostPort } from "./format";
 
 // Per-mode labels and prompt: connections match a remote address, DNS matches a domain. The artifact URL param name comes from
 // eventArtifactParam so the page and the API layer agree on remote_address / query_name.
@@ -30,8 +29,9 @@ function modeCopy(mode: EventSearchMode) {
 
 // EventSearch is the connection and DNS mode of the fleet-wide search page (issue #582). The artifact value (a remote address or a
 // domain) and an optional host live in the URL as chips; because the endpoint 400s on an empty artifact, the page prompts for one and
-// issues no request until it is supplied. Results are keyset-paginated on the shared frame.
-export function EventSearch({ mode }: { readonly mode: EventSearchMode }) {
+// issues no request until it is supplied. Results are keyset-paginated on the shared frame. hostNames (resolved once by the parent)
+// decorates rows with a name over the bare host id.
+export function EventSearch({ mode, hostNames }: { readonly mode: EventSearchMode; readonly hostNames: Map<string, string> }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const copy = modeCopy(mode);
   const artifactParam = eventArtifactParam(mode);
@@ -63,7 +63,6 @@ export function EventSearch({ mode }: { readonly mode: EventSearchMode }) {
     [filterKey], // eslint-disable-line react-hooks/exhaustive-deps -- mode/value/hostId are captured; filterKey is their stable identity
   );
   const { rows, total, loading, error, hasMore, loadMore } = useCursorList(filterKey, fetchPage);
-  const hostNames = useHostNames();
 
   const setFilter = (key: string, val: string) => {
     const next = new URLSearchParams(searchParams);
@@ -137,7 +136,7 @@ function ConnectionCells({ evt }: { readonly evt: EventRecord }) {
     <>
       <td>{p.direction}</td>
       <td>{p.protocol}</td>
-      <td className="search-page__mono">{p.remote_address}:{p.remote_port}</td>
+      <td className="search-page__mono">{hostPort(p.remote_address, p.remote_port)}</td>
     </>
   );
 }
