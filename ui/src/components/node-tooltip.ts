@@ -13,15 +13,20 @@ export interface NodeTooltip {
   verdictLabel?: string;
   marked: boolean;
   groupNote?: string;
+  // techniques are the MITRE ATT&CK ids of the node's alerts (issue #585), shown so an analyst reads the technique mapping while
+  // walking a chain. Display-only in the tooltip (a link inside a transient hover card is unreachable); the clickable link lives on
+  // the detail panel. Absent/empty when the node is not alerted.
+  techniques?: string[];
 }
 
-export function buildNodeTooltip(p: ProcessNode): NodeTooltip {
+export function buildNodeTooltip(p: ProcessNode, techniques?: string[]): NodeTooltip {
   const verdict = p.exec_time_ns ? deriveSigningVerdict(p.code_signing) : undefined;
   return {
     title: basename(p.path) || `PID ${String(p.pid)}`,
     commandLine: formatCommandLine(p.args, p.path),
     verdictLabel: verdict?.label,
     marked: verdict !== undefined && isEvidenceMarked(verdict),
+    techniques: techniques && techniques.length > 0 ? techniques : undefined,
     // An aggregated node collapses identical-path siblings; the group key includes binary identity, so the representative's command
     // line and verdict describe the members. Say so rather than pretending the tooltip covers each one individually.
     groupNote: p.aggregated ? `×${String(p.aggregated.count)} processes (representative shown)` : undefined,

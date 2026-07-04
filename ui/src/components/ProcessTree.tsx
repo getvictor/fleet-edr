@@ -11,6 +11,7 @@ import { HostHealthPanel } from "./HostHealthPanel";
 import { HostHeader } from "./HostHeader";
 import { HostTimeline } from "./HostTimeline";
 import { buildNodeTooltip, nodeEvidenceMarked, type NodeTooltip } from "./node-tooltip";
+import { TechniqueTags } from "./TechniqueTags";
 import { TimeRangeControl } from "./TimeRangeControl";
 import { ActivityHistogram } from "./ActivityHistogram";
 import { DEFAULT_ALERT_WINDOW_MS, DEFAULT_LIVE_WINDOW_MS, windowBounds, type TimeWindow } from "../timewindow";
@@ -75,6 +76,8 @@ interface RenderResult {
 // the issue-#416 aggregated-node expand.
 interface TreeInteractions {
   alertProcessIds: Set<number>;
+  // techniquesByNodeId maps a process DB id to its alerts' technique ids, shown in the hover tooltip (issue #585).
+  techniquesByNodeId: Map<number, string[]>;
   collapsedIds: Set<number>;
   onToggleCollapsed?: (nodeId: number) => void;
   expandedAggIds: Set<number>;
@@ -134,6 +137,9 @@ export function ProcessTreeView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
+  // techniquesByNodeId maps a process DB id to the deduped MITRE technique ids of its alerts (issue #585), so the hover tooltip can
+  // show the technique mapping inline. Built from the same alert fetch that drives alertProcessIds.
+  const [techniquesByNodeId, setTechniquesByNodeId] = useState<Map<number, string[]>>(new Map());
   // hoverTip is the evidence tooltip's position + content (issue #580); null when no node is hovered.
   const [hoverTip, setHoverTip] = useState<{ x: number; y: number; tooltip: NodeTooltip } | null>(null);
   const [query, setQuery] = useState("");
@@ -324,20 +330,29 @@ export function ProcessTreeView() {
     return () => { cancelled = true; };
   }, [hostId, bounds, flatten]);
 
-  // Fetch alerts for this host to mark nodes with alert badges.
+  // Fetch this host's open + acknowledged alerts to mark nodes with an alert dot (by process DB id) and to map each node to its
+  // alerts' MITRE technique ids for the inline tooltip tags (issue #585).
   useEffect(() => {
     if (!hostId) return;
     let cancelled = false;
-    listAlerts({ host_id: hostId, status: "open", limit: 1000 })
-      .then((alerts) => {
+    Promise.all([
+      listAlerts({ host_id: hostId, status: "open", limit: 1000 }),
+      listAlerts({ host_id: hostId, status: "acknowledged", limit: 1000 }),
+    ])
+      .then(([open, acked]) => {
         if (cancelled) return;
-        const ids = new Set(alerts.map((a) => a.process_id));
-        // Also include acknowledged alerts.
-        return listAlerts({ host_id: hostId, status: "acknowledged", limit: 1000 }).then((acked) => {
-          if (cancelled) return;
-          for (const a of acked) ids.add(a.process_id);
-          setAlertProcessIds(ids);
-        });
+        const ids = new Set<number>();
+        const techniques = new Map<number, string[]>();
+        for (const a of [...open, ...acked]) {
+          ids.add(a.process_id);
+          for (const t of a.techniques ?? []) {
+            const existing = techniques.get(a.process_id) ?? [];
+            if (!existing.includes(t)) existing.push(t);
+            techniques.set(a.process_id, existing);
+          }
+        }
+        setAlertProcessIds(ids);
+        setTechniquesByNodeId(techniques);
       })
       .catch(() => { /* alert badges are best-effort */ });
     return () => { cancelled = true; };
@@ -369,6 +384,7 @@ export function ProcessTreeView() {
     /* eslint-enable react-hooks/set-state-in-effect */
     const result = renderTree(svgRef.current, visibleRoots, setSelectedNode, {
       alertProcessIds,
+      techniquesByNodeId,
       collapsedIds,
       onToggleCollapsed: toggleCollapsed,
       expandedAggIds,
@@ -376,7 +392,7 @@ export function ProcessTreeView() {
       onHover: setHoverTip,
     });
     layoutNodesRef.current = result.nodes;
-  }, [visibleRoots, alertProcessIds, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded]);
+  }, [visibleRoots, alertProcessIds, techniquesByNodeId, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded]);
 
   // Focus the currently-active match: scroll the canvas so the match sits near the
   // vertical centre, preserving the user's current zoom level and scroll position
@@ -705,6 +721,13 @@ function GraphBody({
                   {hoverTip.tooltip.verdictLabel}
                 </div>
               )}
+              {/* Technique tags are display-only here (issue #585): a hover tooltip disappears on mouse-out, so the clickable
+                  /rules link lives on the detail panel; the tooltip just surfaces the mapping during the walk. */}
+              {hoverTip.tooltip.techniques && (
+                <div className="process-tree__tooltip-techniques">
+                  <TechniqueTags techniques={hoverTip.tooltip.techniques} />
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -909,7 +932,7 @@ function renderTree(
   onSelect: (node: ProcessNode) => void,
   interactions: TreeInteractions,
 ): RenderResult {
-  const { alertProcessIds, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded, onHover } = interactions;
+  const { alertProcessIds, techniquesByNodeId, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded, onHover } = interactions;
   const hierarchy = toD3Hierarchy(roots);
   const root = d3.hierarchy(hierarchy);
 
@@ -992,7 +1015,7 @@ function renderTree(
     // Evidence tooltip (issue #580): positioned at the pointer on entry; not cursor-following, so hover costs one render, not one
     // per pixel. mouseleave clears it; the click-through detail panel remains the full surface.
     .on("mouseenter", (event: MouseEvent, d) => {
-      onHover?.({ x: event.clientX, y: event.clientY, tooltip: buildNodeTooltip(d.data.data) });
+      onHover?.({ x: event.clientX, y: event.clientY, tooltip: buildNodeTooltip(d.data.data, techniquesByNodeId.get(d.data.data.id)) });
     })
     .on("mouseleave", () => {
       onHover?.(null);

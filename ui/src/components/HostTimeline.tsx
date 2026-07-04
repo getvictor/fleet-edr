@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import "./HostTimeline.scss";
-import { getHostTimeline, eventArtifactParam } from "../api";
+import { getHostTimeline, eventArtifactParam, listAlerts, getAlertDetail } from "../api";
 import type { EventRecord, NetworkConnectPayload, DNSQueryPayload, ExecPayload } from "../types";
 import { Table } from "./ui/Table";
 import { Badge } from "./ui/Badge";
+import { TechniqueTags } from "./TechniqueTags";
 import { useCursorList, type CursorPage } from "./Search/useCursorList";
 import { SearchResultsFrame } from "./Search/SearchResultsFrame";
 import { formatNs, basename, hostPort } from "./Search/format";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
+
+// EventTechniques maps a triggering event id to the alert's rule + technique ids, so a timeline row for that event shows the MITRE
+// tags (issue #585). Keyed by event id because a timeline event carries the OS pid, not the alert's process DB id.
+type EventTechniques = Map<string, { ruleId: string; techniques: string[] }>;
 
 interface Props {
   readonly hostId: string;
@@ -73,6 +78,38 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
   );
   const { rows, total, loading, error, hasMore, loadMore } = useCursorList(filterKey, fetchPage);
 
+  // Build event-id -> technique tags for this host: its open + acknowledged alerts, each alerting rule's triggering event ids
+  // (getAlertDetail) mapped to its technique ids. A row whose event triggered an alert then shows the tags (issue #585). Best-effort:
+  // a failed fetch just leaves rows untagged.
+  const [eventTechniques, setEventTechniques] = useState<EventTechniques>(new Map());
+  useEffect(() => {
+    // Object-ref cancellation flag: a bare `let cancelled` is narrowed to its literal by TS's flow analysis inside the async IIFE
+    // (tripping no-unnecessary-condition on the guard), whereas a property read is treated as a plain boolean.
+    const live = { current: true };
+    void (async () => {
+      try {
+        const [open, acked] = await Promise.all([
+          listAlerts({ host_id: hostId, status: "open", limit: 1000 }),
+          listAlerts({ host_id: hostId, status: "acknowledged", limit: 1000 }),
+        ]);
+        const withTechniques = [...open, ...acked].filter((a) => (a.techniques ?? []).length > 0);
+        const detailed = await Promise.all(
+          withTechniques.map(async (a) => ({ alert: a, detail: await getAlertDetail(a.id).catch(() => null) })),
+        );
+        if (!live.current) return;
+        const map: EventTechniques = new Map();
+        for (const { alert, detail } of detailed) {
+          if (!detail) continue;
+          for (const eid of detail.event_ids) map.set(eid, { ruleId: alert.rule_id, techniques: alert.techniques ?? [] });
+        }
+        setEventTechniques(map);
+      } catch {
+        /* technique tags are best-effort */
+      }
+    })();
+    return () => { live.current = false; };
+  }, [hostId]);
+
   const toggleType = (key: string) => {
     const next = new URLSearchParams(searchParams);
     const set = new Set(activeTypes);
@@ -134,12 +171,14 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
               <th>Type</th>
               <th>Process</th>
               <th>Detail</th>
+              <th>MITRE</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((evt) => {
               const pid = evt.payload.pid; // every timeline payload has pid
               const emphasized = emphasizePid !== undefined && pid === emphasizePid;
+              const tech = eventTechniques.get(evt.event_id);
               return (
                 <tr key={evt.event_id} className={emphasized ? "host-timeline__row--emphasis" : undefined}>
                   <td>{formatNs(evt.timestamp_ns)}</td>
@@ -148,6 +187,8 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
                     <Link to={nodePivot(hostId, pid, evt.timestamp_ns)}>{processLabel(evt)}</Link>
                   </td>
                   <td className="host-timeline__mono host-timeline__detail">{detailCell(evt)}</td>
+                  {/* Technique tags on a row whose event triggered an alert (issue #585), linked to the rule doc page. */}
+                  <td>{tech ? <TechniqueTags techniques={tech.techniques} ruleId={tech.ruleId} /> : null}</td>
                 </tr>
               );
             })}

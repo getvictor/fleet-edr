@@ -138,6 +138,27 @@ describe("HostTimeline", () => {
     await waitFor(() => { expect(screen.getByRole("searchbox")).toHaveValue("second"); });
   });
 
+  // spec:web-ui/inline-mitre-technique-tags/a-timeline-row-for-a-triggering-event-shows-the-technique
+  it("tags a row whose event triggered an alert with the technique, linked to the rule page", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({
+      events: [execEvent("evt-fired", 42, "/bin/sh"), execEvent("evt-quiet", 43, "/bin/ls")],
+      total_matched: 2,
+    });
+    const alert = {
+      id: 9, host_id: "H1", rule_id: "shell_from_office", source: "detection", severity: "high",
+      title: "Shell from Office", description: "", techniques: ["T1059.004"], process_id: 1, status: "open",
+      created_at: "2026-07-04T00:00:00Z", updated_at: "2026-07-04T00:00:00Z",
+    };
+    vi.spyOn(api, "listAlerts").mockImplementation((p) => Promise.resolve(p?.status === "open" ? [alert] : []));
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...alert, event_ids: ["evt-fired"] });
+
+    renderTimeline();
+    // The triggering event's row carries the technique linked to the rule; the quiet event's row does not.
+    const link = await screen.findByRole("link", { name: "T1059.004" });
+    expect(link).toHaveAttribute("href", "/rules/shell_from_office");
+    expect(screen.getAllByRole("link", { name: "T1059.004" })).toHaveLength(1);
+  });
+
   it("shows the empty state when the window has no events", async () => {
     vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
     renderTimeline();
