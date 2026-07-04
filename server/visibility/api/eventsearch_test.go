@@ -70,3 +70,25 @@ func TestArtifactField(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveTimelineEventTypes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		requested []string
+		want      []string
+	}{
+		{"empty means all timeline classes", nil, api.TimelineEventTypes()},
+		{"subset is intersected", []string{"dns_query"}, []string{"dns_query"}},
+		{"non-timeline classes are dropped", []string{"exec", "fork", "exit"}, []string{"exec"}},
+		{"only non-timeline classes yields empty", []string{"fork", "exit"}, nil},
+		{"duplicates are collapsed", []string{"exec", "exec", "exec"}, []string{"exec"}},
+		{"order of requested is preserved", []string{"dns_query", "exec"}, []string{"dns_query", "exec"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, api.EffectiveTimelineEventTypes(tc.requested))
+		})
+	}
+}

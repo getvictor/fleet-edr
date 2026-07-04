@@ -30,6 +30,26 @@ func IsTimelineEventType(eventType string) bool {
 	}
 }
 
+// EffectiveTimelineEventTypes resolves the event classes a HostTimeline query matches: all timeline classes when requested is empty,
+// otherwise the deduplicated intersection of requested with the allowlist. This makes the archive layer's contract (timeline classes
+// only) enforceable independently of any caller-side validation, and bounds the set to the allowlist size regardless of a pathological
+// requested slice (e.g. type=exec,exec,exec,...). An empty return means the caller requested only non-timeline classes, so the query
+// matches nothing. Shared by the ClickHouse store and the fake so they cannot diverge on which classes a filter admits.
+func EffectiveTimelineEventTypes(requested []string) []string {
+	if len(requested) == 0 {
+		return TimelineEventTypes()
+	}
+	seen := make(map[string]bool, len(requested))
+	var out []string
+	for _, t := range requested {
+		if IsTimelineEventType(t) && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // ArtifactField returns the payload/column field a fleet-wide search of eventType matches against, and ok=false for a type that has
 // no artifact search. Callers (the ClickHouse store, the in-memory fake, the handler) share this one mapping.
 func ArtifactField(eventType string) (string, bool) {

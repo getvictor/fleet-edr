@@ -231,3 +231,30 @@ func TestHostTimeline_WindowBoundsEventTime(t *testing.T) {
 	require.Len(t, out.Events, 1)
 	assert.Equal(t, "mid", out.Events[0].EventID)
 }
+
+func TestParseTimelineTypes(t *testing.T) {
+	t.Parallel()
+	t.Run("empty means all classes (nil, ok)", func(t *testing.T) {
+		t.Parallel()
+		types, ok := parseTimelineTypes("")
+		assert.True(t, ok)
+		assert.Nil(t, types)
+	})
+	t.Run("valid subset is parsed", func(t *testing.T) {
+		t.Parallel()
+		types, ok := parseTimelineTypes("exec,dns_query")
+		assert.True(t, ok)
+		assert.Equal(t, []string{"exec", "dns_query"}, types)
+	})
+	t.Run("duplicates are collapsed to a bounded set", func(t *testing.T) {
+		t.Parallel()
+		types, ok := parseTimelineTypes("exec,exec,exec,exec")
+		assert.True(t, ok)
+		assert.Equal(t, []string{"exec"}, types)
+	})
+	t.Run("an unrecognized class is rejected", func(t *testing.T) {
+		t.Parallel()
+		_, ok := parseTimelineTypes("exec,fork")
+		assert.False(t, ok)
+	})
+}

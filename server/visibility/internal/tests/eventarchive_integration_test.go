@@ -352,6 +352,23 @@ func TestEventArchive_HostTimeline(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Events, 1)
 	assert.Equal(t, "t-net", res.Events[0].EventID)
+
+	// The store enforces the timeline allowlist itself: a caller explicitly requesting a non-timeline class (fork) gets no rows,
+	// and a mixed request keeps only the timeline classes. This holds even though the handler already rejects unknown ?type= values,
+	// so the archive contract cannot be violated by a caller that bypasses the handler.
+	forkOnly := window
+	forkOnly.EventTypes = []string{"fork"}
+	res, err = arch.HostTimeline(ctx, forkOnly, "", 50)
+	require.NoError(t, err)
+	assert.Empty(t, res.Events)
+	assert.EqualValues(t, 0, res.TotalMatched)
+
+	mixed := window
+	mixed.EventTypes = []string{"exec", "fork"}
+	res, err = arch.HostTimeline(ctx, mixed, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Events, 1)
+	assert.Equal(t, "t-exec", res.Events[0].EventID) // exec kept, fork dropped
 }
 
 func eventIDSet(events []visibilityapi.Event) map[string]bool {

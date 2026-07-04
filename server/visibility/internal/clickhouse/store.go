@@ -168,9 +168,11 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 // substring, keyset-paged over (timestamp_ns, event_id). The window bounds event time (timestamp_ns), unlike SearchEvents which bounds
 // ingest time. FINAL collapses ReplacingMergeTree duplicates; total_matched is the full match count independent of the page.
 func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter, cursor string, limit int) (api.EventSearchResult, error) {
-	types := filter.EventTypes
+	// Intersect with the allowlist (not just default-when-empty) so the store's own contract holds even if a caller passes a
+	// non-timeline class like fork; an empty result means only non-timeline classes were requested, so nothing matches.
+	types := api.EffectiveTimelineEventTypes(filter.EventTypes)
 	if len(types) == 0 {
-		types = api.TimelineEventTypes()
+		return api.EventSearchResult{}, nil
 	}
 	where := []string{"host_id = ?"}
 	args := []any{filter.HostID}

@@ -137,7 +137,11 @@ func (m *MemArchive) SearchEvents(_ context.Context, filter api.EventSearchFilte
 // HostTimeline returns one host's exec/network/DNS events interleaved newest-first over the event-time window (issue #583), the fake's
 // mirror of the ClickHouse HostTimeline. Shares the keyset page and (timestamp_ns, event_id) order with SearchEvents via pageMatched.
 func (m *MemArchive) HostTimeline(_ context.Context, filter api.HostTimelineFilter, cursor string, limit int) (api.EventSearchResult, error) {
-	return m.pageMatched(cursor, limit, func(e api.Event) bool { return eventMatchesTimeline(e, filter) })
+	types := api.EffectiveTimelineEventTypes(filter.EventTypes)
+	if len(types) == 0 {
+		return api.EventSearchResult{}, nil // only non-timeline classes requested: match nothing, same as the store
+	}
+	return m.pageMatched(cursor, limit, func(e api.Event) bool { return eventMatchesTimeline(e, filter, types) })
 }
 
 // pageMatched collects the events satisfying match, then applies the shared newest-first keyset page: sort by (timestamp_ns,
@@ -187,10 +191,11 @@ func (m *MemArchive) pageMatched(cursor string, limit int, match func(api.Event)
 	return result, nil
 }
 
-// eventMatchesTimeline reports whether an event belongs in a host timeline page: right host, a timeline event class the filter admits
-// (all classes when EventTypes is empty), within the optional event-time window, and containing the optional text case-insensitively.
-func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter) bool {
-	if e.HostID != filter.HostID || !timelineTypeAllowed(e.EventType, filter.EventTypes) {
+// eventMatchesTimeline reports whether an event belongs in a host timeline page: right host, an event class in the effective set
+// (already resolved from the filter via api.EffectiveTimelineEventTypes, so it is the intersection of the request with the allowlist),
+// within the optional event-time window, and containing the optional text case-insensitively.
+func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter, types []string) bool {
+	if e.HostID != filter.HostID || !slices.Contains(types, e.EventType) {
 		return false
 	}
 	if filter.FromNs > 0 && e.TimestampNs < filter.FromNs {
@@ -203,17 +208,6 @@ func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter) bool {
 		return false
 	}
 	return true
-}
-
-// timelineTypeAllowed: the event must be a timeline class, and (when the filter names a subset) one of the requested classes.
-func timelineTypeAllowed(eventType string, requested []string) bool {
-	if !api.IsTimelineEventType(eventType) {
-		return false
-	}
-	if len(requested) == 0 {
-		return true
-	}
-	return slices.Contains(requested, eventType)
 }
 
 // eventMatchesSearch reports whether an event satisfies a fleet-wide search filter: right type, matching artifact value, and within

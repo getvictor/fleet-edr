@@ -97,6 +97,7 @@ func parseTimelineTypes(raw string) ([]string, bool) {
 		return nil, true
 	}
 	var types []string
+	seen := map[string]bool{}
 	for t := range strings.SplitSeq(raw, ",") {
 		t = strings.TrimSpace(t)
 		if t == "" {
@@ -105,6 +106,10 @@ func parseTimelineTypes(raw string) ([]string, bool) {
 		if !visibilityapi.IsTimelineEventType(t) {
 			return nil, false
 		}
+		if seen[t] {
+			continue // dedupe: the allowlist is tiny, so canonicalize a repeated ?type=exec,exec,... to a bounded set
+		}
+		seen[t] = true
 		types = append(types, t)
 	}
 	return types, true
