@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/fleetdm/edr/server/httpserver"
@@ -125,12 +127,29 @@ func (m *MemArchive) EventsByIDs(_ context.Context, eventIDs []string) ([]api.Ev
 // ingest window, newest-first, keyset-paged over (timestamp_ns, event_id). Uses the shared api cursor + field mapping so the fake and
 // the real store stay in lockstep.
 func (m *MemArchive) SearchEvents(_ context.Context, filter api.EventSearchFilter, cursor string, limit int) (api.EventSearchResult, error) {
-	if limit < 1 {
-		limit = 1
-	}
 	field, ok := api.ArtifactField(filter.EventType)
 	if !ok {
 		return api.EventSearchResult{}, fmt.Errorf("mem archive search: unsupported event type %q", filter.EventType)
+	}
+	return m.pageMatched(cursor, limit, func(e api.Event) bool { return eventMatchesSearch(e, filter, field) })
+}
+
+// HostTimeline returns one host's exec/network/DNS events interleaved newest-first over the event-time window (issue #583), the fake's
+// mirror of the ClickHouse HostTimeline. Shares the keyset page and (timestamp_ns, event_id) order with SearchEvents via pageMatched.
+func (m *MemArchive) HostTimeline(_ context.Context, filter api.HostTimelineFilter, cursor string, limit int) (api.EventSearchResult, error) {
+	types := api.EffectiveTimelineEventTypes(filter.EventTypes)
+	if len(types) == 0 {
+		return api.EventSearchResult{}, nil // only non-timeline classes requested: match nothing, same as the store
+	}
+	return m.pageMatched(cursor, limit, func(e api.Event) bool { return eventMatchesTimeline(e, filter, types) })
+}
+
+// pageMatched collects the events satisfying match, then applies the shared newest-first keyset page: sort by (timestamp_ns,
+// event_id) desc, count the full match set, drop everything at/after the cursor, and take limit (+ a next cursor when more remain).
+// Mirrors the store's pageEventsByKeyset so the fake and the real archive page identically.
+func (m *MemArchive) pageMatched(cursor string, limit int, match func(api.Event) bool) (api.EventSearchResult, error) {
+	if limit < 1 {
+		limit = 1
 	}
 	var after *api.EventCursor
 	if cursor != "" {
@@ -145,7 +164,7 @@ func (m *MemArchive) SearchEvents(_ context.Context, filter api.EventSearchFilte
 	defer m.mu.Unlock()
 	var matched []api.Event
 	for _, id := range m.order {
-		if e := m.byID[id]; eventMatchesSearch(e, filter, field) {
+		if e := m.byID[id]; match(e) {
 			matched = append(matched, e)
 		}
 	}
@@ -170,6 +189,25 @@ func (m *MemArchive) SearchEvents(_ context.Context, filter api.EventSearchFilte
 	}
 	result.Events = matched
 	return result, nil
+}
+
+// eventMatchesTimeline reports whether an event belongs in a host timeline page: right host, an event class in the effective set
+// (already resolved from the filter via api.EffectiveTimelineEventTypes, so it is the intersection of the request with the allowlist),
+// within the optional event-time window, and containing the optional text case-insensitively.
+func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter, types []string) bool {
+	if e.HostID != filter.HostID || !slices.Contains(types, e.EventType) {
+		return false
+	}
+	if filter.FromNs > 0 && e.TimestampNs < filter.FromNs {
+		return false
+	}
+	if filter.ToNs > 0 && e.TimestampNs > filter.ToNs {
+		return false
+	}
+	if filter.Text != "" && !strings.Contains(strings.ToLower(string(e.Payload)), strings.ToLower(filter.Text)) {
+		return false
+	}
+	return true
 }
 
 // eventMatchesSearch reports whether an event satisfies a fleet-wide search filter: right type, matching artifact value, and within

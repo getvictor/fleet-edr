@@ -304,6 +304,73 @@ func TestEventArchive_SearchEventsPagination(t *testing.T) {
 	assert.Equal(t, want, got, "paging reproduces the full newest-first order exactly")
 }
 
+// TestEventArchive_HostTimeline exercises the merged host timeline over real ClickHouse: exec/network/DNS interleaved newest-first,
+// host scoping, the type filter, the payload text match, and the event-time window bound (issue #583).
+func TestEventArchive_HostTimeline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+	base := time.Now().UnixNano()
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
+		archiveEvent("t-exec", "hostA", "exec", base+10, 1),
+		archiveArtifactEvent("t-net", "hostA", "network_connect", base+20, "203.0.113.7"),
+		archiveArtifactEvent("t-dns", "hostA", "dns_query", base+30, "evil.example"),
+		archiveEvent("t-fork", "hostA", "fork", base+25, 2),      // not a timeline class: excluded even with no type filter
+		archiveEvent("t-otherhost", "hostB", "exec", base+40, 3), // different host: excluded
+	}))
+	window := visibilityapi.HostTimelineFilter{HostID: "hostA", FromNs: 0, ToNs: base + 1_000_000}
+
+	// No type filter: the three timeline classes for hostA, newest-first, fork and the other host excluded.
+	res, err := arch.HostTimeline(ctx, window, "", 50)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, res.TotalMatched)
+	var order []string
+	for _, e := range res.Events {
+		order = append(order, e.EventType)
+	}
+	assert.Equal(t, []string{"dns_query", "network_connect", "exec"}, order)
+
+	// Type filter narrows to DNS.
+	dnsOnly := window
+	dnsOnly.EventTypes = []string{"dns_query"}
+	res, err = arch.HostTimeline(ctx, dnsOnly, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Events, 1)
+	assert.Equal(t, "t-dns", res.Events[0].EventID)
+
+	// Text match against the payload (case-insensitive) keeps only the DNS event.
+	textFilter := window
+	textFilter.Text = "EVIL.example"
+	res, err = arch.HostTimeline(ctx, textFilter, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Events, 1)
+	assert.Equal(t, "t-dns", res.Events[0].EventID)
+
+	// Window bounds event time: a narrow window around the network event keeps only it.
+	narrow := visibilityapi.HostTimelineFilter{HostID: "hostA", FromNs: base + 15, ToNs: base + 25}
+	res, err = arch.HostTimeline(ctx, narrow, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Events, 1)
+	assert.Equal(t, "t-net", res.Events[0].EventID)
+
+	// The store enforces the timeline allowlist itself: a caller explicitly requesting a non-timeline class (fork) gets no rows,
+	// and a mixed request keeps only the timeline classes. This holds even though the handler already rejects unknown ?type= values,
+	// so the archive contract cannot be violated by a caller that bypasses the handler.
+	forkOnly := window
+	forkOnly.EventTypes = []string{"fork"}
+	res, err = arch.HostTimeline(ctx, forkOnly, "", 50)
+	require.NoError(t, err)
+	assert.Empty(t, res.Events)
+	assert.EqualValues(t, 0, res.TotalMatched)
+
+	mixed := window
+	mixed.EventTypes = []string{"exec", "fork"}
+	res, err = arch.HostTimeline(ctx, mixed, "", 50)
+	require.NoError(t, err)
+	require.Len(t, res.Events, 1)
+	assert.Equal(t, "t-exec", res.Events[0].EventID) // exec kept, fork dropped
+}
+
 func eventIDSet(events []visibilityapi.Event) map[string]bool {
 	m := make(map[string]bool, len(events))
 	for _, e := range events {

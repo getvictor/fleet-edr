@@ -41,6 +41,10 @@ func (f *fakeEventArchive) SearchEvents(context.Context, api.EventSearchFilter, 
 	return api.EventSearchResult{}, nil
 }
 
+func (f *fakeEventArchive) HostTimeline(context.Context, api.HostTimelineFilter, string, int) (api.EventSearchResult, error) {
+	return api.EventSearchResult{}, nil
+}
+
 // fakeEventLog records the events handed to Append and can be made to fail.
 type fakeEventLog struct {
 	appended  [][]api.Event
