@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
@@ -164,7 +165,15 @@ func (r *DNSC2Beacon) evalEvent(
 		return nil, 0, fmt.Errorf("get pid %d: %w", conn.PID, err)
 	}
 	if proc == nil {
-		// Race against materialisation; same defensive shape as the other correlation rules.
+		// The connecting process row is written by the async graph builder, which a concurrently processed batch (issue #535
+		// intra-replica workers, ADR-0011 cross-replica claimers) may not have committed when this connect is evaluated. Within a
+		// tight grace on the connect's ingest age, treat the miss as that ordering race and fail the batch with the retryable
+		// sentinel so the processor nacks and re-evaluates once the row lands (dedup makes the re-run idempotent). Past the grace, or
+		// with no ingest stamp, degrade to the historical silent skip so a genuinely orphaned connect (its exec dropped by a full
+		// agent channel) cannot loop; the tight grace bounds the batch-retry cost of this pre-suspicion-gate resolution.
+		if withinGrace(evt.IngestedAtNs, time.Now().UnixNano(), flowProcessMaterializationGrace) {
+			return nil, 0, fmt.Errorf("dns_c2_beacon connect pid %d flow process: %w", conn.PID, api.ErrProcessNotYetMaterialized)
+		}
 		return nil, 0, nil
 	}
 	// Suspicion gate: only a process exec'd from a temp / world-writable path is a candidate. This is what keeps benign
