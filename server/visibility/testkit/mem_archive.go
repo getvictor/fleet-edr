@@ -3,6 +3,7 @@ package testkit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -118,6 +119,107 @@ func (m *MemArchive) EventsByIDs(_ context.Context, eventIDs []string) ([]api.Ev
 		return out[i].EventID < out[j].EventID
 	})
 	return out, nil
+}
+
+// SearchEvents mirrors the ClickHouse fleet-wide search: events of the filter's type whose artifact value matches, optional host +
+// ingest window, newest-first, keyset-paged over (timestamp_ns, event_id). Uses the shared api cursor + field mapping so the fake and
+// the real store stay in lockstep.
+func (m *MemArchive) SearchEvents(_ context.Context, filter api.EventSearchFilter, cursor string, limit int) (api.EventSearchResult, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	field, ok := api.ArtifactField(filter.EventType)
+	if !ok {
+		return api.EventSearchResult{}, fmt.Errorf("mem archive search: unsupported event type %q", filter.EventType)
+	}
+	var after *api.EventCursor
+	if cursor != "" {
+		c, err := api.DecodeEventCursor(cursor)
+		if err != nil {
+			return api.EventSearchResult{}, err
+		}
+		after = &c
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var matched []api.Event
+	for _, id := range m.order {
+		if e := m.byID[id]; eventMatchesSearch(e, filter, field) {
+			matched = append(matched, e)
+		}
+	}
+	sort.SliceStable(matched, func(i, j int) bool { return eventNewer(matched[i], matched[j]) })
+
+	total := int64(len(matched))
+	if after != nil {
+		kept := matched[:0] // reuse the backing array; api.Event is a value type
+		for _, e := range matched {
+			if eventBeforeCursor(e, *after) {
+				kept = append(kept, e)
+			}
+		}
+		matched = kept
+	}
+
+	result := api.EventSearchResult{TotalMatched: total}
+	if len(matched) > limit {
+		last := matched[limit-1]
+		result.NextCursor = api.EncodeEventCursor(api.EventCursor{TimestampNs: last.TimestampNs, EventID: last.EventID})
+		matched = matched[:limit]
+	}
+	result.Events = matched
+	return result, nil
+}
+
+// eventMatchesSearch reports whether an event satisfies a fleet-wide search filter: right type, matching artifact value, and within
+// the optional host + ingest-window bounds. Extracted so SearchEvents stays flat.
+func eventMatchesSearch(e api.Event, filter api.EventSearchFilter, field string) bool {
+	if e.EventType != filter.EventType || payloadString(e.Payload, field) != filter.Value {
+		return false
+	}
+	if filter.HostID != "" && e.HostID != filter.HostID {
+		return false
+	}
+	if filter.FromNs > 0 && e.IngestedAtNs < filter.FromNs {
+		return false
+	}
+	if filter.ToNs > 0 && e.IngestedAtNs > filter.ToNs {
+		return false
+	}
+	return true
+}
+
+// eventNewer / eventBeforeCursor order and page events by (timestamp_ns, event_id), newest-first, matching the archive's search order.
+func eventNewer(a, b api.Event) bool {
+	if a.TimestampNs != b.TimestampNs {
+		return a.TimestampNs > b.TimestampNs
+	}
+	return a.EventID > b.EventID
+}
+
+func eventBeforeCursor(e api.Event, c api.EventCursor) bool {
+	return e.TimestampNs < c.TimestampNs || (e.TimestampNs == c.TimestampNs && e.EventID < c.EventID)
+}
+
+// payloadString extracts a string field from an event payload, mirroring the archive's JSONExtractString / materialized column.
+func payloadString(payload json.RawMessage, field string) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return ""
+	}
+	raw, ok := m[field]
+	if !ok {
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	return v
 }
 
 // payloadPID extracts the pid field the network/dns payloads carry, mirroring the archive's materialized pid column. A payload without

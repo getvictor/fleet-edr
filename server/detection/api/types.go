@@ -35,6 +35,11 @@ var (
 // visibilityapi.Event.
 type Event = visibilityapi.Event
 
+// EventSearchFilter / EventSearchResult alias the visibility fleet-wide event-search types (issue #582) so the detection operator
+// seam and its callers stay within the detection api surface, matching the Event alias above.
+type EventSearchFilter = visibilityapi.EventSearchFilter
+type EventSearchResult = visibilityapi.EventSearchResult
+
 // Platform constants and helpers are defined in the visibility context (the canonical event owner, ADR-0015) and re-exported here so
 // detection code scopes rules and validates events without importing the visibility package directly, the same re-export pattern the
 // Severity constants use. NormalizePlatform maps an empty (legacy-agent) platform to PlatformDarwin.

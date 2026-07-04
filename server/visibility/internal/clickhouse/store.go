@@ -135,6 +135,73 @@ func (s *Store) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event
 	return scanEvents(rows)
 }
 
+// SearchEvents runs the fleet-wide connection/DNS artifact search (issue #582): events of filter.EventType whose materialized artifact
+// column equals filter.Value, newest-first, keyset-paged over (timestamp_ns, event_id). FINAL collapses ReplacingMergeTree duplicates.
+// Matching the materialized column (not JSONExtract inline) lets the bloom skip index prune granules. total_matched is the full match
+// count independent of the page. An empty cursor starts at the newest event.
+func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, cursor string, limit int) (api.EventSearchResult, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	col, ok := api.ArtifactField(filter.EventType)
+	if !ok {
+		return api.EventSearchResult{}, fmt.Errorf("clickhouse search: unsupported event type %q", filter.EventType)
+	}
+
+	where := []string{"event_type = ?", col + " = ?"}
+	args := []any{filter.EventType, filter.Value}
+	if filter.HostID != "" {
+		where = append(where, "host_id = ?")
+		args = append(args, filter.HostID)
+	}
+	if filter.FromNs > 0 {
+		where = append(where, "ingested_at_ns >= ?")
+		args = append(args, filter.FromNs)
+	}
+	if filter.ToNs > 0 {
+		where = append(where, "ingested_at_ns <= ?")
+		args = append(args, filter.ToNs)
+	}
+	whereSQL := strings.Join(where, " AND ")
+
+	// Decode the cursor before the COUNT so a malformed cursor is a cheap 400, not a full archive count followed by a 400.
+	pageWhere := whereSQL
+	pageArgs := append([]any(nil), args...)
+	if cursor != "" {
+		c, err := api.DecodeEventCursor(cursor)
+		if err != nil {
+			return api.EventSearchResult{}, err
+		}
+		pageWhere += " AND (timestamp_ns, event_id) < (?, ?)"
+		pageArgs = append(pageArgs, c.TimestampNs, c.EventID)
+	}
+
+	var total uint64
+	if err := s.db.GetContext(ctx, &total, "SELECT count() FROM events FINAL WHERE "+whereSQL, args...); err != nil {
+		return api.EventSearchResult{}, fmt.Errorf("clickhouse search count: %w", err)
+	}
+	pageArgs = append(pageArgs, limit+1)
+
+	rows, err := s.db.QueryContext(ctx, "SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload "+
+		"FROM events FINAL WHERE "+pageWhere+" ORDER BY timestamp_ns DESC, event_id DESC LIMIT ?", pageArgs...)
+	if err != nil {
+		return api.EventSearchResult{}, fmt.Errorf("clickhouse search events: %w", err)
+	}
+	events, err := scanEvents(rows)
+	if err != nil {
+		return api.EventSearchResult{}, err
+	}
+
+	result := api.EventSearchResult{TotalMatched: int64(total)}
+	if len(events) > limit {
+		last := events[limit-1]
+		result.NextCursor = api.EncodeEventCursor(api.EventCursor{TimestampNs: last.TimestampNs, EventID: last.EventID})
+		events = events[:limit]
+	}
+	result.Events = events
+	return result, nil
+}
+
 // scanEvents drains rows of the standard event projection (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform,
 // payload) into a slice and closes them. The String payload is scanned into a []byte (database/sql copies the driver's string into it)
 // and handed to json.RawMessage, since database/sql cannot assign a string driver value straight into json.RawMessage.

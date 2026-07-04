@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // snapshotBumpChunkPIDs caps the distinct PIDs folded into one set-based heartbeat UPDATE. Keeps the placeholder count well under
@@ -518,4 +519,12 @@ func (s *Store) GetChildProcesses(ctx context.Context, hostID string, ppid int, 
 // graph query and the DNS-C2 correlation rule, both reaching the store as a detection api.GraphReader) stay unchanged across the cutover.
 func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr api.TimeRange) ([]api.Event, error) {
 	return s.archive.NetworkEventsForProcess(ctx, hostID, pid, tr)
+}
+
+// SearchEvents delegates the fleet-wide connection/DNS artifact search to the visibility EventArchive (issue #582), the same
+// post-cutover delegation GetNetworkEventsForProcess uses: the events live in ClickHouse, but the operator reader seam reaches the
+// detection store, so the store forwards. The visibility filter/result types are re-exported through the detection api so the seam's
+// signature stays within the detection context.
+func (s *Store) SearchEvents(ctx context.Context, filter visibilityapi.EventSearchFilter, cursor string, limit int) (visibilityapi.EventSearchResult, error) {
+	return s.archive.SearchEvents(ctx, filter, cursor, limit)
 }
