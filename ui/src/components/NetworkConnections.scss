@@ -26,6 +26,19 @@
   }
 }
 
+.net-pivot {
+  margin-left: $pad-small;
+  font-family: inherit;
+  font-size: $xxx-small;
+  color: $core-vibrant-blue;
+  text-decoration: none;
+  white-space: nowrap;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 .net-table {
   width: 100%;
   border-collapse: collapse;

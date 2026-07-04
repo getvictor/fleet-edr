@@ -113,3 +113,32 @@ describe("SearchPage", () => {
     expect(await screen.findByText("No matching processes.")).toBeInTheDocument();
   });
 });
+
+describe("SearchPage mode selector", () => {
+  it("defaults to process mode and marks it current", async () => {
+    vi.spyOn(api, "searchProcesses").mockResolvedValue({ rows: [], total_matched: 0 });
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    renderSearch("/search");
+    await waitFor(() => { expect(screen.getByRole("link", { name: "Processes" })).toHaveAttribute("aria-current", "page"); });
+    expect(screen.getByRole("link", { name: "Connections" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("switches to connection mode and prompts without issuing an event search", async () => {
+    vi.spyOn(api, "searchProcesses").mockResolvedValue({ rows: [], total_matched: 0 });
+    const evtSpy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [], total_matched: 0 });
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    renderSearch("/search");
+    fireEvent.click(screen.getByRole("link", { name: "Connections" }));
+    expect(await screen.findByText(/Enter a remote address/i)).toBeInTheDocument();
+    expect(evtSpy).not.toHaveBeenCalled(); // no artifact value yet -> no request
+    expect(screen.getByRole("link", { name: "Connections" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("renders DNS mode from a ?mode=dns URL", async () => {
+    vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [], total_matched: 0 });
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    renderSearch("/search?mode=dns");
+    expect(await screen.findByText(/Enter a domain/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "DNS" })).toHaveAttribute("aria-current", "page");
+  });
+});
