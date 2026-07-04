@@ -343,23 +343,11 @@ export function ProcessTreeView() {
     return () => { cancelled = true; };
   }, [hostId]);
 
-  // Auto-select a process from URL query params: ?process=<dbId> from the alert list / fleet search, or ?pid=<pid>&at=<ms> from a
-  // timeline row (which knows the pid but not the tree's DB id, so the graph resolves it to the node whose lifetime brackets ?at=).
+  // Auto-select a process from the URL: ?process=<dbId> (alert list / fleet search) or ?pid=<pid>&at=<ms> (a timeline row, which
+  // knows the pid but not the DB id). The resolution lives in selectNodeFromParams so this effect stays a single branch.
   useEffect(() => {
-    if (roots.length === 0) return;
-    const processIdParam = searchParams.get("process");
-    if (processIdParam) {
-      const found = findNodeByDbId(roots, Number(processIdParam));
-      if (found) setSelectedNode(found); // eslint-disable-line react-hooks/set-state-in-effect -- auto-select from URL
-      return;
-    }
-    const pidQuery = searchParams.get("pid");
-    const atQuery = searchParams.get("at");
-    if (pidQuery && atQuery) {
-      const atNs = Number(atQuery) * NANOSECONDS_PER_MILLISECOND;
-      const found = findNodeByPidAtTime(roots, Number(pidQuery), atNs);
-      if (found) setSelectedNode(found);
-    }
+    const found = selectNodeFromParams(roots, searchParams);
+    if (found) setSelectedNode(found); // eslint-disable-line react-hooks/set-state-in-effect -- auto-select from URL
   }, [roots, searchParams]);
 
   useEffect(() => {
@@ -484,25 +472,14 @@ export function ProcessTreeView() {
 
   if (!hostId) return <p>No host selected.</p>;
 
-  // viewHref toggles the view param while preserving the rest of the URL (window, alert anchor, selection), so switching views is a
-  // link that never changes the shared time window. Graph is the default, so it drops ?view= rather than setting view=graph.
-  const viewHref = (v: "graph" | "timeline"): string => {
-    const next = new URLSearchParams(searchParams);
-    if (v === "graph") {
-      next.delete("view");
-    } else {
-      next.set("view", v);
-    }
-    const qs = next.toString();
-    return `/hosts/${encodeURIComponent(hostId)}${qs ? `?${qs}` : ""}`;
-  };
-
   const headerActions = (
     <div className="process-tree__controls">
-      <div className="process-tree__viewtabs" role="tablist" aria-label="Host view">
-        <Link to={viewHref("graph")} className="process-tree__viewtab" aria-current={view === "graph" ? "page" : undefined}>Graph</Link>
-        <Link to={viewHref("timeline")} className="process-tree__viewtab" aria-current={view === "timeline" ? "page" : undefined}>Timeline</Link>
-      </div>
+      {/* Simple view navigation, not an ARIA tablist: the children are links with aria-current, not tab widgets with keyboard
+          semantics, so a nav with aria-current is the honest role. */}
+      <nav className="process-tree__viewtabs" aria-label="Host view">
+        <Link to={viewHref(hostId, searchParams, "graph")} className="process-tree__viewtab" aria-current={view === "graph" ? "page" : undefined}>Graph</Link>
+        <Link to={viewHref(hostId, searchParams, "timeline")} className="process-tree__viewtab" aria-current={view === "timeline" ? "page" : undefined}>Timeline</Link>
+      </nav>
       {view === "graph" && (
         <div className="process-tree__search">
           <input
@@ -815,13 +792,43 @@ function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null 
 function findNodeByPidAtTime(nodes: ProcessNode[], pid: number, atNs: number): ProcessNode | null {
   let best: ProcessNode | null = null;
   const visit = (n: ProcessNode) => {
-    if (n.pid === pid && n.fork_time_ns <= atNs && (n.exit_time_ns === undefined || n.exit_time_ns >= atNs)) {
+    // !n.exit_time_ns covers a still-running process whether the API sends the field as undefined, null, or 0; a bare === undefined
+    // check would treat a null (common for running processes over the Go/JSON boundary) as "exited at null" and drop the node.
+    if (n.pid === pid && n.fork_time_ns <= atNs && (!n.exit_time_ns || n.exit_time_ns >= atNs)) {
       if (best === null || n.fork_time_ns > best.fork_time_ns) best = n;
     }
     for (const c of n.children ?? []) visit(c);
   };
   for (const n of nodes) visit(n);
   return best;
+}
+
+// selectNodeFromParams resolves the node the URL asks the graph to select: ?process=<dbId> directly, or ?pid=<pid>&at=<ms> (a timeline
+// row) via findNodeByPidAtTime. Kept at module scope so the selection effect in ProcessTreeView stays a single branch.
+function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSearchParams): ProcessNode | null {
+  if (roots.length === 0) return null;
+  const processIdParam = searchParams.get("process");
+  if (processIdParam) return findNodeByDbId(roots, Number(processIdParam));
+  const pidQuery = searchParams.get("pid");
+  const atQuery = searchParams.get("at");
+  if (pidQuery && atQuery) {
+    return findNodeByPidAtTime(roots, Number(pidQuery), Number(atQuery) * NANOSECONDS_PER_MILLISECOND);
+  }
+  return null;
+}
+
+// viewHref toggles the view param while preserving the rest of the URL (window, alert anchor, selection), so switching views is a link
+// that never changes the shared time window. Graph is the default, so it drops ?view= rather than setting view=graph.
+function viewHref(hostId: string, searchParams: URLSearchParams, v: "graph" | "timeline"): string {
+  const next = new URLSearchParams(searchParams);
+  if (v === "graph") {
+    next.delete("view");
+  } else {
+    next.set("view", v);
+  }
+  const qs = next.toString();
+  const suffix = qs ? `?${qs}` : "";
+  return `/hosts/${encodeURIComponent(hostId)}${suffix}`;
 }
 
 interface D3Node {

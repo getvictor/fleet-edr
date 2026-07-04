@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Link } from "react-router-dom";
 
 import { HostTimeline } from "./HostTimeline";
 import * as api from "../api";
@@ -8,10 +8,8 @@ import type { EventRecord } from "../types";
 
 const BOUNDS = { fromNs: 1_000, toNs: 9_000 };
 
-// An exec payload is not one of EventRecord's union members (which are network/DNS), so the fixture casts through unknown; the
-// component reads pid/path/args off it loosely, matching the real exec payload shape.
 function execEvent(id: string, pid: number, path: string, ts = 1_000_000_000): EventRecord {
-  return { event_id: id, host_id: "H1", timestamp_ns: ts, event_type: "exec", payload: { pid, path, args: [path] } as unknown as EventRecord["payload"] };
+  return { event_id: id, host_id: "H1", timestamp_ns: ts, event_type: "exec", payload: { pid, path, args: [path] } };
 }
 function connEvent(id: string, pid: number, addr: string, port: number, ts = 2_000_000_000): EventRecord {
   return {
@@ -116,6 +114,28 @@ describe("HostTimeline", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     await waitFor(() => { expect(screen.getByText(/Showing 2 of 2/)).toBeInTheDocument(); });
     expect(spy.mock.calls[1][2]).toBe("c1");
+  });
+
+  it("marks every chip pressed when no type filter is active (all shown)", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+    renderTimeline(); // no ?type= -> all types shown
+    const exec = await screen.findByRole("button", { name: "Exec" });
+    // aria-pressed agrees with the visual "on" state (was previously false while the chip looked on).
+    expect(exec).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("re-syncs the text input when the URL text changes externally", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+    render(
+      <MemoryRouter initialEntries={["/hosts/H1?text=first"]}>
+        <Link to="/hosts/H1?text=second">nav</Link>
+        <HostTimeline hostId="H1" bounds={BOUNDS} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("searchbox")).toHaveValue("first");
+    // Simulate external navigation (e.g. a link/back-forward) changing ?text=; the input must follow, not keep the stale draft.
+    fireEvent.click(screen.getByRole("link", { name: "nav" }));
+    await waitFor(() => { expect(screen.getByRole("searchbox")).toHaveValue("second"); });
   });
 
   it("shows the empty state when the window has no events", async () => {

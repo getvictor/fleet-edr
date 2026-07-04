@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import "./HostTimeline.scss";
 import { getHostTimeline, eventArtifactParam } from "../api";
-import type { EventRecord, NetworkConnectPayload, DNSQueryPayload } from "../types";
+import type { EventRecord, NetworkConnectPayload, DNSQueryPayload, ExecPayload } from "../types";
 import { Table } from "./ui/Table";
 import { Badge } from "./ui/Badge";
 import { useCursorList, type CursorPage } from "./Search/useCursorList";
@@ -33,13 +33,19 @@ const EVENT_TYPES: { key: string; label: string }[] = [
 // A row links to its process node in the graph; connection/DNS rows carry the fleet-wide "search" pivot.
 export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTypes = (searchParams.get("type") ?? "").split(",").filter(Boolean);
+  // Sorted so a semantically-equal selection (e.g. a type toggled off then back on) yields one canonical order; otherwise the
+  // Set-insertion order would churn filterKey and reset the cursor list on a no-op change.
+  const activeTypes = (searchParams.get("type") ?? "").split(",").filter(Boolean).sort();
   const text = searchParams.get("text") ?? "";
   const filterKey = JSON.stringify({ h: hostId, from: bounds.fromNs, to: bounds.toNs, types: activeTypes, text });
 
   // The text box is driven by local state, not the URL, so fast typing is never reset by a re-render; the draft is debounced into the
   // URL (which drives the query) so a burst of keystrokes issues one fetch, not one per character.
   const [textDraft, setTextDraft] = useState(text);
+  // Re-sync the draft when the URL text changes from outside this input (back/forward navigation, a link that sets/clears ?text=), so
+  // the input never shows a stale value the debounce would then write back over the navigation.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- mirror external URL state into the local input draft
+  useEffect(() => { setTextDraft(text); }, [text]);
   useEffect(() => {
     const id = setTimeout(() => {
       if (textDraft === (searchParams.get("text") ?? "")) return;
@@ -76,7 +82,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
       set.add(key);
     }
     if (set.size > 0) {
-      next.set("type", [...set].join(","));
+      next.set("type", [...set].sort().join(",")); // canonical order so the same selection never churns the URL/filterKey
     } else {
       next.delete("type");
     }
@@ -86,7 +92,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
   return (
     <div className="host-timeline">
       <div className="host-timeline__filters">
-        <div className="host-timeline__types" role="group" aria-label="Event type filter">
+        <fieldset className="host-timeline__types" aria-label="Event type filter">
           {EVENT_TYPES.map((t) => {
             const on = activeTypes.length === 0 || activeTypes.includes(t.key);
             return (
@@ -94,14 +100,14 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
                 key={t.key}
                 type="button"
                 className={`host-timeline__type${on ? " host-timeline__type--on" : ""}`}
-                aria-pressed={activeTypes.includes(t.key)}
+                aria-pressed={on}
                 onClick={() => { toggleType(t.key); }}
               >
                 {t.label}
               </button>
             );
           })}
-        </div>
+        </fieldset>
         <input
           className="host-timeline__text"
           type="search"
@@ -132,7 +138,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
           </thead>
           <tbody>
             {rows.map((evt) => {
-              const pid = (evt.payload as { pid: number }).pid;
+              const pid = evt.payload.pid; // every timeline payload has pid
               const emphasized = emphasizePid !== undefined && pid === emphasizePid;
               return (
                 <tr key={evt.event_id} className={emphasized ? "host-timeline__row--emphasis" : undefined}>
@@ -163,9 +169,10 @@ function TYPE_LABEL(eventType: string): string {
   return EVENT_TYPES.find((t) => t.key === eventType)?.label ?? eventType;
 }
 
-// processLabel renders the originating process as "name (pid)"; falls back to the raw pid when the event carried no path.
+// processLabel renders the originating process as "name (pid)"; falls back to the raw pid when the event carried no path. pid and the
+// optional path are common to every timeline payload, so no narrowing is needed.
 function processLabel(evt: EventRecord): string {
-  const p = evt.payload as { path?: string; pid: number };
+  const p = evt.payload;
   const name = p.path ? basename(p.path) : "";
   return name ? `${name} (${String(p.pid)})` : String(p.pid);
 }
@@ -192,7 +199,7 @@ function detailCell(evt: EventRecord) {
       </>
     );
   }
-  const p = evt.payload as { path?: string; args?: string[] };
+  const p = evt.payload as ExecPayload;
   return p.args && p.args.length > 0 ? p.args.join(" ") : (p.path ?? "");
 }
 

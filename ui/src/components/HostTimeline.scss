@@ -10,8 +10,13 @@
   }
 
   &__types {
+    // Reset the <fieldset> chrome (used over role="group" for native grouping semantics): no border/legend box.
+    border: 0;
     display: flex;
     gap: 0.25rem;
+    margin: 0;
+    min-inline-size: 0;
+    padding: 0;
   }
 
   &__type {

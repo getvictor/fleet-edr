@@ -373,9 +373,9 @@ export async function searchProcesses(filter: ProcessSearchFilter, cursor?: stri
   set("cursor", cursor);
   const qs = query.toString();
   const res = await fetchJSON<ProcessSearchResult>(`/search/processes${qs ? `?${qs}` : ""}`);
-  // A zero-match page marshals its empty Go slice as JSON null; normalize to [] so list consumers never read .length of null. The
+  // A zero-match page marshals a nil Go slice as JSON null; normalize to [] so list consumers never read .length of null. The
   // disable is required because the response type models rows as non-null, which the wire does not guarantee for an empty page.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals an empty slice as JSON null
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals a nil slice as JSON null (a non-nil empty slice would be [])
   return { ...res, rows: res.rows ?? [] };
 }
 
@@ -409,7 +409,7 @@ export async function searchEvents(mode: EventSearchMode, filter: EventSearchFil
   const qs = query.toString();
   const suffix = qs ? `?${qs}` : "";
   const res = await fetchJSON<EventSearchResult>(`/search/${mode}${suffix}`);
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals an empty slice as JSON null (the type models events as non-null)
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals a nil slice as JSON null (a non-nil empty slice would be []) (the type models events as non-null)
   return { ...res, events: res.events ?? [] };
 }
 
@@ -436,7 +436,7 @@ export async function getHostTimeline(hostID: string, filter: HostTimelineFilter
   const qs = query.toString();
   const suffix = qs ? `?${qs}` : "";
   const res = await fetchJSON<EventSearchResult>(`/hosts/${encodeURIComponent(hostID)}/timeline${suffix}`);
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals an empty slice as JSON null (the type models events as non-null)
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals a nil slice as JSON null (a non-nil empty slice would be []) (the type models events as non-null)
   return { ...res, events: res.events ?? [] };
 }
 
