@@ -16,24 +16,24 @@ import (
 // statements rather than one UPDATE per heartbeat.
 const snapshotBumpChunkPIDs = 500
 
-// insertProcessColumns and insertProcessPlaceholders pin the 21-column process INSERT shape in one place, shared by the per-event
+// insertProcessColumns and insertProcessPlaceholders pin the 23-column process INSERT shape in one place, shared by the per-event
 // InsertProcess, the batched multi-row INSERT, and the per-row poison fallback (processbatch.go), so the column list and arg order
 // can never drift between the per-event and set-based write paths.
 const insertProcessColumns = `INSERT INTO processes
 		(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		 exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
-		 is_snapshot, last_seen_ns)`
+		 is_snapshot, last_seen_ns, source_event_id, exec_event_id)`
 
-const insertProcessPlaceholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+const insertProcessPlaceholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-// appendInsertProcessArgs appends the 21 INSERT bind values for p in insertProcessColumns order.
+// appendInsertProcessArgs appends the 23 INSERT bind values for p in insertProcessColumns order.
 func appendInsertProcessArgs(args []any, p api.Process) []any {
 	return append(args,
 		p.HostID, p.PID, p.PPID, p.Path, p.Args, p.UID, p.GID,
 		p.CodeSigning, p.SHA256, p.CDHash, p.PIDVersion, p.ForkTimeNs, p.ForkIngestedAtNs, p.ExecTimeNs, p.ExitTimeNs,
 		p.ExitIngestedAtNs, p.ExitReason, p.ExitCode, p.PreviousExecID,
-		p.IsSnapshot, p.LastSeenNs,
+		p.IsSnapshot, p.LastSeenNs, p.SourceEventID, p.ExecEventID,
 	)
 }
 
@@ -58,8 +58,11 @@ func (s *Store) InsertProcess(ctx context.Context, p api.Process) (int64, error)
 // recycled PID cannot resurrect an exited row. Returns nil on success (including the no-row-affected case, which is the common path
 // when the heartbeat lands before the snapshot row arrives or after a re-exec flipped is_snapshot off).
 func (s *Store) UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error {
+	// GREATEST keeps last_seen_ns monotonic: it only ever advances. In single-pass ingest heartbeats arrive in timestamp order so the
+	// bump is always forward; the guard matters on re-processing (migration 00011), where a replayed earlier heartbeat must not drag a
+	// freshness value the first pass already advanced back to an older timestamp.
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE processes SET last_seen_ns = ?
+		UPDATE processes SET last_seen_ns = GREATEST(COALESCE(last_seen_ns, 0), ?)
 		WHERE host_id = ? AND pid = ? AND is_snapshot = TRUE AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
 		lastSeenNs, hostID, pid,
@@ -155,6 +158,9 @@ type ProcessExecUpdate struct {
 	// arrived without pidversion (or a missed fork) still gets the identity from the exec, without a present value clobbering
 	// an existing one to NULL.
 	PIDVersion *uint32
+	// ExecEventID is the event_id of the exec event applying this update. Stamped on the row so a re-claim of the same exec is
+	// recognized as already-applied (migration 00011), avoiding the case-b to case-c re-exec misroute.
+	ExecEventID *string
 }
 
 // UpdateProcessExec updates an existing process record with exec-time
@@ -162,10 +168,10 @@ type ProcessExecUpdate struct {
 func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET path = ?, args = ?, uid = ?, gid = ?, code_signing = ?, sha256 = ?, cdhash = ?, exec_time_ns = ?,
-		                    pidversion = COALESCE(?, pidversion)
+		                    pidversion = COALESCE(?, pidversion), exec_event_id = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
 		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
-		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.CDHash, u.ExecTimeNs, u.PIDVersion,
+		u.Path, u.Args, u.UID, u.GID, u.CodeSigning, u.SHA256, u.CDHash, u.ExecTimeNs, u.PIDVersion, u.ExecEventID,
 		u.HostID, u.PID,
 	)
 	return err
@@ -177,17 +183,20 @@ func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) erro
 // issue #6 client half) so the UI can render the latter with a "reconciled" badge instead of pretending it was a clean observed exit.
 // An empty reason normalises to ExitReasonEvent.
 func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
-	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason string,
+	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason, exitEventID string,
 ) (int64, error) {
 	if reason == "" {
 		reason = api.ExitReasonEvent
 	}
+	// fork_time_ns <= exitTimeNs: an exit cannot close a process that forked AFTER it. In single-pass ingest (timestamp order) the
+	// live row always satisfies this, so it is a no-op there; it matters on re-processing (migration 00011), where the preload can
+	// already hold a LATER generation of a reused pid whose exit was buffered on the first pass, and closing it here would be spurious.
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?,
-		                    exit_reason = ?, exit_code = ?
-		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL
+		                    exit_reason = ?, exit_code = ?, exit_event_id = ?
+		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL AND fork_time_ns <= ?
 		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
-		exitTimeNs, exitIngestedAtNs, reason, exitCode, hostID, pid,
+		exitTimeNs, exitIngestedAtNs, reason, exitCode, exitEventID, hostID, pid, exitTimeNs,
 	)
 	if err != nil {
 		return 0, err
@@ -291,12 +300,12 @@ func (s *Store) ReExec(
 		INSERT INTO processes
 			(host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 			 fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
-			 exit_ingested_at_ns, exit_code, previous_exec_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 exit_ingested_at_ns, exit_code, previous_exec_id, source_event_id, exec_event_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		newRow.HostID, newRow.PID, newRow.PPID, newRow.Path, newRow.Args, newRow.UID, newRow.GID,
 		newRow.CodeSigning, newRow.SHA256, newRow.CDHash, newRow.PIDVersion, newRow.ForkTimeNs, newRow.ForkIngestedAtNs,
 		newRow.ExecTimeNs, newRow.ExitTimeNs, newRow.ExitIngestedAtNs, newRow.ExitCode,
-		newRow.PreviousExecID,
+		newRow.PreviousExecID, newRow.SourceEventID, newRow.ExecEventID,
 	)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert new re-exec generation: %w", err)
@@ -424,6 +433,27 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 	return procs, nil
 }
 
+// EventAlreadyApplied reports whether a process row for (hostID, pid) already records eventID as the event that created it
+// (source_event_id) or applied its current exec image / exit (exec_event_id / exit_event_id). The graph builder calls this before
+// mutating so a re-processed event (a batch nack from a retryable detection miss, or a claim-lease-expiry re-offer, replays the same
+// events) is a no-op instead of duplicating a generation or closing the wrong one (migration 00011). Backed by
+// uk_processes_source_event for the source-id probe; the exec/exit probes fall back to the (host_id, pid, ...) indexes.
+func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int, eventID string) (bool, error) {
+	var exists bool
+	err := s.db.GetContext(ctx, &exists, `
+		SELECT EXISTS(
+			SELECT 1 FROM processes
+			WHERE host_id = ? AND pid = ?
+			  AND (source_event_id = ? OR exec_event_id = ? OR exit_event_id = ?)
+		)`,
+		hostID, pid, eventID, eventID, eventID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("check event applied (host=%s pid=%d event=%s): %w", hostID, pid, eventID, err)
+	}
+	return exists, nil
+}
+
 // GetProcessByPID returns the process that was active at the given
 // timestamp. Satisfies api.GraphReader.
 func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
@@ -432,7 +462,7 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 		SELECT id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
-		       is_snapshot, last_seen_ns
+		       is_snapshot, last_seen_ns, source_event_id, exec_event_id, exit_event_id
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)

@@ -93,6 +93,19 @@ type Process struct {
 	// LastSeenNs is the most recent agent-side liveness signal for a snapshot row (issue #173). NULL for non-snapshot rows. The TTL
 	// reconciler uses COALESCE(last_seen_ns, fork_time_ns) so non-snapshot rows fall back to existing #6 behaviour.
 	LastSeenNs *int64 `db:"last_seen_ns" json:"last_seen_ns,omitempty"`
+	// SourceEventID is the event_id of the fork / exec-without-fork / re-exec / snapshot event that INSERTed this row. It makes
+	// graph-builder re-processing idempotent (migration 00011): on a batch re-claim the builder finds the row already created by this
+	// event and skips the duplicate Close+Insert, and UNIQUE (host_id, source_event_id) backstops the rare concurrent double-insert.
+	// NULL for rows written before the migration.
+	SourceEventID *string `db:"source_event_id" json:"source_event_id,omitempty"`
+	// ExecEventID is the event_id of the exec that applied this row's current image. A first-exec-after-fork is an in-place UPDATE (no
+	// new row), so source_event_id cannot cover it; the builder reads this to recognize a re-applied exec and avoid the case-b to
+	// case-c re-exec misroute on re-processing. NULL until an exec has been applied (or for pre-00011 rows).
+	ExecEventID *string `db:"exec_event_id" json:"exec_event_id,omitempty"`
+	// ExitEventID is the event_id of the observed exit event that closed this row. The exit close is an in-place UPDATE of the
+	// most-recent-live row, so a re-processed exit would otherwise close a newer generation of a reused pid; the builder reads this to
+	// recognize a re-applied exit and skip it (migration 00011). NULL for live rows and for synthetic closes (pid_reuse, TTL).
+	ExitEventID *string `db:"exit_event_id" json:"exit_event_id,omitempty"`
 }
 
 // ExitReason values for Process.ExitReason.

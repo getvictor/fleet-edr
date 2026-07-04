@@ -16,18 +16,18 @@ import (
 const processBatchSelectColumns = `id, host_id, pid, ppid, path, args, uid, gid, code_signing, sha256, cdhash, pidversion,
 	fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 	exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
-	is_snapshot, last_seen_ns`
+	is_snapshot, last_seen_ns, source_event_id, exec_event_id, exit_event_id`
 
 // loadKeyChunk caps the (host_id, pid) pairs folded into one preload statement. The row-constructor IN list binds two
 // placeholders per key, so 1000 keys stay well under MySQL's placeholder ceiling while collapsing the per-event SELECTs into a
 // handful of statements.
 const loadKeyChunk = 1000
 
-// processUpdateChunk caps the rows folded into one set-based UPDATE. Each row binds 14 CASE values plus one IN-list id (15
+// processUpdateChunk caps the rows folded into one set-based UPDATE. Each row binds 16 CASE values plus one IN-list id (17
 // placeholders), so a few hundred per chunk keeps the statement well bounded.
 const processUpdateChunk = 200
 
-// insertRowChunk caps the rows folded into one multi-row INSERT. Each row binds 21 placeholders, so this keeps the statement under
+// insertRowChunk caps the rows folded into one multi-row INSERT. Each row binds 23 placeholders, so this keeps the statement under
 // MySQL's ~65k placeholder ceiling even if the configured processing batch grows well beyond today's default; the preload and
 // update paths are chunked for the same reason.
 const insertRowChunk = 1000
@@ -104,10 +104,12 @@ type ProcessRowUpdate struct {
 	CDHash           *string
 	ExecTimeNs       *int64
 	PIDVersion       *uint32
+	ExecEventID      *string
 	ExitTimeNs       *int64
 	ExitIngestedAtNs *int64
 	ExitReason       *string
 	ExitCode         *int
+	ExitEventID      *string
 	LastSeenNs       *int64
 }
 
@@ -190,7 +192,7 @@ func insertNewRowsChunk(ctx context.Context, ext sqlx.ExtContext, rows []NewProc
 	var sb strings.Builder
 	sb.WriteString(insertProcessColumns)
 	sb.WriteString(" VALUES ")
-	args := make([]any, 0, len(rows)*21)
+	args := make([]any, 0, len(rows)*23)
 	for i, r := range rows {
 		if i > 0 {
 			sb.WriteString(", ")
@@ -276,7 +278,8 @@ func (s *Store) updateRowsBatched(ctx context.Context, ext sqlx.ExtContext, upda
 // appender. Immutable identity/fork columns are intentionally excluded.
 var mutableUpdateColumns = []string{
 	"path", "args", "uid", "gid", "code_signing", "sha256", "cdhash",
-	"exec_time_ns", "pidversion", "exit_time_ns", "exit_ingested_at_ns", "exit_reason", "exit_code", "last_seen_ns",
+	"exec_time_ns", "pidversion", "exec_event_id", "exit_time_ns", "exit_ingested_at_ns", "exit_reason", "exit_code",
+	"exit_event_id", "last_seen_ns",
 }
 
 func updateRowsChunk(ctx context.Context, ext sqlx.ExtContext, updates []ProcessRowUpdate) error {
@@ -336,6 +339,8 @@ func updateColumnValue(col string, u ProcessRowUpdate) any {
 		return u.ExecTimeNs
 	case "pidversion":
 		return u.PIDVersion
+	case "exec_event_id":
+		return u.ExecEventID
 	case "exit_time_ns":
 		return u.ExitTimeNs
 	case "exit_ingested_at_ns":
@@ -344,6 +349,8 @@ func updateColumnValue(col string, u ProcessRowUpdate) any {
 		return u.ExitReason
 	case "exit_code":
 		return u.ExitCode
+	case "exit_event_id":
+		return u.ExitEventID
 	case "last_seen_ns":
 		return u.LastSeenNs
 	default:

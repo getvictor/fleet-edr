@@ -16,9 +16,10 @@ import (
 type processStore interface {
 	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error)
 	GetParentPath(ctx context.Context, hostID string, pid int) (string, error)
+	EventAlreadyApplied(ctx context.Context, hostID string, pid int, eventID string) (bool, error)
 	InsertProcess(ctx context.Context, p api.Process) (int64, error)
 	UpdateProcessExec(ctx context.Context, u mysql.ProcessExecUpdate) error
-	UpdateProcessExit(ctx context.Context, hostID string, pid int, exitTimeNs, exitIngestedAtNs int64, exitCode int, reason string) (int64, error)
+	UpdateProcessExit(ctx context.Context, hostID string, pid int, exitTimeNs, exitIngestedAtNs int64, exitCode int, reason, exitEventID string) (int64, error)
 	CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error
 	ReExec(ctx context.Context, priorID int64, exitTimeNs, exitIngestedAtNs int64, newRow api.Process) (newID int64, reLinked bool, err error)
 	UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error
@@ -104,6 +105,25 @@ func (s *batchSession) GetProcessByPID(_ context.Context, hostID string, pid int
 	return &p, nil
 }
 
+// EventAlreadyApplied reports whether any overlay row for (host, pid) already records eventID as its creator (source_event_id) or the
+// applier of its current image / exit (exec_event_id / exit_event_id). It mirrors the store query against the in-memory overlay so a
+// re-processed event is a no-op in both the batched and per-event paths (migration 00011).
+func (s *batchSession) EventAlreadyApplied(_ context.Context, hostID string, pid int, eventID string) (bool, error) {
+	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
+		if matchesEventID(r.proc.SourceEventID, eventID) ||
+			matchesEventID(r.proc.ExecEventID, eventID) ||
+			matchesEventID(r.proc.ExitEventID, eventID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// matchesEventID reports whether a nullable event-id column equals eventID.
+func matchesEventID(field *string, eventID string) bool {
+	return field != nil && *field == eventID
+}
+
 // GetParentPath returns the path of the most-recent (by fork_time_ns, id) row for (host, pid), or "" when none, mirroring the store
 // query (no exit-time filter).
 func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int) (string, error) {
@@ -119,12 +139,29 @@ func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int) 
 	return best.proc.Path, nil
 }
 
-// mostRecentLive returns the most-recent non-exited row for (host, pid), the target of the single-row exec/exit UPDATEs. nil when
-// every row for the key has exited.
+// mostRecentLive returns the most-recent non-exited row for (host, pid), the target of the single-row exec UPDATE. nil when every row
+// for the key has exited.
 func (s *batchSession) mostRecentLive(hostID string, pid int) *procRow {
 	var best *procRow
 	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
 		if r.proc.ExitTimeNs != nil {
+			continue
+		}
+		if best == nil || rankGreater(r, best) {
+			best = r
+		}
+	}
+	return best
+}
+
+// mostRecentLiveForkedAtOrBefore is mostRecentLive restricted to rows that forked at or before atNs, the target of the exit UPDATE. An
+// exit cannot close a process that forked after it; the bound is a no-op in single-pass ingest (the live row always forked before its
+// exit) but on re-processing (migration 00011) it stops a replayed exit from closing a LATER generation of a reused pid that the
+// preload already holds. Mirrors the store's WHERE fork_time_ns <= exitTimeNs.
+func (s *batchSession) mostRecentLiveForkedAtOrBefore(hostID string, pid int, atNs int64) *procRow {
+	var best *procRow
+	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
+		if r.proc.ExitTimeNs != nil || r.proc.ForkTimeNs > atNs {
 			continue
 		}
 		if best == nil || rankGreater(r, best) {
@@ -177,17 +214,18 @@ func (s *batchSession) UpdateProcessExec(_ context.Context, u mysql.ProcessExecU
 	if u.PIDVersion != nil { // COALESCE(?, pidversion): a present value wins, a nil keeps the existing one
 		r.proc.PIDVersion = u.PIDVersion
 	}
+	r.proc.ExecEventID = u.ExecEventID
 	markDirty(r)
 	return nil
 }
 
 func (s *batchSession) UpdateProcessExit(_ context.Context, hostID string, pid int,
-	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason string,
+	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason, exitEventID string,
 ) (int64, error) {
 	if reason == "" {
 		reason = api.ExitReasonEvent // mirrors the store's normalisation
 	}
-	r := s.mostRecentLive(hostID, pid)
+	r := s.mostRecentLiveForkedAtOrBefore(hostID, pid, exitTimeNs)
 	if r == nil {
 		return 0, nil
 	}
@@ -199,6 +237,8 @@ func (s *batchSession) UpdateProcessExit(_ context.Context, hostID string, pid i
 	r.proc.ExitReason = &rs
 	ec := exitCode
 	r.proc.ExitCode = &ec
+	eid := exitEventID
+	r.proc.ExitEventID = &eid
 	markDirty(r)
 	return 1, nil
 }
@@ -270,6 +310,11 @@ func (s *batchSession) UpdateLastSeenForSnapshot(_ context.Context, hostID strin
 	if best == nil {
 		return nil
 	}
+	// Monotonic: last_seen_ns only advances, mirroring the store's GREATEST. A replayed earlier heartbeat must not drag a freshness
+	// value the first pass already advanced back to an older timestamp (migration 00011).
+	if best.proc.LastSeenNs != nil && *best.proc.LastSeenNs >= lastSeenNs {
+		return nil
+	}
 	ls := lastSeenNs
 	best.proc.LastSeenNs = &ls
 	markDirty(best)
@@ -304,10 +349,12 @@ func rowUpdate(p api.Process) mysql.ProcessRowUpdate {
 		CDHash:           p.CDHash,
 		ExecTimeNs:       p.ExecTimeNs,
 		PIDVersion:       p.PIDVersion,
+		ExecEventID:      p.ExecEventID,
 		ExitTimeNs:       p.ExitTimeNs,
 		ExitIngestedAtNs: p.ExitIngestedAtNs,
 		ExitReason:       p.ExitReason,
 		ExitCode:         p.ExitCode,
+		ExitEventID:      p.ExitEventID,
 		LastSeenNs:       p.LastSeenNs,
 	}
 }

@@ -219,6 +219,17 @@ func (b *Builder) handleFork(ctx context.Context, w processStore, evt api.Event)
 		return err
 	}
 
+	// Idempotent re-processing (migration 00011): if this fork already created its row (a batch nack from a retryable detection miss,
+	// or a claim-lease-expiry re-offer, replays the event), skip the Close+Insert so the replay is a no-op rather than a duplicate
+	// generation plus a phantom pid_reuse close of the first-pass row.
+	applied, err := w.EventAlreadyApplied(ctx, evt.HostID, p.ChildPID, evt.EventID)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+
 	// Handle PID reuse: close any existing non-exited record for this PID.
 	if err := w.CloseStaleProcess(ctx, evt.HostID, p.ChildPID, evt.TimestampNs); err != nil {
 		return err
@@ -231,6 +242,7 @@ func (b *Builder) handleFork(ctx context.Context, w processStore, evt api.Event)
 	}
 
 	forkIngested := evt.IngestedAtNs
+	sourceEventID := evt.EventID
 	_, err = w.InsertProcess(ctx, api.Process{
 		HostID:           evt.HostID,
 		PID:              p.ChildPID,
@@ -239,6 +251,7 @@ func (b *Builder) handleFork(ctx context.Context, w processStore, evt api.Event)
 		PIDVersion:       p.PIDVersion,
 		ForkTimeNs:       evt.TimestampNs,
 		ForkIngestedAtNs: &forkIngested,
+		SourceEventID:    &sourceEventID,
 	})
 	return err
 }
@@ -271,6 +284,17 @@ func (b *Builder) handleExec(ctx context.Context, w processStore, evt api.Event)
 		return err
 	}
 
+	// Idempotent re-processing (migration 00011): if this exec already created or imaged the row (a batch nack from a retryable
+	// detection miss, or a claim-lease-expiry re-offer, replays it), skip. Without this, a re-applied first-exec-after-fork (whose
+	// case-b UPDATE already set exec_time_ns) would be re-read below as a case-c re-exec and fabricate a phantom generation.
+	applied, err := w.EventAlreadyApplied(ctx, evt.HostID, p.PID, evt.EventID)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+
 	// Resolve the running-at-this-moment row for the PID. Three shapes drive different recovery paths:
 	//   (a) no row: exec-without-fork (synthesize a root row).
 	//   (b) row, exec_time_ns NULL: first exec after fork; UPDATE in place.
@@ -294,12 +318,14 @@ func (b *Builder) handleExec(ctx context.Context, w processStore, evt api.Event)
 		return b.insertExecWithoutFork(ctx, w, evt, p)
 	}
 	if current.ExecTimeNs == nil {
+		execEventID := evt.EventID
 		return w.UpdateProcessExec(ctx, mysql.ProcessExecUpdate{
 			HostID: evt.HostID, PID: p.PID, ExecTimeNs: evt.TimestampNs,
 			Path: p.Path, Args: p.Args,
 			UID: p.UID, GID: p.GID,
 			CodeSigning: p.CodeSigning, SHA256: p.SHA256, CDHash: p.CDHash,
-			PIDVersion: p.PIDVersion,
+			PIDVersion:  p.PIDVersion,
+			ExecEventID: &execEventID,
 		})
 	}
 	return b.insertReExec(ctx, w, evt, p, current)
@@ -313,6 +339,7 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, w processStore, evt
 		ppid = p.PPID
 	}
 	forkIngested := evt.IngestedAtNs
+	sourceEventID := evt.EventID
 	row := api.Process{
 		HostID:           evt.HostID,
 		PID:              p.PID,
@@ -329,6 +356,10 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, w processStore, evt
 		ForkIngestedAtNs: &forkIngested,
 		ExecTimeNs:       &evt.TimestampNs,
 		IsSnapshot:       p.Snapshot,
+		// The synthesised root is created and imaged by this one exec event; stamping both ids makes a re-processed exec-without-fork
+		// a no-op (migration 00011) rather than a duplicate generation.
+		SourceEventID: &sourceEventID,
+		ExecEventID:   &sourceEventID,
 	}
 	// Issue #173: snapshot rows seed last_seen_ns at insert time so the TTL reconciler's COALESCE(last_seen_ns, fork_time_ns)
 	// predicate gives them a fresh baseline. Without this, the very first reconciliation pass after a snapshot insert would see
@@ -369,6 +400,7 @@ func (b *Builder) insertExecWithoutFork(ctx context.Context, w processStore, evt
 // ReExec helper wraps the close + insert in a single transaction so we can never leave the PID appearing exited with no current
 // generation (partial failure).
 func (b *Builder) insertReExec(ctx context.Context, w processStore, evt api.Event, p execPayload, prior *api.Process) error {
+	sourceEventID := evt.EventID
 	_, reLinked, err := w.ReExec(ctx, prior.ID, evt.TimestampNs, evt.IngestedAtNs, api.Process{
 		HostID: evt.HostID,
 		PID:    p.PID,
@@ -388,6 +420,10 @@ func (b *Builder) insertReExec(ctx context.Context, w processStore, evt api.Even
 		ForkTimeNs:       prior.ForkTimeNs, // chain preserves the original fork time
 		ForkIngestedAtNs: prior.ForkIngestedAtNs,
 		ExecTimeNs:       &evt.TimestampNs,
+		// This exec event both created the generation and applied its image; stamping both ids makes a re-processed exec a no-op
+		// (migration 00011) instead of fabricating another re-exec generation.
+		SourceEventID: &sourceEventID,
+		ExecEventID:   &sourceEventID,
 	})
 	if err != nil {
 		return fmt.Errorf("re-exec prior id=%d: %w", prior.ID, err)
@@ -432,6 +468,17 @@ func (b *Builder) handleExit(ctx context.Context, w processStore, evt api.Event)
 		return err
 	}
 
+	// Idempotent re-processing (migration 00011): the exit close is an in-place UPDATE of the most-recent-live row, so a replayed exit
+	// (a batch nack from a retryable detection miss, or a claim-lease-expiry re-offer) would otherwise close a NEWER generation of a
+	// reused pid. If this exit already closed a row for the pid, the replay is a no-op.
+	applied, err := w.EventAlreadyApplied(ctx, evt.HostID, p.PID, evt.EventID)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+
 	// Whitelist: only the agent-emitted reconciled reason is honoured on the wire. Anything else (server-only synthetic reasons: reexec,
 	// pid_reuse, ttl_reconciliation) collapses to ExitReasonEvent so a compromised agent can't mark normal exits with a misleading reason.
 	reason := api.ExitReasonEvent
@@ -439,7 +486,7 @@ func (b *Builder) handleExit(ctx context.Context, w processStore, evt api.Event)
 		reason = api.ExitReasonHostReconciled
 	}
 
-	affected, err := w.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason)
+	affected, err := w.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason, evt.EventID)
 	if err != nil {
 		return err
 	}
