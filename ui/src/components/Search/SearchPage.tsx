@@ -123,7 +123,9 @@ export function SearchPage() {
                   <td className="search-page__mono search-page__cmdline">{p.args ? p.args.join(" ") : p.path}</td>
                   <td>{p.uid ?? ""}</td>
                   <td>
-                    <Badge variant="neutral">{deriveSigningVerdict(p.code_signing).label}</Badge>
+                    {/* A fork-only process (no exec) inherited its parent's image and has no signature of its own; show no verdict
+                        rather than a misleading "unsigned", matching the tree tooltip and detail panel. */}
+                    {p.exec_time_ns ? <Badge variant="neutral">{deriveSigningVerdict(p.code_signing).label}</Badge> : null}
                   </td>
                   <td>{p.exit_reason ?? ""}</td>
                 </tr>
@@ -143,10 +145,11 @@ export function SearchPage() {
   );
 }
 
-// rowPivot links a result row to its host's process tree anchored at the process's fork time (the standard `?at=` tree entry).
+// rowPivot links a result row to its host's process tree anchored at the process's fork time. The tree's ?process= selects by the
+// process DB row id (findNodeByDbId), NOT the OS pid, so pass p.id; the same convention the alert->tree deep link uses.
 function rowPivot(p: Process): string {
   const atMs = Math.floor(p.fork_time_ns / NANOSECONDS_PER_MILLISECOND);
-  return `/hosts/${encodeURIComponent(p.host_id)}?process=${String(p.pid)}&at=${String(atMs)}`;
+  return `/hosts/${encodeURIComponent(p.host_id)}?process=${String(p.id)}&at=${String(atMs)}`;
 }
 
 function formatNs(ns: number): string {

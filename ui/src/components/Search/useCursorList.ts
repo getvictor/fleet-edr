@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // CursorPage is the shape every keyset-paginated search response shares (issue #582): a page of rows, the opaque cursor for the next
 // page (absent/empty on the last), and the full match count independent of the page.
@@ -29,6 +29,11 @@ export function useCursorList<Row>(key: string, fetchPage: (cursor: string) => P
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // generation bumps on every key change; a fetch captures the generation live at call time and its result is applied only while
+  // that generation is still current. This drops not just a superseded first page but an in-flight loadMore whose key has since
+  // changed, so a slow page-2 response can never append the old filter's rows onto the new filter's results.
+  const generation = useRef(0);
+
   // load fetches one page: the first page (empty cursor) replaces the rows; a subsequent page appends. A stale response (its request
   // superseded by a newer key or loadMore) is dropped via the cancelled flag the effect/callback install.
   const load = useCallback(
@@ -52,23 +57,22 @@ export function useCursorList<Row>(key: string, fetchPage: (cursor: string) => P
     [fetchPage],
   );
 
-  // Reset and fetch the first page on key change. The cancelled flag makes an in-flight first page from a prior key a no-op, so a
-  // rapid filter change cannot land an older result set.
+  // Reset and fetch the first page on key change. Bumping the generation invalidates any fetch (first page OR loadMore) started under
+  // the previous key, so a rapid filter change cannot land an older result set.
   useEffect(() => {
-    let cancelled = false;
+    generation.current += 1;
+    const gen = generation.current;
     /* eslint-disable react-hooks/set-state-in-effect */
     setRows([]);
     setNextCursor(undefined);
     /* eslint-enable react-hooks/set-state-in-effect */
-    load("", () => cancelled);
-    return () => {
-      cancelled = true;
-    };
+    load("", () => generation.current !== gen);
   }, [key, load]);
 
   const loadMore = useCallback(() => {
     if (nextCursor === undefined || loading) return;
-    load(nextCursor, () => false);
+    const gen = generation.current;
+    load(nextCursor, () => generation.current !== gen);
   }, [nextCursor, loading, load]);
 
   return { rows, total, loading, error, hasMore: nextCursor !== undefined, loadMore };

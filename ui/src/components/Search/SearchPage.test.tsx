@@ -68,11 +68,42 @@ describe("SearchPage", () => {
 
   // spec:web-ui/fleet-wide-search-page/a-result-row-opens-the-host-tree-at-the-process
   it("links a result row to the host tree anchored at the process", async () => {
-    vi.spyOn(api, "searchProcesses").mockResolvedValue({ rows: [proc({ id: 1, host_id: "H1", pid: 100, fork_time_ns: 2_000_000_000 })], total_matched: 1 });
+    vi.spyOn(api, "searchProcesses").mockResolvedValue({ rows: [proc({ id: 77, host_id: "H1", pid: 100, exec_time_ns: 2_000_000_000, fork_time_ns: 2_000_000_000 })], total_matched: 1 });
     vi.spyOn(api, "listHosts").mockResolvedValue([host("H1", "mac-a.local")]);
     renderSearch();
     const link = await screen.findByRole("link", { name: "grep" });
-    expect(link).toHaveAttribute("href", "/hosts/H1?process=100&at=2000");
+    // ?process= is the process DB row id (id=77), not the OS pid (100), matching the tree's findNodeByDbId lookup.
+    expect(link).toHaveAttribute("href", "/hosts/H1?process=77&at=2000");
+  });
+
+  it("falls back to the host id and shows no verdict for a fork-only row", async () => {
+    vi.spyOn(api, "searchProcesses").mockResolvedValue({
+      rows: [proc({ id: 1, host_id: "UNKNOWN-HOST", exec_time_ns: undefined })],
+      total_matched: 1,
+    });
+    vi.spyOn(api, "listHosts").mockResolvedValue([]); // no hostname known
+    renderSearch();
+    expect(await screen.findByText("UNKNOWN-HOST")).toBeInTheDocument(); // id shown when hostname absent
+    expect(screen.queryByText("unsigned")).not.toBeInTheDocument(); // fork-only: no verdict badge
+  });
+
+  it("surfaces a search error", async () => {
+    vi.spyOn(api, "searchProcesses").mockRejectedValue(new Error("boom"));
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    renderSearch();
+    expect(await screen.findByText("Error: boom")).toBeInTheDocument();
+  });
+
+  // spec:web-ui/fleet-wide-search-page/removing-a-chip-drops-that-filter
+  it("removing a chip refetches without that filter", async () => {
+    const spy = vi.spyOn(api, "searchProcesses").mockResolvedValue({ rows: [proc()], total_matched: 1 });
+    vi.spyOn(api, "listHosts").mockResolvedValue([host("H1", "mac-a.local")]);
+    renderSearch("/search?path=grep&signing=unsigned");
+    await waitFor(() => { expect(spy).toHaveBeenCalled(); });
+    fireEvent.click(screen.getByRole("button", { name: "Remove Path filter" }));
+    await waitFor(() => {
+      expect(spy.mock.calls.some(([f]) => !("path" in f) && f.signing === "unsigned")).toBe(true);
+    });
   });
 
   it("shows the empty state when there are no matches", async () => {

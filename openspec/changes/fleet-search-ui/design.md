@@ -27,5 +27,5 @@
 ## Risks / Trade-offs
 
 - [A huge result set with "load more"] -> the server caps the page at 200 and returns `total_matched`; the UI shows the running/total count so the analyst knows the set is large and can narrow with chips rather than paging forever.
-- [Filter state only in the URL] -> a malformed hand-edited param yields an empty result, not an error; acceptable, and the endpoint rejects the genuinely bad ones (bad uid, bad window) with a surfaced message.
+- [Filter state only in the URL] -> the page reads only the whitelisted filter keys, so an unknown hand-added param is ignored rather than misinterpreted; a recognized key with a bad value (non-numeric uid, unknown signing verdict, malformed window) is rejected 400 by the endpoint and surfaced in the error banner, not silently dropped.
 - [Signing-id/team-id look pivotable but aren't] -> they stay copy-only with no search affordance, so there's no dead link; a filter for them is a possible endpoint follow-up.

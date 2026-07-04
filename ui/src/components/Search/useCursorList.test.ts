@@ -48,6 +48,22 @@ describe("useCursorList", () => {
     expect(fetchPage).toHaveBeenNthCalledWith(2, "");
   });
 
+  it("drops a loadMore response whose key changed mid-flight", async () => {
+    // Page 2 for key "a" resolves only after we switch to key "b"; its rows must not append to b's results. The two
+    // per-key fetchers are stable references (built once here, selected by key) so the hook's effect doesn't re-run every render.
+    let releaseA2: (p: CursorPage<number>) => void = () => {};
+    const fetchA = (cursor: string): Promise<CursorPage<number>> =>
+      cursor === "" ? Promise.resolve({ rows: [1], nextCursor: "a2", total: 2 }) : new Promise((res) => { releaseA2 = res; });
+    const fetchB = (): Promise<CursorPage<number>> => Promise.resolve({ rows: [9], total: 1 });
+    const { result, rerender } = renderHook(({ k }) => useCursorList(k, k === "a" ? fetchA : fetchB), { initialProps: { k: "a" } });
+    await waitFor(() => { expect(result.current.rows).toEqual([1]); });
+    act(() => { result.current.loadMore(); }); // page 2 of a, held
+    rerender({ k: "b" });
+    await waitFor(() => { expect(result.current.rows).toEqual([9]); });
+    act(() => { releaseA2({ rows: [2], total: 2 }); }); // a's page 2 finally lands
+    await waitFor(() => { expect(result.current.rows).toEqual([9]); }); // must NOT become [9,2]
+  });
+
   it("surfaces a fetch error", async () => {
     const fp = () => Promise.reject(new Error("boom"));
     const { result } = renderHook(() => useCursorList("k", fp));
