@@ -35,7 +35,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   // Sorted so a semantically-equal selection (e.g. a type toggled off then back on) yields one canonical order; otherwise the
   // Set-insertion order would churn filterKey and reset the cursor list on a no-op change.
-  const activeTypes = (searchParams.get("type") ?? "").split(",").filter(Boolean).sort();
+  const activeTypes = (searchParams.get("type") ?? "").split(",").filter(Boolean).sort((a, b) => a.localeCompare(b));
   const text = searchParams.get("text") ?? "";
   const filterKey = JSON.stringify({ h: hostId, from: bounds.fromNs, to: bounds.toNs, types: activeTypes, text });
 
@@ -82,7 +82,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid }: Props) {
       set.add(key);
     }
     if (set.size > 0) {
-      next.set("type", [...set].sort().join(",")); // canonical order so the same selection never churns the URL/filterKey
+      next.set("type", [...set].sort((a, b) => a.localeCompare(b)).join(",")); // canonical order so the same selection never churns the URL/filterKey
     } else {
       next.delete("type");
     }

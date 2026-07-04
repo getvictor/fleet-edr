@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, type RefObject } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import * as d3 from "d3";
 import { getAlertDetail, getProcessTree, listAlerts } from "../api";
@@ -621,66 +621,99 @@ export function ProcessTreeView() {
       {view === "timeline" ? (
         <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} />
       ) : (
-        <>
-          {loading && <p className="process-tree__status">Loading...</p>}
-          {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
-          {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph
-              (the generic chain toggle in the breadcrumb is hidden above). Focused: explain the empty graph + offer to widen.
-              Widened: a short note + collapse back. Exactly one button in either state. */}
-          {!loading && !error && isProcessOptionalAlert && (
-            <div className="process-tree__status process-tree__status--info">
-              {focusAlertChain ? (
-                <>
-                  <p>This detection isn’t attributed to a single process. See the detail above for what fired and why.</p>
-                  <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(false); }}>
-                    Show surrounding host activity
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <p>Showing the surrounding host activity for this detection.</p>
-                  <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(true); }}>
-                    Show alert detail only
-                  </Button>
-                </>
-              )}
-            </div>
-          )}
-          {!loading && !error && !isProcessOptionalAlert && roots.length === 0 && (
-            <p className="process-tree__status">No processes in this time range.</p>
-          )}
+        <GraphBody
+          hostId={hostId}
+          loading={loading}
+          error={error}
+          isProcessOptionalAlert={isProcessOptionalAlert}
+          focusAlertChain={focusAlertChain}
+          onFocusAlertChain={setFocusAlertChain}
+          rootsEmpty={roots.length === 0}
+          svgRef={svgRef}
+          hoverTip={hoverTip}
+          selectedNode={selectedNode}
+          onCloseDetail={() => { setSelectedNode(null); }}
+        />
+      )}
+    </>
+  );
+}
 
-          <div className="process-tree__layout">
-            <div className="process-tree__canvas">
-              <svg ref={svgRef} />
-              {hoverTip && (
-                <div className="process-tree__tooltip" role="tooltip" style={{
-                    left: Math.min(hoverTip.x + TOOLTIP_POINTER_OFFSET_PX, window.innerWidth - TOOLTIP_CLAMP_WIDTH_PX),
-                    top: Math.min(hoverTip.y + TOOLTIP_POINTER_OFFSET_PX, window.innerHeight - TOOLTIP_CLAMP_HEIGHT_PX),
-                  }}>
-                  <div className="process-tree__tooltip-title">{hoverTip.tooltip.title}</div>
-                  {hoverTip.tooltip.groupNote && <div className="process-tree__tooltip-group">{hoverTip.tooltip.groupNote}</div>}
-                  <div className="process-tree__tooltip-cmdline">{hoverTip.tooltip.commandLine}</div>
-                  {hoverTip.tooltip.verdictLabel && (
-                    <div className={`process-tree__tooltip-verdict${hoverTip.tooltip.marked ? " process-tree__tooltip-verdict--marked" : ""}`}>
-                      {hoverTip.tooltip.verdictLabel}
-                    </div>
-                  )}
+interface GraphBodyProps {
+  readonly hostId: string;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly isProcessOptionalAlert: boolean;
+  readonly focusAlertChain: boolean;
+  readonly onFocusAlertChain: (v: boolean) => void;
+  readonly rootsEmpty: boolean;
+  readonly svgRef: RefObject<SVGSVGElement | null>;
+  readonly hoverTip: { x: number; y: number; tooltip: NodeTooltip } | null;
+  readonly selectedNode: ProcessNode | null;
+  readonly onCloseDetail: () => void;
+}
+
+// GraphBody is the process-graph half of the host page: the fetch/status banners, the d3 canvas (drawn into svgRef by ProcessTreeView's
+// effect), the hover tooltip, and the selected-process detail aside. Split out of ProcessTreeView (issue #583) so the graph's status
+// conditionals don't nest under the graph/timeline view branch and inflate the parent's cognitive complexity.
+function GraphBody({
+  hostId, loading, error, isProcessOptionalAlert, focusAlertChain, onFocusAlertChain, rootsEmpty, svgRef, hoverTip, selectedNode, onCloseDetail,
+}: GraphBodyProps) {
+  return (
+    <>
+      {loading && <p className="process-tree__status">Loading...</p>}
+      {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
+      {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph
+          (the generic chain toggle in the breadcrumb is hidden above). Focused: explain the empty graph + offer to widen.
+          Widened: a short note + collapse back. Exactly one button in either state. */}
+      {!loading && !error && isProcessOptionalAlert && (
+        <div className="process-tree__status process-tree__status--info">
+          {focusAlertChain ? (
+            <>
+              <p>This detection isn’t attributed to a single process. See the detail above for what fired and why.</p>
+              <Button size="small" variant="inverse" onClick={() => { onFocusAlertChain(false); }}>
+                Show surrounding host activity
+              </Button>
+            </>
+          ) : (
+            <>
+              <p>Showing the surrounding host activity for this detection.</p>
+              <Button size="small" variant="inverse" onClick={() => { onFocusAlertChain(true); }}>
+                Show alert detail only
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+      {!loading && !error && !isProcessOptionalAlert && rootsEmpty && (
+        <p className="process-tree__status">No processes in this time range.</p>
+      )}
+
+      <div className="process-tree__layout">
+        <div className="process-tree__canvas">
+          <svg ref={svgRef} />
+          {hoverTip && (
+            <div className="process-tree__tooltip" role="tooltip" style={{
+                left: Math.min(hoverTip.x + TOOLTIP_POINTER_OFFSET_PX, window.innerWidth - TOOLTIP_CLAMP_WIDTH_PX),
+                top: Math.min(hoverTip.y + TOOLTIP_POINTER_OFFSET_PX, window.innerHeight - TOOLTIP_CLAMP_HEIGHT_PX),
+              }}>
+              <div className="process-tree__tooltip-title">{hoverTip.tooltip.title}</div>
+              {hoverTip.tooltip.groupNote && <div className="process-tree__tooltip-group">{hoverTip.tooltip.groupNote}</div>}
+              <div className="process-tree__tooltip-cmdline">{hoverTip.tooltip.commandLine}</div>
+              {hoverTip.tooltip.verdictLabel && (
+                <div className={`process-tree__tooltip-verdict${hoverTip.tooltip.marked ? " process-tree__tooltip-verdict--marked" : ""}`}>
+                  {hoverTip.tooltip.verdictLabel}
                 </div>
               )}
             </div>
-            {selectedNode && (
-              <aside className="process-tree__detail">
-                <ProcessDetail
-                  hostId={hostId}
-                  node={selectedNode}
-                  onClose={() => { setSelectedNode(null); }}
-                />
-              </aside>
-            )}
-          </div>
-        </>
-      )}
+          )}
+        </div>
+        {selectedNode && (
+          <aside className="process-tree__detail">
+            <ProcessDetail hostId={hostId} node={selectedNode} onClose={onCloseDetail} />
+          </aside>
+        )}
+      </div>
     </>
   );
 }
