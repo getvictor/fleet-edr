@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
@@ -158,4 +160,57 @@ func TestSelectResolvingQuery(t *testing.T) {
 		got, _ := selectResolvingQuery([]api.Event{conn}, "203.0.113.10", connectTS)
 		assert.Nil(t, got)
 	})
+}
+
+// dnsC2OutboundConnect builds the outbound network_connect the rule keys on, for a pid with no process row, so the tests below
+// exercise exactly the flow-process materialization-race branch (resolveFlowProcess returns nil). ingestedAtNs controls which side
+// of the flow-process grace window the connect lands on.
+func dnsC2OutboundConnect(ingestedAtNs int64) api.Event {
+	return api.Event{
+		EventID:      "dns-c2-flow-race",
+		HostID:       "fixture-host",
+		TimestampNs:  1,
+		IngestedAtNs: ingestedAtNs,
+		EventType:    "network_connect",
+		Payload:      json.RawMessage(`{"pid":97531,"direction":"outbound","remote_address":"203.0.113.66","remote_port":443}`),
+	}
+}
+
+// TestDNSC2Beacon_YoungFlowMissRaisesRetryableError pins the fix for the intermittent demo-nightly drop: with concurrent processor
+// batches (issue #535) the network_connect can be evaluated before the batch carrying its exec commits the process row, and the old
+// silent skip permanently lost the (Critical) beacon alert. A young connect whose flow process is missing must now fail with the
+// retryable sentinel so the processor nacks and re-evaluates the batch once the row lands.
+// spec:server-detection-rules-engine/retryable-evaluation-on-unmaterialized-flow-process/a-young-outbound-connect-s-flow-process-row-is-missing
+func TestDNSC2Beacon_YoungFlowMissRaisesRetryableError(t *testing.T) {
+	t.Parallel()
+	gr := &recordingGraphReader{} // byPID + byPIDVersion nil: the flow process has not materialised yet
+	evt := dnsC2OutboundConnect(time.Now().UnixNano())
+	findings, err := (&DNSC2Beacon{}).Evaluate(t.Context(), []api.Event{evt}, gr)
+	require.ErrorIs(t, err, api.ErrProcessNotYetMaterialized,
+		"a young outbound connect with no flow process row must fail with the retryable sentinel, not skip silently")
+	assert.Empty(t, findings)
+}
+
+// TestDNSC2Beacon_StaleFlowMissSkipsSilently pins the bound on the retry: once the connect is older than the tighter
+// flowProcessMaterializationGrace, its flow process is assumed to never arrive (the exec was dropped), and evaluation degrades to the
+// historical silent skip so a permanently orphaned connect cannot hold its batch in a retry loop.
+// spec:server-detection-rules-engine/retryable-evaluation-on-unmaterialized-flow-process/an-outbound-connect-past-the-grace-window-has-no-flow-process-row
+func TestDNSC2Beacon_StaleFlowMissSkipsSilently(t *testing.T) {
+	t.Parallel()
+	gr := &recordingGraphReader{}
+	evt := dnsC2OutboundConnect(time.Now().Add(-flowProcessMaterializationGrace - time.Second).UnixNano())
+	findings, err := (&DNSC2Beacon{}).Evaluate(t.Context(), []api.Event{evt}, gr)
+	require.NoError(t, err, "a connect past the flow-process grace window must not retry")
+	assert.Empty(t, findings)
+}
+
+// TestDNSC2Beacon_ZeroIngestStampSkipsSilently confirms fixture replay (no ingest stamp) keeps the historical skip on a flow-process
+// miss, so the fixture-driven tests and offline replays never spuriously raise the retryable sentinel.
+func TestDNSC2Beacon_ZeroIngestStampSkipsSilently(t *testing.T) {
+	t.Parallel()
+	gr := &recordingGraphReader{}
+	evt := dnsC2OutboundConnect(0)
+	findings, err := (&DNSC2Beacon{}).Evaluate(t.Context(), []api.Event{evt}, gr)
+	require.NoError(t, err, "a zero ingest stamp is never in grace")
+	assert.Empty(t, findings)
 }
