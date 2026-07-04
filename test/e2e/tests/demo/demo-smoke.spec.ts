@@ -48,7 +48,9 @@ async function signInViaDex(page: Page): Promise<void> {
   await page.locator('input[name="password"]').fill(DEMO_PASSWORD);
   await page.getByRole("button", { name: /login/i }).click();
 
-  // The EDR exchanges the code, mints a session, and redirects to /ui/.
+  // The EDR exchanges the code, mints a session, and redirects into the app
+  // (post-#578 the landing route is /ui/alerts, not the host list); this only
+  // asserts we've left the login / break-glass pages.
   await page.waitForURL(
     (url) => url.host === "localhost:8088" && !url.pathname.includes("login") && !url.pathname.includes("break-glass"),
     { timeout: 30_000 },
@@ -78,6 +80,11 @@ test.describe("demo stack smoke", () => {
     if (STRICT_BUILD) {
       expect(supportsHostnameField, "the source build must expose hostnames on /api/hosts").toBe(true);
     }
+
+    // Alert-first navigation (#578) redirects "/" to /alerts and moved the host list
+    // to /hosts, so enter it explicitly before asserting the rows render (the qa
+    // host-list e2e does the same). The API checks above already ran on the session.
+    await page.goto("/ui/hosts");
 
     if (supportsHostnameField) {
       // API + UI: the hostnames are populated, match the seeded set, and render in
