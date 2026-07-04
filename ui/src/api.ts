@@ -372,7 +372,11 @@ export async function searchProcesses(filter: ProcessSearchFilter, cursor?: stri
   set("to", filter.to);
   set("cursor", cursor);
   const qs = query.toString();
-  return fetchJSON<ProcessSearchResult>(`/search/processes${qs ? `?${qs}` : ""}`);
+  const res = await fetchJSON<ProcessSearchResult>(`/search/processes${qs ? `?${qs}` : ""}`);
+  // A zero-match page marshals its empty Go slice as JSON null; normalize to [] so list consumers never read .length of null. The
+  // disable is required because the response type models rows as non-null, which the wire does not guarantee for an empty page.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals an empty slice as JSON null
+  return { ...res, rows: res.rows ?? [] };
 }
 
 // EventSearchMode picks which fleet-wide artifact search to run: "connections" hits GET /api/search/connections (matching a remote
@@ -404,7 +408,36 @@ export async function searchEvents(mode: EventSearchMode, filter: EventSearchFil
   set("cursor", cursor);
   const qs = query.toString();
   const suffix = qs ? `?${qs}` : "";
-  return fetchJSON<EventSearchResult>(`/search/${mode}${suffix}`);
+  const res = await fetchJSON<EventSearchResult>(`/search/${mode}${suffix}`);
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals an empty slice as JSON null (the type models events as non-null)
+  return { ...res, events: res.events ?? [] };
+}
+
+// HostTimelineFilter is the host event timeline input (issue #583): the event-time window (ns strings), an optional subset of the
+// timeline event types, and an optional case-insensitive payload text match. Empty fields are omitted from the query.
+export interface HostTimelineFilter {
+  from?: string;
+  to?: string;
+  types?: string[];
+  text?: string;
+}
+
+// getHostTimeline reads GET /api/hosts/{host_id}/timeline: the host's exec/network/DNS events interleaved newest-first over the window,
+// filterable by type and text, keyset-paginated. Shares the EventSearchResult page shape with the fleet event search so the UI drives
+// both with useCursorList. Types join into the comma list the endpoint expects.
+export async function getHostTimeline(hostID: string, filter: HostTimelineFilter, cursor?: string): Promise<EventSearchResult> {
+  const query = new URLSearchParams();
+  const set = (key: string, value: string | undefined) => { if (value) query.set(key, value); };
+  set("from", filter.from);
+  set("to", filter.to);
+  set("type", filter.types && filter.types.length > 0 ? filter.types.join(",") : undefined);
+  set("text", filter.text);
+  set("cursor", cursor);
+  const qs = query.toString();
+  const suffix = qs ? `?${qs}` : "";
+  const res = await fetchJSON<EventSearchResult>(`/hosts/${encodeURIComponent(hostID)}/timeline${suffix}`);
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals an empty slice as JSON null (the type models events as non-null)
+  return { ...res, events: res.events ?? [] };
 }
 
 export async function listAlerts(params?: {

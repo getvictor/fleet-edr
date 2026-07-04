@@ -263,3 +263,12 @@ describe("ProcessDetail kill action", () => {
     expect(screen.queryByRole("button", { name: /kill process/i })).not.toBeInTheDocument();
   });
 });
+
+// spec:web-ui/graph-and-timeline-cross-navigation/a-process-node-links-to-its-timeline-rows
+describe("ProcessDetail show-in-timeline pivot (issue #583)", () => {
+  it("links to the host timeline emphasizing this process's pid", async () => {
+    render(<ProcessDetail hostId="host/A" node={makeNode({ pid: 1234 })} onClose={vi.fn()} />);
+    const link = await screen.findByRole("link", { name: "Show in timeline" });
+    expect(link).toHaveAttribute("href", "/hosts/host%2FA?view=timeline&pid=1234");
+  });
+});

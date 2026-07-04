@@ -198,6 +198,15 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
     <Card padding="medium" className="process-detail">
       <div className="process-detail__header">
         <h3 className="process-detail__title">Process detail</h3>
+        {/* Show in timeline (issue #583): switch to the host's flat event stream with this process's rows emphasized, the reverse of
+            a timeline row's "open in graph" pivot. */}
+        <Link
+          className="process-detail__timeline-link"
+          to={`/hosts/${encodeURIComponent(hostId)}?view=timeline&pid=${String(node.pid)}`}
+          title="Show this process's events in the timeline"
+        >
+          Show in timeline
+        </Link>
         <button
           type="button"
           className="process-detail__close"

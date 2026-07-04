@@ -6,6 +6,7 @@ import {
   createAppControlRule,
   searchProcesses,
   searchEvents,
+  getHostTimeline,
   setForbiddenHandler,
   setUnauthorizedHandler,
   Unauthorized401Error,
@@ -231,6 +232,37 @@ describe("searchEvents query-string composition", () => {
     expect(url).toContain("remote_address=1.2.3.4");
     expect(url).not.toContain("host_id=");
     expect(url).not.toContain("cursor=");
+  });
+});
+
+describe("getHostTimeline query-string composition", () => {
+  it("hits the host timeline endpoint with the window, type list, text, and cursor", async () => {
+    const fetchMock = stubFetch({ events: [], total_matched: 0 });
+    await getHostTimeline("host/A", { from: "1000", to: "2000", types: ["exec", "dns_query"], text: "curl" }, "CUR");
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/hosts/host%2FA/timeline?");
+    expect(url).toContain("from=1000");
+    expect(url).toContain("to=2000");
+    expect(url).toContain("type=exec%2Cdns_query"); // comma-joined
+    expect(url).toContain("text=curl");
+    expect(url).toContain("cursor=CUR");
+  });
+
+  it("omits the type param when no types are selected", async () => {
+    const fetchMock = stubFetch({ events: [], total_matched: 0 });
+    await getHostTimeline("hostA", { from: "1000", to: "2000", types: [] });
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/hosts/hostA/timeline");
+    expect(url).not.toContain("type=");
+  });
+
+  it("normalizes a null events field (empty Go slice) to an empty array", async () => {
+    // A zero-match page marshals Events: nil as JSON null; the list consumer would crash reading null.length.
+    stubFetch({ events: null, total_matched: 0 });
+    const res = await getHostTimeline("hostA", { from: "1000", to: "2000" });
+    expect(res.events).toEqual([]);
   });
 });
 

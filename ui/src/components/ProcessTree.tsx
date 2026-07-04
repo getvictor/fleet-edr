@@ -9,6 +9,7 @@ import {
 import { ProcessDetail } from "./ProcessDetail";
 import { HostHealthPanel } from "./HostHealthPanel";
 import { HostHeader } from "./HostHeader";
+import { HostTimeline } from "./HostTimeline";
 import { buildNodeTooltip, nodeEvidenceMarked, type NodeTooltip } from "./node-tooltip";
 import { TimeRangeControl } from "./TimeRangeControl";
 import { ActivityHistogram } from "./ActivityHistogram";
@@ -85,6 +86,13 @@ interface TreeInteractions {
 export function ProcessTreeView() {
   const { hostId } = useParams<{ hostId: string }>();
   const [searchParams] = useSearchParams();
+  // The active host-page view (issue #583): the process graph (default) or the flat event timeline. Held in the URL so a switch is
+  // bookmarkable and the shared time window / alert anchor survive it.
+  const view: "graph" | "timeline" = searchParams.get("view") === "timeline" ? "timeline" : "graph";
+  // The process of interest carried across the graph<->timeline pivots: in the graph it selects the node (with ?at=), in the timeline
+  // it emphasizes that process's rows.
+  const pidParam = searchParams.get("pid");
+  const emphasizePid = pidParam ? Number(pidParam) : undefined;
   const svgRef = useRef<SVGSVGElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const layoutNodesRef = useRef<D3PointNode[]>([]);
@@ -335,19 +343,29 @@ export function ProcessTreeView() {
     return () => { cancelled = true; };
   }, [hostId]);
 
-  // Auto-select process from URL query params (from alert list navigation).
+  // Auto-select a process from URL query params: ?process=<dbId> from the alert list / fleet search, or ?pid=<pid>&at=<ms> from a
+  // timeline row (which knows the pid but not the tree's DB id, so the graph resolves it to the node whose lifetime brackets ?at=).
   useEffect(() => {
+    if (roots.length === 0) return;
     const processIdParam = searchParams.get("process");
-    if (processIdParam && roots.length > 0) {
-      const processId = Number(processIdParam);
-      const found = findNodeByDbId(roots, processId);
+    if (processIdParam) {
+      const found = findNodeByDbId(roots, Number(processIdParam));
       if (found) setSelectedNode(found); // eslint-disable-line react-hooks/set-state-in-effect -- auto-select from URL
+      return;
+    }
+    const pidQuery = searchParams.get("pid");
+    const atQuery = searchParams.get("at");
+    if (pidQuery && atQuery) {
+      const atNs = Number(atQuery) * NANOSECONDS_PER_MILLISECOND;
+      const found = findNodeByPidAtTime(roots, Number(pidQuery), atNs);
+      if (found) setSelectedNode(found);
     }
   }, [roots, searchParams]);
 
   useEffect(() => {
+    if (view !== "graph") return; // the timeline view does no graph work; the fetch (and the d3 draw below) are graph-only
     fetchTree(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch on mount
-  }, [fetchTree]);
+  }, [fetchTree, view]);
 
   useEffect(() => {
     if (!svgRef.current) return;
@@ -466,58 +484,81 @@ export function ProcessTreeView() {
 
   if (!hostId) return <p>No host selected.</p>;
 
+  // viewHref toggles the view param while preserving the rest of the URL (window, alert anchor, selection), so switching views is a
+  // link that never changes the shared time window. Graph is the default, so it drops ?view= rather than setting view=graph.
+  const viewHref = (v: "graph" | "timeline"): string => {
+    const next = new URLSearchParams(searchParams);
+    if (v === "graph") {
+      next.delete("view");
+    } else {
+      next.set("view", v);
+    }
+    const qs = next.toString();
+    return `/hosts/${encodeURIComponent(hostId)}${qs ? `?${qs}` : ""}`;
+  };
+
   const headerActions = (
     <div className="process-tree__controls">
-      <div className="process-tree__search">
-        <input
-          ref={searchInputRef}
-          type="search"
-          className="process-tree__search-input"
-          placeholder="Search name, path, pid (press /)"
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              stepMatch(e.shiftKey ? -1 : 1);
-            } else if (e.key === "Escape") {
-              setQuery("");
-            }
-          }}
-        />
-        {query && (
-          <span className="process-tree__search-count">
-            {matchCount === 0 ? "0 matches" : `${String(matchIdx + 1)} / ${String(matchCount)}`}
-          </span>
-        )}
+      <div className="process-tree__viewtabs" role="tablist" aria-label="Host view">
+        <Link to={viewHref("graph")} className="process-tree__viewtab" aria-current={view === "graph" ? "page" : undefined}>Graph</Link>
+        <Link to={viewHref("timeline")} className="process-tree__viewtab" aria-current={view === "timeline" ? "page" : undefined}>Timeline</Link>
       </div>
+      {view === "graph" && (
+        <div className="process-tree__search">
+          <input
+            ref={searchInputRef}
+            type="search"
+            className="process-tree__search-input"
+            placeholder="Search name, path, pid (press /)"
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                stepMatch(e.shiftKey ? -1 : 1);
+              } else if (e.key === "Escape") {
+                setQuery("");
+              }
+            }}
+          />
+          {query && (
+            <span className="process-tree__search-count">
+              {matchCount === 0 ? "0 matches" : `${String(matchIdx + 1)} / ${String(matchCount)}`}
+            </span>
+          )}
+        </div>
+      )}
       <TimeRangeControl window={timeWindow} nowMs={nowMs} onChange={setTimeWindow} />
-      <label
-        className="process-tree__toggle"
-        title={showSystem ? "System processes shown" : "System processes hidden"}
-      >
-        <input
-          type="checkbox"
-          className="process-tree__toggle-input"
-          checked={showSystem}
-          onChange={(e) => { setShowSystem(e.target.checked); }}
-        />
-        <span className="process-tree__toggle-switch" aria-hidden="true" />
-        <span className="process-tree__toggle-label">Show system</span>
-      </label>
-      <label
-        className="process-tree__toggle"
-        title={flatten ? "Every process shown; repeated execs are not grouped" : "Repeated identical execs are grouped into ×N nodes"}
-      >
-        <input
-          type="checkbox"
-          className="process-tree__toggle-input"
-          checked={flatten}
-          onChange={(e) => { setFlatten(e.target.checked); }}
-        />
-        <span className="process-tree__toggle-switch" aria-hidden="true" />
-        <span className="process-tree__toggle-label">Flatten</span>
-      </label>
+      {view === "graph" && (
+        <>
+          <label
+            className="process-tree__toggle"
+            title={showSystem ? "System processes shown" : "System processes hidden"}
+          >
+            <input
+              type="checkbox"
+              className="process-tree__toggle-input"
+              checked={showSystem}
+              onChange={(e) => { setShowSystem(e.target.checked); }}
+            />
+            <span className="process-tree__toggle-switch" aria-hidden="true" />
+            <span className="process-tree__toggle-label">Show system</span>
+          </label>
+          <label
+            className="process-tree__toggle"
+            title={flatten ? "Every process shown; repeated execs are not grouped" : "Repeated identical execs are grouped into ×N nodes"}
+          >
+            <input
+              type="checkbox"
+              className="process-tree__toggle-input"
+              checked={flatten}
+              onChange={(e) => { setFlatten(e.target.checked); }}
+            />
+            <span className="process-tree__toggle-switch" aria-hidden="true" />
+            <span className="process-tree__toggle-label">Flatten</span>
+          </label>
+        </>
+      )}
       <button type="button" className="process-tree__action-btn" onClick={() => { setNowMs(Date.now()); }}>
         Refresh
       </button>
@@ -592,69 +633,77 @@ export function ProcessTreeView() {
         </div>
       )}
 
-      {loading && <p className="process-tree__status">Loading...</p>}
-      {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
-      {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph
-          (the generic chain toggle in the breadcrumb is hidden above). Focused: explain the empty graph + offer to widen.
-          Widened: a short note + collapse back. Exactly one button in either state. */}
-      {!loading && !error && isProcessOptionalAlert && (
-        <div className="process-tree__status process-tree__status--info">
-          {focusAlertChain ? (
-            <>
-              <p>This detection isn’t attributed to a single process. See the detail above for what fired and why.</p>
-              <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(false); }}>
-                Show surrounding host activity
-              </Button>
-            </>
-          ) : (
-            <>
-              <p>Showing the surrounding host activity for this detection.</p>
-              <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(true); }}>
-                Show alert detail only
-              </Button>
-            </>
-          )}
-        </div>
-      )}
-      {!loading && !error && !isProcessOptionalAlert && roots.length === 0 && (
-        <p className="process-tree__status">No processes in this time range.</p>
-      )}
-
+      {/* The activity histogram describes the active window and is shared by both views (a click narrows the window either way). */}
       <ActivityHistogram
         hostId={hostId}
         fromNs={bounds.fromNs}
         toNs={bounds.toNs}
         onSelectBucket={(fromNs, toNs) => { setTimeWindow({ kind: "absolute", fromNs, toNs }); }}
       />
-      <div className="process-tree__layout">
-        <div className="process-tree__canvas">
-          <svg ref={svgRef} />
-          {hoverTip && (
-            <div className="process-tree__tooltip" role="tooltip" style={{
-                left: Math.min(hoverTip.x + TOOLTIP_POINTER_OFFSET_PX, window.innerWidth - TOOLTIP_CLAMP_WIDTH_PX),
-                top: Math.min(hoverTip.y + TOOLTIP_POINTER_OFFSET_PX, window.innerHeight - TOOLTIP_CLAMP_HEIGHT_PX),
-              }}>
-              <div className="process-tree__tooltip-title">{hoverTip.tooltip.title}</div>
-              {hoverTip.tooltip.groupNote && <div className="process-tree__tooltip-group">{hoverTip.tooltip.groupNote}</div>}
-              <div className="process-tree__tooltip-cmdline">{hoverTip.tooltip.commandLine}</div>
-              {hoverTip.tooltip.verdictLabel && (
-                <div className={`process-tree__tooltip-verdict${hoverTip.tooltip.marked ? " process-tree__tooltip-verdict--marked" : ""}`}>
-                  {hoverTip.tooltip.verdictLabel}
-                </div>
+
+      {view === "timeline" ? (
+        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} />
+      ) : (
+        <>
+          {loading && <p className="process-tree__status">Loading...</p>}
+          {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
+          {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph
+              (the generic chain toggle in the breadcrumb is hidden above). Focused: explain the empty graph + offer to widen.
+              Widened: a short note + collapse back. Exactly one button in either state. */}
+          {!loading && !error && isProcessOptionalAlert && (
+            <div className="process-tree__status process-tree__status--info">
+              {focusAlertChain ? (
+                <>
+                  <p>This detection isn’t attributed to a single process. See the detail above for what fired and why.</p>
+                  <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(false); }}>
+                    Show surrounding host activity
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p>Showing the surrounding host activity for this detection.</p>
+                  <Button size="small" variant="inverse" onClick={() => { setFocusAlertChain(true); }}>
+                    Show alert detail only
+                  </Button>
+                </>
               )}
             </div>
           )}
-        </div>
-        {selectedNode && (
-          <aside className="process-tree__detail">
-            <ProcessDetail
-              hostId={hostId}
-              node={selectedNode}
-              onClose={() => { setSelectedNode(null); }}
-            />
-          </aside>
-        )}
-      </div>
+          {!loading && !error && !isProcessOptionalAlert && roots.length === 0 && (
+            <p className="process-tree__status">No processes in this time range.</p>
+          )}
+
+          <div className="process-tree__layout">
+            <div className="process-tree__canvas">
+              <svg ref={svgRef} />
+              {hoverTip && (
+                <div className="process-tree__tooltip" role="tooltip" style={{
+                    left: Math.min(hoverTip.x + TOOLTIP_POINTER_OFFSET_PX, window.innerWidth - TOOLTIP_CLAMP_WIDTH_PX),
+                    top: Math.min(hoverTip.y + TOOLTIP_POINTER_OFFSET_PX, window.innerHeight - TOOLTIP_CLAMP_HEIGHT_PX),
+                  }}>
+                  <div className="process-tree__tooltip-title">{hoverTip.tooltip.title}</div>
+                  {hoverTip.tooltip.groupNote && <div className="process-tree__tooltip-group">{hoverTip.tooltip.groupNote}</div>}
+                  <div className="process-tree__tooltip-cmdline">{hoverTip.tooltip.commandLine}</div>
+                  {hoverTip.tooltip.verdictLabel && (
+                    <div className={`process-tree__tooltip-verdict${hoverTip.tooltip.marked ? " process-tree__tooltip-verdict--marked" : ""}`}>
+                      {hoverTip.tooltip.verdictLabel}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            {selectedNode && (
+              <aside className="process-tree__detail">
+                <ProcessDetail
+                  hostId={hostId}
+                  node={selectedNode}
+                  onClose={() => { setSelectedNode(null); }}
+                />
+              </aside>
+            )}
+          </div>
+        </>
+      )}
     </>
   );
 }
@@ -757,6 +806,22 @@ function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null 
     }
   }
   return null;
+}
+
+// findNodeByPidAtTime resolves a timeline row's (pid, event time) to its process node: the node with that pid whose lifetime brackets
+// atNs (fork <= atNs, and no exit or exit >= atNs). This disambiguates pid reuse within the window by picking the generation live at
+// the event, the same (host, pid, at) correlation the process-detail network join relies on. Prefers the closest fork at/before the
+// anchor so an exact hit wins over a wider-lived ancestor sharing the pid.
+function findNodeByPidAtTime(nodes: ProcessNode[], pid: number, atNs: number): ProcessNode | null {
+  let best: ProcessNode | null = null;
+  const visit = (n: ProcessNode) => {
+    if (n.pid === pid && n.fork_time_ns <= atNs && (n.exit_time_ns === undefined || n.exit_time_ns >= atNs)) {
+      if (best === null || n.fork_time_ns > best.fork_time_ns) best = n;
+    }
+    for (const c of n.children ?? []) visit(c);
+  };
+  for (const n of nodes) visit(n);
+  return best;
 }
 
 interface D3Node {

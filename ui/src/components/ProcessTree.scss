@@ -146,6 +146,30 @@
 
   // Standalone toolbar action button (e.g. Refresh). Matches the height of the
   // search input and segmented range control so the toolbar row lines up.
+  &__viewtabs {
+    display: flex;
+    gap: $x-small;
+    margin-right: $small;
+  }
+
+  &__viewtab {
+    border-bottom: 2px solid transparent;
+    color: $ui-fleet-black-50;
+    font-size: $x-small;
+    padding: 4px 2px;
+    text-decoration: none;
+
+    &:hover {
+      color: $core-fleet-blue;
+    }
+
+    &[aria-current="page"] {
+      border-bottom-color: $core-vibrant-blue;
+      color: $core-fleet-blue;
+      font-weight: $bold;
+    }
+  }
+
   &__action-btn {
     appearance: none;
     padding: 6px 12px;
