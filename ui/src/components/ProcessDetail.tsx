@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   getProcessDetail,
   listAlertsByProcessId,
@@ -69,6 +69,15 @@ const VERDICT_BADGE: Record<SigningVerdictKind, BadgeVariant> = {
 };
 
 export function ProcessDetail({ hostId, node, onClose }: Props) {
+  const [searchParams] = useSearchParams();
+  // Show-in-timeline preserves the host page's other params (notably ?at= / ?alert=, which anchor the shared time window) so the
+  // graph->timeline pivot keeps the window; it only swaps the graph's ?process= selection for the timeline's view + pid emphasis.
+  const timelineParams = new URLSearchParams(searchParams);
+  timelineParams.set("view", "timeline");
+  timelineParams.set("pid", String(node.pid));
+  timelineParams.delete("process");
+  const timelineHref = `/hosts/${encodeURIComponent(hostId)}?${timelineParams.toString()}`;
+
   const [detail, setDetail] = useState<ProcessDetailType | null>(null);
   const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -198,6 +207,15 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
     <Card padding="medium" className="process-detail">
       <div className="process-detail__header">
         <h3 className="process-detail__title">Process detail</h3>
+        {/* Show in timeline (issue #583): switch to the host's flat event stream with this process's rows emphasized, the reverse of
+            a timeline row's "open in graph" pivot. */}
+        <Link
+          className="process-detail__timeline-link"
+          to={timelineHref}
+          title="Show this process's events in the timeline"
+        >
+          Show in timeline
+        </Link>
         <button
           type="button"
           className="process-detail__close"

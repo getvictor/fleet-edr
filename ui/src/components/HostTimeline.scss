@@ -1,0 +1,76 @@
+@use "../styles/var/colors" as *;
+
+.host-timeline {
+  &__filters {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin: 0 0 0.75rem;
+  }
+
+  &__types {
+    // Reset the <fieldset> chrome (used over role="group" for native grouping semantics): no border/legend box.
+    border: 0;
+    display: flex;
+    gap: 0.25rem;
+    margin: 0;
+    min-inline-size: 0;
+    padding: 0;
+  }
+
+  &__type {
+    background: transparent;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: 1rem;
+    color: $ui-fleet-black-50;
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0.2rem 0.7rem;
+
+    &--on {
+      background: $core-fleet-blue;
+      border-color: $core-fleet-blue;
+      color: $core-fleet-white;
+    }
+  }
+
+  &__text {
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: 0.25rem;
+    flex: 1 1 16rem;
+    font-size: 0.85rem;
+    padding: 0.35rem 0.6rem;
+  }
+
+  &__mono {
+    font-family: ui-monospace, sfmono-regular, Menlo, monospace;
+    font-size: 0.85rem;
+  }
+
+  &__detail {
+    max-width: 40rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__pivot {
+    color: $core-vibrant-blue;
+    font-family: inherit;
+    font-size: 0.75rem;
+    margin-left: 0.5rem;
+    text-decoration: none;
+    white-space: nowrap;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  // The graph-node -> timeline pivot emphasizes the selected process's rows without hiding the surrounding stream.
+  &__row--emphasis td {
+    background: $ui-fleet-blue-10;
+    box-shadow: inset 3px 0 0 $core-vibrant-blue;
+  }
+}

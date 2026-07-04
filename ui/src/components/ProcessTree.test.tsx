@@ -336,3 +336,34 @@ describe("ProcessTreeView alert-entry window", () => {
     expect(toNs - fromNs).toBe(DAY_NS);
   });
 });
+
+describe("ProcessTreeView graph/timeline views (issue #583)", () => {
+  // spec:web-ui/host-event-timeline-view/the-graph-and-timeline-share-one-time-window
+  it("switches to the timeline over the same window the graph used", async () => {
+    const treeSpy = vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    const tlSpy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+    renderTree("");
+    await waitFor(() => { expect(treeSpy).toHaveBeenCalled(); });
+    const graphFromNs = treeSpy.mock.calls[0][1]; // getProcessTree(hostId, fromNs, toNs, ...)
+
+    fireEvent.click(screen.getByRole("link", { name: "Timeline" }));
+    await waitFor(() => { expect(tlSpy).toHaveBeenCalled(); });
+    // The timeline queries the very window the graph was showing (shared time source).
+    expect(tlSpy.mock.calls[0][1]).toMatchObject({ from: String(graphFromNs) });
+  });
+
+  // spec:web-ui/graph-and-timeline-cross-navigation/a-timeline-row-opens-its-process-in-the-graph
+  it("resolves ?pid=&at= to the owning node and opens its detail", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    vi.spyOn(api, "getProcessDetail").mockResolvedValue({
+      process: { ...process(2, 200, 100, "/usr/local/bin/fleet-edr-agent") },
+      network_connections: [],
+      dns_queries: [],
+    });
+    // pid 200 is node 2 (fork_time_ns=1, no exit); any at within the window resolves to it.
+    renderTree("?view=graph&pid=200&at=1750248000000");
+    expect(await screen.findByText("Process detail")).toBeInTheDocument();
+    // The detail panel is for the pid-200 process, not the root.
+    expect(await screen.findByText("Show in timeline")).toBeInTheDocument();
+  });
+});

@@ -263,3 +263,27 @@ describe("ProcessDetail kill action", () => {
     expect(screen.queryByRole("button", { name: /kill process/i })).not.toBeInTheDocument();
   });
 });
+
+// spec:web-ui/graph-and-timeline-cross-navigation/a-process-node-links-to-its-timeline-rows
+describe("ProcessDetail show-in-timeline pivot (issue #583)", () => {
+  it("links to the host timeline emphasizing this process's pid", async () => {
+    render(<ProcessDetail hostId="host/A" node={makeNode({ pid: 1234 })} onClose={vi.fn()} />);
+    const link = await screen.findByRole("link", { name: "Show in timeline" });
+    expect(link).toHaveAttribute("href", "/hosts/host%2FA?view=timeline&pid=1234");
+  });
+
+  it("preserves the window/alert params (?at=, ?alert=) and drops the graph ?process= selection", async () => {
+    rtlRender(
+      <MemoryRouter initialEntries={["/hosts/h1?at=123&alert=7&process=42"]}>
+        <ProcessDetail hostId="h1" node={makeNode({ pid: 1234 })} onClose={vi.fn()} />
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: "Show in timeline" });
+    const href = link.getAttribute("href") ?? "";
+    expect(href).toContain("at=123"); // shared time-window anchor preserved
+    expect(href).toContain("alert=7");
+    expect(href).toContain("view=timeline");
+    expect(href).toContain("pid=1234");
+    expect(href).not.toContain("process=42"); // graph selection is irrelevant in the timeline
+  });
+});

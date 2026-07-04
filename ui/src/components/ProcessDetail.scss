@@ -20,6 +20,18 @@
     color: $core-fleet-black;
   }
 
+  &__timeline-link {
+    color: $core-vibrant-blue;
+    font-size: $xx-small;
+    margin-left: auto; // push the link + close control to the right, leaving the title on the left
+    margin-right: $pad-small;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
   &__close {
     background: none;
     border: none;

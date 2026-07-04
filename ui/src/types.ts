@@ -155,7 +155,19 @@ export interface EventRecord {
   host_id: string;
   timestamp_ns: number;
   event_type: string;
-  payload: NetworkConnectPayload | DNSQueryPayload;
+  payload: NetworkConnectPayload | DNSQueryPayload | ExecPayload;
+}
+
+// ExecPayload is the payload of an exec event, surfaced in the host timeline (issue #583). Every timeline payload shares pid and an
+// optional path, so the union members can be read for those two without narrowing; exec-specific fields (args, cwd) need a cast.
+export interface ExecPayload {
+  pid: number;
+  ppid?: number;
+  path?: string;
+  args?: string[];
+  cwd?: string;
+  uid?: number;
+  gid?: number;
 }
 
 export interface NetworkConnectPayload {
