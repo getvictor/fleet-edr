@@ -367,3 +367,19 @@ describe("ProcessTreeView graph/timeline views (issue #583)", () => {
     expect(await screen.findByText("Show in timeline")).toBeInTheDocument();
   });
 });
+
+describe("ProcessTreeView alert technique mapping (issue #585)", () => {
+  it("fetches open + acknowledged alerts and marks the alerted node without crashing on techniques", async () => {
+    const alert = {
+      id: 3, host_id: "h1", rule_id: "launchd_persistence", source: "detection", severity: "high",
+      title: "Persistence", description: "", techniques: ["T1543.004"], process_id: 2, status: "open",
+      created_at: "2026-07-04T00:00:00Z", updated_at: "2026-07-04T00:00:00Z",
+    };
+    const spy = vi.spyOn(api, "listAlerts").mockImplementation((p) => Promise.resolve(p?.status === "open" ? [alert] : []));
+    renderTree("");
+    // Both statuses are fetched (open + acknowledged) to build the technique-by-node map.
+    await waitFor(() => { expect(spy).toHaveBeenCalledTimes(2); });
+    // The forest renders with the alerted node (id 2) present; the technique map building path ran without error.
+    expect(await screen.findByText(/fleet-edr-agent/)).toBeInTheDocument();
+  });
+});

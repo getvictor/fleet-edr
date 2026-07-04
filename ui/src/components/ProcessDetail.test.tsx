@@ -214,6 +214,14 @@ describe("ProcessDetail alerts", () => {
     await waitFor(() => { expect(api.updateAlertStatus).toHaveBeenCalledWith(7, "acknowledged"); });
   });
 
+  // spec:web-ui/inline-mitre-technique-tags/the-detail-panel-links-alert-techniques-to-the-rule-page
+  it("shows each alert's technique ids as badges linking to the rule doc page", async () => {
+    vi.mocked(api.listAlertsByProcessId).mockResolvedValue([makeAlert({ rule_id: "shell_from_office", techniques: ["T1059.004"] })]);
+    render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
+    const link = await screen.findByRole("link", { name: "T1059.004" });
+    expect(link).toHaveAttribute("href", "/rules/shell_from_office");
+  });
+
   it("offers a reopen action for a resolved alert", async () => {
     vi.mocked(api.listAlertsByProcessId).mockResolvedValue([makeAlert({ status: "resolved" })]);
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);

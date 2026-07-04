@@ -33,6 +33,15 @@ describe("buildNodeTooltip", () => {
     expect(tip.groupNote).toBeUndefined();
   });
 
+  // spec:web-ui/inline-mitre-technique-tags/an-alerted-node-tooltip-shows-its-techniques
+  it("carries the node's alert technique ids when provided, and none otherwise", () => {
+    const withTech = buildNodeTooltip(node({}), ["T1059.004", "T1543.004"]);
+    expect(withTech.techniques).toEqual(["T1059.004", "T1543.004"]);
+    // A node with no alert (no techniques passed, or an empty list) shows no tags.
+    expect(buildNodeTooltip(node({})).techniques).toBeUndefined();
+    expect(buildNodeTooltip(node({}), []).techniques).toBeUndefined();
+  });
+
   it("falls back to the path when no args were captured and marks an unsigned exec", () => {
     const tip = buildNodeTooltip(node({ args: undefined, code_signing: undefined }));
     expect(tip.commandLine).toBe("/usr/local/bin/tool");

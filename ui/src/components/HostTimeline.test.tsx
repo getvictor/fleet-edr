@@ -138,6 +138,42 @@ describe("HostTimeline", () => {
     await waitFor(() => { expect(screen.getByRole("searchbox")).toHaveValue("second"); });
   });
 
+  // spec:web-ui/inline-mitre-technique-tags/a-timeline-row-for-a-triggering-event-shows-the-technique
+  it("tags a row whose event triggered an alert with the technique, linked to the rule page", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({
+      events: [execEvent("evt-fired", 42, "/bin/sh"), execEvent("evt-quiet", 43, "/bin/ls")],
+      total_matched: 2,
+    });
+    const alert = {
+      id: 9, host_id: "H1", rule_id: "shell_from_office", source: "detection", severity: "high",
+      title: "Shell from Office", description: "", techniques: ["T1059.004"], process_id: 1, status: "open",
+      created_at: "2026-07-04T00:00:00Z", updated_at: "2026-07-04T00:00:00Z",
+    };
+    vi.spyOn(api, "listAlerts").mockImplementation((p) => Promise.resolve(p?.status === "open" ? [alert] : []));
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({ ...alert, event_ids: ["evt-fired"] });
+
+    renderTimeline();
+    // The triggering event's row carries the technique linked to the rule; the quiet event's row does not.
+    const link = await screen.findByRole("link", { name: "T1059.004" });
+    expect(link).toHaveAttribute("href", "/rules/shell_from_office");
+    expect(screen.getAllByRole("link", { name: "T1059.004" })).toHaveLength(1);
+  });
+
+  it("shows the techniques of every alert that a single event triggered", async () => {
+    vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [execEvent("evt-shared", 42, "/bin/sh")], total_matched: 1 });
+    const base = { host_id: "H1", source: "detection", severity: "high", description: "", process_id: 1, status: "open", created_at: "2026-07-04T00:00:00Z", updated_at: "2026-07-04T00:00:00Z" };
+    const a1 = { ...base, id: 1, rule_id: "shell_from_office", title: "A1", techniques: ["T1059.004"] };
+    const a2 = { ...base, id: 2, rule_id: "suspicious_exec", title: "A2", techniques: ["T1105"] };
+    vi.spyOn(api, "listAlerts").mockImplementation((p) => Promise.resolve(p?.status === "open" ? [a1, a2] : []));
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id) =>
+      Promise.resolve(id === 1 ? { ...a1, event_ids: ["evt-shared"] } : { ...a2, event_ids: ["evt-shared"] }),
+    );
+    renderTimeline();
+    // Both alerts' techniques appear on the one shared event's row, each linked to its own rule (no overwrite by the last alert).
+    expect(await screen.findByRole("link", { name: "T1059.004" })).toHaveAttribute("href", "/rules/shell_from_office");
+    expect(screen.getByRole("link", { name: "T1105" })).toHaveAttribute("href", "/rules/suspicious_exec");
+  });
+
   it("shows the empty state when the window has no events", async () => {
     vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
     renderTimeline();

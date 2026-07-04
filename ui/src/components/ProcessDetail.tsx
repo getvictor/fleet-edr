@@ -20,6 +20,7 @@ import { ReauthModal } from "./ReauthModal";
 import { Card } from "./ui/Card";
 import { CopyButton } from "./ui/CopyButton";
 import { Button } from "./ui/Button";
+import { TechniqueTags } from "./TechniqueTags";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 import { deriveSigningVerdict, type SigningVerdictKind } from "../signing";
@@ -402,6 +403,8 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
               </div>
               <div className="process-detail__alert-title">{a.title}</div>
               <div className="process-detail__alert-desc">{a.description}</div>
+              {/* Inline MITRE technique tags (issue #585), linked to the rule doc page so the mapping is one click from the panel. */}
+              <TechniqueTags techniques={a.techniques} ruleId={a.rule_id} className="process-detail__alert-techniques" />
               <div className="process-detail__alert-actions">
                 {a.status === "open" && (
                   <Button
