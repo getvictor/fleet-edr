@@ -102,6 +102,15 @@ export interface ProcessSearchResult {
   total_matched: number;
 }
 
+// EventSearchResult is the response from the fleet-wide connection and DNS search endpoints (GET /api/search/connections and
+// /api/search/dns, issue #582): a page of matching events across all hosts, the opaque keyset cursor for the next page (absent on the
+// last), and the full match count independent of the page. Each event carries the visibility Event shape (see EventRecord).
+export interface EventSearchResult {
+  events: EventRecord[];
+  next_cursor?: string;
+  total_matched: number;
+}
+
 export interface ProcessNode extends Process {
   children?: ProcessNode[];
   network_connections?: EventRecord[];

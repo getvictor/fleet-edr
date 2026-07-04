@@ -4,6 +4,8 @@ import {
   getHostHealth,
   getProcessTree,
   createAppControlRule,
+  searchProcesses,
+  searchEvents,
   setForbiddenHandler,
   setUnauthorizedHandler,
   Unauthorized401Error,
@@ -150,6 +152,85 @@ describe("listAlerts query-string composition", () => {
     const [target] = fetchMock.mock.calls[0] as [URL];
     const url = target.toString();
     expect(url).not.toContain("source=");
+  });
+});
+
+describe("searchProcesses query-string composition", () => {
+  // SearchPage and its component tests mock api.searchProcesses via vi.spyOn, so the real URLSearchParams building inside
+  // searchProcesses (api.ts) never runs there. These exercise the real function against a stubbed fetch, mirroring the
+  // listAlerts composition tests above, so the process-search endpoint's query shape stays covered and pinned.
+  it("includes every set filter plus the cursor and omits the unset ones", async () => {
+    const fetchMock = stubFetch({ rows: [], total_matched: 0 });
+    await searchProcesses(
+      { host_id: "host-a", path: "/usr/bin/grep", hash: "abc123", uid: "0", signing: "unsigned", from: "1000", to: "2000" },
+      "CURSOR_TOKEN",
+    );
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/search/processes?");
+    expect(url).toContain("host_id=host-a");
+    expect(url).toContain("path=%2Fusr%2Fbin%2Fgrep");
+    expect(url).toContain("hash=abc123");
+    expect(url).toContain("uid=0");
+    expect(url).toContain("signing=unsigned");
+    expect(url).toContain("from=1000");
+    expect(url).toContain("to=2000");
+    expect(url).toContain("cursor=CURSOR_TOKEN");
+  });
+
+  it("emits no query string when the filter is empty and no cursor is given", async () => {
+    const fetchMock = stubFetch({ rows: [], total_matched: 0 });
+    await searchProcesses({});
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/search/processes");
+    expect(url).not.toContain("?");
+  });
+
+  it("omits empty-string filter values so a blank chip does not narrow the query", async () => {
+    const fetchMock = stubFetch({ rows: [], total_matched: 0 });
+    await searchProcesses({ path: "", uid: "0" });
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).not.toContain("path=");
+    expect(url).toContain("uid=0");
+  });
+});
+
+describe("searchEvents query-string composition", () => {
+  // The EventSearch component mocks api.searchEvents via vi.spyOn, so the real path/param building never runs there. These pin the
+  // two endpoints' shapes: connections carries the artifact as remote_address, dns as query_name, both under /search/<mode>.
+  it("hits the connections endpoint carrying the remote address, host, window, and cursor", async () => {
+    const fetchMock = stubFetch({ events: [], total_matched: 0 });
+    await searchEvents("connections", { value: "1.2.3.4", host_id: "host-a", from: "1000", to: "2000" }, "CURSOR");
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/search/connections?");
+    expect(url).toContain("remote_address=1.2.3.4");
+    expect(url).toContain("host_id=host-a");
+    expect(url).toContain("from=1000");
+    expect(url).toContain("to=2000");
+    expect(url).toContain("cursor=CURSOR");
+    expect(url).not.toContain("query_name=");
+  });
+
+  it("hits the dns endpoint carrying the domain as query_name", async () => {
+    const fetchMock = stubFetch({ events: [], total_matched: 0 });
+    await searchEvents("dns", { value: "evil.example.com" });
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/search/dns?query_name=evil.example.com");
+    expect(url).not.toContain("remote_address=");
+  });
+
+  it("omits host, window, and cursor when only the artifact value is given", async () => {
+    const fetchMock = stubFetch({ events: [], total_matched: 0 });
+    await searchEvents("connections", { value: "1.2.3.4" });
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("remote_address=1.2.3.4");
+    expect(url).not.toContain("host_id=");
+    expect(url).not.toContain("cursor=");
   });
 });
 

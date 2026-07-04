@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render as rtlRender, screen, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { NetworkConnections } from "./NetworkConnections";
 import type { EventRecord, NetworkConnectPayload, DNSQueryPayload } from "../types";
+
+// NetworkConnections now renders "search fleet" pivot Links, so every render needs a Router context.
+function render(ui: ReactNode) {
+  return rtlRender(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 // NetworkConnections is pure presentation over two event lists. These tests pin the
 // empty state, the connection-grouping (identical remote+port+proto+direction collapse
@@ -153,5 +160,31 @@ describe("NetworkConnections DNS table", () => {
     );
     expect(screen.getByText(/network connections/i)).toBeInTheDocument();
     expect(screen.getByText(/dns queries/i)).toBeInTheDocument();
+  });
+});
+
+describe("NetworkConnections search-fleet pivots", () => {
+  // spec:web-ui/network-artifact-search-pivots/pivoting-from-a-remote-address-searches-connections-fleet-wide
+  it("links a connection's remote address to the fleet-wide connection search", () => {
+    render(
+      <NetworkConnections
+        connections={[connEvent({ id: "a", ts: 1, remote_address: "203.0.113.7", remote_port: 8443 })]}
+        dnsQueries={null}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Search all hosts for this address" });
+    expect(link).toHaveAttribute("href", "/search?mode=connections&remote_address=203.0.113.7");
+  });
+
+  // spec:web-ui/network-artifact-search-pivots/pivoting-from-a-dns-query-searches-lookups-fleet-wide
+  it("links a DNS query name to the fleet-wide DNS search", () => {
+    render(
+      <NetworkConnections
+        connections={null}
+        dnsQueries={[dnsEvent({ id: "d1", ts: 1, query_name: "evil.example.com" })]}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Search all hosts for this domain" });
+    expect(link).toHaveAttribute("href", "/search?mode=dns&query_name=evil.example.com");
   });
 });

@@ -11,6 +11,7 @@ import type {
   HostSummary,
   HostDetail,
   ProcessSearchResult,
+  EventSearchResult,
   HostHealth,
   TreeResponse,
   ProcessDetail,
@@ -372,6 +373,37 @@ export async function searchProcesses(filter: ProcessSearchFilter, cursor?: stri
   set("cursor", cursor);
   const qs = query.toString();
   return fetchJSON<ProcessSearchResult>(`/search/processes${qs ? `?${qs}` : ""}`);
+}
+
+// EventSearchMode picks which fleet-wide artifact search to run: "connections" hits GET /api/search/connections (matching a remote
+// address), "dns" hits GET /api/search/dns (matching a query name). The two endpoints share a query shape and differ only in the path
+// segment and the parameter carrying the artifact value, mirroring the server's shared serveEventSearch.
+export type EventSearchMode = "connections" | "dns";
+
+// EventSearchFilter is the connection/DNS search input: value is the required artifact (a remote address for connections, a domain for
+// dns) the endpoint 400s without; host_id optionally narrows to one host; from/to bound ingest time (ns). Empty strings are omitted.
+export interface EventSearchFilter {
+  value: string;
+  host_id?: string;
+  from?: string;
+  to?: string;
+}
+
+// The query-parameter name each mode uses to carry the artifact value, matching the server handler (remote_address / query_name).
+export function eventArtifactParam(mode: EventSearchMode): string {
+  return mode === "connections" ? "remote_address" : "query_name";
+}
+
+export async function searchEvents(mode: EventSearchMode, filter: EventSearchFilter, cursor?: string): Promise<EventSearchResult> {
+  const query = new URLSearchParams();
+  const set = (key: string, value: string | undefined) => { if (value) query.set(key, value); };
+  set(eventArtifactParam(mode), filter.value);
+  set("host_id", filter.host_id);
+  set("from", filter.from);
+  set("to", filter.to);
+  set("cursor", cursor);
+  const qs = query.toString();
+  return fetchJSON<EventSearchResult>(`/search/${mode}${qs ? `?${qs}` : ""}`);
 }
 
 export async function listAlerts(params?: {
