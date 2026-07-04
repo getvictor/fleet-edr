@@ -11,12 +11,16 @@ import (
 	"github.com/fleetdm/edr/internal/keyring"
 )
 
-// Default timing knobs. The ready window covers MySQL warmup + migrations on first boot; the verify window covers the processor
-// interval plus enroll/ingest round-trips. defaultHeadroom is the extra budget the overall run context allows beyond
-// ready+verify for the enroll/ingest round-trips themselves.
+// Default timing knobs. The ready window covers MySQL warmup + migrations on first boot. The verify window must cover the SLOWEST
+// rule's async materialisation: dns_c2_beacon is a cross-stream correlation (it joins a network_connect to a preceding dns_query and
+// resolves the process on a skew-tolerant retry), so it fires a processor cycle or two after ingest and under CI load occasionally
+// exceeded a 60s window (the 2026-07-04 demo-nightly flake: 5 detection alerts had fired but dns_c2_beacon had not). verify returns as
+// soon as the predicate holds, so the happy path is unaffected; the larger ceiling is only spent when a rule is genuinely slow or
+// never fires. defaultHeadroom is the extra budget the overall run context (ready+verify+headroom) allows for the enroll/ingest
+// round-trips themselves.
 const (
 	defaultReadyTimeout  = 90 * time.Second
-	defaultVerifyTimeout = 60 * time.Second
+	defaultVerifyTimeout = 120 * time.Second
 	defaultPollInterval  = 500 * time.Millisecond
 	defaultHeadroom      = 30 * time.Second
 )
