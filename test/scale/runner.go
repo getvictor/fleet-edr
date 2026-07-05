@@ -295,31 +295,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		PassP99:   opts.PassP99,
 		PerHost:   make([]HostReport, opts.HostCount),
 	}
-	hosts := make([]*hostState, opts.HostCount)
-	quietCutoff := int(float64(opts.HostCount) * opts.QuietRatio)
-	for i := range hosts {
-		st := &hostState{
-			index:  i,
-			hostID: uuid.NewString(),
-		}
-		if i < quietCutoff {
-			st.scenario = quiet
-			st.scenarioName = opts.QuietScenarioPath
-			st.gap = opts.QuietIterationGap
-			rep.QuietHostCount++
-		} else {
-			st.scenario = active[i%len(active)]
-			st.scenarioName = opts.ActiveScenarioPaths[i%len(active)]
-			st.gap = opts.ActiveIterationGap
-			rep.ActiveHostCount++
-		}
-		// Pre-allocate the latency slice to the expected observation count (Duration / gap, padded by 2 for jitter +
-		// startup variance). Grow-by-double append in the hot loop is otherwise the largest allocator in a long run and
-		// can skew percentile measurements on GC-busy CI runners.
-		expectedObs := int(opts.Duration/st.gap) + 2
-		st.latencies = make([]time.Duration, 0, expectedObs)
-		hosts[i] = st
-	}
+	hosts := makeHostStates(opts, quiet, active, &rep)
 
 	runCtx, cancel := context.WithTimeout(ctx, opts.Duration)
 	defer cancel()
@@ -355,6 +331,38 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		aggregateServerBacklog(&rep, backlog.snapshot(), opts)
 	}
 	return rep, ctx.Err()
+}
+
+// makeHostStates builds the per-host state slice: it assigns each host the quiet or an active scenario by the quietCutoff split,
+// pre-sizes its latency buffer, and tallies the quiet/active host counts into rep. Extracted from Run so the entry function stays
+// under Sonar S3776's cognitive-complexity budget.
+func makeHostStates(opts Options, quiet *fakeagent.Scenario, active []*fakeagent.Scenario, rep *Report) []*hostState {
+	hosts := make([]*hostState, opts.HostCount)
+	quietCutoff := int(float64(opts.HostCount) * opts.QuietRatio)
+	for i := range hosts {
+		st := &hostState{
+			index:  i,
+			hostID: uuid.NewString(),
+		}
+		if i < quietCutoff {
+			st.scenario = quiet
+			st.scenarioName = opts.QuietScenarioPath
+			st.gap = opts.QuietIterationGap
+			rep.QuietHostCount++
+		} else {
+			st.scenario = active[i%len(active)]
+			st.scenarioName = opts.ActiveScenarioPaths[i%len(active)]
+			st.gap = opts.ActiveIterationGap
+			rep.ActiveHostCount++
+		}
+		// Pre-allocate the latency slice to the expected observation count (Duration / gap, padded by 2 for jitter +
+		// startup variance). Grow-by-double append in the hot loop is otherwise the largest allocator in a long run and
+		// can skew percentile measurements on GC-busy CI runners.
+		expectedObs := int(opts.Duration/st.gap) + 2
+		st.latencies = make([]time.Duration, 0, expectedObs)
+		hosts[i] = st
+	}
+	return hosts
 }
 
 // hostState is the per-goroutine state: scenario + RNG + observation slice. Latencies accumulate locally to avoid lock contention;
@@ -425,15 +433,7 @@ func (h *hostState) run(
 			return
 		}
 
-		h.mu.Lock()
-		if err != nil {
-			h.errorCount++
-			h.lastErr = err.Error()
-		} else {
-			h.latencies = append(h.latencies, latency)
-			h.postedCount++
-		}
-		h.mu.Unlock()
+		h.recordResult(latency, err)
 
 		// Jittered gap: gap * [jitterFloor, jitterFloor+jitterRange]. De-synchronises hosts so the server does not see a
 		// heartbeat-shaped fan-in spike.
@@ -441,6 +441,21 @@ func (h *hostState) run(
 		if err := sleepCtx(ctx, jittered); err != nil {
 			return
 		}
+	}
+}
+
+// recordResult folds one PostDirect outcome into the host's locked counters: a non-nil err bumps errorCount and records lastErr,
+// otherwise the observed latency is appended and postedCount incremented. Extracted from the run loop so the hot-loop body stays
+// under the cognitive-complexity budget.
+func (h *hostState) recordResult(latency time.Duration, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err != nil {
+		h.errorCount++
+		h.lastErr = err.Error()
+	} else {
+		h.latencies = append(h.latencies, latency)
+		h.postedCount++
 	}
 }
 
@@ -454,6 +469,24 @@ func (h *hostState) recordErr(msg string) {
 // aggregate folds per-host latencies into the Report's percentile fields and computes pass/fail. Latencies are concatenated then
 // sorted once; with ~100 hosts and ~hundreds of observations each, an O(n log n) sort over the union is well under a millisecond.
 func aggregate(rep *Report, hosts []*hostState, opts Options) {
+	all := foldHostLatencies(rep, hosts)
+	slices.Sort(all)
+	rep.LatencyP50 = percentileSorted(all, percentileP50)
+	rep.LatencyP95 = percentileSorted(all, percentileP95)
+	rep.LatencyP99 = percentileSorted(all, percentileP99)
+	if len(all) > 0 {
+		rep.LatencyMax = all[len(all)-1]
+	}
+	if rep.Duration > 0 {
+		rep.ObservationsPerSec = float64(rep.ObservationCount) / rep.Duration.Seconds()
+	}
+	evaluatePassGate(rep, opts)
+}
+
+// foldHostLatencies writes each host's HostReport into rep, accumulates the aggregate observation + error counts, and returns the
+// concatenation of every host's per-observation latencies (pre-sized to the exact total). Extracted from aggregate so the caller
+// stays under the cognitive-complexity budget.
+func foldHostLatencies(rep *Report, hosts []*hostState) []time.Duration {
 	// Pre-size the aggregate latency slice to the exact total observation count. The per-host postedCount is already known
 	// here so the previous `len(hosts)*16` guess is replaced with the precise value; in a 100-host x 5-min x 1s lane the
 	// guess was ~20x low and forced grow-by-double reallocations.
@@ -481,16 +514,13 @@ func aggregate(rep *Report, hosts []*hostState, opts Options) {
 		all = append(all, h.latencies...)
 		h.mu.Unlock()
 	}
-	slices.Sort(all)
-	rep.LatencyP50 = percentileSorted(all, percentileP50)
-	rep.LatencyP95 = percentileSorted(all, percentileP95)
-	rep.LatencyP99 = percentileSorted(all, percentileP99)
-	if len(all) > 0 {
-		rep.LatencyMax = all[len(all)-1]
-	}
-	if rep.Duration > 0 {
-		rep.ObservationsPerSec = float64(rep.ObservationCount) / rep.Duration.Seconds()
-	}
+	return all
+}
+
+// evaluatePassGate sets rep.Pass and appends the human-readable fail reasons for the three direct-mode pass criteria: zero errors,
+// p99 within budget, and a non-empty observation set. Extracted from aggregate so the caller stays under the cognitive-complexity
+// budget.
+func evaluatePassGate(rep *Report, opts Options) {
 	rep.Pass = true
 	if rep.ErrorCount > 0 {
 		rep.Pass = false
@@ -674,14 +704,8 @@ func validateOptions(opts Options) (Options, error) {
 	default:
 		return opts, fmt.Errorf("scale: invalid Mode %q (allowed: %q, %q)", opts.Mode, ModeDirect, ModeHeadless)
 	}
-	if opts.QuietRatio < 0 || opts.QuietRatio > 1 {
-		return opts, fmt.Errorf("scale: QuietRatio must be in [0,1], got %v", opts.QuietRatio)
-	}
-	if opts.QuietRatio > 0 && opts.QuietScenarioPath == "" {
-		return opts, errors.New("scale: QuietScenarioPath is required when QuietRatio > 0")
-	}
-	if opts.QuietRatio < 1 && len(opts.ActiveScenarioPaths) == 0 {
-		return opts, errors.New("scale: ActiveScenarioPaths is required when QuietRatio < 1")
+	if err := validateScenarioOptions(opts); err != nil {
+		return opts, err
 	}
 	if opts.Mode == ModeHeadless && opts.QueueDepthPollInterval <= 0 {
 		// defaultOptions resolved zero -> defaultQueueDepthPollInterval, but a negative value passed in by a misconfigured
@@ -689,17 +713,42 @@ func validateOptions(opts Options) (Options, error) {
 		return opts, fmt.Errorf("scale: QueueDepthPollInterval must be > 0 in headless mode, got %s",
 			opts.QueueDepthPollInterval)
 	}
+	if err := validateBacklogOptions(opts); err != nil {
+		return opts, err
+	}
+	return opts, nil
+}
+
+// validateScenarioOptions checks the QuietRatio range and the scenario-path requirements that follow from it. Extracted from
+// validateOptions so the entry validator stays under the cognitive-complexity budget; the checks run in their original order.
+func validateScenarioOptions(opts Options) error {
+	if opts.QuietRatio < 0 || opts.QuietRatio > 1 {
+		return fmt.Errorf("scale: QuietRatio must be in [0,1], got %v", opts.QuietRatio)
+	}
+	if opts.QuietRatio > 0 && opts.QuietScenarioPath == "" {
+		return errors.New("scale: QuietScenarioPath is required when QuietRatio > 0")
+	}
+	if opts.QuietRatio < 1 && len(opts.ActiveScenarioPaths) == 0 {
+		return errors.New("scale: ActiveScenarioPaths is required when QuietRatio < 1")
+	}
+	return nil
+}
+
+// validateBacklogOptions checks the two server-backlog misconfigurations: a ceiling with no DSN to sample, and a DSN in headless
+// mode where the sampler does not run. Extracted from validateOptions so the entry validator stays under the cognitive-complexity
+// budget; the checks run in their original order.
+func validateBacklogOptions(opts Options) error {
 	// A server-backlog ceiling with no DSN to sample is a silent no-op: the sampler never starts, so the gate the operator
 	// asked for is never evaluated and the run reports a false pass. Reject it (Copilot/Gemini/CodeRabbit #536).
 	if opts.PassMaxServerBacklog > 0 && opts.BacklogDSN == "" {
-		return opts, errors.New("scale: PassMaxServerBacklog requires BacklogDSN to be set")
+		return errors.New("scale: PassMaxServerBacklog requires BacklogDSN to be set")
 	}
 	// The server-backlog poll is only wired into the direct-mode Run; runHeadless ignores it. Reject the flags in headless
 	// mode rather than silently skipping the poll, so --backlog-dsn in a headless run fails loudly instead of no-op'ing.
 	if opts.Mode == ModeHeadless && opts.BacklogDSN != "" {
-		return opts, errors.New("scale: BacklogDSN is only supported in direct mode, not headless")
+		return errors.New("scale: BacklogDSN is only supported in direct mode, not headless")
 	}
-	return opts, nil
+	return nil
 }
 
 func defaultOptions(o Options) Options {
