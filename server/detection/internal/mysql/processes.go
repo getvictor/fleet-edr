@@ -177,14 +177,25 @@ func (s *Store) UpdateProcessExec(ctx context.Context, u ProcessExecUpdate) erro
 	return err
 }
 
-// UpdateProcessExit sets the exit timestamp, code, and reason for a running process. exitIngestedAtNs is the server-stamped ingest
+// ProcessExitUpdate carries the exit metadata stamped onto a running process row. Grouped as a struct so callers don't pass an
+// 8-parameter positional list (SonarCloud go:S107).
+type ProcessExitUpdate struct {
+	HostID           string
+	PID              int
+	ExitTimeNs       int64
+	ExitIngestedAtNs int64
+	ExitCode         int
+	Reason           string
+	ExitEventID      string
+}
+
+// UpdateProcessExit sets the exit timestamp, code, and reason for a running process. ExitIngestedAtNs is the server-stamped ingest
 // time of the originating exit event and anchors the upper bound of correlation queries against a server-controlled clock (issue #7).
-// reason distinguishes kernel-observed exits (ExitReasonEvent: the default) from agent-side reconciled ones (ExitReasonHostReconciled:
+// Reason distinguishes kernel-observed exits (ExitReasonEvent: the default) from agent-side reconciled ones (ExitReasonHostReconciled:
 // issue #6 client half) so the UI can render the latter with a "reconciled" badge instead of pretending it was a clean observed exit.
 // An empty reason normalises to ExitReasonEvent.
-func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
-	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason, exitEventID string,
-) (int64, error) {
+func (s *Store) UpdateProcessExit(ctx context.Context, u ProcessExitUpdate) (int64, error) {
+	reason := u.Reason
 	if reason == "" {
 		reason = api.ExitReasonEvent
 	}
@@ -196,7 +207,7 @@ func (s *Store) UpdateProcessExit(ctx context.Context, hostID string, pid int,
 		                    exit_reason = ?, exit_code = ?, exit_event_id = ?
 		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL AND fork_time_ns <= ?
 		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
-		exitTimeNs, exitIngestedAtNs, reason, exitCode, exitEventID, hostID, pid, exitTimeNs,
+		u.ExitTimeNs, u.ExitIngestedAtNs, reason, u.ExitCode, u.ExitEventID, u.HostID, u.PID, u.ExitTimeNs,
 	)
 	if err != nil {
 		return 0, err

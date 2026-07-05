@@ -136,21 +136,25 @@ var (
 // developer-id, then the platform flag, then a signing-id-only residual is signed. The classes are mutually exclusive by
 // construction, so the server filter partitions rows the same way the UI labels a node. The unsigned class additionally requires an
 // exec, since a fork-only row has no signature to judge (matching the UI's fork-only suppression).
+// csHasBlock is the shared prefix of every signer-class predicate that requires a present code-signing block; extracted so the literal
+// is defined once (SonarCloud go:S1192).
+const csHasBlock = "(code_signing IS NOT NULL AND "
+
 func signingClassSQL(class string) (string, bool) {
 	switch class {
 	case "unsigned":
 		return "(exec_time_ns IS NOT NULL AND (code_signing IS NULL OR (" +
 			csValidNoTeam + " AND NOT (" + csPlatform + ") AND " + csSID + " = '')))", true
 	case "invalid":
-		return "(code_signing IS NOT NULL AND NOT " + csValid + ")", true
+		return csHasBlock + "NOT " + csValid + ")", true
 	case "ad-hoc":
-		return "(code_signing IS NOT NULL AND " + csValid + " AND " + csAdhoc + ")", true
+		return csHasBlock + csValid + " AND " + csAdhoc + ")", true
 	case "developer-id":
-		return "(code_signing IS NOT NULL AND " + csValid + " AND NOT " + csAdhoc + " AND " + csTeam + " <> '')", true
+		return csHasBlock + csValid + " AND NOT " + csAdhoc + " AND " + csTeam + " <> '')", true
 	case "platform":
-		return "(code_signing IS NOT NULL AND " + csValidNoTeam + " AND (" + csPlatform + "))", true
+		return csHasBlock + csValidNoTeam + " AND (" + csPlatform + "))", true
 	case "signed":
-		return "(code_signing IS NOT NULL AND " + csValidNoTeam + " AND NOT (" + csPlatform + ") AND " + csSID + " <> '')", true
+		return csHasBlock + csValidNoTeam + " AND NOT (" + csPlatform + ") AND " + csSID + " <> '')", true
 	default:
 		return "", false
 	}

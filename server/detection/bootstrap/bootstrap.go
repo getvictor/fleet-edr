@@ -163,73 +163,9 @@ func New(deps Deps) (*Detection, error) {
 	}
 
 	if deps.Mode == ModeFull {
-		det.engine = engine.New(store, logger)
-		if deps.Metrics != nil {
-			det.engine.SetMetrics(deps.Metrics)
+		if err := det.wireFullMode(deps, store, intakeH, logger); err != nil {
+			return nil, err
 		}
-		query := graph.NewQuery(store)
-		det.svc = service.New(store, query, intakeH, deps.EventLog, deps.UserExists, logger)
-		if deps.AuthZ == nil {
-			return nil, errors.New("detection bootstrap: AuthZ is required in ModeFull")
-		}
-		det.operatorH = operator.New(det.svc, deps.AuthZ, logger)
-		det.operatorH.SetAudit(deps.Audit)
-		// The webhook admin surface reads/writes destinations through the store. Wiring it always (independent of the sealer) keeps
-		// list/get/delete working; a create/update that needs to seal a secret returns a configured-error when no root secret is set.
-		det.operatorH.SetWebhookAdmin(store)
-		// The per-host agent-health detail (GET /api/hosts/{host_id}/health) reads the endpoint context's host_health table through the
-		// same store; wire it alongside the webhook admin surface (issue #359).
-		det.operatorH.SetHostHealth(store)
-		det.operatorH.SetHostDetail(store)
-		det.operatorH.SetActivityHistogram(store)
-		det.operatorH.SetProcessSearch(store)
-		det.operatorH.SetEventSearch(store)
-		det.operatorH.SetHostTimeline(store)
-
-		processor := pipeline.NewProcessor(
-			deps.EventLog,
-			graph.NewBuilder(store, logger),
-			det.engine,
-			logger,
-			deps.ProcessInterval,
-			deps.ProcessBatch,
-			deps.ProcessConcurrency,
-		)
-		processTTL := pipeline.NewProcessTTL(store, pipeline.ProcessTTLOptions{
-			MaxAge:   deps.StaleProcessTTL,
-			Interval: deps.StaleProcessInterval,
-			Logger:   logger,
-		})
-		retention := pipeline.NewRetention(deps.DB, pipeline.RetentionOptions{
-			RetentionDays: deps.RetentionDays,
-			Interval:      deps.RetentionInterval,
-			Logger:        logger,
-		})
-		queuePrune := pipeline.NewQueuePrune(deps.EventLog, pipeline.QueuePruneOptions{
-			Interval: deps.QueuePruneInterval,
-			Logger:   logger,
-		})
-
-		// Outbound webhook (issue #496): wire the sealer into the store and build the delivery worker (both only when a root secret
-		// is configured; see configureWebhookDelivery).
-		webhookDelivery, webhookTester, webhookErr := configureWebhookDelivery(store, deps, logger)
-		if webhookErr != nil {
-			return nil, webhookErr
-		}
-		// Guard the typed-nil: only install the tester when one was built, so the handler's nil check stays honest.
-		if webhookTester != nil {
-			det.operatorH.SetWebhookTester(webhookTester)
-		}
-
-		det.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
-			Processor:       processor,
-			ProcessTTL:      processTTL,
-			Retention:       retention,
-			QueuePrune:      queuePrune,
-			WebhookDelivery: webhookDelivery,
-			DB:              deps.DB,
-			Coordinator:     deps.Coordinator,
-		})
 	} else {
 		// Intake-only: still expose a service with the intake handler
 		// so RegisterIngestRoutes works.
@@ -237,6 +173,80 @@ func New(deps Deps) (*Detection, error) {
 	}
 
 	return det, nil
+}
+
+// wireFullMode wires the ModeFull-only components (correlation engine, operator API surface, and background pipeline runner) onto the
+// Detection handle. Factored out of New to keep New's cognitive complexity in bounds (SonarCloud go:S3776), mirroring
+// configureWebhookDelivery.
+func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.Handler, logger *slog.Logger) error {
+	d.engine = engine.New(store, logger)
+	if deps.Metrics != nil {
+		d.engine.SetMetrics(deps.Metrics)
+	}
+	query := graph.NewQuery(store)
+	d.svc = service.New(store, query, intakeH, deps.EventLog, deps.UserExists, logger)
+	if deps.AuthZ == nil {
+		return errors.New("detection bootstrap: AuthZ is required in ModeFull")
+	}
+	d.operatorH = operator.New(d.svc, deps.AuthZ, logger)
+	d.operatorH.SetAudit(deps.Audit)
+	// The webhook admin surface reads/writes destinations through the store. Wiring it always (independent of the sealer) keeps
+	// list/get/delete working; a create/update that needs to seal a secret returns a configured-error when no root secret is set.
+	d.operatorH.SetWebhookAdmin(store)
+	// The per-host agent-health detail (GET /api/hosts/{host_id}/health) reads the endpoint context's host_health table through the
+	// same store; wire it alongside the webhook admin surface (issue #359).
+	d.operatorH.SetHostHealth(store)
+	d.operatorH.SetHostDetail(store)
+	d.operatorH.SetActivityHistogram(store)
+	d.operatorH.SetProcessSearch(store)
+	d.operatorH.SetEventSearch(store)
+	d.operatorH.SetHostTimeline(store)
+
+	processor := pipeline.NewProcessor(
+		deps.EventLog,
+		graph.NewBuilder(store, logger),
+		d.engine,
+		logger,
+		deps.ProcessInterval,
+		deps.ProcessBatch,
+		deps.ProcessConcurrency,
+	)
+	processTTL := pipeline.NewProcessTTL(store, pipeline.ProcessTTLOptions{
+		MaxAge:   deps.StaleProcessTTL,
+		Interval: deps.StaleProcessInterval,
+		Logger:   logger,
+	})
+	retention := pipeline.NewRetention(deps.DB, pipeline.RetentionOptions{
+		RetentionDays: deps.RetentionDays,
+		Interval:      deps.RetentionInterval,
+		Logger:        logger,
+	})
+	queuePrune := pipeline.NewQueuePrune(deps.EventLog, pipeline.QueuePruneOptions{
+		Interval: deps.QueuePruneInterval,
+		Logger:   logger,
+	})
+
+	// Outbound webhook (issue #496): wire the sealer into the store and build the delivery worker (both only when a root secret
+	// is configured; see configureWebhookDelivery).
+	webhookDelivery, webhookTester, webhookErr := configureWebhookDelivery(store, deps, logger)
+	if webhookErr != nil {
+		return webhookErr
+	}
+	// Guard the typed-nil: only install the tester when one was built, so the handler's nil check stays honest.
+	if webhookTester != nil {
+		d.operatorH.SetWebhookTester(webhookTester)
+	}
+
+	d.pipe = pipeline.NewRunner(pipeline.RunnerOptions{
+		Processor:       processor,
+		ProcessTTL:      processTTL,
+		Retention:       retention,
+		QueuePrune:      queuePrune,
+		WebhookDelivery: webhookDelivery,
+		DB:              deps.DB,
+		Coordinator:     deps.Coordinator,
+	})
+	return nil
 }
 
 // ApplySchema runs the CREATE TABLE statements detection owns. Idempotent.

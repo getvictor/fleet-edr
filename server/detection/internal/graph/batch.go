@@ -19,7 +19,7 @@ type processStore interface {
 	EventAlreadyApplied(ctx context.Context, hostID string, pid int, eventID string) (bool, error)
 	InsertProcess(ctx context.Context, p api.Process) (int64, error)
 	UpdateProcessExec(ctx context.Context, u mysql.ProcessExecUpdate) error
-	UpdateProcessExit(ctx context.Context, hostID string, pid int, exitTimeNs, exitIngestedAtNs int64, exitCode int, reason, exitEventID string) (int64, error)
+	UpdateProcessExit(ctx context.Context, u mysql.ProcessExitUpdate) (int64, error)
 	CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error
 	ReExec(ctx context.Context, priorID int64, exitTimeNs, exitIngestedAtNs int64, newRow api.Process) (newID int64, reLinked bool, err error)
 	UpdateLastSeenForSnapshot(ctx context.Context, hostID string, pid int, lastSeenNs int64) error
@@ -219,25 +219,24 @@ func (s *batchSession) UpdateProcessExec(_ context.Context, u mysql.ProcessExecU
 	return nil
 }
 
-func (s *batchSession) UpdateProcessExit(_ context.Context, hostID string, pid int,
-	exitTimeNs, exitIngestedAtNs int64, exitCode int, reason, exitEventID string,
-) (int64, error) {
+func (s *batchSession) UpdateProcessExit(_ context.Context, u mysql.ProcessExitUpdate) (int64, error) {
+	reason := u.Reason
 	if reason == "" {
 		reason = api.ExitReasonEvent // mirrors the store's normalisation
 	}
-	r := s.mostRecentLiveForkedAtOrBefore(hostID, pid, exitTimeNs)
+	r := s.mostRecentLiveForkedAtOrBefore(u.HostID, u.PID, u.ExitTimeNs)
 	if r == nil {
 		return 0, nil
 	}
-	et := exitTimeNs
+	et := u.ExitTimeNs
 	r.proc.ExitTimeNs = &et
-	ei := exitIngestedAtNs
+	ei := u.ExitIngestedAtNs
 	r.proc.ExitIngestedAtNs = &ei
 	rs := reason
 	r.proc.ExitReason = &rs
-	ec := exitCode
+	ec := u.ExitCode
 	r.proc.ExitCode = &ec
-	eid := exitEventID
+	eid := u.ExitEventID
 	r.proc.ExitEventID = &eid
 	markDirty(r)
 	return 1, nil

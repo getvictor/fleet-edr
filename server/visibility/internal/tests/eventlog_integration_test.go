@@ -312,45 +312,56 @@ func TestEventLog_ConcurrentClaimersNoDeadlock(t *testing.T) {
 	require.NoError(t, log.Append(ctx, seed))
 
 	const workers = 8
-	const batch = 50
-	var (
-		mu        sync.Mutex
-		claimed   = make(map[string]int) // event_id -> times claimed; must end at exactly 1 each
-		claimErrs atomic.Int64
-		ackErrs   atomic.Int64
-	)
-	var wg sync.WaitGroup
-	wg.Add(workers)
+	run := &claimRun{log: log, batch: 50, claimed: make(map[string]int)}
+	run.wg.Add(workers)
 	for range workers {
-		go func() {
-			defer wg.Done()
-			for {
-				batchEvents, err := log.Claim(ctx, batch)
-				if err != nil {
-					claimErrs.Add(1)
-					return
-				}
-				if len(batchEvents) == 0 {
-					return // no claimable rows left: every event has already been claimed by some worker
-				}
-				mu.Lock()
-				for _, e := range batchEvents {
-					claimed[e.EventID]++
-				}
-				mu.Unlock()
-				if err := log.Ack(ctx, ids(batchEvents)); err != nil {
-					ackErrs.Add(1)
-				}
-			}
-		}()
+		go run.drain(ctx)
 	}
-	wg.Wait()
+	run.wg.Wait()
 
-	require.Zero(t, claimErrs.Load(), "concurrent claimers must not surface a deadlock error (#544)")
-	require.Zero(t, ackErrs.Load(), "acks must not error under concurrency")
-	require.Len(t, claimed, totalEvents, "every seeded event is claimed exactly once")
-	for id, n := range claimed {
+	require.Zero(t, run.claimErrs.Load(), "concurrent claimers must not surface a deadlock error (#544)")
+	require.Zero(t, run.ackErrs.Load(), "acks must not error under concurrency")
+	require.Len(t, run.claimed, totalEvents, "every seeded event is claimed exactly once")
+	for id, n := range run.claimed {
 		assert.Equalf(t, 1, n, "event %s must be claimed by exactly one worker (no double-claim)", id)
+	}
+}
+
+// claimRun holds the state the concurrent claimers share: claimed counts how many times each event_id was handed out (must end at
+// exactly 1), and the atomics tally any claim/ack error. Bundling it lets drain be a low-complexity method rather than a deeply nested
+// inline goroutine closure (SonarCloud go:S3776).
+type claimRun struct {
+	log       visibilityapi.EventLog
+	batch     int
+	wg        sync.WaitGroup
+	mu        sync.Mutex
+	claimed   map[string]int
+	claimErrs atomic.Int64
+	ackErrs   atomic.Int64
+}
+
+// drain claims and acks batches until an empty claim shows the queue is drained, recording every claimed event and any error. One
+// worker observes an empty claim only once no claimable (processed = 0 or lease-expired) rows remain, so returning on empty drains
+// the whole queue without a spin.
+func (r *claimRun) drain(ctx context.Context) {
+	defer r.wg.Done()
+	for {
+		batchEvents, err := r.log.Claim(ctx, r.batch)
+		if err != nil {
+			r.claimErrs.Add(1)
+			return
+		}
+		if len(batchEvents) == 0 {
+			return // no claimable rows left: every event has already been claimed by some worker
+		}
+		r.mu.Lock()
+		for _, e := range batchEvents {
+			r.claimed[e.EventID]++
+		}
+		r.mu.Unlock()
+		if err := r.log.Ack(ctx, ids(batchEvents)); err != nil {
+			r.ackErrs.Add(1)
+		}
 	}
 }
 

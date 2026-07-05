@@ -287,7 +287,7 @@ describe("ProcessTreeView conviction evidence", () => {
   it("applies the evidence class to unsigned and ad-hoc nodes only", async () => {
     const { container } = renderTree("");
     await waitFor(() => {
-      expect(container.querySelectorAll("g.node").length).toBe(3);
+      expect(container.querySelectorAll("g.node")).toHaveLength(3);
     });
     const marked = [...container.querySelectorAll("g.node--evidence")].map(
       (g) => g.querySelector(".node__label")?.textContent ?? "",
@@ -301,7 +301,7 @@ describe("ProcessTreeView conviction evidence", () => {
   it("shows the evidence tooltip on hover and clears it on leave", async () => {
     const { container } = renderTree("");
     await waitFor(() => {
-      expect(container.querySelectorAll("g.node--evidence").length).toBe(2);
+      expect(container.querySelectorAll("g.node--evidence")).toHaveLength(2);
     });
     const unsignedNode = [...container.querySelectorAll("g.node--evidence")].find((g) =>
       (g.querySelector(".node__label")?.textContent ?? "").includes("dropper"),

@@ -27,7 +27,9 @@ func TestStore_EventAlreadyApplied(t *testing.T) {
 		SourceEventID: new("fork-1"), ExecEventID: new("exec-1"),
 	})
 	require.NoError(t, err)
-	affected, err := s.UpdateProcessExit(ctx, "h", 10, 200, 201, 0, api.ExitReasonEvent, "exit-1")
+	affected, err := s.UpdateProcessExit(ctx, mysql.ProcessExitUpdate{
+		HostID: "h", PID: 10, ExitTimeNs: 200, ExitIngestedAtNs: 201, ExitCode: 0, Reason: api.ExitReasonEvent, ExitEventID: "exit-1",
+	})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), affected)
 
@@ -57,12 +59,16 @@ func TestStore_UpdateProcessExit_ForkTimeBound(t *testing.T) {
 	_, err := s.InsertProcess(ctx, api.Process{HostID: "h", PID: 20, ForkTimeNs: 200})
 	require.NoError(t, err)
 
-	affected, err := s.UpdateProcessExit(ctx, "h", 20, 100, 101, 0, api.ExitReasonEvent, "exit-stale")
+	affected, err := s.UpdateProcessExit(ctx, mysql.ProcessExitUpdate{
+		HostID: "h", PID: 20, ExitTimeNs: 100, ExitIngestedAtNs: 101, ExitCode: 0, Reason: api.ExitReasonEvent, ExitEventID: "exit-stale",
+	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), affected, "an exit before the row's fork must not close it")
 
 	// An exit after the fork closes it and stamps exit_event_id.
-	affected, err = s.UpdateProcessExit(ctx, "h", 20, 300, 301, 7, api.ExitReasonEvent, "exit-real")
+	affected, err = s.UpdateProcessExit(ctx, mysql.ProcessExitUpdate{
+		HostID: "h", PID: 20, ExitTimeNs: 300, ExitIngestedAtNs: 301, ExitCode: 7, Reason: api.ExitReasonEvent, ExitEventID: "exit-real",
+	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), affected)
 

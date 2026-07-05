@@ -487,7 +487,15 @@ func (b *Builder) handleExit(ctx context.Context, w processStore, evt api.Event)
 		reason = api.ExitReasonHostReconciled
 	}
 
-	affected, err := w.UpdateProcessExit(ctx, evt.HostID, p.PID, evt.TimestampNs, evt.IngestedAtNs, p.ExitCode, reason, evt.EventID)
+	affected, err := w.UpdateProcessExit(ctx, mysql.ProcessExitUpdate{
+		HostID:           evt.HostID,
+		PID:              p.PID,
+		ExitTimeNs:       evt.TimestampNs,
+		ExitIngestedAtNs: evt.IngestedAtNs,
+		ExitCode:         p.ExitCode,
+		Reason:           reason,
+		ExitEventID:      evt.EventID,
+	})
 	if err != nil {
 		return err
 	}

@@ -248,8 +248,15 @@ func run() error {
 	// streamConnected is the shared flag the control channel raises while its stream is up so the commander suspends polling. Per-replica
 	// ephemeral state, lost on restart; the commander reads it, the control client sets it.
 	var streamConnected atomic.Bool
-	startCommander(ctx, hostID, cfg.ServerURL, tokenProvider, esfDispatcher, agentTransport, &streamConnected, commandLedger, logger)
-	if err := startControlClient(ctx, cfg, hostID, tokenProvider, esfDispatcher, &streamConnected, commandLedger, logger); err != nil {
+	cmdDeps := commandDeps{
+		tokenProvider:    tokenProvider,
+		appControlSender: esfDispatcher,
+		streamConnected:  &streamConnected,
+		ledger:           commandLedger,
+		logger:           logger,
+	}
+	startCommander(ctx, hostID, cfg.ServerURL, agentTransport, cmdDeps)
+	if err := startControlClient(ctx, cfg, hostID, cmdDeps); err != nil {
 		// Cancel first so the goroutines started above (receiver loops, uploader, commander, coalescer) wind down before the
 		// deferred queue close runs; otherwise the LIFO defers would close the queue while those goroutines still write to it.
 		cancel()
@@ -376,40 +383,42 @@ func safePrefix(s string) string {
 	return s[:8]
 }
 
+// commandDeps bundles the plumbing both command transports share: the enrollment token source, the app-control sender the executor
+// drives, the stream-connected flag the poll path consults, the durable command ledger, and the logger. Grouped so the two start
+// functions stay under the positional-argument limit (SonarCloud go:S107).
+type commandDeps struct {
+	tokenProvider    enrollment.TokenProvider
+	appControlSender commander.ApplicationControlSender
+	streamConnected  *atomic.Bool
+	ledger           commander.Ledger
+	logger           *slog.Logger
+}
+
 // startCommander spins up the command-poll loop when we have a host_id. With no host_id the agent keeps running (events still upload)
 // but cannot receive commands, so commander launch is skipped and logged.
-func startCommander(
-	ctx context.Context,
-	hostID, serverURL string,
-	tokenProvider enrollment.TokenProvider,
-	appControlSender commander.ApplicationControlSender,
-	transport http.RoundTripper,
-	streamConnected *atomic.Bool,
-	ledger commander.Ledger,
-	logger *slog.Logger,
-) {
+func startCommander(ctx context.Context, hostID, serverURL string, transport http.RoundTripper, deps commandDeps) {
 	if hostID == "" {
-		logger.WarnContext(ctx, "no host_id available; commander disabled")
+		deps.logger.WarnContext(ctx, "no host_id available; commander disabled")
 		return
 	}
 	cmdr := commander.New(commander.Config{
 		ServerURL:                serverURL,
-		TokenFn:                  tokenProvider.Token,
-		OnAuthFail:               tokenProvider.OnUnauthorized,
+		TokenFn:                  deps.tokenProvider.Token,
+		OnAuthFail:               deps.tokenProvider.OnUnauthorized,
 		HostID:                   hostID,
 		Interval:                 commanderPollInterval,
-		ApplicationControlSender: appControlSender,
+		ApplicationControlSender: deps.appControlSender,
 		// Defer to the control channel while it is connected (the gateway pushes commands in real time); the poll is the fallback floor.
-		StreamConnected: streamConnected.Load,
+		StreamConnected: deps.streamConnected.Load,
 		// Shared durable dedup so the poll path does not re-execute a command the control client already ran (issue #558).
-		Ledger: ledger,
-	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, logger)
+		Ledger: deps.ledger,
+	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, deps.logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.ErrorContext(ctx, "commander", "err", err)
+			deps.logger.ErrorContext(ctx, "commander", "err", err)
 		}
 	}()
-	logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
+	deps.logger.InfoContext(ctx, "commander polling", "host_id_prefix", safePrefix(hostID))
 }
 
 // startControlClient opens the persistent control-channel stream to the server. The endpoint is derived from EDR_SERVER_URL (issue
@@ -417,16 +426,8 @@ func startCommander(
 // over the same pinned TLS the agent uses for HTTP, presents the host token at connect, and signals streamConnected so the commander
 // suspends polling while the stream is up. If the stream can't connect or won't stay up, the commander's GET /api/commands short-poll
 // remains the floor; the control channel is an always-on enhancement, not a separately-enabled feature.
-func startControlClient(
-	ctx context.Context,
-	cfg *config.Config,
-	hostID string,
-	tokenProvider enrollment.TokenProvider,
-	appControlSender commander.ApplicationControlSender,
-	streamConnected *atomic.Bool,
-	ledger commander.Ledger,
-	logger *slog.Logger,
-) error {
+func startControlClient(ctx context.Context, cfg *config.Config, hostID string, deps commandDeps) error {
+	logger := deps.logger
 	if hostID == "" {
 		logger.WarnContext(ctx, "no host_id available; control channel disabled")
 		return nil
@@ -453,11 +454,11 @@ func startControlClient(
 	client := controlclient.New(controlclient.Config{
 		Client:                   control.NewControlChannelClient(conn),
 		HostID:                   hostID,
-		TokenFn:                  tokenProvider.Token,
-		OnAuthFail:               tokenProvider.OnUnauthorized,
-		ApplicationControlSender: appControlSender,
-		Ledger:                   ledger,
-		OnConnectedChange:        streamConnected.Store,
+		TokenFn:                  deps.tokenProvider.Token,
+		OnAuthFail:               deps.tokenProvider.OnUnauthorized,
+		ApplicationControlSender: deps.appControlSender,
+		Ledger:                   deps.ledger,
+		OnConnectedChange:        deps.streamConnected.Store,
 		Logger:                   logger,
 	})
 	go func() {

@@ -227,7 +227,7 @@ export function Webhooks() {
           data-1p-ignore=""
           data-lpignore="true"
           data-form-type="other"
-          placeholder={form.editingId !== null ? "•••••• enter a new value to rotate" : "enter the signing secret"}
+          placeholder={form.editingId === null ? "enter the signing secret" : "•••••• enter a new value to rotate"}
           value={form.secret}
           onChange={(e) => { update("secret", e.target.value); }}
         />
@@ -297,9 +297,9 @@ export function Webhooks() {
                       Delete
                     </Button>
                     {testResult !== null && testResult.id === d.id && (
-                      <span className={testResult.ok ? "webhooks__test-ok" : "webhooks__test-err"} role="status">
+                      <output className={testResult.ok ? "webhooks__test-ok" : "webhooks__test-err"}>
                         {testResult.message}
-                      </span>
+                      </output>
                     )}
                   </td>
                 </tr>
