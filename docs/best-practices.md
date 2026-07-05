@@ -18,7 +18,7 @@ The detection surface is the product. Treat detection content as code: versioned
 - [x] Network-attribution events (PID -> connection) via `NEFilterDataProvider`
 - [ ] Application Control subsystem (named policies, allow/block by path / SHA-256 / CDHash / TeamID / SigningID / certificate, Detect-vs-Protect, host-group scoping). The `add-application-control` OpenSpec change removed the legacy singleton blocklist.
 - [x] Response action: command queue (kill, set_application_control) with ack/complete lifecycle
-- [~] **MITRE ATT&CK mapping** on every rule. The `Rule` interface in `server/rules/api/types.go` requires a `Techniques()` method returning the ATT&CK technique IDs the rule maps to; each catalog rule under `server/rules/internal/catalog/` implements it, and the engine threads the IDs onto every alert so they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`, `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export (`server/rules/internal/operator/handler.go` `navigatorTechnique`). **Demoted to `[~]`**: ATT&CK v19 (April 2026) split Defense Evasion into the new Stealth and Defense Impairment tactics and revoked ~13 technique IDs into new parents (e.g. "Clear Windows Event Logs" → T1685/005). Current rule mappings have not yet been re-validated against v19; track as a follow-up task.
+- [~] **MITRE ATT&CK mapping** on every rule. The `Rule` interface in `server/rules/api/types.go` requires a `Techniques()` method returning the ATT&CK technique IDs the rule maps to; each catalog rule under `server/rules/internal/catalog/` implements it, and the engine threads the IDs onto every alert so they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`, `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export (the `handleATTACKCoverage` handler in `server/rules/internal/operator/handler.go`, which delegates to `BuildNavigatorLayer` / `NavigatorTechnique` in `server/rules/api/navigator.go`). **Demoted to `[~]`**: ATT&CK v19 (April 2026) split Defense Evasion into the new Stealth and Defense Impairment tactics and revoked ~13 technique IDs into new parents (e.g. "Clear Windows Event Logs" → T1685/005). Current rule mappings have not yet been re-validated against v19; track as a follow-up task.
 - [ ] **ATT&CK Detection Strategies / Analytics** alignment (v18+ taxonomy). v18 (Oct 2025) retired traditional Detections + Data Sources in favour of Detection Strategies and Analytics per technique; rules should surface the strategy ID alongside the technique so coverage gaps map to MITRE's published analytics, not just techniques
 - [ ] **Sigma rule support** (import community rules; transpile to native rule format). SigmaHQ now ships bi-weekly versioned rule packages, so adoption can be packaged rather than per-rule scraped from `main`
 - [ ] **YARA scanning** for file-based detections (signature + heuristic)
@@ -42,14 +42,14 @@ The detection surface is the product. Treat detection content as code: versioned
 - [ ] **SOAR / playbook integration** (webhook out, structured response API)
 - [ ] **SIEM export**: Splunk HEC, Elastic, Syslog/CEF/LEEF formats
 - [ ] **Slack / Teams / PagerDuty alert sinks**
-- [ ] **OCSF (Open Cybersecurity Schema Framework)** event export. Splunk-led standard (now under the Linux Foundation) adopted by AWS Security Hub, Cloudflare, Sumo Logic, IBM QRadar; becoming the lingua franca for cross-vendor security telemetry exchange. OCSF 1.6.0 (Aug 2025) added an `ai_operation` profile to `process_activity` and Vector / Knowledge Graph DB types, which become relevant once we ship LLM features (§15)
+- [ ] **OCSF (Open Cybersecurity Schema Framework)** event export. Splunk-led standard (now under the Linux Foundation) adopted by AWS Security Hub, Cloudflare, Sumo Logic, IBM QRadar; becoming the lingua franca for cross-vendor security telemetry exchange. OCSF 1.8.0 (Mar 2026) added a macOS extension that patches the `process` object with `egid` / `euid` (a direct map for our ESF exec capture) and moved the `ai_operation` profile onto `process_activity`; both sharpen the case for an OCSF export, the latter once we ship LLM features (§15)
 - [ ] **OpenC2** action verbs for the response API (OASIS standard for `kill`, `isolate`, `quarantine`, etc.) so SOAR platforms can drive responses without custom adapters
 - [ ] **LOLBAS / GTFOBins** reference data baked into rules so each detection cites the living-off-the-land binary entry that justifies the alert
 - [ ] **DeTT&CT / ATT&CK Navigator export** for visualizing rule-set coverage against the matrix; lets buyers compare your coverage to commercial vendors
 - [ ] **Atomic Red Team / Stratus Red Team / Caldera** scenario replays in CI to assert rules fire on canonical attack signals
 - [ ] **ITDR signals**: pull IdP login anomalies, privileged-access changes, and lateral-movement indicators into the same alert surface (Okta, Entra ID system logs). EDR / ITDR convergence is a 2024-2026 industry trend
 - [ ] **Deception primitives**: canary tokens, honeyfiles, honey credentials. Cheap, high signal-to-noise, and a differentiator for an open-source EDR
-- [ ] **AI-agent / shadow-AI activity telemetry**: CrowdStrike's Spring 2026 platform release and SentinelOne's 2026 AI security updates both shipped AI-agent discovery, shadow-AI governance, and runtime control as first-class EDR features. For us this means capturing LLM tool-use, MCP server invocations, and agent-process behaviour as distinct event types, not just generic exec / network
+- [ ] **AI-agent / shadow-AI activity telemetry**: CrowdStrike's RSAC 2026 release (Falcon AIDR plus Shadow AI Discovery for Endpoint, GA March 2026) discovers LLM runtimes, AI agents, MCP servers, and AI dev tools running on the endpoint, and SentinelOne shipped comparable AI-agent discovery and runtime control. For us this means capturing LLM tool-use, MCP server invocations, and agent-process behaviour as distinct event types, not just generic exec / network
 
 ## 2. Cross-platform reach
 
@@ -68,14 +68,14 @@ Today the agent is macOS-only on Apple Silicon. Best-in-class EDRs (CrowdStrike 
 ## 3. Security: AuthN, AuthZ, cryptography
 
 - [x] Argon2id password hashing for users (with random per-user salt)
-- [x] HMAC-SHA256 host-token verification for enrollment, keyed by a server-held pepper derived from the deployment root secret (with deterministic token-id index for fast lookup)
+- [x] HMAC-SHA256 host-token verification for enrollment, keyed by a server-held pepper derived from the deployment root secret via HKDF (`internal/keyring`). Tokens are self-validating (local HMAC + expiry check, no DB lookup); the old opaque-token-id index was dropped in `server/endpoint/migrations/00004_drop_opaque_host_token_columns.sql`
 - [x] Constant-time comparison for secrets (`subtle.ConstantTimeCompare` for CSRF tokens)
 - [x] HTTP-only, Secure, SameSite session cookies (`server/identity/internal/{login,middleware,sessions}/`)
 - [x] CSRF protection on unsafe methods (per-session token in header)
 - [x] Bearer-token authentication for agents (`HostToken` middleware)
 - [x] Rate limiting on enrollment (`EDR_ENROLL_RATE_PER_MIN`) and the break-glass surface (internal per-IP / per-email / per-setup buckets in `server/identity/internal/breakglass`)
-- [x] TLS 1.3 by default; TLS 1.2 only with explicit opt-in for legacy pilots
-- [x] Restricted TLS 1.2 cipher suites (forward-secrecy AEAD only)
+- [x] TLS 1.3 enforced unconditionally (`MinVersion: tls.VersionTLS13` in `server/httpserver/tls.go`); there is no legacy TLS 1.2 opt-out to maintain
+- [-] **Restricted TLS 1.2 cipher suites**: moot. The server refuses TLS 1.2 entirely (line above), so there is no TLS 1.2 cipher-suite surface to restrict, and Go does not expose TLS 1.3 cipher-suite selection
 - [x] HSTS with `includeSubDomains`, two-year max-age
 - [x] Reload TLS cert + key on `SIGHUP` without dropping connections
 - [x] Refusal of `X-Forwarded-For` until a trusted-proxy allowlist exists
@@ -99,7 +99,7 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 
 - [x] SHA-pinned GitHub Actions everywhere (`actions/checkout@<40-char-sha>`)
 - [x] `permissions: {}` default at workflow level, narrow per-job grants
-- [x] `persist-credentials: false` on every checkout
+- [~] `persist-credentials: false` on every checkout except one: 37 of 38 set it, the exception being the `openspec-archived` job at `.github/workflows/release.yml:54` (which does no credentialed git op)
 - [x] `concurrency` cancellation to avoid stale parallel runs
 - [x] `zizmor` GitHub Actions security audit (auditor persona, weekly schedule)
 - [x] `actionlint` workflow-syntax linter
@@ -137,9 +137,9 @@ This is where the bar has moved fastest. SLSA, Sigstore, OpenSSF Scorecard are t
 - [x] `swiftlint --strict` for the macOS extensions
 - [x] TypeScript ESLint with `strictTypeChecked`, `eslint-plugin-security`, `eslint-plugin-no-unsanitized`, `react-hooks/exhaustive-deps`, `eqeqeq`, `no-explicit-any: error`
 - [x] `tsc --noEmit` strict type-check in CI
-- [x] SonarCloud for cross-language quality + security hot spots (`sonar-project.properties`, dedicated `SonarCloud` workflow)
-- [x] Multi-module Go workspace with clear boundaries (`agent/`, `server/`)
-- [x] **Modular monolith with bounded contexts** (per ADR-0004). `server/<context>/` layout: `api/` (public types and interfaces), `bootstrap/` (DI entry point for `server/cmd/*` and `test/integration/`), `internal/<module>/` (private, Go-compiler enforced). Five contexts: `detection`, `rules`, `response`, `endpoint`, `identity`. Cross-context calls go via the imported `api/` package only; no cross-context transactions; no cross-context foreign keys (the one such FK, `fk_alerts_updated_by`, was dropped in favour of code-level validation)
+- [x] SonarCloud for cross-language quality + security hot spots (`sonar-project.properties`; runs as the `sonarcloud` job in `.github/workflows/test.yml`)
+- [x] Single Go module (ADR-0001; the 2026-04 refactor collapsed the old two-module workspace). The `agent/` vs `server/` boundary is enforced by `depguard` deny rules and shared code lives in `internal/`
+- [x] **Modular monolith with bounded contexts** (per ADR-0004). `server/<context>/` layout: `api/` (public types and interfaces), `bootstrap/` (DI entry point for `server/cmd/*` and `test/integration/`), `internal/<module>/` (private, Go-compiler enforced). Seven contexts: the original five (`detection`, `rules`, `response`, `endpoint`, `identity`) plus `observability` and `visibility` added later (ADR-0004 amendment / ADR-0015; `observability` is internal-only, with no `api/`). Cross-context calls go via the imported `api/` package only; no cross-context transactions; no cross-context foreign keys (the one such FK, `fk_alerts_updated_by`, was dropped in favour of code-level validation)
 - [x] **Architecture lint** via `arch-go` ([github.com/arch-go/arch-go](https://github.com/arch-go/arch-go)). Declarative YAML rules at `arch-go.yml`; programmatic API runs from `go test ./test/arch/...` so violations break the test job, not just lint. Complements `depguard` (which stays for block-list deps like `pkg/errors`). Wired as `task lint:arch` locally and as a hard-fail gating CI job (`.github/workflows/arch-go.yml`)
 - [x] **Test-coverage thresholds** uploaded to SonarCloud. Both Go and TS coverage reports flow through (`sonar.go.coverage.reportPaths`, `sonar.javascript.lcov.reportPaths`); the "Coverage on New Code" gate is set to ≥80% and applies per PR.
 - [x] **Codecov** with PR comments and coverage diff. Uploaded by the `codecov` job in `.github/workflows/test.yml` after `agent-test`, `server-test`, and `ui-test` finish; `CODECOV_TOKEN` lives in the `codecov` GitHub Environment (same pattern as `sonarcloud` and `release-signing`). Three per-component flags (`agent`, `server`, `ui`) so the dashboard splits the Go binaries from the React bundle; the UI flag is fed by the Playwright E2E run's V8 coverage via monocart-coverage-reports (vitest tests can upload to the same flag once they land and Codecov takes the union). Per-PR PATCH gate stays enforcing at 70% on new code; the PROJECT rollup is informational (`informational: true` in `codecov.yml`) because Codecov's project numbers drifted vs reality on this repo through the M13 stack and the rollup gate became a chronic flake. SonarCloud's 80% new-code gate remains the authoritative bar for per-PR coverage
@@ -209,7 +209,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 ## 8. API and protocol design
 
 - [x] Stable API URL prefix (`/api/`); evolve in place rather than bumping a URL version, since v1 → v2 transitions rarely happen and are the wrong layer for protocol versioning when they do
-- [x] JSON event schema (`schema/events.json` -- consumed by both agent and server)
+- [~] JSON event schema (`schema/events.json`): the canonical wire contract both sides code to and the docs / openspec / fakeagent reference, but it is not programmatically consumed (no `go:embed`, codegen, or runtime validation), so agent and server can still drift from it
 - [x] Standard JSON error responses with `Cache-Control: no-store` on health endpoints
 - [x] Per-route auth-domain composition (public / host-token / session) at registration time so the policy is reviewable in `main.go`
 - [~] **OpenAPI 3.1 spec** committed at `docs/api/openapi.yaml`, prose overview at [`api.md`](api.md), AND hosted rendering at `/api/docs` via embedded Redoc (D1 deliverable: zero external network calls, served from `server/apidocs/embed`). Still missing: handler/client codegen via `oapi-codegen` / `openapi-typescript`, so today the spec and the Go handlers can still drift without CI catching it
@@ -250,12 +250,12 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [x] Idempotent migrations with explicit duplicate-error swallowing (`store.go`)
 - [x] Indexed lookup paths for hot queries (composite indexes on `(processed, host_id, timestamp_ns)`, etc.)
 - [x] `FOR UPDATE SKIP LOCKED` for safe parallel processor claiming
-- [x] Foreign key cascades that match the lifecycle (`sessions` -> `users` cascade, `alerts.updated_by` -> `users` set null)
+- [x] Foreign key cascades that match the lifecycle (`sessions` -> `users` cascade; the identity config tables' `updated_by` -> `users` SET NULL). The former `alerts.updated_by` FK was dropped when that column became a cross-context principal id (ADR-0017)
 - [x] `parseTime=true` enforced even when caller forgets it
 - [x] Connection-pool stats exposed via OTel
 - [x] Retention runner with configurable age (`server/detection/internal/pipeline/retention.go`)
 - [x] Local Docker Compose with `mysql_test` for parallel test isolation
-- [x] **Versioned migrations** via [goose](https://github.com/pressly/goose), embedded in the server binary, per-context directories with per-context `<context>_goose_db_version` tracking tables, forward-only, tiered (expand-contract for Tier 2). Adopted in ADR-0009 to replace the in-process idempotent-ALTER approach that hit a ceiling around rename / drop operations. All five bounded contexts (identity, endpoint, rules, response, detection) are converted. See ADR-0009
+- [x] **Versioned migrations** via [goose](https://github.com/pressly/goose), embedded in the server binary, per-context directories with per-context `<context>_goose_db_version` tracking tables, forward-only, tiered (expand-contract for Tier 2). Adopted in ADR-0009 to replace the in-process idempotent-ALTER approach that hit a ceiling around rename / drop operations. All seven bounded contexts are converted (the original five identity, endpoint, rules, response, detection plus visibility and observability; visibility also carries a separate `migrations-clickhouse` set). See ADR-0009
 - [-] **PostgreSQL alternative**: **will not do**. Supporting two RDBMSes doubles migration testing, query tuning, and store-layer surface for a small team. MySQL 8.4 covers what the data plane needs; customers who require Postgres can stand up a CDC bridge via Debezium against the existing MySQL primary
 - [ ] **Read-replica support** for the read-heavy UI queries
 - [ ] **Logical-replication / CDC outbox** for downstream SIEM / data-lake export
@@ -297,7 +297,7 @@ These cost almost nothing and disproportionately drive adoption.
 - [x] **[`CONTRIBUTING.md`](../CONTRIBUTING.md)** at the repo root: pointers to build / test (Taskfile, lefthook, `.tool-versions`), per-language style sources of truth ([`go-conventions.md`](go-conventions.md), `.golangci.yml`, ESLint, swiftlint), Sonar new-code coverage gate, the `Co-Authored-By` policy, and a security-PR checklist tied back to [`threat-model.md`](threat-model.md). DCO sign-off noted as a future requirement, not enforced today
 - [ ] **`CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1)
 - [ ] **`CODEOWNERS`** for review routing
-- [ ] **PR template** with checklist (tests, docs, security review)
+- [x] **PR template** with checklist at [`.github/pull_request_template.md`](../.github/pull_request_template.md): OpenSpec-for-behavior-changes, tests, live-VM-for-ESF/XPC changes, and docs-for-user-facing-changes gates
 - [ ] **`SUPPORT.md`** explaining where to ask questions
 - [ ] **GitHub Discussions** enabled for design conversations
 - [x] **Architecture Decision Records** at `docs/adr/NNNN-title.md` with template + index at [`README.md`](adr/README.md); seeded with the single-module, Apple-Silicon-only, and standalone-product decisions. Add new ones as non-obvious trade-offs land.
@@ -336,8 +336,8 @@ If anyone is going to deploy this against employee endpoints in regulated indust
 - [x] Network extension (`NEFilterDataProvider`) for connection capture with PID attribution
 - [x] Ad-hoc signing pipeline documented for SIP-disabled dev VMs
 - [x] Endpoint Security entitlement requested explicitly
-- [x] CGo bridge linked with `-lbsm` for `audit_token_to_pid/euid/egid`
-- [x] Lessons captured for `os.log` redaction, `es_process_t.cwd` differences, etc.
+- [~] CGo bridge audit-token handling: the old `-lbsm` (libbsm) link is gone. The agent bridge now links `-framework Foundation` (`agent/receiver/receiver.go`) and audit-token PID/UID extraction is Swift-native in the extensions (`flow.sourceProcessAuditToken`), so no `audit_token_to_pid` C path remains to link `-lbsm` for
+- [~] Lessons captured for `os.log` redaction ([`lessons-and-gotchas.md`](lessons-and-gotchas.md)). The `es_process_t.cwd` difference is noted in project memory but is not yet in the lessons doc
 - [ ] **Notarized signed extensions** for production install via MDM
 - [ ] **Profile-delivered entitlement consent** (`SystemPolicyAllListConfiguration` payloads) pushed via Fleet so end-users do not see a TCC prompt
 - [ ] **MDM-managed Full Disk Access** profile for the agent
@@ -352,14 +352,14 @@ A 2024-2026 industry shift: AI coding assistants (Claude Code, Cursor, Copilot, 
 ### Repo conventions for AI assistants
 
 - [x] **Project-level AI assistant config**: committed [`CLAUDE.md`](../CLAUDE.md) at the repo root captures testing conventions, bounded-context layout, dev-environment quirks, and code-style rules, so any contributor or AI agent can start cold. Maintainers may layer per-user global config on top, but nothing here depends on it
-- [ ] **`.cursorrules`** and/or **[`.github/copilot-instructions.md`](../.github/copilot-instructions.md)** mirrors of the same conventions for non-Claude users
+- [~] **[`.github/copilot-instructions.md`](../.github/copilot-instructions.md)** mirrors the conventions for GitHub Copilot users (committed). `.cursorrules` still absent; no Cursor users today so it stays a gap, not a non-goal
 - [ ] **MCP servers committed to the repo**: shared tooling configs (SigNoz, SonarQube, Unblocked) so every contributor's AI agent has the same runtime context
 
 ### AI-assisted code review
 
-- [~] **AI PR review bot**: Qodo PR-Agent is configured (`.pr_agent.toml`) but deliberately set to manual-only (`pr_commands = []`, `handle_push_trigger = false`). Revisit if PR throughput grows
+- [x] **AI PR review bot**: Qodo PR-Agent runs automatically since the paid plan landed 2026-06-12 (`.pr_agent.toml`: `pr_commands = ["/agentic_review"]` on open, `handle_push_trigger = true` re-reviews every push). `/describe` is deliberately NOT auto-run so the maintainer owns PR bodies. `.coderabbit.yaml` layers a second reviewer (below)
 - [ ] **GitHub Copilot code review** enabled at the repo level (free for public repos)
-- [ ] **CodeRabbit / Greptile** as a security-leaning second opinion on auth + crypto paths
+- [~] **CodeRabbit** configured in-repo ([`.coderabbit.yaml`](../.coderabbit.yaml): `profile: assertive`, security-leaning `tone_instructions` biasing toward bypassed authz, TOCTOU, weak crypto, audit-log tampering, secrets in logs) with path-scoped review focus; runs manual-only per project convention. Greptile not used
 - [ ] **AI-generated PR change-summary** auto-posted (Qodo can do this; today disabled by policy)
 
 ### Provenance and risk hygiene for AI-generated code
@@ -390,19 +390,19 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | ------------------------------ | ------- | ----- | --- |
 | Detection content + response   | 6.5     | 38    | 17% |
 | Cross-platform reach           | 1       | 8     | 12% |
-| AuthN / AuthZ / crypto         | 15.5    | 25    | 62% |
-| Supply-chain security          | 15.5    | 27    | 57% |
+| AuthN / AuthZ / crypto         | 14.5    | 24    | 60% |
+| Supply-chain security          | 15      | 27    | 56% |
 | Code quality + static analysis | 15      | 22    | 68% |
 | Testing                        | 7       | 19    | 37% |
 | Observability + operations     | 15      | 24    | 62% |
-| API design                     | 5.5     | 16    | 34% |
+| API design                     | 5       | 16    | 31% |
 | Frontend                       | 6       | 14    | 43% |
 | Data layer                     | 9       | 17    | 53% |
 | Build / release / packaging    | 5       | 10    | 50% |
-| Community signals              | 13      | 24    | 54% |
+| Community signals              | 14      | 24    | 58% |
 | Compliance + privacy           | 1       | 14    | 7%  |
-| macOS platform hygiene         | 6       | 12    | 50% |
-| AI-assisted engineering        | 2       | 17    | 12% |
+| macOS platform hygiene         | 5       | 12    | 42% |
+| AI-assisted engineering        | 4       | 17    | 24% |
 
 The supply-chain hardening track shipped Sigstore signing (cosign keyless on every release artifact), CycloneDX + SPDX SBOMs, SLSA build provenance at level 2 (Apple notarization breaks L3's hermeticity requirement), OpenSSF Scorecard, and OSV-Scanner alongside the existing govulncheck. A real SonarCloud coverage gate (≥80% on new code, per PR) closed the last big code-quality gap. That moved §4 from 37% to 57% and §5 from 59% to 64%. Wiring Codecov alongside (CODECOV_TOKEN scoped to the `codecov` environment, agent + server flags, thresholds matching the Sonar gate so the two never disagree) lifted §5 to 68% and added the procurement-recognized Codecov badge to the README without stacking a second coverage authority. Hosting Redoc at `/api/docs` plus a Redocly OpenAPI lint job moved §8 from 25% to 34%. The `release.yml` workflow shipping notarized signed `.pkg` plus a multi-arch cosign-signed server image, plus auditing the existing hardened-runtime + minimal-entitlements pipeline that notarization already enforces, lifted §11 Build/release from 17% to 50% (with GoReleaser and Linux init-system + distro packaging both flipped to will-not-do since the custom workflow + Apple-Silicon-only MVP scope already cover those). Adding `LICENSE` (MIT) + [`SECURITY.md`](../SECURITY.md) + [`CONTRIBUTING.md`](../CONTRIBUTING.md) lifted §12 Community signals from 42% to 54% and unblocked the rest of that section's doc items. [`threat-model.md`](threat-model.md) (STRIDE per component) opened §13 Compliance + privacy from 0% to 8%: that section was the last fully-empty area on the checklist.
 
