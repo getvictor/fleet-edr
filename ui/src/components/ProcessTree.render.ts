@@ -49,7 +49,7 @@ export interface TreeInteractions {
 // nested branch logic (issue: complexity paydown). Each takes plain values, so it is side-effect-free and independently testable.
 
 // computeLayoutBounds is the bounding box of the laid-out hierarchy, used to size the svg and center the initial zoom transform.
-function computeLayoutBounds(nodes: D3PointNode[]): { minX: number; maxX: number; minY: number; maxY: number } {
+export function computeLayoutBounds(nodes: D3PointNode[]): { minX: number; maxX: number; minY: number; maxY: number } {
   let minY = Infinity, maxY = -Infinity;
   let minX = Infinity, maxX = -Infinity;
   for (const n of nodes) {
@@ -73,7 +73,7 @@ function nodeDotRadius(alerted: boolean): number {
   return alerted ? NODE_DOT_RADIUS_ALERTED : NODE_DOT_RADIUS_DEFAULT;
 }
 
-function nodeDotFill(p: ProcessNode, alerted: boolean): string {
+export function nodeDotFill(p: ProcessNode, alerted: boolean): string {
   if (alerted) return "#ff5c83"; // core-vibrant-red
   // An aggregated group is "live" (green) when any member is still running; otherwise grey like a single exited process.
   if (p.aggregated) return p.aggregated.running_count > 0 ? "#009a7d" : "#8b8fa2";
@@ -85,12 +85,12 @@ function nodeDotFill(p: ProcessNode, alerted: boolean): string {
 // authoritative "rendered collapsed" signal is _collapsedCount, which buildVisibleRoots sets only on nodes it truly collapses: a node
 // whose id is in collapsedIds but whose children stay visible (search-expanded, applyCollapse off) has no _collapsedCount and reads as
 // expanded. An aggregated node is always expandable to its sample.
-function nodeHasChevron(p: ProcessNode): boolean {
+export function nodeHasChevron(p: ProcessNode): boolean {
   if (p.aggregated) return true; // always expandable to its sample
   return (p.children !== undefined && p.children.length > 0) || p._collapsedCount !== undefined;
 }
 
-function chevronGlyph(p: ProcessNode, expandedAggIds: Set<number>): string {
+export function chevronGlyph(p: ProcessNode, expandedAggIds: Set<number>): string {
   if (p.aggregated) return expandedAggIds.has(p.id) ? "▼" : "▶";
   return p._collapsedCount === undefined ? "▼" : "▶";
 }
@@ -107,7 +107,7 @@ function nodeLabelWeight(alerted: boolean): string {
   return alerted ? "bold" : "normal";
 }
 
-function nodeLabelText(node: D3Node): string {
+export function nodeLabelText(node: D3Node): string {
   const p = node.data;
   // Aggregated nodes read as a group header ("grep ×1000"), not a single pid; the sample members carry the individual pids once the
   // node is expanded.
@@ -149,9 +149,12 @@ export function renderTree(
     .attr("transform", `translate(${String(margin - minY)},${String(margin - minX)})`);
 
   // Zoom behavior.
-  const zoom = d3.zoom<SVGSVGElement, unknown>().scaleExtent([TREE_ZOOM_MIN, TREE_ZOOM_MAX]).on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
-    g.attr("transform", String(event.transform));
-  });
+  const zoom = d3
+    .zoom<SVGSVGElement, unknown>()
+    .scaleExtent([TREE_ZOOM_MIN, TREE_ZOOM_MAX])
+    .on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
+      g.attr("transform", String(event.transform));
+    });
   sel.call(zoom);
   // eslint-disable-next-line @typescript-eslint/unbound-method
   sel.call(zoom.transform, d3.zoomIdentity.translate(margin - minY, margin - minX));
