@@ -58,7 +58,7 @@ Reading the `X-Edr-Authz-Reason` header (or the matching `audit_events` row's `p
 | `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | (none) |
 | `no_matching_rule` | The actor's role bindings don't grant the action. | Assign the appropriate role from the Users page in Admin settings (or SQL, see below). |
 | `reauth_required` | The actor's session is past the reauth window (default 30m). The role grants the action; the operator just needs to re-prove possession of credentials. | UI handles this automatically via the reauth modal. If a non-UI client hits it, follow `challenge.reauth_url` and retry. |
-| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. The current release only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes are coming soon. |
+| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. The current release only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes may be supported in a future release. |
 | `action_not_registered` | The handler called `Allow` with an action string outside `RegisteredActions`. | Server bug. File a ticket; the offending handler likely passed a string literal instead of a typed `api.Action` constant. |
 | `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug: the session middleware is misconfigured for the route. Check the route's middleware chain. |
 

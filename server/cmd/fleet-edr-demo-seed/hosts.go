@@ -18,7 +18,7 @@ import (
 // hostCorpusFS holds the rich, real-captured host streams replayed into the demo. Each file is a scrubbed JSONL export of an
 // edr-qa agent event queue (one fakeagent.Envelope per line: the same wire shape /api/events receives). These supply the deep,
 // realistic process trees with correlated network_connect + dns_query that the attack/noise YAML scenarios lack; the scrub
-// (ai/demo/scrub.py) dropped heartbeats, remapped the host UUID, mapped real IPs to RFC 5737 / RFC 3849 documentation ranges
+// dropped heartbeats, remapped the host UUID, mapped real IPs to RFC 5737 / RFC 3849 documentation ranges
 // (consistently, so the DNS -> network correlation survives), and redacted identity strings.
 //
 //go:embed corpus/hosts/*.jsonl

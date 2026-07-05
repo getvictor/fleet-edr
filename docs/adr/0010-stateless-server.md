@@ -6,7 +6,7 @@
 
 ## Context
 
-The v0.1.0 availability commitment ships the server as a multi-replica application tier behind a load balancer, with rolling upgrade as the only supported upgrade procedure (see `ai/migrations/ha-architecture.md` and the `server-availability` spec). Two properties that topology depends on: any replica must be able to serve any request (the LB does not pin a client to a replica), and a replica must be able to restart (or be replaced during a rolling upgrade) without customer-visible state loss. Both properties break the moment a request's correctness depends on state that lives only in one replica's memory.
+The v0.1.0 availability commitment ships the server as a multi-replica application tier behind a load balancer, with rolling upgrade as the only supported upgrade procedure (see [ADR-0011](0011-ha-architecture.md) and the `server-availability` spec). Two properties that topology depends on: any replica must be able to serve any request (the LB does not pin a client to a replica), and a replica must be able to restart (or be replaced during a rolling upgrade) without customer-visible state loss. Both properties break the moment a request's correctness depends on state that lives only in one replica's memory.
 
 The codebase already mostly satisfies this: sessions and CSRF tokens are MySQL-backed (any replica validates a cookie minted by another), the event queue and detection state are in MySQL, and application-control snapshots are persisted. The risk is regression: a future change that reaches for an in-process map, channel, or cache to hold state that a peer replica would need.
 
@@ -22,7 +22,7 @@ A few per-replica behaviours are accepted and documented rather than centralised
 
 ### Amendment (2026-06-29): the agent control-connection gateway is a sanctioned stateful tier
 
-The `push-command-channel` change replaces the agent's command short-poll with a persistent push connection (the scale-to-100k plan's control channel, `ai/scale-100k/plan.md` section 3.6). The server-side gateway that holds those connections is the first deliberate, named exception to this ADR. It is sanctioned under the following bounds:
+The `push-command-channel` change replaces the agent's command short-poll with a persistent push connection (the scale-to-100k plan's control channel). The server-side gateway that holds those connections is the first deliberate, named exception to this ADR. It is sanctioned under the following bounds:
 
 - **Its only in-process state is per connection: the live socket (keyed by host), the connection's authentication metadata (the token epoch and expiry needed to re-check it against the revocation snapshot without a database lookup), and the set of in-flight command identifiers.** Nothing else.
 - **Nothing durable is persisted in the gateway.** All command state (the queue, statuses, results) stays in MySQL, exactly as before; the gateway is a second transport in front of the unchanged command service, not a new authority for command state.
@@ -47,7 +47,7 @@ This carve-out is specific to the control gateway. It is not a precedent for hol
 
 ## References
 
-- `ai/migrations/ha-architecture.md` and `ai/migrations/v0.1.0-execution-plan.md`: the HA arc this invariant underpins
+- ADR-0011 ([`0011-ha-architecture.md`](0011-ha-architecture.md)): the HA arc this invariant underpins
 - `openspec/specs/server-availability/spec.md`: the requirement "The server holds no in-process state that survives a request lifetime" that this ADR is the enforcement artifact for
 - ADR-0009 ([`0009-migrations-via-goose.md`](0009-migrations-via-goose.md)): the migration discipline the same rolling-upgrade topology requires
 - [`operations.md`](../operations.md): the per-IP rate-limiter and audit-queue accepted-gap decisions (added with the HA arc)

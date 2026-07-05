@@ -7,7 +7,7 @@
 # executable (ADR-0008 + its 2026-05-29 amendment). Mirrors the
 # positive_daemon_unsigned_executable fixture.
 #
-# Ground-truthed on edr-dev (ai/btm-attribution/experiment.md): the BTM instigator
+# Ground-truthed on edr-dev: the BTM instigator
 # for a `launchctl bootstrap` is Apple's smd (a platform binary), so the decision
 # rides the REGISTERED EXECUTABLE's code-signing, not the instigator. This scenario
 # models that exactly: a platform-binary instigator (smd-like) plus an unsigned

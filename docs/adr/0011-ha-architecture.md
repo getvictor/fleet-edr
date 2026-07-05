@@ -53,4 +53,3 @@ Endpoint protection does not depend on control-plane availability: application-c
 - [`server-availability/spec.md`](../../openspec/specs/server-availability/spec.md): the requirements (migrations, drain, leader-coordinated periodic tasks, SKIP LOCKED processor scaling, cross-replica sessions/CSRF, rolling-upgrade-safe migrations) this ADR is the architecture record for
 - [`operations.md`](../operations.md): the rolling-upgrade runbook and the rate-limiter / audit-queue accepted-gap decisions
 - [`install-server.md`](../install-server.md): the deployment topology, availability, and SLA documentation
-- [`ha-architecture.md`](../../ai/migrations/ha-architecture.md) and [`v0.1.0-execution-plan.md`](../../ai/migrations/v0.1.0-execution-plan.md): the design rationale and PR slicing for the arc

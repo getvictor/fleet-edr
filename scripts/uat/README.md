@@ -2,7 +2,7 @@
 
 Asserted automation around the dogfood QA scripts under `scripts/qa/`. The driver at `scripts/uat/system-test.sh` SSHs into the SIP-enabled `edr-qa` VM, optionally installs the candidate PKG and waits for system-extension activation, runs a scenario's `attack.sh`, then polls the server's REST API for the expected detections.
 
-This is the L5 layer of the testing pyramid (per [`testing-strategy.md`](../../docs/testing-strategy.md) and `ai/uat/extension-testing.md`): unlike L0..L4 it does not run per PR; it runs against release candidates and on the developer's own machine against a SIP-on VM. For per-PR signal on extension wire shapes see L0 unit tests (M7) and L0 corpus replay (M8). Running L5 from a dedicated self-hosted GitHub Actions runner (so the cron lane and release tags fire automatically) is tracked as a follow-up; for now the harness runs locally only.
+This is the L5 layer of the testing pyramid (per [`testing-strategy.md`](../../docs/testing-strategy.md)): unlike L0..L4 it does not run per PR; it runs against release candidates and on the developer's own machine against a SIP-on VM. For per-PR signal on extension wire shapes see L0 unit tests (M7) and L0 corpus replay (M8). Running L5 from a dedicated self-hosted GitHub Actions runner (so the cron lane and release tags fire automatically) is tracked as a follow-up; for now the harness runs locally only.
 
 ## Difference vs `scripts/qa/`
 

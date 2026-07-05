@@ -1,6 +1,6 @@
 # M12 scale-test harness
 
-UAT plan milestone M12 (see `ai/uat/plan.md` and [`testing-strategy.md`](../../docs/testing-strategy.md)). Fans out N simulated EDR hosts against one server for D wall-clock duration, records client-observed POST /api/events latency, and asserts the documented pass criteria.
+UAT plan milestone M12 (see [`testing-strategy.md`](../../docs/testing-strategy.md)). Fans out N simulated EDR hosts against one server for D wall-clock duration, records client-observed POST /api/events latency, and asserts the documented pass criteria.
 
 The harness exists in two shapes:
 

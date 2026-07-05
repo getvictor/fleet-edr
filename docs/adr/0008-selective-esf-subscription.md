@@ -12,8 +12,6 @@ The original Decision left two things unspecified that the implementation (#304)
 - `instigator = /usr/libexec/smd` (`com.apple.xpc.smd`), an Apple platform binary; `app = nil`
 - out-of-band on the executable: `codesign` -> ad-hoc / linker-signed, no TeamIdentifier; `spctl -t install` -> rejected (not notarized)
 
-(Full record: `ai/btm-attribution/experiment.md`.)
-
 ### Revised decisions
 
 1. **Do NOT gate on the BTM instigator's code-signing.** `launchctl bootstrap` delegates registration to `smd`, so the instigator is an Apple platform binary for _every_ legacy LaunchDaemon registration, attack or not. The instigator is not the attacker, and `app` is nil for this vector. An instigator `is_platform_binary` gate suppresses the canonical attack. (Implementation note: #304 shipped exactly this gate; it must change.)
