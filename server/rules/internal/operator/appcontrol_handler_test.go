@@ -43,7 +43,7 @@ func TestReadAppControlBody(t *testing.T) {
 
 	t.Run("clean read returns the body", func(t *testing.T) {
 		t.Parallel()
-		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"reason":"r"}`))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(`{"reason":"r"}`))
 		rec := httptest.NewRecorder()
 		body, ok := h.readAppControlBody(req.Context(), rec, req, applicationControlReadBodyLimit)
 		require.True(t, ok)
@@ -53,7 +53,7 @@ func TestReadAppControlBody(t *testing.T) {
 
 	t.Run("body read error maps to 400 read_body", func(t *testing.T) {
 		t.Parallel()
-		req := httptest.NewRequest(http.MethodPost, "/x", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", nil)
 		req.Body = io.NopCloser(errReader{})
 		rec := httptest.NewRecorder()
 		body, ok := h.readAppControlBody(req.Context(), rec, req, applicationControlReadBodyLimit)
@@ -118,8 +118,10 @@ func TestDecodeAppControlBody(t *testing.T) {
 		require.False(t, ok)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 		code, msg := decodeErrResponse(t, rec.Body.Bytes())
-		assert.Equal(t, errCodeInvalidJSON, code)
-		assert.Equal(t, errMsgInvalidJSON, msg)
+		// errCodeInvalidJSON / errMsgInvalidJSON are plain typed strings ("application_control.invalid_json", "invalid json"), not
+		// JSON documents, so testifylint's encoded-compare false-positives on the "JSON" in the constant name; JSONEq would fail.
+		assert.Equal(t, errCodeInvalidJSON, code) //nolint:testifylint // encoded-compare false positive on JSON-named constant
+		assert.Equal(t, errMsgInvalidJSON, msg)   //nolint:testifylint // encoded-compare false positive on JSON-named constant
 	})
 }
 
@@ -165,7 +167,8 @@ func TestDecodeAppControlBodyIfPresent(t *testing.T) {
 		require.False(t, ok)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 		code, _ := decodeErrResponse(t, rec.Body.Bytes())
-		assert.Equal(t, errCodeInvalidJSON, code)
+		// errCodeInvalidJSON is a plain typed error code, not a JSON document: encoded-compare false-positives on the constant name.
+		assert.Equal(t, errCodeInvalidJSON, code) //nolint:testifylint // encoded-compare false positive on JSON-named constant
 	})
 }
 
@@ -201,18 +204,19 @@ func TestMutationHandlerEarlyExits(t *testing.T) {
 
 	t.Run("create rule: invalid json is 400 invalid_json", func(t *testing.T) {
 		t.Parallel()
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/app-control/policies/1/rules", strings.NewReader("{bad"))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/app-control/policies/1/rules", strings.NewReader("{bad"))
 		req.SetPathValue("id", "1")
 		rec := httptest.NewRecorder()
 		h.handleCreateRule(rec, req)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 		code, _ := decodeErrResponse(t, rec.Body.Bytes())
-		assert.Equal(t, errCodeInvalidJSON, code)
+		// errCodeInvalidJSON is a plain typed error code, not a JSON document: encoded-compare false-positives on the constant name.
+		assert.Equal(t, errCodeInvalidJSON, code) //nolint:testifylint // encoded-compare false positive on JSON-named constant
 	})
 
 	t.Run("create rule: valid body but no actor is 500", func(t *testing.T) {
 		t.Parallel()
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/app-control/policies/1/rules",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/app-control/policies/1/rules",
 			strings.NewReader(`{"rule_type":"BINARY","identifier":"/bin/x","reason":"r"}`))
 		req.SetPathValue("id", "1")
 		rec := httptest.NewRecorder()
@@ -224,7 +228,7 @@ func TestMutationHandlerEarlyExits(t *testing.T) {
 
 	t.Run("create rule: body read error is 400 read_body", func(t *testing.T) {
 		t.Parallel()
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/app-control/policies/1/rules", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/app-control/policies/1/rules", nil)
 		req.Body = io.NopCloser(errReader{})
 		req.SetPathValue("id", "1")
 		rec := httptest.NewRecorder()
@@ -236,7 +240,7 @@ func TestMutationHandlerEarlyExits(t *testing.T) {
 
 	t.Run("create rule: bad policy id is 400 invalid_policy_id", func(t *testing.T) {
 		t.Parallel()
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/app-control/policies/0/rules", strings.NewReader("{}"))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/app-control/policies/0/rules", strings.NewReader("{}"))
 		req.SetPathValue("id", "0") // non-positive -> parsePolicyID rejects
 		rec := httptest.NewRecorder()
 		h.handleCreateRule(rec, req)
@@ -247,7 +251,7 @@ func TestMutationHandlerEarlyExits(t *testing.T) {
 
 	t.Run("delete rule: whitespace body is normalized then 500 on missing actor", func(t *testing.T) {
 		t.Parallel()
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/app-control/rules/1", strings.NewReader("  \n  "))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/v1/app-control/rules/1", strings.NewReader("  \n  "))
 		req.SetPathValue("id", "1")
 		rec := httptest.NewRecorder()
 		h.handleDeleteRule(rec, req)

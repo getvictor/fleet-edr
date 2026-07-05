@@ -329,6 +329,35 @@ func TestNewOIDCProviderConfigFn(t *testing.T) {
 		assert.Equal(t, "https://edr.example.com/api/auth/callback", got.RedirectURL)
 		assert.NotEmpty(t, got.Stamp, "the cache stamp folds both config versions")
 	})
+
+	t.Run("a non-ErrNotFound store read error is surfaced, not masked as not-configured", func(t *testing.T) {
+		t.Parallel()
+		// Closing the handle makes the next read fail with a driver error ("database is closed"), which is NOT ErrNotFound. The
+		// closure must return that error verbatim so a real store fault surfaces as a 500, not the directed "SSO not configured" reply.
+		db, store := newSSOStore(t, sealerKeyA)
+		require.NoError(t, db.Close())
+		fn := newOIDCProviderConfigFn(store, appconfig.New(db))
+		_, err := fn(t.Context())
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, oidc.ErrNotConfigured, "a store read failure must not be flattened into ErrNotConfigured")
+	})
+
+	t.Run("an app-config read error is surfaced after the OIDC config loads", func(t *testing.T) {
+		t.Parallel()
+		db, store := newSSOStore(t, sealerKeyA)
+		ctx := t.Context()
+		secret := "shh"
+		// A usable OIDC config so GetDecrypted returns cleanly: the failure must come from the app_config read that derives the
+		// redirect URL, exercising the second (appConfig.Get) error branch rather than the first (store) one. Dropping only the
+		// app_config table leaves oidc_config intact, so the first read succeeds and the second fails with a real (non-ErrNoRows) error.
+		require.NoError(t, store.Upsert(ctx, ssoconfig.UpsertInput{Issuer: "https://idp.example.com", ClientID: "cid", NewSecret: &secret}))
+		_, err := db.ExecContext(ctx, "DROP TABLE app_config")
+		require.NoError(t, err)
+		fn := newOIDCProviderConfigFn(store, appconfig.New(db))
+		_, err = fn(ctx)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, oidc.ErrNotConfigured, "an app_config read failure is a real error, not not-configured")
+	})
 }
 
 // TestNewOIDCJITPolicyFn exercises the JIT-policy closure the provisioner reads: no stored config means JIT off (deny unknown
@@ -359,5 +388,16 @@ func TestNewOIDCJITPolicyFn(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, allow)
 		assert.Equal(t, "auditor", role)
+	})
+
+	t.Run("a non-ErrNotFound store read error is surfaced, not silently JIT-off", func(t *testing.T) {
+		t.Parallel()
+		// A closed handle makes store.Get fail with a driver error (not ErrNotFound). The closure must return that error so a store
+		// fault propagates to the provisioner rather than being flattened into the "JIT off, deny unknown subject" default.
+		db, store := newSSOStore(t, sealerKeyA)
+		require.NoError(t, db.Close())
+		fn := newOIDCJITPolicyFn(store)
+		_, _, err := fn(t.Context())
+		require.Error(t, err)
 	})
 }
