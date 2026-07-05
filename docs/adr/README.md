@@ -26,8 +26,8 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0001](0001-single-go-module-with-internal.md) | Single Go module with `internal/` for shared code | Accepted |
 | [0002](0002-macos-apple-silicon-mvp-only.md) | MVP ships macOS on Apple Silicon only | Accepted |
 | [0003](0003-standalone-product-not-fleet-integrated.md) | EDR is a standalone product, Fleet is a deployment channel | Accepted |
-| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Implemented; amendment proposed in [0015](0015-clickhouse-visibility-store.md) (`visibility` context) |
-| [0005](0005-mysql-only-data-plane.md) | MySQL is the only supported RDBMS for the data plane | Accepted; narrowing proposed in [0015](0015-clickhouse-visibility-store.md) |
+| [0004](0004-modular-monolith-bounded-contexts.md) | Modular monolith with bounded contexts | Implemented; extended by [0015](0015-clickhouse-visibility-store.md) (`visibility` context now live) |
+| [0005](0005-mysql-only-data-plane.md) | MySQL is the only supported RDBMS for the data plane | Accepted; narrowed by [0015](0015-clickhouse-visibility-store.md) |
 | [0006](0006-otel-only-metrics.md) | OpenTelemetry is the only metrics pipeline; no Prometheus /metrics | Accepted |
 | [0007](0007-xpc-peer-validation-libxpc-only.md) | XPC peer validation via libxpc code-signing requirement; no audit_token layer | Accepted |
 | [0008](0008-selective-esf-subscription.md) | Selective Endpoint Security subscription; BTM for persistence, no broad NOTIFY_OPEN | Accepted |
@@ -36,11 +36,11 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0011](0011-ha-architecture.md) | High-availability architecture: multi-replica app tier with rolling upgrade | Accepted |
 | [0012](0012-capability-based-ui-gating.md) | Capability-based UI gating from a server-provided permission set | Accepted |
 | [0013](0013-service-account-and-api-authentication.md) | Service-account and API authentication: client-credentials with short-lived self-validating tokens | Accepted |
-| [0014](0014-inline-enforcement-failure-semantics.md) | Inline network enforcement: observation fails open, enforcement is explicit and resilient | Proposed |
-| [0015](0015-clickhouse-visibility-store.md) | ClickHouse event store in a new `visibility` bounded context | Proposed |
+| [0014](0014-inline-enforcement-failure-semantics.md) | Inline network enforcement: observation fails open, enforcement is explicit and resilient | Accepted |
+| [0015](0015-clickhouse-visibility-store.md) | ClickHouse event store in a new `visibility` bounded context | Accepted |
 | [0016](0016-event-delivery-substrate.md) | Event delivery: database-backed work queue now, streaming substrate at scale | Accepted |
-| [0017](0017-unified-principal-model.md) | Unified principal model: one typed actor identity for users and service accounts | Proposed |
-| [0018](0018-windows-platform-strategy.md) | Windows platform strategy: phased Windows agent, platform-agnostic contract, driverless first | Proposed |
+| [0017](0017-unified-principal-model.md) | Unified principal model: one typed actor identity for users and service accounts | Accepted |
+| [0018](0018-windows-platform-strategy.md) | Windows platform strategy: phased Windows agent, platform-agnostic contract, driverless first | Accepted |
 
 ## Tooling
 

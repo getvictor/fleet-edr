@@ -1,6 +1,6 @@
 # 0014. Inline network enforcement: observation fails open, enforcement is explicit and resilient
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-21
 - Deciders: getvictor
 

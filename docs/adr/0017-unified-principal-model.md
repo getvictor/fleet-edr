@@ -1,6 +1,6 @@
 # 0017. Unified principal model: one typed actor identity for users and service accounts
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-28
 - Deciders: getvictor
 
