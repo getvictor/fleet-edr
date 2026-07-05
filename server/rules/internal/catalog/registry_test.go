@@ -88,15 +88,6 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 				"%s declares severity %q; expected one of the SeverityLow|Medium|High|Critical constants",
 				r.ID(), d.Severity)
 			assert.NotEmpty(t, d.EventTypes, "EventTypes must list at least one type for %s", r.ID())
-			for _, c := range d.Config {
-				assert.NotEmpty(t, c.EnvVar, "%s config knob missing EnvVar", r.ID())
-				assert.NotEmpty(t, c.Type, "%s config knob %s missing Type", r.ID(), c.EnvVar)
-				assert.NotEmpty(t, c.Description, "%s config knob %s missing Description", r.ID(), c.EnvVar)
-				// Default is allowed to be the empty string (feature off until configured); the field
-				// must exist on the struct so the JSON shape advertises the knob's default to operators.
-				// _ = is a compile-time reference, not a runtime assertion.
-				_ = c.Default
-			}
 		})
 	}
 }

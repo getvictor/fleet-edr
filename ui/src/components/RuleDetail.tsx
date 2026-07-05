@@ -117,32 +117,6 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
         <p key={`${entry.id}-p${String(i)}`} className="rule-detail__para">{para}</p>
       ))}
 
-      {doc.config && doc.config.length > 0 && (
-        <>
-          <h2>Configuration</h2>
-          <Table className="rule-detail__config">
-            <thead>
-              <tr>
-                <th>Env var</th>
-                <th>Type</th>
-                <th>Default</th>
-                <th>Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {doc.config.map((c) => (
-                <tr key={c.env_var}>
-                  <td><code>{c.env_var}</code></td>
-                  <td><code>{c.type}</code></td>
-                  <td>{c.default === "" ? <span className="rule-detail__muted">(unset)</span> : <code>{c.default}</code>}</td>
-                  <td>{c.description}</td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </>
-      )}
-
       {doc.false_positives && doc.false_positives.length > 0 && (
         <>
           <h2>Known false-positive sources</h2>
