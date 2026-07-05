@@ -146,24 +146,6 @@ type Documentation struct {
 	// Limitations names known coverage gaps so an operator knows what the rule does NOT catch (atomic renames, env-inherited DYLD vars,
 	// etc.).
 	Limitations []string `json:"limitations,omitempty"`
-	// Config enumerates the env var knobs the rule honours. Empty for
-	// rules without configuration (e.g. credential_keychain_dump).
-	Config []ConfigKnob `json:"config,omitempty"`
-}
-
-// ConfigKnob describes one operator-facing tuning env var.
-type ConfigKnob struct {
-	// EnvVar is the canonical name (e.g. EDR_LAUNCHAGENT_ALLOWLIST).
-	EnvVar string `json:"env_var"`
-	// Type tells the operator what value-shape the env var expects: "csv-paths" for absolute filesystem paths, "csv-team-ids" for Apple
-	// team-ID strings, "duration" for time.ParseDuration values, etc.
-	Type string `json:"type"`
-	// Default is the literal value the rule uses when the env var is
-	// unset. Empty string means "feature off until configured".
-	Default string `json:"default"`
-	// Description is one-sentence guidance for what the operator is
-	// buying by setting this knob.
-	Description string `json:"description"`
 }
 
 // --- Application Control types -----------------------------------------------

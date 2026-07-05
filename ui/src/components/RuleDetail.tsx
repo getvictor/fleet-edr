@@ -6,7 +6,7 @@ import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
 
 // RuleDetail renders a single detection rule's documentation: behaviour,
-// severity, ATT&CK mapping, configuration knobs, false-positive sources, and
+// severity, ATT&CK mapping, false-positive sources, and
 // limitations. This page loads rule docs from /api/rules; the
 // markdown reference at docs/detection-rules.md is generated directly from
 // the same Go-side `detection.Rule.Doc()` definitions, so the two surfaces
@@ -116,32 +116,6 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
       {doc.description.split("\n\n").map((para, i) => (
         <p key={`${entry.id}-p${String(i)}`} className="rule-detail__para">{para}</p>
       ))}
-
-      {doc.config && doc.config.length > 0 && (
-        <>
-          <h2>Configuration</h2>
-          <Table className="rule-detail__config">
-            <thead>
-              <tr>
-                <th>Env var</th>
-                <th>Type</th>
-                <th>Default</th>
-                <th>Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {doc.config.map((c) => (
-                <tr key={c.env_var}>
-                  <td><code>{c.env_var}</code></td>
-                  <td><code>{c.type}</code></td>
-                  <td>{c.default === "" ? <span className="rule-detail__muted">(unset)</span> : <code>{c.default}</code>}</td>
-                  <td>{c.description}</td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </>
-      )}
 
       {doc.false_positives && doc.false_positives.length > 0 && (
         <>

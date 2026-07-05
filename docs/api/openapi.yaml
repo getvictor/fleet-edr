@@ -1214,30 +1214,6 @@ components:
           items:
             type: string
           description: Coverage gaps the rule does NOT catch.
-        config:
-          type: array
-          items:
-            $ref: "#/components/schemas/RuleConfig"
-          description: Operator tuning knobs (env vars). Empty for non-configurable rules.
-
-    RuleConfig:
-      type: object
-      required: [env_var, type, default, description]
-      properties:
-        env_var:
-          type: string
-          example: EDR_LAUNCHAGENT_ALLOWLIST
-        type:
-          type: string
-          description: Value-shape hint (e.g. `csv-paths`, `csv-team-ids`, `duration`).
-          example: csv-paths
-        default:
-          type: string
-          description: Literal default value when the env var is unset. Empty string means "feature off until configured".
-          example: ""
-        description:
-          type: string
-          example: "Comma-separated absolute plist paths the rule should silently accept."
 
     DetectionExclusion:
       type: object
