@@ -136,17 +136,17 @@ The agent runs two parallel receiver loops (ESF + Network), each with exponentia
 
 ## Server components
 
-The server is a modular monolith split into five bounded contexts under `server/`: `identity`, `endpoint`, `rules`, `response`, and `detection` (ADR-0004). Each context owns an `api/` package (the only surface other contexts may import), a Go-compiler-enforced `internal/` tree, and its own `migrations/` schema (ADR-0009). The event data plane lives almost entirely in the `detection` context; the subsections below trace a batch through it.
+The server is a modular monolith split into seven bounded contexts under `server/`: the original five `identity`, `endpoint`, `rules`, `response`, and `detection` (ADR-0004), plus `observability` and `visibility` (the ClickHouse event store, ADR-0015). Each context owns an `api/` package (the only surface other contexts may import), a Go-compiler-enforced `internal/` tree, and its own `migrations/` schema (ADR-0009). The event data plane spans `detection` (the ingest handler and the detection pipeline) and `visibility` (the ClickHouse event archive plus the ephemeral MySQL `event_queue`, ADR-0015); the subsections below trace a batch through it.
 
 ### Ingest handler (`server/detection/internal/intake/`)
 
-Stateless agent-facing handler. `POST /api/events` validates required fields (`event_id`, `host_id`, `event_type`, `timestamp_ns`), enforces a 10 MB body limit (`MaxIngestBodyBytes`), and inserts into the `events` table with `INSERT IGNORE` for idempotent deduplication. The same package serves the unauthenticated `/livez` and `/readyz` probes.
+Stateless agent-facing handler. `POST /api/events` validates required fields (`event_id`, `host_id`, `event_type`, `timestamp_ns`), enforces a 10 MB body limit (`MaxIngestBodyBytes`), and durably persists each accepted event to the ClickHouse archive while enqueuing it on the MySQL `event_queue` (both owned by the `visibility` context, ADR-0015), returning success only after both writes; the write is idempotent by `event_id`. The same package serves the unauthenticated `/livez` and `/readyz` probes.
 
 A standalone `fleet-edr-ingest` binary (`server/cmd/fleet-edr-ingest/`) runs this handler independently for horizontal scaling.
 
 ### Pipeline (`server/detection/internal/pipeline/`)
 
-Composes the background goroutines detection runs continuously. `processor.go` claims a batch of unprocessed `events` rows every `cfg.ProcessInterval` (default 500ms). For each batch:
+Composes the background goroutines detection runs continuously. `processor.go` claims a batch of unprocessed events from the visibility `event_queue` (the lock-free multi-replica claim, ADR-0016) every `cfg.ProcessInterval` (default 500ms), reading full event payloads from the ClickHouse archive as needed. For each batch:
 
 1. **Graph builder** (`server/detection/internal/graph/builder.go`) materializes process state:
 
@@ -181,17 +181,17 @@ type Rule interface {
 
 ### Persistence (MySQL 8.4, ADR-0005)
 
-Each bounded context owns its own tables in the shared database; there are no cross-context foreign keys (ADR-0004). The data plane (`detection`) owns:
+Each bounded context owns its own tables; there are no cross-context foreign keys (ADR-0004). Raw events no longer live in MySQL: the durable event archive is a ClickHouse table owned by `visibility`, and the ephemeral MySQL `event_queue` (also `visibility`) holds only the unprocessed working set (ADR-0015, ADR-0016). In MySQL, the `detection` context owns:
 
-| Table          | Purpose                                                                          |
-| -------------- | -------------------------------------------------------------------------------- |
-| `events`       | Raw event storage with processed flag for the claim/process/mark cycle           |
-| `processes`    | Materialized process state (PID, `pidversion`, path, args, fork/exec/exit times) |
-| `alerts`       | Detection findings with deduplication (host_id, rule_id, process_id)             |
-| `alert_events` | Links alerts to triggering events                                                |
-| `hosts`        | Enrolled-host roster with last-seen / online status                              |
+| Table                  | Purpose                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| `processes`            | Materialized process state (PID, `pidversion`, path, args, fork/exec/exit times) |
+| `alerts`               | Detection findings with deduplication (host_id, rule_id, process_id)             |
+| `alert_events`         | Links alerts to their triggering event IDs                                       |
+| `alert_event_payloads` | Self-contained event-payload copies so an alert's evidence survives archive TTL  |
+| `hosts`                | Enrolled-host roster with last-seen / online status                              |
 
-`commands` lives in `response`; `enrollments` in `endpoint`; the `app_control_*` policy tables in `rules`; `users`, `sessions`, `roles`, and `audit_events` in `identity`.
+`event_queue` lives in `visibility`; `commands` lives in `response`; `enrollments` in `endpoint`; the `app_control_*` policy tables in `rules`; `users`, `sessions`, `roles`, and `audit_events` in `identity`.
 
 ### Read and operator API
 
