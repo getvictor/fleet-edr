@@ -927,8 +927,5 @@ func writeAppControlErr(
 	code string,
 	message string,
 ) {
-	writeJSON(ctx, logger, w, status, map[string]string{
-		"error":   code,
-		"message": message,
-	})
+	writeOperatorErr(ctx, logger, w, status, code, message)
 }
