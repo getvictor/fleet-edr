@@ -274,7 +274,6 @@ type recordingMetrics struct {
 	heartbeatsDropped   int
 	alertsCreated       int
 	processesReconciled int64
-	rowsDeleted         int64
 	processRowsDeleted  int64
 }
 
@@ -298,11 +297,6 @@ func (m *recordingMetrics) ProcessesTTLReconciled(_ context.Context, n int64) {
 	defer m.mu.Unlock()
 	m.processesReconciled += n
 }
-func (m *recordingMetrics) RetentionRowsDeleted(_ context.Context, n int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.rowsDeleted += n
-}
 func (m *recordingMetrics) ProcessRetentionRowsDeleted(_ context.Context, n int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -313,10 +307,10 @@ func (m *recordingMetrics) ProcessRetentionRowsDeleted(_ context.Context, n int6
 // this fake, so it is a no-op here.
 func (m *recordingMetrics) QueueRowsPruned(_ context.Context, _ int64) {}
 
-func (m *recordingMetrics) snapshot() (events, alerts int, reconciled, deleted int64) {
+func (m *recordingMetrics) snapshot() (events, alerts int, reconciled int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.eventsIngested, m.alertsCreated, m.processesReconciled, m.rowsDeleted
+	return m.eventsIngested, m.alertsCreated, m.processesReconciled
 }
 
 // allowAllAuthZ is a chokepoint stub: every Allow returns granted. Tests defined here exercise detection's ingest / processor paths,
@@ -1833,11 +1827,11 @@ func TestSetMetrics_PropagatesToEngineAndIntake(t *testing.T) {
 
 	// Wait for the processor + engine to fire so AlertCreated is recorded.
 	require.Eventually(t, func() bool {
-		_, alerts, _, _ := rec.snapshot()
+		_, alerts, _ := rec.snapshot()
 		return alerts > 0
 	}, 5*time.Second, 50*time.Millisecond)
 
-	events, alerts, _, _ := rec.snapshot()
+	events, alerts, _ := rec.snapshot()
 	assert.Positive(t, events, "EventsIngested hook fired by intake")
 	assert.Positive(t, alerts, "AlertCreated fired by engine")
 }

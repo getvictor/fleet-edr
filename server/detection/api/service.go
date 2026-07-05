@@ -95,11 +95,8 @@ type MetricsRecorder interface {
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.
 	ProcessesTTLReconciled(ctx context.Context, n int64)
-	// RetentionRowsDeleted is called by the pipeline's retention
-	// runner on every retention pass, reporting event rows deleted.
-	RetentionRowsDeleted(ctx context.Context, n int64)
 	// ProcessRetentionRowsDeleted is called by the pipeline's retention runner on every pass with the count of completed process rows
-	// pruned past the retention window (counted separately from event rows).
+	// pruned past the retention window. (Raw events left MySQL for ClickHouse native TTL in ADR-0015, so there is no event-row counter.)
 	ProcessRetentionRowsDeleted(ctx context.Context, n int64)
 	// QueueRowsPruned is called by the pipeline's queue-prune sweep on every pass with the number of acked rows removed from the event
 	// work queue (the visibility EventLog), so operators can watch the sweep keep pace with ingest (ADR-0015).

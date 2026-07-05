@@ -245,8 +245,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector (SigNoz, Tempo, Datadog OTel
   - `edr.alerts.created` (counter, by `rule_id` + `severity`): alerts raised by detection.
   - `edr.enrolled.hosts` (gauge): current non-revoked enrollments.
   - `edr.offline.hosts` (gauge): hosts unseen longer than the offline threshold (5 min).
-  - `edr.retention.rows_deleted` (counter): event rows pruned per retention run.
-  - `edr.retention.processes.rows_deleted` (counter): process-graph rows pruned per retention run.
+  - `edr.retention.processes.rows_deleted` (counter): process-graph rows pruned per retention run. (Raw-event retention is the ClickHouse archive's native TTL, ADR-0015, not a server-emitted metric.)
   - `edr.processes.ttl_reconciled` (counter): processes whose exit was synthesized by the freshness-TTL reconciler (missed-exit fallback).
   - `edr.agent.queue.dropped` (counter): agent-side queue drops reported back.
   - `edr.audit.write_failures` (counter): audit-row INSERT failures; any non-zero value means the append-only audit contract is broken, so alert on it.

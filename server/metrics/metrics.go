@@ -57,7 +57,6 @@ type Recorder struct {
 	eventsIngested              metric.Int64Counter
 	heartbeatsDropped           metric.Int64Counter
 	alertsCreated               metric.Int64Counter
-	retentionRowsDeleted        metric.Int64Counter
 	processRetentionRowsDeleted metric.Int64Counter
 	queueRowsPruned             metric.Int64Counter
 	processesReconciled         metric.Int64Counter
@@ -110,11 +109,6 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.alerts.created",
 		metric.WithDescription("Detection alerts created (dedup-skipped alerts not counted), by rule + severity."),
 		metric.WithUnit("{alert}"),
-	)
-	r.retentionRowsDeleted, _ = meter.Int64Counter(
-		"edr.retention.rows_deleted",
-		metric.WithDescription("Total rows deleted by the event retention job since server start."),
-		metric.WithUnit("{row}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.processes.rows_deleted",
@@ -238,16 +232,8 @@ func (r *Recorder) ObserveHTTPRequest(ctx context.Context, method, route string,
 	))
 }
 
-// RetentionRowsDeleted satisfies retention.MetricsRecorder.
-func (r *Recorder) RetentionRowsDeleted(ctx context.Context, n int64) {
-	if r == nil || r.retentionRowsDeleted == nil || n <= 0 {
-		return
-	}
-	r.retentionRowsDeleted.Add(ctx, n)
-}
-
-// ProcessRetentionRowsDeleted satisfies api.MetricsRecorder. Counts completed process rows pruned past the retention window, kept
-// separate from RetentionRowsDeleted (event rows) so operators can see process-table churn distinctly.
+// ProcessRetentionRowsDeleted satisfies api.MetricsRecorder. Counts completed process rows pruned past the retention window. (The
+// events table left MySQL for ClickHouse native TTL in ADR-0015, so there is no longer an event-row deletion counter here.)
 func (r *Recorder) ProcessRetentionRowsDeleted(ctx context.Context, n int64) {
 	if r == nil || r.processRetentionRowsDeleted == nil || n <= 0 {
 		return
