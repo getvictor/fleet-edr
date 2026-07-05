@@ -17,6 +17,18 @@ import { ActivityHistogram } from "./ActivityHistogram";
 import { DEFAULT_ALERT_WINDOW_MS, DEFAULT_LIVE_WINDOW_MS, windowBounds, type TimeWindow } from "../timewindow";
 import { Badge, type BadgeVariant } from "./ui/Badge";
 import { Button } from "./ui/Button";
+import {
+  buildPreservedIds,
+  buildQueryFilterIds,
+  buildVisibleRoots,
+  collectMatches,
+  findAlertChain,
+  selectNodeFromParams,
+  toD3Hierarchy,
+  viewHref,
+  type D3Node,
+  type D3PointNode,
+} from "./ProcessTree.helpers";
 import "./ProcessTree.scss";
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
@@ -49,22 +61,8 @@ const LABEL_BG_PAD_Y = 1;
 const LABEL_BG_EXTRA_WIDTH = LABEL_BG_PAD_X * 2;
 const LABEL_BG_EXTRA_HEIGHT = LABEL_BG_PAD_Y * 2;
 
-// Path segments we treat as "system noise" for the hide-system toggle. We match on substring
-// rather than prefix so that cryptex-mounted paths also match. On modern macOS a single framework
-// binary can appear at any of, e.g.:
-//   /System/Library/Frameworks/WebKit.framework/...
-//   /System/Volumes/Preboot/Cryptexes/OS/System/Library/Frameworks/WebKit.framework/...
-//   /System/Cryptexes/Incoming/OS/System/Library/Frameworks/WebKit.framework/...
-// We deliberately do NOT filter /System/Applications/ (Safari, Mail, Notes, Messages, Calendar,
-// etc.) because those are user-facing apps and are as valid an attack surface as anything in
-// /Applications/. Anything packaged as a .app bundle is kept regardless of where it lives, so
-// Finder, Dock, loginwindow-hosted apps, and the like also remain in the tree.
-const SYSTEM_PATH_SEGMENTS = ["/System/Library/", "/usr/libexec/", "/Library/Apple/"];
-
 const SHOW_SYSTEM_STORAGE_KEY = "edr.processTree.showSystem";
 const FLATTEN_STORAGE_KEY = "edr.processTree.flatten";
-
-type D3PointNode = d3.HierarchyPointNode<D3Node>;
 
 interface RenderResult {
   zoom: d3.ZoomBehavior<SVGSVGElement, unknown>;
@@ -221,81 +219,20 @@ export function ProcessTreeView() {
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
-  const preservedIds = useMemo(() => {
-    const keep = new Set<number>();
-    const walk = (node: ProcessNode, ancestors: number[]) => {
-      const nextAncestors = [...ancestors, node.id];
-      if (alertProcessIds.has(node.id)) {
-        for (const id of nextAncestors) keep.add(id);
-      }
-      if (node.children) for (const c of node.children) walk(c, nextAncestors);
-    };
-    for (const r of roots) walk(r, []);
-    return keep;
-  }, [roots, alertProcessIds]);
+  const preservedIds = useMemo(() => buildPreservedIds(roots, alertProcessIds), [roots, alertProcessIds]);
 
-  // Re-shape the raw tree according to the current filters: hide system-path nodes
-  // unconditionally (except preserved), optionally restrict to the alert chain, and drop
-  // children of collapsed nodes while stashing the hidden-count on the surviving parent so
-  // we can render it as "+N". While a search query is active, skip the collapse step so the
-  // user never sees "0 matches" when a match is only hidden inside a collapsed subtree
-  // AND prune to just matches + ancestors so the canvas isn't a wall of dimmed noise.
+  // Re-shape the raw tree according to the current filters (see buildVisibleRoots in ProcessTree.helpers): hide system-path nodes
+  // unconditionally (except preserved), optionally restrict to the alert chain, and drop children of collapsed nodes while stashing the
+  // hidden-count on the surviving parent so we can render it as "+N". While a search query is active, skip the collapse step so the user
+  // never sees "0 matches" when a match is only hidden inside a collapsed subtree AND prune to just matches + ancestors so the canvas
+  // isn't a wall of dimmed noise.
   const applyCollapse = query.trim() === "";
-  const queryFilterIds = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return null;
-    const keep = new Set<number>();
-    const visit = (nodes: ProcessNode[], ancestors: number[]): boolean => {
-      let anyMatch = false;
-      for (const n of nodes) {
-        const matches = matchesQueryRaw(n, q);
-        const childMatches = n.children ? visit(n.children, [...ancestors, n.id]) : false;
-        if (matches || childMatches) {
-          keep.add(n.id);
-          for (const a of ancestors) keep.add(a);
-          anyMatch = true;
-        }
-      }
-      return anyMatch;
-    };
-    visit(roots, []);
-    return keep;
-  }, [roots, query]);
-  const visibleRoots = useMemo(() => {
-    // Predicate for "is this node visible at all": pulled out to keep the
-    // recursive walk below under Sonar's cognitive-complexity cap.
-    const isVisible = (n: ProcessNode): boolean => {
-      if (alertChainIds && !alertChainIds.has(n.id)) return false;
-      if (!showSystem && isSystemPath(n.path) && !preservedIds.has(n.id)) return false;
-      // Search filter: hide everything outside the matches-plus-ancestors set so
-      // a query like "60289" reduces a 200-node tree to the few rows that matter,
-      // instead of dimming 195 nodes the user has to visually skip past.
-      if (queryFilterIds && !queryFilterIds.has(n.id)) return false;
-      return true;
-    };
-    const apply = (nodes: ProcessNode[]): ProcessNode[] => {
-      const out: ProcessNode[] = [];
-      for (const n of nodes) {
-        if (!isVisible(n)) continue;
-        // An aggregated "×N" node ships childless; when the analyst expands it, its capped sample becomes its children in place
-        // (issue #416). Its own subtree is always the sample, so the generic collapse machinery below doesn't apply to it.
-        if (n.aggregated) {
-          const sample = expandedAggIds.has(n.id) ? apply(n.aggregated.sample ?? []) : undefined;
-          out.push({ ...n, children: sample });
-          continue;
-        }
-        const kids = n.children ? apply(n.children) : undefined;
-        if (applyCollapse && collapsedIds.has(n.id) && kids && kids.length > 0) {
-          const collapsedTotal = kids.reduce((acc, c) => acc + 1 + countDescendants(c), 0);
-          out.push({ ...n, children: undefined, _collapsedCount: collapsedTotal });
-        } else {
-          out.push({ ...n, children: kids });
-        }
-      }
-      return out;
-    };
-    return apply(roots);
-  }, [roots, showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds]);
+  const queryFilterIds = useMemo(() => buildQueryFilterIds(roots, query), [roots, query]);
+  const visibleRoots = useMemo(
+    () =>
+      buildVisibleRoots(roots, { showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds }),
+    [roots, showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds],
+  );
 
   const toggleCollapsed = useCallback((nodeId: number) => {
     setCollapsedIds((prev) => {
@@ -747,189 +684,74 @@ function GraphBody({
   );
 }
 
-// collectMatches walks the laid-out nodes and returns every node whose payload matches
-// q (by name/path/pid/args) plus the set of nodes on the ancestor path of any match,
-// used to dim non-matching subtrees while keeping the context to the match visible.
-function collectMatches(
-  nodes: D3PointNode[],
-  q: string,
-): { matches: D3PointNode[]; pathNodes: Set<D3PointNode> } {
-  const matches: D3PointNode[] = [];
-  const pathNodes = new Set<D3PointNode>();
-  if (!q) return { matches, pathNodes };
+// The pure per-node display derivations renderTree's d3 callbacks delegate to, so the render body below stays flat d3 wiring instead of
+// nested branch logic (issue: complexity paydown). Each takes plain values, so it is side-effect-free and independently testable.
+
+// computeLayoutBounds is the bounding box of the laid-out hierarchy, used to size the svg and center the initial zoom transform.
+function computeLayoutBounds(nodes: D3PointNode[]): { minX: number; maxX: number; minY: number; maxY: number } {
+  let minY = Infinity, maxY = -Infinity;
+  let minX = Infinity, maxX = -Infinity;
   for (const n of nodes) {
-    if (n.data.pid === 0) continue; // synthetic root when tree has multiple real roots
-    if (!nodeMatchesQuery(n.data, q)) continue;
-    matches.push(n);
-    let cur: D3PointNode | null = n;
-    while (cur) {
-      pathNodes.add(cur);
-      cur = cur.parent;
-    }
+    if (n.x < minX) minX = n.x;
+    if (n.x > maxX) maxX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.y > maxY) maxY = n.y;
   }
-  return { matches, pathNodes };
+  return { minX, maxX, minY, maxY };
 }
 
-// matchFields holds the four node fields the search box compares against.
-// Both the d3-layout-time matcher and the data-side pre-filter funnel into
-// this so the matching rules can't drift between them.
-function matchFields(name: string, path: string, pid: number, args: string[] | undefined, q: string): boolean {
-  if (name.toLowerCase().includes(q)) return true;
-  if (path.toLowerCase().includes(q)) return true;
-  if (String(pid).includes(q)) return true;
-  if (args?.some((a) => a.toLowerCase().includes(q))) return true;
-  return false;
+// node--evidence drives the amber ring via CSS (ProcessTree.scss) rather than presentation attributes, so the search-match ring's class
+// rule cannot silently override it (CSS rules beat SVG presentation attributes).
+function evidenceNodeClass(p: ProcessNode): string {
+  return nodeEvidenceMarked(p) ? "node node--evidence" : "node";
 }
 
-function nodeMatchesQuery(d: D3Node, q: string): boolean {
-  return matchFields(d.name, d.path, d.pid, d.data.args, q);
+// Alerted nodes get a larger red dot. The label sits far enough from the dot (see LABEL_DX) that neither the bigger dot nor the
+// search-match ring get clipped by the label backdrop.
+function nodeDotRadius(alerted: boolean): number {
+  return alerted ? NODE_DOT_RADIUS_ALERTED : NODE_DOT_RADIUS_DEFAULT;
 }
 
-// matchesQueryRaw is the data-side mirror of nodeMatchesQuery: it operates on
-// raw ProcessNode rows before the d3 layout runs. Used by the visible-tree
-// pre-filter so the canvas only ever lays out the matches-plus-ancestors set.
-function matchesQueryRaw(n: ProcessNode, q: string): boolean {
-  const name = n.path.split("/").pop() ?? "";
-  return matchFields(name, n.path, n.pid, n.args, q);
+function nodeDotFill(p: ProcessNode, alerted: boolean): string {
+  if (alerted) return "#ff5c83"; // core-vibrant-red
+  // An aggregated group is "live" (green) when any member is still running; otherwise grey like a single exited process.
+  if (p.aggregated) return p.aggregated.running_count > 0 ? "#009a7d" : "#8b8fa2";
+  if (p.exit_time_ns) return "#8b8fa2";
+  return "#009a7d";
 }
 
-function isSystemPath(path: string): boolean {
-  // Any .app bundle is a user-launchable application, so keep it visible even if it lives
-  // under /System/Library/ (e.g. /System/Library/CoreServices/Finder.app/...).
-  if (path.includes(".app/")) return false;
-  for (const seg of SYSTEM_PATH_SEGMENTS) {
-    if (path.includes(seg)) return true;
-  }
-  return false;
+// A chevron is drawn when a node has children in the underlying data OR has been collapsed (so it can be expanded back). An aggregated
+// node is always expandable to its sample.
+function nodeHasChevron(p: ProcessNode, collapsedIds: Set<number>): boolean {
+  if (p.aggregated) return true; // always expandable to its sample
+  return (p.children !== undefined && p.children.length > 0) || collapsedIds.has(p.id);
 }
 
-function countDescendants(node: ProcessNode): number {
-  if (!node.children) return 0;
-  let n = 0;
-  for (const c of node.children) n += 1 + countDescendants(c);
-  return n;
+function chevronGlyph(p: ProcessNode, expandedAggIds: Set<number>, collapsedIds: Set<number>): string {
+  if (p.aggregated) return expandedAggIds.has(p.id) ? "▼" : "▶";
+  return collapsedIds.has(p.id) ? "▶" : "▼";
 }
 
-// Given a root list and a target process row id, return the set of ids that form the alert
-// chain: the target, every ancestor back to the top root, and every descendant. If the
-// target isn't in the tree, returns an empty set (the focus filter will then drop the whole
-// tree, making it visually obvious that the target is out of range).
-function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<number> {
-  const related = new Set<number>();
-  let path: ProcessNode[] = [];
-  const findPath = (nodes: ProcessNode[], acc: ProcessNode[]): boolean => {
-    for (const n of nodes) {
-      const next = [...acc, n];
-      if (n.id === targetDbId) { path = next; return true; }
-      if (n.children?.length && findPath(n.children, next)) return true;
-    }
-    return false;
-  };
-  findPath(roots, []);
-  if (path.length === 0) return related;
-  for (const p of path) related.add(p.id);
-  const addDescendants = (n: ProcessNode) => {
-    related.add(n.id);
-    if (n.children) for (const c of n.children) addDescendants(c);
-  };
-  addDescendants(path[path.length - 1]);
-  return related;
+function nodeLabelClass(alerted: boolean): string {
+  return `node__label${alerted ? " node__label--alert" : ""}`;
 }
 
-function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null {
-  for (const n of nodes) {
-    if (n.id === dbId) return n;
-    if (n.children) {
-      const found = findNodeByDbId(n.children, dbId);
-      if (found) return found;
-    }
-  }
-  return null;
+function nodeLabelFill(alerted: boolean): string {
+  return alerted ? "#ff5c83" : "#192147";
 }
 
-// findNodeByPidAtTime resolves a timeline row's (pid, event time) to its process node: the node with that pid whose lifetime brackets
-// atNs (fork <= atNs, and no exit or exit >= atNs). This disambiguates pid reuse within the window by picking the generation live at
-// the event, the same (host, pid, at) correlation the process-detail network join relies on. Prefers the closest fork at/before the
-// anchor so an exact hit wins over a wider-lived ancestor sharing the pid.
-function findNodeByPidAtTime(nodes: ProcessNode[], pid: number, atNs: number): ProcessNode | null {
-  let best: ProcessNode | null = null;
-  const visit = (n: ProcessNode) => {
-    // !n.exit_time_ns covers a still-running process whether the API sends the field as undefined, null, or 0; a bare === undefined
-    // check would treat a null (common for running processes over the Go/JSON boundary) as "exited at null" and drop the node.
-    if (n.pid === pid && n.fork_time_ns <= atNs && (!n.exit_time_ns || n.exit_time_ns >= atNs)) {
-      if (best === null || n.fork_time_ns > best.fork_time_ns) best = n;
-    }
-    for (const c of n.children ?? []) visit(c);
-  };
-  for (const n of nodes) visit(n);
-  return best;
+function nodeLabelWeight(alerted: boolean): string {
+  return alerted ? "bold" : "normal";
 }
 
-// selectNodeFromParams resolves the node the URL asks the graph to select: ?process=<dbId> directly, or ?pid=<pid>&at=<ms> (a timeline
-// row) via findNodeByPidAtTime. Kept at module scope so the selection effect in ProcessTreeView stays a single branch.
-function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSearchParams): ProcessNode | null {
-  if (roots.length === 0) return null;
-  const processIdParam = searchParams.get("process");
-  if (processIdParam) return findNodeByDbId(roots, Number(processIdParam));
-  const pidQuery = searchParams.get("pid");
-  const atQuery = searchParams.get("at");
-  if (pidQuery && atQuery) {
-    return findNodeByPidAtTime(roots, Number(pidQuery), Number(atQuery) * NANOSECONDS_PER_MILLISECOND);
-  }
-  return null;
-}
-
-// viewHref toggles the view param while preserving the rest of the URL (window, alert anchor, selection), so switching views is a link
-// that never changes the shared time window. Graph is the default, so it drops ?view= rather than setting view=graph.
-function viewHref(hostId: string, searchParams: URLSearchParams, v: "graph" | "timeline"): string {
-  const next = new URLSearchParams(searchParams);
-  if (v === "graph") {
-    next.delete("view");
-  } else {
-    next.set("view", v);
-  }
-  const qs = next.toString();
-  const suffix = qs ? `?${qs}` : "";
-  return `/hosts/${encodeURIComponent(hostId)}${suffix}`;
-}
-
-interface D3Node {
-  name: string;
-  pid: number;
-  path: string;
-  data: ProcessNode;
-  children?: D3Node[];
-}
-
-function toD3Hierarchy(nodes: ProcessNode[]): D3Node {
-  function convert(n: ProcessNode): D3Node {
-    const kids = n.children?.map(convert);
-    return {
-      name: basename(n.path) || `PID ${String(n.pid)}`,
-      pid: n.pid,
-      path: n.path,
-      data: n,
-      children: kids && kids.length > 0 ? kids : undefined,
-    };
-  }
-
-  if (nodes.length === 1) {
-    return convert(nodes[0]);
-  }
-
-  return {
-    name: "root",
-    pid: 0,
-    path: "",
-    data: nodes[0],
-    children: nodes.map(convert),
-  };
-}
-
-function basename(path: string): string {
-  if (!path) return "";
-  const parts = path.split("/");
-  return parts[parts.length - 1];
+function nodeLabelText(node: D3Node): string {
+  const p = node.data;
+  // Aggregated nodes read as a group header ("grep ×1000"), not a single pid; the sample members carry the individual pids once the
+  // node is expanded.
+  if (p.aggregated) return `${node.name} ×${String(p.aggregated.count)}`;
+  const base = `${node.name} (${String(node.pid)})`;
+  const hidden = p._collapsedCount;
+  return hidden && hidden > 0 ? `${base}  +${String(hidden)}` : base;
 }
 
 function renderTree(
@@ -950,14 +772,7 @@ function renderTree(
   const links = root.links();
 
   // Compute bounding box.
-  let minY = Infinity, maxY = -Infinity;
-  let minX = Infinity, maxX = -Infinity;
-  for (const n of nodes) {
-    if (n.x < minX) minX = n.x;
-    if (n.x > maxX) maxX = n.x;
-    if (n.y < minY) minY = n.y;
-    if (n.y > maxY) maxY = n.y;
-  }
+  const { minX, maxX, minY } = computeLayoutBounds(nodes);
 
   const margin = TREE_MARGIN_PX;
   const svgHeight = maxX - minX + margin * 2;
@@ -1004,9 +819,7 @@ function renderTree(
     .selectAll("g.node")
     .data(nodes.filter((n) => n.data.pid !== 0 || roots.length === 1))
     .join("g")
-    // node--evidence drives the amber ring via CSS (ProcessTree.scss) rather than presentation attributes, so the search-match
-    // ring's class rule cannot silently override it (CSS rules beat SVG presentation attributes).
-    .attr("class", (d) => (nodeEvidenceMarked(d.data.data) ? "node node--evidence" : "node"))
+    .attr("class", (d) => evidenceNodeClass(d.data.data))
     .attr("transform", (d) => `translate(${String(d.y)},${String(d.x)})`)
     .style("cursor", "pointer")
     .on("click", (_, d) => {
@@ -1031,27 +844,13 @@ function renderTree(
   node
     .append("circle")
     .attr("class", "node__dot")
-    // Alerted nodes get a larger red dot. The label sits far enough away from the
-    // dot (see dx on the label text below) that neither the bigger dot nor the
-    // search-match ring get clipped by the label backdrop.
-    .attr("r", (d) => (alertProcessIds.has(d.data.data.id) ? NODE_DOT_RADIUS_ALERTED : NODE_DOT_RADIUS_DEFAULT))
-    .attr("fill", (d) => {
-      const p = d.data.data;
-      if (alertProcessIds.has(p.id)) return "#ff5c83"; // core-vibrant-red
-      // An aggregated group is "live" (green) when any member is still running; otherwise grey like a single exited process.
-      if (p.aggregated) return p.aggregated.running_count > 0 ? "#009a7d" : "#8b8fa2";
-      if (p.exit_time_ns) return "#8b8fa2";
-      return "#009a7d";
-    });
+    .attr("r", (d) => nodeDotRadius(alertProcessIds.has(d.data.data.id)))
+    .attr("fill", (d) => nodeDotFill(d.data.data, alertProcessIds.has(d.data.data.id)));
 
   // Collapse/expand chevron. Sits in front of the dot. Only rendered when a node has
   // children in the underlying data OR has been collapsed (so we can expand it back).
   // Click events on the chevron stop propagation so they don't also fire the node-select handler.
-  const chevronNodes = node.filter((d) => {
-    const p = d.data.data;
-    if (p.aggregated) return true; // always expandable to its sample
-    return (p.children !== undefined && p.children.length > 0) || collapsedIds.has(p.id);
-  });
+  const chevronNodes = node.filter((d) => nodeHasChevron(d.data.data, collapsedIds));
   chevronNodes
     .append("text")
     .attr("class", "node__chevron")
@@ -1061,11 +860,7 @@ function renderTree(
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
     .attr("fill", "#515774")
     .style("cursor", "pointer")
-    .text((d) => {
-      const p = d.data.data;
-      if (p.aggregated) return expandedAggIds.has(p.id) ? "▼" : "▶";
-      return collapsedIds.has(p.id) ? "▶" : "▼";
-    })
+    .text((d) => chevronGlyph(d.data.data, expandedAggIds, collapsedIds))
     .on("click", (event: MouseEvent, d) => {
       event.stopPropagation();
       const p = d.data.data;
@@ -1078,10 +873,7 @@ function renderTree(
 
   node
     .append("text")
-    .attr("class", (d) => {
-      const isAlerted = alertProcessIds.has(d.data.data.id);
-      return `node__label${isAlerted ? " node__label--alert" : ""}`;
-    })
+    .attr("class", (d) => nodeLabelClass(alertProcessIds.has(d.data.data.id)))
     // dx=16 leaves enough gap that the label backdrop starts clear of an r=8
     // alert dot (extends to x=8) and of the r=7 + 2px stroke search-match ring
     // (extends to x=9), so neither is clipped by the backdrop rect.
@@ -1089,17 +881,9 @@ function renderTree(
     .attr("dy", LABEL_DY)
     .attr("font-size", "12px")
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
-    .attr("fill", (d) => (alertProcessIds.has(d.data.data.id) ? "#ff5c83" : "#192147"))
-    .attr("font-weight", (d) => (alertProcessIds.has(d.data.data.id) ? "bold" : "normal"))
-    .text((d) => {
-      const p = d.data.data;
-      // Aggregated nodes read as a group header ("grep ×1000"), not a single pid; the sample members carry the individual pids
-      // once the node is expanded.
-      if (p.aggregated) return `${d.data.name} ×${String(p.aggregated.count)}`;
-      const base = `${d.data.name} (${String(d.data.pid)})`;
-      const hidden = p._collapsedCount;
-      return hidden && hidden > 0 ? `${base}  +${String(hidden)}` : base;
-    });
+    .attr("fill", (d) => nodeLabelFill(alertProcessIds.has(d.data.data.id)))
+    .attr("font-weight", (d) => nodeLabelWeight(alertProcessIds.has(d.data.data.id)))
+    .text((d) => nodeLabelText(d.data));
 
   // White backdrop behind each label so sibling tree links passing through the
   // label area don't visually cut through the text. Inserted after the text is
