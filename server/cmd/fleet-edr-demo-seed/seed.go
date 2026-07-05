@@ -87,21 +87,9 @@ func (s *seeder) run(ctx context.Context) error {
 		return fmt.Errorf("server did not become ready: %w", err)
 	}
 
-	if !s.cfg.force {
-		seeded, err := s.alreadySeeded(ctx)
-		if err != nil {
-			return fmt.Errorf("check already-seeded: %w", err)
-		}
-		if seeded {
-			// Don't re-replay, but slide the existing rows forward so the graph still reads as recent activity. The persisted
-			// demo volume survives restarts, so without this the timestamps stay frozen at the first seed and age out of the UI's
-			// last-hour process-tree window, leaving the host view empty after a day or a restart.
-			if err := s.refreshTimestamps(ctx); err != nil {
-				return fmt.Errorf("refresh demo timestamps: %w", err)
-			}
-			s.logger.InfoContext(ctx, "demo data already present, refreshed timestamps to recent (pass --force to re-seed)")
-			return s.seedUserIfConfigured(ctx)
-		}
+	// On an idempotent re-run (demo data already present, --force off) slide the existing rows forward instead of re-replaying.
+	if handled, err := s.maybeRefreshExisting(ctx); handled || err != nil {
+		return err
 	}
 
 	// Replay each rich captured host (deep real process tree + correlated network_connect/dns_query) and weave its attacks
@@ -121,6 +109,30 @@ func (s *seeder) run(ctx context.Context) error {
 
 	s.logger.InfoContext(ctx, "demo seed complete")
 	return nil
+}
+
+// maybeRefreshExisting handles the idempotent re-run path. When --force is off and the demo data is already present, it slides the
+// existing rows forward (so the graph still reads as recent) and reprovisions the SSO user instead of re-replaying the corpus, then
+// reports handled=true so run returns without replaying. It reports handled=false when a fresh replay should proceed.
+func (s *seeder) maybeRefreshExisting(ctx context.Context) (bool, error) {
+	if s.cfg.force {
+		return false, nil
+	}
+	seeded, err := s.alreadySeeded(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check already-seeded: %w", err)
+	}
+	if !seeded {
+		return false, nil
+	}
+	// Don't re-replay, but slide the existing rows forward so the graph still reads as recent activity. The persisted
+	// demo volume survives restarts, so without this the timestamps stay frozen at the first seed and age out of the UI's
+	// last-hour process-tree window, leaving the host view empty after a day or a restart.
+	if err := s.refreshTimestamps(ctx); err != nil {
+		return true, fmt.Errorf("refresh demo timestamps: %w", err)
+	}
+	s.logger.InfoContext(ctx, "demo data already present, refreshed timestamps to recent (pass --force to re-seed)")
+	return true, s.seedUserIfConfigured(ctx)
 }
 
 // buildBlockEnvelope constructs the application_control_block wire envelope the ApplicationControlBlock rule consumes. Payload shape
@@ -287,14 +299,46 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 		return err
 	}
 
-	var newestNs sql.NullInt64
-	// Anchor the delta on the device-clock tail only: fork/exec/event timestamps and their ingest stamps. The exit columns are
-	// deliberately excluded because the process-TTL reconciler (pipeline.ProcessTTLRunner) force-exits long-running processes at
-	// fork + maxAge, so a stale demo's synthesized exit_time_ns sits ~maxAge PAST the real tail. Anchoring on it would shrink the
-	// delta by maxAge and leave every fork that-much stale, which is exactly the empty-1h-window symptom this guards against.
-	// Anchor on the process graph's device-clock tail. Events live in the ClickHouse archive now (ADR-0015), not a MySQL table, but
-	// the process rows are materialized from those events: fork_time_ns tracks the event timestamp tail and fork_ingested_at_ns the
-	// server ingest-stamp tail, so the processes columns carry the same anchor the events MAX used to provide.
+	newestNs, ok, err := s.newestReplayedTimestampNs(ctx, inClause, hostArgs)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil // no replayed rows yet; nothing to slide
+	}
+	deltaNs := time.Now().Add(-recentTailOffset).UnixNano() - newestNs
+	// alerts carry SQL TIMESTAMP(6) columns; we slide them at whole-second granularity (the alert -> process-tree window the UI
+	// anchors on created_at spans minutes, so sub-second precision is irrelevant). deltaSec <= 0 means the data is already at or
+	// newer than the target (a quick restart after a fresh seed, or clock skew): nothing to slide, and a backward shift would only
+	// un-recent the graph, so skip the redundant writes.
+	deltaSec := deltaNs / int64(time.Second)
+	if deltaSec <= 0 {
+		return nil
+	}
+
+	if err := s.applyTimestampSlide(ctx, inClause, hostArgs, deltaNs, deltaSec); err != nil {
+		return err
+	}
+
+	if err := s.slideArchiveEvents(ctx, inClause, hostArgs, deltaNs); err != nil {
+		return err
+	}
+
+	s.logger.InfoContext(ctx, "refreshed demo timestamps to recent", "delta_ns", deltaNs)
+	return nil
+}
+
+// newestReplayedTimestampNs reads the demo hosts' device-clock tail, the anchor for the refresh delta. ok is false when no replayed
+// process rows exist yet (a fresh volume), so the caller skips the slide entirely.
+//
+// Anchor the delta on the device-clock tail only: fork/exec/event timestamps and their ingest stamps. The exit columns are
+// deliberately excluded because the process-TTL reconciler (pipeline.ProcessTTLRunner) force-exits long-running processes at
+// fork + maxAge, so a stale demo's synthesized exit_time_ns sits ~maxAge PAST the real tail. Anchoring on it would shrink the
+// delta by maxAge and leave every fork that-much stale, which is exactly the empty-1h-window symptom this guards against.
+// Anchor on the process graph's device-clock tail. Events live in the ClickHouse archive now (ADR-0015), not a MySQL table, but
+// the process rows are materialized from those events: fork_time_ns tracks the event timestamp tail and fork_ingested_at_ns the
+// server ingest-stamp tail, so the processes columns carry the same anchor the events MAX used to provide.
+func (s *seeder) newestReplayedTimestampNs(ctx context.Context, inClause string, hostArgs []any) (int64, bool, error) {
 	newestQuery := `
 		SELECT GREATEST(
 			COALESCE((SELECT MAX(fork_time_ns) FROM processes WHERE ` + inClause + `), 0),
@@ -305,22 +349,20 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 	for range 3 {
 		anchorArgs = append(anchorArgs, hostArgs...)
 	}
+	var newestNs sql.NullInt64
 	if err := s.db.QueryRowContext(ctx, newestQuery, anchorArgs...).Scan(&newestNs); err != nil {
-		return fmt.Errorf("read newest demo timestamp: %w", err)
+		return 0, false, fmt.Errorf("read newest demo timestamp: %w", err)
 	}
 	if !newestNs.Valid || newestNs.Int64 == 0 {
-		return nil // no replayed rows yet; nothing to slide
+		return 0, false, nil // no replayed rows yet; nothing to slide
 	}
-	deltaNs := time.Now().Add(-recentTailOffset).UnixNano() - newestNs.Int64
-	// alerts carry SQL TIMESTAMP(6) columns; we slide them at whole-second granularity (the alert -> process-tree window the UI
-	// anchors on created_at spans minutes, so sub-second precision is irrelevant). deltaSec <= 0 means the data is already at or
-	// newer than the target (a quick restart after a fresh seed, or clock skew): nothing to slide, and a backward shift would only
-	// un-recent the graph, so skip the redundant writes.
-	deltaSec := deltaNs / int64(time.Second)
-	if deltaSec <= 0 {
-		return nil
-	}
+	return newestNs.Int64, true, nil
+}
 
+// applyTimestampSlide runs the MySQL half of the refresh in one transaction: shift every replayed process/host/alert timestamp column
+// forward and drop the synthesized TTL force-exits. deltaNs slides the nanosecond columns; deltaSec slides the alerts' TIMESTAMP(6)
+// columns at whole-second granularity. Every statement carries the demo-host scope.
+func (s *seeder) applyTimestampSlide(ctx context.Context, inClause string, hostArgs []any, deltaNs, deltaSec int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin refresh tx: %w", err)
@@ -355,12 +397,6 @@ func (s *seeder) refreshTimestamps(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit timestamp refresh: %w", err)
 	}
-
-	if err := s.slideArchiveEvents(ctx, inClause, hostArgs, deltaNs); err != nil {
-		return err
-	}
-
-	s.logger.InfoContext(ctx, "refreshed demo timestamps to recent", "delta_ns", deltaNs)
 	return nil
 }
 
