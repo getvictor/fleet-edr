@@ -70,7 +70,7 @@ The primary path is the Users page in Admin settings (`/admin/settings/users`): 
 
 To set an operator's role _before_ their first sign-in, pre-provision them from the same Users page ("Add user"): enter an email and a role and the server stages a pending account (`POST /api/settings/users`, gated on `user.invite`, audited as `user.provisioned`). The staged row shows a "Pending" badge until that email first authenticates via SSO, at which point the OIDC provisioner adopts the row, activates it, and binds the pre-assigned role instead of defaulting to `analyst`. Matching is on the verified email claim, and adoption is honored even when JIT auto-provisioning is disabled (staging is an explicit admin decision, distinct from JIT-creating an unknown subject). `super_admin` is never offered and is rejected unless the acting operator is itself a `super_admin`.
 
-The SQL pattern below remains as a break-glass alternative (for example, recovering a deployment that has no usable admin session). The shape mirrors `server/identity/bootstrap/schema.go`:
+The SQL pattern below remains as a break-glass alternative (for example, recovering a deployment that has no usable admin session). The shape mirrors `server/identity/migrations/00001_initial.sql`:
 
 ```sql
 INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)

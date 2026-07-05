@@ -253,7 +253,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [x] Foreign key cascades that match the lifecycle (`sessions` -> `users` cascade, `alerts.updated_by` -> `users` set null)
 - [x] `parseTime=true` enforced even when caller forgets it
 - [x] Connection-pool stats exposed via OTel
-- [x] Retention runner with configurable age (`server/retention/`)
+- [x] Retention runner with configurable age (`server/detection/internal/pipeline/retention.go`)
 - [x] Local Docker Compose with `mysql_test` for parallel test isolation
 - [x] **Versioned migrations** via [goose](https://github.com/pressly/goose), embedded in the server binary, per-context directories with per-context `<context>_goose_db_version` tracking tables, forward-only, tiered (expand-contract for Tier 2). Adopted in ADR-0009 to replace the in-process idempotent-ALTER approach that hit a ceiling around rename / drop operations. All five bounded contexts (identity, endpoint, rules, response, detection) are converted. See ADR-0009
 - [-] **PostgreSQL alternative**: **will not do**. Supporting two RDBMSes doubles migration testing, query tuning, and store-layer surface for a small team. MySQL 8.4 covers what the data plane needs; customers who require Postgres can stand up a CDC bridge via Debezium against the existing MySQL primary
