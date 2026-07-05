@@ -259,3 +259,10 @@ func NoStoreJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter
 		logger.ErrorContext(ctx, "encode response", "err", err)
 	}
 }
+
+// WriteJSONError writes the single-field error envelope `{"error": code}` (no-store) that the identity admin surfaces return on a
+// rejected request. Centralizes the envelope shape so the several admin handlers cannot drift on the field name; handlers that also
+// return a human-readable message use their own two-field writer instead.
+func WriteJSONError(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
+	NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
+}

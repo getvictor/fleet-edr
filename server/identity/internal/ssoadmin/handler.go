@@ -6,9 +6,7 @@ package ssoadmin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -369,17 +367,16 @@ func normalizeScopes(in []string) []string {
 
 func decodeJSON[T any](ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
-	// Read one byte past the cap so an oversized body is detected and rejected, rather than silently truncated to a parseable prefix.
-	body, err := io.ReadAll(io.LimitReader(r.Body, updateBodyLimit+1))
-	if err != nil {
+	outcome := httpserver.DecodeCappedJSON(r, updateBodyLimit, &v)
+	if outcome == httpserver.BodyReadFailed {
 		writeErr(ctx, logger, w, http.StatusBadRequest, "read_body")
 		return v, false
 	}
-	if len(body) > updateBodyLimit {
+	if outcome == httpserver.BodyTooLarge {
 		writeErr(ctx, logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
 		return v, false
 	}
-	if err := json.Unmarshal(body, &v); err != nil {
+	if outcome == httpserver.BodyInvalidJSON {
 		writeErr(ctx, logger, w, http.StatusBadRequest, "invalid_json")
 		return v, false
 	}
@@ -387,5 +384,5 @@ func decodeJSON[T any](ctx context.Context, logger *slog.Logger, w http.Response
 }
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code string) {
-	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": code})
+	httpserver.WriteJSONError(ctx, logger, w, status, code)
 }

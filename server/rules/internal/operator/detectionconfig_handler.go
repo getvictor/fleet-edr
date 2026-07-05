@@ -3,9 +3,7 @@ package operator
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -294,20 +292,20 @@ func (h *DetectionConfigHandler) handleUpsertRuleSetting(w http.ResponseWriter, 
 	writeJSON(ctx, h.logger, w, http.StatusOK, setting)
 }
 
-// decode reads + unmarshals a JSON body under the size limit, writing the right 400 on failure. Returns false when it has already
-// written an error response. It reads one byte past the limit so an over-limit body is rejected with a typed 413 rather than
-// silently truncated (a truncated payload would surface as a misleading invalid_json 400 or a partial-but-valid mutation).
+// decode reads + unmarshals a JSON body under the size limit, writing the right 400/413 on failure. Returns false when it has
+// already written an error response. The read+size invariant (read one byte past the limit so an over-cap body is rejected with a
+// typed 413 rather than silently truncated) lives in httpserver.DecodeCappedJSON.
 func (h *DetectionConfigHandler) decode(ctx context.Context, w http.ResponseWriter, r *http.Request, dst any) bool {
-	body, err := io.ReadAll(io.LimitReader(r.Body, detectionConfigReadBodyLimit+1))
-	if err != nil {
+	outcome := httpserver.DecodeCappedJSON(r, detectionConfigReadBodyLimit, dst)
+	if outcome == httpserver.BodyReadFailed {
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCReadBody, "could not read request body")
 		return false
 	}
-	if len(body) > detectionConfigReadBodyLimit {
+	if outcome == httpserver.BodyTooLarge {
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, errCodeDCBodyTooLarge, "request body too large")
 		return false
 	}
-	if err := json.Unmarshal(body, dst); err != nil {
+	if outcome == httpserver.BodyInvalidJSON {
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidJSON, "invalid JSON body")
 		return false
 	}
