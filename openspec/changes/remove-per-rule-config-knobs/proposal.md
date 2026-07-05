@@ -11,7 +11,7 @@ This change retires the per-rule config-knob capability. It is a documented SHAL
 - **BREAKING (API surface, in practice inert):** `GET /api/rules` no longer includes `doc.config`, and the OpenAPI `RuleConfig` schema is removed. Because no rule has populated `config` since #459, the field was already never present on the wire, so no client observes a change.
 - Remove the `config` clause from the per-rule documentation requirement, keeping `false_positives` and `limitations`.
 - Remove the "Rule with config knobs" scenario (`server-admin-surface`) and the config-knob rendering from the web-ui rule-detail requirement.
-- Remove the backing code: `rules/api` `RuleType.Config` field and the `ConfigKnob` type; the `gen-rule-docs` Configuration renderer; the UI `RuleConfig` type, `RuleDoc.config`, and the rule-detail Configuration table. Scrub the `RuleConfig` schema from BOTH OpenAPI copies (`docs/api/openapi.yaml` and the `go:embed`ed `server/apidocs/embed/openapi.yaml` served at `/api/docs`).
+- Remove the backing code: `rules/api` `Documentation.Config` field and the `ConfigKnob` type; the `gen-rule-docs` Configuration renderer; the UI `RuleConfig` type, `RuleDoc.config`, and the rule-detail Configuration table. Scrub the `RuleConfig` schema from BOTH OpenAPI copies (`docs/api/openapi.yaml` and the `go:embed`ed `server/apidocs/embed/openapi.yaml` served at `/api/docs`).
 
 Out of scope: the DB-backed detection-config surface (#459) that replaced this is unchanged; rule false-positive/limitation documentation is unchanged.
 

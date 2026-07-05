@@ -6,7 +6,7 @@ import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
 
 // RuleDetail renders a single detection rule's documentation: behaviour,
-// severity, ATT&CK mapping, configuration knobs, false-positive sources, and
+// severity, ATT&CK mapping, false-positive sources, and
 // limitations. This page loads rule docs from /api/rules; the
 // markdown reference at docs/detection-rules.md is generated directly from
 // the same Go-side `detection.Rule.Doc()` definitions, so the two surfaces
