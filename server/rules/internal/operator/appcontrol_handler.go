@@ -196,26 +196,18 @@ func (h *AppControlHandler) handleCreateRule(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
-	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+	body, ok := h.readAppControlBody(ctx, w, r, applicationControlReadBodyLimit)
+	if !ok {
 		return
 	}
 	var req createRuleRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
+	if !decodeAppControlBody(ctx, h.logger, w, body, &req) {
 		return
 	}
-	actor, ok := identityapi.ActorFromContext(ctx)
+	actor, ok := h.actorOrInternalError(ctx, w)
 	if !ok {
-		// Session middleware guarantees an actor on every request that reaches HTTPGate's allow path; an absent actor here
-		// is a wiring bug, not a user error. Surface a 500 so the regression is loud rather than silently let CreateRule fall
-		// through to a service-layer guard.
-		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
-
 	rule, err := h.svc.CreateRule(ctx, api.CreateRuleRequest{
 		PolicyID:   policyID,
 		RuleType:   req.RuleType,
@@ -310,20 +302,16 @@ func (h *AppControlHandler) handleUpdateRule(w http.ResponseWriter, r *http.Requ
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidRuleID, errMsgInvalidRuleID)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
-	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+	body, ok := h.readAppControlBody(ctx, w, r, applicationControlReadBodyLimit)
+	if !ok {
 		return
 	}
 	var req updateRuleRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
+	if !decodeAppControlBody(ctx, h.logger, w, body, &req) {
 		return
 	}
-	actor, ok := identityapi.ActorFromContext(ctx)
+	actor, ok := h.actorOrInternalError(ctx, w)
 	if !ok {
-		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	rule, err := h.svc.UpdateRule(ctx, api.UpdateRuleRequest{
@@ -362,24 +350,16 @@ func (h *AppControlHandler) handleDeleteRule(w http.ResponseWriter, r *http.Requ
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidRuleID, errMsgInvalidRuleID)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
-	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+	body, ok := h.readAppControlBody(ctx, w, r, applicationControlReadBodyLimit)
+	if !ok {
 		return
 	}
 	var req deleteRuleRequest
-	// Whitespace-only bodies are normalised to empty so an operator sending a body of just spaces does not get a misleading
-	// invalid_json (the typed reason-required validation should fire instead). Copilot flagged this on PR #188.
-	if len(bytes.TrimSpace(body)) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
-			return
-		}
+	if !decodeAppControlBodyIfPresent(ctx, h.logger, w, body, &req) {
+		return
 	}
-	actor, ok := identityapi.ActorFromContext(ctx)
+	actor, ok := h.actorOrInternalError(ctx, w)
 	if !ok {
-		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	if err := h.svc.DeleteRule(ctx, api.DeleteRuleRequest{
@@ -407,20 +387,16 @@ func (h *AppControlHandler) handleCreatePolicy(w http.ResponseWriter, r *http.Re
 		identityapi.Resource{Type: "application_control"}) {
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
-	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+	body, ok := h.readAppControlBody(ctx, w, r, applicationControlReadBodyLimit)
+	if !ok {
 		return
 	}
 	var req createPolicyRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
+	if !decodeAppControlBody(ctx, h.logger, w, body, &req) {
 		return
 	}
-	actor, ok := identityapi.ActorFromContext(ctx)
+	actor, ok := h.actorOrInternalError(ctx, w)
 	if !ok {
-		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	policy, err := h.svc.CreatePolicy(ctx, api.CreatePolicyRequest{
@@ -455,20 +431,16 @@ func (h *AppControlHandler) handleUpdatePolicy(w http.ResponseWriter, r *http.Re
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
-	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+	body, ok := h.readAppControlBody(ctx, w, r, applicationControlReadBodyLimit)
+	if !ok {
 		return
 	}
 	var req updatePolicyRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
+	if !decodeAppControlBody(ctx, h.logger, w, body, &req) {
 		return
 	}
-	actor, ok := identityapi.ActorFromContext(ctx)
+	actor, ok := h.actorOrInternalError(ctx, w)
 	if !ok {
-		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	policy, err := h.svc.UpdatePolicy(ctx, api.UpdatePolicyRequest{
@@ -502,24 +474,16 @@ func (h *AppControlHandler) handleDeletePolicy(w http.ResponseWriter, r *http.Re
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, applicationControlReadBodyLimit))
-	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+	body, ok := h.readAppControlBody(ctx, w, r, applicationControlReadBodyLimit)
+	if !ok {
 		return
 	}
 	var req deletePolicyRequest
-	// Whitespace-only bodies are normalised to empty so an operator sending a body of just spaces does not get a misleading
-	// invalid_json (the typed reason-required validation should fire instead). Copilot flagged this on PR #188.
-	if len(bytes.TrimSpace(body)) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
-			return
-		}
+	if !decodeAppControlBodyIfPresent(ctx, h.logger, w, body, &req) {
+		return
 	}
-	actor, ok := identityapi.ActorFromContext(ctx)
+	actor, ok := h.actorOrInternalError(ctx, w)
 	if !ok {
-		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	if err := h.svc.DeletePolicy(ctx, api.DeletePolicyRequest{
@@ -591,20 +555,16 @@ func (h *AppControlHandler) handleBulkUpsertRules(w http.ResponseWriter, r *http
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidPolicyID, errMsgInvalidPolicyID)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, bulkUpsertReadBodyLimit))
-	if err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+	body, ok := h.readAppControlBody(ctx, w, r, bulkUpsertReadBodyLimit)
+	if !ok {
 		return
 	}
 	var req bulkUpsertRulesRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
+	if !decodeAppControlBody(ctx, h.logger, w, body, &req) {
 		return
 	}
-	actor, ok := identityapi.ActorFromContext(ctx)
+	actor, ok := h.actorOrInternalError(ctx, w)
 	if !ok {
-		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
-		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
 		return
 	}
 	items := make([]api.BulkUpsertRuleItem, 0, len(req.Rules))
@@ -660,6 +620,51 @@ func actorIdentifierFromContext(ctx context.Context) string {
 	// authentication for every actor kind, so a service-account mutation is attributed rather than rejected by the store's required-actor
 	// validation (#518). See ADR-0017.
 	return a.Principal.ID
+}
+
+// readAppControlBody reads the request body under a size cap and, on a read error, writes the typed 400 read-body response and
+// returns ok=false. Extracted so each mutation handler shares one copy of the read-and-map-error block instead of inlining it
+// (Sonar S3776 + S4144). limit lets the bulk-upsert route lift the per-rule cap without a second copy of the logic.
+func (h *AppControlHandler) readAppControlBody(ctx context.Context, w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, limit))
+	if err != nil {
+		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
+		return nil, false
+	}
+	return body, true
+}
+
+// actorOrInternalError pulls the authenticated actor off ctx. Session middleware guarantees an actor on every request that reaches
+// HTTPGate's allow path, so an absent actor is a wiring bug, not a user error: this logs it and writes a 500 (matching the prior
+// inline handling in every mutation handler) and returns ok=false. Extracted so the seven mutation handlers share one copy.
+func (h *AppControlHandler) actorOrInternalError(ctx context.Context, w http.ResponseWriter) (*identityapi.Actor, bool) {
+	actor, ok := identityapi.ActorFromContext(ctx)
+	if !ok {
+		h.logger.ErrorContext(ctx, noActorOnContextLogMsg)
+		writeAppControlErr(ctx, h.logger, w, http.StatusInternalServerError, internalErrorCode, internalErrorMessage)
+		return nil, false
+	}
+	return actor, true
+}
+
+// decodeAppControlBody unmarshals a request body into dst and, on a JSON error, writes the typed 400 invalid-json response and
+// returns false. Extracted from the mutation handlers so the decode-and-map-error block lives in one place.
+func decodeAppControlBody[T any](ctx context.Context, logger *slog.Logger, w http.ResponseWriter, body []byte, dst *T) bool {
+	if err := json.Unmarshal(body, dst); err != nil {
+		writeAppControlErr(ctx, logger, w, http.StatusBadRequest, errCodeInvalidJSON, errMsgInvalidJSON)
+		return false
+	}
+	return true
+}
+
+// decodeAppControlBodyIfPresent is the DELETE-route variant: a whitespace-only body is normalised to empty (dst is left at its
+// zero value so the typed reason-required validation fires instead of a misleading invalid_json; Copilot flagged this on PR #188),
+// otherwise the body is decoded like decodeAppControlBody. Returns false only when a non-empty body fails to unmarshal.
+func decodeAppControlBodyIfPresent[T any](ctx context.Context, logger *slog.Logger, w http.ResponseWriter, body []byte, dst *T) bool {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return true
+	}
+	return decodeAppControlBody(ctx, logger, w, body, dst)
 }
 
 // errCodeInvalidQuery is the typed code the cross-policy list handler uses to flag a malformed query parameter (negative

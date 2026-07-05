@@ -115,40 +115,56 @@ func loadScenariosAndMarkers(specsDir, changesDir, rootDir string) ([]Scenario, 
 // set. A missing or empty changesDir yields an empty set so a repo with no in-flight proposals behaves exactly as before.
 func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
 	ids := make(map[string]struct{})
-	if changesDir == "" {
-		return ids, nil
-	}
-	// A missing changes tree (no in-flight proposals) or a path that isn't a directory is not an error:
-	// spectrace simply has no WIP IDs to add and behaves exactly as it did before the feature.
-	info, statErr := os.Stat(changesDir)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
-			return ids, nil
-		}
-		return nil, statErr
-	}
-	if !info.IsDir() {
-		return ids, nil
-	}
-	entries, err := os.ReadDir(changesDir)
-	if err != nil {
-		return nil, err
-	}
 	// Parse each in-flight proposal directory's delta specs. Skip the archive subtree (already applied into the live
 	// specs) and any plain files, so only genuinely in-flight scenario IDs widen the reference-valid set.
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == archiveDirName {
-			continue
-		}
-		scenarios, err := ParseAllSpecs(filepath.Join(changesDir, e.Name()))
+	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
+		scenarios, err := ParseAllSpecs(changeDir)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, s := range scenarios {
 			ids[s.ID] = struct{}{}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return ids, nil
+}
+
+// forEachInFlightChangeDir invokes fn once per in-flight OpenSpec change directory under changesDir (openspec/changes/<change>),
+// passing the change's path. It skips the archive subtree (already merged into the live specs) and any plain files, so only
+// genuinely in-flight change folders reach fn. A missing or empty changesDir, or a path that isn't a directory, is not an error:
+// fn is simply never called and the caller keeps its empty accumulator, exactly as spectrace behaved before the feature. Shared
+// scaffold behind parseChangeScenarioIDs and parseRemovedRequirementKeys, which differ only in what they extract per change.
+func forEachInFlightChangeDir(changesDir string, fn func(changeDir string) error) error {
+	if changesDir == "" {
+		return nil
+	}
+	info, statErr := os.Stat(changesDir)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		return statErr
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	entries, err := os.ReadDir(changesDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == archiveDirName {
+			continue
+		}
+		if err := fn(filepath.Join(changesDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // parseRemovedRequirementKeys returns the set of "<capability>/<requirement-slug>" keys that in-flight OpenSpec change deltas
@@ -161,30 +177,11 @@ func parseChangeScenarioIDs(changesDir string) (map[string]struct{}, error) {
 // The archive subtree is skipped: archived removals are already applied into openspec/specs, so the scenarios are simply gone.
 func parseRemovedRequirementKeys(changesDir string) (map[string]struct{}, error) {
 	keys := make(map[string]struct{})
-	if changesDir == "" {
-		return keys, nil
-	}
-	info, statErr := os.Stat(changesDir)
-	if statErr != nil {
-		if os.IsNotExist(statErr) {
-			return keys, nil
-		}
-		return nil, statErr
-	}
-	if !info.IsDir() {
-		return keys, nil
-	}
-	entries, err := os.ReadDir(changesDir)
+	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
+		return collectRemovedRequirementKeys(changeDir, keys)
+	})
 	if err != nil {
 		return nil, err
-	}
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == archiveDirName {
-			continue
-		}
-		if err := collectRemovedRequirementKeys(filepath.Join(changesDir, e.Name()), keys); err != nil {
-			return nil, err
-		}
 	}
 	return keys, nil
 }
@@ -214,14 +211,21 @@ func collectRemovedRequirementKeys(changeDir string, keys map[string]struct{}) e
 		if d.IsDir() || filepath.Base(path) != "spec.md" {
 			return nil
 		}
-		f, err := os.Open(path) //nolint:gosec // path comes from filepath.WalkDir under changesDir/<change>/specs
-		if err != nil {
-			return fmt.Errorf("open %s: %w", path, err)
-		}
-		defer f.Close()
-		capability := filepath.Base(filepath.Dir(path))
-		return scanRemovedRequirements(f, capability, keys)
+		return scanRemovedRequirementsFile(path, keys)
 	})
+}
+
+// scanRemovedRequirementsFile opens one delta spec.md and records its `## REMOVED Requirements` keys under the capability derived
+// from the file's parent directory (specs/<capability>/spec.md). Split out of collectRemovedRequirementKeys' WalkDir callback so
+// the callback stays a flat guard chain.
+func scanRemovedRequirementsFile(path string, keys map[string]struct{}) error {
+	f, err := os.Open(path) //nolint:gosec // path comes from filepath.WalkDir under changesDir/<change>/specs
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	capability := filepath.Base(filepath.Dir(path))
+	return scanRemovedRequirements(f, capability, keys)
 }
 
 // scanRemovedRequirements is the streaming parser behind collectRemovedRequirementKeys. It tracks the active `## ` section and,

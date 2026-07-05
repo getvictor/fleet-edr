@@ -33,6 +33,11 @@ func envMap(pairs map[string]string) func(string) string {
 		if k == "EDR_SECRET_KEY" {
 			return validTestSecretKey
 		}
+		// EDR_CLICKHOUSE_DSN is required by every boot (ADR-0015: the event store is ClickHouse); default it so positive cases don't
+		// each set it. Presence in the map (even as "") opts out, which is how the missing-DSN negative case is written.
+		if k == "EDR_CLICKHOUSE_DSN" {
+			return "clickhouse://localhost:9000/edr_test"
+		}
 		return ""
 	}
 }
@@ -126,6 +131,19 @@ func TestLoad(t *testing.T) {
 				"EDR_TLS_KEY_FILE":  keyFile,
 			},
 			wantErr: "EDR_DSN",
+		},
+		{
+			// EDR_CLICKHOUSE_DSN is required (ADR-0015: the event store is ClickHouse, no MySQL fallback). Empty string opts out of
+			// the envMap default so this exercises the required-var validation now centralized in config.Load.
+			name: "missing EDR_CLICKHOUSE_DSN",
+			env: map[string]string{
+				"EDR_DSN":            "x",
+				"EDR_ENROLL_SECRET":  "s",
+				"EDR_TLS_CERT_FILE":  certFile,
+				"EDR_TLS_KEY_FILE":   keyFile,
+				"EDR_CLICKHOUSE_DSN": "",
+			},
+			wantErr: "EDR_CLICKHOUSE_DSN",
 		},
 		{
 			name: "missing EDR_ENROLL_SECRET",

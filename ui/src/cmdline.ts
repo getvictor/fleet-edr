@@ -8,6 +8,9 @@ export function formatCommandLine(args: string[] | undefined, path: string): str
 
 function quoteArg(arg: string): string {
   if (arg === "") return '""';
-  if (/[\s"]/.test(arg)) return `"${arg.split('"').join(String.raw`\"`)}"`;
+  if (/[\s"]/.test(arg)) {
+    const escaped = arg.split('"').join(String.raw`\"`);
+    return `"${escaped}"`;
+  }
   return arg;
 }
