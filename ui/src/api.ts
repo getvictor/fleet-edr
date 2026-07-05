@@ -505,6 +505,15 @@ export async function fetchAttackNavigatorLayer(): Promise<AttackNavigatorLayer>
   return fetchJSON<AttackNavigatorLayer>("/attack-coverage");
 }
 
+// RuleConfig describes one operator-tuning env var. Wire shape matches
+// admin.RuleConfig in the server.
+export interface RuleConfig {
+  env_var: string;
+  type: string;
+  default: string;
+  description: string;
+}
+
 // RuleDoc is the structured per-rule documentation surfaced by GET
 // /api/rules. Mirrors detection.Documentation on the server, with
 // the JSON tag spellings the wire format uses.
@@ -516,6 +525,7 @@ export interface RuleDoc {
   event_types: string[];
   false_positives?: string[];
   limitations?: string[];
+  config?: RuleConfig[];
 }
 
 export interface RuleDocEntry {
