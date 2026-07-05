@@ -16,7 +16,7 @@ Run this before generating any non-trivial new code: a function or method beyond
 
 ## Where to look
 
-The server is five bounded contexts under `server/`: `identity`, `endpoint`, `rules`, `response`, `detection` (ADR-0004). Cross-context code lives in the imported `api/` package; code shared by server and agent lives in `internal/`. The agent is under `agent/`, the extension under `extension/edr/`.
+The server is seven bounded contexts under `server/`: the original five `identity`, `endpoint`, `rules`, `response`, `detection` (ADR-0004), plus `observability` and `visibility` (the ClickHouse event store, ADR-0015). Cross-context code lives in the imported `api/` package; code shared by server and agent lives in `internal/`. The agent is under `agent/`, the extension under `extension/edr/`.
 
 Search in this order:
 

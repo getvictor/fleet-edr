@@ -10,15 +10,15 @@ This is a 2025-2026-era maintenance domain that didn't exist when most "best pra
 
 ## Scope
 
-`.claude/` is gitignored in this repo (see `.gitignore`), so this audit operates on each maintainer's local checkout, not on a PR. The same reviewer running this task quarter after quarter is the right pattern; the audit log entry records the date and "no findings" or a summary of changes.
+Most of `.claude/` is tracked in this repo: the slash commands under `.claude/commands/` and the skills under `.claude/skills/` are committed, so a fix to either ships in a PR like any other doc. Only `.claude/settings.local.json` and `.claude/scheduled_tasks.lock` are per-maintainer and uncommitted (see `.gitignore`, which ignores the lock; `settings.local.json` is simply never added). The same reviewer running this task quarter after quarter is the right pattern; the audit log entry records the date and "no findings" or a summary of changes.
 
-Files in scope (all per-maintainer, none committed):
+Files in scope:
 
-- `.claude/settings.local.json` (project-scoped overrides)
-- `.claude/commands/` (project-scoped slash commands)
-- `.claude/skills/` (project-scoped skills)
-- `.claude/scheduled_tasks.lock` (informational)
-- Any hook entries in those settings files
+- `.claude/settings.local.json` (project-scoped overrides; per-maintainer, uncommitted)
+- `.claude/commands/` (project-scoped slash commands; committed, so fixes go in a PR)
+- `.claude/skills/` (project-scoped skills; committed, so fixes go in a PR)
+- `.claude/scheduled_tasks.lock` (informational; per-maintainer, uncommitted)
+- Any hook entries in the settings file
 
 User-level `~/.claude/` (settings, MEMORY index, user-level skills) is out of scope unless explicitly requested: that's cross-project.
 
