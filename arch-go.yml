@@ -25,6 +25,7 @@ dependenciesRules:
         - "**.attrkeys"
         - "**.httpserver"
         - "**.secretseal"  # shared AES-256-GCM sealer: ssoconfig seals the OIDC client secret with it (issue #496 extracted it)
+        - "**.hmactoken"  # shared v1 HMAC token envelope: satoken builds its service-account access token on it (ADR-0013 generalizes the host-token machinery; shared via internal/ so identity does not import endpoint)
         - "**.testdb"
 
   # endpoint context internals.
@@ -37,6 +38,7 @@ dependenciesRules:
         - "**.endpoint.testkit"
         - "**.attrkeys"
         - "**.httpserver"
+        - "**.hmactoken"  # shared v1 HMAC token envelope: signedtoken builds its host bearer token on it (extracted so satoken can reuse the same primitive without a cross-context import)
         - "**.identity.api"  # identity.api.AuditRecorder for enrollment.revoke audit
         - "**.testdb"
 
