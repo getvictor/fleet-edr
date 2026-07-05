@@ -284,8 +284,18 @@ func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
 		return nil
 	}
 	oidcHTTPClient := in.deps.OIDC.HTTPClient
-	apply := func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string) error {
-		tx, err := in.deps.DB.BeginTxx(ctx, nil)
+	apply := newSSOApplyFn(in.deps.DB, in.ssoStore, in.appConfig)
+	return ssoadmin.NewHandler(in.ssoStore, in.appConfig, apply, in.authz, in.audit,
+		func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, in.logger)
+}
+
+// newSSOApplyFn builds the atomic apply callback ssoadmin.NewHandler takes. It writes oidc_config and app_config in ONE transaction so a
+// partial failure can't pair a new issuer with a stale derived redirect; app_config carries the optimistic-concurrency version check.
+func newSSOApplyFn(db *sqlx.DB, ssoStore *ssoconfig.Store, appConfig *appconfig.Store) func(
+	ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string,
+) error {
+	return func(ctx context.Context, oidcIn ssoconfig.UpsertInput, appCfg appconfig.AppConfig, expectedAppVersion int64, updatedBy string) error {
+		tx, err := db.BeginTxx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("identity bootstrap: begin sso update tx: %w", err)
 		}
@@ -295,10 +305,10 @@ func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
 				_ = tx.Rollback()
 			}
 		}()
-		if err := in.ssoStore.UpsertTx(ctx, tx, oidcIn); err != nil {
+		if err := ssoStore.UpsertTx(ctx, tx, oidcIn); err != nil {
 			return err
 		}
-		if err := in.appConfig.PutTx(ctx, tx, appCfg, expectedAppVersion, updatedBy); err != nil {
+		if err := appConfig.PutTx(ctx, tx, appCfg, expectedAppVersion, updatedBy); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
@@ -307,8 +317,6 @@ func buildSSOAdminHandler(in ssoAdminHandlerDeps) *ssoadmin.Handler {
 		committed = true
 		return nil
 	}
-	return ssoadmin.NewHandler(in.ssoStore, in.appConfig, apply, in.authz, in.audit,
-		func(ctx context.Context, issuer string) error { return oidc.Probe(ctx, issuer, oidcHTTPClient) }, in.logger)
 }
 
 // serviceAccountSurface bundles the optional service-account handlers plus the API-auth middleware. All fields are nil/zero in
@@ -373,33 +381,9 @@ type breakglassDeps struct {
 // origins). Returns an error when the operator partially configured the surface.
 func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handler, error) {
 	bg := in.deps.Breakglass
-	rpID := bg.RPID
-	rpOrigins := bg.RPOrigins
-	if rpID == "" && len(rpOrigins) == 0 {
-		// Nothing configured: default to localhost so first boot has a working recovery surface without a long env var prelude. The
-		// origins are https:// to match the server's mandatory-TLS posture (issue #140); the browser hits https://localhost:8088, so the
-		// WebAuthn origin check would reject http:// here. Production sets EDR_BREAKGLASS_RP_ID + EDR_BREAKGLASS_RP_ORIGINS to the
-		// externally reachable host.
-		rpID = "localhost"
-		rpOrigins = []string{"https://localhost:8088", "https://127.0.0.1:8088"}
-	}
-	// Reject partial config: an operator who set RP_ORIGINS WITHOUT RP_ID intended to configure break-glass; silently defaulting to the
-	// localhost RP id would brick recovery against the wrong relying party.
-	if rpID == "" && len(rpOrigins) > 0 {
-		return nil, nil, errors.New(
-			"identity bootstrap: EDR_BREAKGLASS_RP_ORIGINS set without EDR_BREAKGLASS_RP_ID")
-	}
-	if len(rpOrigins) == 0 {
-		return nil, nil, errors.New(
-			"identity bootstrap: EDR_BREAKGLASS_RP_ID set without EDR_BREAKGLASS_RP_ORIGINS")
-	}
-	if len(in.deps.SessionSigningKey) == 0 {
-		return nil, nil, errors.New(
-			"identity bootstrap: SessionSigningKey is required when break-glass is configured")
-	}
-	displayName := bg.RPDisplayName
-	if displayName == "" {
-		displayName = "EDR Break-glass"
+	rpID, rpOrigins, displayName, err := resolveBreakglassConfig(bg, in.deps.SessionSigningKey)
+	if err != nil {
+		return nil, nil, err
 	}
 	wa, err := breakglass.NewWebAuthn(breakglass.WebAuthnOptions{
 		RPID:          rpID,
@@ -436,6 +420,41 @@ func buildBreakglass(in breakglassDeps) (*breakglass.Service, *breakglass.Handle
 	return svc, h, nil
 }
 
+// resolveBreakglassConfig normalizes the break-glass relying-party knobs and rejects a partial config. When neither RP id nor origins
+// are set it falls through to a localhost default so first boot has a working recovery surface; a partial config (one of RP id / origins
+// without the other, or a missing session signing key) is an operator error and returns one. The display name defaults when unset.
+func resolveBreakglassConfig(bg BreakglassDeps, sessionSigningKey []byte) (rpID string, rpOrigins []string, displayName string, err error) {
+	rpID = bg.RPID
+	rpOrigins = bg.RPOrigins
+	if rpID == "" && len(rpOrigins) == 0 {
+		// Nothing configured: default to localhost so first boot has a working recovery surface without a long env var prelude. The
+		// origins are https:// to match the server's mandatory-TLS posture (issue #140); the browser hits https://localhost:8088, so the
+		// WebAuthn origin check would reject http:// here. Production sets EDR_BREAKGLASS_RP_ID + EDR_BREAKGLASS_RP_ORIGINS to the
+		// externally reachable host.
+		rpID = "localhost"
+		rpOrigins = []string{"https://localhost:8088", "https://127.0.0.1:8088"}
+	}
+	// Reject partial config: an operator who set RP_ORIGINS WITHOUT RP_ID intended to configure break-glass; silently defaulting to the
+	// localhost RP id would brick recovery against the wrong relying party.
+	if rpID == "" && len(rpOrigins) > 0 {
+		return "", nil, "", errors.New(
+			"identity bootstrap: EDR_BREAKGLASS_RP_ORIGINS set without EDR_BREAKGLASS_RP_ID")
+	}
+	if len(rpOrigins) == 0 {
+		return "", nil, "", errors.New(
+			"identity bootstrap: EDR_BREAKGLASS_RP_ID set without EDR_BREAKGLASS_RP_ORIGINS")
+	}
+	if len(sessionSigningKey) == 0 {
+		return "", nil, "", errors.New(
+			"identity bootstrap: SessionSigningKey is required when break-glass is configured")
+	}
+	displayName = bg.RPDisplayName
+	if displayName == "" {
+		displayName = "EDR Break-glass"
+	}
+	return rpID, rpOrigins, displayName, nil
+}
+
 // oidcHandlerDeps bundles the per-call inputs to buildOIDCHandler. Pulled out of the function signature so the call stays under the
 // linter's per-call parameter budget without churning through fields in two places when the wiring expands.
 type oidcHandlerDeps struct {
@@ -466,9 +485,29 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 	}
 	store := ssoconfig.New(in.deps.DB, sealer)
 
-	// The resolver reads the decrypted connection config per login; ErrNotFound (no config yet) maps to oidc.ErrNotConfigured so the
-	// login route returns a directed "SSO not configured" response instead of a 500.
-	resolver := oidc.NewResolver(func(ctx context.Context) (oidc.ProviderConfig, error) {
+	resolver := oidc.NewResolver(newOIDCProviderConfigFn(store, in.appCfg), in.deps.OIDC.HTTPClient, in.logger)
+
+	prov := oidc.NewProvisioner(in.deps.DB, in.users, in.identities, in.rbac, in.audit, oidc.ProvisionerOptions{
+		Logger:   in.logger,
+		PolicyFn: newOIDCJITPolicyFn(store),
+	})
+
+	return oidc.NewHandler(oidc.HandlerOptions{
+		Resolve:     resolver.Current,
+		Provisioner: prov,
+		Sessions:    in.sessions,
+		SigningKey:  in.deps.SessionSigningKey,
+		StateTTL:    in.deps.OIDC.StateCookieTTL,
+		Audit:       in.audit,
+		Logger:      in.logger,
+	}), store, nil
+}
+
+// newOIDCProviderConfigFn returns the per-login provider-config resolver the OIDC handler reads through. It reads the decrypted
+// connection config per login; ErrNotFound (no config yet) maps to oidc.ErrNotConfigured so the login route returns a directed "SSO not
+// configured" response instead of a 500.
+func newOIDCProviderConfigFn(store *ssoconfig.Store, appConfig *appconfig.Store) oidc.ConfigFunc {
+	return func(ctx context.Context) (oidc.ProviderConfig, error) {
 		c, err := store.GetDecrypted(ctx)
 		if errors.Is(err, ssoconfig.ErrNotFound) {
 			return oidc.ProviderConfig{}, oidc.ErrNotConfigured
@@ -478,7 +517,7 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 		}
 		// The redirect URI is derived from the deployment external URL, which lives in the appconfig document and changes independently
 		// of oidc_config; fold both versions into the cache stamp so an external-URL edit rebuilds the client too.
-		appCfg, appVersion, err := in.appCfg.Get(ctx)
+		appCfg, appVersion, err := appConfig.Get(ctx)
 		if err != nil {
 			return oidc.ProviderConfig{}, err
 		}
@@ -496,33 +535,22 @@ func buildOIDCHandler(in oidcHandlerDeps) (*oidc.Handler, *ssoconfig.Store, erro
 			Scopes:       c.Scopes,
 			Stamp:        fmt.Sprintf("%d.%d", c.Version, appVersion),
 		}, nil
-	}, in.deps.OIDC.HTTPClient, in.logger)
+	}
+}
 
-	// The provisioner reads the JIT toggle + default role from the same store at provision time, so a UI edit of either applies on the
-	// next sign-in. No stored config means JIT is off (unknown subjects are denied), matching the wave-1 default.
-	prov := oidc.NewProvisioner(in.deps.DB, in.users, in.identities, in.rbac, in.audit, oidc.ProvisionerOptions{
-		Logger: in.logger,
-		PolicyFn: func(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
-			c, err := store.Get(ctx)
-			if errors.Is(err, ssoconfig.ErrNotFound) {
-				return false, "", nil
-			}
-			if err != nil {
-				return false, "", err
-			}
-			return c.JITEnabled, c.DefaultRole, nil
-		},
-	})
-
-	return oidc.NewHandler(oidc.HandlerOptions{
-		Resolve:     resolver.Current,
-		Provisioner: prov,
-		Sessions:    in.sessions,
-		SigningKey:  in.deps.SessionSigningKey,
-		StateTTL:    in.deps.OIDC.StateCookieTTL,
-		Audit:       in.audit,
-		Logger:      in.logger,
-	}), store, nil
+// newOIDCJITPolicyFn returns the JIT policy the OIDC provisioner reads at provision time, so a UI edit of the toggle or default role
+// applies on the next sign-in. No stored config means JIT is off (unknown subjects are denied), matching the wave-1 default.
+func newOIDCJITPolicyFn(store *ssoconfig.Store) func(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
+	return func(ctx context.Context) (allowJIT bool, defaultRole string, err error) {
+		c, err := store.Get(ctx)
+		if errors.Is(err, ssoconfig.ErrNotFound) {
+			return false, "", nil
+		}
+		if err != nil {
+			return false, "", err
+		}
+		return c.JITEnabled, c.DefaultRole, nil
+	}
 }
 
 // ApplySchema applies identity's goose migration corpus and seeds the
@@ -597,20 +625,35 @@ func SeedOIDCConfig(ctx context.Context, db *sqlx.DB, oidcSecretKey []byte, in O
 		return fmt.Errorf("identity SeedOIDCConfig: build secret sealer: %w", err)
 	}
 	store := ssoconfig.New(db, sealer)
-	// Skip only when a USABLE config already exists and we are not forcing. Usable means the row decrypts AND carries a client secret:
-	// gating on mere row presence would silently no-op over a row whose secret cannot be decrypted (e.g. after an EDR_SECRET_KEY
-	// rotation) or that has no secret at all, leaving SSO broken; an undecryptable row surfaces as an error so the caller can rerun with
-	// Force, while a present-but-secretless row falls through and is (re)seeded.
 	if !in.Force {
-		switch cfg, err := store.GetDecrypted(ctx); {
-		case err == nil && cfg.ClientSecret != "":
+		usable, err := storedOIDCConfigUsable(ctx, store)
+		if err != nil {
+			return err
+		}
+		if usable {
 			return nil // a usable stored config governs; leave it untouched
-		case err != nil && !errors.Is(err, ssoconfig.ErrNotFound):
-			return fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
 		}
 	}
-	// Write oidc_config and the external URL in ONE transaction (same shape as the admin API's apply), so a partial failure can't leave a
-	// stored OIDC config paired with a missing derived redirect; a rolled-back seed re-runs cleanly.
+	return seedOIDCConfigTx(ctx, db, store, in)
+}
+
+// storedOIDCConfigUsable reports whether a USABLE OIDC config already exists so SeedOIDCConfig can no-op without forcing. Usable means
+// the row decrypts AND carries a client secret: gating on mere row presence would silently no-op over a row whose secret cannot be
+// decrypted (e.g. after an EDR_SECRET_KEY rotation) or that has no secret at all, leaving SSO broken; an undecryptable row surfaces as an
+// error so the caller can rerun with Force, while a present-but-secretless row is reported not-usable and is (re)seeded.
+func storedOIDCConfigUsable(ctx context.Context, store *ssoconfig.Store) (bool, error) {
+	switch cfg, err := store.GetDecrypted(ctx); {
+	case err == nil && cfg.ClientSecret != "":
+		return true, nil
+	case err != nil && !errors.Is(err, ssoconfig.ErrNotFound):
+		return false, fmt.Errorf("identity SeedOIDCConfig: read OIDC config: %w", err)
+	}
+	return false, nil
+}
+
+// seedOIDCConfigTx writes oidc_config and the external URL in ONE transaction (same shape as the admin API's apply), so a partial
+// failure can't leave a stored OIDC config paired with a missing derived redirect; a rolled-back seed re-runs cleanly.
+func seedOIDCConfigTx(ctx context.Context, db *sqlx.DB, store *ssoconfig.Store, in OIDCSeedInput) error {
 	tx, err := db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("identity SeedOIDCConfig: begin tx: %w", err)
