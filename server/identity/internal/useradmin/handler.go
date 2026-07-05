@@ -6,9 +6,7 @@ package useradmin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -421,16 +419,16 @@ func pathID(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *
 }
 
 func decodeBody(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request, dst any) bool {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
-	if err != nil {
+	outcome := httpserver.DecodeCappedJSON(r, maxBodyBytes, dst)
+	if outcome == httpserver.BodyReadFailed {
 		writeErr(ctx, logger, w, http.StatusBadRequest, "read_error")
 		return false
 	}
-	if len(body) > maxBodyBytes {
+	if outcome == httpserver.BodyTooLarge {
 		writeErr(ctx, logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
 		return false
 	}
-	if err := json.Unmarshal(body, dst); err != nil {
+	if outcome == httpserver.BodyInvalidJSON {
 		writeErr(ctx, logger, w, http.StatusBadRequest, "invalid_json")
 		return false
 	}
@@ -438,5 +436,5 @@ func decodeBody(ctx context.Context, logger *slog.Logger, w http.ResponseWriter,
 }
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, reason string) {
-	httpserver.NoStoreJSON(ctx, logger, w, status, map[string]string{"error": reason})
+	httpserver.WriteJSONError(ctx, logger, w, status, reason)
 }

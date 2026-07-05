@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -624,18 +623,17 @@ func actorIdentifierFromContext(ctx context.Context) string {
 	return a.Principal.ID
 }
 
-// readAppControlBody reads the request body under a size cap and, on a read error, writes the typed 400 read-body response and
-// returns ok=false. Extracted so each mutation handler shares one copy of the read-and-map-error block instead of inlining it
-// (Sonar S3776 + S4144). limit lets the bulk-upsert route lift the per-rule cap without a second copy of the logic. It reads
-// limit+1 bytes so an over-limit body is detected and rejected with a typed 413 rather than silently truncated (a truncated
-// payload would surface as a misleading invalid_json 400 or, worse, a partial-but-valid mutation).
+// readAppControlBody reads the request body under a size cap and, on a read error or an over-cap body, writes the typed 400/413
+// response and returns ok=false. Extracted so each mutation handler shares one copy of the read-and-map-error block instead of
+// inlining it (Sonar S3776 + S4144). limit lets the bulk-upsert route lift the per-rule cap without a second copy of the logic. The
+// read+size invariant (read limit+1 so an over-cap body is rejected rather than silently truncated) lives in httpserver.ReadCappedBody.
 func (h *AppControlHandler) readAppControlBody(ctx context.Context, w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
-	if err != nil {
+	body, outcome := httpserver.ReadCappedBody(r, limit)
+	if outcome == httpserver.BodyReadFailed {
 		writeAppControlErr(ctx, h.logger, w, http.StatusBadRequest, errCodeReadBody, errMsgReadBody)
 		return nil, false
 	}
-	if int64(len(body)) > limit {
+	if outcome == httpserver.BodyTooLarge {
 		writeAppControlErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, errCodeBodyTooLarge, errMsgBodyTooLarge)
 		return nil, false
 	}
