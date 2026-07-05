@@ -101,8 +101,8 @@ final class EventSerializerTests: XCTestCase {
 
     // spec:endpoint-event-collection/launch-item-registration-event-capture/a-launchdaemon-is-registered-via-background-task-management
     func testBtmLaunchItemAddPayloadRoundTripAndWireKeys() throws {
-        // Pins the snake_case wire keys the Go privilege_launchd_plist_write rule consumes. Models the real ground-truth
-        // (ai/btm-attribution): the DECISION input is executable_code_signing (here an unsigned dropper, which fires),
+        // Pins the snake_case wire keys the Go privilege_launchd_plist_write rule consumes. Models the real ground-truth:
+        // the DECISION input is executable_code_signing (here an unsigned dropper, which fires),
         // while the instigator is Apple's smd (a platform binary) and is forensic-only.
         let payload = BtmLaunchItemAddPayload(
             itemType: "daemon",

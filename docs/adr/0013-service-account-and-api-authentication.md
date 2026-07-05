@@ -53,7 +53,7 @@ Service accounts authenticate with the **OAuth 2.1 client-credentials grant**, e
 
 ## References
 
-- Issue #376 (API-only users / `api_token` identity kind) and #135 (role-management UI), the wave-2 user-management arc this underpins
+- Issue #376 (API-only users / `api_token` identity kind) and #135 (role-management UI), the user-management arc this underpins
 - #454 (`server/endpoint/internal/signedtoken`, `server/endpoint/internal/token`): the self-validating signed host token + agent-pull refresh this generalizes
 - ADR-0010 ([`0010-stateless-server.md`](0010-stateless-server.md)) and ADR-0011 ([`0011-ha-architecture.md`](0011-ha-architecture.md)): the stateless multi-replica topology the stateless hot path serves
 - ADR-0004 ([`0004-modular-monolith-bounded-contexts.md`](0004-modular-monolith-bounded-contexts.md)): the identity bounded context that owns the new surface

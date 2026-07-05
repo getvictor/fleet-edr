@@ -1,6 +1,6 @@
 # 0015. ClickHouse event store in a new `visibility` bounded context
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-25
 - Deciders: getvictor
 

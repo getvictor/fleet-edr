@@ -58,7 +58,7 @@ Reading the `X-Edr-Authz-Reason` header (or the matching `audit_events` row's `p
 | `granted` | Decision was Allow. Never appears on a 403; documented for completeness because the audit row uses the same field. | (none) |
 | `no_matching_rule` | The actor's role bindings don't grant the action. | Assign the appropriate role from the Users page in Admin settings (or SQL, see below). |
 | `reauth_required` | The actor's session is past the reauth window (default 30m). The role grants the action; the operator just needs to re-prove possession of credentials. | UI handles this automatically via the reauth modal. If a non-UI client hits it, follow `challenge.reauth_url` and retry. |
-| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. The current release only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes are coming soon. |
+| `scope_not_yet_supported` | The actor has a `host_group` or `host` scoped role binding. The current release only honours the deployment-wide `global` scope. | Persist a `global`-scoped binding instead: `host_group` / `host` scopes may be supported in a future release. |
 | `action_not_registered` | The handler called `Allow` with an action string outside `RegisteredActions`. | Server bug. File a ticket; the offending handler likely passed a string literal instead of a typed `api.Action` constant. |
 | `no_actor` | The chokepoint was reached without an authenticated session on context. | Server bug: the session middleware is misconfigured for the route. Check the route's middleware chain. |
 
@@ -70,7 +70,7 @@ The primary path is the Users page in Admin settings (`/admin/settings/users`): 
 
 To set an operator's role _before_ their first sign-in, pre-provision them from the same Users page ("Add user"): enter an email and a role and the server stages a pending account (`POST /api/settings/users`, gated on `user.invite`, audited as `user.provisioned`). The staged row shows a "Pending" badge until that email first authenticates via SSO, at which point the OIDC provisioner adopts the row, activates it, and binds the pre-assigned role instead of defaulting to `analyst`. Matching is on the verified email claim, and adoption is honored even when JIT auto-provisioning is disabled (staging is an explicit admin decision, distinct from JIT-creating an unknown subject). `super_admin` is never offered and is rejected unless the acting operator is itself a `super_admin`.
 
-The SQL pattern below remains as a break-glass alternative (for example, recovering a deployment that has no usable admin session). The shape mirrors `server/identity/bootstrap/schema.go`:
+The SQL pattern below remains as a break-glass alternative (for example, recovering a deployment that has no usable admin session). The shape mirrors `server/identity/migrations/00001_initial.sql`:
 
 ```sql
 INSERT INTO role_bindings (user_id, role_id, scope_type, scope_id)

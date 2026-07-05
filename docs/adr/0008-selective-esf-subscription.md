@@ -12,8 +12,6 @@ The original Decision left two things unspecified that the implementation (#304)
 - `instigator = /usr/libexec/smd` (`com.apple.xpc.smd`), an Apple platform binary; `app = nil`
 - out-of-band on the executable: `codesign` -> ad-hoc / linker-signed, no TeamIdentifier; `spctl -t install` -> rejected (not notarized)
 
-(Full record: `ai/btm-attribution/experiment.md`.)
-
 ### Revised decisions
 
 1. **Do NOT gate on the BTM instigator's code-signing.** `launchctl bootstrap` delegates registration to `smd`, so the instigator is an Apple platform binary for _every_ legacy LaunchDaemon registration, attack or not. The instigator is not the attacker, and `app` is nil for this vector. An instigator `is_platform_binary` gate suppresses the canonical attack. (Implementation note: #304 shipped exactly this gate; it must change.)
@@ -123,7 +121,7 @@ The watched-path set for (3) starts **hardcoded in the extension**, documented a
 
 - #301 (the volume issue this ADR re-scopes), #299 / PR #302 (the create-forwarding change this ADR supersedes the direction of), #298 (AUTH_EXEC serial-handler stall), #300 (uploader catch-up).
 - L5 system-test run 2026-05-29 (the ~12-minute detection-latency backlog observation).
-- `extension/edr/extension/ESFSubscriber.swift`, `extension/edr/extension/ESFSubscriber+FileEvents.swift` (current subscription + file-event handlers).
+- `extension/edr/extension/ESFSubscriber.swift`, `extension/edr/extension/FileTamperSubscriber.swift` (current subscription + file-event handlers).
 - `server/rules/internal/catalog/privilege_launchd_plist_write.go`, `.../sudoers_tamper.go` (the `open`-keyed rules).
 - ADR-0002 "macOS Apple Silicon MVP only" (the macOS 13+ floor that makes BTM + inversion available).
 - Apple: [es_mute_path](<https://developer.apple.com/documentation/endpointsecurity/es_mute_path(_:_:_:)>), [es_mute_path_events](<https://developer.apple.com/documentation/endpointsecurity/es_mute_path_events(_:_:_:_:_:)>), [es_invert_muting](<https://developer.apple.com/documentation/endpointsecurity/es_invert_muting(_:_:)>), [ES_MUTE_INVERTED](https://developer.apple.com/documentation/endpointsecurity/es_mute_inverted), [WWDC20 Build an Endpoint Security app](https://developer.apple.com/videos/play/wwdc2020/10159/).

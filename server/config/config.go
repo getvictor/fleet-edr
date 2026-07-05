@@ -86,9 +86,9 @@ type Config struct {
 
 	// Data lifecycle.
 	//
-	// RetentionDays is the age cap for events in days. 0 disables the retention
-	// runner entirely (useful for operators who ship events to another store and
-	// don't want MVP's default 30-day window). Default 30.
+	// RetentionDays is the age cap in days for completed MySQL process records: the retention runner prunes rows whose exit aged past it
+	// (alert-referenced rows are kept). 0 disables the runner. Event retention is the ClickHouse archive's native TTL (ADR-0015), not this
+	// knob. Default 30.
 	RetentionDays int
 
 	// Detection-rule false-positive allowlists and the disabled-rule list moved out of boot-time env to the DB-backed
@@ -224,8 +224,9 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	// docker-secret mounts). go-sql-driver does not URL-decode the DSN, so a password containing DSN metacharacters (@, :, /, ?)
 	// is not supported in the raw DSN string and must be avoided.
 	optionalStr(&c.DSN, "EDR_DSN", getenv)
-	// EDR_CLICKHOUSE_DSN points the visibility event archive at ClickHouse (clickhouse-go DSN form). Optional: the archive is wired in
-	// at the cutover, so an unset value leaves the server on the MySQL-only path (use EDR_CLICKHOUSE_DSN_FILE for docker-secret mounts).
+	// EDR_CLICKHOUSE_DSN points the visibility event archive at ClickHouse (clickhouse-go DSN form). ClickHouse is the event store
+	// (ADR-0015): there is no MySQL events fallback after the cutover, so the combined server and the standalone ingest binary both refuse
+	// to boot when it is unset (enforced in cmd/main, not here). Use EDR_CLICKHOUSE_DSN_FILE for docker-secret mounts.
 	optionalStr(&c.ClickHouseDSN, "EDR_CLICKHOUSE_DSN", getenv)
 	if c.DSN == "" {
 		*errs = append(*errs, errors.New("EDR_DSN is required (use EDR_DSN_FILE for docker-secret mounts)"))

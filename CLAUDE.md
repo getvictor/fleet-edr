@@ -1,7 +1,10 @@
 ## Testing
 
-The repo enforces a SonarCloud "Coverage on New Code ≥ 80%" gate per PR.
-Codecov mirrors that threshold. Tests live in three layers:
+The repo enforces a SonarCloud "Coverage on New Code ≥ 80%" gate per PR
+(configured in the SonarCloud UI); that is the authoritative coverage bar.
+Codecov runs in parallel but is held non-gating at 70% (`codecov.yml`,
+`informational: true`) so it does not gate-out PRs Sonar already accepts.
+Tests live in three layers:
 
 1. **Per-package unit tests**: co-located with the code, default tag.
 2. **Per-context integration tests**: `server/<context>/internal/tests/`,
@@ -91,10 +94,12 @@ Minimum requirements per PR:
 
 ## Bounded contexts
 
-ADR-0004 carved `server/` into five bounded contexts: `identity`, `endpoint`,
-`rules`, `response`, `detection`. Cross-context calls go through the imported
-`api/` package only. Internal packages are Go-compiler enforced via the
-`internal/` rule. arch-go (`arch-go.yml`) layers an extra check.
+ADR-0004 carved `server/` into bounded contexts: the original five
+(`identity`, `endpoint`, `rules`, `response`, `detection`), since amended to add
+`observability` (the sixth) and `visibility` (the seventh, carved from
+`detection` per ADR-0015). Cross-context calls go through the imported `api/`
+package only. Internal packages are Go-compiler enforced via the `internal/`
+rule. arch-go (`arch-go.yml`) layers an extra check.
 
 ## Dev environment
 

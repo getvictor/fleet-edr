@@ -1,6 +1,6 @@
 # 0018. Windows platform strategy
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-02
 - Deciders: getvictor
 
