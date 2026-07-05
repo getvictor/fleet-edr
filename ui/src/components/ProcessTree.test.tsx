@@ -22,6 +22,9 @@ beforeAll(() => {
   const dim = (value: number) => ({ baseVal: { value } });
   Object.defineProperty(SVGSVGElement.prototype, "width", { configurable: true, get: () => dim(800) });
   Object.defineProperty(SVGSVGElement.prototype, "height", { configurable: true, get: () => dim(600) });
+  // The search-highlight effect scrolls the active match into view; jsdom does not implement Element.scrollTo, so stub it as a
+  // no-op or typing a query into the search box throws inside the effect.
+  Element.prototype.scrollTo = () => { /* no-op in jsdom */ };
 });
 
 function process(id: number, pid: number, ppid: number, path: string): ProcessNode {
@@ -381,5 +384,58 @@ describe("ProcessTreeView alert technique mapping (issue #585)", () => {
     await waitFor(() => { expect(spy).toHaveBeenCalledTimes(2); });
     // The forest renders with the alerted node (id 2) present; the technique map building path ran without error.
     expect(await screen.findByText(/fleet-edr-agent/)).toBeInTheDocument();
+  });
+});
+
+// Regression guard (CodeRabbit finding): the collapse chevron glyph MUST reflect a node's ACTUAL rendered state, not raw collapsedIds
+// membership. While a search query is active applyCollapse is off, so buildVisibleRoots leaves a collapsed-id node's children visible
+// and does NOT stamp _collapsedCount on it. Deriving the glyph from collapsedIds.has(id) would then show a "collapsed" ▶ over a node
+// whose children are on screen. The glyph is derived from _collapsedCount, the true "rendered collapsed" signal, so it reads ▼.
+describe("ProcessTreeView chevron reflects rendered collapse state", () => {
+  const chevronForest: ProcessNode[] = [
+    { ...process(1, 100, 1, "/bin/bash"), children: [process(2, 300, 100, "/usr/bin/curl")] },
+  ];
+  const chevronGlyphs = (container: HTMLElement) =>
+    [...container.querySelectorAll("text.node__chevron")].map((c) => c.textContent);
+
+  beforeEach(() => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: chevronForest });
+  });
+
+  it("shows the collapsed ▶ chevron and its +N count for a genuinely collapsed node (no query)", async () => {
+    const { container } = renderTree("");
+    await screen.findByText(/curl \(300\)/);
+
+    // bash has one visible child (curl); its chevron is the only chevron and reads ▼ (expanded). curl is a childless leaf, no chevron.
+    expect(chevronGlyphs(container)).toEqual(["▼"]);
+
+    // Collapse bash's subtree via its chevron. applyCollapse is on (empty query), so buildVisibleRoots hides curl and stamps
+    // _collapsedCount on bash.
+    fireEvent.click(container.querySelector("text.node__chevron") as Element);
+    await waitFor(() => { expect(screen.queryByText(/curl \(300\)/)).not.toBeInTheDocument(); });
+
+    // bash now reads ▶ (collapsed) and its label carries the +1 hidden-count from _collapsedCount.
+    expect(chevronGlyphs(container)).toEqual(["▶"]);
+    expect(screen.getByText(/bash \(100\)\s+\+1/)).toBeInTheDocument();
+  });
+
+  it("shows the expanded ▼ chevron for a collapsed-id node whose children are search-expanded", async () => {
+    const { container } = renderTree("");
+    await screen.findByText(/curl \(300\)/);
+
+    // Collapse bash so its id is in collapsedIds.
+    fireEvent.click(container.querySelector("text.node__chevron") as Element);
+    await waitFor(() => { expect(screen.queryByText(/curl \(300\)/)).not.toBeInTheDocument(); });
+    expect(chevronGlyphs(container)).toEqual(["▶"]);
+
+    // Search for the collapsed-away child: applyCollapse flips off, so buildVisibleRoots keeps curl visible and never stamps
+    // _collapsedCount on bash even though bash is still in collapsedIds.
+    fireEvent.change(screen.getByPlaceholderText(/Search name, path, pid/i), { target: { value: "curl" } });
+    expect(await screen.findByText(/curl \(300\)/)).toBeInTheDocument();
+
+    // The chevron must reflect the rendered state (bash's children are on screen): ▼, never a stale ▶.
+    const glyphs = chevronGlyphs(container);
+    expect(glyphs).toContain("▼");
+    expect(glyphs).not.toContain("▶");
   });
 });
