@@ -65,6 +65,49 @@ func TestReadAppControlBody(t *testing.T) {
 	})
 }
 
+// spec:server-admin-surface/operator-mutation-endpoints-reject-oversize-request-bodies/oversize-application-control-mutation-body-is-rejected
+//
+// TestReadAppControlBody_SizeLimit pins the 413 gate: readAppControlBody reads one byte past the per-route cap so an over-limit body
+// is rejected with the typed body_too_large 413 rather than silently truncated (a truncated payload would surface as a misleading
+// invalid_json 400 or a partial-but-valid mutation). A body exactly at the cap still reads clean, on both the per-rule (16 KiB) and
+// bulk-upsert (256 KiB) caps.
+func TestReadAppControlBody_SizeLimit(t *testing.T) {
+	t.Parallel()
+	h := &AppControlHandler{logger: quietLogger()}
+
+	cases := []struct {
+		name       string
+		limit      int64
+		size       int
+		wantOK     bool
+		wantStatus int
+	}{
+		{"per-rule cap: at limit reads clean", applicationControlReadBodyLimit, applicationControlReadBodyLimit, true, http.StatusOK},
+		{"per-rule cap: over limit is 413", applicationControlReadBodyLimit, applicationControlReadBodyLimit + 1, false, http.StatusRequestEntityTooLarge},
+		{"bulk cap: at limit reads clean", bulkUpsertReadBodyLimit, bulkUpsertReadBodyLimit, true, http.StatusOK},
+		{"bulk cap: over limit is 413", bulkUpsertReadBodyLimit, bulkUpsertReadBodyLimit + 1, false, http.StatusRequestEntityTooLarge},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", strings.NewReader(strings.Repeat("a", tc.size)))
+			rec := httptest.NewRecorder()
+			body, ok := h.readAppControlBody(req.Context(), rec, req, tc.limit)
+			require.Equal(t, tc.wantOK, ok)
+			if tc.wantOK {
+				assert.Len(t, body, tc.size)
+				assert.Equal(t, http.StatusOK, rec.Code, "no error response is written at or below the cap")
+				return
+			}
+			assert.Nil(t, body)
+			assert.Equal(t, tc.wantStatus, rec.Code)
+			code, msg := decodeErrResponse(t, rec.Body.Bytes())
+			assert.Equal(t, errCodeBodyTooLarge, code)
+			assert.Equal(t, errMsgBodyTooLarge, msg)
+		})
+	}
+}
+
 // TestActorOrInternalError covers the extracted actorOrInternalError helper: an authenticated actor is returned as-is, while an
 // absent actor (a session-middleware wiring bug, not a user error) logs and maps to a 500.
 func TestActorOrInternalError(t *testing.T) {
