@@ -93,7 +93,6 @@ func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
 	writeRuleHeading(b, r.ID, r.Doc)
 	writeRuleMeta(b, r.ID, r.Doc, r.Techniques)
 	writeRuleDescription(b, r.Doc)
-	writeRuleConfig(b, r.Doc.Config)
 	writeRuleBulletSection(b, "Known false-positive sources", r.Doc.FalsePositives)
 	writeRuleBulletSection(b, "Limitations", r.Doc.Limitations)
 }
@@ -126,23 +125,6 @@ func writeRuleDescription(b *strings.Builder, d rulesapi.Documentation) {
 	b.WriteString("### Description\n\n")
 	b.WriteString(d.Description)
 	b.WriteString("\n\n")
-}
-
-func writeRuleConfig(b *strings.Builder, knobs []rulesapi.ConfigKnob) {
-	if len(knobs) == 0 {
-		return
-	}
-	b.WriteString("### Configuration\n\n")
-	b.WriteString("| Env var | Type | Default | Description |\n")
-	b.WriteString("| --- | --- | --- | --- |\n")
-	for _, c := range knobs {
-		def := "_(unset)_"
-		if c.Default != "" {
-			def = "`" + c.Default + "`"
-		}
-		fmt.Fprintf(b, "| `%s` | `%s` | %s | %s |\n", c.EnvVar, c.Type, def, mdCell(c.Description))
-	}
-	b.WriteString("\n")
 }
 
 func writeRuleBulletSection(b *strings.Builder, heading string, items []string) {

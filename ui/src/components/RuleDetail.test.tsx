@@ -23,10 +23,6 @@ function makeEntry(over: Partial<RuleDocEntry> = {}): RuleDocEntry {
       event_types: ["exec"],
       false_positives: ["build scripts"],
       limitations: ["macOS only"],
-      config: [
-        { env_var: "EDR_FOO", type: "bool", default: "", description: "toggle foo" },
-        { env_var: "EDR_BAR", type: "int", default: "5", description: "bar threshold" },
-      ],
     },
     ...over,
   };
@@ -92,15 +88,6 @@ describe("RuleDetail body", () => {
     expect(screen.getByText("Second paragraph.")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "T1059.004" });
     expect(link).toHaveAttribute("href", "https://attack.mitre.org/techniques/T1059/004/");
-  });
-
-  it("renders the config table, marking an empty default as (unset)", async () => {
-    mockDocs([makeEntry()]);
-    renderAt("suspicious_exec");
-    await waitFor(() => expect(screen.getByText("Configuration")).toBeInTheDocument());
-    expect(screen.getByText("EDR_FOO")).toBeInTheDocument();
-    expect(screen.getByText("(unset)")).toBeInTheDocument();
-    expect(screen.getByText("5")).toBeInTheDocument();
   });
 
   it("renders the false-positive and limitations lists", async () => {
