@@ -225,9 +225,9 @@ func loadCoreEnv(c *Config, getenv func(string) string, errs *[]error) {
 	// is not supported in the raw DSN string and must be avoided.
 	optionalStr(&c.DSN, "EDR_DSN", getenv)
 	// EDR_CLICKHOUSE_DSN points the visibility event archive at ClickHouse (clickhouse-go DSN form). ClickHouse is the event store
-	// (ADR-0015): there is no MySQL events fallback after the cutover, so the combined server and the standalone ingest binary both refuse
-	// to boot when it is unset (enforced in cmd/main, not here). Use EDR_CLICKHOUSE_DSN_FILE for docker-secret mounts.
-	optionalStr(&c.ClickHouseDSN, "EDR_CLICKHOUSE_DSN", getenv)
+	// (ADR-0015): there is no MySQL events fallback after the cutover, so it is required, not optional. Validated here (like every other
+	// required var) so the combined server and the standalone ingest binary share one check. Use EDR_CLICKHOUSE_DSN_FILE for docker-secret mounts.
+	requireStr(&c.ClickHouseDSN, "EDR_CLICKHOUSE_DSN", getenv, errs, true)
 	if c.DSN == "" {
 		*errs = append(*errs, errors.New("EDR_DSN is required (use EDR_DSN_FILE for docker-secret mounts)"))
 	}

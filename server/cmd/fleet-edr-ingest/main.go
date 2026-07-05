@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -234,10 +233,7 @@ func run() error {
 // accepted event out to the archive plus the MySQL EventLog queue, so EDR_CLICKHOUSE_DSN is required here too: an unset value is a fatal
 // misconfig, not a MySQL fallback. Returns the ClickHouse handle so the caller can defer its Close.
 func openVisibility(ctx context.Context, logger *slog.Logger, cfg *config.Config, db *sqlx.DB) (*sqlx.DB, *visibilitybootstrap.Visibility, error) {
-	if cfg.ClickHouseDSN == "" {
-		logger.ErrorContext(ctx, "EDR_CLICKHOUSE_DSN is required: the event store is ClickHouse (ADR-0015)")
-		return nil, nil, errors.New("EDR_CLICKHOUSE_DSN is required")
-	}
+	// EDR_CLICKHOUSE_DSN is validated as required in config.Load (ADR-0015: no MySQL events fallback), so it is non-empty here.
 	chDB, err := visibilitybootstrap.OpenClickHouse(ctx, cfg.ClickHouseDSN)
 	if err != nil {
 		logger.ErrorContext(ctx, "open clickhouse", "err", err)

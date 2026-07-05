@@ -119,12 +119,8 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	// ClickHouse is the event store (ADR-0015): the durable archive intake writes to and correlation/evidence reads from. It is
-	// required, not optional: there is no MySQL events fallback after the cutover, so an unset EDR_CLICKHOUSE_DSN is a fatal misconfig.
-	if cfg.ClickHouseDSN == "" {
-		logger.ErrorContext(ctx, "EDR_CLICKHOUSE_DSN is required: the event store is ClickHouse (ADR-0015)")
-		return errors.New("EDR_CLICKHOUSE_DSN is required")
-	}
+	// ClickHouse is the event store (ADR-0015): the durable archive intake writes to and correlation/evidence reads from.
+	// EDR_CLICKHOUSE_DSN is validated as required in config.Load (no MySQL events fallback after the cutover), so it is non-empty here.
 	chDB, err := visibilitybootstrap.OpenClickHouse(ctx, cfg.ClickHouseDSN)
 	if err != nil {
 		logger.ErrorContext(ctx, "open clickhouse", "err", err)
