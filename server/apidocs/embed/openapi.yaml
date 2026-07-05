@@ -1294,6 +1294,7 @@ components:
           enum:
             - detection_config.invalid_json
             - detection_config.read_body
+            - detection_config.body_too_large
             - detection_config.invalid_input
             - detection_config.invalid_id
             - detection_config.not_found

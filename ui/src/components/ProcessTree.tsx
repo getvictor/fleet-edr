@@ -70,13 +70,13 @@ interface RenderResult {
 }
 
 // TreeInteractions bundles the node-state + callbacks renderTree needs so its signature stays under the parameter cap. alertProcessIds
-// drives the alert dot; collapsedIds/onToggleCollapsed drive the generic subtree collapse; expandedAggIds/onToggleAggExpanded drive
-// the issue-#416 aggregated-node expand.
+// drives the alert dot; onToggleCollapsed drives the generic subtree collapse (the chevron glyph derives collapsed-ness from each
+// node's rendered _collapsedCount, so no collapsedIds set is threaded here); expandedAggIds/onToggleAggExpanded drive the issue-#416
+// aggregated-node expand.
 interface TreeInteractions {
   alertProcessIds: Set<number>;
   // techniquesByNodeId maps a process DB id to its alerts' technique ids, shown in the hover tooltip (issue #585).
   techniquesByNodeId: Map<number, string[]>;
-  collapsedIds: Set<number>;
   onToggleCollapsed?: (nodeId: number) => void;
   expandedAggIds: Set<number>;
   onToggleAggExpanded?: (nodeId: number) => void;
@@ -328,14 +328,13 @@ export function ProcessTreeView() {
     const result = renderTree(svgRef.current, visibleRoots, setSelectedNode, {
       alertProcessIds,
       techniquesByNodeId,
-      collapsedIds,
       onToggleCollapsed: toggleCollapsed,
       expandedAggIds,
       onToggleAggExpanded: toggleAggExpanded,
       onHover: setHoverTip,
     });
     layoutNodesRef.current = result.nodes;
-  }, [visibleRoots, alertProcessIds, techniquesByNodeId, collapsedIds, toggleCollapsed, expandedAggIds, toggleAggExpanded]);
+  }, [visibleRoots, alertProcessIds, techniquesByNodeId, toggleCollapsed, expandedAggIds, toggleAggExpanded]);
 
   // Focus the currently-active match: scroll the canvas so the match sits near the
   // vertical centre, preserving the user's current zoom level and scroll position
@@ -720,16 +719,18 @@ function nodeDotFill(p: ProcessNode, alerted: boolean): string {
   return "#009a7d";
 }
 
-// A chevron is drawn when a node has children in the underlying data OR has been collapsed (so it can be expanded back). An aggregated
-// node is always expandable to its sample.
-function nodeHasChevron(p: ProcessNode, collapsedIds: Set<number>): boolean {
+// A chevron is drawn when a node has visible children in the rendered tree OR is actually collapsed (so it can be expanded back). The
+// authoritative "rendered collapsed" signal is _collapsedCount, which buildVisibleRoots sets only on nodes it truly collapses: a node
+// whose id is in collapsedIds but whose children stay visible (search-expanded, applyCollapse off) has no _collapsedCount and reads as
+// expanded. An aggregated node is always expandable to its sample.
+function nodeHasChevron(p: ProcessNode): boolean {
   if (p.aggregated) return true; // always expandable to its sample
-  return (p.children !== undefined && p.children.length > 0) || collapsedIds.has(p.id);
+  return (p.children !== undefined && p.children.length > 0) || p._collapsedCount !== undefined;
 }
 
-function chevronGlyph(p: ProcessNode, expandedAggIds: Set<number>, collapsedIds: Set<number>): string {
+function chevronGlyph(p: ProcessNode, expandedAggIds: Set<number>): string {
   if (p.aggregated) return expandedAggIds.has(p.id) ? "▼" : "▶";
-  return collapsedIds.has(p.id) ? "▶" : "▼";
+  return p._collapsedCount !== undefined ? "▶" : "▼";
 }
 
 function nodeLabelClass(alerted: boolean): string {
@@ -760,7 +761,7 @@ function renderTree(
   onSelect: (node: ProcessNode) => void,
   interactions: TreeInteractions,
 ): RenderResult {
-  const { alertProcessIds, techniquesByNodeId, collapsedIds, onToggleCollapsed, expandedAggIds, onToggleAggExpanded, onHover } =
+  const { alertProcessIds, techniquesByNodeId, onToggleCollapsed, expandedAggIds, onToggleAggExpanded, onHover } =
     interactions;
   const hierarchy = toD3Hierarchy(roots);
   const root = d3.hierarchy(hierarchy);
@@ -847,10 +848,10 @@ function renderTree(
     .attr("r", (d) => nodeDotRadius(alertProcessIds.has(d.data.data.id)))
     .attr("fill", (d) => nodeDotFill(d.data.data, alertProcessIds.has(d.data.data.id)));
 
-  // Collapse/expand chevron. Sits in front of the dot. Only rendered when a node has
-  // children in the underlying data OR has been collapsed (so we can expand it back).
-  // Click events on the chevron stop propagation so they don't also fire the node-select handler.
-  const chevronNodes = node.filter((d) => nodeHasChevron(d.data.data, collapsedIds));
+  // Collapse/expand chevron. Sits in front of the dot. Only rendered when a node has visible children in the rendered tree OR is
+  // actually collapsed (its _collapsedCount is set, so we can expand it back). Click events on the chevron stop propagation so they
+  // don't also fire the node-select handler.
+  const chevronNodes = node.filter((d) => nodeHasChevron(d.data.data));
   chevronNodes
     .append("text")
     .attr("class", "node__chevron")
@@ -860,7 +861,7 @@ function renderTree(
     .attr("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
     .attr("fill", "#515774")
     .style("cursor", "pointer")
-    .text((d) => chevronGlyph(d.data.data, expandedAggIds, collapsedIds))
+    .text((d) => chevronGlyph(d.data.data, expandedAggIds))
     .on("click", (event: MouseEvent, d) => {
       event.stopPropagation();
       const p = d.data.data;

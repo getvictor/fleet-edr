@@ -303,6 +303,69 @@ func TestDetectionConfigHandler_UpsertRuleSetting(t *testing.T) {
 	}
 }
 
+// spec:server-admin-surface/operator-mutation-endpoints-reject-oversize-request-bodies/oversize-detection-config-mutation-body-is-rejected
+//
+// TestDetectionConfigHandler_BodyTooLarge pins the 413 gate on the shared decode path: a body one byte past the 16 KiB cap is
+// rejected with the typed body_too_large 413 before json.Unmarshal, rather than silently truncated into a misleading invalid_json
+// 400 or a partial-but-valid mutation. A normal at/below-cap body on the same routes still succeeds.
+func TestDetectionConfigHandler_BodyTooLarge(t *testing.T) {
+	t.Parallel()
+	// pad on its own is exactly the cap; wrapped in the JSON envelope the whole body lands one byte past it, tripping the 413.
+	pad := strings.Repeat("a", detectionConfigReadBodyLimit)
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{
+			"create exclusion over limit is 413",
+			http.MethodPost, "/api/v1/detection-config/exclusions",
+			`{"rule_id":"suspicious_exec","match_type":"team_id","value":"` + pad + `","reason":"r"}`,
+			http.StatusRequestEntityTooLarge,
+		},
+		{
+			"create exclusion at/below limit still works",
+			http.MethodPost, "/api/v1/detection-config/exclusions",
+			`{"rule_id":"suspicious_exec","match_type":"team_id","value":"ABC","reason":"r"}`,
+			http.StatusCreated,
+		},
+		{
+			"upsert rule setting over limit is 413",
+			http.MethodPut, "/api/v1/detection-config/rule-settings",
+			`{"rule_id":"suspicious_exec","mode":"disabled","reason":"` + pad + `"}`,
+			http.StatusRequestEntityTooLarge,
+		},
+		{
+			"upsert rule setting at/below limit still works",
+			http.MethodPut, "/api/v1/detection-config/rule-settings",
+			`{"rule_id":"suspicious_exec","mode":"disabled","reason":"noisy"}`,
+			http.StatusOK,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &fakeDCService{
+				created: api.DetectionExclusion{ID: 1},
+				setting: api.DetectionRuleSetting{RuleID: "suspicious_exec", Mode: api.DetectionRuleModeDisabled},
+			}
+			srv := dcServer(t, svc, true)
+			resp := dcDo(t, srv, tc.method, tc.path, tc.body)
+			defer resp.Body.Close()
+			require.Equal(t, tc.status, resp.StatusCode)
+			if tc.status == http.StatusRequestEntityTooLarge {
+				var env struct {
+					Error string `json:"error"`
+				}
+				require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+				assert.Equal(t, errCodeDCBodyTooLarge, env.Error)
+			}
+		})
+	}
+}
+
 func TestDetectionConfigHandler_MissingActorIs500(t *testing.T) {
 	t.Parallel()
 	// No actor middleware: a write that clears the gate + decode + reason validation hits the missing-actor guard and 500s.
