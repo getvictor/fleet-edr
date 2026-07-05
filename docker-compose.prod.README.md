@@ -85,7 +85,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` in `.env` to your SigNoz / collector endpoint.
 
 - Traces for every HTTP request + DB query.
 - Logs via `otelslog` with `service.name=fleet-edr-server`.
-- Metrics: `edr.events.ingested`, `edr.alerts.created`, `edr.enrolled.hosts`, `edr.offline.hosts`, `edr.retention.rows_deleted`, `edr.db.query.duration`, `edr.agent.queue.dropped`. See [docs/install-server.md](docs/install-server.md#otel-metrics-and-logs) for the full list and [docs/operations.md](docs/operations.md#metrics-and-monitoring) for what to alert on.
+- Metrics: `edr.events.ingested`, `edr.alerts.created`, `edr.enrolled.hosts`, `edr.offline.hosts`, `edr.retention.processes.rows_deleted`, `edr.db.query.duration`, `edr.agent.queue.dropped`. See [docs/install-server.md](docs/install-server.md#otel-metrics-and-logs) for the full list and [docs/operations.md](docs/operations.md#metrics-and-monitoring) for what to alert on.
 
 There is no Prometheus scrape endpoint.
 

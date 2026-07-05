@@ -100,16 +100,10 @@ func (s *Store) EnsureDefaultPolicy(ctx context.Context) error {
 // ListHostGroupsForPolicy returns the host groups assigned to a policy, ordered by priority (highest first) then by group name. The
 // fan-out path walks the result and unions the member hosts of each group to build the set of unique hosts a rule update should
 // reach. Phase A always returns the single built-in `all-hosts` group; Phase B grows the result when editable assignments land.
-func (s *Store) ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]api.HostGroup, error) {
-	const query = `SELECT g.id, g.name, g.description, g.criteria, g.created_at, g.updated_at
-		FROM host_groups g
-		INNER JOIN app_control_assignments a ON a.host_group_id = g.id
-		WHERE a.policy_id = ?
-		ORDER BY a.priority DESC, g.name ASC`
-	rows, err := s.db.QueryxContext(ctx, query, policyID)
-	if err != nil {
-		return nil, fmt.Errorf("appcontrol list host groups: %w", err)
-	}
+// scanHostGroups drains rows whose SELECT list matches the host_groups column order shared by ListHostGroups and
+// ListHostGroupsForPolicy (id, name, description, criteria, created_at, updated_at), closing rows before it returns.
+// Returns a non-nil empty slice when there are no rows so callers serialize `[]` rather than `null`.
+func scanHostGroups(rows *sqlx.Rows) ([]api.HostGroup, error) {
 	defer rows.Close()
 	out := []api.HostGroup{}
 	for rows.Next() {
@@ -125,6 +119,19 @@ func (s *Store) ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]
 	return out, nil
 }
 
+func (s *Store) ListHostGroupsForPolicy(ctx context.Context, policyID int64) ([]api.HostGroup, error) {
+	const query = `SELECT g.id, g.name, g.description, g.criteria, g.created_at, g.updated_at
+		FROM host_groups g
+		INNER JOIN app_control_assignments a ON a.host_group_id = g.id
+		WHERE a.policy_id = ?
+		ORDER BY a.priority DESC, g.name ASC`
+	rows, err := s.db.QueryxContext(ctx, query, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("appcontrol list host groups: %w", err)
+	}
+	return scanHostGroups(rows)
+}
+
 // ListHostGroups returns every host_group row in alphabetical name order. Phase A always returns the single seed `all-hosts`
 // group; Phase B grows the result when editable groups land. Distinct from ListHostGroupsForPolicy: that one filters by an
 // assignment link to a specific policy; this one returns every group regardless of assignment state.
@@ -135,19 +142,7 @@ func (s *Store) ListHostGroups(ctx context.Context) ([]api.HostGroup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("appcontrol list host groups: %w", err)
 	}
-	defer rows.Close()
-	out := []api.HostGroup{}
-	for rows.Next() {
-		var g api.HostGroup
-		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.Criteria, &g.CreatedAt, &g.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("appcontrol scan host group: %w", err)
-		}
-		out = append(out, g)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("appcontrol iterate host groups: %w", err)
-	}
-	return out, nil
+	return scanHostGroups(rows)
 }
 
 // GetHostGroupByID loads a single host_group row by primary key. Returns ErrAppControlHostGroupNotFound when the row does not
@@ -220,6 +215,44 @@ func scanPolicyRow(scanner interface{ Scan(...any) error }) (api.ApplicationCont
 		&p.CreatedAt, &p.UpdatedAt, &p.CreatedBy, &p.UpdatedBy, &p.AssignmentCount,
 	)
 	return p, err
+}
+
+// scanRuleRow consumes one row whose SELECT list matches the app_control_rules column order reused unchanged across
+// getRuleByID / ListRulesByPolicy / ListRulesAcrossPolicies / fetchBulkUpsertRows. Mirrors scanPolicyRow: the fixed column
+// order is one source of truth, so a regression that reorders either side surfaces as a typed scan error rather than a
+// silent field swap. The `enabled` column is stored as an INT and mapped to the bool field here so every caller shares one
+// conversion. Callers translate sql.ErrNoRows themselves because the surrounding error wrapping varies per call site.
+func scanRuleRow(scanner interface{ Scan(...any) error }) (api.ApplicationControlRule, error) {
+	var r api.ApplicationControlRule
+	var enabled int
+	if err := scanner.Scan(
+		&r.ID, &r.PolicyID, &r.RuleType, &r.Identifier, &r.Action, &r.Enforcement, &enabled,
+		&r.Severity, &r.Source, &r.SourceRef, &r.CustomMsg, &r.CustomURL, &r.Comment, &r.ExpiresAt,
+		&r.CreatedAt, &r.UpdatedAt, &r.CreatedBy,
+	); err != nil {
+		return api.ApplicationControlRule{}, err
+	}
+	r.Enabled = enabled != 0
+	return r, nil
+}
+
+// scanRules drains rows built atop the shared app_control_rules SELECT list (see scanRuleRow) into a slice, closing rows
+// before it returns. Shared by ListRulesByPolicy and ListRulesAcrossPolicies. Returns a non-nil empty slice when there are
+// no rows so callers serialize `[]` rather than `null`.
+func scanRules(rows *sqlx.Rows) ([]api.ApplicationControlRule, error) {
+	defer rows.Close()
+	out := []api.ApplicationControlRule{}
+	for rows.Next() {
+		r, err := scanRuleRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("appcontrol list rules scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("appcontrol list rules rows: %w", err)
+	}
+	return out, nil
 }
 
 // GetPolicyByName loads the policy row by name. Rules are NOT populated; callers that need rules call ListRulesByPolicy explicitly.
@@ -339,23 +372,9 @@ func (s *Store) ListRulesAcrossPolicies(
 	if err != nil {
 		return api.ListRulesAcrossPoliciesResult{}, fmt.Errorf("appcontrol list rules page: %w", err)
 	}
-	defer rows.Close()
-	out := []api.ApplicationControlRule{}
-	for rows.Next() {
-		var r api.ApplicationControlRule
-		var enabled int
-		if err := rows.Scan(
-			&r.ID, &r.PolicyID, &r.RuleType, &r.Identifier, &r.Action, &r.Enforcement, &enabled,
-			&r.Severity, &r.Source, &r.SourceRef, &r.CustomMsg, &r.CustomURL, &r.Comment, &r.ExpiresAt,
-			&r.CreatedAt, &r.UpdatedAt, &r.CreatedBy,
-		); err != nil {
-			return api.ListRulesAcrossPoliciesResult{}, fmt.Errorf("appcontrol list rules scan: %w", err)
-		}
-		r.Enabled = enabled != 0
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return api.ListRulesAcrossPoliciesResult{}, fmt.Errorf("appcontrol list rules rows: %w", err)
+	out, err := scanRules(rows)
+	if err != nil {
+		return api.ListRulesAcrossPoliciesResult{}, err
 	}
 	return api.ListRulesAcrossPoliciesResult{Rules: out, Total: total}, nil
 }
@@ -371,25 +390,7 @@ func (s *Store) ListRulesByPolicy(ctx context.Context, policyID int64) ([]api.Ap
 	if err != nil {
 		return nil, fmt.Errorf("appcontrol list rules: %w", err)
 	}
-	defer rows.Close()
-	out := []api.ApplicationControlRule{}
-	for rows.Next() {
-		var r api.ApplicationControlRule
-		var enabled int
-		if err := rows.Scan(
-			&r.ID, &r.PolicyID, &r.RuleType, &r.Identifier, &r.Action, &r.Enforcement, &enabled,
-			&r.Severity, &r.Source, &r.SourceRef, &r.CustomMsg, &r.CustomURL, &r.Comment, &r.ExpiresAt,
-			&r.CreatedAt, &r.UpdatedAt, &r.CreatedBy,
-		); err != nil {
-			return nil, fmt.Errorf("appcontrol list rules scan: %w", err)
-		}
-		r.Enabled = enabled != 0
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("appcontrol list rules rows: %w", err)
-	}
-	return out, nil
+	return scanRules(rows)
 }
 
 // CreateRule inserts a new rule under the policy and bumps the
@@ -815,17 +816,10 @@ func (s *Store) getRuleByID(ctx context.Context, id int64) (api.ApplicationContr
 		severity, source, source_ref, custom_msg, custom_url, comment, expires_at,
 		created_at, updated_at, created_by
 		FROM app_control_rules WHERE id = ?`
-	row := s.db.QueryRowxContext(ctx, query, id)
-	var r api.ApplicationControlRule
-	var enabled int
-	if err := row.Scan(
-		&r.ID, &r.PolicyID, &r.RuleType, &r.Identifier, &r.Action, &r.Enforcement, &enabled,
-		&r.Severity, &r.Source, &r.SourceRef, &r.CustomMsg, &r.CustomURL, &r.Comment, &r.ExpiresAt,
-		&r.CreatedAt, &r.UpdatedAt, &r.CreatedBy,
-	); err != nil {
+	r, err := scanRuleRow(s.db.QueryRowxContext(ctx, query, id))
+	if err != nil {
 		return api.ApplicationControlRule{}, fmt.Errorf("appcontrol get rule: %w", err)
 	}
-	r.Enabled = enabled != 0
 	return r, nil
 }
 
@@ -1015,16 +1009,10 @@ func (s *Store) fetchBulkUpsertRows(ctx context.Context, policyID int64, items [
 	defer rows.Close()
 	out := make(map[string]api.ApplicationControlRule, len(items))
 	for rows.Next() {
-		var rule api.ApplicationControlRule
-		var enabled int
-		if err := rows.Scan(
-			&rule.ID, &rule.PolicyID, &rule.RuleType, &rule.Identifier, &rule.Action, &rule.Enforcement, &enabled,
-			&rule.Severity, &rule.Source, &rule.SourceRef, &rule.CustomMsg, &rule.CustomURL, &rule.Comment, &rule.ExpiresAt,
-			&rule.CreatedAt, &rule.UpdatedAt, &rule.CreatedBy,
-		); err != nil {
+		rule, err := scanRuleRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("appcontrol bulk upsert refetch scan: %w", err)
 		}
-		rule.Enabled = enabled != 0
 		out[bulkItemKey(rule.RuleType, rule.Identifier)] = rule
 	}
 	if err := rows.Err(); err != nil {

@@ -227,22 +227,22 @@ If your host filesystem is ZFS / Btrfs / LVM-thin, volume snapshots are faster t
 
 ## Retention tuning
 
-The server deletes events older than `EDR_RETENTION_DAYS` (default 30) on a fixed hourly schedule. The knob lives in the server's environment; restart to take effect.
+`EDR_RETENTION_DAYS` (default 30) prunes completed process-graph records older than the cutoff on a fixed hourly schedule; alert-referenced rows are kept. The knob lives in the server's environment; restart to take effect. Raw event history is governed separately by the ClickHouse archive's native TTL (currently a fixed 30-day expiry set in the migration, ADR-0015), not by this knob.
 
 Three common scenarios:
 
-1. **Compliance requires 90 days of event history.** Set `EDR_RETENTION_DAYS=90`. Monitor `edr.retention.rows_deleted` and the DB disk usage for a week to confirm storage is sized right.
-2. **Disk is filling up, want to shrink window.** Set a smaller `EDR_RETENTION_DAYS` value. The next retention run will delete events older than the new cutoff. Expect one large deletion, then normal churn.
-3. **Want to keep events forever for a forensic investigation.** Set `EDR_RETENTION_DAYS=0`. Retention is disabled. Re-enable once the investigation is complete to avoid unbounded growth.
+1. **Keep the process graph longer for investigations.** Set a larger `EDR_RETENTION_DAYS`. Monitor `edr.retention.processes.rows_deleted` and DB disk usage for a week to confirm storage is sized right. (Raw event history is bounded by the ClickHouse TTL, not this knob; to change how long events are retained, adjust the archive TTL in `server/visibility/migrations-clickhouse/`.)
+2. **Disk is filling up, want to shrink the process-graph window.** Set a smaller `EDR_RETENTION_DAYS`. The next hourly run prunes completed process records older than the new cutoff. Expect one large deletion, then normal churn. (For raw-event disk, the ClickHouse TTL is the lever.)
+3. **Want to keep the process graph forever for a forensic investigation.** Set `EDR_RETENTION_DAYS=0`. Process-record pruning is disabled. Re-enable once the investigation is complete to avoid unbounded growth.
 
-Alerts are NOT deleted by retention. They stay until you delete them via the admin UI. A resolved alert pointing at an event that retention has purged will still render, with the event references 404ing.
+Alerts are NOT pruned by retention; they stay until you delete them via the admin UI. An alert's triggering-event evidence is copied into MySQL at alert-creation time (`alert_event_payloads`), so it survives even after the ClickHouse archive ages those events out.
 
 ### Curbing event volume at the source
 
-Retention bounds how long events live; three levers reduce how many are written in the first place:
+The ClickHouse TTL bounds how long events live; three levers reduce how many are written in the first place:
 
-- **`snapshot_heartbeat` events are no longer persisted.** The server applies their freshness side effect (the `processes.last_seen_ns` bump that exempts a live snapshot row from the 6h TTL force-exit) at ingest and drops them, so they never occupy an `events` row. Watch `edr.ingest.heartbeats_dropped` to see the row-count savings.
-- **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats no longer cost an `events` row, but they still cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under the 6h stale-process TTL so a live snapshot row is always re-freshened before the TTL would force-exit it.
+- **`snapshot_heartbeat` events are no longer persisted.** The server applies their freshness side effect (the `processes.last_seen_ns` bump that exempts a live snapshot row from the 6h TTL force-exit) at ingest and drops them, so they never occupy an archive or queue row. Watch `edr.ingest.heartbeats_dropped` to see the row-count savings.
+- **`EDR_PROCESS_RECONCILE_INTERVAL` is the heartbeat-rate lever** (agent-side, default `60s`). Each interval the agent emits one heartbeat per live snapshot PID (~900 on a normal macOS host). Heartbeats no longer cost an archive or queue row, but they still cost an ingest request and a freshness UPDATE; raising the interval (for example `EDR_PROCESS_RECONCILE_INTERVAL=5m` in `/etc/fleet-edr.conf`) cuts that traffic ~5x. Keep it well under the 6h stale-process TTL so a live snapshot row is always re-freshened before the TTL would force-exit it.
 - **Repetitive network/DNS telemetry is coalesced automatically** (agent-side, fixed `10s` window). Within each window the agent collapses repeated identical connection 5-tuples and repeated DNS lookups into one representative event plus a `coalesced_count`, preserving the earliest timestamp and (for DNS) the union of resolved addresses. The window is a fixed constant, deliberately well under the 30s DNS-to-connect beacon-correlation window so coalescing can never push a representative outside it.
 
 ## Process-tree freshness
@@ -269,7 +269,7 @@ Core metrics to chart:
 | `edr.alerts.created` | counter | By `rule_id` + `severity`. Sudden spike warrants a look |
 | `edr.enrolled.hosts` | gauge | Should match your MDM's scoped Mac count |
 | `edr.offline.hosts` | gauge | Hosts whose `last_seen` is older than 5 min. Keep near zero |
-| `edr.retention.rows_deleted` | counter | Should tick up every retention run (hourly) |
+| `edr.retention.processes.rows_deleted` | counter | Completed process rows pruned per retention run (hourly). Raw-event pruning is ClickHouse-native TTL, not a server metric |
 | `edr.processes.ttl_reconciled` | counter | TTL-driven synthetic-exit emissions. The counter only increments when the reconciler synthesises an exit (it no-ops when there's nothing stale), so a non-zero rate or spike means the reconciler is firing, typically because a host missed an exec/exit pair. A sustained zero is ambiguous (either no stale processes to reconcile, or the reconciler has wedged); rely on logs/traces or a separate heartbeat to distinguish |
 | `db.sql.latency` | histogram | DB call latency, emitted by the otelsql driver instrumentation (not a bespoke metric). p99 creeping up = DB overloaded or a slow query regressed |
 | `edr.agent.queue.dropped` | counter | Non-zero = agent's local SQLite queue hit its cap. Investigate connectivity |
@@ -278,7 +278,7 @@ Recommended alerts (SigNoz, Grafana, wherever your OTel backend lives):
 
 - `edr.offline.hosts > 10% of edr.enrolled.hosts for 15m` - fleet-wide connectivity issue.
 - `rate(edr.events.ingested[5m]) == 0 for 5m` - server isn't receiving events. Either all agents are offline (see above), ingress is broken, or the server wedged.
-- `rate(edr.retention.rows_deleted[1h]) == 0 for 2h` when `EDR_RETENTION_DAYS > 0` - retention job stuck.
+- `rate(edr.retention.processes.rows_deleted[1h]) == 0 for 2h` when `EDR_RETENTION_DAYS > 0` - process-record retention job stuck.
 - `rate(edr.agent.queue.dropped[5m]) > 0` - endpoints losing data.
 
 Server logs go through the same OTLP pipeline (via `otelslog`) with `service.name=fleet-edr-server`. Use them for audit-style queries like "who resolved alert X" (look for `edr.admin.action=alert_update` log events with `user.id`).
