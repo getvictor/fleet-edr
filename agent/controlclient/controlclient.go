@@ -120,38 +120,53 @@ func (c *Client) Run(ctx context.Context) error {
 // runStream opens one stream and pumps it until it ends. The bool reports whether the stream actually connected (so Run can reset the
 // backoff); the error is the disconnect cause.
 func (c *Client) runStream(ctx context.Context) (bool, error) {
-	sctx := ctx
-	if c.cfg.TokenFn != nil {
-		if token := c.cfg.TokenFn(); token != "" {
-			sctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-		}
-	}
-	stream, err := c.cfg.Client.Connect(sctx)
+	stream, err := c.cfg.Client.Connect(c.streamContext(ctx))
 	if err != nil {
-		// The server's auth interceptor can reject the stream during setup, not only on the first Recv; treat an
-		// Unauthenticated rejection here the same way so a revoked/expired token still drives re-enrollment.
-		if status.Code(err) == codes.Unauthenticated && c.cfg.OnAuthFail != nil {
-			c.cfg.OnAuthFail(ctx)
-		}
+		c.notifyAuthFailure(ctx, err)
 		return false, err
 	}
 	c.setConnected(true)
 	defer c.setConnected(false)
 	c.logger.InfoContext(ctx, "control channel connected", "host_id_present", c.cfg.HostID != "")
+	return true, c.pumpStream(ctx, stream)
+}
 
+// streamContext attaches the current host token as a bearer credential to ctx for the stream, or returns ctx unchanged when no token
+// source is configured or it yields an empty token.
+func (c *Client) streamContext(ctx context.Context) context.Context {
+	if c.cfg.TokenFn == nil {
+		return ctx
+	}
+	token := c.cfg.TokenFn()
+	if token == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+}
+
+// notifyAuthFailure invokes the auth-failure callback when err is a gRPC Unauthenticated rejection. The server's auth interceptor can
+// reject the stream during setup, not only on the first Recv, so both the Connect error and a later Recv error route through here to
+// keep a revoked or expired token driving re-enrollment.
+func (c *Client) notifyAuthFailure(ctx context.Context, err error) {
+	if status.Code(err) == codes.Unauthenticated && c.cfg.OnAuthFail != nil {
+		c.cfg.OnAuthFail(ctx)
+	}
+}
+
+// pumpStream reads frames until the stream ends, dispatching each pushed command. It returns the disconnect cause; by the time it runs
+// the stream has already connected, so the caller reports connected=true regardless of how it ends.
+func (c *Client) pumpStream(ctx context.Context, stream control.ControlChannel_ConnectClient) error {
 	for {
 		frame, err := stream.Recv()
 		if err != nil {
-			if status.Code(err) == codes.Unauthenticated && c.cfg.OnAuthFail != nil {
-				c.cfg.OnAuthFail(ctx)
-			}
-			return true, err
+			c.notifyAuthFailure(ctx, err)
+			return err
 		}
 		if cmd := frame.GetCommand(); cmd != nil {
 			if err := c.handleCommand(ctx, stream, cmd); err != nil {
 				// A send failure means the stream is one-way broken (we can still Recv but can no longer report outcomes). Tear it
 				// down and reconnect rather than sit "connected" while silently dropping every outcome.
-				return true, err
+				return err
 			}
 		}
 	}

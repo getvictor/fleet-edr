@@ -32,7 +32,8 @@ export function SearchPage() {
     if (key !== "process") next.set("mode", key);
     if (hostId) next.set("host_id", hostId);
     const qs = next.toString();
-    return `/search${qs ? `?${qs}` : ""}`;
+    const suffix = qs ? `?${qs}` : "";
+    return `/search${suffix}`;
   };
 
   return (

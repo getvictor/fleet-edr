@@ -372,7 +372,8 @@ export async function searchProcesses(filter: ProcessSearchFilter, cursor?: stri
   set("to", filter.to);
   set("cursor", cursor);
   const qs = query.toString();
-  const res = await fetchJSON<ProcessSearchResult>(`/search/processes${qs ? `?${qs}` : ""}`);
+  const suffix = qs ? `?${qs}` : "";
+  const res = await fetchJSON<ProcessSearchResult>(`/search/processes${suffix}`);
   // A zero-match page marshals a nil Go slice as JSON null; normalize to [] so list consumers never read .length of null. The
   // disable is required because the response type models rows as non-null, which the wire does not guarantee for an empty page.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Go marshals a nil slice as JSON null (a non-nil empty slice would be [])
