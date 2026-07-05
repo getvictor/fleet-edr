@@ -14,6 +14,7 @@ import (
 
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/adminhttp"
 	"github.com/fleetdm/edr/server/identity/internal/serviceaccounts"
 )
 
@@ -146,7 +147,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createRequest
-	if !decodeBody(ctx, h.logger, w, r, &req) {
+	if !adminhttp.DecodeBody(ctx, h.logger, w, r, maxBodyBytes, &req) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
@@ -194,7 +195,7 @@ func (h *Handler) handleRotate(w http.ResponseWriter, r *http.Request) {
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionServiceAccountRotate, api.Resource{Type: "service_account"}) {
 		return
 	}
-	id, ok := pathID(ctx, h.logger, w, r)
+	id, ok := adminhttp.PathID(ctx, h.logger, w, r)
 	if !ok {
 		return
 	}
@@ -217,7 +218,7 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionServiceAccountRevoke, api.Resource{Type: "service_account"}) {
 		return
 	}
-	id, ok := pathID(ctx, h.logger, w, r)
+	id, ok := adminhttp.PathID(ctx, h.logger, w, r)
 	if !ok {
 		return
 	}
@@ -271,32 +272,6 @@ func (h *Handler) recordLifecycle(ctx context.Context, r *http.Request, action, 
 	}); err != nil {
 		h.logger.ErrorContext(ctx, "service-account audit record failed", "err", err)
 	}
-}
-
-func pathID(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeErr(ctx, logger, w, http.StatusBadRequest, "invalid_id")
-		return 0, false
-	}
-	return id, true
-}
-
-func decodeBody(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request, dst any) bool {
-	outcome := httpserver.DecodeCappedJSON(r, maxBodyBytes, dst)
-	if outcome == httpserver.BodyReadFailed {
-		writeErr(ctx, logger, w, http.StatusBadRequest, "read_error")
-		return false
-	}
-	if outcome == httpserver.BodyTooLarge {
-		writeErr(ctx, logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
-		return false
-	}
-	if outcome == httpserver.BodyInvalidJSON {
-		writeErr(ctx, logger, w, http.StatusBadRequest, "invalid_json")
-		return false
-	}
-	return true
 }
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, reason string) {

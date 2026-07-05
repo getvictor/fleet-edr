@@ -16,6 +16,7 @@ import (
 
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/identity/api"
+	"github.com/fleetdm/edr/server/identity/internal/adminhttp"
 	"github.com/fleetdm/edr/server/identity/internal/users"
 )
 
@@ -151,7 +152,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createRequest
-	if !decodeBody(ctx, h.logger, w, r, &req) {
+	if !adminhttp.DecodeBody(ctx, h.logger, w, r, maxBodyBytes, &req) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
@@ -209,12 +210,12 @@ func (h *Handler) handleSetRole(w http.ResponseWriter, r *http.Request) {
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionUserManage, api.Resource{Type: "user"}) {
 		return
 	}
-	id, ok := pathID(ctx, h.logger, w, r)
+	id, ok := adminhttp.PathID(ctx, h.logger, w, r)
 	if !ok {
 		return
 	}
 	var req roleRequest
-	if !decodeBody(ctx, h.logger, w, r, &req) {
+	if !adminhttp.DecodeBody(ctx, h.logger, w, r, maxBodyBytes, &req) {
 		return
 	}
 	role := strings.ToLower(strings.TrimSpace(req.Role))
@@ -270,12 +271,12 @@ func (h *Handler) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 	if !api.HTTPGate(ctx, w, h.authz, h.logger, api.ActionUserManage, api.Resource{Type: "user"}) {
 		return
 	}
-	id, ok := pathID(ctx, h.logger, w, r)
+	id, ok := adminhttp.PathID(ctx, h.logger, w, r)
 	if !ok {
 		return
 	}
 	var req statusRequest
-	if !decodeBody(ctx, h.logger, w, r, &req) {
+	if !adminhttp.DecodeBody(ctx, h.logger, w, r, maxBodyBytes, &req) {
 		return
 	}
 	status := strings.ToLower(strings.TrimSpace(req.Status))
@@ -407,32 +408,6 @@ func effectiveRole(roles []string) string {
 		}
 	}
 	return best
-}
-
-func pathID(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request) (int64, bool) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeErr(ctx, logger, w, http.StatusBadRequest, "invalid_id")
-		return 0, false
-	}
-	return id, true
-}
-
-func decodeBody(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, r *http.Request, dst any) bool {
-	outcome := httpserver.DecodeCappedJSON(r, maxBodyBytes, dst)
-	if outcome == httpserver.BodyReadFailed {
-		writeErr(ctx, logger, w, http.StatusBadRequest, "read_error")
-		return false
-	}
-	if outcome == httpserver.BodyTooLarge {
-		writeErr(ctx, logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
-		return false
-	}
-	if outcome == httpserver.BodyInvalidJSON {
-		writeErr(ctx, logger, w, http.StatusBadRequest, "invalid_json")
-		return false
-	}
-	return true
 }
 
 func writeErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, reason string) {
