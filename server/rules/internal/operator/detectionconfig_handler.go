@@ -335,5 +335,5 @@ func (h *DetectionConfigHandler) writeMutationErr(ctx context.Context, w http.Re
 }
 
 func writeDetectionConfigErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code, message string) {
-	writeJSON(ctx, logger, w, status, map[string]string{"error": code, "message": message})
+	writeOperatorErr(ctx, logger, w, status, code, message)
 }

@@ -113,3 +113,10 @@ func (h *Handler) handleATTACKCoverage(w http.ResponseWriter, r *http.Request) {
 func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, body any) {
 	httpserver.NoStoreJSON(ctx, logger, w, status, body)
 }
+
+// writeOperatorErr writes the two-field operator error envelope ({"error": code, "message": message}) used by every operator mutation
+// surface. Centralizes the envelope shape so the per-surface writers (writeAppControlErr, writeDetectionConfigErr) share one copy of
+// it; the single-field variant lives in httpserver.WriteJSONError for the identity admin surfaces.
+func writeOperatorErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code, message string) {
+	writeJSON(ctx, logger, w, status, map[string]string{"error": code, "message": message})
+}
