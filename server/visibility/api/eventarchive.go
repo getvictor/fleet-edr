@@ -48,15 +48,25 @@ type EventArchive interface {
 // HostTimelineFilter selects events for one host's merged event timeline (issue #583). HostID is required. FromNs/ToNs bound event
 // time (timestamp_ns, what the host page's time window means), zero meaning unbounded on that side. EventTypes narrows to a subset of
 // the timeline event classes (empty means all of them). Text, when non-empty, keeps only events whose raw payload contains it
-// case-insensitively. PIDs, when non-empty, keeps only events whose originating pid is in the set: the alert-chain scope passes the
-// pids of the alerted process plus its ancestors and descendants so the timeline mirrors the graph's focus. Empty means no pid filter.
+// case-insensitively. Chain, when non-empty, scopes the timeline to a set of process generations (the alert chain), so it mirrors the
+// graph's focus. Empty means no chain scope (the full host stream).
 type HostTimelineFilter struct {
 	HostID     string
 	FromNs     int64
 	ToNs       int64
 	EventTypes []string
 	Text       string
-	PIDs       []int64
+	Chain      []ProcessWindow
+}
+
+// ProcessWindow scopes the timeline to one process generation: events whose originating pid is PID and whose server ingest time is in
+// [FromIngestedNs, ToIngestedNs]. ToIngestedNs 0 means the generation is still running (open upper bound; a pid cannot be reused while
+// held). Ingest time (not the kernel event time) is used so the scope is skew-free and matches how the graph correlates events to a
+// process; it disambiguates PID reuse, which a raw-pid filter cannot (pid 450 may be bash, then curl, then orbit within one window).
+type ProcessWindow struct {
+	PID            int64
+	FromIngestedNs int64
+	ToIngestedNs   int64
 }
 
 // EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class

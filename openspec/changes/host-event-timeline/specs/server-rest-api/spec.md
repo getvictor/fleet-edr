@@ -2,7 +2,7 @@
 
 ### Requirement: Host event timeline endpoint
 
-The server SHALL expose `GET /api/hosts/{host_id}/timeline`, gated on the process-read action scoped to the host, returning that host's exec, network-connection, and DNS-query events interleaved in event-time order, newest first. The endpoint SHALL bound results to an event-time window (`from`/`to` in nanoseconds; zero or absent means unbounded on that side) and SHALL accept an optional `type` filter (a comma-separated subset of the supported event classes) and an optional case-insensitive `text` substring match against the event payload, and an optional `pids` filter (a comma-separated list of process ids) scoping results to events whose originating pid is in the set, so a client can scope the timeline to an alert's process chain. A `pids` value that is not a list of non-negative integers SHALL be rejected as a bad request. Results SHALL be keyset-paginated with an opaque cursor and SHALL carry the total match count independent of the page, matching the fleet-wide search contract. An unrecognized event type SHALL be rejected as a bad request; a malformed cursor SHALL be rejected as a bad request; and when the archive read surface is not configured the endpoint SHALL return service-unavailable.
+The server SHALL expose `GET /api/hosts/{host_id}/timeline`, gated on the process-read action scoped to the host, returning that host's exec, network-connection, and DNS-query events interleaved in event-time order, newest first. The endpoint SHALL bound results to an event-time window (`from`/`to` in nanoseconds; zero or absent means unbounded on that side) and SHALL accept an optional `type` filter (a comma-separated subset of the supported event classes) and an optional case-insensitive `text` substring match against the event payload, and an optional `chain` filter scoping results to a set of process generations (each given as `pid:fromIngestedNs:toIngestedNs`), so a client can scope the timeline to an alert's process chain. An event matches a generation when its originating pid matches and its server ingest time falls within the generation's window (a zero upper bound means the generation is still running), which disambiguates PID reuse that a raw-pid filter would conflate. A malformed `chain` value SHALL be rejected as a bad request. Results SHALL be keyset-paginated with an opaque cursor and SHALL carry the total match count independent of the page, matching the fleet-wide search contract. An unrecognized event type SHALL be rejected as a bad request; a malformed cursor SHALL be rejected as a bad request; and when the archive read surface is not configured the endpoint SHALL return service-unavailable.
 
 #### Scenario: Timeline interleaves the three event classes in time order
 
@@ -22,12 +22,12 @@ The server SHALL expose `GET /api/hosts/{host_id}/timeline`, gated on the proces
 - **WHEN** the timeline is requested with that string as the text filter
 - **THEN** only events whose payload contains the string (case-insensitively) are returned
 
-#### Scenario: Pids filter scopes to the alert chain
+#### Scenario: Chain scope selects generations by pid and ingest window
 
-- **GIVEN** a host with events from several processes
-- **WHEN** the timeline is requested with a `pids` filter naming a subset of those processes
-- **THEN** only events whose originating pid is in the set are returned, and the total reflects that subset
-- **AND** a `pids` value that is not a list of non-negative integers is rejected as a bad request
+- **GIVEN** a host where a pid was reused by more than one process generation across the window
+- **WHEN** the timeline is requested with a `chain` filter of `pid:fromIngestedNs:toIngestedNs` generations
+- **THEN** only events whose pid and server ingest time fall within one of those generations are returned, so a later process that reused the same pid is excluded
+- **AND** a malformed `chain` value is rejected as a bad request
 
 #### Scenario: Keyset pagination is stable and complete
 

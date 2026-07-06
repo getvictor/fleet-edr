@@ -123,32 +123,37 @@ func TestHostTimeline_TextMatch(t *testing.T) {
 	assert.Equal(t, "d1", out.Events[0].EventID)
 }
 
-// spec:server-rest-api/host-event-timeline-endpoint/pids-filter-scopes-to-the-alert-chain
-func TestHostTimeline_PIDsScope(t *testing.T) {
+// spec:server-rest-api/host-event-timeline-endpoint/chain-scope-selects-generations-by-pid-and-ingest-window
+func TestHostTimeline_ChainScope(t *testing.T) {
 	t.Parallel()
+	// The ev() helper sets IngestedAtNs == ts, so a generation's ingest window is expressed against the event timestamps here.
 	a := timelineArchive(t,
-		ev("a", "h1", 100, "exec", `{"pid":1,"path":"/bin/sh"}`),
-		ev("b", "h1", 200, "exec", `{"pid":2,"path":"/usr/bin/curl"}`),
-		ev("c", "h1", 300, "network_connect", `{"pid":3,"remote_address":"1.2.3.4"}`),
+		ev("a", "h1", 100, "exec", `{"pid":1,"path":"/bin/sh"}`),                      // pid 1, ingest 100 -> in generation [50,150]
+		ev("b", "h1", 200, "exec", `{"pid":1,"path":"/usr/bin/curl"}`),                // pid 1, ingest 200 -> a LATER pid-1 generation
+		ev("c", "h1", 300, "network_connect", `{"pid":3,"remote_address":"1.2.3.4"}`), // pid 3, ingest 300 -> in generation [250, running]
 	)
 	srv := newTimelineServer(t, a, allowAllAuthZ{})
-	resp := doGet(t, srv, "/api/hosts/h1/timeline?pids=1,3") // the alert chain is pids 1 and 3; pid 2 is unrelated
+	// Chain = pid 1's generation (ingest [50,150]) and pid 3's still-running generation (ingest [250, 0]). Event "b" reuses pid 1 in a
+	// later generation (ingest 200 > 150), so it MUST be excluded: this is exactly the PID-reuse case a raw-pid filter would include.
+	resp := doGet(t, srv, "/api/hosts/h1/timeline?chain=1:50:150,3:250:0")
 	defer resp.Body.Close()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	out := decodeTimeline(t, resp)
 	require.Len(t, out.Events, 2)
-	assert.EqualValues(t, 2, out.TotalMatched) // total reflects the scoped set, not the whole host
+	assert.EqualValues(t, 2, out.TotalMatched) // total reflects the scoped generations, not every event that reused the pids
 	assert.ElementsMatch(t, []string{"a", "c"}, []string{out.Events[0].EventID, out.Events[1].EventID})
 }
 
-func TestHostTimeline_InvalidPIDsRejected(t *testing.T) {
+func TestHostTimeline_InvalidChainRejected(t *testing.T) {
 	t.Parallel()
 	a := timelineArchive(t, ev("a", "h1", 100, "exec", `{"pid":1}`))
 	srv := newTimelineServer(t, a, allowAllAuthZ{})
-	resp := doGet(t, srv, "/api/hosts/h1/timeline?pids=1,notanumber")
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	for _, bad := range []string{"chain=1:notanumber:200", "chain=1:100", "chain=1:100:200:300", "chain=-1:100:200"} {
+		resp := doGet(t, srv, "/api/hosts/h1/timeline?"+bad)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, bad)
+		resp.Body.Close()
+	}
 }
 
 // spec:server-rest-api/host-event-timeline-endpoint/keyset-pagination-is-stable-and-complete

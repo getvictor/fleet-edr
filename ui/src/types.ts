@@ -80,6 +80,10 @@ export interface Process {
   // cdhash is the 40-hex SHA-1 of the code directory, present for Hardened-Runtime binaries only.
   cdhash?: string;
   fork_time_ns: number;
+  // Server ingest timestamps (single-server monotonic clock; omitted for pre-migration rows). Used to scope the timeline to a process
+  // generation without ES/NE kernel-clock skew; see chainWindows in ProcessTree.helpers.
+  fork_ingested_at_ns?: number;
+  exit_ingested_at_ns?: number;
   exec_time_ns?: number;
   exit_time_ns?: number;
   exit_code?: number;

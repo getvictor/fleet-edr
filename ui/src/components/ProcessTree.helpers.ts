@@ -148,19 +148,26 @@ export function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<nu
   return related;
 }
 
-// chainPids maps a set of chain node DB ids (from findAlertChain) to the OS pids of those nodes. The host timeline keys on pid (not the
-// graph's DB id), so this lets the timeline scope to the same alert chain the graph shows. Walks the forest once; deduped because a pid
-// can recur across process generations in the chain.
-export function chainPids(roots: ProcessNode[], ids: Set<number>): number[] {
-  const pids = new Set<number>();
+// chainWindows maps a set of chain node DB ids (from findAlertChain) to their process generations: each node's pid plus its server
+// ingest-time lifetime. The host timeline scopes on (pid, ingest window) rather than raw pid so PID reuse does not pull in a different
+// process that later held the same pid. fromIngestedNs falls back to the kernel fork time, and toIngestedNs to the kernel exit time,
+// for pre-migration rows lacking the ingest stamps; toIngestedNs 0 means the generation is still running (open upper bound).
+export function chainWindows(roots: ProcessNode[], ids: Set<number>): { pid: number; fromIngestedNs: number; toIngestedNs: number }[] {
+  const out: { pid: number; fromIngestedNs: number; toIngestedNs: number }[] = [];
   const walk = (nodes: ProcessNode[]) => {
     for (const n of nodes) {
-      if (ids.has(n.id)) pids.add(n.pid);
+      if (ids.has(n.id)) {
+        out.push({
+          pid: n.pid,
+          fromIngestedNs: n.fork_ingested_at_ns ?? n.fork_time_ns,
+          toIngestedNs: n.exit_ingested_at_ns ?? n.exit_time_ns ?? 0,
+        });
+      }
       if (n.children) walk(n.children);
     }
   };
   walk(roots);
-  return [...pids];
+  return out;
 }
 
 function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null {

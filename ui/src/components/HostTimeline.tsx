@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import "./HostTimeline.scss";
-import { getHostTimeline, eventArtifactParam, listAlerts, getAlertDetail } from "../api";
+import { getHostTimeline, eventArtifactParam, listAlerts, getAlertDetail, type ChainWindow } from "../api";
 import type { EventRecord, NetworkConnectPayload, DNSQueryPayload, ExecPayload } from "../types";
 import { Table } from "./ui/Table";
 import { Badge } from "./ui/Badge";
@@ -50,9 +50,10 @@ interface Props {
   readonly bounds: { fromNs: number; toNs: number };
   // When set, timeline rows whose originating process is this pid are emphasized (the graph node -> timeline pivot).
   readonly emphasizePid?: number;
-  // When set, scopes the timeline to the alert chain: only events whose pid is in this set (the alerted process plus its ancestors and
-  // descendants), mirroring the graph's "Alert chain" focus. Undefined shows the full host stream.
-  readonly chainPids?: number[];
+  // When set, scopes the timeline to the alert chain: only events belonging to one of these process generations (the alerted process
+  // plus its ancestors and descendants), matched by pid + ingest window, mirroring the graph's "Alert chain" focus. Undefined shows the
+  // full host stream.
+  readonly chainWindows?: ChainWindow[];
 }
 
 // How long after the last keystroke the text filter commits to the URL (and thus the query). Keeps a fast typist to one fetch.
@@ -68,16 +69,19 @@ const EVENT_TYPES: { key: string; label: string }[] = [
 // HostTimeline is the flat, filterable event stream beside the process graph (issue #583): the host's exec/network/DNS events for the
 // active window, newest-first, filterable by type chips and a text box (both in the URL), keyset-paginated via the shared list hook.
 // A row links to its process node in the graph; connection/DNS rows carry the fleet-wide "search" pivot.
-export function HostTimeline({ hostId, bounds, emphasizePid, chainPids }: Props) {
+export function HostTimeline({ hostId, bounds, emphasizePid, chainWindows }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   // Sorted so a semantically-equal selection (e.g. a type toggled off then back on) yields one canonical order; otherwise the
   // Set-insertion order would churn filterKey and reset the cursor list on a no-op change.
   const activeTypes = (searchParams.get("type") ?? "").split(",").filter(Boolean).sort((a, b) => a.localeCompare(b));
   const text = searchParams.get("text") ?? "";
-  // Sort the chain pids so the same chain yields one canonical filter key regardless of walk order; toggling the scope on or off then
-  // reloads the list. scopePids is undefined (not []) when unscoped so it is omitted from the query entirely.
-  const scopePids = chainPids && chainPids.length > 0 ? [...chainPids].sort((a, b) => a - b) : undefined;
-  const filterKey = JSON.stringify({ h: hostId, from: bounds.fromNs, to: bounds.toNs, types: activeTypes, text, pids: scopePids ?? [] });
+  // scopeChain is undefined (not []) when unscoped so it is omitted from the query entirely. The filter key includes a canonical,
+  // order-independent encoding of the generations so toggling the scope on or off reloads the list without churning on walk order.
+  const scopeChain = chainWindows && chainWindows.length > 0 ? chainWindows : undefined;
+  const scopeKey = scopeChain
+    ? scopeChain.map((w) => `${String(w.pid)}:${String(w.fromIngestedNs)}:${String(w.toIngestedNs)}`).sort((a, b) => a.localeCompare(b))
+    : [];
+  const filterKey = JSON.stringify({ h: hostId, from: bounds.fromNs, to: bounds.toNs, types: activeTypes, text, chain: scopeKey });
 
   // The text box is driven by local state, not the URL, so fast typing is never reset by a re-render; the draft is debounced into the
   // URL (which drives the query) so a burst of keystrokes issues one fetch, not one per character.
@@ -104,7 +108,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid, chainPids }: Props)
     async (cursor: string): Promise<CursorPage<EventRecord>> => {
       const res = await getHostTimeline(
         hostId,
-        { from: String(bounds.fromNs), to: String(bounds.toNs), types: activeTypes, text: text || undefined, pids: scopePids },
+        { from: String(bounds.fromNs), to: String(bounds.toNs), types: activeTypes, text: text || undefined, chain: scopeChain },
         cursor || undefined,
       );
       return { rows: res.events, nextCursor: res.next_cursor, total: res.total_matched };
@@ -172,7 +176,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid, chainPids }: Props)
         />
         {/* Reflect the shared alert-scope so the analyst knows why fewer events show; the "Alert chain / Full tree" toggle in the
             breadcrumb drives both this and the graph. */}
-        {scopePids && <span className="host-timeline__scope-note">Scoped to the alert chain</span>}
+        {scopeChain && <span className="host-timeline__scope-note">Scoped to the alert chain</span>}
       </div>
 
       <SearchResultsFrame

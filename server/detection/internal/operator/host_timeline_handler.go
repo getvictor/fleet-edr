@@ -12,9 +12,9 @@ import (
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
-// maxTimelinePIDs caps the alert-chain pid filter. The process tree is itself capped at processTreeMaxLimit nodes, so a chain cannot
-// exceed that; the cap bounds the IN-list size against a malformed caller rather than a real chain.
-const maxTimelinePIDs = processTreeMaxLimit
+// maxTimelineChain caps the alert-chain scope. The process tree is itself capped at processTreeMaxLimit nodes, so a chain cannot exceed
+// that; the cap bounds the OR-clause count against a malformed caller rather than a real chain.
+const maxTimelineChain = processTreeMaxLimit
 
 // HostTimelineReader is the host-scoped merged event timeline surface (issue #583): exec, network_connect, and dns_query events for one
 // host interleaved in event-time order. mysql.Store satisfies it by delegating to the visibility EventArchive, the same seam the
@@ -73,9 +73,9 @@ func (h *Handler) handleHostTimeline(w http.ResponseWriter, r *http.Request) {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidEventType)
 		return
 	}
-	// ?pids= is the alert-chain scope: the client passes the pids of the alerted process plus its ancestors and descendants so the
-	// timeline mirrors the graph's focus. Absent means the full host stream.
-	pids, ok := parseTimelinePIDs(q.Get("pids"))
+	// ?chain= is the alert-chain scope: the client passes one `pid:fromIngestedNs:toIngestedNs` triple per chain process generation
+	// (the alerted process plus its ancestors and descendants) so the timeline mirrors the graph's focus. Absent means the full stream.
+	chain, ok := parseTimelineChain(q.Get("chain"))
 	if !ok {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidPID)
 		return
@@ -88,7 +88,7 @@ func (h *Handler) handleHostTimeline(w http.ResponseWriter, r *http.Request) {
 		ToNs:       toNs,
 		EventTypes: types,
 		Text:       q.Get("text"),
-		PIDs:       pids,
+		Chain:      chain,
 	}, q.Get("cursor"), limit)
 	if err != nil {
 		if errors.Is(err, visibilityapi.ErrInvalidEventCursor) {
@@ -128,32 +128,34 @@ func parseTimelineTypes(raw string) ([]string, bool) {
 	return types, true
 }
 
-// parseTimelinePIDs parses the optional ?pids= comma list (the alert-chain scope) into a deduped []int64. An empty param means no pid
-// filter (nil slice; the full host stream). A non-integer or negative entry, or more than maxTimelinePIDs entries, makes ok=false so the
-// handler rejects it with a 400 rather than scoping to the wrong set.
-func parseTimelinePIDs(raw string) ([]int64, bool) {
+// parseTimelineChain parses the optional ?chain= scope: a comma-separated list of `pid:fromIngestedNs:toIngestedNs` triples, one per
+// alert-chain process generation. toIngestedNs 0 means the generation is still running (open upper bound). An empty param means no scope
+// (the full host stream). A malformed triple, a negative value, or more than maxTimelineChain entries makes ok=false so the handler
+// rejects it with a 400 rather than scoping to the wrong set.
+func parseTimelineChain(raw string) ([]visibilityapi.ProcessWindow, bool) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, true
 	}
-	var pids []int64
-	seen := map[int64]bool{}
-	for p := range strings.SplitSeq(raw, ",") {
-		p = strings.TrimSpace(p)
-		if p == "" {
+	var chain []visibilityapi.ProcessWindow
+	for entry := range strings.SplitSeq(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
 			continue
 		}
-		v, err := strconv.ParseInt(p, 10, 64)
-		if err != nil || v < 0 {
+		if len(chain) >= maxTimelineChain {
 			return nil, false
 		}
-		if seen[v] {
-			continue // a chain can list a pid more than once across generations; collapse to one IN entry
-		}
-		if len(pids) >= maxTimelinePIDs {
+		parts := strings.Split(entry, ":")
+		if len(parts) != 3 {
 			return nil, false
 		}
-		seen[v] = true
-		pids = append(pids, v)
+		pid, e1 := strconv.ParseInt(parts[0], 10, 64)
+		from, e2 := strconv.ParseInt(parts[1], 10, 64)
+		to, e3 := strconv.ParseInt(parts[2], 10, 64)
+		if e1 != nil || e2 != nil || e3 != nil || pid < 0 || from < 0 || to < 0 {
+			return nil, false
+		}
+		chain = append(chain, visibilityapi.ProcessWindow{PID: pid, FromIngestedNs: from, ToIngestedNs: to})
 	}
-	return pids, true
+	return chain, true
 }

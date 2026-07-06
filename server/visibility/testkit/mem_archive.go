@@ -207,12 +207,23 @@ func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter, types []st
 	if filter.Text != "" && !strings.Contains(strings.ToLower(string(e.Payload)), strings.ToLower(filter.Text)) {
 		return false
 	}
-	if len(filter.PIDs) > 0 {
-		// Mirror the store's materialized-pid filter: every timeline payload carries a pid, so parse it and keep only the chain's pids.
+	if len(filter.Chain) > 0 {
+		// Mirror the store's chain scope: an event belongs to a chain generation when its pid (parsed from the payload) matches and its
+		// ingest time falls in that generation's window (0 upper = still running).
 		var p struct {
 			PID int64 `json:"pid"`
 		}
-		if err := json.Unmarshal(e.Payload, &p); err != nil || !slices.Contains(filter.PIDs, p.PID) {
+		if err := json.Unmarshal(e.Payload, &p); err != nil {
+			return false
+		}
+		inChain := false
+		for _, g := range filter.Chain {
+			if p.PID == g.PID && e.IngestedAtNs >= g.FromIngestedNs && (g.ToIngestedNs == 0 || e.IngestedAtNs <= g.ToIngestedNs) {
+				inChain = true
+				break
+			}
+		}
+		if !inChain {
 			return false
 		}
 	}

@@ -6,7 +6,7 @@ import {
   countDescendants,
   toD3Hierarchy,
   collectMatches,
-  chainPids,
+  chainWindows,
   findAlertChain,
   resolveAlertEntry,
   selectNodeFromParams,
@@ -190,25 +190,36 @@ describe("findAlertChain", () => {
   });
 });
 
-describe("chainPids", () => {
-  // ids 1 -> 2 -> 3 with distinct pids; id 4 is off-chain.
+describe("chainWindows", () => {
+  // ids 1 -> 2 -> 3 with ingest lifetimes; id 4 is off-chain. Node 3 is still running (no exit).
   const roots = [
-    node({ id: 1, pid: 100, children: [node({ id: 2, pid: 200, children: [node({ id: 3, pid: 300 })] }), node({ id: 4, pid: 400 })] }),
+    node({
+      id: 1, pid: 100, fork_ingested_at_ns: 10, exit_ingested_at_ns: 20,
+      children: [
+        node({
+          id: 2, pid: 200, fork_ingested_at_ns: 12, exit_ingested_at_ns: 18,
+          children: [node({ id: 3, pid: 300, fork_ingested_at_ns: 14 })],
+        }),
+        node({ id: 4, pid: 400, fork_ingested_at_ns: 11, exit_ingested_at_ns: 19 }),
+      ],
+    }),
   ];
 
-  it("maps chain node ids to their pids and skips off-chain nodes", () => {
-    const pids = chainPids(roots, new Set([1, 2, 3]));
-    expect([...pids].sort((a, b) => a - b)).toEqual([100, 200, 300]);
-    expect(pids).not.toContain(400);
+  it("maps chain node ids to (pid, ingest window), skips off-chain nodes, and gives a running node an open upper bound", () => {
+    expect(chainWindows(roots, new Set([1, 2, 3]))).toEqual([
+      { pid: 100, fromIngestedNs: 10, toIngestedNs: 20 },
+      { pid: 200, fromIngestedNs: 12, toIngestedNs: 18 },
+      { pid: 300, fromIngestedNs: 14, toIngestedNs: 0 },
+    ]);
   });
 
-  it("dedupes a pid that recurs across chain generations (a re-exec keeps the same pid)", () => {
-    const reexec = [node({ id: 1, pid: 500, children: [node({ id: 2, pid: 500 })] })];
-    expect(chainPids(reexec, new Set([1, 2]))).toEqual([500]);
+  it("falls back to the kernel fork/exit times when ingest stamps are absent (pre-migration rows)", () => {
+    const legacy = [node({ id: 1, pid: 5, fork_time_ns: 7, exit_time_ns: 9 })];
+    expect(chainWindows(legacy, new Set([1]))).toEqual([{ pid: 5, fromIngestedNs: 7, toIngestedNs: 9 }]);
   });
 
   it("returns an empty array for an empty id set", () => {
-    expect(chainPids(roots, new Set())).toEqual([]);
+    expect(chainWindows(roots, new Set())).toEqual([]);
   });
 });
 

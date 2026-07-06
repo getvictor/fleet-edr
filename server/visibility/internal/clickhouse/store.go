@@ -196,15 +196,21 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 		where = append(where, "positionCaseInsensitiveUTF8(payload, ?) > 0")
 		args = append(args, filter.Text)
 	}
-	if len(filter.PIDs) > 0 {
-		// Alert-chain scope: keep only the chain's pids (materialized column, so this prunes rather than scans the payload). Bounded by
-		// the host + window predicate above; pid reuse within a 24h window is possible but rare, so this scopes closely to the chain.
-		ph := make([]string, len(filter.PIDs))
-		for i, pid := range filter.PIDs {
-			ph[i] = "?"
-			args = append(args, pid)
+	if len(filter.Chain) > 0 {
+		// Alert-chain scope: keep only events belonging to one of the chain's process generations, matched by pid AND ingest-time
+		// lifetime. Ingest time (materialized alongside pid) is a single-server monotonic clock, so it disambiguates PID reuse that a
+		// raw-pid filter conflates and is not subject to ES/NE kernel-clock skew. ToIngestedNs 0 = still running (open upper bound).
+		gens := make([]string, len(filter.Chain))
+		for i, g := range filter.Chain {
+			if g.ToIngestedNs > 0 {
+				gens[i] = "(pid = ? AND ingested_at_ns >= ? AND ingested_at_ns <= ?)"
+				args = append(args, g.PID, g.FromIngestedNs, g.ToIngestedNs)
+			} else {
+				gens[i] = "(pid = ? AND ingested_at_ns >= ?)"
+				args = append(args, g.PID, g.FromIngestedNs)
+			}
 		}
-		where = append(where, "pid IN ("+strings.Join(ph, ", ")+")")
+		where = append(where, "("+strings.Join(gens, " OR ")+")")
 	}
 	return s.pageEventsByKeyset(ctx, strings.Join(where, " AND "), args, cursor, limit)
 }
