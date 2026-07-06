@@ -185,7 +185,7 @@ export function AlertList() {
                       jump as a sibling control. */}
                   <Link
                     className="link-button"
-                    to={`/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(new Date(a.created_at).getTime())}`}
+                    to={`/alerts/${encodeURIComponent(String(a.id))}`}
                     title="Open this alert's process tree at the alert time"
                   >
                     {a.title}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { HostList } from "./components/HostList";
 import { ProcessTreeView } from "./components/ProcessTree";
+import { AlertGraphRoute } from "./components/AlertGraphRoute";
 import { AlertList } from "./components/AlertList";
 import { AttackCoverage } from "./components/AttackCoverage";
 import { ApplicationControlRoutes } from "./components/ApplicationControl/ApplicationControlRoutes";
@@ -222,6 +223,7 @@ export function AuthedApp() {
           />
           <Route path="/rules/:ruleId" element={<RuleDetail />} />
           <Route path="/hosts/:hostId" element={<ProcessTreeView />} />
+          <Route path="/alerts/:alertId" element={<AlertGraphRoute />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

@@ -213,6 +213,18 @@ describe("selectNodeFromParams", () => {
     expect(selectNodeFromParams(roots, new URLSearchParams("pid=1"))).toBeNull();
   });
 
+  it("selects by overrideProcessId (the alert route's entryAlert) in precedence over the params", () => {
+    // The /alerts/:alertId route has no ?process= in the URL; it passes the alerted process id directly.
+    expect(selectNodeFromParams(roots, new URLSearchParams(), 6)?.id).toBe(6);
+    // The override wins even when a ?process= is also present.
+    expect(selectNodeFromParams(roots, new URLSearchParams("process=1"), 6)?.id).toBe(6);
+  });
+
+  it("ignores a 0 overrideProcessId (a process-optional alert) and falls through to the params", () => {
+    expect(selectNodeFromParams(roots, new URLSearchParams(), 0)).toBeNull();
+    expect(selectNodeFromParams(roots, new URLSearchParams("process=6"), 0)?.id).toBe(6);
+  });
+
   describe("?pid=<pid>&at=<ms> lifetime windows", () => {
     // Two generations reuse pid 500: gen A [1ms..5ms], gen B [10ms..running].
     const ms = (n: number) => n * NANOSECONDS_PER_MILLISECOND;
@@ -271,25 +283,29 @@ describe("selectNodeFromParams", () => {
 describe("viewHref", () => {
   it("drops ?view= when switching to the default graph view, preserving other params", () => {
     const sp = new URLSearchParams("view=timeline&window=1h");
-    expect(viewHref("host-1", sp, "graph")).toBe("/hosts/host-1?window=1h");
+    expect(viewHref("/hosts/h1", sp, "graph")).toBe("/hosts/h1?window=1h");
   });
 
   it("sets ?view=timeline while preserving the shared time window", () => {
     const sp = new URLSearchParams("window=1h");
-    expect(viewHref("host-1", sp, "timeline")).toBe("/hosts/host-1?window=1h&view=timeline");
+    expect(viewHref("/hosts/h1", sp, "timeline")).toBe("/hosts/h1?window=1h&view=timeline");
   });
 
   it("emits no query suffix when there are no params", () => {
-    expect(viewHref("host-1", new URLSearchParams(), "graph")).toBe("/hosts/host-1");
+    expect(viewHref("/hosts/h1", new URLSearchParams(), "graph")).toBe("/hosts/h1");
   });
 
-  it("percent-encodes the host id", () => {
-    expect(viewHref("a/b c", new URLSearchParams(), "graph")).toBe("/hosts/a%2Fb%20c");
+  it("returns the base path verbatim (the caller passes an already-formed pathname)", () => {
+    expect(viewHref("/hosts/a%2Fb%20c", new URLSearchParams(), "graph")).toBe("/hosts/a%2Fb%20c");
+  });
+
+  it("toggles the view param on an alert base path, dropping view= for the default graph", () => {
+    expect(viewHref("/alerts/842", new URLSearchParams("view=timeline&pid=5"), "graph")).toBe("/alerts/842?pid=5");
   });
 
   it("does not mutate the caller's URLSearchParams", () => {
     const sp = new URLSearchParams("view=timeline");
-    viewHref("h", sp, "graph");
+    viewHref("/hosts/h1", sp, "graph");
     expect(sp.get("view")).toBe("timeline");
   });
 });

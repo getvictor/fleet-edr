@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback, type RefObject } from "react";
-import { useParams, useSearchParams, Link } from "react-router-dom";
+import { useParams, useSearchParams, useLocation, Link } from "react-router-dom";
 import * as d3 from "d3";
 import { getAlertDetail, getProcessTree, listAlerts } from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
@@ -47,9 +47,12 @@ const TOOLTIP_CLAMP_HEIGHT_PX = 170;
 const SHOW_SYSTEM_STORAGE_KEY = "edr.processTree.showSystem";
 const FLATTEN_STORAGE_KEY = "edr.processTree.flatten";
 
-export function ProcessTreeView() {
-  const { hostId } = useParams<{ hostId: string }>();
+export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: { readonly hostId?: string; readonly entryAlert?: AlertDetail } = {}) {
+  const params = useParams<{ hostId: string }>();
+  // hostId is sourced from the prop first (the /alerts/:alertId route passes the alert's host), then the /hosts/:hostId route param.
+  const hostId = hostIdProp ?? params.hostId ?? "";
   const [searchParams] = useSearchParams();
+  const { pathname } = useLocation();
   // The active host-page view (issue #583): the process graph (default) or the flat event timeline. Held in the URL so a switch is
   // bookmarkable and the shared time window / alert anchor survive it.
   const view: "graph" | "timeline" = searchParams.get("view") === "timeline" ? "timeline" : "graph";
@@ -57,6 +60,11 @@ export function ProcessTreeView() {
   // it emphasizes that process's rows.
   const pidParam = searchParams.get("pid");
   const emphasizePid = pidParam ? Number(pidParam) : undefined;
+  // The alert anchor is sourced from the entryAlert prop (the /alerts/:alertId route) when present, else the legacy ?at= param on the
+  // host route. hasAlertEntry marks that we arrived from an alert (prop or ?alert=) so focus mode defaults on. Number(...) || 0 folds a
+  // missing/NaN ?at= to 0 so the "> 0" test below reads a single number for both entry paths.
+  const anchorAtMs = entryAlert ? new Date(entryAlert.created_at).getTime() : (Number(searchParams.get("at")) || 0);
+  const hasAlertEntry = entryAlert !== undefined || searchParams.get("alert") !== null;
   const svgRef = useRef<SVGSVGElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const layoutNodesRef = useRef<D3PointNode[]>([]);
@@ -66,28 +74,25 @@ export function ProcessTreeView() {
   // The page's single time source (issue #581). Arriving from an alert anchors a wide window at the alert time (the alert-pivot
   // requirement's default); otherwise a live 1h window. Every consumer (tree fetch, histogram, control label) reads windowBounds
   // of this one value; a relative window's "now" is the frozen nowMs below, re-captured only by the Refresh action.
-  const [timeWindow, setTimeWindow] = useState<TimeWindow>(() => {
-    const parsedAt = Number(searchParams.get("at"));
-    return Number.isFinite(parsedAt) && parsedAt > 0
-      ? { kind: "relative", ms: DEFAULT_ALERT_WINDOW_MS, anchorNs: parsedAt * NANOSECONDS_PER_MILLISECOND }
-      : { kind: "relative", ms: DEFAULT_LIVE_WINDOW_MS };
-  });
-  // The alert anchor lives in the ?at= param. React Router keeps this component mounted when the param changes (e.g. the alert
-  // breadcrumb's "back to host" link drops it), so re-derive the entry window whenever ?at= transitions rather than only on mount.
-  const atParam = searchParams.get("at");
-  const lastAtRef = useRef<string | null>(atParam);
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>(() =>
+    anchorAtMs > 0
+      ? { kind: "relative", ms: DEFAULT_ALERT_WINDOW_MS, anchorNs: anchorAtMs * NANOSECONDS_PER_MILLISECOND }
+      : { kind: "relative", ms: DEFAULT_LIVE_WINDOW_MS },
+  );
+  // The alert anchor arrives as the entryAlert prop (the /alerts/:alertId route) or the ?at= param on the host route. React Router
+  // keeps this component mounted when the param changes (e.g. the alert breadcrumb's "back to host" link drops it), so re-derive the
+  // entry window whenever the anchor transitions rather than only on mount. anchorAtMs is stable on the alert route, so this is a no-op
+  // there and only fires on the host-route ?at= transitions.
+  const lastAtMsRef = useRef<number>(anchorAtMs);
   useEffect(() => {
-    if (lastAtRef.current === atParam) return;
-    lastAtRef.current = atParam;
-    const parsedAt = Number(atParam);
-     
+    if (lastAtMsRef.current === anchorAtMs) return;
+    lastAtMsRef.current = anchorAtMs;
     setTimeWindow(
-      Number.isFinite(parsedAt) && parsedAt > 0
-        ? { kind: "relative", ms: DEFAULT_ALERT_WINDOW_MS, anchorNs: parsedAt * NANOSECONDS_PER_MILLISECOND }
+      anchorAtMs > 0
+        ? { kind: "relative", ms: DEFAULT_ALERT_WINDOW_MS, anchorNs: anchorAtMs * NANOSECONDS_PER_MILLISECOND }
         : { kind: "relative", ms: DEFAULT_LIVE_WINDOW_MS },
     );
-     
-  }, [atParam]);
+  }, [anchorAtMs]);
 
   // nowMs is the page's single frozen "now": captured once on mount and re-captured only on Refresh, never read live during render.
   // Every relative-window resolution (bounds here, the shift arrows, the absolute-picker draft) uses this one value, so a relative
@@ -132,10 +137,8 @@ export function ProcessTreeView() {
   // Alert focus mode: when we arrived from an alert link, the tree defaults to showing only
   // the alerted process plus its ancestors and descendants (the "related processes only" view), so
   // the analyst isn't wading through a forest of unrelated background daemons. Toggleable.
-  const [focusAlertChain, setFocusAlertChain] = useState<boolean>(
-    () => searchParams.get("alert") !== null,
-  );
-  const [alertDetail, setAlertDetail] = useState<AlertDetail | null>(null);
+  const [focusAlertChain, setFocusAlertChain] = useState<boolean>(() => hasAlertEntry);
+  const [alertDetail, setAlertDetail] = useState<AlertDetail | null>(entryAlert ?? null);
 
   // A process-optional alert (process_id === 0) has no attributed process node to focus on: it keys on an artifact, not a
   // process (e.g. a LaunchDaemon registration, where the BTM instigator is Apple's smd, not the actor). Focus mode would
@@ -145,7 +148,9 @@ export function ProcessTreeView() {
   // mount, so deriving this from the async alertDetail alone would leave a blank canvas during the fetch (or permanently if
   // getAlertDetail fails) before the explanation appears. alertDetail.process_id is the fallback for any path that omits the
   // param.
-  const isProcessOptionalAlert = searchParams.get("process") === "0" || (alertDetail !== null && alertDetail.process_id === 0);
+  const isProcessOptionalAlert = entryAlert
+    ? entryAlert.process_id === 0
+    : searchParams.get("process") === "0" || (alertDetail !== null && alertDetail.process_id === 0);
 
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
@@ -155,8 +160,11 @@ export function ProcessTreeView() {
     try { localStorage.setItem(FLATTEN_STORAGE_KEY, String(flatten)); } catch { /* ignore */ }
   }, [flatten]);
 
-  // Fetch the alert so we can render a breadcrumb with title/severity/timestamp.
+  // Fetch the alert so we can render a breadcrumb with title/severity/timestamp. Skipped when entryAlert is supplied: the
+  // /alerts/:alertId route already fetched it and seeded alertDetail, so the query-param fetch path only runs on the host route and
+  // never clobbers the prop-seeded detail.
   useEffect(() => {
+    if (entryAlert !== undefined) return;
     const alertIdParam = searchParams.get("alert");
     if (!alertIdParam) {
       setAlertDetail(null); // eslint-disable-line react-hooks/set-state-in-effect -- clear on param removal
@@ -168,17 +176,18 @@ export function ProcessTreeView() {
       .then((result) => { if (!cancelled) setAlertDetail(result); })
       .catch(() => { if (!cancelled) setAlertDetail(null); });
     return () => { cancelled = true; };
-  }, [searchParams]);
+  }, [searchParams, entryAlert]);
 
   // Compute the set of process row-ids that make up the alert chain:
   // the alerted process, every ancestor back to the root, and every descendant.
   // Used by the focus-mode filter to drop everything unrelated to the alert.
   const alertChainIds = useMemo(() => {
-    const processIdParam = searchParams.get("process");
-    if (!focusAlertChain || !processIdParam) return null;
-    const targetId = Number(processIdParam);
+    // The alerted process id comes from the entryAlert prop (the /alerts/:alertId route) or the ?process= param (the host route's
+    // legacy alert deep link). A process-optional alert (process_id 0) has no chain to focus, so targetId 0 falls through to null.
+    const targetId = entryAlert ? entryAlert.process_id : Number(searchParams.get("process"));
+    if (!focusAlertChain || !targetId) return null;
     return findAlertChain(roots, targetId);
-  }, [roots, searchParams, focusAlertChain]);
+  }, [roots, searchParams, focusAlertChain, entryAlert]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
@@ -267,9 +276,9 @@ export function ProcessTreeView() {
   // Auto-select a process from the URL: ?process=<dbId> (alert list / fleet search) or ?pid=<pid>&at=<ms> (a timeline row, which
   // knows the pid but not the DB id). The resolution lives in selectNodeFromParams so this effect stays a single branch.
   useEffect(() => {
-    const found = selectNodeFromParams(roots, searchParams);
+    const found = selectNodeFromParams(roots, searchParams, entryAlert?.process_id);
     if (found) setSelectedNode(found); // eslint-disable-line react-hooks/set-state-in-effect -- auto-select from URL
-  }, [roots, searchParams]);
+  }, [roots, searchParams, entryAlert]);
 
   useEffect(() => {
     if (view !== "graph") return; // the timeline view does no graph work; the fetch (and the d3 draw below) are graph-only
@@ -398,8 +407,8 @@ export function ProcessTreeView() {
       {/* Simple view navigation, not an ARIA tablist: the children are links with aria-current, not tab widgets with keyboard
           semantics, so a nav with aria-current is the honest role. */}
       <nav className="process-tree__viewtabs" aria-label="Host view">
-        <Link to={viewHref(hostId, searchParams, "graph")} className="process-tree__viewtab" aria-current={view === "graph" ? "page" : undefined}>Graph</Link>
-        <Link to={viewHref(hostId, searchParams, "timeline")} className="process-tree__viewtab" aria-current={view === "timeline" ? "page" : undefined}>Timeline</Link>
+        <Link to={viewHref(pathname, searchParams, "graph")} className="process-tree__viewtab" aria-current={view === "graph" ? "page" : undefined}>Graph</Link>
+        <Link to={viewHref(pathname, searchParams, "timeline")} className="process-tree__viewtab" aria-current={view === "timeline" ? "page" : undefined}>Timeline</Link>
       </nav>
       {view === "graph" && (
         <div className="process-tree__search">

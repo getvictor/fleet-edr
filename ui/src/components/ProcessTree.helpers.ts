@@ -179,8 +179,12 @@ function findNodeByPidAtTime(nodes: ProcessNode[], pid: number, atNs: number): P
 
 // selectNodeFromParams resolves the node the URL asks the graph to select: ?process=<dbId> directly, or ?pid=<pid>&at=<ms> (a timeline
 // row) via findNodeByPidAtTime. Kept at module scope so the selection effect in ProcessTreeView stays a single branch.
-export function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSearchParams): ProcessNode | null {
+// overrideProcessId, when set, selects that process DB id directly (the /alerts/:alertId route carries the alerted process on the
+// entryAlert prop rather than in the URL); it takes precedence over the ?process= param. A 0 id (a process-optional alert) selects
+// nothing.
+export function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSearchParams, overrideProcessId?: number): ProcessNode | null {
   if (roots.length === 0) return null;
+  if (overrideProcessId) return findNodeByDbId(roots, overrideProcessId);
   const processIdParam = searchParams.get("process");
   if (processIdParam) return findNodeByDbId(roots, Number(processIdParam));
   const pidQuery = searchParams.get("pid");
@@ -191,9 +195,10 @@ export function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSear
   return null;
 }
 
-// viewHref toggles the view param while preserving the rest of the URL (window, alert anchor, selection), so switching views is a link
-// that never changes the shared time window. Graph is the default, so it drops ?view= rather than setting view=graph.
-export function viewHref(hostId: string, searchParams: URLSearchParams, v: "graph" | "timeline"): string {
+// viewHref toggles the view param on the current path while preserving the rest of the URL (window, alert anchor, selection), so
+// switching views is a link that never changes the shared time window. basePath is the full pathname (e.g. /hosts/h1 or /alerts/842)
+// so the toggle stays on whichever route rendered the view. Graph is the default, so it drops ?view= rather than setting view=graph.
+export function viewHref(basePath: string, searchParams: URLSearchParams, v: "graph" | "timeline"): string {
   const next = new URLSearchParams(searchParams);
   if (v === "graph") {
     next.delete("view");
@@ -202,7 +207,7 @@ export function viewHref(hostId: string, searchParams: URLSearchParams, v: "grap
   }
   const qs = next.toString();
   const suffix = qs ? `?${qs}` : "";
-  return `/hosts/${encodeURIComponent(hostId)}${suffix}`;
+  return `${basePath}${suffix}`;
 }
 
 // buildPreservedIds: never hide processes that have alerts attached, or that sit on the ancestor path of one (even if their binary is
