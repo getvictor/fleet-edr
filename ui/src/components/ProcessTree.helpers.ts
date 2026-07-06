@@ -3,7 +3,7 @@
 // ProcessTree component and its d3 render effect stay under Sonar's cognitive-complexity cap. Behavior is identical to the inlined
 // originals; these are verbatim moves plus three build* functions lifted out of the component's useMemo bodies unchanged.
 import type { HierarchyPointNode } from "d3";
-import type { ProcessNode } from "../types";
+import type { AlertDetail, ProcessNode } from "../types";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 
 export interface D3Node {
@@ -208,6 +208,28 @@ export function viewHref(basePath: string, searchParams: URLSearchParams, v: "gr
   const qs = next.toString();
   const suffix = qs ? `?${qs}` : "";
   return `${basePath}${suffix}`;
+}
+
+// AlertEntry is the alert context ProcessTreeView needs, folded from whichever entry path was used.
+export interface AlertEntry {
+  focus: boolean; // arrived from an alert (the entryAlert prop or a ?alert= param): focus mode defaults on
+  processId: number; // the alerted process DB id; 0 when process-optional or absent
+  atMs: number; // the alert time anchor in ms since epoch; 0 when none
+}
+
+// resolveAlertEntry folds the two alert-entry paths into one shape so ProcessTreeView reads plain fields instead of repeating the
+// prop-or-query branch at every use (which pushed the component over Sonar's cognitive-complexity cap). The entryAlert prop is the
+// /alerts/:alertId route; the ?alert=&process=&at= query is the host route's legacy alert deep link. Number(...) || 0 folds a
+// missing/NaN param to 0 so callers read a single number.
+export function resolveAlertEntry(entryAlert: AlertDetail | undefined, searchParams: URLSearchParams): AlertEntry {
+  if (entryAlert) {
+    return { focus: true, processId: entryAlert.process_id, atMs: new Date(entryAlert.created_at).getTime() };
+  }
+  return {
+    focus: searchParams.get("alert") !== null,
+    processId: Number(searchParams.get("process")) || 0,
+    atMs: Number(searchParams.get("at")) || 0,
+  };
 }
 
 // buildPreservedIds: never hide processes that have alerts attached, or that sit on the ancestor path of one (even if their binary is

@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { MemoryRouter, Routes, Route, Link } from "react-router-dom";
 import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import * as api from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
@@ -87,5 +87,38 @@ describe("AlertGraphRoute", () => {
     vi.spyOn(api, "getAlertDetail").mockRejectedValue(new Error("not found"));
     renderRoute();
     expect(await screen.findByText(/alert not found/i)).toBeInTheDocument();
+  });
+
+  it("treats a non-numeric alertId as not-found without firing a fetch", async () => {
+    const spy = vi.spyOn(api, "getAlertDetail").mockResolvedValue(alert);
+    render(
+      <MemoryRouter initialEntries={["/alerts/not-a-number"]}>
+        <Routes>
+          <Route path="/alerts/:alertId" element={<AlertGraphRoute />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/alert not found/i)).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("resets and refetches when the alertId changes, never leaving the previous alert on screen", async () => {
+    // Regression for the stale-state bug: navigating between /alerts/:alertId routes keeps the same AlertGraphRoute mounted, so the
+    // component must reset + refetch (and remount ProcessTreeView) rather than keep rendering the prior alert's breadcrumb/tree.
+    vi.spyOn(api, "getAlertDetail").mockImplementation((id: number) =>
+      Promise.resolve(id === 843 ? { ...alert, id: 843, title: "Second alert" } : alert),
+    );
+    render(
+      <MemoryRouter initialEntries={["/alerts/842"]}>
+        <Link to="/alerts/843">go-843</Link>
+        <Routes>
+          <Route path="/alerts/:alertId" element={<AlertGraphRoute />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Suspicious exec chain")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "go-843" }));
+    expect(await screen.findByText("Second alert")).toBeInTheDocument();
+    expect(screen.queryByText("Suspicious exec chain")).not.toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ import {
   toD3Hierarchy,
   collectMatches,
   findAlertChain,
+  resolveAlertEntry,
   selectNodeFromParams,
   viewHref,
   buildPreservedIds,
@@ -16,7 +17,7 @@ import {
   type D3PointNode,
   type VisibilityFilters,
 } from "./ProcessTree.helpers";
-import type { ProcessNode } from "../types";
+import type { AlertDetail, ProcessNode } from "../types";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 
 // node builds a valid ProcessNode from a partial: every required Process field carries a benign default so a test only names the
@@ -481,5 +482,48 @@ describe("buildVisibleRoots", () => {
       const out = buildVisibleRoots(aggRoots(undefined), { ...baseFilters(), expandedAggIds: new Set([6]) });
       expect(out[0].children).toEqual([]);
     });
+  });
+});
+
+describe("resolveAlertEntry", () => {
+  const alert: AlertDetail = {
+    id: 842,
+    host_id: "h1",
+    rule_id: "suspicious_exec",
+    source: "detection",
+    severity: "high",
+    title: "Suspicious exec chain",
+    description: "d",
+    techniques: [],
+    process_id: 7,
+    status: "open",
+    created_at: "2026-06-18T12:00:00Z",
+    updated_at: "2026-06-18T12:00:00Z",
+    event_ids: ["evt-1"],
+  };
+
+  it("sources the anchor from the entryAlert prop (the /alerts/:alertId route)", () => {
+    const entry = resolveAlertEntry(alert, new URLSearchParams());
+    expect(entry.focus).toBe(true);
+    expect(entry.processId).toBe(7);
+    expect(entry.atMs).toBe(new Date("2026-06-18T12:00:00Z").getTime());
+  });
+
+  it("falls back to the ?alert=&process=&at= query on the host route", () => {
+    const entry = resolveAlertEntry(undefined, new URLSearchParams("alert=842&process=7&at=1750248000000"));
+    expect(entry.focus).toBe(true);
+    expect(entry.processId).toBe(7);
+    expect(entry.atMs).toBe(1750248000000);
+  });
+
+  it("reports no alert entry and zeroed anchor when neither prop nor query is present", () => {
+    const entry = resolveAlertEntry(undefined, new URLSearchParams());
+    expect(entry.focus).toBe(false);
+    expect(entry.processId).toBe(0);
+    expect(entry.atMs).toBe(0);
+  });
+
+  it("treats a process-optional alert (process_id 0) as processId 0", () => {
+    expect(resolveAlertEntry({ ...alert, process_id: 0 }, new URLSearchParams()).processId).toBe(0);
   });
 });

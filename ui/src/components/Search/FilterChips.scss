@@ -36,6 +36,7 @@
     display: flex;
     align-items: center;
     gap: $pad-small;
+
     // Take a full row so the value control has room to grow; when chips are present this wraps onto its own line below them.
     flex: 1 1 100%;
   }

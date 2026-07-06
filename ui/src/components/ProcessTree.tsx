@@ -23,6 +23,7 @@ import {
   buildVisibleRoots,
   collectMatches,
   findAlertChain,
+  resolveAlertEntry,
   selectNodeFromParams,
   viewHref,
   type D3Node,
@@ -47,7 +48,12 @@ const TOOLTIP_CLAMP_HEIGHT_PX = 170;
 const SHOW_SYSTEM_STORAGE_KEY = "edr.processTree.showSystem";
 const FLATTEN_STORAGE_KEY = "edr.processTree.flatten";
 
-export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: { readonly hostId?: string; readonly entryAlert?: AlertDetail } = {}) {
+interface ProcessTreeViewProps {
+  readonly hostId?: string;
+  readonly entryAlert?: AlertDetail;
+}
+
+export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeViewProps = {}) {
   const params = useParams<{ hostId: string }>();
   // hostId is sourced from the prop first (the /alerts/:alertId route passes the alert's host), then the /hosts/:hostId route param.
   const hostId = hostIdProp ?? params.hostId ?? "";
@@ -60,11 +66,11 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: { readonly h
   // it emphasizes that process's rows.
   const pidParam = searchParams.get("pid");
   const emphasizePid = pidParam ? Number(pidParam) : undefined;
-  // The alert anchor is sourced from the entryAlert prop (the /alerts/:alertId route) when present, else the legacy ?at= param on the
-  // host route. hasAlertEntry marks that we arrived from an alert (prop or ?alert=) so focus mode defaults on. Number(...) || 0 folds a
-  // missing/NaN ?at= to 0 so the "> 0" test below reads a single number for both entry paths.
-  const anchorAtMs = entryAlert ? new Date(entryAlert.created_at).getTime() : (Number(searchParams.get("at")) || 0);
-  const hasAlertEntry = entryAlert !== undefined || searchParams.get("alert") !== null;
+  // The alert context, folded from whichever entry path was used (the entryAlert prop on /alerts/:alertId, or the legacy
+  // ?alert=&process=&at= query on the host route). Reading plain fields off this keeps the prop-or-query branching in one helper
+  // instead of repeated inline at every use (Sonar S3776 on this function). atMs 0 = no anchor; focus = arrived from an alert.
+  const alertEntry = resolveAlertEntry(entryAlert, searchParams);
+  const anchorAtMs = alertEntry.atMs;
   const svgRef = useRef<SVGSVGElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const layoutNodesRef = useRef<D3PointNode[]>([]);
@@ -137,7 +143,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: { readonly h
   // Alert focus mode: when we arrived from an alert link, the tree defaults to showing only
   // the alerted process plus its ancestors and descendants (the "related processes only" view), so
   // the analyst isn't wading through a forest of unrelated background daemons. Toggleable.
-  const [focusAlertChain, setFocusAlertChain] = useState<boolean>(() => hasAlertEntry);
+  const [focusAlertChain, setFocusAlertChain] = useState<boolean>(() => alertEntry.focus);
   const [alertDetail, setAlertDetail] = useState<AlertDetail | null>(entryAlert ?? null);
 
   // A process-optional alert (process_id === 0) has no attributed process node to focus on: it keys on an artifact, not a
@@ -182,12 +188,11 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: { readonly h
   // the alerted process, every ancestor back to the root, and every descendant.
   // Used by the focus-mode filter to drop everything unrelated to the alert.
   const alertChainIds = useMemo(() => {
-    // The alerted process id comes from the entryAlert prop (the /alerts/:alertId route) or the ?process= param (the host route's
-    // legacy alert deep link). A process-optional alert (process_id 0) has no chain to focus, so targetId 0 falls through to null.
-    const targetId = entryAlert ? entryAlert.process_id : Number(searchParams.get("process"));
-    if (!focusAlertChain || !targetId) return null;
-    return findAlertChain(roots, targetId);
-  }, [roots, searchParams, focusAlertChain, entryAlert]);
+    // The alerted process id is alertEntry.processId (from the entryAlert prop or the ?process= param). A process-optional alert
+    // (processId 0) has no chain to focus, so it falls through to null.
+    if (!focusAlertChain || !alertEntry.processId) return null;
+    return findAlertChain(roots, alertEntry.processId);
+  }, [roots, focusAlertChain, alertEntry.processId]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.

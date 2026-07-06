@@ -32,8 +32,9 @@
     display: flex;
     gap: $pad-small;
     align-items: center;
-    // Keep the actions/filter bar right-aligned whether or not the header carries a title. With space-between this is redundant when a
-    // title is present, but it holds the actions to the right on the tab pages whose title was removed (Alerts, Application control, Coverage).
+
+    // Keep the actions/filter bar right-aligned whether or not the header carries a title. With space-between this is redundant
+    // when a title is present, but it holds the actions to the right on tab pages whose title was removed (Alerts, App control, Coverage).
     margin-left: auto;
   }
 }
