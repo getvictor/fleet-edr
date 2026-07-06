@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import "./HostHeader.scss";
 import { getHostDetail } from "../api";
 import type { HostDetail } from "../types";
 import { PageHeader } from "./ui/PageHeader";
 import { CopyButton } from "./ui/CopyButton";
+import { useDismiss } from "./ui/useDismiss";
 import { formatRelativeNs, isOnline } from "../time";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 
@@ -77,24 +78,7 @@ function metaRow(detail: HostDetail, online: boolean): ReactNode {
 // its copy control, agent version, source IP, event count, exact last-seen, and enrollment date out of the always-visible header. Closes
 // on outside-click and Escape, mirroring AccountMenu's disclosure pattern.
 function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const { open, setOpen, ref } = useDismiss<HTMLDivElement>();
 
   return (
     <div className="host-header__details" ref={ref}>

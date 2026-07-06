@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useCan, PermissionAction } from "../../permissions-core";
+import { useDismiss } from "./useDismiss";
 import "./AccountMenu.scss";
 
 interface AccountMenuProps {
@@ -24,24 +24,7 @@ function authMethodLabel(authMethod?: string): string | null {
 // menu/menuitem roles would promise arrow-key navigation that this control does not provide.
 export function AccountMenu({ user, authMethod, onLogout }: AccountMenuProps) {
   const can = useCan();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const { open, setOpen, ref } = useDismiss<HTMLDivElement>();
 
   const badge = authMethodLabel(authMethod);
 
