@@ -127,7 +127,7 @@ describe("ProcessTreeView process-optional alert", () => {
 // spec:web-ui/process-tree-visualization/repeated-siblings-render-as-an-aggregated-badge
 //
 // Issue #416: the server collapses repeated identical-path siblings into one node carrying a count. The tree MUST render that as a
-// "×N" badge, expand it in place to the sample on click, and expose a Flatten toggle that refetches the raw (un-aggregated) forest.
+// "×N" badge and expand it in place to the sample on click.
 describe("ProcessTreeView sibling aggregation", () => {
   const aggregatedChild: ProcessNode = {
     ...process(10, 200, 100, "/usr/bin/grep"),
@@ -149,7 +149,7 @@ describe("ProcessTreeView sibling aggregation", () => {
   ];
 
   beforeEach(() => {
-    // Flatten/showSystem persist to localStorage; clear it so a prior test's toggle can't leak into this render.
+    // showSystem persists to localStorage; clear it so a prior test's toggle can't leak into this render.
     localStorage.clear();
     vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
   });
@@ -185,20 +185,6 @@ describe("ProcessTreeView sibling aggregation", () => {
     // A second activation collapses the group again (the toggle's delete branch).
     fireEvent.click(screen.getByText(/grep ×3/));
     await waitFor(() => { expect(screen.queryByText(/grep \(201\)/)).not.toBeInTheDocument(); });
-  });
-
-  it("Flatten toggle refetches the raw forest with flatten=true", async () => {
-    const spy = vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: aggregatedForest });
-    renderTree("");
-    await screen.findByText(/grep ×3/);
-
-    // Initial fetch is aggregated (flatten falsy).
-    expect(spy).toHaveBeenLastCalledWith("h1", expect.any(Number), expect.any(Number), undefined, false);
-
-    fireEvent.click(screen.getByLabelText("Flatten"));
-
-    // Flipping the toggle refetches asking for the un-aggregated forest.
-    expect(spy).toHaveBeenLastCalledWith("h1", expect.any(Number), expect.any(Number), undefined, true);
   });
 
   it("selects a normal process, colors an alerted and an exited node, and toggles a normal chevron", async () => {
@@ -252,11 +238,12 @@ describe("ProcessTreeView process-backed alert", () => {
     // But the process-optional explanation must not appear.
     expect(screen.queryByText(/isn’t attributed to a single process/i)).not.toBeInTheDocument();
 
-    // The generic chain toggle IS present for a process-backed alert (it is only hidden for process-optional ones), and it
-    // is a state label that flips between "Focused on chain" and "Full host tree" rather than reading as a stale action.
-    const toggle = screen.getByRole("button", { name: /focused on chain/i });
-    fireEvent.click(toggle);
-    expect(await screen.findByRole("button", { name: /full host tree/i })).toBeInTheDocument();
+    // The scope segmented control IS present for a process-backed alert (hidden only for process-optional ones). Arriving from an alert
+    // starts focused on the alert chain; clicking "Full tree" switches scope, with the active segment reflected by aria-pressed.
+    expect(screen.getByRole("button", { name: "Alert chain" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Full tree" }));
+    expect(await screen.findByRole("button", { name: "Full tree" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Alert chain" })).toHaveAttribute("aria-pressed", "false");
   });
 });
 
@@ -278,8 +265,8 @@ describe("ProcessTreeView alert route (entryAlert prop)", () => {
 
     // The finding detail renders from the prop (no query params present).
     expect(await screen.findByText(/registered as system LaunchDaemon/i)).toBeInTheDocument();
-    // Focus mode is on for a process-backed alert entered via the prop: the chain toggle shows the focused state.
-    expect(screen.getByRole("button", { name: /focused on chain/i })).toBeInTheDocument();
+    // Focus mode is on for a process-backed alert entered via the prop: the scope control shows the alert chain as the active segment.
+    expect(screen.getByRole("button", { name: "Alert chain" })).toHaveAttribute("aria-pressed", "true");
     // The alert was supplied, so the component must not refetch it.
     expect(fetchSpy).not.toHaveBeenCalled();
   });

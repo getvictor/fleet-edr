@@ -8,8 +8,22 @@
     margin-bottom: 0.5rem;
   }
 
-  &__title {
-    font-weight: 600;
+  // Reveals the per-component rows on a healthy host, where they are collapsed by default. Sits to the right of the rollup badge.
+  &__toggle {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary, #6b7280);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.8rem;
+    margin-left: auto;
+    padding: 0;
+    text-decoration: underline;
+
+    &:hover {
+      color: var(--color-text-primary, #192147);
+    }
   }
 
   &__list {

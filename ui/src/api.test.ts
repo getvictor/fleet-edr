@@ -69,21 +69,21 @@ describe("getHostHealth", () => {
   });
 });
 
-describe("getProcessTree flatten parameter (issue #416)", () => {
-  it("omits flatten by default so the response is aggregated", async () => {
+describe("getProcessTree pin parameter (issue #416)", () => {
+  it("omits pin by default (plain host view, aggregation applies)", async () => {
     const fetchMock = stubFetch({ roots: [] });
     await getProcessTree("host-a", 1000, 2000);
     const [target] = fetchMock.mock.calls[0] as [URL];
     const url = target.toString();
     expect(url).toContain("/hosts/host-a/tree?from=1000&to=2000&limit=2000");
-    expect(url).not.toContain("flatten");
+    expect(url).not.toContain("pin");
   });
 
-  it("appends flatten=1 when the caller opts out of aggregation", async () => {
+  it("appends pin=<id> so the alerted process is kept out of aggregation", async () => {
     const fetchMock = stubFetch({ roots: [] });
-    await getProcessTree("host-a", 1000, 2000, 2000, true);
+    await getProcessTree("host-a", 1000, 2000, 2000, 696697);
     const [target] = fetchMock.mock.calls[0] as [URL];
-    expect(target.toString()).toContain("flatten=1");
+    expect(target.toString()).toContain("pin=696697");
   });
 });
 

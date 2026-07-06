@@ -29,40 +29,23 @@
     flex-wrap: wrap;
   }
 
-  // Segmented control: one rounded container with vertical dividers between
-  // options. Replaces the prior row of individual buttons.
-  &__range {
+  // Segmented control for two mutually-exclusive scopes (alert chain vs full tree): one rounded container with a divider between the
+  // options, the active one filled. The industry-standard shape for a binary view toggle, replacing an ambiguous single button.
+  &__scope {
     display: inline-flex;
     border: 1px solid $ui-fleet-black-25;
     border-radius: $border-radius;
     overflow: hidden;
     background-color: $core-fleet-white;
     line-height: 1;
-    margin: 0;
-    padding: 0;
-    // Fieldsets default to min-width: min-content, which can push this control
-    // past its flex container on narrow viewports. Reset so flexbox can shrink it.
-    min-width: 0;
-
-    .visually-hidden {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-      border: 0;
-    }
   }
 
-  &__range-item {
+  &__scope-item {
     appearance: none;
     background: transparent;
     border: 0;
     border-right: 1px solid $ui-fleet-black-10;
-    padding: 6px 12px;
+    padding: 4px 10px;
     font-size: $x-small;
     font-family: inherit;
     color: $core-fleet-black;
@@ -185,6 +168,16 @@
     &:hover {
       background-color: $ui-off-white;
     }
+  }
+
+  // Graph filter bar: sits directly above the canvas so the search + display toggles live with the content they shape, mirroring the
+  // timeline's filter row above its list (issue #583). Same flex-wrap row shape as .host-timeline__filters for a consistent look.
+  &__graph-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: $pad-medium;
+    margin-bottom: $pad-small;
   }
 
   &__search {

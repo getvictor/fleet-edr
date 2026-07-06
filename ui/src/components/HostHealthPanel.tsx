@@ -19,17 +19,18 @@ const COMPONENT_LABELS: Record<string, string> = {
 export function HostHealthPanel({ hostId }: { readonly hostId: string }) {
   const [health, setHealth] = useState<HostHealth | null>(null);
   const [failed, setFailed] = useState(false);
+  // When the rollup is healthy the per-component rows just repeat "all good", so they collapse behind this toggle. Only ever set by the
+  // user; not-healthy states ignore it and always show the rows so the failing component is visible without a click.
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    // Reset per-host state on every hostId change: React Router re-renders this component with a new hostId without unmounting, so
-    // without the reset a prior host's snapshot (or a prior transient failure that latched `failed`) would persist and could keep the
-    // panel stuck hidden or showing stale data.
-    // Reset per-host state on hostId change so a prior host's data or a latched failure does not persist (React Router re-renders
-    // without unmounting). Disable set-state-in-effect for the synchronous reset, matching the same pattern in ProcessTree.tsx.
+    // Reset per-host state on hostId change so a prior host's data, a latched failure, or a left-open expander does not persist (React
+    // Router re-renders without unmounting). Disable set-state-in-effect for the synchronous reset, matching ProcessTree.tsx.
     /* eslint-disable react-hooks/set-state-in-effect */
     setHealth(null);
     setFailed(false);
+    setExpanded(false);
     /* eslint-enable react-hooks/set-state-in-effect */
     getHostHealth(hostId)
       .then((h) => {
@@ -46,15 +47,28 @@ export function HostHealthPanel({ hostId }: { readonly hostId: string }) {
   if (failed || !health) return null;
 
   const components = health.components ?? [];
+  const healthy = health.overall_status === "healthy";
+  // Show the component rows when something needs attention (always, so the failing one is visible) or when a healthy host's panel has
+  // been expanded on demand. A healthy, collapsed panel is just the one-line rollup.
+  const showComponents = components.length > 0 && (!healthy || expanded);
   return (
     <Card className="host-health" padding="medium">
       <div className="host-health__header">
-        <span className="host-health__title">Agent health</span>
-        <HealthBadge status={health.overall_status} />
+        {/* One self-describing pill ("Agent healthy" / "Agent needs attention") instead of a separate label plus a bare status badge. */}
+        <HealthBadge status={health.overall_status} prefix="Agent" />
+        {healthy && components.length > 0 && (
+          <button
+            type="button"
+            className="host-health__toggle"
+            aria-expanded={expanded}
+            onClick={() => { setExpanded((v) => !v); }}
+          >
+            {expanded ? "Hide details" : "Details"}
+          </button>
+        )}
       </div>
-      {components.length === 0 ? (
-        <p className="host-health__empty">No component health reported yet.</p>
-      ) : (
+      {components.length === 0 && <p className="host-health__empty">No component health reported yet.</p>}
+      {showComponents && (
         <ul className="host-health__list">
           {components.map((c) => (
             <li key={c.type} className="host-health__item">

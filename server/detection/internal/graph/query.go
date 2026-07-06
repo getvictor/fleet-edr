@@ -34,7 +34,7 @@ func NewQuery(s *mysql.Store) *Query {
 // siblings under the same parent are collapsed into a single aggregated node (issue #416) so a busy host's grep×1000 / jspawnhelper×240
 // churn renders as a handful of `×N` nodes rather than thousands of dots. flatten opts out and returns the raw forest for an analyst
 // who wants every node.
-func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool) ([]api.ProcessNode, error) {
+func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) ([]api.ProcessNode, error) {
 	procs, err := q.store.GetProcessTree(ctx, hostID, tr, limit)
 	if err != nil {
 		return nil, err
@@ -43,7 +43,7 @@ func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, 
 	if flatten {
 		return forest, nil
 	}
-	return aggregateSiblings(forest), nil
+	return aggregateSiblingsPinned(forest, pinnedID), nil
 }
 
 // GetProcessDetail returns a process with its network connections, DNS queries, and re-exec chain. Method name matches the
@@ -186,6 +186,14 @@ func indexProcesses(procs []api.Process) (map[int64]*api.ProcessNode, map[int]in
 // aggregateMinGroup stays individual (a `×1` badge would be noise). Output siblings are ordered by first fork time (then row id) so
 // the result is deterministic regardless of the map-iteration order buildForest produced.
 func aggregateSiblings(forest []api.ProcessNode) []api.ProcessNode {
+	return aggregateSiblingsPinned(forest, 0)
+}
+
+// aggregateSiblingsPinned is aggregateSiblings with a pinned process id that is never folded into a "×N" group: the alerted process on
+// the alert view stays a first-class node so the alert-chain filter and the alert dot can locate it by its real id. Issue #416 gives an
+// aggregated header a synthetic negative id (the negation of its representative), which the id-keyed UI paths cannot match, so an alerted
+// process with identical siblings would otherwise vanish from its own chain. 0 pins nothing (the plain aggregateSiblings entry point).
+func aggregateSiblingsPinned(forest []api.ProcessNode, pinnedID int64) []api.ProcessNode {
 	if len(forest) == 0 {
 		return forest
 	}
@@ -195,13 +203,13 @@ func aggregateSiblings(forest []api.ProcessNode) []api.ProcessNode {
 		n := forest[i]
 		if len(n.Children) > 0 {
 			// Non-leaf: keep it individual and recurse so its own children aggregate too.
-			n.Children = aggregateSiblings(n.Children)
+			n.Children = aggregateSiblingsPinned(n.Children, pinnedID)
 			out = append(out, n)
 			continue
 		}
 		leaves = append(leaves, n)
 	}
-	out = append(out, groupLeaves(leaves)...)
+	out = append(out, groupLeaves(leaves, pinnedID)...)
 	slices.SortFunc(out, func(a, b api.ProcessNode) int {
 		if d := nodeFirstForkNs(a) - nodeFirstForkNs(b); d != 0 {
 			return int(min(max(d, -1), 1))
@@ -214,21 +222,30 @@ func aggregateSiblings(forest []api.ProcessNode) []api.ProcessNode {
 // groupLeaves partitions leaf siblings by binary identity and folds every group of at least aggregateMinGroup members into one
 // aggregated node; smaller groups pass through unchanged. Group order within the returned slice is not significant: aggregateSiblings
 // re-sorts the merged output by fork time.
-func groupLeaves(leaves []api.ProcessNode) []api.ProcessNode {
+func groupLeaves(leaves []api.ProcessNode, pinnedID int64) []api.ProcessNode {
 	if len(leaves) == 0 {
 		return nil
 	}
 	// order preserves first-seen key order so grouping is deterministic before the caller's fork-time sort.
 	groups := make(map[string][]api.ProcessNode, len(leaves))
 	var order []string
+	// A pinned leaf (the alerted process) always passes through as its own node, never folded into a "×N" group, so the id-keyed UI
+	// paths can still find it. Removing it from its identity group can drop that group below aggregateMinGroup, which then also passes
+	// through individually; that is fine (a two-member group with one pinned collapses to two plain nodes).
+	var pinned []api.ProcessNode
 	for _, n := range leaves {
+		if pinnedID != 0 && n.ID == pinnedID {
+			pinned = append(pinned, n)
+			continue
+		}
 		k := aggregationKey(n)
 		if _, ok := groups[k]; !ok {
 			order = append(order, k)
 		}
 		groups[k] = append(groups[k], n)
 	}
-	out := make([]api.ProcessNode, 0, len(order))
+	out := make([]api.ProcessNode, 0, len(order)+len(pinned))
+	out = append(out, pinned...)
 	for _, k := range order {
 		members := groups[k]
 		if len(members) < aggregateMinGroup {

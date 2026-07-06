@@ -73,6 +73,44 @@ func TestAggregateSiblings_TableCases(t *testing.T) {
 		assert.Nil(t, out[0].Aggregated, "a lone child MUST NOT be aggregated")
 	})
 
+	t.Run("a pinned leaf stays a first-class node while its other identical siblings still aggregate", func(t *testing.T) {
+		t.Parallel()
+		// Three identical siblings; pin id 2. It must survive as its own node (real positive id, no Aggregated) so an alert keyed on
+		// id 2 can locate it by that id, while the remaining two still collapse into a ×2 header.
+		out := aggregateSiblingsPinned([]api.ProcessNode{
+			leaf(1, "/usr/bin/curl", "sha-curl", 100, true),
+			leaf(2, "/usr/bin/curl", "sha-curl", 200, true),
+			leaf(3, "/usr/bin/curl", "sha-curl", 300, true),
+		}, 2)
+		var pinnedNode, aggNode *api.ProcessNode
+		for i := range out {
+			if out[i].ID == 2 {
+				pinnedNode = &out[i]
+			}
+			if out[i].Aggregated != nil {
+				aggNode = &out[i]
+			}
+		}
+		require.NotNil(t, pinnedNode, "the pinned leaf must remain a first-class node with its real id")
+		assert.Nil(t, pinnedNode.Aggregated)
+		require.NotNil(t, aggNode, "the other two identical siblings still aggregate")
+		assert.Equal(t, 2, aggNode.Aggregated.Count)
+	})
+
+	t.Run("pinning one of two identical siblings leaves both as plain nodes (the alert case that motivated the pin)", func(t *testing.T) {
+		t.Parallel()
+		// Two identical siblings, one pinned: the other is a group of one, below aggregateMinGroup, so it passes through. This is the
+		// exact shape of the live alert (two curl siblings, one alerted) whose chain rendered blank before the pin.
+		out := aggregateSiblingsPinned([]api.ProcessNode{
+			leaf(1, "/usr/bin/curl", "sha-curl", 100, true),
+			leaf(2, "/usr/bin/curl", "sha-curl", 200, true),
+		}, 1)
+		require.Len(t, out, 2)
+		for _, n := range out {
+			assert.Nil(t, n.Aggregated, "with one of two pinned, neither node aggregates")
+		}
+	})
+
 	t.Run("same path but different binary identity does not merge", func(t *testing.T) {
 		t.Parallel()
 		out := aggregateSiblings([]api.ProcessNode{

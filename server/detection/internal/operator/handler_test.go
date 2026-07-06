@@ -24,7 +24,7 @@ import (
 // of server/response/internal/operator/handler_test.go's fakeService for cross-package consistency.
 type fakeService struct {
 	listHosts         func(ctx context.Context) ([]api.HostSummary, error)
-	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool) ([]api.ProcessNode, error)
+	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) ([]api.ProcessNode, error)
 	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error)
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
 	getAlert          func(ctx context.Context, id int64) (api.Alert, []string, error)
@@ -47,11 +47,11 @@ func (f fakeService) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return f.listHosts(ctx)
 }
 
-func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool) ([]api.ProcessNode, error) {
+func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) ([]api.ProcessNode, error) {
 	if f.buildTree == nil {
 		panic("fakeService.BuildTree not set")
 	}
-	return f.buildTree(ctx, hostID, tr, limit, flatten)
+	return f.buildTree(ctx, hostID, tr, limit, flatten, pinnedID)
 }
 
 func (f fakeService) GetProcessDetail(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error) {
@@ -232,7 +232,7 @@ func TestHandleProcessTree(t *testing.T) {
 
 	t.Run("svc error returns 500", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) ([]api.ProcessNode, error) {
 			return nil, errors.New("query failed")
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
@@ -244,7 +244,7 @@ func TestHandleProcessTree(t *testing.T) {
 
 	t.Run("nil roots normalized to empty array under roots key", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) ([]api.ProcessNode, error) {
 			return nil, nil
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
@@ -259,7 +259,7 @@ func TestHandleProcessTree(t *testing.T) {
 	t.Run("limit param above max is clamped", func(t *testing.T) {
 		t.Parallel()
 		var sawLimit int
-		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, limit int, _ bool) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, limit int, _ bool, _ int64) ([]api.ProcessNode, error) {
 			sawLimit = limit
 			return nil, nil
 		}}
@@ -286,7 +286,7 @@ func TestHandleProcessTree(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 				var sawFlatten bool
-				svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, flatten bool) ([]api.ProcessNode, error) {
+				svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, flatten bool, _ int64) ([]api.ProcessNode, error) {
 					sawFlatten = flatten
 					return nil, nil
 				}}
@@ -298,10 +298,24 @@ func TestHandleProcessTree(t *testing.T) {
 		}
 	})
 
+	// spec:server-rest-api/per-host-process-forest/a-pinned-process-is-never-folded-into-an-aggregate
+	t.Run("pin= is threaded to BuildTree so the alerted process is never aggregated", func(t *testing.T) {
+		t.Parallel()
+		var sawPin int64
+		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, _ bool, pinnedID int64) ([]api.ProcessNode, error) {
+			sawPin = pinnedID
+			return nil, nil
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/hosts/host-a/tree?pin=696697")
+		_ = resp.Body.Close()
+		assert.Equal(t, int64(696697), sawPin, "the ?pin process id must reach BuildTree")
+	})
+
 	// spec:server-rest-api/per-host-process-forest/repeated-identical-siblings-collapse-into-an-aggregated-node
 	t.Run("aggregated node wire shape is pinned", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) ([]api.ProcessNode, error) {
 			return []api.ProcessNode{{
 				Process: api.Process{ID: 10, HostID: "host-a", PID: 200, PPID: 100, Path: "/usr/bin/grep", ForkTimeNs: 1000},
 				Aggregated: &api.AggregatedSiblings{

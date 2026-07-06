@@ -18,7 +18,7 @@ The web UI SHALL show each host's overall health status in the Hosts list as a b
 
 ### Requirement: The host detail surfaces the health conditions
 
-The web UI host detail SHALL present the host's component conditions, each showing the component, its status, a human-readable message, and how long it has been in its current state. When a required extension is not activated the message SHALL make the required action legible to an operator, for example that the security extension needs attention.
+The web UI host detail SHALL present the host's agent-health rollup as a single self-describing status pill (for example "Agent healthy" or "Agent needs attention"). When the rollup is healthy the per-component conditions SHALL be collapsed by default and revealed on demand behind a details control, since they would only restate that everything is fine. When the rollup is not healthy the per-component conditions SHALL be shown without further interaction so the failing component is visible; each condition shows the component, its status, a human-readable message, and how long it has been in its current state. When a required extension is not activated the message SHALL make the required action legible to an operator, for example that the security extension needs attention.
 
 #### Scenario: The detail lists a component with its message and age
 
@@ -26,8 +26,9 @@ The web UI host detail SHALL present the host's component conditions, each showi
 - **WHEN** an operator opens the host detail
 - **THEN** the conditions panel shows the security extension with its unhealthy status, its message, and how long it has been in that state
 
-#### Scenario: A fully healthy host shows all components healthy
+#### Scenario: A fully healthy host shows a single healthy rollup
 
 - **GIVEN** a host whose every component is healthy
 - **WHEN** an operator opens the host detail
-- **THEN** the conditions panel shows each component as healthy
+- **THEN** the panel shows a single "Agent healthy" status pill and the per-component rows are collapsed
+- **AND** the operator can reveal the per-component conditions on demand

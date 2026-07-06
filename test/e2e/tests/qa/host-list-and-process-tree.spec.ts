@@ -170,7 +170,11 @@ test.describe.serial("L4 (M6): host list + process tree UI specs", () => {
     // process-tree-detail.spec.ts; collapses the previous inline copy that Sonar flagged as duplicated code.
     const hostId = await setupProcessTreeDeep(p, agent);
 
-    // PageHeader renders the host_id; asserting on the text avoids depending on D3 SVG selectors (those are layout-tuning-fragile).
-    await expect(p.getByText(hostId)).toBeVisible({ timeout: 15_000 });
+    // The identity header leads with the hostname and keeps the raw host id inside a Details popover, so open it and assert on the id
+    // text; this proves the host page rendered without depending on D3 SVG selectors (those are layout-tuning-fragile).
+    const details = p.getByRole("button", { name: "Details" });
+    await expect(details).toBeVisible({ timeout: 15_000 });
+    await details.click();
+    await expect(p.getByText(hostId)).toBeVisible();
   });
 });
