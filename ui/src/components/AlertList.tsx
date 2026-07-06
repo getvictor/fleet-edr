@@ -147,11 +147,7 @@ export function AlertList() {
 
   return (
     <>
-      <PageHeader
-        title="Alerts"
-        subtitle="Detection findings across all hosts"
-        actions={filters}
-      />
+      <PageHeader actions={filters} />
       {loading && <EmptyState>Loading alerts...</EmptyState>}
       {error && !loading && <EmptyState>Error: {error}</EmptyState>}
       {!loading && !error && alerts.length === 0 && (
@@ -189,7 +185,7 @@ export function AlertList() {
                       jump as a sibling control. */}
                   <Link
                     className="link-button"
-                    to={`/hosts/${encodeURIComponent(a.host_id)}?alert=${String(a.id)}&process=${String(a.process_id)}&at=${String(new Date(a.created_at).getTime())}`}
+                    to={`/alerts/${encodeURIComponent(String(a.id))}`}
                     title="Open this alert's process tree at the alert time"
                   >
                     {a.title}

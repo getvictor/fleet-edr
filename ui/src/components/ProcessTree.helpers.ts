@@ -3,7 +3,7 @@
 // ProcessTree component and its d3 render effect stay under Sonar's cognitive-complexity cap. Behavior is identical to the inlined
 // originals; these are verbatim moves plus three build* functions lifted out of the component's useMemo bodies unchanged.
 import type { HierarchyPointNode } from "d3";
-import type { ProcessNode } from "../types";
+import type { AlertDetail, ProcessNode } from "../types";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 
 export interface D3Node {
@@ -179,8 +179,12 @@ function findNodeByPidAtTime(nodes: ProcessNode[], pid: number, atNs: number): P
 
 // selectNodeFromParams resolves the node the URL asks the graph to select: ?process=<dbId> directly, or ?pid=<pid>&at=<ms> (a timeline
 // row) via findNodeByPidAtTime. Kept at module scope so the selection effect in ProcessTreeView stays a single branch.
-export function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSearchParams): ProcessNode | null {
+// overrideProcessId, when set, selects that process DB id directly (the /alerts/:alertId route carries the alerted process on the
+// entryAlert prop rather than in the URL); it takes precedence over the ?process= param. A 0 id (a process-optional alert) selects
+// nothing.
+export function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSearchParams, overrideProcessId?: number): ProcessNode | null {
   if (roots.length === 0) return null;
+  if (overrideProcessId) return findNodeByDbId(roots, overrideProcessId);
   const processIdParam = searchParams.get("process");
   if (processIdParam) return findNodeByDbId(roots, Number(processIdParam));
   const pidQuery = searchParams.get("pid");
@@ -191,9 +195,10 @@ export function selectNodeFromParams(roots: ProcessNode[], searchParams: URLSear
   return null;
 }
 
-// viewHref toggles the view param while preserving the rest of the URL (window, alert anchor, selection), so switching views is a link
-// that never changes the shared time window. Graph is the default, so it drops ?view= rather than setting view=graph.
-export function viewHref(hostId: string, searchParams: URLSearchParams, v: "graph" | "timeline"): string {
+// viewHref toggles the view param on the current path while preserving the rest of the URL (window, alert anchor, selection), so
+// switching views is a link that never changes the shared time window. basePath is the full pathname (e.g. /hosts/h1 or /alerts/842)
+// so the toggle stays on whichever route rendered the view. Graph is the default, so it drops ?view= rather than setting view=graph.
+export function viewHref(basePath: string, searchParams: URLSearchParams, v: "graph" | "timeline"): string {
   const next = new URLSearchParams(searchParams);
   if (v === "graph") {
     next.delete("view");
@@ -202,7 +207,29 @@ export function viewHref(hostId: string, searchParams: URLSearchParams, v: "grap
   }
   const qs = next.toString();
   const suffix = qs ? `?${qs}` : "";
-  return `/hosts/${encodeURIComponent(hostId)}${suffix}`;
+  return `${basePath}${suffix}`;
+}
+
+// AlertEntry is the alert context ProcessTreeView needs, folded from whichever entry path was used.
+export interface AlertEntry {
+  focus: boolean; // arrived from an alert (the entryAlert prop or a ?alert= param): focus mode defaults on
+  processId: number; // the alerted process DB id; 0 when process-optional or absent
+  atMs: number; // the alert time anchor in ms since epoch; 0 when none
+}
+
+// resolveAlertEntry folds the two alert-entry paths into one shape so ProcessTreeView reads plain fields instead of repeating the
+// prop-or-query branch at every use (which pushed the component over Sonar's cognitive-complexity cap). The entryAlert prop is the
+// /alerts/:alertId route; the ?alert=&process=&at= query is the host route's legacy alert deep link. Number(...) || 0 folds a
+// missing/NaN param to 0 so callers read a single number.
+export function resolveAlertEntry(entryAlert: AlertDetail | undefined, searchParams: URLSearchParams): AlertEntry {
+  if (entryAlert) {
+    return { focus: true, processId: entryAlert.process_id, atMs: new Date(entryAlert.created_at).getTime() };
+  }
+  return {
+    focus: searchParams.get("alert") !== null,
+    processId: Number(searchParams.get("process")) || 0,
+    atMs: Number(searchParams.get("at")) || 0,
+  };
 }
 
 // buildPreservedIds: never hide processes that have alerts attached, or that sit on the ancestor path of one (even if their binary is

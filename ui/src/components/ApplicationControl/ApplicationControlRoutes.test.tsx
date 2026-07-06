@@ -23,9 +23,9 @@ describe("ApplicationControlRoutes", () => {
       </MemoryRouter>,
     );
     await waitFor(() => {
-      // PageHeader title "Application control" is unique to the
-      // PoliciesList page in this surface.
-      expect(screen.getByRole("heading", { name: /application control/i })).toBeInTheDocument();
+      // The "New policy" action is unique to the PoliciesList page in this
+      // surface (the page title was removed in the ui-cleanup pass).
+      expect(screen.getByRole("button", { name: /new policy/i })).toBeInTheDocument();
     });
   });
 

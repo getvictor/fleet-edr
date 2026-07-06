@@ -91,8 +91,6 @@ export function AttackCoverage() {
   return (
     <>
       <PageHeader
-        title="ATT&CK coverage"
-        subtitle="MITRE ATT&CK techniques the deployed detection rules cover today."
         actions={
           <Button
             size="small"

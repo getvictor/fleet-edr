@@ -64,11 +64,7 @@ export function PoliciesList() {
 
   return (
     <>
-      <PageHeader
-        title="Application control"
-        subtitle="Rules the host extension consults on every exec"
-        actions={newPolicyAction}
-      />
+      <PageHeader actions={newPolicyAction} />
       {loading && <EmptyState>Loading policies...</EmptyState>}
       {error && !loading && <EmptyState>Error: {error}</EmptyState>}
       {!loading && !error && policies.length === 0 && (

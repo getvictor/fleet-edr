@@ -17,7 +17,7 @@ Operator-facing documentation for Fleet EDR. For developer setup see the repo-ro
 | Understanding how the pieces fit together                                 | [`architecture.md`](architecture.md)                 |
 | Setting up Okta or another OIDC IdP for operator login                    | [`okta-setup.md`](okta-setup.md)                     |
 | Recovering when SSO is unavailable, registering a second security key     | [`breakglass.md`](breakglass.md)                     |
-| Reviewing what threats v0.1 covers and where the gaps are                 | [`threat-model.md`](threat-model.md)                 |
+| Reviewing what threats the product covers and where the gaps are          | [`threat-model.md`](threat-model.md)                 |
 
 ## Getting started
 

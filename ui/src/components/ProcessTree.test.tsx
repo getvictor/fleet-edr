@@ -260,6 +260,31 @@ describe("ProcessTreeView process-backed alert", () => {
   });
 });
 
+// The /alerts/:alertId route hands the resolved alert to ProcessTreeView as the entryAlert prop instead of the ?alert=&process=&at=
+// query params the host route uses. This pins that the prop path drives the same alert-entry behaviour (focus mode + breadcrumb from
+// the alert) and does NOT refetch the alert it was already given.
+describe("ProcessTreeView alert route (entryAlert prop)", () => {
+  it("focuses the chain and renders the breadcrumb from the prop, without a getAlertDetail fetch", async () => {
+    // Empty host tree so toggling focus off doesn't hit the d3/SVG render path (jsdom lacks SVG geometry APIs).
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: [] });
+    const fetchSpy = vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    const entryAlert: AlertDetail = { ...launchDaemonAlert, process_id: 99, rule_id: "suspicious_exec", title: "Suspicious exec chain" };
+
+    render(
+      <MemoryRouter initialEntries={["/alerts/7"]}>
+        <ProcessTreeView hostId="h1" entryAlert={entryAlert} />
+      </MemoryRouter>,
+    );
+
+    // The finding detail renders from the prop (no query params present).
+    expect(await screen.findByText(/registered as system LaunchDaemon/i)).toBeInTheDocument();
+    // Focus mode is on for a process-backed alert entered via the prop: the chain toggle shows the focused state.
+    expect(screen.getByRole("button", { name: /focused on chain/i })).toBeInTheDocument();
+    // The alert was supplied, so the component must not refetch it.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 // Graph-level conviction evidence (issue #580): the ring class and hover tooltip wiring over a rendered D3 tree. The verdict
 // derivation itself is unit-tested in signing.test.ts; these pin the renderTree integration.
 describe("ProcessTreeView conviction evidence", () => {

@@ -1,4 +1,4 @@
-@import "../../styles/var/colors.scss";
+@use "../../styles/var/colors" as *;
 
 .sso-settings {
   display: block;

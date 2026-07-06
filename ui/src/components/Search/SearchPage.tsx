@@ -1,6 +1,5 @@
 import { Link, useSearchParams } from "react-router-dom";
 import "./SearchPage.scss";
-import { PageHeader } from "../ui/PageHeader";
 import { ProcessSearch } from "./ProcessSearch";
 import { EventSearch } from "./EventSearch";
 import { useHostNames } from "./useHostNames";
@@ -38,8 +37,6 @@ export function SearchPage() {
 
   return (
     <div className="search-page">
-      <PageHeader title="Search" subtitle="Hunt processes, connections, and DNS across every host." />
-
       <nav className="search-page__modes" aria-label="Search mode">
         {MODES.map((m) => (
           <Link
