@@ -315,12 +315,13 @@ export async function getProcessTree(
   fromNs: number,
   toNs: number,
   limit = 2000,
-  // flatten opts out of server-side sibling aggregation (issue #416): the raw forest with every node, not the collapsed "×N" nodes.
-  flatten = false
+  // pinnedProcessId keeps that process a first-class node server-side (never folded into a sibling "×N" aggregate, issue #416), so an
+  // alert's process is always present for the chain view even when it has identical siblings. Omit for the plain host view.
+  pinnedProcessId?: number
 ): Promise<TreeResponse> {
-  const flattenParam = flatten ? "&flatten=1" : "";
+  const pinParam = pinnedProcessId ? `&pin=${String(pinnedProcessId)}` : "";
   return fetchJSON<TreeResponse>(
-    `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}${flattenParam}`
+    `/hosts/${encodeURIComponent(hostId)}/tree?from=${String(fromNs)}&to=${String(toNs)}&limit=${String(limit)}${pinParam}`
   );
 }
 

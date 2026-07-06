@@ -261,6 +261,13 @@ paths:
             When true, opt out of sibling aggregation and return the raw forest with every node. By default the response
             collapses repeated identical-path leaf siblings under the same parent into aggregated `×N` nodes (issue #416).
           schema: {type: boolean, default: false}
+        - name: pin
+          in: query
+          description: >-
+            Process id to keep as a first-class node: the named process is never folded into a sibling `×N` aggregate, so a
+            client such as the alert view can locate the alerted process by its real id even when it has identical siblings.
+            0 (the default) pins nothing.
+          schema: {type: integer, format: int64, default: 0}
       responses:
         "200":
           description: Forest of process roots

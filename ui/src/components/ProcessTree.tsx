@@ -46,7 +46,6 @@ const TOOLTIP_CLAMP_WIDTH_PX = 560;
 const TOOLTIP_CLAMP_HEIGHT_PX = 170;
 
 const SHOW_SYSTEM_STORAGE_KEY = "edr.processTree.showSystem";
-const FLATTEN_STORAGE_KEY = "edr.processTree.flatten";
 
 interface ProcessTreeViewProps {
   readonly hostId?: string;
@@ -127,15 +126,6 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       return false;
     }
   });
-  // Flatten opts out of server-side sibling aggregation (issue #416): when on, the tree fetch asks for the raw forest so an analyst
-  // sees every repeated exec as its own node instead of a collapsed "×N". Persisted across reloads like showSystem.
-  const [flatten, setFlatten] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(FLATTEN_STORAGE_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
   const [collapsedIds, setCollapsedIds] = useState<Set<number>>(new Set());
   // Aggregated "×N" nodes ship collapsed; expanding one materializes its capped sample as children in place (issue #416). Keyed by
   // the aggregated node's representative row id.
@@ -161,10 +151,6 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
   }, [showSystem]);
-
-  useEffect(() => {
-    try { localStorage.setItem(FLATTEN_STORAGE_KEY, String(flatten)); } catch { /* ignore */ }
-  }, [flatten]);
 
   // Fetch the alert so we can render a breadcrumb with title/severity/timestamp. Skipped when entryAlert is supplied: the
   // /alerts/:alertId route already fetched it and seeded alertDetail, so the query-param fetch path only runs on the host route and
@@ -235,14 +221,17 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     // Stale-response guard: bounds changes can overlap (rapid preset picks, histogram clicks), and an older tree response landing
     // after a newer one would paint the wrong window. Ignore all but the latest in-flight request, mirroring the alert fetch.
     let cancelled = false;
-    getProcessTree(hostId, bounds.fromNs, bounds.toNs, undefined, flatten)
+    // Pin the alerted process so the server never folds it into a sibling "×N" aggregate (issue #416 gives aggregated headers a synthetic
+    // negative id the id-keyed paths cannot match). This keeps the alerted process a first-class node so the alert-chain filter and the
+    // alert dot can find it by its real id even when it has identical siblings. 0 (no alert) sends no pin.
+    getProcessTree(hostId, bounds.fromNs, bounds.toNs, undefined, alertEntry.processId || undefined)
       .then((res) => { if (!cancelled) setRoots(res.roots); })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Unknown error");
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [hostId, bounds, flatten]);
+  }, [hostId, bounds, alertEntry.processId]);
 
   // Fetch this host's open + acknowledged alerts to mark nodes with an alert dot (by process DB id) and to map each node to its
   // alerts' MITRE technique ids for the inline tooltip tags (issue #585).
@@ -407,6 +396,9 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
 
   if (!hostId) return <p>No host selected.</p>;
 
+  // Header controls are the ones shared by both views: the Graph/Timeline switch, the time window, and Refresh. The graph-only search
+  // and display toggles moved out of the header into the graphControls bar directly above the canvas (below), so each view's filters sit
+  // with the content they shape (mirroring the timeline's filter row above its list) and the header reads the same in either view.
   const headerActions = (
     <div className="process-tree__controls">
       {/* Simple view navigation, not an ARIA tablist: the children are links with aria-current, not tab widgets with keyboard
@@ -415,65 +407,53 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
         <Link to={viewHref(pathname, searchParams, "graph")} className="process-tree__viewtab" aria-current={view === "graph" ? "page" : undefined}>Graph</Link>
         <Link to={viewHref(pathname, searchParams, "timeline")} className="process-tree__viewtab" aria-current={view === "timeline" ? "page" : undefined}>Timeline</Link>
       </nav>
-      {view === "graph" && (
-        <div className="process-tree__search">
-          <input
-            ref={searchInputRef}
-            type="search"
-            className="process-tree__search-input"
-            placeholder="Search name, path, pid (press /)"
-            value={query}
-            onChange={(e) => { setQuery(e.target.value); }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                stepMatch(e.shiftKey ? -1 : 1);
-              } else if (e.key === "Escape") {
-                setQuery("");
-              }
-            }}
-          />
-          {query && (
-            <span className="process-tree__search-count">
-              {matchCount === 0 ? "0 matches" : `${String(matchIdx + 1)} / ${String(matchCount)}`}
-            </span>
-          )}
-        </div>
-      )}
       <TimeRangeControl window={timeWindow} nowMs={nowMs} onChange={setTimeWindow} />
-      {view === "graph" && (
-        <>
-          <label
-            className="process-tree__toggle"
-            title={showSystem ? "System processes shown" : "System processes hidden"}
-          >
-            <input
-              type="checkbox"
-              className="process-tree__toggle-input"
-              checked={showSystem}
-              onChange={(e) => { setShowSystem(e.target.checked); }}
-            />
-            <span className="process-tree__toggle-switch" aria-hidden="true" />
-            <span className="process-tree__toggle-label">Show system</span>
-          </label>
-          <label
-            className="process-tree__toggle"
-            title={flatten ? "Every process shown; repeated execs are not grouped" : "Repeated identical execs are grouped into ×N nodes"}
-          >
-            <input
-              type="checkbox"
-              className="process-tree__toggle-input"
-              checked={flatten}
-              onChange={(e) => { setFlatten(e.target.checked); }}
-            />
-            <span className="process-tree__toggle-switch" aria-hidden="true" />
-            <span className="process-tree__toggle-label">Flatten</span>
-          </label>
-        </>
-      )}
       <button type="button" className="process-tree__action-btn" onClick={() => { setNowMs(Date.now()); }}>
         Refresh
       </button>
+    </div>
+  );
+
+  // The graph's filter bar: search + display toggles, rendered directly above the canvas in the graph branch (below). Placed here with
+  // the rest of the search/toggle state so no prop-drilling into GraphBody is needed.
+  const graphControls = (
+    <div className="process-tree__graph-controls">
+      <div className="process-tree__search">
+        <input
+          ref={searchInputRef}
+          type="search"
+          className="process-tree__search-input"
+          placeholder="Search name, path, pid (press /)"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              stepMatch(e.shiftKey ? -1 : 1);
+            } else if (e.key === "Escape") {
+              setQuery("");
+            }
+          }}
+        />
+        {query && (
+          <span className="process-tree__search-count">
+            {matchCount === 0 ? "0 matches" : `${String(matchIdx + 1)} / ${String(matchCount)}`}
+          </span>
+        )}
+      </div>
+      <label
+        className="process-tree__toggle"
+        title={showSystem ? "System processes shown" : "System processes hidden"}
+      >
+        <input
+          type="checkbox"
+          className="process-tree__toggle-input"
+          checked={showSystem}
+          onChange={(e) => { setShowSystem(e.target.checked); }}
+        />
+        <span className="process-tree__toggle-switch" aria-hidden="true" />
+        <span className="process-tree__toggle-label">Show system</span>
+      </label>
     </div>
   );
 
@@ -513,18 +493,29 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           {!isProcessOptionalAlert && (
             <>
               <span className="alert-breadcrumb__spacer" />
-              <Button
-                size="small"
-                variant={focusAlertChain ? "primary" : "inverse"}
-                onClick={() => { setFocusAlertChain((v) => !v); }}
-                title={focusAlertChain
-                  ? "Showing only the processes related to this alert; click to show the full host tree"
-                  : "Showing the full host tree; click to focus the alert's process chain"}
-              >
-                {/* State label, not an action: both cases describe what's currently shown (the click action is in the
-                    tooltip), so the toggle isn't read as "Show full tree" while it actually enables focus mode. */}
-                {focusAlertChain ? "Focused on chain" : "Full host tree"}
-              </Button>
+              {/* Two-state scope switch as a segmented control (the industry-standard shape for a binary view toggle): both options are
+                  visible and the active one is filled, so there is no ambiguity about whether a lone label names the current state or the
+                  action it performs. Each segment sets its scope directly rather than flipping an opaque boolean. */}
+              <div className="process-tree__scope" role="group" aria-label="Process scope">
+                <button
+                  type="button"
+                  className={`process-tree__scope-item${focusAlertChain ? " process-tree__scope-item--active" : ""}`}
+                  aria-pressed={focusAlertChain}
+                  onClick={() => { setFocusAlertChain(true); }}
+                  title="Show only the processes related to this alert (its ancestors and descendants)"
+                >
+                  Alert chain
+                </button>
+                <button
+                  type="button"
+                  className={`process-tree__scope-item${focusAlertChain ? "" : " process-tree__scope-item--active"}`}
+                  aria-pressed={!focusAlertChain}
+                  onClick={() => { setFocusAlertChain(false); }}
+                  title="Show the full host process tree"
+                >
+                  Full tree
+                </button>
+              </div>
             </>
           )}
         </div>
@@ -556,19 +547,22 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       {view === "timeline" ? (
         <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} />
       ) : (
-        <GraphBody
-          hostId={hostId}
-          loading={loading}
-          error={error}
-          isProcessOptionalAlert={isProcessOptionalAlert}
-          focusAlertChain={focusAlertChain}
-          onFocusAlertChain={setFocusAlertChain}
-          rootsEmpty={roots.length === 0}
-          svgRef={svgRef}
-          hoverTip={hoverTip}
-          selectedNode={selectedNode}
-          onCloseDetail={() => { setSelectedNode(null); }}
-        />
+        <>
+          {graphControls}
+          <GraphBody
+            hostId={hostId}
+            loading={loading}
+            error={error}
+            isProcessOptionalAlert={isProcessOptionalAlert}
+            focusAlertChain={focusAlertChain}
+            onFocusAlertChain={setFocusAlertChain}
+            rootsEmpty={roots.length === 0}
+            svgRef={svgRef}
+            hoverTip={hoverTip}
+            selectedNode={selectedNode}
+            onCloseDetail={() => { setSelectedNode(null); }}
+          />
+        </>
       )}
     </>
   );

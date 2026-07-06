@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { HostHealthPanel } from "./HostHealthPanel";
 import * as api from "../api";
 import type { HostHealth } from "../types";
@@ -41,9 +41,33 @@ describe("HostHealthPanel", () => {
     expect(screen.getByText("Network extension connected")).toBeInTheDocument();
     expect(screen.getByText("Security extension")).toBeInTheDocument();
     expect(screen.getByText("Network extension")).toBeInTheDocument();
-    // The overall rollup and the unhealthy security extension both render a "needs attention" badge; the network extension is healthy.
-    expect(screen.getAllByText("needs attention")).toHaveLength(2);
+    // The overall rollup is a single prefixed pill ("Agent needs attention"); the unhealthy security component keeps the bare status.
+    expect(screen.getByText("Agent needs attention")).toBeInTheDocument();
+    expect(screen.getByText("needs attention")).toBeInTheDocument();
     expect(screen.getByText("healthy")).toHaveClass("badge--success");
+  });
+
+  // spec:web-ui/the-host-detail-surfaces-the-health-conditions/a-fully-healthy-host-shows-a-single-healthy-rollup
+  it("collapses component rows when healthy and reveals them on demand via Details", async () => {
+    const health: HostHealth = {
+      overall_status: "healthy",
+      reported_at_ns: nowNs(),
+      components: [
+        { type: "endpoint_security_extension", status: "healthy", reason: "activated", message: "Security extension connected", last_transition_ns: nowNs() },
+        { type: "network_extension", status: "healthy", reason: "activated", message: "Network extension connected", last_transition_ns: nowNs() },
+      ],
+    };
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(health);
+
+    render(<HostHealthPanel hostId="h1" />);
+
+    // Healthy rolls up to one self-describing pill; the per-component rows stay hidden until asked for.
+    expect(await screen.findByText("Agent healthy")).toBeInTheDocument();
+    expect(screen.queryByText("Security extension connected")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText("Security extension connected")).toBeInTheDocument();
+    expect(screen.getByText("Network extension connected")).toBeInTheDocument();
   });
 
   it("shows an empty state when no components are reported", async () => {

@@ -161,7 +161,12 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	// every node.
 	flatten := httpserver.ParseBoolParam(r, "flatten", false)
 
-	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit, flatten)
+	// ?pin=<process id> keeps that process a first-class node instead of folding it into a sibling "×N" aggregate. The alert view
+	// passes the alerted process id so its chain filter and alert dot can always locate it by its real id even when it has identical
+	// siblings. 0 (the default) pins nothing.
+	pinnedID := int64(httpserver.ParseIntParam(r, "pin", 0))
+
+	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
 		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)

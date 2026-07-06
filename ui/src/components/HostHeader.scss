@@ -16,7 +16,71 @@
   }
 }
 
-.host-header__host-id {
+// Details disclosure: a quiet text trigger next to the online pill that opens a floating panel of the host's reference facts, so the
+// header stays to identity + status while the raw id/agent/IP/counts/dates stay one click away.
+.host-header__details {
+  position: relative;
+  display: inline-flex;
+}
+
+.host-header__details-trigger {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--color-border, #d4d6dd);
+  border-radius: 0.25rem;
+  color: var(--color-text-secondary, #6b7280);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.5rem;
+
+  &:hover {
+    color: var(--color-text-primary, #192147);
+  }
+}
+
+.host-header__details-popover {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  left: 0;
+  z-index: 20;
+  min-width: 20rem;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-elevated, #fff);
+  border: 1px solid var(--color-border, #d4d6dd);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.host-header__details-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+  font-size: 0.85rem;
+
+  // Each row wraps a dt/dd pair; display:contents lets the pair land directly on the grid's label/value columns.
+  .host-header__details-row {
+    display: contents;
+  }
+
+  dt {
+    color: var(--color-text-secondary, #6b7280);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  dd {
+    margin: 0;
+    color: var(--color-text-primary, #192147);
+    overflow-wrap: anywhere;
+  }
+}
+
+.host-header__details-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.85em;
+  font-size: 0.9em;
 }

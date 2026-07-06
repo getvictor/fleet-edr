@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import "./HostHeader.scss";
 import { getHostDetail } from "../api";
@@ -13,11 +13,12 @@ interface HostHeaderProps {
   readonly actions?: ReactNode;
 }
 
-// HostHeader is the host page's identity header (issue #579): the enrollment hostname as the title (falling back to the raw host id),
-// an online/offline pill on the host list's shared 5-minute predicate, and a meta row with the OS identity the inventory check-in
-// keeps fresh, the agent version, liveness, source IP, event count, and enrollment date. Best-effort by design: the detail fetch
-// failing (or not yet resolved) degrades to the raw-id title and never blocks the process tree below it. The title links to the bare
-// host page so an operator in an alert-context view can drop the ?alert=...&process=...&at=... params without the host list.
+// HostHeader is the host page's identity header (issue #579). It leads with the enrollment hostname (falling back to the raw host id),
+// an online/offline pill on the host list's shared 5-minute predicate, and a "Details" popover holding the reference facts (raw id +
+// copy, agent version, source IP, event count, enrollment date, exact last-seen). The always-visible meta row stays to the essentials:
+// the OS identity, plus "last seen" only when offline (when online the pill already conveys liveness). Best-effort by design: the detail
+// fetch failing (or not yet resolved) degrades to the raw-id title and never blocks the process tree below it. The title links to the
+// bare host page so an operator in an alert-context view can drop the ?alert=...&process=...&at=... params.
 export function HostHeader({ hostId, actions }: HostHeaderProps) {
   const [detail, setDetail] = useState<HostDetail | null>(null);
 
@@ -48,34 +49,103 @@ export function HostHeader({ hostId, actions }: HostHeaderProps) {
       <Link to={`/hosts/${encodeURIComponent(hostId)}`} className="process-tree__host-link">
         {detail?.hostname ? detail.hostname : hostId}
       </Link>
-      <CopyButton value={hostId} label="Copy host id" />
       {detail && (
         <span className={online ? "status-pill status-pill--online" : "status-pill status-pill--offline"}>
           {online ? "online" : "offline"}
         </span>
       )}
+      {detail && <HostDetailsPopover detail={detail} />}
     </span>
   );
 
-  return <PageHeader title={title} subtitle={detail ? metaRow(detail) : undefined} actions={actions} />;
+  return <PageHeader title={title} subtitle={detail ? metaRow(detail, online) : undefined} actions={actions} />;
 }
 
-// metaRow renders the identity/liveness facts as dot-separated segments. Empty fields (never enrolled, degraded collector) drop their
-// segment rather than rendering a dash, so the row only states what the server actually knows.
-function metaRow(detail: HostDetail) {
+// metaRow renders only the at-a-glance identity facts as dot-separated segments: the OS, and "last seen" only when the host is offline
+// (when online the pill already says so). Everything else moved into the Details popover. Returns undefined when nothing is known so the
+// PageHeader renders no subtitle rather than an empty row.
+function metaRow(detail: HostDetail, online: boolean): ReactNode {
   const os = [detail.os_name, detail.os_version].filter(Boolean).join(" ");
   const segments: ReactNode[] = [];
   if (os) segments.push(<span key="os">{detail.os_build ? `${os} (${detail.os_build})` : os}</span>);
-  if (detail.agent_version) segments.push(<span key="agent">agent {detail.agent_version}</span>);
-  segments.push(<span key="seen">last seen {formatRelativeNs(detail.last_seen_ns)}</span>);
-  if (detail.source_ip) segments.push(<span key="ip">{detail.source_ip}</span>);
-  segments.push(<span key="events">{detail.event_count.toLocaleString()} events</span>);
-  if (detail.enrolled_at_ns > 0) {
-    segments.push(
-      <span key="enrolled">enrolled {new Date(detail.enrolled_at_ns / NANOSECONDS_PER_MILLISECOND).toLocaleDateString()}</span>,
-    );
-  }
-  // The raw id stays visible for log correlation even when the hostname takes the title slot.
-  if (detail.hostname) segments.push(<span key="id" className="host-header__host-id">{detail.host_id}</span>);
+  if (!online) segments.push(<span key="seen">last seen {formatRelativeNs(detail.last_seen_ns)}</span>);
+  if (segments.length === 0) return undefined;
   return <span className="host-header__meta">{segments}</span>;
+}
+
+// HostDetailsPopover is the click-open reference panel for the host's secondary facts (issue #579 simplification). It keeps the raw id,
+// its copy control, agent version, source IP, event count, exact last-seen, and enrollment date out of the always-visible header. Closes
+// on outside-click and Escape, mirroring AccountMenu's disclosure pattern.
+function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="host-header__details" ref={ref}>
+      <button
+        type="button"
+        className="host-header__details-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => { setOpen((v) => !v); }}
+      >
+        Details
+      </button>
+      {open && (
+        <div className="host-header__details-popover" role="dialog" aria-label="Host details">
+          <dl className="host-header__details-list">
+            <div className="host-header__details-row">
+              <dt>Host ID</dt>
+              <dd className="host-header__details-id">
+                <span>{detail.host_id}</span>
+                <CopyButton value={detail.host_id} label="Copy host id" />
+              </dd>
+            </div>
+            {detail.agent_version && (
+              <div className="host-header__details-row">
+                <dt>Agent</dt>
+                <dd>{detail.agent_version}</dd>
+              </div>
+            )}
+            {detail.source_ip && (
+              <div className="host-header__details-row">
+                <dt>IP</dt>
+                <dd>{detail.source_ip}</dd>
+              </div>
+            )}
+            <div className="host-header__details-row">
+              <dt>Events</dt>
+              <dd>{detail.event_count.toLocaleString()}</dd>
+            </div>
+            <div className="host-header__details-row">
+              <dt>Last seen</dt>
+              <dd>{formatRelativeNs(detail.last_seen_ns)}</dd>
+            </div>
+            {detail.enrolled_at_ns > 0 && (
+              <div className="host-header__details-row">
+                <dt>Enrolled</dt>
+                <dd>{new Date(detail.enrolled_at_ns / NANOSECONDS_PER_MILLISECOND).toLocaleDateString()}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      )}
+    </div>
+  );
 }
