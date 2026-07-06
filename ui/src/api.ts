@@ -415,12 +415,11 @@ export async function searchEvents(mode: EventSearchMode, filter: EventSearchFil
   return { ...res, events: res.events ?? [] };
 }
 
-// ChainWindow is one alert-chain process generation: its pid and its server ingest-time lifetime. toIngestedNs 0 means still running
-// (open upper bound). The timeline matches events by (pid, ingest time in window), which disambiguates PID reuse a raw pid cannot.
-export interface ChainWindow {
+// ChainGeneration identifies one alert-chain process generation by its pid and kernel pid generation (pidversion). The timeline matches
+// events on the (pid, pidversion) pair, which uniquely identifies the generation across PID reuse (a raw pid cannot).
+export interface ChainGeneration {
   pid: number;
-  fromIngestedNs: number;
-  toIngestedNs: number;
+  pidversion: number;
 }
 
 // HostTimelineFilter is the host event timeline input (issue #583): the event-time window (ns strings), an optional subset of the
@@ -433,7 +432,7 @@ export interface HostTimelineFilter {
   text?: string;
   // chain, when set, scopes the timeline to the alert chain's process generations (the alerted process plus its ancestors and
   // descendants), mirroring the graph's focus. Omitted (or empty) shows the full host stream.
-  chain?: ChainWindow[];
+  chain?: ChainGeneration[];
 }
 
 // getHostTimeline reads GET /api/hosts/{host_id}/timeline: the host's exec/network/DNS events interleaved newest-first over the window,
@@ -446,12 +445,11 @@ export async function getHostTimeline(hostID: string, filter: HostTimelineFilter
   set("to", filter.to);
   set("type", filter.types && filter.types.length > 0 ? filter.types.join(",") : undefined);
   set("text", filter.text);
-  // Encode each chain generation as `pid:fromIngestedNs:toIngestedNs`, comma-separated. The endpoint disambiguates PID reuse by matching
-  // events on both the pid and the ingest-time window.
+  // Encode each chain generation as `pid:pidversion`, comma-separated. The endpoint matches events on both so PID reuse is disambiguated.
   set(
     "chain",
     filter.chain && filter.chain.length > 0
-      ? filter.chain.map((w) => `${String(w.pid)}:${String(w.fromIngestedNs)}:${String(w.toIngestedNs)}`).join(",")
+      ? filter.chain.map((g) => `${String(g.pid)}:${String(g.pidversion)}`).join(",")
       : undefined,
   );
   set("cursor", cursor);

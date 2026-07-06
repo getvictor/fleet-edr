@@ -6,7 +6,7 @@ import {
   countDescendants,
   toD3Hierarchy,
   collectMatches,
-  chainWindows,
+  chainGenerations,
   findAlertChain,
   resolveAlertEntry,
   selectNodeFromParams,
@@ -190,36 +190,33 @@ describe("findAlertChain", () => {
   });
 });
 
-describe("chainWindows", () => {
-  // ids 1 -> 2 -> 3 with ingest lifetimes; id 4 is off-chain. Node 3 is still running (no exit).
+describe("chainGenerations", () => {
+  // ids 1 -> 2 -> 3 with distinct pidversions; id 4 is off-chain; id 5 (a chain node) has no pidversion.
   const roots = [
     node({
-      id: 1, pid: 100, fork_ingested_at_ns: 10, exit_ingested_at_ns: 20,
+      id: 1, pid: 100, pidversion: 10,
       children: [
-        node({
-          id: 2, pid: 200, fork_ingested_at_ns: 12, exit_ingested_at_ns: 18,
-          children: [node({ id: 3, pid: 300, fork_ingested_at_ns: 14 })],
-        }),
-        node({ id: 4, pid: 400, fork_ingested_at_ns: 11, exit_ingested_at_ns: 19 }),
+        node({ id: 2, pid: 200, pidversion: 11, children: [node({ id: 3, pid: 300, pidversion: 12 })] }),
+        node({ id: 4, pid: 400, pidversion: 99 }),
+        node({ id: 5, pid: 500 }), // no pidversion (fork-only / pre-migration)
       ],
     }),
   ];
 
-  it("maps chain node ids to (pid, ingest window), skips off-chain nodes, and gives a running node an open upper bound", () => {
-    expect(chainWindows(roots, new Set([1, 2, 3]))).toEqual([
-      { pid: 100, fromIngestedNs: 10, toIngestedNs: 20 },
-      { pid: 200, fromIngestedNs: 12, toIngestedNs: 18 },
-      { pid: 300, fromIngestedNs: 14, toIngestedNs: 0 },
+  it("maps chain node ids to (pid, pidversion) pairs and skips off-chain nodes", () => {
+    expect(chainGenerations(roots, new Set([1, 2, 3]))).toEqual([
+      { pid: 100, pidversion: 10 },
+      { pid: 200, pidversion: 11 },
+      { pid: 300, pidversion: 12 },
     ]);
   });
 
-  it("falls back to the kernel fork/exit times when ingest stamps are absent (pre-migration rows)", () => {
-    const legacy = [node({ id: 1, pid: 5, fork_time_ns: 7, exit_time_ns: 9 })];
-    expect(chainWindows(legacy, new Set([1]))).toEqual([{ pid: 5, fromIngestedNs: 7, toIngestedNs: 9 }]);
+  it("skips a chain node that has no pidversion (cannot be scoped precisely)", () => {
+    expect(chainGenerations(roots, new Set([1, 5]))).toEqual([{ pid: 100, pidversion: 10 }]);
   });
 
   it("returns an empty array for an empty id set", () => {
-    expect(chainWindows(roots, new Set())).toEqual([]);
+    expect(chainGenerations(roots, new Set())).toEqual([]);
   });
 });
 

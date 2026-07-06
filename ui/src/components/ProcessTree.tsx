@@ -21,7 +21,7 @@ import {
   buildPreservedIds,
   buildQueryFilterIds,
   buildVisibleRoots,
-  chainWindows,
+  chainGenerations,
   collectMatches,
   findAlertChain,
   resolveAlertEntry,
@@ -181,14 +181,14 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     return findAlertChain(roots, alertEntry.processId);
   }, [roots, focusAlertChain, alertEntry.processId]);
 
-  // The alert chain's process generations (pid + ingest lifetime), so the Timeline can scope to the same chain the Graph shows (the
+  // The alert chain's process generations (pid + pidversion), so the Timeline can scope to the same chain the Graph shows (the
   // "Alert chain / Full tree" toggle drives both). Non-null only when focused on a process-backed alert AND the chain has resolved from
   // the fetched tree; null otherwise means the Timeline shows the full host stream. A resolved-but-empty chain also yields the full
   // stream rather than blank.
-  const alertChainWindows = useMemo(() => {
+  const alertChainGenerations = useMemo(() => {
     if (!alertChainIds) return null;
-    const windows = chainWindows(roots, alertChainIds);
-    return windows.length > 0 ? windows : null;
+    const gens = chainGenerations(roots, alertChainIds);
+    return gens.length > 0 ? gens : null;
   }, [roots, alertChainIds]);
 
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
@@ -559,7 +559,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       />
 
       {view === "timeline" ? (
-        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} chainWindows={alertChainWindows ?? undefined} />
+        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} chainGenerations={alertChainGenerations ?? undefined} />
       ) : (
         <>
           {graphControls}

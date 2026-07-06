@@ -51,12 +51,12 @@ describe("HostTimeline", () => {
   it("scopes the query to the alert chain's process generations and shows a scope note", async () => {
     const spy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
     const chain = [
-      { pid: 450, fromIngestedNs: 100, toIngestedNs: 200 },
-      { pid: 445, fromIngestedNs: 50, toIngestedNs: 0 },
+      { pid: 450, pidversion: 1010 },
+      { pid: 445, pidversion: 903 },
     ];
     render(
       <MemoryRouter initialEntries={["/hosts/H1"]}>
-        <HostTimeline hostId="H1" bounds={BOUNDS} chainWindows={chain} />
+        <HostTimeline hostId="H1" bounds={BOUNDS} chainGenerations={chain} />
       </MemoryRouter>,
     );
     await waitFor(() => { expect(spy).toHaveBeenCalled(); });

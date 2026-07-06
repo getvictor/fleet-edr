@@ -128,15 +128,14 @@ func parseTimelineTypes(raw string) ([]string, bool) {
 	return types, true
 }
 
-// parseTimelineChain parses the optional ?chain= scope: a comma-separated list of `pid:fromIngestedNs:toIngestedNs` triples, one per
-// alert-chain process generation. toIngestedNs 0 means the generation is still running (open upper bound). An empty param means no scope
-// (the full host stream). A malformed triple, a negative value, or more than maxTimelineChain entries makes ok=false so the handler
-// rejects it with a 400 rather than scoping to the wrong set.
-func parseTimelineChain(raw string) ([]visibilityapi.ProcessWindow, bool) {
+// parseTimelineChain parses the optional ?chain= scope: a comma-separated list of `pid:pidversion` pairs, one per alert-chain process
+// generation. An empty param means no scope (the full host stream). A malformed pair, a negative value, or more than maxTimelineChain
+// entries makes ok=false so the handler rejects it with a 400 rather than scoping to the wrong set.
+func parseTimelineChain(raw string) ([]visibilityapi.ProcessGeneration, bool) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, true
 	}
-	var chain []visibilityapi.ProcessWindow
+	var chain []visibilityapi.ProcessGeneration
 	for entry := range strings.SplitSeq(raw, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -145,17 +144,16 @@ func parseTimelineChain(raw string) ([]visibilityapi.ProcessWindow, bool) {
 		if len(chain) >= maxTimelineChain {
 			return nil, false
 		}
-		parts := strings.Split(entry, ":")
-		if len(parts) != 3 {
+		pidStr, verStr, ok := strings.Cut(entry, ":")
+		if !ok {
 			return nil, false
 		}
-		pid, e1 := strconv.ParseInt(parts[0], 10, 64)
-		from, e2 := strconv.ParseInt(parts[1], 10, 64)
-		to, e3 := strconv.ParseInt(parts[2], 10, 64)
-		if e1 != nil || e2 != nil || e3 != nil || pid < 0 || from < 0 || to < 0 {
+		pid, e1 := strconv.ParseInt(pidStr, 10, 64)
+		ver, e2 := strconv.ParseInt(verStr, 10, 64)
+		if e1 != nil || e2 != nil || pid < 0 || ver < 0 {
 			return nil, false
 		}
-		chain = append(chain, visibilityapi.ProcessWindow{PID: pid, FromIngestedNs: from, ToIngestedNs: to})
+		chain = append(chain, visibilityapi.ProcessGeneration{PID: pid, PIDVersion: ver})
 	}
 	return chain, true
 }

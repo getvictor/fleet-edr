@@ -208,17 +208,18 @@ func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter, types []st
 		return false
 	}
 	if len(filter.Chain) > 0 {
-		// Mirror the store's chain scope: an event belongs to a chain generation when its pid (parsed from the payload) matches and its
-		// ingest time falls in that generation's window (0 upper = still running).
+		// Mirror the store's chain scope: an event belongs to a chain generation when its (pid, pidversion) parsed from the payload
+		// matches one of the generations. An event without a pidversion (pidversion 0) cannot match a real generation.
 		var p struct {
-			PID int64 `json:"pid"`
+			PID        int64 `json:"pid"`
+			PIDVersion int64 `json:"pidversion"`
 		}
 		if err := json.Unmarshal(e.Payload, &p); err != nil {
 			return false
 		}
 		inChain := false
 		for _, g := range filter.Chain {
-			if p.PID == g.PID && e.IngestedAtNs >= g.FromIngestedNs && (g.ToIngestedNs == 0 || e.IngestedAtNs <= g.ToIngestedNs) {
+			if p.PID == g.PID && p.PIDVersion == g.PIDVersion {
 				inChain = true
 				break
 			}

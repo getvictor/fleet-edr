@@ -197,18 +197,14 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 		args = append(args, filter.Text)
 	}
 	if len(filter.Chain) > 0 {
-		// Alert-chain scope: keep only events belonging to one of the chain's process generations, matched by pid AND ingest-time
-		// lifetime. Ingest time (materialized alongside pid) is a single-server monotonic clock, so it disambiguates PID reuse that a
-		// raw-pid filter conflates and is not subject to ES/NE kernel-clock skew. ToIngestedNs 0 = still running (open upper bound).
+		// Alert-chain scope: keep only events belonging to one of the chain's process generations, matched by (pid, pidversion). pid is
+		// materialized (prunes granules); pidversion lives in the payload, extracted per row over that pruned set. The pair is unique
+		// across PID reuse, so a later process that reused a chain pid is excluded, and it is robust to ingest timing (unlike a window,
+		// which collapses to near-zero for a short-lived process whose fork and exit land in one batch).
 		gens := make([]string, len(filter.Chain))
 		for i, g := range filter.Chain {
-			if g.ToIngestedNs > 0 {
-				gens[i] = "(pid = ? AND ingested_at_ns >= ? AND ingested_at_ns <= ?)"
-				args = append(args, g.PID, g.FromIngestedNs, g.ToIngestedNs)
-			} else {
-				gens[i] = "(pid = ? AND ingested_at_ns >= ?)"
-				args = append(args, g.PID, g.FromIngestedNs)
-			}
+			gens[i] = "(pid = ? AND JSONExtractInt(payload, 'pidversion') = ?)"
+			args = append(args, g.PID, g.PIDVersion)
 		}
 		where = append(where, "("+strings.Join(gens, " OR ")+")")
 	}

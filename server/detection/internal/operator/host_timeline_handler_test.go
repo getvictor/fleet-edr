@@ -123,19 +123,18 @@ func TestHostTimeline_TextMatch(t *testing.T) {
 	assert.Equal(t, "d1", out.Events[0].EventID)
 }
 
-// spec:server-rest-api/host-event-timeline-endpoint/chain-scope-selects-generations-by-pid-and-ingest-window
+// spec:server-rest-api/host-event-timeline-endpoint/chain-scope-selects-generations-by-pid-and-pidversion
 func TestHostTimeline_ChainScope(t *testing.T) {
 	t.Parallel()
-	// The ev() helper sets IngestedAtNs == ts, so a generation's ingest window is expressed against the event timestamps here.
 	a := timelineArchive(t,
-		ev("a", "h1", 100, "exec", `{"pid":1,"path":"/bin/sh"}`),                      // pid 1, ingest 100 -> in generation [50,150]
-		ev("b", "h1", 200, "exec", `{"pid":1,"path":"/usr/bin/curl"}`),                // pid 1, ingest 200 -> a LATER pid-1 generation
-		ev("c", "h1", 300, "network_connect", `{"pid":3,"remote_address":"1.2.3.4"}`), // pid 3, ingest 300 -> in generation [250, running]
+		ev("a", "h1", 100, "exec", `{"pid":1,"pidversion":10,"path":"/bin/sh"}`),                      // pid 1 gen 10 -> in chain
+		ev("b", "h1", 200, "exec", `{"pid":1,"pidversion":11,"path":"/usr/bin/curl"}`),                // pid 1 REUSED, gen 11 -> not in chain
+		ev("c", "h1", 300, "network_connect", `{"pid":3,"pidversion":20,"remote_address":"1.2.3.4"}`), // pid 3 gen 20 -> in chain
 	)
 	srv := newTimelineServer(t, a, allowAllAuthZ{})
-	// Chain = pid 1's generation (ingest [50,150]) and pid 3's still-running generation (ingest [250, 0]). Event "b" reuses pid 1 in a
-	// later generation (ingest 200 > 150), so it MUST be excluded: this is exactly the PID-reuse case a raw-pid filter would include.
-	resp := doGet(t, srv, "/api/hosts/h1/timeline?chain=1:50:150,3:250:0")
+	// Chain = pid 1 generation 10 and pid 3 generation 20. Event "b" reuses pid 1 in a later generation (11), so it MUST be excluded:
+	// exactly the PID-reuse case a raw-pid filter would wrongly include.
+	resp := doGet(t, srv, "/api/hosts/h1/timeline?chain=1:10,3:20")
 	defer resp.Body.Close()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -147,9 +146,9 @@ func TestHostTimeline_ChainScope(t *testing.T) {
 
 func TestHostTimeline_InvalidChainRejected(t *testing.T) {
 	t.Parallel()
-	a := timelineArchive(t, ev("a", "h1", 100, "exec", `{"pid":1}`))
+	a := timelineArchive(t, ev("a", "h1", 100, "exec", `{"pid":1,"pidversion":10}`))
 	srv := newTimelineServer(t, a, allowAllAuthZ{})
-	for _, bad := range []string{"chain=1:notanumber:200", "chain=1:100", "chain=1:100:200:300", "chain=-1:100:200"} {
+	for _, bad := range []string{"chain=1:notanumber", "chain=1", "chain=-1:2", "chain=1:2:3"} {
 		resp := doGet(t, srv, "/api/hosts/h1/timeline?"+bad)
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, bad)
 		resp.Body.Close()

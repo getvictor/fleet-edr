@@ -56,17 +56,16 @@ type HostTimelineFilter struct {
 	ToNs       int64
 	EventTypes []string
 	Text       string
-	Chain      []ProcessWindow
+	Chain      []ProcessGeneration
 }
 
-// ProcessWindow scopes the timeline to one process generation: events whose originating pid is PID and whose server ingest time is in
-// [FromIngestedNs, ToIngestedNs]. ToIngestedNs 0 means the generation is still running (open upper bound; a pid cannot be reused while
-// held). Ingest time (not the kernel event time) is used so the scope is skew-free and matches how the graph correlates events to a
-// process; it disambiguates PID reuse, which a raw-pid filter cannot (pid 450 may be bash, then curl, then orbit within one window).
-type ProcessWindow struct {
-	PID            int64
-	FromIngestedNs int64
-	ToIngestedNs   int64
+// ProcessGeneration identifies one process generation by its pid AND kernel pid-generation (pidversion, audit_token_to_pidversion). The
+// pair is unique across PID reuse: pid 450 may be bash then curl then orbit within one window, each a distinct pidversion, so matching
+// (pid, pidversion) scopes to the exact generation the graph shows. This is robust to ingest timing (a short-lived process whose fork
+// and exit land in one batch still matches all its events) where an ingest-time window would collapse to near-zero and drop them.
+type ProcessGeneration struct {
+	PID        int64
+	PIDVersion int64
 }
 
 // EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class

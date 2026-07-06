@@ -148,20 +148,16 @@ export function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<nu
   return related;
 }
 
-// chainWindows maps a set of chain node DB ids (from findAlertChain) to their process generations: each node's pid plus its server
-// ingest-time lifetime. The host timeline scopes on (pid, ingest window) rather than raw pid so PID reuse does not pull in a different
-// process that later held the same pid. fromIngestedNs falls back to the kernel fork time, and toIngestedNs to the kernel exit time,
-// for pre-migration rows lacking the ingest stamps; toIngestedNs 0 means the generation is still running (open upper bound).
-export function chainWindows(roots: ProcessNode[], ids: Set<number>): { pid: number; fromIngestedNs: number; toIngestedNs: number }[] {
-  const out: { pid: number; fromIngestedNs: number; toIngestedNs: number }[] = [];
+// chainGenerations maps a set of chain node DB ids (from findAlertChain) to their process generations: each node's (pid, pidversion).
+// The host timeline scopes on the (pid, pidversion) pair rather than raw pid so PID reuse does not pull in a different process that
+// later held the same pid. A node without a pidversion (a fork-only or pre-migration row) cannot be scoped precisely, so it is skipped;
+// its events do not appear in the scoped timeline, which is safer than over-including every reuse of its pid.
+export function chainGenerations(roots: ProcessNode[], ids: Set<number>): { pid: number; pidversion: number }[] {
+  const out: { pid: number; pidversion: number }[] = [];
   const walk = (nodes: ProcessNode[]) => {
     for (const n of nodes) {
-      if (ids.has(n.id)) {
-        out.push({
-          pid: n.pid,
-          fromIngestedNs: n.fork_ingested_at_ns ?? n.fork_time_ns,
-          toIngestedNs: n.exit_ingested_at_ns ?? n.exit_time_ns ?? 0,
-        });
+      if (ids.has(n.id) && n.pidversion !== undefined) {
+        out.push({ pid: n.pid, pidversion: n.pidversion });
       }
       if (n.children) walk(n.children);
     }
