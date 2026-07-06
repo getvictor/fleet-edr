@@ -275,8 +275,10 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   }, [roots, searchParams, entryAlert]);
 
   useEffect(() => {
-    if (view !== "graph") return; // the timeline view does no graph work; the fetch (and the d3 draw below) are graph-only
-    fetchTree(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch on mount
+    if (view !== "graph") return undefined; // the timeline view does no graph work; the fetch (and the d3 draw below) are graph-only
+    // Return fetchTree's cleanup so its stale-response guard actually fires: on a window/host/pin change the prior in-flight fetch is
+    // cancelled and cannot paint a stale tree over the newer one.
+    return fetchTree(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch on mount
   }, [fetchTree, view]);
 
   useEffect(() => {
