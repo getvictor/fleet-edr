@@ -6,6 +6,7 @@ import {
   countDescendants,
   toD3Hierarchy,
   collectMatches,
+  chainPids,
   findAlertChain,
   resolveAlertEntry,
   selectNodeFromParams,
@@ -186,6 +187,28 @@ describe("findAlertChain", () => {
 
   it("returns an empty set when the target is not in the tree", () => {
     expect(findAlertChain(roots, 999).size).toBe(0);
+  });
+});
+
+describe("chainPids", () => {
+  // ids 1 -> 2 -> 3 with distinct pids; id 4 is off-chain.
+  const roots = [
+    node({ id: 1, pid: 100, children: [node({ id: 2, pid: 200, children: [node({ id: 3, pid: 300 })] }), node({ id: 4, pid: 400 })] }),
+  ];
+
+  it("maps chain node ids to their pids and skips off-chain nodes", () => {
+    const pids = chainPids(roots, new Set([1, 2, 3]));
+    expect([...pids].sort((a, b) => a - b)).toEqual([100, 200, 300]);
+    expect(pids).not.toContain(400);
+  });
+
+  it("dedupes a pid that recurs across chain generations (a re-exec keeps the same pid)", () => {
+    const reexec = [node({ id: 1, pid: 500, children: [node({ id: 2, pid: 500 })] })];
+    expect(chainPids(reexec, new Set([1, 2]))).toEqual([500]);
+  });
+
+  it("returns an empty array for an empty id set", () => {
+    expect(chainPids(roots, new Set())).toEqual([]);
   });
 });
 

@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
+
+// maxTimelinePIDs caps the alert-chain pid filter. The process tree is itself capped at processTreeMaxLimit nodes, so a chain cannot
+// exceed that; the cap bounds the IN-list size against a malformed caller rather than a real chain.
+const maxTimelinePIDs = processTreeMaxLimit
 
 // HostTimelineReader is the host-scoped merged event timeline surface (issue #583): exec, network_connect, and dns_query events for one
 // host interleaved in event-time order. mysql.Store satisfies it by delegating to the visibility EventArchive, the same seam the
@@ -68,6 +73,13 @@ func (h *Handler) handleHostTimeline(w http.ResponseWriter, r *http.Request) {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidEventType)
 		return
 	}
+	// ?pids= is the alert-chain scope: the client passes the pids of the alerted process plus its ancestors and descendants so the
+	// timeline mirrors the graph's focus. Absent means the full host stream.
+	pids, ok := parseTimelinePIDs(q.Get("pids"))
+	if !ok {
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidPID)
+		return
+	}
 
 	limit := parseSearchLimit(q)
 	result, err := h.hostTimeline.HostTimeline(ctx, visibilityapi.HostTimelineFilter{
@@ -76,6 +88,7 @@ func (h *Handler) handleHostTimeline(w http.ResponseWriter, r *http.Request) {
 		ToNs:       toNs,
 		EventTypes: types,
 		Text:       q.Get("text"),
+		PIDs:       pids,
 	}, q.Get("cursor"), limit)
 	if err != nil {
 		if errors.Is(err, visibilityapi.ErrInvalidEventCursor) {
@@ -113,4 +126,34 @@ func parseTimelineTypes(raw string) ([]string, bool) {
 		types = append(types, t)
 	}
 	return types, true
+}
+
+// parseTimelinePIDs parses the optional ?pids= comma list (the alert-chain scope) into a deduped []int64. An empty param means no pid
+// filter (nil slice; the full host stream). A non-integer or negative entry, or more than maxTimelinePIDs entries, makes ok=false so the
+// handler rejects it with a 400 rather than scoping to the wrong set.
+func parseTimelinePIDs(raw string) ([]int64, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, true
+	}
+	var pids []int64
+	seen := map[int64]bool{}
+	for p := range strings.SplitSeq(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		v, err := strconv.ParseInt(p, 10, 64)
+		if err != nil || v < 0 {
+			return nil, false
+		}
+		if seen[v] {
+			continue // a chain can list a pid more than once across generations; collapse to one IN entry
+		}
+		if len(pids) >= maxTimelinePIDs {
+			return nil, false
+		}
+		seen[v] = true
+		pids = append(pids, v)
+	}
+	return pids, true
 }

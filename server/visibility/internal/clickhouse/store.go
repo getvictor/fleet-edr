@@ -196,6 +196,16 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 		where = append(where, "positionCaseInsensitiveUTF8(payload, ?) > 0")
 		args = append(args, filter.Text)
 	}
+	if len(filter.PIDs) > 0 {
+		// Alert-chain scope: keep only the chain's pids (materialized column, so this prunes rather than scans the payload). Bounded by
+		// the host + window predicate above; pid reuse within a 24h window is possible but rare, so this scopes closely to the chain.
+		ph := make([]string, len(filter.PIDs))
+		for i, pid := range filter.PIDs {
+			ph[i] = "?"
+			args = append(args, pid)
+		}
+		where = append(where, "pid IN ("+strings.Join(ph, ", ")+")")
+	}
 	return s.pageEventsByKeyset(ctx, strings.Join(where, " AND "), args, cursor, limit)
 }
 

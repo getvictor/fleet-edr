@@ -123,6 +123,34 @@ func TestHostTimeline_TextMatch(t *testing.T) {
 	assert.Equal(t, "d1", out.Events[0].EventID)
 }
 
+// spec:server-rest-api/host-event-timeline-endpoint/pids-filter-scopes-to-the-alert-chain
+func TestHostTimeline_PIDsScope(t *testing.T) {
+	t.Parallel()
+	a := timelineArchive(t,
+		ev("a", "h1", 100, "exec", `{"pid":1,"path":"/bin/sh"}`),
+		ev("b", "h1", 200, "exec", `{"pid":2,"path":"/usr/bin/curl"}`),
+		ev("c", "h1", 300, "network_connect", `{"pid":3,"remote_address":"1.2.3.4"}`),
+	)
+	srv := newTimelineServer(t, a, allowAllAuthZ{})
+	resp := doGet(t, srv, "/api/hosts/h1/timeline?pids=1,3") // the alert chain is pids 1 and 3; pid 2 is unrelated
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	out := decodeTimeline(t, resp)
+	require.Len(t, out.Events, 2)
+	assert.EqualValues(t, 2, out.TotalMatched) // total reflects the scoped set, not the whole host
+	assert.ElementsMatch(t, []string{"a", "c"}, []string{out.Events[0].EventID, out.Events[1].EventID})
+}
+
+func TestHostTimeline_InvalidPIDsRejected(t *testing.T) {
+	t.Parallel()
+	a := timelineArchive(t, ev("a", "h1", 100, "exec", `{"pid":1}`))
+	srv := newTimelineServer(t, a, allowAllAuthZ{})
+	resp := doGet(t, srv, "/api/hosts/h1/timeline?pids=1,notanumber")
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
 // spec:server-rest-api/host-event-timeline-endpoint/keyset-pagination-is-stable-and-complete
 func TestHostTimeline_KeysetPaginationStable(t *testing.T) {
 	t.Parallel()

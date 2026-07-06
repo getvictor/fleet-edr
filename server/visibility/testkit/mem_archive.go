@@ -207,6 +207,15 @@ func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter, types []st
 	if filter.Text != "" && !strings.Contains(strings.ToLower(string(e.Payload)), strings.ToLower(filter.Text)) {
 		return false
 	}
+	if len(filter.PIDs) > 0 {
+		// Mirror the store's materialized-pid filter: every timeline payload carries a pid, so parse it and keep only the chain's pids.
+		var p struct {
+			PID int64 `json:"pid"`
+		}
+		if err := json.Unmarshal(e.Payload, &p); err != nil || !slices.Contains(filter.PIDs, p.PID) {
+			return false
+		}
+	}
 	return true
 }
 

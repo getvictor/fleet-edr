@@ -21,6 +21,7 @@ import {
   buildPreservedIds,
   buildQueryFilterIds,
   buildVisibleRoots,
+  chainPids,
   collectMatches,
   findAlertChain,
   resolveAlertEntry,
@@ -180,6 +181,15 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     return findAlertChain(roots, alertEntry.processId);
   }, [roots, focusAlertChain, alertEntry.processId]);
 
+  // The alert chain's OS pids, so the Timeline can scope to the same chain the Graph shows (the "Alert chain / Full tree" toggle drives
+  // both). Non-null only when focused on a process-backed alert AND the chain has resolved from the fetched tree; null otherwise means
+  // the Timeline shows the full host stream. A resolved-but-empty chain (nothing matched) also yields the full stream rather than blank.
+  const alertChainPids = useMemo(() => {
+    if (!alertChainIds) return null;
+    const pids = chainPids(roots, alertChainIds);
+    return pids.length > 0 ? pids : null;
+  }, [roots, alertChainIds]);
+
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
   const preservedIds = useMemo(() => buildPreservedIds(roots, alertProcessIds), [roots, alertProcessIds]);
@@ -275,11 +285,12 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   }, [roots, searchParams, entryAlert]);
 
   useEffect(() => {
-    if (view !== "graph") return undefined; // the timeline view does no graph work; the fetch (and the d3 draw below) are graph-only
-    // Return fetchTree's cleanup so its stale-response guard actually fires: on a window/host/pin change the prior in-flight fetch is
-    // cancelled and cannot paint a stale tree over the newer one.
+    // Fetch the tree for the graph, and also when focused on an alert in the timeline view so the chain's pids resolve to scope the
+    // timeline (the d3 draw below is a no-op in timeline view because the graph's svg is not mounted). Return fetchTree's cleanup so its
+    // stale-response guard fires: on a window/host/pin change the prior in-flight fetch is cancelled and cannot paint a stale tree.
+    if (view !== "graph" && !(focusAlertChain && alertEntry.processId)) return undefined;
     return fetchTree(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch on mount
-  }, [fetchTree, view]);
+  }, [fetchTree, view, focusAlertChain, alertEntry.processId]);
 
   useEffect(() => {
     if (!svgRef.current) return;
@@ -547,7 +558,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       />
 
       {view === "timeline" ? (
-        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} />
+        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} chainPids={alertChainPids ?? undefined} />
       ) : (
         <>
           {graphControls}

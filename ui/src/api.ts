@@ -416,12 +416,16 @@ export async function searchEvents(mode: EventSearchMode, filter: EventSearchFil
 }
 
 // HostTimelineFilter is the host event timeline input (issue #583): the event-time window (ns strings), an optional subset of the
-// timeline event types, and an optional case-insensitive payload text match. Empty fields are omitted from the query.
+// timeline event types, an optional case-insensitive payload text match, and an optional alert-chain pid scope. Empty fields are
+// omitted from the query.
 export interface HostTimelineFilter {
   from?: string;
   to?: string;
   types?: string[];
   text?: string;
+  // pids, when set, scopes the timeline to the alert chain (the alerted process plus its ancestors and descendants), mirroring the
+  // graph's focus. Omitted (or empty) shows the full host stream.
+  pids?: number[];
 }
 
 // getHostTimeline reads GET /api/hosts/{host_id}/timeline: the host's exec/network/DNS events interleaved newest-first over the window,
@@ -434,6 +438,7 @@ export async function getHostTimeline(hostID: string, filter: HostTimelineFilter
   set("to", filter.to);
   set("type", filter.types && filter.types.length > 0 ? filter.types.join(",") : undefined);
   set("text", filter.text);
+  set("pids", filter.pids && filter.pids.length > 0 ? filter.pids.join(",") : undefined);
   set("cursor", cursor);
   const qs = query.toString();
   const suffix = qs ? `?${qs}` : "";

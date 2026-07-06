@@ -48,13 +48,15 @@ type EventArchive interface {
 // HostTimelineFilter selects events for one host's merged event timeline (issue #583). HostID is required. FromNs/ToNs bound event
 // time (timestamp_ns, what the host page's time window means), zero meaning unbounded on that side. EventTypes narrows to a subset of
 // the timeline event classes (empty means all of them). Text, when non-empty, keeps only events whose raw payload contains it
-// case-insensitively.
+// case-insensitively. PIDs, when non-empty, keeps only events whose originating pid is in the set: the alert-chain scope passes the
+// pids of the alerted process plus its ancestors and descendants so the timeline mirrors the graph's focus. Empty means no pid filter.
 type HostTimelineFilter struct {
 	HostID     string
 	FromNs     int64
 	ToNs       int64
 	EventTypes []string
 	Text       string
+	PIDs       []int64
 }
 
 // EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class

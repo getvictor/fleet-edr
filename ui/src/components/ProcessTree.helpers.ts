@@ -148,6 +148,21 @@ export function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<nu
   return related;
 }
 
+// chainPids maps a set of chain node DB ids (from findAlertChain) to the OS pids of those nodes. The host timeline keys on pid (not the
+// graph's DB id), so this lets the timeline scope to the same alert chain the graph shows. Walks the forest once; deduped because a pid
+// can recur across process generations in the chain.
+export function chainPids(roots: ProcessNode[], ids: Set<number>): number[] {
+  const pids = new Set<number>();
+  const walk = (nodes: ProcessNode[]) => {
+    for (const n of nodes) {
+      if (ids.has(n.id)) pids.add(n.pid);
+      if (n.children) walk(n.children);
+    }
+  };
+  walk(roots);
+  return [...pids];
+}
+
 function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null {
   for (const n of nodes) {
     if (n.id === dbId) return n;
