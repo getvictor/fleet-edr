@@ -46,21 +46,10 @@
   margin-bottom: $pad-medium;
 }
 
+// Sizing only; the control look (border, radius, height, font, focus) comes from the shared .field__input the element also carries.
 .app-control__filter-search {
   flex: 1 1 240px;
   min-width: 200px;
-  padding: $pad-xsmall $pad-small;
-  border: 1px solid $ui-fleet-black-25;
-  border-radius: 4px;
-  font-size: $xx-small;
-}
-
-.app-control__filter-select {
-  padding: $pad-xsmall $pad-small;
-  border: 1px solid $ui-fleet-black-25;
-  border-radius: 4px;
-  font-size: $xx-small;
-  background: white;
 }
 
 .app-control__filter-summary {

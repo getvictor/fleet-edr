@@ -29,6 +29,16 @@ export function FilterChips({ fields, active, onChange }: FilterChipsProps) {
 
   const addField = addKey ? byKey.get(addKey) : undefined;
 
+  // Changing the field keeps a typed free-text value when the next field is also free-text, so reconsidering the field mid-type does
+  // not wipe the entry; it resets when the value vocabulary changes (moving to or from a fixed-option field, or clearing the field).
+  const changeField = (nextKey: string) => {
+    const nextField = nextKey ? byKey.get(nextKey) : undefined;
+    const prevIsFreeText = addField !== undefined && addField.options === undefined;
+    const nextIsFreeText = nextField !== undefined && nextField.options === undefined;
+    if (!prevIsFreeText || !nextIsFreeText) setAddValue("");
+    setAddKey(nextKey);
+  };
+
   const commitAdd = () => {
     if (!addKey || !addValue) return;
     onChange(addKey, addValue);
@@ -56,32 +66,45 @@ export function FilterChips({ fields, active, onChange }: FilterChipsProps) {
 
       <span className="filter-chips__add">
         <select
+          className="field__input"
           aria-label="Add filter field"
           value={addKey}
-          onChange={(e) => { setAddKey(e.target.value); setAddValue(""); }}
+          onChange={(e) => { changeField(e.target.value); }}
         >
           <option value="">Add filter...</option>
           {available.map((f) => (
             <option key={f.key} value={f.key}>{f.label}</option>
           ))}
         </select>
-        {addField?.options ? (
-          <select aria-label={`${addField.label} value`} value={addValue} onChange={(e) => { setAddValue(e.target.value); }}>
-            <option value="">Select...</option>
-            {addField.options.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        ) : (
-          <input
-            aria-label={addField ? `${addField.label} value` : "Filter value"}
-            disabled={!addField}
-            value={addValue}
-            onChange={(e) => { setAddValue(e.target.value); }}
-            onKeyDown={(e) => { if (e.key === "Enter") commitAdd(); }}
-          />
+        {/* The value control + Add appear only once a field is chosen, so the value is never a disabled dead input. */}
+        {addField && (
+          <>
+            {addField.options ? (
+              <select
+                className="field__input filter-chips__value"
+                aria-label={`${addField.label} value`}
+                value={addValue}
+                onChange={(e) => { setAddValue(e.target.value); }}
+              >
+                <option value="">Select...</option>
+                {addField.options.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="field__input filter-chips__value"
+                aria-label={`${addField.label} value`}
+                placeholder={`Filter by ${addField.label.toLowerCase()}`}
+                value={addValue}
+                autoFocus
+                onChange={(e) => { setAddValue(e.target.value); }}
+                onKeyDown={(e) => { if (e.key === "Enter") commitAdd(); }}
+              />
+            )}
+            <Button onClick={commitAdd} disabled={!addValue}>Add</Button>
+          </>
         )}
-        <Button size="small" onClick={commitAdd}>Add</Button>
       </span>
     </div>
   );

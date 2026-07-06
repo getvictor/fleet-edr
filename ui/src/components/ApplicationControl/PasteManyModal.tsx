@@ -214,6 +214,10 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
             rows={10}
             spellCheck={false}
             autoComplete="off"
+            // Password managers otherwise offer to fill this box (1Password ignores autoComplete="off"); these opt-outs suppress
+            // the 1Password / LastPass inline icon on what is a rules-paste field, not a credential field.
+            data-1p-ignore
+            data-lpignore="true"
             placeholder={PLACEHOLDER_TEXTAREA}
             value={rawInput}
             onChange={(e) => { setRawInput(e.target.value); }}
@@ -245,6 +249,7 @@ export function PasteManyModal({ open, policyID, onClose, onUpserted }: PasteMan
                       </td>
                       <td>
                         <select
+                          className="field__input"
                           aria-label={`Type for row ${String(index + 1)}`}
                           value={row.ruleType ?? ""}
                           onChange={(e) => { handleTypeChange(index, e.target.value); }}

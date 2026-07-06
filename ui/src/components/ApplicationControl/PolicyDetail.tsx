@@ -450,14 +450,14 @@ function RulesFilterBar({
     <div className="app-control__filter-bar" role="search" aria-label="Filter rules">
       <input
         type="search"
-        className="app-control__filter-search"
+        className="field__input app-control__filter-search"
         placeholder="Search identifier or comment"
         aria-label="Search rules by identifier or comment"
         value={filter.search}
         onChange={(e) => { onChange({ ...filter, search: e.target.value }); }}
       />
       <select
-        className="app-control__filter-select"
+        className="field__input"
         aria-label="Filter by rule type"
         value={filter.ruleType}
         onChange={(e) => { onChange({ ...filter, ruleType: e.target.value }); }}
@@ -468,7 +468,7 @@ function RulesFilterBar({
         ))}
       </select>
       <select
-        className="app-control__filter-select"
+        className="field__input"
         aria-label="Filter by status"
         value={filter.enabled}
         onChange={(e) => { onChange({ ...filter, enabled: e.target.value as RulesFilter["enabled"] }); }}
@@ -478,7 +478,7 @@ function RulesFilterBar({
         <option value="disabled">Disabled</option>
       </select>
       <select
-        className="app-control__filter-select"
+        className="field__input"
         aria-label="Filter by source"
         value={filter.source}
         onChange={(e) => { onChange({ ...filter, source: e.target.value }); }}

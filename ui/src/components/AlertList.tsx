@@ -147,11 +147,7 @@ export function AlertList() {
 
   return (
     <>
-      <PageHeader
-        title="Alerts"
-        subtitle="Detection findings across all hosts"
-        actions={filters}
-      />
+      <PageHeader actions={filters} />
       {loading && <EmptyState>Loading alerts...</EmptyState>}
       {error && !loading && <EmptyState>Error: {error}</EmptyState>}
       {!loading && !error && alerts.length === 0 && (

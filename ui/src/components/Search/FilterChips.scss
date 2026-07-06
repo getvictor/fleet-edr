@@ -1,4 +1,5 @@
 @use "../../styles/var/colors" as *;
+@use "../../styles/var/padding" as *;
 
 .filter-chips {
   display: flex;
@@ -32,8 +33,17 @@
   }
 
   &__add {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 0.35rem;
+    gap: $pad-small;
+    // Take a full row so the value control has room to grow; when chips are present this wraps onto its own line below them.
+    flex: 1 1 100%;
+  }
+
+  // The value control fills the row between the field select and the Add button, capped so it stays reasonable on a wide viewport.
+  &__value {
+    flex: 1 1 auto;
+    min-width: 200px;
+    max-width: 420px;
   }
 }
