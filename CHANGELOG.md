@@ -2,7 +2,9 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
-## [0.4.0] (unreleased)
+## [0.4.0] (2026-07-07)
+
+Feature release on top of 0.3.0. The headline is a re-architected event store: raw telemetry now lives in a ClickHouse archive backed by a small MySQL work queue, which unlocks fleet-wide hunting (process, connection, and DNS search), a host event timeline, and a flexible time-navigation control across the investigation surface. Also in this release: a unified principal model that makes every service-account action fully attributable, the groundwork for Windows agents (a platform-tagged event contract, a driverless ETW process sensor, and platform-scoped detection rules), agent health reporting on the Hosts page, and detection-reliability fixes that close a concurrent-processing race which could silently drop alerts. Read the upgrade notes below before upgrading: `EDR_CLICKHOUSE_DSN` is now required, and the `EDR_OIDC_*` SSO seeding variables are removed.
 
 ### Upgrade notes (action required)
 
@@ -156,6 +158,7 @@ First stable release. The product ships as two components, released together for
 - **Flexible deployment.** The server is a standard Linux container image, so it runs on any container host (a Docker VM, Kubernetes, AWS ECS/EKS, GCP, Azure, or on-prem), with a one-click Render blueprint for the fastest start. Agents reach Macs through any MDM (Fleet, Jamf, Kandji, Intune, mosyle).
 - **Supply-chain-hardened releases.** Every release ships a Developer ID-signed, Apple-notarized package alongside SBOMs, cosign signatures, and build provenance attestations.
 
+[0.4.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.4.0
 [0.3.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.3.0
 [0.2.1]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.1
 [0.2.0]: https://github.com/getvictor/fleet-edr/releases/tag/v0.2.0

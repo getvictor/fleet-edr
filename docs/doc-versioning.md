@@ -22,7 +22,7 @@ These two getting-started paths want opposite treatments:
 - **The demo floats to `:latest`.** `docker-compose.demo.yml` defaults its images to the newest published tag so the demo always shows the current product. It auto-advances when a stable release moves `:latest`, and is never bumped by hand.
 - **Deploy snippets are pinned to a signed tag.** A pilot must deploy a known, reproducible, signed version, so the deploy docs pin an explicit `vX.Y.Z`. These literals are bumped at release time, never floated. The bump is mechanical: `tools/bump-doc-versions.sh vX.Y.Z` (see [`release-checklist.md`](release-checklist.md)).
 
-The files that carry a pinned deploy tag are `docs/quickstart-vm.md`, `docs/install-server.md`, `docs/install-agent-manual.md`, `docs/mdm-deployment.md`, `docs/fleet-deployment.md`, and `bootstrap.sh`. They reference only the current release tag; historical or upgrade-path version mentions belong in [`../CHANGELOG.md`](../CHANGELOG.md), not in these files, because the bump rewrites every version token in them wholesale.
+The files that carry a pinned deploy tag are `docs/quickstart-vm.md`, `docs/install-server.md`, `docs/install-agent-manual.md`, `docs/mdm-deployment.md`, `docs/fleet-deployment.md`, `bootstrap.sh`, and `docker-compose.prod.README.md`. They reference only the current release tag; historical or upgrade-path version mentions belong in [`../CHANGELOG.md`](../CHANGELOG.md), not in these files, because the bump rewrites every version token in them wholesale.
 
 ## Two gates back this
 

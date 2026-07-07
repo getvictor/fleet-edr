@@ -7,7 +7,7 @@ This stack runs the fleet-edr-server + MySQL on a single host. It's the simplest
 ```sh
 # 1. Pin a released version. `latest` works for dev but is not safe for prod
 #    because image digests drift silently.
-echo 'EDR_VERSION=v0.3.0' > .env
+echo 'EDR_VERSION=v0.4.0' > .env
 echo 'OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317' >> .env
 
 # 2. Generate the secret files. The MySQL root password + the full DSN that
