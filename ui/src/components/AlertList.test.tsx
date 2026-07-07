@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { MemoryRouter } from "react-router-dom";
 import { AlertList } from "./AlertList";
 import * as api from "../api";
-import type { Alert } from "../types";
+import type { Alert, HostSummary } from "../types";
 
 // AlertList shipped without component tests prior to step 9; the source filter
 // chip is the demo cut's last UI surface and the easiest place to grow
@@ -28,6 +28,16 @@ const makeAlert = (over: Partial<Alert> = {}): Alert => ({
   created_at: "2026-05-14T00:00:00Z",
   updated_at: "2026-05-14T00:00:00Z",
   ...over,
+});
+
+const hostSummary = (id: string, name: string): HostSummary => ({
+  host_id: id,
+  hostname: name,
+  os_version: "26.4",
+  platform: "darwin",
+  event_count: 0,
+  last_seen_ns: 0,
+  overall_status: "unknown",
 });
 
 afterEach(() => {
@@ -166,5 +176,32 @@ describe("AlertList general states", () => {
     await waitFor(() => {
       expect(screen.getByText(/error: boom/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe("AlertList host column", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "listAlerts");
+  });
+
+  // spec:web-ui/the-alert-list-identifies-a-host-by-name/alert-list-shows-the-enrollment-hostname
+  it("shows the host's enrollment hostname, falling back to the hardware id when unknown", async () => {
+    (api.listAlerts as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeAlert({ id: 1, host_id: "AAAA-1111", title: "named host alert" }),
+      makeAlert({ id: 2, host_id: "BBBB-2222", title: "unknown host alert" }),
+    ]);
+    // Only the first host has a resolvable hostname; the second is absent from the map.
+    vi.spyOn(api, "listHosts").mockResolvedValue([hostSummary("AAAA-1111", "mac-a.local")]);
+    render(
+      <MemoryRouter>
+        <AlertList />
+      </MemoryRouter>,
+    );
+    // The known host resolves to its name; the unknown host falls back to its raw hardware id in the cell.
+    expect(await screen.findByText("mac-a.local")).toBeInTheDocument();
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("BBBB-2222")).toBeInTheDocument();
+    // The named host's UUID is not shown as the visible cell text (it lives in the link tooltip instead).
+    expect(within(table).queryByText("AAAA-1111")).not.toBeInTheDocument();
   });
 });

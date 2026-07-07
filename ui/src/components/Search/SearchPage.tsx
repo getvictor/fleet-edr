@@ -2,7 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import "./SearchPage.scss";
 import { ProcessSearch } from "./ProcessSearch";
 import { EventSearch } from "./EventSearch";
-import { useHostNames } from "./useHostNames";
+import { useHostNames } from "../useHostNames";
 import type { EventSearchMode } from "../../api";
 
 // The three search modes. Process is the default (no ?mode= param) so PR 3's pivots (`/search?path=...`) still land on it; the two

@@ -3333,6 +3333,35 @@ func TestStore_SearchProcesses_Filters(t *testing.T) {
 	assert.EqualValues(t, 2, res.TotalMatched)
 }
 
+// TestStore_SearchProcesses_SkipsCountWhenUnfiltered pins the count-skip: a fully-unfiltered fleet browse reports TotalNotCounted (the
+// COUNT over the whole processes table is skipped), while any filter (here a lone host_id) restores the exact count. It still returns a
+// full page and a next cursor, so pagination is unaffected by the missing total.
+// spec:server-rest-api/fleet-wide-process-search-endpoint/unfiltered-browse-skips-the-total-count
+func TestStore_SearchProcesses_SkipsCountWhenUnfiltered(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "SRCH-NOCOUNT"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+	for i := range 3 {
+		seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 5000 + i, ForkNs: int64(i+1) * 1000, ExecNs: 1, SHA: "nc"})
+	}
+
+	// Unfiltered fleet browse: the count is skipped (other parallel tests seed the shared table, so an exact fleet total is neither
+	// stable nor asserted here), but the page and cursor are still served.
+	unfiltered, err := d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{}, "", 2)
+	require.NoError(t, err)
+	assert.Equal(t, api.TotalNotCounted, unfiltered.TotalMatched, "the unfiltered browse skips the COUNT and reports the sentinel")
+	assert.Len(t, unfiltered.Rows, 2, "a full page is still returned")
+	assert.NotEmpty(t, unfiltered.NextCursor, "pagination is unaffected by the skipped total")
+
+	// A single host_id filter restores the exact count over this host's seeded rows.
+	filtered, err := d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{HostID: host}, "", 50)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, filtered.TotalMatched, "a filtered search reports the exact total")
+}
+
 // TestStore_SearchProcesses_IndividualFilters pins the store-level behaviour of each filter the "Fleet-wide process search endpoint"
 // requirement lists, closing the gaps the compose-only test above leaves: the path substring (including LIKE-metacharacter escaping),
 // the fork-time window bounds, exit_reason, uid in isolation, the three signer classes the platform/ad-hoc/unsigned cases skip

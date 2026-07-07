@@ -23,7 +23,8 @@ const searchProcessColumns = `id, host_id, pid, ppid, path, args, uid, gid, code
 
 // SearchProcesses runs the fleet-wide process search (issue #582): the filter's non-empty predicates ANDed in SQL, ordered
 // newest-first by (fork_time_ns, id), keyset-paged from cursor. It returns up to limit rows, a next cursor when a further page
-// exists, and total_matched (the full filtered count, independent of the page). An empty cursor starts at the newest row; a
+// exists, and total_matched (the full filtered count, independent of the page) for a filtered search, or api.TotalNotCounted for the
+// fully-unfiltered fleet browse (the COUNT is skipped there; see the count block below). An empty cursor starts at the newest row; a
 // malformed cursor is a caller error surfaced by decodeCursor.
 //
 // Keyset over the compound (fork_time_ns, id): fork_time_ns alone is not unique, so the row id breaks ties and the pair gives a
@@ -37,10 +38,18 @@ func (s *Store) SearchProcesses(ctx context.Context, filter api.ProcessSearchFil
 	}
 	where, args := buildSearchWhere(filter)
 
-	var total int64
-	if err := s.db.GetContext(ctx, &total,
-		"SELECT COUNT(*) FROM processes WHERE "+strings.Join(where, " AND "), args...); err != nil {
-		return api.ProcessSearchResult{}, fmt.Errorf("count matched processes: %w", err)
+	// Count only when a filter is set. buildSearchWhere emits just the "1=1" sentinel for the fully-unfiltered fleet browse, and a
+	// COUNT(*) over the whole processes table is its most expensive half for a total of only marginal value on a browse (pagination
+	// rides the cursor, not the total). Any predicate (even a lone host_id or time window, whose count is index-cheap and answers "how
+	// many match") restores the exact count. Mirrors the event search's recent-events skip.
+	total := api.TotalNotCounted
+	if len(where) > 1 {
+		var counted int64
+		if err := s.db.GetContext(ctx, &counted,
+			"SELECT COUNT(*) FROM processes WHERE "+strings.Join(where, " AND "), args...); err != nil {
+			return api.ProcessSearchResult{}, fmt.Errorf("count matched processes: %w", err)
+		}
+		total = counted
 	}
 
 	// The keyset predicate is appended only for pages after the first; it narrows the same filtered set to rows older than the

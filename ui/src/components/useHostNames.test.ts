@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 
 import { useHostNames } from "./useHostNames";
-import * as api from "../../api";
-import type { HostSummary } from "../../types";
+import * as api from "../api";
+import type { HostSummary } from "../types";
 
 function host(id: string, name: string): HostSummary {
   return { host_id: id, hostname: name, os_version: "26.4", platform: "darwin", event_count: 0, last_seen_ns: 0, overall_status: "unknown" };

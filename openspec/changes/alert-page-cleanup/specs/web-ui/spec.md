@@ -20,6 +20,17 @@ The web UI SHALL surface the host's agent-health rollup and per-component condit
 
 ## ADDED Requirements
 
+### Requirement: The alert list identifies a host by name
+
+The alert list's Host column SHALL identify each alert's host by its enrollment hostname, falling back to the full hardware identifier only when no enrollment hostname is known, matching the host list and the search results so an analyst reads a recognizable name rather than a hardware UUID. The full hardware identifier SHALL remain available (for example in the control's tooltip), and the host control SHALL continue to open that host's process tree.
+
+#### Scenario: Alert list shows the enrollment hostname
+
+- **GIVEN** alerts whose hosts have enrollment hostnames, plus one alert on a host with no known hostname
+- **WHEN** the alert list renders
+- **THEN** each alert's Host cell shows the host's enrollment hostname
+- **AND** the alert on the host with no known hostname shows that host's hardware identifier instead
+
 ### Requirement: The process detail omits a self-referential alert link
 
 When the process detail panel is opened from an alert's page, its "Related alerts" references SHALL omit the alert whose page is currently open, so the panel never links back to the page the operator is already on. Every other alert on the process SHALL still be listed. When the panel is opened outside an alert context, every alert on the process SHALL be listed.

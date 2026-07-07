@@ -11,6 +11,7 @@ import { Select } from "./ui/Input";
 import { PageHeader } from "./ui/PageHeader";
 import { Can } from "../permissions";
 import { PermissionAction } from "../permissions-core";
+import { useHostNames } from "./useHostNames";
 import "./AlertList.scss";
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
@@ -53,6 +54,9 @@ export function AlertList() {
   const [statusFilter, setStatusFilter] = useState("open");
   const [severityFilter, setSeverityFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
+  // Resolve host_id -> enrollment hostname so the Host column reads like the host list and search: analysts recognize a hostname, not a
+  // hardware UUID. Best-effort (issue #582 pattern); a host with no known hostname falls back to the raw id.
+  const hostNames = useHostNames();
 
   useEffect(() => {
     let cancelled = false;
@@ -195,13 +199,16 @@ export function AlertList() {
                   {/* Host links to the host's full process tree without
                       pinning to any particular alert. Distinct destination
                       from the title above: title = "this alert", host =
-                      "the whole host". */}
+                      "the whole host". The cell shows the enrollment hostname
+                      (resolved via useHostNames), matching the host list and
+                      search; the raw hardware id stays in the tooltip so it is
+                      still discoverable. Unknown hostname falls back to the id. */}
                   <Link
                     className="link-button"
                     to={`/hosts/${encodeURIComponent(a.host_id)}`}
-                    title="Open the full process tree for this host"
+                    title={`Open the full process tree for this host (${a.host_id})`}
                   >
-                    {a.host_id}
+                    {hostNames.get(a.host_id) ?? a.host_id}
                   </Link>
                 </td>
                 <td>{formatTime(a.created_at)}</td>
