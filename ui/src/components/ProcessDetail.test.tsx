@@ -14,10 +14,11 @@ function render(ui: ReactElement) {
 }
 
 // ProcessDetail renders one process's metadata, its re-exec chain, network activity, and
-// per-process alerts, plus the reauth-gated kill action. Tests pin the metadata fields,
-// the close affordance, the loading→network transition, the re-exec chain, the alert
-// status mutations, the kill happy path + poll-to-completion + failure, and the
-// permission gate hiding the kill button.
+// the process's related alerts (as compact links to the alert page; triage lives on the
+// alert header now), plus the reauth-gated kill action. Tests pin the metadata fields,
+// the close affordance, the loading→network transition, the re-exec chain, the related-
+// alert links, the kill happy path + poll-to-completion + failure, and the permission
+// gate hiding the kill button.
 
 const NS = 1_000_000;
 
@@ -62,7 +63,6 @@ function makeAlert(over: Partial<Alert> = {}): Alert {
 beforeEach(() => {
   vi.spyOn(api, "getProcessDetail").mockResolvedValue(makeDetail());
   vi.spyOn(api, "listAlertsByProcessId").mockResolvedValue([]);
-  vi.spyOn(api, "updateAlertStatus").mockResolvedValue(undefined);
   vi.spyOn(api, "createCommand").mockResolvedValue({ id: 99 });
   vi.spyOn(api, "getCommand");
 });
@@ -205,13 +205,16 @@ describe("ProcessDetail network + re-exec", () => {
   });
 });
 
-describe("ProcessDetail alerts", () => {
-  it("renders per-process alerts and acknowledges an open alert", async () => {
+describe("ProcessDetail related alerts", () => {
+  it("lists the process's alerts as compact links to the alert page, without restating the card or owning triage", async () => {
     vi.mocked(api.listAlertsByProcessId).mockResolvedValue([makeAlert()]);
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText("Suspicious exec")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /acknowledge/i }));
-    await waitFor(() => { expect(api.updateAlertStatus).toHaveBeenCalledWith(7, "acknowledged"); });
+    const link = await screen.findByRole("link", { name: /Suspicious exec/ });
+    expect(link).toHaveAttribute("href", "/alerts/7");
+    // Triage moved to the alert header: the node inspector no longer restates the alert or owns its acknowledge / resolve controls.
+    expect(screen.queryByRole("button", { name: /acknowledge/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resolve/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("curl from a shell")).not.toBeInTheDocument();
   });
 
   // spec:web-ui/inline-mitre-technique-tags/the-detail-panel-links-alert-techniques-to-the-rule-page
@@ -220,15 +223,6 @@ describe("ProcessDetail alerts", () => {
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
     const link = await screen.findByRole("link", { name: "T1059.004" });
     expect(link).toHaveAttribute("href", "/rules/shell_from_office");
-  });
-
-  it("offers a reopen action for a resolved alert", async () => {
-    vi.mocked(api.listAlertsByProcessId).mockResolvedValue([makeAlert({ status: "resolved" })]);
-    render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText("Suspicious exec")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: /acknowledge/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /reopen/i }));
-    await waitFor(() => { expect(api.updateAlertStatus).toHaveBeenCalledWith(7, "open"); });
   });
 });
 

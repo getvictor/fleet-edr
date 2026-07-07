@@ -7,6 +7,7 @@ import {
   NANOSECONDS_PER_MILLISECOND,
 } from "../constants";
 import { ProcessDetail } from "./ProcessDetail";
+import { AlertTriageActions } from "./AlertTriageActions";
 import { HostHealthPanel } from "./HostHealthPanel";
 import { HostHeader } from "./HostHeader";
 import { HostTimeline } from "./HostTimeline";
@@ -535,18 +536,21 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
         </div>
       )}
 
-      {/* The finding detail (description + technique tags) is the "what and why" of the alert. It renders for every alert,
-          and is the primary surface for a process-optional alert whose graph is intentionally empty. */}
+      {/* The finding detail is the "what and why" of the alert: description, technique tags (linked to the rule doc), and the alert's
+          own triage controls. Triage lives here, on the alert surface, rather than inside a process node inspector (a process-optional
+          alert has no process to click, so this is the only place its status can change). It renders for every alert and is the primary
+          surface for a process-optional alert whose graph is intentionally empty. */}
       {alertDetail && (
         <div className="alert-detail-panel">
           <p className="alert-detail-panel__description">{alertDetail.description}</p>
-          {alertDetail.techniques && alertDetail.techniques.length > 0 && (
-            <div className="alert-detail-panel__techniques">
-              {alertDetail.techniques.map((t) => (
-                <Badge key={t} variant="neutral">{t}</Badge>
-              ))}
-            </div>
-          )}
+          <TechniqueTags techniques={alertDetail.techniques} ruleId={alertDetail.rule_id} className="alert-detail-panel__techniques" />
+          <div className="alert-detail-panel__actions">
+            <AlertTriageActions
+              alertId={alertDetail.id}
+              status={alertDetail.status}
+              onStatusChange={(status) => { setAlertDetail((prev) => (prev ? { ...prev, status } : prev)); }}
+            />
+          </div>
         </div>
       )}
 

@@ -255,7 +255,7 @@
   }
 
   &__detail {
-    width: 420px;
+    width: 480px;
     flex-shrink: 0;
   }
 }
@@ -352,6 +352,10 @@
     display: flex;
     flex-wrap: wrap;
     gap: $pad-xsmall;
+  }
+
+  &__actions {
+    margin-top: $pad-small;
   }
 }
 

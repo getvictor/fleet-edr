@@ -111,6 +111,19 @@ describe("ProcessTreeView process-optional alert", () => {
     expect(screen.queryByRole("button", { name: /full host tree|focused on chain/i })).not.toBeInTheDocument();
   });
 
+  // spec:web-ui/alert-pivots-to-the-host-process-tree/a-process-optional-alert-is-triageable-from-the-alert-page
+  it("offers the alert's triage controls in the header, the only triage surface for a process-optional alert", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    const statusSpy = vi.spyOn(api, "updateAlertStatus").mockResolvedValue(undefined);
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    // A process-optional alert has no process node to click, so the alert header is the only place its status can change. The
+    // acknowledge control lives there and reflects the new status locally on success (no refetch).
+    fireEvent.click(await screen.findByRole("button", { name: /acknowledge/i }));
+    await waitFor(() => { expect(statusSpy).toHaveBeenCalledWith(7, "acknowledged"); });
+    expect(await screen.findByText("acknowledged")).toBeInTheDocument();
+  });
+
   it("still explains the alert (no blank canvas) when getAlertDetail fails", async () => {
     // The focus filter empties the forest from ?process=0 on mount, before (or even if never) alertDetail loads. Keying the
     // process-optional classification on the URL param means the explanation still renders, so a slow or failed
