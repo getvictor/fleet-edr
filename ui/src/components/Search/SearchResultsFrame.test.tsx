@@ -36,6 +36,13 @@ describe("SearchResultsFrame", () => {
     expect(screen.getByText("Nothing here.")).toBeInTheDocument();
   });
 
+  it("shows only the count, without a total, when the total was not computed", () => {
+    // The recent-events browse skips the fleet-wide count and reports a negative total; the frame shows "Showing N" only.
+    frame({ count: 50, total: -1, hasMore: true });
+    expect(screen.getByText("Showing 50")).toBeInTheDocument();
+    expect(screen.queryByText(/of .* matches/)).not.toBeInTheDocument();
+  });
+
   it("keeps the rows and shows the error inline when a load-more fails", () => {
     // The Copilot finding: an error with rows already shown (failed "Load more") must not replace the table.
     frame({ error: "load more failed", count: 3, total: 10, hasMore: true });

@@ -140,6 +140,7 @@ function ConnectionCells({ evt }: { readonly evt: EventRecord }) {
 function DNSHeaders() {
   return (
     <>
+      <th>Query</th>
       <th>Type</th>
       <th>Response</th>
     </>
@@ -150,6 +151,9 @@ function DNSCells({ evt }: { readonly evt: EventRecord }) {
   const p = evt.payload as DNSQueryPayload;
   return (
     <>
+      {/* The queried domain is the point of a DNS row: once results span many domains (the recent-events view), it must be shown, not
+          just implied by the filter chip. */}
+      <td className="search-page__mono">{p.query_name}</td>
       <td>{p.query_type}</td>
       <td className="search-page__mono">{p.response_addresses?.join(", ") || "-"}</td>
     </>

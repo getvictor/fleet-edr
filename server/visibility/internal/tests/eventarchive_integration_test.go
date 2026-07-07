@@ -263,12 +263,14 @@ func TestEventArchive_SearchEvents(t *testing.T) {
 	require.Len(t, res.Events, 1)
 	assert.Equal(t, "hostB", res.Events[0].HostID)
 
-	// An empty artifact value lists every event of the type (the recent-events mode), across hosts, still scoped to the type.
+	// An empty artifact value lists every event of the type (the recent-events mode), across hosts, still scoped to the type. The
+	// browse deliberately skips the fleet-wide COUNT (the more expensive half on a large archive), so TotalMatched is not computed.
 	res, err = arch.SearchEvents(ctx, visibilityapi.EventSearchFilter{
 		EventType: "network_connect", FromNs: window.FromNs, ToNs: window.ToNs,
 	}, "", 50)
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, res.TotalMatched, "no artifact filter lists all connection events")
+	assert.EqualValues(t, visibilityapi.TotalNotCounted, res.TotalMatched, "the recent-events browse skips the count")
+	require.Len(t, res.Events, 3, "no artifact filter lists all connection events")
 	ids = eventIDSet(res.Events)
 	assert.True(t, ids["c-a"] && ids["c-b"] && ids["c-other"], "includes every connection regardless of remote address")
 	assert.False(t, ids["d-a"], "still scoped to the connection event type")

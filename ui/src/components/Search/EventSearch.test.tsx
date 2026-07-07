@@ -83,6 +83,7 @@ describe("EventSearch DNS mode", () => {
     });
     renderEvent("dns", "?query_name=evil.example.com");
     expect(await screen.findByText("AAAA")).toBeInTheDocument();
+    expect(screen.getByText("evil.example.com")).toBeInTheDocument(); // the queried domain renders in its own column
     expect(screen.getByText("2606::1, 2606::2")).toBeInTheDocument();
     expect(screen.getByText("nslookup (7)")).toBeInTheDocument();
   });
@@ -91,17 +92,25 @@ describe("EventSearch DNS mode", () => {
 describe("EventSearch recent events + pagination + error", () => {
   // spec:web-ui/fleet-wide-connection-and-dns-search/an-event-mode-opens-on-recent-events
   it("lists recent connections and issues a request when no artifact value is supplied", async () => {
-    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [connEvent("a", "H1")], total_matched: 1 });
+    // The recent-events browse skips the count, so the endpoint reports a negative total and the frame shows "Showing N" only.
+    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [connEvent("a", "H1")], total_matched: -1 });
     renderEvent("connections", "");
     expect(await screen.findByText("mac-a.local")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1")).toBeInTheDocument();
+    expect(screen.queryByText(/of .* matches/)).not.toBeInTheDocument();
     // The request fired with no artifact filter (recent events across the fleet), rather than sitting behind a prompt.
     expect(spy).toHaveBeenCalledWith("connections", expect.objectContaining({ value: "" }), undefined);
   });
 
-  it("lists recent DNS lookups when no domain is supplied", async () => {
-    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [dnsEvent("d1", "H1")], total_matched: 1 });
+  it("lists recent DNS lookups with the queried domain when no domain filter is supplied", async () => {
+    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({
+      events: [dnsEvent("d1", "H1", { query_name: "recent.example.com" })],
+      total_matched: -1,
+    });
     renderEvent("dns", "");
-    expect(await screen.findByText("nslookup (7)")).toBeInTheDocument();
+    // The queried domain is shown per row (it varies across the recent feed), alongside the process.
+    expect(await screen.findByText("recent.example.com")).toBeInTheDocument();
+    expect(screen.getByText("nslookup (7)")).toBeInTheDocument();
     expect(spy).toHaveBeenCalledWith("dns", expect.objectContaining({ value: "" }), undefined);
   });
 

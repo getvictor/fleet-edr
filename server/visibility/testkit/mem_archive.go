@@ -131,7 +131,8 @@ func (m *MemArchive) SearchEvents(_ context.Context, filter api.EventSearchFilte
 	if !ok {
 		return api.EventSearchResult{}, fmt.Errorf("mem archive search: unsupported event type %q", filter.EventType)
 	}
-	return m.pageMatched(cursor, limit, func(e api.Event) bool { return eventMatchesSearch(e, filter, field) })
+	// Mirror the store: count only for a targeted (artifact-valued) search; the recent-events browse skips it.
+	return m.pageMatched(cursor, limit, filter.Value != "", func(e api.Event) bool { return eventMatchesSearch(e, filter, field) })
 }
 
 // HostTimeline returns one host's exec/network/DNS events interleaved newest-first over the event-time window (issue #583), the fake's
@@ -141,13 +142,13 @@ func (m *MemArchive) HostTimeline(_ context.Context, filter api.HostTimelineFilt
 	if len(types) == 0 {
 		return api.EventSearchResult{}, nil // only non-timeline classes requested: match nothing, same as the store
 	}
-	return m.pageMatched(cursor, limit, func(e api.Event) bool { return eventMatchesTimeline(e, filter, types) })
+	return m.pageMatched(cursor, limit, true, func(e api.Event) bool { return eventMatchesTimeline(e, filter, types) })
 }
 
 // pageMatched collects the events satisfying match, then applies the shared newest-first keyset page: sort by (timestamp_ns,
-// event_id) desc, count the full match set, drop everything at/after the cursor, and take limit (+ a next cursor when more remain).
-// Mirrors the store's pageEventsByKeyset so the fake and the real archive page identically.
-func (m *MemArchive) pageMatched(cursor string, limit int, match func(api.Event) bool) (api.EventSearchResult, error) {
+// event_id) desc, count the full match set when countTotal (else TotalNotCounted), drop everything at/after the cursor, and take limit
+// (+ a next cursor when more remain). Mirrors the store's pageEventsByKeyset so the fake and the real archive page identically.
+func (m *MemArchive) pageMatched(cursor string, limit int, countTotal bool, match func(api.Event) bool) (api.EventSearchResult, error) {
 	if limit < 1 {
 		limit = 1
 	}
@@ -170,7 +171,10 @@ func (m *MemArchive) pageMatched(cursor string, limit int, match func(api.Event)
 	}
 	sort.SliceStable(matched, func(i, j int) bool { return eventNewer(matched[i], matched[j]) })
 
-	total := int64(len(matched))
+	total := api.TotalNotCounted
+	if countTotal {
+		total = int64(len(matched))
+	}
 	if after != nil {
 		kept := matched[:0] // reuse the backing array; api.Event is a value type
 		for _, e := range matched {

@@ -5,7 +5,8 @@ import { Button } from "../ui/Button";
 interface Props {
   readonly loading: boolean;
   readonly error: string | null;
-  // count is the number of rows currently shown; total is the full match count (total_matched) the endpoint reported.
+  // count is the number of rows currently shown; total is the full match count (total_matched) the endpoint reported, or negative when
+  // the endpoint deliberately skipped the count (the recent-events browse), in which case only the shown count is displayed.
   readonly count: number;
   readonly total: number;
   readonly hasMore: boolean;
@@ -31,7 +32,9 @@ export function SearchResultsFrame({ loading, error, count, total, hasMore, onLo
     <>
       {error && <p className="search-page__error" role="alert">Error: {error}</p>}
       <p className="search-page__count">
-        Showing {count.toLocaleString()} of {total.toLocaleString()} matches
+        {total < 0
+          ? `Showing ${count.toLocaleString()}`
+          : `Showing ${count.toLocaleString()} of ${total.toLocaleString()} matches`}
       </p>
       {children}
       {hasMore && (
