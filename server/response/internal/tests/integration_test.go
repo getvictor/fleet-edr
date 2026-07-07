@@ -33,6 +33,7 @@ import (
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/response/api"
 	"github.com/fleetdm/edr/server/response/bootstrap"
+	"github.com/fleetdm/edr/server/response/internal/gateway"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -556,4 +557,136 @@ func TestControlGatewayPushLifecycle_RealMySQL(t *testing.T) {
 // controlConnectCtx builds the outgoing gRPC context carrying the host bearer token the gateway's auth interceptor reads from metadata.
 func controlConnectCtx(token string) context.Context {
 	return metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+}
+
+// serveGateway serves gw over an h2c net/http server on a fresh loopback listener and starts its watch loop, exactly as cmd/main
+// multiplexes the control gateway onto the shared HTTPS listener (grpc.Server.ServeHTTP behind net/http's cleartext HTTP/2). The
+// returned stop tears the gateway and its listener down so a fresh gateway (modelling the same replica after a restart, or a peer
+// replica) can take over the same MySQL store; it returns only after the serve goroutine has observed http.ErrServerClosed.
+func serveGateway(t *testing.T, gw *gateway.Gateway) (addr string, stop func()) {
+	t.Helper()
+	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	httpSrv := &http.Server{Handler: gw, Protocols: protocols, ReadHeaderTimeout: 5 * time.Second}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- httpSrv.Serve(lis) }()
+	runCtx, runCancel := context.WithCancel(t.Context())
+	go gw.Run(runCtx)
+	stop = func() {
+		runCancel()
+		gw.Stop()
+		// Bound the shutdown so a regression that wedges the stream fails the test instead of hanging the run, mirroring
+		// httpserver.RunAndShutdown's own timeout-bounded shutdown context.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(runCtx), 15*time.Second)
+		defer shutdownCancel()
+		require.NoError(t, httpSrv.Shutdown(shutdownCtx))
+		require.ErrorIs(t, <-serveDone, http.ErrServerClosed)
+	}
+	return lis.Addr().String(), stop
+}
+
+// TestGatewayLossReconnectNoCommandLoss_RealMySQL pins the ADR-0010 control-gateway carve-out: the gateway is the one sanctioned
+// stateful tier, holding only ephemeral per-connection state (the live socket and the in-flight command identifiers), while every
+// command's durable state lives in the shared MySQL store. So losing a gateway (and its whole in-memory connection registry) before a
+// queued command is acknowledged loses NO command: the row stays pending in MySQL, is servable meanwhile over the retained polled
+// command path, and is re-delivered when the host reconnects to a fresh gateway. This is the integration-fidelity counterpart to the
+// gateway package's in-memory disconnect/deregister test, driven through the production entry point (grpc.Server.ServeHTTP behind an
+// h2c net/http server) against a real database.
+// spec:server-availability/the-server-holds-no-in-process-state-that-survives-a-request-lifetime/losing-the-gateway-forces-reconnect-without-command-loss
+func TestGatewayLossReconnectNoCommandLoss_RealMySQL(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	// First gateway: the replica that will be lost. BuildControlGateway wires the fast-path notifier so an Insert on this replica pushes
+	// to a locally-held connection immediately (the 1s watch is the backstop).
+	firstGateway := r.BuildControlGateway(stubVerifier{}, nil)
+	firstAddr, stopFirst := serveGateway(t, firstGateway)
+
+	firstConn, err := grpc.NewClient(firstAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	firstStreamCtx, cancelFirstStream := context.WithCancel(controlConnectCtx("tok-a"))
+	firstStream, err := control.NewControlChannelClient(firstConn).Connect(firstStreamCtx)
+	require.NoError(t, err)
+
+	// Queue a command; the connected agent receives it over the stream but reports no outcome, so the row stays pending. The gateway now
+	// holds only the ephemeral in-flight marker for it; the durable row lives in MySQL.
+	id, err := r.Service().Insert(ctx, "host-a", "kill_process", json.RawMessage(`{"pid":42}`))
+	require.NoError(t, err)
+
+	frame, err := firstStream.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, frame.GetCommand())
+	require.Equal(t, id, frame.GetCommand().GetId())
+
+	pushed, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, api.StatusPending, pushed.Status, "delivered but unacknowledged: the row is still pending in the store")
+
+	// Lose the gateway and its whole in-memory connection registry (the sanctioned stateful tier goes away), before any outcome lands.
+	cancelFirstStream()
+	require.NoError(t, firstConn.Close())
+	stopFirst()
+
+	// The queued command survived the in-process loss: durable state lives in MySQL, not in the gateway's memory. This is the
+	// load-bearing assertion.
+	afterLoss, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusPending, afterLoss.Status, "command survives gateway loss because its state is durable, not gateway-held")
+
+	// Meanwhile the agent falls back to the polled command path, which still returns the pending command with no gateway present at all.
+	polled, err := r.Service().ListForHost(ctx, "host-a", api.StatusPending)
+	require.NoError(t, err)
+	require.Len(t, polled, 1, "the retained poll path still serves the pending command while no gateway holds a connection")
+	assert.Equal(t, id, polled[0].ID)
+
+	// A fresh gateway comes up (the same replica after a restart, or a peer replica: either way it shares this MySQL store) and the host
+	// reconnects. The still-pending command is re-delivered over the new stream from the shared store: no command was lost.
+	secondGateway := r.BuildControlGateway(stubVerifier{}, nil)
+	secondAddr, stopSecond := serveGateway(t, secondGateway)
+	t.Cleanup(stopSecond)
+
+	secondConn, err := grpc.NewClient(secondAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = secondConn.Close() })
+	secondStreamCtx, cancelSecondStream := context.WithCancel(controlConnectCtx("tok-a"))
+	defer cancelSecondStream()
+	secondStream, err := control.NewControlChannelClient(secondConn).Connect(secondStreamCtx)
+	require.NoError(t, err)
+
+	// The fresh gateway pushes the still-pending command on connect (backlog) or via the 1s watch backstop; its in-flight bookkeeping is
+	// its own, so the prior gateway's lost marker does not suppress re-delivery.
+	redelivered, err := secondStream.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, redelivered.GetCommand())
+	assert.Equal(t, id, redelivered.GetCommand().GetId(), "the pending command is re-delivered on reconnect from the shared store")
+
+	// The agent now reports its full lifecycle over the reconnected stream; both outcomes flow through the unchanged UpdateStatus rules
+	// against MySQL, so the row walks pending to acked to completed exactly as the poll path does.
+	require.NoError(t, secondStream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{Outcome: &control.Outcome{
+		Id: id, Status: string(api.StatusAcked),
+	}}}))
+	require.Eventually(t, func() bool {
+		got, err := r.Service().Get(ctx, id)
+		return err == nil && got.Status == api.StatusAcked
+	}, 5*time.Second, 20*time.Millisecond, "ack applied to MySQL over the reconnected stream")
+
+	require.NoError(t, secondStream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{Outcome: &control.Outcome{
+		Id: id, Status: string(api.StatusCompleted), Result: []byte(`{"killed_pid":42}`),
+	}}}))
+	require.Eventually(t, func() bool {
+		got, err := r.Service().Get(ctx, id)
+		return err == nil && got.Status == api.StatusCompleted
+	}, 5*time.Second, 20*time.Millisecond, "completion applied to MySQL over the reconnected stream")
+
+	// Final DB state confirms the command completed its lifecycle after the gateway loss and reconnect: nothing was lost.
+	final, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusCompleted, final.Status)
+	require.NotNil(t, final.AckedAt)
+	require.NotNil(t, final.CompletedAt)
+	assert.JSONEq(t, `{"killed_pid":42}`, string(final.Result))
 }

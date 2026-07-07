@@ -444,6 +444,68 @@ func TestAppControlREST_CreateRule_AuditCarriesIdentityReasonAndDiff(t *testing.
 	assert.Equal(t, string(rulesapi.SeverityRuleHigh), ev.Payload["severity"])
 }
 
+// spec:server-application-control/rule-lifecycle-audit-events/a-service-account-creates-a-rule-and-is-attributed
+//
+// TestAppControlREST_CreateRule_ServiceAccountIsAttributed pins the spec scenario "a service account creates a rule and is
+// attributed": an admin-roled service account (a principal that carries no human user id) creates an application-control rule, the
+// write succeeds rather than being rejected with "actor is required" at the persistence layer (#518), and both the audit event and
+// the persisted row's created_by attribution record the service account's principal id (svc_<id>, type service_account) rather than
+// a human-only identifier. The sibling create tests drive the same handler with a UserPrincipal; this one swaps in a service-account
+// principal so the service-account attribution path is covered end to end.
+func TestAppControlREST_CreateRule_ServiceAccountIsAttributed(t *testing.T) {
+	t.Parallel()
+	r := newAppControlRig(t, []string{"host-a", "host-b"})
+	policyID := r.defaultPolicyID(t)
+
+	// Drive the create as an admin-roled service account: keep the rig's global admin role binding and swap only the acting
+	// principal to a service account (which carries no human user id). The rig injects r.actor by pointer, so mutating it in place
+	// is exactly what the handler observes on this request.
+	const serviceAccountID = 7
+	r.actor.Principal = identityapi.ServiceAccountPrincipal(serviceAccountID, "ci-bot")
+	wantPrincipalID := identityapi.ServiceAccountPrincipalID(serviceAccountID)
+	identifier := strings.Repeat("b", 64)
+
+	resp := r.do(t, http.MethodPost,
+		"/api/v1/app-control/policies/"+i64(policyID)+"/rules",
+		map[string]any{
+			"rule_type":  rulesapi.RuleTypeBinary,
+			"identifier": identifier,
+			"severity":   rulesapi.SeverityRuleHigh,
+			"reason":     "service account blocks a known-bad binary",
+		})
+	defer resp.Body.Close()
+	rawBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	// The write succeeds: a service-account actor MUST NOT be rejected for lacking a human user id.
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "a service-account create must succeed: body=%s", rawBody)
+	assert.NotContains(t, string(rawBody), "actor is required",
+		"a service-account write must not be rejected with the actor-required error")
+
+	var created rulesapi.ApplicationControlRule
+	require.NoError(t, json.Unmarshal(rawBody, &created))
+	assert.Equal(t, wantPrincipalID, created.CreatedBy, "the create response's created_by carries the service account principal id")
+
+	// The audit event records the service-account principal (svc_<id>, type service_account), not a human-only identifier.
+	events := r.audit.snapshot()
+	require.Len(t, events, 1, "a successful rule create emits exactly one audit event")
+	ev := events[0]
+	assert.Equal(t, identityapi.AuditAppControlRuleCreate, ev.Action)
+	assert.Equal(t, wantPrincipalID, ev.Actor.ID, "the audit event attributes the service account principal id")
+	assert.Equal(t, identityapi.PrincipalServiceAccount, ev.Actor.Type, "and the service_account principal type")
+
+	// The persisted row's created_by records the same principal id. Read it back through the public GET path the UI uses so the
+	// assertion reflects what the store persisted, not only the create response.
+	get := r.do(t, http.MethodGet, "/api/v1/app-control/policies/"+i64(policyID), nil)
+	defer get.Body.Close()
+	require.Equal(t, http.StatusOK, get.StatusCode)
+	var fetched rulesapi.ApplicationControlPolicy
+	require.NoError(t, json.NewDecoder(get.Body).Decode(&fetched))
+	require.Len(t, fetched.Rules, 1)
+	assert.Equal(t, wantPrincipalID, fetched.Rules[0].CreatedBy,
+		"the persisted rule's created_by attribution records the service account principal id")
+}
+
 // TestAppControl_CreateRule_RejectsDuplicate: posting the same (policy, rule_type, identifier) twice should return 409 with the typed
 // error code; the second POST also must NOT fan out a stale duplicate command (the rule didn't change, so the snapshot doesn't need to
 // ship).

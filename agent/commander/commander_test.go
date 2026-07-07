@@ -469,6 +469,92 @@ func TestRunPolls(t *testing.T) {
 	assert.GreaterOrEqual(t, callCount, 2, "should have polled at least twice")
 }
 
+// spec:agent-command-executor/the-control-connection-is-preferred-and-polling-is-the-degraded-floor/the-poll-is-the-fallback-when-the-connection-is-unavailable
+//
+// Pins the fallback gate in pollAndDispatch: the persistent control connection is preferred, and the poll is the degraded floor used only
+// while that connection is down. When StreamConnected reports the connection is down, a single poll fetches the queued command from the
+// source and drives it through the unchanged polled lifecycle (acked then completed). When StreamConnected reports the connection is up,
+// the poll is skipped entirely (no fetch, no dispatch) because the gateway is already pushing commands in real time and a concurrent poll
+// would only race it into invalid-transition noise on already-acked commands.
+func TestPollIsFallbackWhenConnectionUnavailable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name            string
+		streamConnected bool
+		wantFetch       bool
+		wantForward     bool
+		wantStatuses    []string
+	}{
+		{
+			name:            "connection down: poll is the fallback",
+			streamConnected: false,
+			wantFetch:       true,
+			wantForward:     true,
+			wantStatuses:    []string{"acked", "completed"},
+		},
+		{
+			name:            "connection up: poll is skipped",
+			streamConnected: true,
+			wantFetch:       false,
+			wantForward:     false,
+			wantStatuses:    nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var fetched bool
+			var statuses []string
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					mu.Lock()
+					fetched = true
+					mu.Unlock()
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode([]Command{{
+						ID:          80,
+						HostID:      "host-a",
+						CommandType: "set_application_control",
+						Payload:     json.RawMessage(`{"policy_id":7,"policy_version":1,"rules":[]}`),
+						Status:      "pending",
+					}})
+				case http.MethodPut:
+					var u statusUpdate
+					_ = json.NewDecoder(r.Body).Decode(&u)
+					mu.Lock()
+					statuses = append(statuses, u.Status)
+					mu.Unlock()
+					w.WriteHeader(http.StatusNoContent)
+				}
+			}))
+			defer srv.Close()
+
+			sender := &recordingApplicationControlSender{}
+			cmdr := New(Config{
+				ServerURL:                srv.URL,
+				HostID:                   "host-a",
+				ApplicationControlSender: sender,
+				StreamConnected:          func() bool { return tc.streamConnected },
+			}, nil, nil)
+
+			cmdr.pollAndDispatch(t.Context())
+
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, tc.wantFetch, fetched, "the poll fetches from the source only when the control connection is down")
+			assert.Equal(t, tc.wantStatuses, statuses, "the polled lifecycle transitions must be acked then completed on the fallback path")
+			if tc.wantForward {
+				require.Len(t, sender.sent, 1, "the queued command is forwarded to the extension on the polled fallback path")
+			} else {
+				assert.Empty(t, sender.sent, "no dispatch happens while the control connection is preferred")
+			}
+		})
+	}
+}
+
 // spec:agent-command-executor/command-lifecycle-is-explicit/acknowledgement-fails
 //
 // Pins the failure-mode of the acked-first contract: if the ack PUT cannot reach the server, the

@@ -164,6 +164,105 @@ func TestPoster_RunPostsOnStartupTransitionAndStops(t *testing.T) {
 	}
 }
 
+// spec:agent-status-reporting/the-agent-reports-on-startup-on-transition-and-periodically/a-startup-post-makes-a-dead-sensor-visible-immediately
+func TestPoster_StartupPostShowsDeadSensorUnhealthy(t *testing.T) {
+	t.Parallel()
+	hits := make(chan capturedReq, 16)
+	srv := newCaptureServer(t, http.StatusNoContent, hits)
+	reg := newRegistryWithClock(fixedClock(42))
+	// A sensor that never connects: registration seeds it unhealthy/never_connected and nothing ever marks it connected.
+	reg.Register(ComponentEndpointSecurityExtension, "Security extension")
+	p := newTestPoster(t, srv, &fakeTokens{token: "tok-startup"}, reg)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+
+	// Run posts once synchronously before creating the periodic ticker, so the first captured request is the startup post, taken before
+	// the periodic floor could fire.
+	var startup capturedReq
+	select {
+	case startup = <-hits:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a startup status check-in within 2s")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
+
+	var got report
+	require.NoError(t, json.Unmarshal(startup.body, &got))
+	require.Len(t, got.Components, 1)
+	dead := got.Components[0]
+	assert.Equal(t, ComponentEndpointSecurityExtension, dead.Type)
+	assert.Equal(t, StatusUnhealthy, dead.Status, "a sensor that never connected must be visible as unhealthy on the startup post")
+	assert.Equal(t, reasonNeverConnected, dead.Reason, "the startup post distinguishes never_connected from a dropped session")
+}
+
+// spec:agent-status-reporting/the-agent-reports-on-startup-on-transition-and-periodically/a-burst-of-retries-collapses-into-one-post
+func TestPoster_BurstOfTransitionsCollapsesToOnePost(t *testing.T) {
+	t.Parallel()
+	hits := make(chan capturedReq, 32)
+	srv := newCaptureServer(t, http.StatusNoContent, hits)
+	reg := newRegistryWithClock(seqClock(1))
+	reg.Register(ComponentNetworkExtension, "Network extension")
+	// A large periodic interval so the only posts in the test window are the startup post plus the burst's single debounced post; a short
+	// debounce so the burst settles quickly. The burst below fires in a tight loop far inside the debounce window, so every pulse resets
+	// the poster's debounce timer and the flap collapses into one post.
+	p := NewPoster(Options{
+		Registry:     reg,
+		Client:       srv.Client(),
+		BaseURL:      srv.URL,
+		Tokens:       &fakeTokens{token: "tok-burst"},
+		AgentVersion: "0.4.0",
+		Interval:     10 * time.Second,
+		Debounce:     50 * time.Millisecond,
+		NowNs:        fixedClock(1234),
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+
+	// Drain the startup post so the count below reflects only the burst.
+	waitForHit(t, hits)
+
+	// A burst of connect retries that flap the status rapidly: each MarkConnected/MarkDisconnected is a real transition that pulses
+	// Changed, and the whole loop runs well inside one debounce window. The resulting status is the same across the burst (unhealthy after
+	// the final drop).
+	for range 8 {
+		reg.MarkConnected(ComponentNetworkExtension)
+		reg.MarkDisconnected(ComponentNetworkExtension)
+	}
+
+	// The whole burst collapses into a single debounced post.
+	waitForHit(t, hits)
+	postsForBurst := 1
+
+	// Settle well past the debounce window and confirm no second post landed for the burst; the interval is far too long to have ticked.
+	settle := time.After(4 * p.debounce)
+	draining := true
+	for draining {
+		select {
+		case <-hits:
+			postsForBurst++
+		case <-settle:
+			draining = false
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
+	assert.LessOrEqual(t, postsForBurst, 1, "a burst of transitions within the debounce window must collapse into at most one post")
+}
+
 func TestNewPoster_RequiresDependencies(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() {

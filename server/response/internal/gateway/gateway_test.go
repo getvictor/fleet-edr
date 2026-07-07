@@ -361,6 +361,43 @@ func TestGateway(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})
+
+	// A command queued on a different replica never signals this replica's fast path (no Notify): the connection-holding replica must
+	// still discover and deliver it on its periodic watch tick. Here addPending mutates only the pending map, exactly as a cross-replica
+	// insert looks to this replica, and with nothing pending at connect the connect-time backlog push delivers nothing, so the sole path
+	// to the stream is the watch sweep firing on newTestGateway's 20ms interval.
+	// spec:agent-control-channel/queued-commands-are-delivered-over-the-connection-in-real-time/command-queued-on-another-replica-is-delivered-within-the-watch-interval
+	t.Run("command queued on another replica is delivered by the watch sweep without a notify", func(t *testing.T) {
+		t.Parallel()
+		src := newFakeSource()
+		ver := newFakeVerifier()
+		ver.add("tok-a", "host-a")
+		g, dial := newTestGateway(t, src, ver)
+
+		// A bounded stream context so a delivery regression fails fast (Recv returns DeadlineExceeded) instead of hanging the test. The
+		// 5s bound is comfortably above the 20ms watch interval, so a healthy watch sweep always beats it.
+		streamCtx, streamCancel := context.WithTimeout(connectCtx("tok-a"), 5*time.Second)
+		defer streamCancel()
+		stream, err := dial(streamCtx, "tok-a").Connect(streamCtx)
+		require.NoError(t, err)
+
+		// Wait until the server has registered the connection so the watch ticker sweeps this host, and so the connect-time backlog push
+		// (which saw an empty pending set) has already run and delivered nothing.
+		require.Eventually(t, func() bool { return g.reg.len() == 1 }, 2*time.Second, 10*time.Millisecond)
+
+		// Queue the command AFTER connect with NO Notify: this models an operator action landing on a peer replica. The command reaches
+		// the stream only because the watch ticker calls ListPendingForHosts for the connected host and pushes it.
+		src.addPending(api.Command{ID: 11, HostID: "host-a", CommandType: "isolate_host", Payload: []byte(`{"mode":"full"}`)})
+
+		frame, err := stream.Recv()
+		require.NoError(t, err, "watch sweep delivers a cross-replica command within the watch interval")
+		cmd := frame.GetCommand()
+		require.NotNil(t, cmd)
+		assert.Equal(t, int64(11), cmd.GetId())
+		assert.Equal(t, "isolate_host", cmd.GetCommandType())
+		assert.Equal(t, "host-a", cmd.GetHostId())
+		assert.JSONEq(t, `{"mode":"full"}`, string(cmd.GetPayload()))
+	})
 }
 
 // TestGatewayServeAndStop exercises the production serve path: New, Serve on a real TCP listener, a client dialing with a token,
@@ -415,4 +452,19 @@ func TestGatewayServeAndStop(t *testing.T) {
 	g.Stop()
 	require.NoError(t, httpSrv.Shutdown(context.WithoutCancel(runCtx)))
 	require.ErrorIs(t, <-serveDone, http.ErrServerClosed, "Serve returns ErrServerClosed after Shutdown, not an unexpected failure")
+}
+
+// TestGatewayWatchIntervalIsCompiledConstant pins the server-configuration invariant that the control-channel command-watch interval is a
+// fixed compiled constant, not an operator knob. The inertness is structural: the gateway constructor takes only resolved Deps and reads
+// no environment variable, so there is no EDR_*WATCH* override seam, and New always seeds the effective watch interval from the compiled
+// defaultWatchInterval. (The repo forbids mutating process env in tests and resolves configuration at the boundary, issue #172, so the
+// honest assertion here is that New has no env-derived interval to override.)
+// spec:server-configuration/the-server-configuration-surface-is-intentionally-minimal/the-command-watch-interval-is-not-an-operator-knob
+func TestGatewayWatchIntervalIsCompiledConstant(t *testing.T) {
+	t.Parallel()
+
+	g := New(Deps{Source: newFakeSource(), Verifier: newFakeVerifier()})
+
+	assert.Equal(t, defaultWatchInterval, g.watchInterval, "the command-watch interval is compiled, not an operator knob")
+	assert.Equal(t, time.Second, g.watchInterval, "the compiled watch interval is one second")
 }

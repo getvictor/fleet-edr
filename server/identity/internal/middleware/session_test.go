@@ -168,6 +168,45 @@ func TestSession_ValidCookieLetsHandlerRun(t *testing.T) {
 	assert.Equal(t, sess.CSRFToken, sawSession.CSRFToken)
 }
 
+// spec:server-identity-authorization/the-authenticated-actor-carries-a-typed-principal/a-user-request-carries-a-user-principal
+//
+// GIVEN an authenticated human operator session, WHEN the Session middleware builds the actor, THEN the actor pinned on the request
+// context carries a typed principal of type `user` with the stable principal id (usr_<users.id>) and a display label derived from the
+// user record (the email). The middleware builds this via service.LoadActor -> api.UserPrincipal(u.ID, u.Email); this test pulls the
+// actor out of the request context and asserts the Principal triple rather than only the legacy UserIDFromContext value that
+// TestSession_ValidCookieLetsHandlerRun checks.
+func TestSession_UserRequestCarriesUserPrincipal(t *testing.T) {
+	t.Parallel()
+	svc, ss := newService(t)
+	// User id 42 is seeded by newService with email "stub-42@test"; that email is the label LoadActor derives for the user principal.
+	const userID = int64(42)
+	const wantLabel = "stub-42@test"
+	sess, err := ss.Create(t.Context(), userID, sessions.CreateOptions{})
+	require.NoError(t, err)
+
+	mw := middleware.Session(svc, slog.Default())
+	var sawActor *api.Actor
+	srv := httptest.NewServer(mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a, _ := api.ActorFromContext(r.Context())
+		sawActor = a
+		w.WriteHeader(http.StatusOK)
+	})))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.AddCookie(&http.Cookie{Name: api.SessionCookieName, Value: api.EncodeToken(sess.ID)})
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NotNil(t, sawActor, "Session middleware must pin a non-nil actor for an authenticated user request")
+	assert.Equal(t, api.PrincipalUser, sawActor.Principal.Type, "actor principal type must be `user`")
+	assert.Equal(t, api.UserPrincipalID(userID), sawActor.Principal.ID, "actor principal id must be usr_<users.id>")
+	assert.Equal(t, wantLabel, sawActor.Principal.Label, "actor principal label must be derived from the user record (email)")
+}
+
 // A GET never needs a CSRF header even if one of the authenticated admin
 // surfaces ever ends up behind the CSRF middleware.
 func TestCSRF_SafeMethodPassesThrough(t *testing.T) {

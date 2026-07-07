@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -53,6 +54,15 @@ func safeDBName(name string) string {
 // returns the EventArchive.
 func openTestArchive(t *testing.T) visibilityapi.EventArchive {
 	t.Helper()
+	arch, _ := openTestArchiveWithHandle(t)
+	return arch
+}
+
+// openTestArchiveWithHandle is openTestArchive plus the raw ClickHouse handle, for the few tests that must run a maintenance statement
+// the EventArchive API does not expose (e.g. OPTIMIZE ... FINAL to force TTL application deterministically). The handle stays open
+// until test cleanup, so a test may use it for the whole test body.
+func openTestArchiveWithHandle(t *testing.T) (visibilityapi.EventArchive, *sqlx.DB) {
+	t.Helper()
 	dsn := clickhouseTestDSN(t)
 	ctx := context.Background()
 
@@ -80,7 +90,7 @@ func openTestArchive(t *testing.T) visibilityapi.EventArchive {
 	vis, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: testdb.Open(t), ClickHouseDB: chDB})
 	require.NoError(t, err)
 	require.NoError(t, vis.ApplySchema(ctx))
-	return vis.EventArchive()
+	return vis.EventArchive(), chDB
 }
 
 // readNetworkEvents polls NetworkEventsForProcess until it returns wantN rows or the deadline elapses, absorbing any brief
@@ -198,6 +208,58 @@ func TestEventArchive_IdempotentInsert(t *testing.T) {
 
 	got := readNetworkEvents(t, arch, "h1", 7, 1, httpserver.TimeRange{FromNs: 0, ToNs: base + 1_000_000})
 	assert.Len(t, got, 1, "FINAL collapses the at-least-once duplicate to a single row")
+}
+
+// spec:server-event-ingestion/durable-event-archive-with-bounded-retention/an-event-older-than-the-retention-window-ages-out
+func TestEventArchive_RetentionTTLExpiresOldEvents(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch, chDB := openTestArchiveWithHandle(t)
+
+	// Two events on the same (host, pid), differing only in ingest age. ingested_date is materialized from ingested_at_ns, so the recent
+	// event lands inside the 30-day TTL window and the old event, stamped ~40 days back, lands outside it. dayNs is a fixed span; nowNs
+	// only anchors "recent" to today so the recent event never itself ages out mid-test.
+	const dayNs = int64(24 * time.Hour)
+	nowNs := time.Now().UnixNano()
+	recentIngestedNs := nowNs
+	oldIngestedNs := nowNs - 40*dayNs
+
+	const (
+		host      = "hretention"
+		pid       = 55
+		recentID  = "retention-recent"
+		expiredID = "retention-expired"
+	)
+	recent := archiveEvent(recentID, host, "network_connect", nowNs+100, pid)
+	recent.IngestedAtNs = recentIngestedNs
+	expired := archiveEvent(expiredID, host, "network_connect", oldIngestedNs+200, pid)
+	expired.IngestedAtNs = oldIngestedNs
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{recent, expired}))
+
+	// The read window bounds ingested_at_ns and spans both ingest times, so absent TTL both events would be returned; the surviving
+	// event below is therefore filtered by retention, not by the window. (A "both present before expiry" pre-read would race the
+	// background merge scheduler, which can apply TTL on its own before the read settles, so it is left out deliberately.)
+	window := httpserver.TimeRange{FromNs: 0, ToNs: nowNs + 1_000_000}
+
+	// ClickHouse applies native TTL during merges; OPTIMIZE ... FINAL forces one synchronously so the expiry is deterministic in-test
+	// rather than waiting on the background merge scheduler. This is the maintenance path openTestArchiveWithHandle exposes chDB for.
+	_, err := chDB.ExecContext(ctx, "OPTIMIZE TABLE events FINAL")
+	require.NoError(t, err)
+
+	// After expiry the old event is absent from query results and the recent one still present, over the same window. Eventually absorbs
+	// any brief read-after-merge lag.
+	var after []visibilityapi.Event
+	require.Eventually(t, func() bool {
+		after, err = arch.NetworkEventsForProcess(ctx, host, pid, window)
+		return err == nil && len(after) == 1
+	}, 5*time.Second, 100*time.Millisecond, "TTL leaves exactly the in-window event")
+	assert.Equal(t, []string{recentID}, eventIDs(after), "the event older than the 30-day window ages out; the recent event survives")
+
+	// EventsByIDs has no time window at all, so it too must not resurface the expired row: TTL removed it from the archive, not merely
+	// from the windowed correlation read.
+	byID, err := arch.EventsByIDs(ctx, []string{recentID, expiredID})
+	require.NoError(t, err)
+	assert.Equal(t, []string{recentID}, eventIDs(byID), "the expired event is gone from the archive entirely, not just the windowed read")
 }
 
 // archiveArtifactEvent builds a network_connect or dns_query event carrying the artifact field the fleet-wide search matches on
@@ -392,4 +454,12 @@ func eventIDSet(events []visibilityapi.Event) map[string]bool {
 		m[e.EventID] = true
 	}
 	return m
+}
+
+func eventIDs(events []visibilityapi.Event) []string {
+	ids := make([]string, len(events))
+	for i, e := range events {
+		ids[i] = e.EventID
+	}
+	return ids
 }
