@@ -47,6 +47,8 @@ afterEach(() => {
 describe("AlertList source filter", () => {
   beforeEach(() => {
     vi.spyOn(api, "listAlerts");
+    // Every AlertList render now calls useHostNames(), which fetches /hosts; stub it so these suites stay isolated from the real API.
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
   });
 
   it("renders the source column with the readable label, not the wire value", async () => {
@@ -145,6 +147,7 @@ describe("AlertList source filter", () => {
 describe("AlertList general states", () => {
   beforeEach(() => {
     vi.spyOn(api, "listAlerts");
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
   });
 
   it("shows the loading state until the fetch resolves", async () => {

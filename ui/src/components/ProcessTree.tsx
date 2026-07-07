@@ -23,7 +23,7 @@ import {
   buildVisibleRoots,
   chainGenerations,
   collectMatches,
-  countVisibleNodes,
+  wouldSystemToggleReveal,
   findAlertChain,
   resolveAlertEntry,
   selectNodeFromParams,
@@ -207,27 +207,18 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   const applyCollapse = query.trim() === "";
   const queryFilterIds = useMemo(() => buildQueryFilterIds(roots, query), [roots, query]);
   // Build both system-visibility variants so we can tell whether the toggle would change anything on THIS view. buildVisibleRoots with
-  // showSystem only ever reveals hidden system nodes (and their subtrees), so an identical node count with vs without means there is no
-  // system noise to reveal here (e.g. an alert chain whose only system-path nodes are preserved) and the toggle is inert.
-  const visibleRootsShowSystem = useMemo(
+  const visibleRoots = useMemo(
     () =>
       buildVisibleRoots(roots, {
-        showSystem: true, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds,
+        showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds,
       }),
-    [roots, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds],
+    [roots, showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds],
   );
-  const visibleRootsHideSystem = useMemo(
-    () =>
-      buildVisibleRoots(roots, {
-        showSystem: false, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds,
-      }),
-    [roots, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds],
-  );
-  const visibleRoots = showSystem ? visibleRootsShowSystem : visibleRootsHideSystem;
-  // Only offer the toggle when flipping it actually changes the rendered tree; a dead control that does nothing is worse than no control.
+  // Only offer the toggle when flipping it actually changes the rendered tree; a dead control that does nothing is worse than no
+  // control. A single boolean walk over the raw roots answers this without materializing the second (unrendered) tree on every keystroke.
   const systemToggleChangesView = useMemo(
-    () => countVisibleNodes(visibleRootsShowSystem) !== countVisibleNodes(visibleRootsHideSystem),
-    [visibleRootsShowSystem, visibleRootsHideSystem],
+    () => wouldSystemToggleReveal(roots, { preservedIds, alertChainIds, queryFilterIds, expandedAggIds }),
+    [roots, preservedIds, alertChainIds, queryFilterIds, expandedAggIds],
   );
 
   const toggleCollapsed = useCallback((nodeId: number) => {

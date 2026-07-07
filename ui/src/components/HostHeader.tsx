@@ -99,10 +99,15 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
   const [health, setHealth] = useState<HostHealth | null>(null);
 
   useEffect(() => {
+    // Reset on host_id change (and clear on a failed fetch) so the attention dot and health section never show the previous host's
+    // agent health, matching the header's own detail reset. Disable set-state-in-effect for the synchronous reset.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setHealth(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
     let cancelled = false;
     getHostHealth(detail.host_id)
       .then((h) => { if (!cancelled) setHealth(h); })
-      .catch(() => { /* best-effort: no health section, no dot */ });
+      .catch(() => { if (!cancelled) setHealth(null); });
     return () => { cancelled = true; };
   }, [detail.host_id]);
 

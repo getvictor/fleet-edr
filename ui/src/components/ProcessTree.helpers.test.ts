@@ -4,6 +4,7 @@ import { hierarchy } from "d3";
 import {
   isSystemPath,
   countDescendants,
+  wouldSystemToggleReveal,
   toD3Hierarchy,
   collectMatches,
   chainGenerations,
@@ -70,6 +71,50 @@ describe("countDescendants", () => {
     });
     // 2,3,4,5,6,7 = six descendants.
     expect(countDescendants(tree)).toBe(6);
+  });
+});
+
+describe("wouldSystemToggleReveal", () => {
+  const SYS = "/usr/libexec/trustd"; // a system-path binary (isSystemPath true)
+  const USR = "/opt/homebrew/bin/curl"; // an ordinary binary (isSystemPath false)
+  const noGates = { preservedIds: new Set<number>(), alertChainIds: null, queryFilterIds: null, expandedAggIds: new Set<number>() };
+
+  it("is false when the forest has no non-preserved system-path node", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: USR })] })];
+    expect(wouldSystemToggleReveal(roots, noGates)).toBe(false);
+  });
+
+  it("is true when a hidden system-path node exists (even nested)", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    expect(wouldSystemToggleReveal(roots, noGates)).toBe(true);
+  });
+
+  it("is false when the only system-path node is preserved (e.g. the alerted process)", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    expect(wouldSystemToggleReveal(roots, { ...noGates, preservedIds: new Set([2]) })).toBe(false);
+  });
+
+  it("still counts a system-path node hidden inside a collapsed subtree (collapse is ignored)", () => {
+    // The walk recurses children regardless of collapse, because a collapsed parent's "+N" badge changes when the toggle flips.
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: USR, children: [node({ id: 3, path: SYS })] })] })];
+    expect(wouldSystemToggleReveal(roots, noGates)).toBe(true);
+  });
+
+  it("respects the query filter: a system node outside the match set does not count", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    // queryFilterIds excludes node 2 (and its subtree is pruned in the render), so flipping the toggle changes nothing.
+    expect(wouldSystemToggleReveal(roots, { ...noGates, queryFilterIds: new Set([1]) })).toBe(false);
+  });
+
+  it("respects the alert chain: a system node off the chain does not count", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    expect(wouldSystemToggleReveal(roots, { ...noGates, alertChainIds: new Set([1]) })).toBe(false);
+  });
+
+  it("only walks an aggregated node's sample when it is expanded", () => {
+    const agg = node({ id: 1, path: USR, aggregated: { count: 3, running_count: 1, exited_count: 2, first_fork_ns: 0, last_fork_ns: 0, sample: [node({ id: 2, path: SYS })] } });
+    expect(wouldSystemToggleReveal([agg], noGates)).toBe(false); // collapsed: sample not rendered
+    expect(wouldSystemToggleReveal([agg], { ...noGates, expandedAggIds: new Set([1]) })).toBe(true); // expanded: sample walked
   });
 });
 

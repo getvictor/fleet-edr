@@ -51,13 +51,32 @@ export function countDescendants(node: ProcessNode): number {
   return n;
 }
 
-// countVisibleNodes totals the nodes in a reshaped forest (roots + all descendants). Used to decide whether the "Show system" toggle
-// would change anything: since buildVisibleRoots with showSystem only ever ADDS the hidden system nodes (and their subtrees), an equal
-// count with vs without means the toggle is inert on the current view and can be hidden.
-export function countVisibleNodes(nodes: ProcessNode[]): number {
-  let n = 0;
-  for (const node of nodes) n += 1 + (node.children ? countVisibleNodes(node.children) : 0);
-  return n;
+// wouldSystemToggleReveal reports whether flipping the "Show system" toggle would change the rendered tree, so the toggle is offered
+// only when it does something. It is true iff some node reachable under the current alert-chain and query gates is a non-preserved
+// system-path node: such a node is hidden when showSystem is off and shown when on (or, when it sits inside a collapsed parent, changes
+// that parent's "+N" badge). One lightweight early-exit walk over the raw roots, reusing buildVisibleRoots' gate order, replaces
+// materializing and counting two full trees on every search keystroke. Collapse is intentionally ignored here (a system node hidden
+// inside a collapsed subtree still changes that subtree's badge when the toggle flips); expandedAggIds mirrors how an aggregated node
+// exposes its sample only when expanded.
+export function wouldSystemToggleReveal(
+  roots: ProcessNode[],
+  opts: { preservedIds: Set<number>; alertChainIds: Set<number> | null; queryFilterIds: Set<number> | null; expandedAggIds: Set<number> },
+): boolean {
+  const { preservedIds, alertChainIds, queryFilterIds, expandedAggIds } = opts;
+  const walk = (nodes: ProcessNode[]): boolean => {
+    for (const n of nodes) {
+      // Gates that do not depend on showSystem prune the same subtrees in both trees, so skip them here too (matching buildVisibleRoots).
+      if (alertChainIds && !alertChainIds.has(n.id)) continue;
+      if (queryFilterIds && !queryFilterIds.has(n.id)) continue;
+      // A non-preserved system-path node is exactly what showSystem toggles.
+      if (isSystemPath(n.path) && !preservedIds.has(n.id)) return true;
+      // An aggregated node renders its sample only when expanded; a plain node recurses into its children.
+      const kids = n.aggregated ? (expandedAggIds.has(n.id) ? n.aggregated.sample : undefined) : n.children;
+      if (kids && walk(kids)) return true;
+    }
+    return false;
+  };
+  return walk(roots);
 }
 
 export function toD3Hierarchy(nodes: ProcessNode[]): D3Node {
