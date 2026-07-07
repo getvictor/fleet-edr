@@ -15,8 +15,19 @@
 
 - [x] 3.1 Render `AlertTriageActions` inside the alert breadcrumb row next to the id / severity / title / time; drop the separate actions row.
 
-## 4. Tests + gates
+## 4. Hide the dead "Show system" toggle
 
-- [x] 4.1 Re-home the two agent-health scenario markers to `HostHeader` tests; cover the dot states (healthy / degraded / unhealthy / unknown) and the reveal-on-demand rollup.
-- [x] 4.2 Test that `ProcessDetail` omits the current alert from "Related alerts" and keeps the others.
-- [x] 4.3 tsc, vitest, eslint, dashes, prose, openspec validate, spectrace green.
+- [x] 4.1 Build both system-visibility variants and derive `systemToggleChangesView` (node count differs) via a `countVisibleNodes` helper.
+- [x] 4.2 Render the toggle only when it would change the tree.
+
+## 5. Disable the kill action for an exited process
+
+- [x] 5.1 Derive `processExited` from `exit_time_ns` and fold it into `killDisabled`; show the reason and a muted "process exited" note.
+
+## 6. Tests + gates
+
+- [x] 6.1 Re-home the two agent-health scenario markers to `HostHeader` tests; cover the dot states (healthy / degraded / unhealthy / unknown) and the reveal-on-demand rollup.
+- [x] 6.2 Test that `ProcessDetail` omits the current alert from "Related alerts" and keeps the others.
+- [x] 6.3 Test the toggle is hidden with no system noise and shown when a system process is hidden.
+- [x] 6.4 Test the kill button is disabled + explained for an exited process and dispatches nothing.
+- [x] 6.5 tsc, vitest, eslint, dashes, prose, openspec validate, spectrace green.

@@ -23,6 +23,7 @@ import {
   buildVisibleRoots,
   chainGenerations,
   collectMatches,
+  countVisibleNodes,
   findAlertChain,
   resolveAlertEntry,
   selectNodeFromParams,
@@ -205,10 +206,28 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // isn't a wall of dimmed noise.
   const applyCollapse = query.trim() === "";
   const queryFilterIds = useMemo(() => buildQueryFilterIds(roots, query), [roots, query]);
-  const visibleRoots = useMemo(
+  // Build both system-visibility variants so we can tell whether the toggle would change anything on THIS view. buildVisibleRoots with
+  // showSystem only ever reveals hidden system nodes (and their subtrees), so an identical node count with vs without means there is no
+  // system noise to reveal here (e.g. an alert chain whose only system-path nodes are preserved) and the toggle is inert.
+  const visibleRootsShowSystem = useMemo(
     () =>
-      buildVisibleRoots(roots, { showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds }),
-    [roots, showSystem, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds],
+      buildVisibleRoots(roots, {
+        showSystem: true, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds,
+      }),
+    [roots, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds],
+  );
+  const visibleRootsHideSystem = useMemo(
+    () =>
+      buildVisibleRoots(roots, {
+        showSystem: false, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds,
+      }),
+    [roots, collapsedIds, expandedAggIds, preservedIds, applyCollapse, alertChainIds, queryFilterIds],
+  );
+  const visibleRoots = showSystem ? visibleRootsShowSystem : visibleRootsHideSystem;
+  // Only offer the toggle when flipping it actually changes the rendered tree; a dead control that does nothing is worse than no control.
+  const systemToggleChangesView = useMemo(
+    () => countVisibleNodes(visibleRootsShowSystem) !== countVisibleNodes(visibleRootsHideSystem),
+    [visibleRootsShowSystem, visibleRootsHideSystem],
   );
 
   const toggleCollapsed = useCallback((nodeId: number) => {
@@ -462,19 +481,23 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           </span>
         )}
       </div>
-      <label
-        className="process-tree__toggle"
-        title={showSystem ? "System processes shown" : "System processes hidden"}
-      >
-        <input
-          type="checkbox"
-          className="process-tree__toggle-input"
-          checked={showSystem}
-          onChange={(e) => { setShowSystem(e.target.checked); }}
-        />
-        <span className="process-tree__toggle-switch" aria-hidden="true" />
-        <span className="process-tree__toggle-label">Show system</span>
-      </label>
+      {/* Only offer the toggle when it would change the rendered tree. On an alert chain whose only system-path nodes are the alerted
+          process and its ancestors (kept regardless), flipping it does nothing, so a dead switch is hidden rather than shown. */}
+      {systemToggleChangesView && (
+        <label
+          className="process-tree__toggle"
+          title={showSystem ? "System processes shown" : "System processes hidden"}
+        >
+          <input
+            type="checkbox"
+            className="process-tree__toggle-input"
+            checked={showSystem}
+            onChange={(e) => { setShowSystem(e.target.checked); }}
+          />
+          <span className="process-tree__toggle-switch" aria-hidden="true" />
+          <span className="process-tree__toggle-label">Show system</span>
+        </label>
+      )}
     </div>
   );
 

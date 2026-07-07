@@ -51,6 +51,15 @@ export function countDescendants(node: ProcessNode): number {
   return n;
 }
 
+// countVisibleNodes totals the nodes in a reshaped forest (roots + all descendants). Used to decide whether the "Show system" toggle
+// would change anything: since buildVisibleRoots with showSystem only ever ADDS the hidden system nodes (and their subtrees), an equal
+// count with vs without means the toggle is inert on the current view and can be hidden.
+export function countVisibleNodes(nodes: ProcessNode[]): number {
+  let n = 0;
+  for (const node of nodes) n += 1 + (node.children ? countVisibleNodes(node.children) : 0);
+  return n;
+}
+
 export function toD3Hierarchy(nodes: ProcessNode[]): D3Node {
   function convert(n: ProcessNode): D3Node {
     const kids = n.children?.map(convert);

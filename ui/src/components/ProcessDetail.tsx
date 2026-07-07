@@ -222,10 +222,16 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
   // Drop the alert whose page is already open so "Related alerts" never links back to itself; other alerts on this process remain.
   const relatedAlerts = currentAlertId === undefined ? alerts : alerts.filter((a) => a.id !== currentAlertId);
 
-  const killDisabled = killSending
+  // A process that has already exited cannot be killed: kill targets a live PID, and once the process is gone that PID is either free or
+  // reused by an unrelated process (the exit_reason pid_reuse / reexec cases), so a kill-by-pid could hit the wrong process. Grey the
+  // control out and say why, matching how EDR consoles disable a response action once its target is no longer running.
+  const processExited = node.exit_time_ns !== undefined && node.exit_time_ns > 0;
+  const killDisabled = processExited
+    || killSending
     || (killCommand !== null
       && killCommand.status !== "completed"
       && killCommand.status !== "failed");
+  const killTitle = processExited ? "This process has already exited, so it can no longer be killed" : undefined;
 
   return (
     <Card padding="medium" className="process-detail">
@@ -329,9 +335,13 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
             size="small"
             onClick={handleKillProcess}
             disabled={killDisabled}
+            title={killTitle}
           >
             Kill process
           </Button>
+          {processExited && !killCommand && (
+            <span className="process-detail__cmd-status process-detail__cmd-status--exited">process exited</span>
+          )}
           {killCommand && (
             <span className={`process-detail__cmd-status process-detail__cmd-status--${killCommand.status}`}>
               {killCommand.status}

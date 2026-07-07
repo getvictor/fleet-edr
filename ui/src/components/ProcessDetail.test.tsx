@@ -275,6 +275,18 @@ describe("ProcessDetail kill action", () => {
     await waitFor(() => expect(screen.getByText(/failed: failed to send command/i)).toBeInTheDocument());
   });
 
+  // spec:web-ui/the-kill-action-is-disabled-once-the-process-has-exited/an-exited-process-cannot-be-killed-from-the-detail-panel
+  it("disables the kill button and explains why once the process has exited", async () => {
+    render(<ProcessDetail hostId="h1" node={makeNode({ exit_time_ns: 200 * NS })} onClose={vi.fn()} />);
+    const killButton = await screen.findByRole("button", { name: /kill process/i });
+    expect(killButton).toBeDisabled();
+    expect(killButton).toHaveAttribute("title", "This process has already exited, so it can no longer be killed");
+    expect(screen.getByText("process exited")).toBeInTheDocument();
+    // A disabled control never dispatches a kill for a dead pid (which could hit an unrelated process after PID reuse).
+    fireEvent.click(killButton);
+    expect(api.createCommand).not.toHaveBeenCalled();
+  });
+
   it("hides the kill button when the operator lacks host.kill_process", () => {
     render(
       <PermissionsProvider permissions={[]}>

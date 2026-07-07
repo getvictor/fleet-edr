@@ -30,3 +30,30 @@ When the process detail panel is opened from an alert's page, its "Related alert
 - **WHEN** the process detail panel lists the process's Related alerts
 - **THEN** the alert whose page is open is omitted from the list
 - **AND** the process's other alert is still shown as a link to its alert page
+
+### Requirement: The process tree hides the system-noise toggle when it changes nothing
+
+The process tree's "Show system" toggle (which reveals system-path processes hidden by default) SHALL be offered only when flipping it would change the rendered tree. When the current view has no hidden system-path process to reveal (for example an alert chain whose only system-path nodes are the alerted process and its ancestors, which are shown regardless), the toggle SHALL NOT be rendered, so the operator is never presented with a control that does nothing.
+
+#### Scenario: The toggle is hidden when there is no system noise to reveal
+
+- **GIVEN** a process tree whose visible nodes include no system-path process that is hidden by default
+- **WHEN** the tree renders
+- **THEN** the "Show system" toggle is not shown
+
+#### Scenario: The toggle is shown when system processes are hidden
+
+- **GIVEN** a process tree that contains a system-path process hidden by default
+- **WHEN** the tree renders
+- **THEN** the "Show system" toggle is shown so the operator can reveal it
+
+### Requirement: The kill action is disabled once the process has exited
+
+The process detail panel's "Kill process" control SHALL be disabled when the process has already exited, because a kill targets a live PID and after exit that PID is either free or reused by an unrelated process, so a kill-by-pid could terminate the wrong process. The disabled control SHALL make the reason legible (that the process has already exited).
+
+#### Scenario: An exited process cannot be killed from the detail panel
+
+- **GIVEN** a process whose detail panel is open and which has an exit time
+- **WHEN** the operator views the "Kill process" control
+- **THEN** the control is disabled and indicates that the process has already exited
+- **AND** activating it dispatches no kill command
