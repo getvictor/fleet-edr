@@ -51,6 +51,41 @@ export function countDescendants(node: ProcessNode): number {
   return n;
 }
 
+// wouldSystemToggleReveal reports whether flipping the "Show system" toggle would change the rendered tree, so the toggle is offered
+// only when it does something. It is true iff some node reachable under the current alert-chain and query gates is a non-preserved
+// system-path node: such a node is hidden when showSystem is off and shown when on (or, when it sits inside a collapsed parent, changes
+// that parent's "+N" badge). One lightweight early-exit walk over the raw roots, reusing buildVisibleRoots' gate order, replaces
+// materializing and counting two full trees on every search keystroke. Collapse is intentionally ignored here (a system node hidden
+// inside a collapsed subtree still changes that subtree's badge when the toggle flips); expandedAggIds mirrors how an aggregated node
+// exposes its sample only when expanded.
+export interface SystemToggleGates {
+  preservedIds: Set<number>;
+  alertChainIds: Set<number> | null;
+  queryFilterIds: Set<number> | null;
+  expandedAggIds: Set<number>;
+}
+
+// toggleWalkChildren is the child set the reveal walk descends into: an aggregated node exposes its sample only when expanded; a plain
+// node exposes its children. Collapse is intentionally ignored (a collapsed parent's "+N" badge still changes when the toggle flips).
+function toggleWalkChildren(n: ProcessNode, gates: SystemToggleGates): ProcessNode[] {
+  if (n.aggregated) return gates.expandedAggIds.has(n.id) ? (n.aggregated.sample ?? []) : [];
+  return n.children ?? [];
+}
+
+// systemToggleAffectsNode is true iff n, or any descendant reachable under the non-showSystem gates, is a non-preserved system-path node
+// (the thing the toggle hides/shows). Split out of wouldSystemToggleReveal so each function stays under the cognitive-complexity cap.
+function systemToggleAffectsNode(n: ProcessNode, gates: SystemToggleGates): boolean {
+  // Gates that do not depend on showSystem prune the same subtrees in both trees, so a pruned node contributes nothing.
+  if (gates.alertChainIds && !gates.alertChainIds.has(n.id)) return false;
+  if (gates.queryFilterIds && !gates.queryFilterIds.has(n.id)) return false;
+  if (isSystemPath(n.path) && !gates.preservedIds.has(n.id)) return true;
+  return toggleWalkChildren(n, gates).some((c) => systemToggleAffectsNode(c, gates));
+}
+
+export function wouldSystemToggleReveal(roots: ProcessNode[], gates: SystemToggleGates): boolean {
+  return roots.some((n) => systemToggleAffectsNode(n, gates));
+}
+
 export function toD3Hierarchy(nodes: ProcessNode[]): D3Node {
   function convert(n: ProcessNode): D3Node {
     const kids = n.children?.map(convert);

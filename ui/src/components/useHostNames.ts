@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { listHosts } from "../../api";
-import type { HostSummary } from "../../types";
+import { listHosts } from "../api";
+import type { HostSummary } from "../types";
 
-// useHostNames resolves a host_id -> hostname map once from listHosts so a search row can show a name, not a bare id (issue #582). The
+// useHostNames resolves a host_id -> hostname map once from listHosts so a row can show a name, not a bare hardware id (issue #582). The
 // host set is small, so one call decorates every row; on failure the map stays empty and rows fall back to the id. Shared by the
-// process and event search modes so both decorate rows identically.
+// process and event search modes and the alert list so every fleet-wide list decorates a host the same way.
 export function useHostNames(): Map<string, string> {
   const [hostNames, setHostNames] = useState<Map<string, string>>(new Map());
   useEffect(() => {

@@ -4,6 +4,7 @@ import { hierarchy } from "d3";
 import {
   isSystemPath,
   countDescendants,
+  wouldSystemToggleReveal,
   toD3Hierarchy,
   collectMatches,
   chainGenerations,
@@ -73,11 +74,61 @@ describe("countDescendants", () => {
   });
 });
 
+describe("wouldSystemToggleReveal", () => {
+  const SYS = "/usr/libexec/trustd"; // a system-path binary (isSystemPath true)
+  const USR = "/opt/homebrew/bin/curl"; // an ordinary binary (isSystemPath false)
+  const noGates = { preservedIds: new Set<number>(), alertChainIds: null, queryFilterIds: null, expandedAggIds: new Set<number>() };
+
+  it("is false when the forest has no non-preserved system-path node", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: USR })] })];
+    expect(wouldSystemToggleReveal(roots, noGates)).toBe(false);
+  });
+
+  it("is true when a hidden system-path node exists (even nested)", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    expect(wouldSystemToggleReveal(roots, noGates)).toBe(true);
+  });
+
+  it("is false when the only system-path node is preserved (e.g. the alerted process)", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    expect(wouldSystemToggleReveal(roots, { ...noGates, preservedIds: new Set([2]) })).toBe(false);
+  });
+
+  it("still counts a system-path node hidden inside a collapsed subtree (collapse is ignored)", () => {
+    // The walk recurses children regardless of collapse, because a collapsed parent's "+N" badge changes when the toggle flips.
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: USR, children: [node({ id: 3, path: SYS })] })] })];
+    expect(wouldSystemToggleReveal(roots, noGates)).toBe(true);
+  });
+
+  it("respects the query filter: a system node outside the match set does not count", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    // queryFilterIds excludes node 2 (and its subtree is pruned in the render), so flipping the toggle changes nothing.
+    expect(wouldSystemToggleReveal(roots, { ...noGates, queryFilterIds: new Set([1]) })).toBe(false);
+  });
+
+  it("respects the alert chain: a system node off the chain does not count", () => {
+    const roots = [node({ id: 1, path: USR, children: [node({ id: 2, path: SYS })] })];
+    expect(wouldSystemToggleReveal(roots, { ...noGates, alertChainIds: new Set([1]) })).toBe(false);
+  });
+
+  it("only walks an aggregated node's sample when it is expanded", () => {
+    const aggregated = {
+      count: 3,
+      running_count: 1,
+      exited_count: 2,
+      first_fork_ns: 0,
+      last_fork_ns: 0,
+      sample: [node({ id: 2, path: SYS })],
+    };
+    const agg = node({ id: 1, path: USR, aggregated });
+    expect(wouldSystemToggleReveal([agg], noGates)).toBe(false); // collapsed: sample not rendered
+    expect(wouldSystemToggleReveal([agg], { ...noGates, expandedAggIds: new Set([1]) })).toBe(true); // expanded: sample walked
+  });
+});
+
 describe("toD3Hierarchy", () => {
   it("returns the single root directly with basename as name and children present", () => {
-    const d3n = toD3Hierarchy([
-      node({ id: 1, pid: 100, path: "/usr/bin/curl", children: [node({ id: 2, pid: 200, path: "/bin/sh" })] }),
-    ]);
+    const d3n = toD3Hierarchy([node({ id: 1, pid: 100, path: "/usr/bin/curl", children: [node({ id: 2, pid: 200, path: "/bin/sh" })] })]);
     expect(d3n.name).toBe("curl");
     expect(d3n.pid).toBe(100);
     expect(d3n.path).toBe("/usr/bin/curl");
@@ -93,10 +144,7 @@ describe("toD3Hierarchy", () => {
   });
 
   it("wraps multiple roots under a synthetic root with pid 0", () => {
-    const d3n = toD3Hierarchy([
-      node({ id: 1, pid: 100, path: "/bin/a" }),
-      node({ id: 2, pid: 101, path: "/bin/b" }),
-    ]);
+    const d3n = toD3Hierarchy([node({ id: 1, pid: 100, path: "/bin/a" }), node({ id: 2, pid: 101, path: "/bin/b" })]);
     expect(d3n.name).toBe("root");
     expect(d3n.pid).toBe(0);
     expect(d3n.path).toBe("");
@@ -194,7 +242,9 @@ describe("chainGenerations", () => {
   // ids 1 -> 2 -> 3 with distinct pidversions; id 4 is off-chain; id 5 (a chain node) has no pidversion.
   const roots = [
     node({
-      id: 1, pid: 100, pidversion: 10,
+      id: 1,
+      pid: 100,
+      pidversion: 10,
       children: [
         node({ id: 2, pid: 200, pidversion: 11, children: [node({ id: 3, pid: 300, pidversion: 12 })] }),
         node({ id: 4, pid: 400, pidversion: 99 }),
@@ -221,9 +271,7 @@ describe("chainGenerations", () => {
 });
 
 describe("selectNodeFromParams", () => {
-  const roots = [
-    node({ id: 1, pid: 1, path: "/sbin/launchd", children: [node({ id: 6, pid: 42, path: "/usr/bin/deep" })] }),
-  ];
+  const roots = [node({ id: 1, pid: 1, path: "/sbin/launchd", children: [node({ id: 6, pid: 42, path: "/usr/bin/deep" })] })];
 
   it("returns null when there are no roots", () => {
     expect(selectNodeFromParams([], new URLSearchParams("process=1"))).toBeNull();
@@ -344,9 +392,7 @@ describe("viewHref", () => {
 
 describe("buildPreservedIds", () => {
   // R(1) -> A(2) -> B(3); R(1) -> C(4)
-  const roots = [
-    node({ id: 1, children: [node({ id: 2, children: [node({ id: 3 })] }), node({ id: 4 })] }),
-  ];
+  const roots = [node({ id: 1, children: [node({ id: 2, children: [node({ id: 3 })] }), node({ id: 4 })] })];
 
   it("keeps an alerted node and its full ancestor path, but not unrelated branches", () => {
     const keep = buildPreservedIds(roots, new Set([3]));
@@ -441,8 +487,7 @@ describe("buildVisibleRoots", () => {
   });
 
   // childIds pulls the immediate children ids under the first (id 2) grandchild-holder so assertions read clearly.
-  const appChildIds = (out: ProcessNode[]): number[] =>
-    (out[0].children?.[0].children ?? []).map((c) => c.id).sort((a, b) => a - b);
+  const appChildIds = (out: ProcessNode[]): number[] => (out[0].children?.[0].children ?? []).map((c) => c.id).sort((a, b) => a - b);
 
   it("hides system-path nodes and their subtrees when showSystem is false", () => {
     const out = buildVisibleRoots(makeTree(), { ...baseFilters(), showSystem: false });

@@ -123,22 +123,24 @@ describe("SearchPage mode selector", () => {
     expect(screen.getByRole("link", { name: "Connections" })).not.toHaveAttribute("aria-current");
   });
 
-  it("switches to connection mode and prompts without issuing an event search", async () => {
+  it("switches to connection mode and issues a fleet-wide event search on recent events", async () => {
     vi.spyOn(api, "searchProcesses").mockResolvedValue({ rows: [], total_matched: 0 });
     const evtSpy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [], total_matched: 0 });
     vi.spyOn(api, "listHosts").mockResolvedValue([]);
     renderSearch("/search");
     fireEvent.click(screen.getByRole("link", { name: "Connections" }));
-    expect(await screen.findByText(/Enter a remote address/i)).toBeInTheDocument();
-    expect(evtSpy).not.toHaveBeenCalled(); // no artifact value yet -> no request
+    // Connection mode opens on recent events (like process mode), so it fires a search immediately with no artifact filter.
+    await waitFor(() => { expect(evtSpy).toHaveBeenCalledWith("connections", expect.objectContaining({ value: "" }), undefined); });
     expect(screen.getByRole("link", { name: "Connections" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("renders DNS mode from a ?mode=dns URL", async () => {
-    vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [], total_matched: 0 });
+  it("renders DNS mode from a ?mode=dns URL and lists recent lookups", async () => {
+    const evtSpy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [], total_matched: 0 });
     vi.spyOn(api, "listHosts").mockResolvedValue([]);
     renderSearch("/search?mode=dns");
-    expect(await screen.findByText(/Enter a domain/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "DNS" })).toHaveAttribute("aria-current", "page");
+    await waitFor(() => { expect(screen.getByRole("link", { name: "DNS" })).toHaveAttribute("aria-current", "page"); });
+    // No prompt: with no lookups it shows the empty label, having issued the recent-events search.
+    expect(await screen.findByText("No matching DNS queries.")).toBeInTheDocument();
+    expect(evtSpy).toHaveBeenCalled();
   });
 });

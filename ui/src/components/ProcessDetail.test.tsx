@@ -224,6 +224,25 @@ describe("ProcessDetail related alerts", () => {
     const link = await screen.findByRole("link", { name: "T1059.004" });
     expect(link).toHaveAttribute("href", "/rules/shell_from_office");
   });
+
+  // spec:web-ui/the-process-detail-omits-a-self-referential-alert-link/related-alerts-omit-the-alert-whose-page-is-open
+  it("omits the current alert from Related alerts but keeps the process's other alerts", async () => {
+    vi.mocked(api.listAlertsByProcessId).mockResolvedValue([
+      makeAlert({ id: 1648, title: "Suspicious exec chain" }),
+      makeAlert({ id: 1700, title: "Credential dump" }),
+    ]);
+    render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} currentAlertId={1648} />);
+
+    // The other alert on the same process still links; the alert whose page is open does not link back to itself.
+    expect(await screen.findByRole("link", { name: /Credential dump/ })).toHaveAttribute("href", "/alerts/1700");
+    expect(screen.queryByRole("link", { name: /Suspicious exec chain/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps every alert linked when opened outside an alert context (no currentAlertId)", async () => {
+    vi.mocked(api.listAlertsByProcessId).mockResolvedValue([makeAlert({ id: 1648, title: "Suspicious exec chain" })]);
+    render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
+    expect(await screen.findByRole("link", { name: /Suspicious exec chain/ })).toHaveAttribute("href", "/alerts/1648");
+  });
 });
 
 describe("ProcessDetail kill action", () => {
@@ -254,6 +273,18 @@ describe("ProcessDetail kill action", () => {
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /kill process/i }));
     await waitFor(() => expect(screen.getByText(/failed: failed to send command/i)).toBeInTheDocument());
+  });
+
+  // spec:web-ui/the-kill-action-is-disabled-once-the-process-has-exited/an-exited-process-cannot-be-killed-from-the-detail-panel
+  it("disables the kill button and explains why once the process has exited", async () => {
+    render(<ProcessDetail hostId="h1" node={makeNode({ exit_time_ns: 200 * NS })} onClose={vi.fn()} />);
+    const killButton = await screen.findByRole("button", { name: /kill process/i });
+    expect(killButton).toBeDisabled();
+    expect(killButton).toHaveAttribute("title", "This process has already exited, so it can no longer be killed");
+    expect(screen.getByText("process exited")).toBeInTheDocument();
+    // A disabled control never dispatches a kill for a dead pid (which could hit an unrelated process after PID reuse).
+    fireEvent.click(killButton);
+    expect(api.createCommand).not.toHaveBeenCalled();
   });
 
   it("hides the kill button when the operator lacks host.kill_process", () => {

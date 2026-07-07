@@ -100,6 +100,8 @@
     &--acked { color: $rainbow-orange; }
     &--completed { color: $ui-success; }
     &--failed { color: $core-vibrant-red; }
+    // Muted grey: an exited process is a neutral fact next to the greyed-out Kill button, not a warning or error state.
+    &--exited { color: $ui-fleet-black-50; }
   }
 
   &__loading {

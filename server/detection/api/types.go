@@ -206,12 +206,19 @@ type ProcessSearchFilter struct {
 }
 
 // ProcessSearchResult is one page of a fleet-wide process search plus the pagination and total metadata. NextCursor is empty on the
-// last page. TotalMatched counts every row matching the filter independent of the page size, so the UI can show "N results".
+// last page. TotalMatched counts every row matching the filter independent of the page size, so the UI can show "N results", or is
+// TotalNotCounted when the count was deliberately skipped (see below).
 type ProcessSearchResult struct {
 	Rows         []Process `json:"rows"`
 	NextCursor   string    `json:"next_cursor,omitempty"`
 	TotalMatched int64     `json:"total_matched"`
 }
+
+// TotalNotCounted marks TotalMatched as "not computed". The fully-unfiltered fleet browse skips the COUNT(*) over the whole processes
+// table (its most expensive half) because a browse's grand total is of only marginal value and pagination rides NextCursor, not the
+// total; any filter (even a lone host_id or time window, whose count is index-cheap) restores the exact count. It shares the visibility
+// event search's sentinel value so the UI's "Showing N" vs "Showing N of M" branch is identical across process and event search.
+const TotalNotCounted = visibilityapi.TotalNotCounted
 
 // Host is the operator-visible row from the hosts summary table. Mirrors HostSummary but adds updated_at; both are kept distinct
 // because the operator list endpoint historically returned the HostSummary shape and the UI snapshots it.

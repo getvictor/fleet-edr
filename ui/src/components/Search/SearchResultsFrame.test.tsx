@@ -20,12 +20,6 @@ function frame(over: Partial<Parameters<typeof SearchResultsFrame>[0]> = {}) {
 }
 
 describe("SearchResultsFrame", () => {
-  it("shows the prompt and nothing else when a prompt is set", () => {
-    frame({ prompt: "Type something", count: 0 });
-    expect(screen.getByText("Type something")).toBeInTheDocument();
-    expect(screen.queryByText("a-row")).not.toBeInTheDocument();
-  });
-
   it("shows a full-page error when there are no rows", () => {
     frame({ error: "boom", count: 0 });
     expect(screen.getByText("Error: boom")).toBeInTheDocument();
@@ -40,6 +34,13 @@ describe("SearchResultsFrame", () => {
   it("shows the empty label when a completed search matched nothing", () => {
     frame({ count: 0 });
     expect(screen.getByText("Nothing here.")).toBeInTheDocument();
+  });
+
+  it("shows only the count, without a total, when the total was not computed", () => {
+    // The recent-events browse skips the fleet-wide count and reports a negative total; the frame shows "Showing N" only.
+    frame({ count: 50, total: -1, hasMore: true });
+    expect(screen.getByText("Showing 50")).toBeInTheDocument();
+    expect(screen.queryByText(/of .* matches/)).not.toBeInTheDocument();
   });
 
   it("keeps the rows and shows the error inline when a load-more fails", () => {

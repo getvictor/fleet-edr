@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import "./HostHeader.scss";
-import { getHostDetail } from "../api";
-import type { HostDetail } from "../types";
+import { getHostDetail, getHostHealth } from "../api";
+import type { HostDetail, HostHealth } from "../types";
 import { PageHeader } from "./ui/PageHeader";
 import { CopyButton } from "./ui/CopyButton";
+import { HealthBadge } from "./ui/HealthBadge";
 import { useDismiss } from "./ui/useDismiss";
 import { formatRelativeNs, isOnline } from "../time";
 import { NANOSECONDS_PER_MILLISECOND } from "../constants";
@@ -12,6 +13,21 @@ import { NANOSECONDS_PER_MILLISECOND } from "../constants";
 interface HostHeaderProps {
   readonly hostId: string;
   readonly actions?: ReactNode;
+}
+
+// Friendly labels for the component types shipped today. An unrecognized type (a future signal) falls back to its raw identifier.
+const COMPONENT_LABELS: Record<string, string> = {
+  endpoint_security_extension: "Security extension",
+  network_extension: "Network extension",
+};
+
+// healthDotClass maps the rollup to the attention dot on the Details trigger: none when healthy (green is "no news") or unknown (no
+// snapshot yet, nothing actionable), amber when degraded, red when unhealthy. So the operator only sees a marker when something needs
+// their attention, and the full conditions live one click away in the popover.
+function healthDotClass(status: string | undefined): string | null {
+  if (status === "degraded") return "host-header__health-dot--warn";
+  if (status === "unhealthy") return "host-header__health-dot--crit";
+  return null;
 }
 
 // HostHeader is the host page's identity header (issue #579). It leads with the enrollment hostname (falling back to the raw host id),
@@ -25,7 +41,7 @@ export function HostHeader({ hostId, actions }: HostHeaderProps) {
 
   useEffect(() => {
     // Reset on hostId change so a stale header never shows over another host (React Router re-renders without unmounting). Disable
-    // set-state-in-effect for the synchronous reset, matching HostHealthPanel and ProcessTree.
+    // set-state-in-effect for the synchronous reset, matching ProcessTree.
     /* eslint-disable react-hooks/set-state-in-effect */
     setDetail(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -75,10 +91,28 @@ function metaRow(detail: HostDetail, online: boolean): ReactNode {
 }
 
 // HostDetailsPopover is the click-open reference panel for the host's secondary facts (issue #579 simplification). It keeps the raw id,
-// its copy control, agent version, source IP, event count, exact last-seen, and enrollment date out of the always-visible header. Closes
-// on outside-click and Escape, mirroring AccountMenu's disclosure pattern.
+// its copy control, agent version, source IP, event count, exact last-seen, enrollment date, and the agent-health conditions out of the
+// always-visible header. The trigger carries an attention dot only when agent health needs attention, so a clean host shows no health
+// chrome at all. Closes on outside-click and Escape, mirroring AccountMenu's disclosure pattern.
 function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
   const { open, setOpen, ref } = useDismiss<HTMLDivElement>();
+  const [health, setHealth] = useState<HostHealth | null>(null);
+
+  useEffect(() => {
+    // Reset on host_id change (and clear on a failed fetch) so the attention dot and health section never show the previous host's
+    // agent health, matching the header's own detail reset. Disable set-state-in-effect for the synchronous reset.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setHealth(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    let cancelled = false;
+    getHostHealth(detail.host_id)
+      .then((h) => { if (!cancelled) setHealth(h); })
+      .catch(() => { if (!cancelled) setHealth(null); });
+    return () => { cancelled = true; };
+  }, [detail.host_id]);
+
+  const dotClass = healthDotClass(health?.overall_status);
+  const components = health?.components ?? [];
 
   return (
     <div className="host-header__details" ref={ref}>
@@ -87,12 +121,35 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
         className="host-header__details-trigger"
         aria-haspopup="dialog"
         aria-expanded={open}
+        title={dotClass ? "Agent needs attention" : undefined}
         onClick={() => { setOpen((v) => !v); }}
       >
         Details
+        {dotClass && <span className={`host-header__health-dot ${dotClass}`} aria-hidden="true" />}
+        {dotClass && <span className="host-header__sr-only">agent needs attention</span>}
       </button>
       {open && (
         <div className="host-header__details-popover" role="dialog" aria-label="Host details">
+          {health && (
+            <div className="host-header__health">
+              <div className="host-header__health-head">
+                <span className="host-header__details-label">Agent health</span>
+                <HealthBadge status={health.overall_status} prefix="Agent" />
+              </div>
+              {components.length > 0 && (
+                <ul className="host-header__health-list">
+                  {components.map((c) => (
+                    <li key={c.type} className="host-header__health-item">
+                      <HealthBadge status={c.status} />
+                      <span className="host-header__health-component">{COMPONENT_LABELS[c.type] ?? c.type}</span>
+                      {c.message ? <span className="host-header__health-message">{c.message}</span> : null}
+                      <span className="host-header__health-since">{formatRelativeNs(c.last_transition_ns)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           <dl className="host-header__details-list">
             <div className="host-header__details-row">
               <dt>Host ID</dt>

@@ -236,6 +236,33 @@ describe("ProcessTreeView sibling aggregation", () => {
   });
 });
 
+describe("ProcessTreeView show-system toggle visibility", () => {
+  beforeEach(() => {
+    // showSystem persists to localStorage; clear it so a prior test's toggle state can't leak into these renders.
+    localStorage.clear();
+  });
+
+  // spec:web-ui/the-process-tree-hides-the-system-noise-toggle-when-it-changes-nothing/the-toggle-is-hidden-when-there-is-no-system-noise-to-reveal
+  it("hides the Show system toggle when the view has no hidden system processes", async () => {
+    // The default forest (launchd -> fleet-edr-agent) has no system-path nodes, so flipping the toggle would change nothing.
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    renderTree("");
+    await screen.findByText(/launchd/);
+    expect(screen.queryByText("Show system")).not.toBeInTheDocument();
+  });
+
+  // spec:web-ui/the-process-tree-hides-the-system-noise-toggle-when-it-changes-nothing/the-toggle-is-shown-when-system-processes-are-hidden
+  it("shows the Show system toggle when a system process is hidden by default", async () => {
+    const withSystemNode: ProcessNode[] = [
+      { ...process(1, 100, 1, "/sbin/launchd"), children: [process(2, 200, 100, "/usr/libexec/opendirectoryd")] },
+    ];
+    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: withSystemNode });
+    renderTree("");
+    // The /usr/libexec child is hidden while showSystem is off, so the toggle that would reveal it is offered.
+    expect(await screen.findByText("Show system")).toBeInTheDocument();
+  });
+});
+
 describe("ProcessTreeView process-backed alert", () => {
   it("keys the explanation on process_id === 0, not on an empty graph", async () => {
     // An attributed alert (process_id !== 0) whose target happens to be outside the loaded window: the graph is empty, but

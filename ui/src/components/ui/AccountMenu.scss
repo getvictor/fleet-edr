@@ -35,18 +35,15 @@
     text-transform: uppercase;
   }
 
-  &__email {
-    font-family: "Source Code Pro", monospace;
-    font-size: 13px;
-  }
-
   &__auth-method {
     padding: 2px 6px;
     border-radius: 4px;
-    background: rgba(235, 188, 67, 0.2);
-    // Darkened from #ebbc43 to clear WCAG AA (4.5:1) against the light-gold background; matches the amber used elsewhere.
-    color: #7a5e12;
+    // Solid gold pill with dark text so the badge is readable on the DARK nav bar. The previous translucent-gold fill + brown text was
+    // tuned for a light background and vanished (brown on navy); a solid amber also reads as "attention" for a break-glass session.
+    background: $ui-warning;
+    color: $core-fleet-black;
     font-size: 11px;
+    font-weight: 600;
   }
 
   &__chevron {

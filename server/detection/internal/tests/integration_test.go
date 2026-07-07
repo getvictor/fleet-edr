@@ -3238,7 +3238,8 @@ func TestStore_ActivityHistogram(t *testing.T) {
 }
 
 // searchSeed is one process row for the fleet-wide search tests. CodeSigning is the raw JSON the extension would send; empty means
-// the block is absent (the exec'd-unsigned case). ExecTimeNs zero leaves exec_time_ns NULL (a fork-only row).
+// the block is absent (the exec'd-unsigned case). ExecTimeNs zero leaves exec_time_ns NULL (a fork-only row). Path empty defaults to
+// /usr/bin/tool; ExitReason empty leaves exit_reason NULL (a still-running row).
 type searchSeed struct {
 	HostID      string
 	PID         int
@@ -3247,21 +3248,31 @@ type searchSeed struct {
 	SHA         string
 	CodeSigning string
 	UID         int
+	Path        string
+	ExitReason  string
 }
 
 // seedSearchProcess inserts one searchSeed row directly (the fast path for asserting the store query, per the repo test matrix).
 func seedSearchProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection, seed searchSeed) {
 	t.Helper()
-	var cs, execNs any
+	var cs, execNs, exitReason any
 	if seed.CodeSigning != "" {
 		cs = seed.CodeSigning
 	}
 	if seed.ExecNs != 0 {
 		execNs = seed.ExecNs
 	}
+	if seed.ExitReason != "" {
+		exitReason = seed.ExitReason
+	}
+	path := seed.Path
+	if path == "" {
+		path = "/usr/bin/tool"
+	}
 	_, err := d.Store().DB().ExecContext(ctx, `
-		INSERT INTO processes (host_id, pid, ppid, path, uid, code_signing, sha256, fork_time_ns, exec_time_ns)
-		VALUES (?, ?, 1, '/usr/bin/tool', ?, ?, ?, ?, ?)`, seed.HostID, seed.PID, seed.UID, cs, seed.SHA, seed.ForkNs, execNs)
+		INSERT INTO processes (host_id, pid, ppid, path, uid, code_signing, sha256, fork_time_ns, exec_time_ns, exit_reason)
+		VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+		seed.HostID, seed.PID, path, seed.UID, cs, seed.SHA, seed.ForkNs, execNs, exitReason)
 	require.NoError(t, err)
 }
 
@@ -3320,6 +3331,96 @@ func TestStore_SearchProcesses_Filters(t *testing.T) {
 	res, err = d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{Signing: "platform"}, "", 50)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, res.TotalMatched)
+}
+
+// TestStore_SearchProcesses_SkipsCountWhenUnfiltered pins the count-skip: a fully-unfiltered fleet browse reports TotalNotCounted (the
+// COUNT over the whole processes table is skipped), while any filter (here a lone host_id) restores the exact count. It still returns a
+// full page and a next cursor, so pagination is unaffected by the missing total.
+// spec:server-rest-api/fleet-wide-process-search-endpoint/unfiltered-browse-skips-the-total-count
+func TestStore_SearchProcesses_SkipsCountWhenUnfiltered(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "SRCH-NOCOUNT"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+	for i := range 3 {
+		seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 5000 + i, ForkNs: int64(i+1) * 1000, ExecNs: 1, SHA: "nc"})
+	}
+
+	// Unfiltered fleet browse: the count is skipped (other parallel tests seed the shared table, so an exact fleet total is neither
+	// stable nor asserted here), but the page and cursor are still served.
+	unfiltered, err := d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{}, "", 2)
+	require.NoError(t, err)
+	assert.Equal(t, api.TotalNotCounted, unfiltered.TotalMatched, "the unfiltered browse skips the COUNT and reports the sentinel")
+	assert.Len(t, unfiltered.Rows, 2, "a full page is still returned")
+	assert.NotEmpty(t, unfiltered.NextCursor, "pagination is unaffected by the skipped total")
+
+	// A single host_id filter restores the exact count over this host's seeded rows.
+	filtered, err := d.Store().SearchProcesses(ctx, api.ProcessSearchFilter{HostID: host}, "", 50)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, filtered.TotalMatched, "a filtered search reports the exact total")
+}
+
+// TestStore_SearchProcesses_IndividualFilters pins the store-level behaviour of each filter the "Fleet-wide process search endpoint"
+// requirement lists, closing the gaps the compose-only test above leaves: the path substring (including LIKE-metacharacter escaping),
+// the fork-time window bounds, exit_reason, uid in isolation, the three signer classes the platform/ad-hoc/unsigned cases skip
+// (invalid / developer-id / signed), and empty-result queries. One host's rows are exercised one filter at a time, scoped by host_id.
+func TestStore_SearchProcesses_IndividualFilters(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "SRCH-F"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+
+	// flags bit 0 (0x1) is CS_VALID, bit 1 (0x2) is CS_ADHOC (search.go). invalid clears CS_VALID; developer-id carries a team id;
+	// signed is valid, non-platform, no team, with a signing id.
+	invalidCS := `{"team_id":"","signing_id":"com.x.invalid","flags":0,"is_platform_binary":false}`
+	developerCS := `{"team_id":"TEAM123","signing_id":"com.x.dev","flags":1,"is_platform_binary":false}`
+	signedCS := `{"team_id":"","signing_id":"com.x.signed","flags":1,"is_platform_binary":false}`
+
+	// uid 0: 100,104,105,106; uid 501: 101,102,103. a_b vs axb probes the LIKE underscore-escape.
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 100, ForkNs: 1000, ExecNs: 1001, SHA: "fa", UID: 0, Path: "/usr/bin/curl", ExitReason: "event"})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 101, ForkNs: 2000, ExecNs: 2001, SHA: "fb", UID: 501, Path: "/opt/app/agent", ExitReason: "pid_reuse"})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 102, ForkNs: 3000, ExecNs: 3001, SHA: "fc", UID: 501, Path: "/usr/bin/a_b"})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 103, ForkNs: 3050, ExecNs: 3051, SHA: "fd", UID: 501, Path: "/usr/bin/axb"})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 104, ForkNs: 4000, ExecNs: 4001, SHA: "fe", UID: 0, Path: "/bin/inv", CodeSigning: invalidCS})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 105, ForkNs: 4100, ExecNs: 4101, SHA: "ff", UID: 0, Path: "/bin/dev", CodeSigning: developerCS})
+	seedSearchProcess(t, ctx, d, searchSeed{HostID: host, PID: 106, ForkNs: 4200, ExecNs: 4201, SHA: "fg", UID: 0, Path: "/bin/sgn", CodeSigning: signedCS})
+
+	uid501 := 501
+	cases := []struct {
+		name   string
+		filter api.ProcessSearchFilter
+		want   []int
+	}{
+		{"path substring matches", api.ProcessSearchFilter{HostID: host, Path: "curl"}, []int{100}},
+		{"path LIKE underscore is escaped, not a wildcard", api.ProcessSearchFilter{HostID: host, Path: "a_b"}, []int{102}},
+		{"from bounds the window low", api.ProcessSearchFilter{HostID: host, FromNs: 4000}, []int{104, 105, 106}},
+		{"to bounds the window high", api.ProcessSearchFilter{HostID: host, ToNs: 1000}, []int{100}},
+		{"from and to bound both ends", api.ProcessSearchFilter{HostID: host, FromNs: 2000, ToNs: 3050}, []int{101, 102, 103}},
+		{"exit_reason matches exactly", api.ProcessSearchFilter{HostID: host, ExitReason: "event"}, []int{100}},
+		{"exit_reason distinguishes values", api.ProcessSearchFilter{HostID: host, ExitReason: "pid_reuse"}, []int{101}},
+		{"exit_reason with no match is empty", api.ProcessSearchFilter{HostID: host, ExitReason: "reexec"}, nil},
+		{"signing invalid", api.ProcessSearchFilter{HostID: host, Signing: "invalid"}, []int{104}},
+		{"signing developer-id", api.ProcessSearchFilter{HostID: host, Signing: "developer-id"}, []int{105}},
+		{"signing signed", api.ProcessSearchFilter{HostID: host, Signing: "signed"}, []int{106}},
+		{"uid isolates a single owner", api.ProcessSearchFilter{HostID: host, UID: &uid501}, []int{101, 102, 103}},
+		{"hash with no match is empty", api.ProcessSearchFilter{HostID: host, Hash: "no-such-hash"}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := d.Store().SearchProcesses(ctx, tc.filter, "", 50)
+			require.NoError(t, err)
+			got := make([]int, 0, len(res.Rows))
+			for _, r := range res.Rows {
+				got = append(got, int(r.PID))
+			}
+			assert.ElementsMatch(t, tc.want, got)
+			assert.EqualValues(t, len(tc.want), res.TotalMatched)
+		})
+	}
 }
 
 // spec:server-rest-api/fleet-wide-process-search-endpoint/keyset-pagination-is-stable-and-complete

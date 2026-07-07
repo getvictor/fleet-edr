@@ -82,20 +82,29 @@ func TestHandleDNSSearch_MapsToQueryName(t *testing.T) {
 	assert.Equal(t, "evil.example", got.Value)
 }
 
-// spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/missing-artifact-value-is-rejected
-func TestHandleEventSearch_MissingValueIs400(t *testing.T) {
+// spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/absent-artifact-value-lists-recent-events
+func TestHandleEventSearch_NoValueListsRecentEvents(t *testing.T) {
 	t.Parallel()
-	er := fakeEventSearch{fn: func(context.Context, visibilityapi.EventSearchFilter, string, int) (visibilityapi.EventSearchResult, error) {
-		t.Fatal("reader must not be reached without an artifact value")
-		return visibilityapi.EventSearchResult{}, nil
+	var got visibilityapi.EventSearchFilter
+	reached := 0
+	er := fakeEventSearch{fn: func(_ context.Context, f visibilityapi.EventSearchFilter, _ string, _ int) (visibilityapi.EventSearchResult, error) {
+		got = f
+		reached++
+		return visibilityapi.EventSearchResult{
+			Events:       []visibilityapi.Event{{EventID: "recent", HostID: "h1", EventType: f.EventType}},
+			TotalMatched: 1,
+		}, nil
 	}}
 	srv := newEventSearchServer(t, er, allowAllAuthZ{})
 
+	// An absent (or empty) artifact value lists recent events of the type instead of 400ing; the reader is reached with no Value filter.
 	for _, path := range []string{"/api/search/connections", "/api/search/dns?query_name="} {
 		resp := doGet(t, srv, path)
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "path %q", path)
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "path %q", path)
 		resp.Body.Close()
 	}
+	assert.Equal(t, 2, reached, "both routes queried the reader")
+	assert.Empty(t, got.Value, "no artifact filter is applied when the value is absent")
 }
 
 func TestHandleEventSearch_MalformedCursorIs400(t *testing.T) {

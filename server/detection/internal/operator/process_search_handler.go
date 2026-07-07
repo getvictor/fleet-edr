@@ -26,6 +26,14 @@ var validSigningClasses = map[string]bool{
 	"unsigned": true, "invalid": true, "ad-hoc": true, "developer-id": true, "platform": true, "signed": true,
 }
 
+// validExitReasons is the accepted exit_reason filter vocabulary, the same closed set the graph writes (api.ExitReason*). A value
+// outside it is a 400 rather than a silently-empty fleet query, matching the signing filter: an analyst must be able to trust that the
+// filter they typed was applied, not silently misspelled into zero results.
+var validExitReasons = map[string]bool{
+	api.ExitReasonEvent: true, api.ExitReasonTTLReconciliation: true, api.ExitReasonPIDReuse: true,
+	api.ExitReasonReExec: true, api.ExitReasonHostReconciled: true,
+}
+
 // ProcessSearchReader is the fleet-wide process search surface the operator handler serves at GET /api/search/processes (issue #582).
 // mysql.Store satisfies it. A dependency distinct from api.Service, matching the HostDetailReader seam, so the alert/host read
 // interface and its mocks stay untouched.
@@ -56,6 +64,28 @@ func (h *Handler) handleProcessSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filter, limit, ok := h.parseProcessSearchRequest(ctx, w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.processSearch.SearchProcesses(ctx, filter, r.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		if errors.Is(err, api.ErrInvalidCursor) {
+			h.writeError(ctx, w, http.StatusBadRequest, errInvalidCursor)
+			return
+		}
+		h.logger.ErrorContext(ctx, "search processes", "err", err)
+		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
+		return
+	}
+	h.writeJSON(w, r, result)
+}
+
+// parseProcessSearchRequest reads and validates the process-search filter and page limit from the request query. On a bad value it
+// writes the 400 and returns ok=false so the handler stops. Extracted from handleProcessSearch so that handler stays under Sonar's
+// cognitive-complexity cap (go:S3776): the sequential validation guards live here, one concern per function.
+func (h *Handler) parseProcessSearchRequest(ctx context.Context, w http.ResponseWriter, r *http.Request) (api.ProcessSearchFilter, int, bool) {
 	q := r.URL.Query()
 	filter := api.ProcessSearchFilter{
 		HostID:     q.Get("host_id"),
@@ -66,26 +96,30 @@ func (h *Handler) handleProcessSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sc := filter.Signing; sc != "" && !validSigningClasses[sc] {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidSigning)
-		return
+		return filter, 0, false
+	}
+	if er := filter.ExitReason; er != "" && !validExitReasons[er] {
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidExitReason)
+		return filter, 0, false
 	}
 	// Parse from/to strictly: ParseInt64Param would silently default an unparseable value to 0, turning a mistyped or negative bound
 	// into an unbounded fleet scan (COUNT included) instead of a rejected request. A present-but-bad or negative bound is a 400.
 	fromNs, ok := parseNonNegativeParam(q, "from")
 	if !ok {
 		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)
-		return
+		return filter, 0, false
 	}
 	toNs, ok := parseNonNegativeParam(q, "to")
 	if !ok {
 		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)
-		return
+		return filter, 0, false
 	}
 	filter.FromNs, filter.ToNs = fromNs, toNs
 	if raw := q.Get("uid"); raw != "" {
 		uid, err := strconv.Atoi(raw)
 		if err != nil || uid < 0 {
 			h.writeError(ctx, w, http.StatusBadRequest, errInvalidUser)
-			return
+			return filter, 0, false
 		}
 		filter.UID = &uid
 	}
@@ -97,18 +131,7 @@ func (h *Handler) handleProcessSearch(w http.ResponseWriter, r *http.Request) {
 	if limit > searchMaxLimit {
 		limit = searchMaxLimit
 	}
-
-	result, err := h.processSearch.SearchProcesses(ctx, filter, q.Get("cursor"), limit)
-	if err != nil {
-		if errors.Is(err, api.ErrInvalidCursor) {
-			h.writeError(ctx, w, http.StatusBadRequest, errInvalidCursor)
-			return
-		}
-		h.logger.ErrorContext(ctx, "search processes", "err", err)
-		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
-		return
-	}
-	h.writeJSON(w, r, result)
+	return filter, limit, true
 }
 
 // parseNonNegativeParam reads an optional non-negative int64 query param. Absent -> (0, true), meaning "no bound". Present but

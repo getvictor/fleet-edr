@@ -8,17 +8,15 @@ import { useCursorList, type CursorPage } from "./useCursorList";
 import { SearchResultsFrame } from "./SearchResultsFrame";
 import { formatNs, basename, hostPort } from "./format";
 
-// Per-mode labels and prompt: connections match a remote address, DNS matches a domain. The artifact URL param name comes from
-// eventArtifactParam so the page and the API layer agree on remote_address / query_name.
-const MODE_COPY: Record<EventSearchMode, { artifactLabel: string; prompt: string; emptyLabel: string }> = {
+// Per-mode labels: connections match a remote address, DNS matches a domain. The artifact URL param name comes from eventArtifactParam
+// so the page and the API layer agree on remote_address / query_name.
+const MODE_COPY: Record<EventSearchMode, { artifactLabel: string; emptyLabel: string }> = {
   connections: {
     artifactLabel: "Remote address",
-    prompt: "Enter a remote address to search connections across every host.",
     emptyLabel: "No matching connections.",
   },
   dns: {
     artifactLabel: "Domain",
-    prompt: "Enter a domain to search DNS lookups across every host.",
     emptyLabel: "No matching DNS queries.",
   },
 };
@@ -28,16 +26,15 @@ function modeCopy(mode: EventSearchMode) {
 }
 
 // EventSearch is the connection and DNS mode of the fleet-wide search page (issue #582). The artifact value (a remote address or a
-// domain) and an optional host live in the URL as chips; because the endpoint 400s on an empty artifact, the page prompts for one and
-// issues no request until it is supplied. Results are keyset-paginated on the shared frame. hostNames (resolved once by the parent)
-// decorates rows with a name over the bare host id.
+// domain) and an optional host live in the URL as chips. Like the process mode, it opens on the fleet's most recent events of this type
+// and narrows once an artifact is supplied, rather than sitting blank behind a prompt. Results are keyset-paginated on the shared frame.
+// hostNames (resolved once by the parent) decorates rows with a name over the bare host id.
 export function EventSearch({ mode, hostNames }: { readonly mode: EventSearchMode; readonly hostNames: Map<string, string> }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const copy = modeCopy(mode);
   const artifactParam = eventArtifactParam(mode);
   const value = searchParams.get(artifactParam) ?? "";
   const hostId = searchParams.get("host_id") ?? "";
-  const hasValue = value !== "";
 
   const fields: FilterField[] = [
     { key: artifactParam, label: copy.artifactLabel },
@@ -55,8 +52,8 @@ export function EventSearch({ mode, hostNames }: { readonly mode: EventSearchMod
 
   const fetchPage = useCallback(
     async (cursor: string): Promise<CursorPage<EventRecord>> => {
-      // No artifact value: the endpoint requires one, so return an empty page without issuing a request. The frame shows the prompt.
-      if (!value) return { rows: [], total: 0 };
+      // An empty artifact value lists the fleet's most recent events of this type; a supplied value narrows to it (searchEvents omits
+      // the artifact param when the value is empty).
       const res = await searchEvents(mode, { value, host_id: hostId || undefined }, cursor || undefined);
       return { rows: res.events, nextCursor: res.next_cursor, total: res.total_matched };
     },
@@ -85,7 +82,6 @@ export function EventSearch({ mode, hostNames }: { readonly mode: EventSearchMod
         hasMore={hasMore}
         onLoadMore={loadMore}
         emptyLabel={copy.emptyLabel}
-        prompt={hasValue ? undefined : copy.prompt}
       >
         <Table>
           <thead>
@@ -144,6 +140,7 @@ function ConnectionCells({ evt }: { readonly evt: EventRecord }) {
 function DNSHeaders() {
   return (
     <>
+      <th>Query</th>
       <th>Type</th>
       <th>Response</th>
     </>
@@ -154,6 +151,9 @@ function DNSCells({ evt }: { readonly evt: EventRecord }) {
   const p = evt.payload as DNSQueryPayload;
   return (
     <>
+      {/* The queried domain is the point of a DNS row: once results span many domains (the recent-events view), it must be shown, not
+          just implied by the filter chip. */}
+      <td className="search-page__mono">{p.query_name}</td>
       <td>{p.query_type}</td>
       <td className="search-page__mono">{p.response_addresses?.join(", ") || "-"}</td>
     </>

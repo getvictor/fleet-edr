@@ -145,8 +145,14 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 		return api.EventSearchResult{}, fmt.Errorf("clickhouse search: unsupported event type %q", filter.EventType)
 	}
 
-	where := []string{"event_type = ?", col + " = ?"}
-	args := []any{filter.EventType, filter.Value}
+	where := []string{"event_type = ?"}
+	args := []any{filter.EventType}
+	if filter.Value != "" {
+		// Exact match on the materialized artifact column so the bloom skip index prunes granules. An empty value lists recent events
+		// of this type unfiltered (the ORDER BY prefix on event_type keeps that cheap).
+		where = append(where, col+" = ?")
+		args = append(args, filter.Value)
+	}
 	if filter.HostID != "" {
 		where = append(where, "host_id = ?")
 		args = append(args, filter.HostID)
@@ -160,7 +166,10 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 		args = append(args, filter.ToNs)
 	}
 	whereSQL := strings.Join(where, " AND ")
-	return s.pageEventsByKeyset(ctx, whereSQL, args, cursor, limit)
+	// Count only when narrowing by an artifact (a targeted search, where the bloom-indexed count is cheap and "N of M" answers "how many
+	// hosts hit this address"). The recent-events browse (no artifact) skips the count: on a large archive it is the more expensive half
+	// of the page for a total of marginal value, and pagination rides NextCursor, not the total.
+	return s.pageEventsByKeyset(ctx, whereSQL, args, cursor, limit, filter.Value != "")
 }
 
 // HostTimeline returns one host's exec/network_connect/dns_query events interleaved in event-time order, newest-first (issue #583):
@@ -211,14 +220,16 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 		}
 		where = append(where, "(JSONHas(payload, 'pidversion') AND (pid, JSONExtractInt(payload, 'pidversion')) IN ("+strings.Join(gens, ", ")+"))")
 	}
-	return s.pageEventsByKeyset(ctx, strings.Join(where, " AND "), args, cursor, limit)
+	// The host timeline is scoped to one host (host_id is the ORDER BY prefix), so its count is cheap and always reported.
+	return s.pageEventsByKeyset(ctx, strings.Join(where, " AND "), args, cursor, limit, true)
 }
 
-// pageEventsByKeyset runs the shared newest-first keyset page behind both the fleet-wide search and the host timeline: it counts every
-// row matching baseWhere/baseArgs, then fetches up to limit events strictly before the cursor position ordered (timestamp_ns,
-// event_id) DESC, returning a next cursor when more remain. baseWhere is the full filter predicate with no cursor clause; baseArgs are
-// its positional args in order. The cursor is decoded before the COUNT so a malformed cursor is a cheap 400, not a full count first.
-func (s *Store) pageEventsByKeyset(ctx context.Context, baseWhere string, baseArgs []any, cursor string, limit int) (api.EventSearchResult, error) {
+// pageEventsByKeyset runs the shared newest-first keyset page behind both the fleet-wide search and the host timeline: when countTotal
+// it counts every row matching baseWhere/baseArgs (else TotalMatched is TotalNotCounted), then fetches up to limit events strictly
+// before the cursor position ordered (timestamp_ns, event_id) DESC, returning a next cursor when more remain. baseWhere is the full
+// filter predicate with no cursor clause; baseArgs are its positional args in order. The cursor is decoded before the COUNT so a
+// malformed cursor is a cheap 400, not a full count first.
+func (s *Store) pageEventsByKeyset(ctx context.Context, baseWhere string, baseArgs []any, cursor string, limit int, countTotal bool) (api.EventSearchResult, error) {
 	if limit < 1 {
 		limit = 1
 	}
@@ -233,9 +244,13 @@ func (s *Store) pageEventsByKeyset(ctx context.Context, baseWhere string, baseAr
 		pageArgs = append(pageArgs, c.TimestampNs, c.EventID)
 	}
 
-	var total uint64
-	if err := s.db.GetContext(ctx, &total, "SELECT count() FROM events FINAL WHERE "+baseWhere, baseArgs...); err != nil {
-		return api.EventSearchResult{}, fmt.Errorf("clickhouse event page count: %w", err)
+	total := api.TotalNotCounted
+	if countTotal {
+		var counted uint64
+		if err := s.db.GetContext(ctx, &counted, "SELECT count() FROM events FINAL WHERE "+baseWhere, baseArgs...); err != nil {
+			return api.EventSearchResult{}, fmt.Errorf("clickhouse event page count: %w", err)
+		}
+		total = int64(counted)
 	}
 	pageArgs = append(pageArgs, limit+1)
 
@@ -249,7 +264,7 @@ func (s *Store) pageEventsByKeyset(ctx context.Context, baseWhere string, baseAr
 		return api.EventSearchResult{}, err
 	}
 
-	result := api.EventSearchResult{TotalMatched: int64(total)}
+	result := api.EventSearchResult{TotalMatched: total}
 	if len(events) > limit {
 		last := events[limit-1]
 		result.NextCursor = api.EncodeEventCursor(api.EventCursor{TimestampNs: last.TimestampNs, EventID: last.EventID})

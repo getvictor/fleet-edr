@@ -80,12 +80,19 @@ type EventSearchFilter struct {
 }
 
 // EventSearchResult is one page of a fleet-wide event search plus pagination and total metadata. NextCursor is empty on the last
-// page; TotalMatched counts every matching event independent of the page.
+// page; TotalMatched counts every matching event independent of the page, or is TotalNotCounted when the count was deliberately
+// skipped (see below).
 type EventSearchResult struct {
 	Events       []Event `json:"events"`
 	NextCursor   string  `json:"next_cursor,omitempty"`
 	TotalMatched int64   `json:"total_matched"`
 }
+
+// TotalNotCounted marks TotalMatched as "not computed". The recent-events listing (an event search with no artifact value) skips the
+// COUNT query, which on a large archive is the more expensive half of the page and yields a grand total of only marginal value for a
+// browse view; pagination is driven by NextCursor, not the total, so nothing depends on it. A filtered search still reports the exact
+// count. The UI shows "Showing N" instead of "Showing N of M" when it sees this sentinel.
+const TotalNotCounted int64 = -1
 
 // ErrInvalidEventCursor is returned by SearchEvents when the pagination cursor does not decode. The operator handler maps it to 400.
 var ErrInvalidEventCursor = errors.New("visibility: invalid event search cursor")

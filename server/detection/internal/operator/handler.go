@@ -31,7 +31,7 @@ const (
 	errInvalidUser        = "invalid_user"
 	errInvalidCursor      = "invalid_cursor"
 	errInvalidSigning     = "invalid_signing"
-	errMissingArtifact    = "missing_artifact_value"
+	errInvalidExitReason  = "invalid_exit_reason"
 	errInvalidEventType   = "invalid_event_type"
 
 	// processTreeDefaultLimit is the row cap when the caller does not supply ?limit=. Sized to fit a typical analyst's investigation
