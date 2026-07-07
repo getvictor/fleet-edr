@@ -72,7 +72,7 @@ describe("HostList rendering", () => {
     expect(cell).toHaveClass("host-list__events-col");
   });
 
-  // spec:web-ui/host-list-is-the-home-view/host-rows-show-the-host-platform
+  // spec:web-ui/host-list-page/host-rows-show-the-host-platform
   it("shows a per-host platform label, mapping darwin to macOS and an empty platform to unknown", async () => {
     mockHosts([
       makeHost({ host_id: "mac", hostname: "mac.local", platform: "darwin" }),
@@ -94,6 +94,15 @@ describe("HostList rendering", () => {
     const badge = await screen.findByText("needs attention");
     expect(badge).toHaveClass("badge--critical");
     expect(screen.getByText("online")).toBeInTheDocument();
+  });
+
+  // spec:web-ui/the-hosts-list-surfaces-per-host-health/a-host-with-unknown-health-shows-a-neutral-badge
+  it("shows a neutral health badge for a host with unknown health", async () => {
+    mockHosts([makeHost({ overall_status: "unknown" })]);
+    renderList();
+    // Unknown health surfaces as a neutral badge, not the healthy variant.
+    const badge = await screen.findByText("unknown");
+    expect(badge).toHaveClass("badge--neutral");
   });
 });
 

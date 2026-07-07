@@ -8,14 +8,14 @@ This capability defines how operators authenticate to the EDR server. Okta OIDC 
 
 ### Requirement: Okta OIDC is the primary login path
 
-The system SHALL accept operator login via the configured OpenID Connect (OIDC) issuer as the primary authentication path. The provider configuration (issuer, client id, client secret, redirect URL, scopes, JIT toggle, default role) SHALL be sourced from the durable OIDC configuration store defined by the `sso-configuration` capability; `EDR_OIDC_*` environment variables act only as a first-boot bootstrap seed for that store and are not read by the login path once a stored record exists. The login flow MUST start at `GET /api/auth/login`, redirect the browser to the issuer's authorization endpoint with PKCE S256, accept the authorization-code callback at `GET /api/auth/callback`, verify the ID token's signature and standard claims (`iss`, `aud`, `exp`, `iat`, `nonce`), and exchange the resulting identity for a session cookie minted by the existing session capability. A successful callback MUST set the session cookie with `auth_method='oidc'` and redirect the browser to the application's home view. The provider/verifier the login path uses MUST reflect the current stored configuration without requiring a server restart.
+The system SHALL accept operator login via the configured OpenID Connect (OIDC) issuer as the primary authentication path. The provider configuration (issuer, client id, client secret, redirect URL, scopes, JIT toggle, default role) SHALL be sourced solely from the durable OIDC configuration store defined by the `sso-configuration` capability; the login path does not read any `EDR_OIDC_*` environment variable. The login flow MUST start at `GET /api/auth/login`, redirect the browser to the issuer's authorization endpoint with PKCE S256, accept the authorization-code callback at `GET /api/auth/callback`, verify the ID token's signature and standard claims (`iss`, `aud`, `exp`, `iat`, `nonce`), and exchange the resulting identity for a session cookie minted by the existing session capability. A successful callback MUST set the session cookie with `auth_method='oidc'` and redirect the browser to the application's home view. The provider/verifier the login path uses MUST reflect the current stored configuration without requiring a server restart.
 
 #### Scenario: Operator initiates SSO login
 
 - **GIVEN** OIDC is enabled for the deployment via a stored configuration record
 - **WHEN** the browser issues `GET /api/auth/login`
 - **THEN** the server responds with a 302 to the issuer's authorization endpoint
-- **AND** the redirect carries the `client_id`, `redirect_url`, and scope set from the stored configuration, a server-generated `state` parameter, and a PKCE `code_challenge` with method `S256`
+- **AND** the redirect carries the `client_id`, `redirect_uri`, and scope set from the stored configuration, a server-generated `state` parameter, and a PKCE `code_challenge` with method `S256`
 
 #### Scenario: Successful callback mints a session
 
@@ -40,7 +40,7 @@ The system SHALL accept operator login via the configured OpenID Connect (OIDC) 
 
 ### Requirement: Just-in-time provisioning of unknown SSO users
 
-The system SHALL provision a user account on first successful Okta login when `auth.oidc.allow_jit_provisioning` is enabled and no identity row exists for the incoming `(provider, subject)` pair. The newly-created user SHALL be bound to the deployment's configured default JIT role at the deployment-wide scope (the seeded `analyst` role by default, overridable to another seeded role via `EDR_OIDC_DEFAULT_ROLE`). It MUST NOT inherit any other role from claims (group to role mapping is out of scope for the current release), and the provisioning SHALL emit an audit row with action `user.created`. When `allow_jit_provisioning` is disabled, an unknown subject SHALL be denied with an audit row whose reason is `oidc.unknown_subject`.
+The system SHALL provision a user account on first successful Okta login when `auth.oidc.allow_jit_provisioning` is enabled and no identity row exists for the incoming `(provider, subject)` pair. The newly-created user SHALL be bound to the deployment's configured default JIT role at the deployment-wide scope (the seeded `analyst` role by default, overridable to another seeded role through the stored OIDC configuration's default-role field set via the Single sign-on admin API). It MUST NOT inherit any other role from claims (group to role mapping is out of scope for the current release), and the provisioning SHALL emit an audit row with action `user.created`. When `allow_jit_provisioning` is disabled, an unknown subject SHALL be denied with an audit row whose reason is `oidc.unknown_subject`.
 
 #### Scenario: First Okta login auto-provisions an analyst
 

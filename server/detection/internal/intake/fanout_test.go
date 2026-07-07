@@ -75,6 +75,7 @@ func postBatch(t *testing.T, h *Handler, body string) *httptest.ResponseRecorder
 // TestHandleIngest_FanOut pins the ADR-0015 ingest fan-out: archive first, then the work queue, 200 only after both, and a 500 (never
 // a partial enqueue) if either store fails. The happy path is covered end-to-end by the integration suite; these cases pin the
 // ordering and the two failure branches that an in-memory archive cannot exercise.
+// spec:server-event-ingestion/decoupled-processing-pipeline/an-accepted-batch-is-both-archived-and-enqueued
 func TestHandleIngest_FanOut(t *testing.T) {
 	t.Parallel()
 	// A fork (stored) plus a snapshot_heartbeat (partitioned out before the fan-out, issue #408), so we can assert the stores see

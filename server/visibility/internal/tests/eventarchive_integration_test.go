@@ -109,6 +109,7 @@ func archiveEvent(id, host, etype string, ts int64, pid int) visibilityapi.Event
 	}
 }
 
+// spec:server-event-ingestion/durable-event-archive-with-bounded-retention/an-accepted-event-is-queryable-from-the-archive
 func TestEventArchive_InsertAndCorrelationRead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -184,6 +185,7 @@ func TestEventArchive_EventsByIDs(t *testing.T) {
 	assert.Empty(t, empty, "no ids requested returns no rows without a query")
 }
 
+// spec:server-event-ingestion/durable-event-archive-with-bounded-retention/a-re-delivered-event-is-not-duplicated-in-the-archive
 func TestEventArchive_IdempotentInsert(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

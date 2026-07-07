@@ -282,3 +282,63 @@ The system SHALL store the originating process's kernel PID generation (`pidvers
 - **WHEN** an `exec` event for a host and PID carries no `pidversion`
 - **THEN** the materialized process record is created with its `pidversion` left unset
 - **AND** the record remains retrievable by host, PID, and event-time lifetime as before
+
+### Requirement: Set-based batch materialization is equivalent to per-event application
+
+The system SHALL materialize a batch using a bounded, small number of database round-trips that does not grow one-or-more per event: it MUST resolve the candidate process rows for the batch's `(host_id, pid)` set with a single bulk read, fold the batch against an in-memory model that reproduces the per-event resolution semantics (timestamp ordering, fork creation, exec-in-place update, exit closure, PID-reuse closure, exec-without-fork synthesis, same-PID re-exec chain linkage, snapshot dedup and freshness seeding, and the exit-before-snapshot-exec buffer), and persist the result with set-based writes. The resulting process forest MUST be identical to the forest produced by applying the same events one at a time in timestamp order, for any batch.
+
+#### Scenario: Batched materialization equals per-event materialization
+
+- **GIVEN** a batch of `fork`, `exec`, `exit`, and snapshot `exec` events, including same-PID re-exec sequences and PID reuse, applied to a host's current process forest
+- **WHEN** the builder materializes the batch with its set-based path
+- **THEN** the resulting process records (parent linkage, exec image and metadata, exit timestamps and reasons, re-exec chain back-references, snapshot markers and freshness timestamps) are identical to those produced by applying the same events individually in timestamp order
+
+#### Scenario: A poison data error is isolated under batched persistence
+
+- **GIVEN** a batch whose set-based write would fail because one row carries a value the database can never store (a permanent data-integrity violation) alongside otherwise-valid rows
+- **WHEN** the builder flushes the batch
+- **THEN** the offending row is dropped and logged, the remaining rows are materialized, and the batch is reported successful so the processor marks it processed and does not retry it
+- **AND** a transient (retryable) write fault instead fails the whole batch so the processor retries it and no data is lost
+
+### Requirement: Re-processing a batch is idempotent
+
+The graph builder MUST be idempotent under re-processing: applying the same batch of fork/exec/exit/snapshot/heartbeat events more than once SHALL yield the identical process forest as applying it once, with no duplicate generations, no fabricated re-exec generations, no phantom PID-reuse closes, and no freshness regressions. This is required because the detection processor nacks and re-claims a batch on a retryable evaluation miss, and a claim-lease-expiry re-offer can replay a stalled or crashed worker's events, so the same events are folded through the builder more than once. Idempotency is anchored on the event that materialized each row: a row records the id of the event that created it and the id of the event that applied its current exec image and its exit, and the builder skips an event whose effect is already recorded. An observed exit MUST NOT close a process that forked after the exit, and a heartbeat's freshness bump MUST only advance (never move backward), so a replayed exit or heartbeat cannot corrupt a later generation of a reused PID that a prior pass already materialized.
+
+#### Scenario: Re-applying the same batch yields the same forest
+
+- **GIVEN** a batch of fork/exec/exit/snapshot/heartbeat events that the builder has already processed once, materializing a process forest
+- **WHEN** the identical batch is processed a second time (a nack-and-re-claim, or a claim-lease-expiry re-offer)
+- **THEN** the process forest is unchanged: the same rows, the same generations and re-exec chain, and the same exit and freshness state
+- **AND** no duplicate process rows, fabricated re-exec generations, or phantom PID-reuse closes are created
+
+### Requirement: Sibling aggregation collapses repeated leaf execs
+
+The system SHALL provide a read-time transform over the per-host process forest that collapses repeated identical child executions under the same parent into a single aggregated node, so that a parent that spawned N childless children of the same binary identity renders as one node carrying a count rather than N nodes. Two children have the same binary identity when they share the same parent AND the same image path AND the same content hash AND the same code-directory hash. Parent identity is part of the key because the transform also runs over the forest roots, which are not guaranteed to share a real parent (a node becomes a root when its real parent is unresolvable in the queried window), so without it two orphaned leaves of the same binary but distinct lineages would wrongly merge. The aggregated node MUST carry the group's total count, the split of that count into exited and running members (a running member has no observed exit), and the earliest and latest fork times in the group. The earliest member (by fork time, with the row id as the tie-breaker for equal fork times) is the representative that supplies the aggregated node's visible process fields, so the label and identity are deterministic; the aggregated node's own identifier MUST be distinct from that representative and from every real process so an aggregated group and its members never collide. The transform MUST be order-preserving and lossless: it MUST NOT drop or duplicate any process, the total number of underlying processes MUST be preserved (the sum of every aggregated node's count plus one per individual node equals the input leaf count at each level), and the output siblings MUST be deterministically ordered by first fork time. Only childless siblings are eligible to fold; a child that has its own subtree MUST remain an individual node so its descendants are never silently removed. A group smaller than the aggregation threshold MUST remain individual nodes rather than becoming a count-of-one aggregate. Aggregation MUST be opt-outable so a caller can obtain the raw, un-aggregated forest.
+
+#### Scenario: Aggregation preserves every leaf and its order
+
+- **GIVEN** a parent with an arbitrary batch of childless children of varying image paths, binary identities, fork times, and exit states
+- **WHEN** the forest is aggregated
+- **THEN** the sum of every aggregated node's count plus one for each individual node equals the number of input children
+- **AND** no underlying process is dropped, duplicated, or moved to a group of a different binary identity
+- **AND** the output siblings are ordered by first fork time
+- **AND** each aggregated node's exited and running counts sum to its total count and its first fork time is no later than its last
+
+#### Scenario: N identical-path children collapse into one node
+
+- **GIVEN** a parent that spawned several childless children sharing one image path and binary identity, some exited and some still running
+- **WHEN** the forest is aggregated
+- **THEN** those children are represented by a single aggregated node carrying the group count, the exited-versus-running split, and the earliest and latest fork times
+
+#### Scenario: A child with its own subtree is never folded away
+
+- **GIVEN** a parent whose children include both repeated childless execs and a child that itself has descendants
+- **WHEN** the forest is aggregated
+- **THEN** the childless repeats collapse into an aggregated node
+- **AND** the child that has descendants remains an individual node with its subtree intact, whose own repeated children may aggregate one level down
+
+#### Scenario: Same path but different binary is not merged
+
+- **GIVEN** two childless children under one parent that share an image path but differ in content hash
+- **WHEN** the forest is aggregated
+- **THEN** they remain two separate nodes rather than one aggregated node

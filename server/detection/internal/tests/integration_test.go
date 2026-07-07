@@ -755,7 +755,7 @@ func TestIngest_MixedNewAndSeen(t *testing.T) {
 		"mixed batch: the previously-seen event is deduped, the new event is appended; archive holds 2 distinct events")
 }
 
-// spec:server-event-ingestion/transparent-persistence-failure-reporting/the-database-is-temporarily-unavailable
+// spec:server-event-ingestion/transparent-persistence-failure-reporting/a-backing-store-is-temporarily-unavailable
 //
 // Closes the per-test MySQL handle out from under the handler, then posts a valid batch. The store's
 // InsertEvents path returns the wrapped sql error; the handler maps that to HTTP 500 with `internal` per the

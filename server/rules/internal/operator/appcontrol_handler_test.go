@@ -217,6 +217,7 @@ func TestDecodeAppControlBodyIfPresent(t *testing.T) {
 
 // TestActorIdentifierFromContext pins the stable created_by / updated_by tag: the acting principal's id when an actor is present,
 // and empty when none is (so the store-level required-actor gate produces a typed 400 rather than the handler short-circuiting).
+// spec:server-identity-authorization/the-authenticated-actor-carries-a-typed-principal/handlers-identify-the-actor-by-principal-id
 func TestActorIdentifierFromContext(t *testing.T) {
 	t.Parallel()
 

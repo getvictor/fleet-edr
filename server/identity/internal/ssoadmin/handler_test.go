@@ -147,7 +147,7 @@ func TestHandleGet_deniedIsForbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-// spec:sso-configuration/every-configuration-mutation-is-audited/saving-a-change-writes-an-audit-row
+// spec:sso-configuration/every-configuration-mutation-is-audited/saving-a-change-writes-an-audit-row-naming-the-principal
 func TestHandleUpdate_validRotatesSecretAtomicallyAndAudits(t *testing.T) {
 	t.Parallel()
 	ap := &captureApply{}

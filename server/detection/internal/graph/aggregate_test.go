@@ -29,6 +29,7 @@ func leafP(id int64, ppid int, path string, sha string, forkNs int64, exited boo
 func TestAggregateSiblings_TableCases(t *testing.T) {
 	t.Parallel()
 
+	// spec:server-process-graph-builder/sibling-aggregation-collapses-repeated-leaf-execs/n-identical-path-children-collapse-into-one-node
 	t.Run("N identical-path leaves collapse into one aggregated node with the exited/running split and fork span", func(t *testing.T) {
 		t.Parallel()
 		in := []api.ProcessNode{
@@ -111,6 +112,7 @@ func TestAggregateSiblings_TableCases(t *testing.T) {
 		}
 	})
 
+	// spec:server-process-graph-builder/sibling-aggregation-collapses-repeated-leaf-execs/same-path-but-different-binary-is-not-merged
 	t.Run("same path but different binary identity does not merge", func(t *testing.T) {
 		t.Parallel()
 		out := aggregateSiblings([]api.ProcessNode{
@@ -122,6 +124,7 @@ func TestAggregateSiblings_TableCases(t *testing.T) {
 		assert.Nil(t, out[1].Aggregated)
 	})
 
+	// spec:server-process-graph-builder/sibling-aggregation-collapses-repeated-leaf-execs/a-child-with-its-own-subtree-is-never-folded-away
 	t.Run("a child with its own subtree is never folded away and keeps its descendants", func(t *testing.T) {
 		t.Parallel()
 		parent := leaf(1, "/bin/bash", "sha-bash", 50, false)

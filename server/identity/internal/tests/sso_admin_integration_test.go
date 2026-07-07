@@ -177,6 +177,8 @@ func serviceAccountActorCtx(r *http.Request) *http.Request {
 // TestSSOAdmin_updateByServiceAccountRecordsPrincipal verifies the #514 fix: a service-account SSO update records its principal id
 // (svc_<id>) on both oidc_config.updated_by and app_config.updated_by, rather than the interim NULL the #515 stopgap recorded. The
 // columns FK principals(id), so the acting service account is attributed to the same standard as a user.
+// spec:server-identity-service-accounts/service-account-actions-are-attributable-to-the-service-account-principal/a-service-account-updates-sso-configuration-and-is-attributed
+// spec:sso-configuration/every-configuration-mutation-is-audited/a-service-account-update-records-the-service-account-principal-not-null
 func TestSSOAdmin_updateByServiceAccountRecordsPrincipal(t *testing.T) {
 	t.Parallel()
 	idp := oidcDiscoveryServer(t)

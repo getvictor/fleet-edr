@@ -63,18 +63,20 @@ The system MUST move each command through a server-visible acknowledged state be
 
 ### Requirement: Process-termination command
 
-The system SHALL execute a kill-process command by sending SIGKILL to the requested process identifier on the local host and SHALL report a structured outcome distinguishing success from "no such process" and from permission denied.
+The system SHALL execute a kill-process command by terminating the requested process identifier on the local host using the platform's native process-termination primitive (SIGKILL on Unix-like platforms, TerminateProcess on Windows) and SHALL report a structured outcome distinguishing success from "no such process" and from permission denied.
+
+The change from the prior requirement is that termination is specified in terms of the platform's native primitive rather than SIGKILL only, so a Windows agent terminates via TerminateProcess; the reported-outcome contract and the Unix behavior are unchanged.
 
 #### Scenario: Successful kill
 
 - **GIVEN** a kill-process command is received with a live process identifier
-- **WHEN** the agent sends SIGKILL to that process identifier
+- **WHEN** the agent terminates that process identifier
 - **THEN** the executor reports completed with a result identifying the killed process identifier
 
 #### Scenario: Process is already gone
 
 - **GIVEN** a kill-process command is received but the process has already exited
-- **WHEN** the agent attempts to signal it
+- **WHEN** the agent attempts to terminate it
 - **THEN** the executor reports failed with an error reason that conveys "no such process"
 
 #### Scenario: Process identifier is non-positive
@@ -136,3 +138,46 @@ The system MUST signal the enrollment subsystem when the server returns 401 on e
 - **WHEN** the server returns 401
 - **THEN** the executor invokes the registered authentication-failure callback
 - **AND** the same status update remains the executor's responsibility on the next cycle
+
+### Requirement: Command execution is deduplicated durably across transports and restarts
+
+The agent SHALL key command execution on a durable, per-agent ledger so a command's side effect runs at most once across BOTH the push (control connection) and poll transports and across agent restarts. Before running a command's side effect the agent SHALL record a write-ahead claim for the command id; after the side effect it SHALL record the terminal outcome. On encountering a command id that the ledger already records, the agent SHALL NOT re-run the side effect: if a terminal outcome is recorded it re-reports that outcome, and if only a write-ahead claim is recorded (a prior attempt that did not complete, for example an interrupted process) it reports the command failed rather than re-running the side effect, so a non-idempotent command such as `kill_process` never signals a since-reused PID on re-delivery.
+
+#### Scenario: A command executed on one transport is not re-executed by the other
+
+- **GIVEN** a command whose side effect the agent has already run and recorded a terminal outcome for (over the control connection)
+- **WHEN** the same command id is delivered again on the poll path after the connection drops
+- **THEN** the agent does not run the side effect again
+- **AND** it re-reports the recorded terminal outcome, so the command's status stays stable rather than flipping
+
+#### Scenario: A recorded outcome survives an agent restart
+
+- **GIVEN** a command whose terminal outcome the agent recorded before it stopped
+- **WHEN** the agent restarts and the same command id is delivered again
+- **THEN** the recorded outcome is still available from the durable ledger
+- **AND** the agent re-reports it without re-running the side effect
+
+#### Scenario: Concurrent delivery of the same command runs the side effect once
+
+- **GIVEN** the same command delivered on both transports at the same time
+- **WHEN** the agent attempts to execute it from both
+- **THEN** the write-ahead claim is recorded atomically, so exactly one execution wins the claim
+- **AND** the side effect runs at most once; the other execution does not re-run it
+
+### Requirement: The control connection is preferred and polling is the degraded floor
+
+The system SHALL prefer the persistent control connection for command delivery and outcome reporting when it is established, and SHALL fall back to the polled command path only when the connection cannot be established or has dropped, so a host is never left without a command path. The polled cadence, lifecycle, and host-scoping are unchanged on the fallback path, and no additional fallback transport is introduced.
+
+#### Scenario: Commands flow over the connection when it is up
+
+- **GIVEN** a host holding an open control connection
+- **WHEN** a command is queued for the host
+- **THEN** the command is delivered and its outcome reported over the connection
+- **AND** the agent does not depend on the command poll to receive or report it
+
+#### Scenario: The poll is the fallback when the connection is unavailable
+
+- **GIVEN** a host that cannot establish or has lost its control connection
+- **WHEN** a command is queued for the host
+- **THEN** the agent receives it on the polled command path at the configured interval
+- **AND** acknowledges and completes it through the unchanged polled lifecycle

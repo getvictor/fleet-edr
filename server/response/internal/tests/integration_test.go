@@ -239,6 +239,7 @@ func TestUpdateStatus_LifecycleHappyPath(t *testing.T) {
 
 // TestUpdateStatus_RejectsForbiddenTransitions covers two key invariants: pending -> completed (must ack first) and a terminal state
 // being immutable.
+// spec:agent-control-channel/delivery-is-at-least-once-and-idempotent-by-command-identity/an-outcome-that-is-not-a-valid-transition-is-rejected
 func TestUpdateStatus_RejectsForbiddenTransitions(t *testing.T) {
 	t.Parallel()
 	r := newResponse(t, nil)
@@ -273,6 +274,7 @@ func TestUpdateStatus_RejectsForbiddenTransitions(t *testing.T) {
 
 // TestUpdateStatus_ForeignHostRejected: host-b cannot ack host-a's command. The collapse to ErrCommandNotFound (not a distinct "wrong
 // host" error) defends against probing for other hosts' command_ids.
+// spec:agent-control-channel/commands-on-the-connection-are-scoped-to-the-authenticated-host/an-outcome-report-for-another-host-s-command-is-rejected
 func TestUpdateStatus_ForeignHostRejected(t *testing.T) {
 	t.Parallel()
 	r := newResponse(t, nil)
@@ -468,6 +470,8 @@ func TestBuildControlGateway(t *testing.T) {
 // the poll path (TestUpdateStatus_LifecycleHappyPath) does. The gateway is driven through its production entry point (grpc.Server.ServeHTTP
 // behind a net/http HTTP/2 server speaking cleartext h2c, how cmd/main multiplexes it onto the shared listener), and the command is queued
 // via Service.Insert, whose fast-path notifier (wired by BuildControlGateway) pushes it to the live connection.
+// spec:agent-control-channel/queued-commands-are-delivered-over-the-connection-in-real-time/command-queued-on-the-connection-holding-replica-is-delivered-immediately
+// spec:agent-control-channel/command-outcomes-are-reported-over-the-same-connection-with-the-same-lifecycle/acknowledge-then-complete-over-the-connection
 func TestControlGatewayPushLifecycle_RealMySQL(t *testing.T) {
 	t.Parallel()
 	r := newResponse(t, nil)

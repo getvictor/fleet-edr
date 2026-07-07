@@ -168,6 +168,8 @@ func (h *recordingHeartbeat) count(hostID string) int {
 // TestGatewayLiveness pins connection-presence liveness (issue #477, tasks.md 5.7): while a host holds a control connection the gateway
 // advances its last-seen via the injected heartbeat WITHOUT any command poll or telemetry upload, and once the connection drops the bumps
 // stop so the host ages to offline. Delivery and revocation intervals are pushed out of the way so the test isolates the liveness path.
+// spec:agent-control-channel/connection-presence-is-authoritative-host-liveness/a-connected-host-s-last-seen-advances-without-polling
+// spec:agent-control-channel/connection-presence-is-authoritative-host-liveness/disconnect-reflects-in-online-status
 func TestGatewayLiveness(t *testing.T) {
 	t.Parallel()
 	hb := newRecordingHeartbeat()
@@ -227,6 +229,8 @@ func TestGatewayLiveness(t *testing.T) {
 
 func TestGateway(t *testing.T) {
 	t.Parallel()
+	// spec:agent-control-channel/the-agent-holds-a-persistent-authenticated-control-connection/connection-opens-with-a-valid-host-token
+	// spec:agent-control-channel/queued-commands-are-delivered-over-the-connection-in-real-time/command-queued-for-a-connected-host-is-pushed-promptly
 	t.Run("valid token delivers a pending command and records its outcome", func(t *testing.T) {
 		t.Parallel()
 		src := newFakeSource()
@@ -265,6 +269,7 @@ func TestGateway(t *testing.T) {
 		assert.JSONEq(t, `{"killed_pid":42}`, string(src.updates[1].Result))
 	})
 
+	// spec:agent-control-channel/the-agent-holds-a-persistent-authenticated-control-connection/connection-is-refused-for-an-invalid-or-expired-token
 	t.Run("invalid token is rejected with Unauthenticated", func(t *testing.T) {
 		t.Parallel()
 		_, dial := newTestGateway(t, newFakeSource(), newFakeVerifier())
@@ -289,6 +294,7 @@ func TestGateway(t *testing.T) {
 		assert.Equal(t, codes.Unauthenticated, status.Code(err))
 	})
 
+	// spec:agent-control-channel/the-agent-holds-a-persistent-authenticated-control-connection/a-reconnect-replaces-the-prior-connection-for-the-same-host
 	t.Run("second connection for the same host evicts the first", func(t *testing.T) {
 		t.Parallel()
 		src := newFakeSource()
@@ -333,6 +339,7 @@ func TestGateway(t *testing.T) {
 		require.Eventually(t, func() bool { return g.reg.len() == 0 }, 2*time.Second, 10*time.Millisecond)
 	})
 
+	// spec:agent-control-channel/a-revoked-or-expired-token-terminates-the-connection/revoking-a-token-closes-the-connection
 	t.Run("revoked token tears down the connection", func(t *testing.T) {
 		t.Parallel()
 		src := newFakeSource()

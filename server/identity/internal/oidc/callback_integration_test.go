@@ -120,7 +120,7 @@ func (e *callbackTestEnv) callbackRequest(t *testing.T, stateOverride string) *h
 // spec:ui-authentication-session/session-cookie-is-http-only-and-same-site/cookie-attributes-on-login
 // spec:ui-authentication-session/login-mints-a-session-cookie-and-a-csrf-token/successful-login
 // spec:server-identity-authentication/okta-oidc-is-the-primary-login-path/successful-callback-mints-a-session
-// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/successful-sso-login-is-audited
+// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/successful-sso-login-is-audited-with-the-user-principal
 //
 // Pins the cookie-attributes clause AND the spec's "successful login" scenario on the OIDC happy-path session mint:
 // after the callback succeeds and a session is created, the response is 302 to the state's pinned redirect (/ui/) and

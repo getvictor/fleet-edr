@@ -27,13 +27,21 @@ The system SHALL evaluate every rule that has been registered with the engine ag
 
 ### Requirement: Registered rule catalog
 
-The system SHALL register the following named rules at startup so each becomes evaluable against every batch: `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, and `dns_c2_beacon`.
+The system SHALL register the following named rules at startup so each becomes evaluable against every batch of its target platform: `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, and `dns_c2_beacon`. The registered-rule metadata SHALL report each rule's target platforms.
+
+The change from the prior requirement is that rule metadata now reports each rule's target platforms, and a rule is evaluable against batches of its declared platform rather than unconditionally.
 
 #### Scenario: The engine reports its rule catalog
 
 - **GIVEN** a running detection engine in its default configuration
 - **WHEN** an operator inspects the catalog of registered rules
 - **THEN** the catalog includes `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, and `dns_c2_beacon`
+
+#### Scenario: Rule metadata reports target platforms
+
+- **GIVEN** a running detection engine in its default configuration
+- **WHEN** an operator inspects the registered-rule metadata
+- **THEN** each rule reports the operating-system platforms it targets
 
 ### Requirement: Persisted alert schema
 
@@ -196,20 +204,48 @@ Each server replica SHALL converge its in-memory detection-config snapshot with 
 
 ### Requirement: Durable detection configuration surface
 
-The system SHALL persist detection-rule configuration (per-rule mode, optional severity override, per-rule settings, and false-positive exclusions) as durable state in MySQL, edited through the authenticated admin API and UI. Detection configuration MUST NOT be sourced from boot-time environment variables. Every mutation MUST pass through the RBAC authorization chokepoint and record an audit entry naming the actor. Each configuration record MAY carry a host-group scope (or be global); records also support an optional expiration after which they no longer apply. A configuration change MUST become effective for subsequent evaluations without a server restart.
+The system SHALL persist detection-rule configuration (per-rule mode, optional severity override, per-rule settings, and false-positive exclusions) as durable state in MySQL, edited through the authenticated admin API and UI. Detection configuration MUST NOT be sourced from boot-time environment variables. Every mutation MUST pass through the RBAC authorization chokepoint and record an audit entry naming the acting principal (a human user or a service account) by its principal id and a resolvable label. The per-row attribution column (`created_by` / `updated_by`) SHALL store the acting principal id; a service-account write MUST NOT be rejected at the persistence layer for lacking a human user id, and a system-originated write SHALL record the system principal (principal id `sys`, type `system`). Each configuration record MAY carry a host-group scope (or be global); records also support an optional expiration after which they no longer apply. A configuration change MUST become effective for subsequent evaluations without a server restart.
+
+Each registered rule SHALL declare the set of exclusion match types it consults at evaluation time, and the rule catalog surface (`GET /api/rules`) SHALL expose that set for every rule so operator tooling can offer only the match types a rule actually reads. Creating an exclusion SHALL be rejected when its `rule_id` does not name a registered rule, and when its `match_type` is not one the named rule consults; the rejection is a client error that names the supported match types. This prevents an operator from storing an exclusion whose `(rule_id, match_type)` pair no rule reads, which would otherwise be accepted and displayed as active while suppressing nothing.
 
 #### Scenario: An operator adds a false-positive exclusion without restarting
 
 - **GIVEN** a rule that is currently producing a benign finding for a known-good process
 - **WHEN** an operator adds an exclusion for that rule (by a typed match such as a parent-path glob or a signing team ID) through the detection-configuration API
-- **THEN** the exclusion is persisted in MySQL with the actor recorded in the audit log
+- **THEN** the exclusion is persisted in MySQL with the acting principal id recorded in both the attribution column and the audit log
 - **AND** subsequent batches no longer produce that finding, without a server restart
+
+#### Scenario: A service account adds an exclusion and is attributed
+
+- **GIVEN** an admin-roled service account holding the detection-config write permission
+- **WHEN** it creates an exclusion through the detection-configuration API
+- **THEN** the write succeeds without an `actor is required` rejection
+- **AND** the exclusion's attribution column and the audit row both record the service account's principal id
 
 #### Scenario: An expired exclusion stops applying
 
 - **GIVEN** an exclusion whose expiration timestamp is in the past
 - **WHEN** the engine evaluates a batch that the exclusion would otherwise suppress
 - **THEN** the exclusion does not apply and the finding is produced
+
+#### Scenario: The rule catalog exposes per-rule supported exclusion match types
+
+- **GIVEN** the registered rule catalog
+- **WHEN** a client reads `GET /api/rules`
+- **THEN** each rule carries the set of exclusion match types it consults, as an array (empty for a rule that consults no exclusions)
+
+#### Scenario: Creating an exclusion for a match type the rule does not consult is rejected
+
+- **GIVEN** a rule that consults a fixed set of exclusion match types
+- **WHEN** an operator attempts to create an exclusion for that rule with a match type outside the rule's supported set
+- **THEN** the request is rejected as a client error whose message names the rule's supported match types
+- **AND** no exclusion is persisted
+
+#### Scenario: Creating an exclusion for an unknown rule is rejected
+
+- **GIVEN** a `rule_id` that names no registered rule (including the empty string)
+- **WHEN** an operator attempts to create an exclusion for it
+- **THEN** the request is rejected as a client error and no exclusion is persisted
 
 ### Requirement: Per-host resolution of exclusions and rule settings
 
@@ -260,3 +296,132 @@ The `suspicious_exec` rule MUST NOT treat an outbound `network_connect` event to
 - **GIVEN** a non-shell parent spawns a shell that issues an outbound `network_connect` to `8.8.8.8` on port 53
 - **WHEN** the engine evaluates the rule against the batch
 - **THEN** the engine produces a `suspicious_exec` finding from the network arm, because the destination is a publicly routable address
+
+### Requirement: Canonical rule naming
+
+The system SHALL give every detection rule one canonical human-readable name, distinct from its stable snake_case identifier, and reuse that one name across every operator-facing surface. The rule's documentation title (surfaced in `/api/rules` and `docs/detection-rules.md`) and the title of every alert the rule raises SHALL both be that canonical name, so an operator who triages an alert, reads the documentation, and writes an exclusion sees one name mapped to one rule. A rule that fires on more than one trigger arm SHALL still raise its findings under the single canonical name; the distinguishing arm detail belongs in the finding's description, not in a divergent title. The rule identifier SHALL remain unchanged by this requirement.
+
+The application-control block rule is exempt from the alert-title half: its alerts carry a per-block computed title that names the blocked binary and a per-rule identifier (`app_control:<n>`) rather than the catalog rule's identifier, because those alerts name the admin rule and binary that were blocked rather than a catalog detection. Its documentation title SHALL still be the canonical name.
+
+#### Scenario: A rule names itself the same way everywhere
+
+- **GIVEN** any registered catalog rule other than the application-control block rule
+- **WHEN** the rule's documentation title is read and the rule fires to raise an alert
+- **THEN** the documentation title equals the rule's canonical name
+- **AND** the alert's title equals that same canonical name
+- **AND** the canonical name is a clean human-readable label carrying no parenthetical implementation detail
+
+#### Scenario: A multi-arm rule raises one canonical title across arms
+
+- **GIVEN** the `suspicious_exec` rule, which fires on either a temp-path exec arm or an outbound network-connection arm
+- **WHEN** either arm fires
+- **THEN** the alert title is the one canonical name "Suspicious exec chain"
+- **AND** the finding description names which arm fired
+
+### Requirement: Alert evidence is self-contained
+
+When the system persists an alert, it SHALL capture the payloads of the alert's triggering events into durable, alert-scoped storage, in addition to recording their `event_id` values (the "Alert-to-event linkage" requirement). An alert's evidence SHALL remain resolvable independently of the event archive's retention window, so opening an alert returns its triggering-event payloads even after those events have aged out of the event archive. This keeps alert evidence self-contained and removes any dependency of archive retention on a cross-store reference.
+
+#### Scenario: Triggering-event payloads are captured at alert creation
+
+- **GIVEN** an event batch that satisfies one rule's pattern
+- **WHEN** the engine persists the resulting alert
+- **THEN** the payloads of the alert's triggering events are stored as alert-scoped evidence
+- **AND** the alert still records the `event_id` values of those triggering events
+
+#### Scenario: Evidence survives event-archive expiry
+
+- **GIVEN** a persisted alert whose triggering events have since aged out of the event archive
+- **WHEN** an operator requests the alert detail
+- **THEN** the alert's captured triggering-event payloads are still returned as its evidence
+
+### Requirement: Platform-scoped rule evaluation
+
+Every registered rule SHALL declare one or more target platforms, each one of `darwin`, `windows`, or `linux`. The detection engine SHALL evaluate a rule only against the events whose platform is in that rule's declared set, so a rule targeting one platform never fires on another platform's events. An event carrying no platform SHALL be treated as `darwin`, the default for an agent predating the platform-aware contract. A rule with no matching events in a batch SHALL be skipped.
+
+#### Scenario: A darwin-only rule does not see windows events
+
+- **GIVEN** a rule that declares only darwin and a batch containing a windows event
+- **WHEN** the engine evaluates the rule
+- **THEN** the windows event is not passed to the rule
+
+#### Scenario: A mixed-platform batch is filtered per rule
+
+- **GIVEN** a darwin-only rule and a windows-only rule evaluating a batch that contains a darwin event and a windows event
+- **WHEN** the engine evaluates both rules
+- **THEN** the darwin rule sees only the darwin event and the windows rule sees only the windows event
+
+#### Scenario: An event without a platform is evaluated as darwin
+
+- **GIVEN** a darwin-only rule and an event that carries no platform
+- **WHEN** the engine evaluates the rule
+- **THEN** the platform-less event is passed to the rule
+
+#### Scenario: Every cataloged rule declares at least one valid platform
+
+- **GIVEN** the registered rule catalog
+- **WHEN** each rule's declared platforms are inspected
+- **THEN** every rule declares a non-empty set and every declared platform is a recognized value
+
+### Requirement: Signature-based parent exclusions
+
+The `suspicious_exec` rule SHALL suppress a finding when the chain's non-shell parent process matches an operator exclusion by its code-signing identity, in addition to the existing parent-path-glob match. The consulted signature dimensions are the parent's Apple Developer team ID (`team_id`), its code-signing identifier (`signing_id`), and its code-directory hash (`cdhash`), read from the parent process's already-persisted code-signing record; no agent or event-wire change is required. A finding with no resolved non-shell parent, or a parent that carries no signing identity, MUST NOT be suppressed by a signature exclusion, so an unsigned binary at a benign-looking path is not silently allowed. This lets an operator exclude a code-signed developer tool by its non-spoofable signing identity instead of a path glob that an attacker who can write to a world-writable directory could land inside.
+
+#### Scenario: A signed parent is suppressed by its team ID
+
+- **GIVEN** a `suspicious_exec` chain whose non-shell parent is a code-signed binary with team ID `Q6L2SF6YDW`
+- **AND** an exclusion of match type `team_id` with value `Q6L2SF6YDW` for `suspicious_exec`
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces no `suspicious_exec` finding, because the parent's signing team ID matches the exclusion
+- **AND** the same holds for a `signing_id` exclusion matching the parent's signing identifier and a `cdhash` exclusion matching the parent's code-directory hash
+
+#### Scenario: An unsigned lookalike parent is not suppressed
+
+- **GIVEN** an exclusion of match type `team_id` with value `Q6L2SF6YDW` for `suspicious_exec`
+- **AND** a `suspicious_exec` chain whose non-shell parent is an unsigned binary at a path resembling the benign tool (for example `/tmp/claude/versions/1.0/claude`)
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the finding is produced, because the unsigned parent carries no team ID for the signature exclusion to match
+
+### Requirement: Retryable evaluation on unmaterialized flow process
+
+The system MUST NOT silently drop a `dns_c2_beacon` alert because the rule evaluated a `network_connect` before a concurrently processed batch committed the connecting process's row (intra-replica processor workers and cross-replica claimers both create this window). When the rule resolves the flow's process and the lookup misses while the connect's ingest age is inside a fixed flow-materialization grace window, evaluation SHALL fail the batch with the retryable not-yet-materialized error class so the processor does not acknowledge the events and re-evaluates them on a later cycle, by which time the concurrent flush has committed. Once the connect is older than the grace window, a missing flow process SHALL be treated as permanently absent (its exec was never delivered) and the connect evaluated without a finding, so an orphaned connect cannot hold its batch in a retry loop.
+
+This flow-process grace window MUST be materially tighter than the subject-process materialization grace, because flow resolution runs before the rule's suspicion gate and so is reachable by any outbound connect rather than only a pre-filtered event; the tighter bound caps the batch-retry cost a genuinely orphaned connect can incur under sustained load while still covering the ordering race, which commits within a batch flush.
+
+#### Scenario: A young outbound connect's flow process row is missing
+
+- **GIVEN** an outbound `network_connect` whose connecting process has no materialized process row
+- **AND** the connect was ingested more recently than the flow-materialization grace window
+- **WHEN** the `dns_c2_beacon` rule evaluates it
+- **THEN** evaluation fails with the retryable not-yet-materialized error class
+- **AND** the processor does not acknowledge the batch, so the events are re-evaluated on a later cycle
+- **AND** the alert is produced by the re-evaluation once the process row is committed
+
+#### Scenario: An outbound connect past the grace window has no flow process row
+
+- **GIVEN** an outbound `network_connect` whose connecting process has no materialized process row
+- **AND** the connect was ingested longer ago than the flow-materialization grace window
+- **WHEN** the `dns_c2_beacon` rule evaluates it
+- **THEN** the connect produces no finding and no error
+- **AND** the batch is acknowledged normally
+
+### Requirement: Retryable evaluation on unmaterialized subject process
+
+The system MUST NOT silently drop an alert because rule evaluation ran before a concurrently processed batch committed the event's subject process row (intra-replica processor workers and cross-replica claimers both create this window). When a rule resolves the process an event is about (the pid carried in the event's own payload) and the lookup misses while the event's ingest age is inside a fixed materialization grace window, evaluation SHALL fail the batch with a retryable error class so the processor does not acknowledge the events and re-evaluates them on a later cycle. Once an event is older than the grace window, a missing subject process SHALL be treated as permanently absent and the event evaluated without a finding, so an orphaned event cannot hold its batch in a retry loop. This subject-process retry contract applies to subject-process lookups; ancestor and parent-chain lookups keep the skip semantics. (`dns_c2_beacon`'s flow-to-process resolution, which runs before its suspicion gate, uses an analogous retry under a tighter grace, specified separately by the "Retryable evaluation on unmaterialized flow process" requirement.)
+
+#### Scenario: A young event's subject process row is missing
+
+- **GIVEN** an event whose payload references a pid with no materialized process row
+- **AND** the event was ingested more recently than the materialization grace window
+- **WHEN** a rule that resolves that event's subject process evaluates it
+- **THEN** evaluation fails with the retryable not-yet-materialized error class
+- **AND** the processor does not acknowledge the batch, so the events are re-evaluated on a later cycle
+- **AND** the alert is produced by the re-evaluation once the process row is committed
+
+#### Scenario: An event past the grace window has no subject process row
+
+- **GIVEN** an event whose payload references a pid with no materialized process row
+- **AND** the event was ingested longer ago than the materialization grace window
+- **WHEN** a rule that resolves that event's subject process evaluates it
+- **THEN** the event produces no finding and no error
+- **AND** the batch is acknowledged normally

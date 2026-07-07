@@ -56,14 +56,6 @@ func TestAll_DeclareValidPlatforms(t *testing.T) {
 	}
 }
 
-// spec:server-admin-surface/per-rule-documentation-endpoint/rule-with-config-knobs
-//
-// TRANSITIONAL marker. The "Rule with config knobs" scenario is retired by the in-flight change
-// `remove-per-rule-config-knobs` (a MODIFIED delta that drops it). spectrace exempts only whole `## REMOVED`
-// requirements, not a scenario dropped from a kept requirement, so this marker is retained until the release
-// archive removes the canonical scenario, at which point this comment is deleted. No config-knob assertion
-// remains because the `Documentation.Config` surface was removed by the same change.
-//
 // TestAll_DocStructIsPopulated walks every shipped rule's Doc() and locks in the operator-facing invariants. Drives coverage of each
 // rule's Doc() body from the rules package itself so SonarCloud's Go coverage profile attributes the lines correctly (cross-package
 // coverage isn't aggregated under the project's current `-coverprofile` setup). Same checks as the gate in tools/gen-rule-docs,

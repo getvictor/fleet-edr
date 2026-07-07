@@ -660,7 +660,7 @@ func TestHandle_FullLogin_Success(t *testing.T) {
 // a probing attacker cannot enumerate failure modes. Pinned because the WARN branch is the operator's only diagnostic breadcrumb when
 // the failure isn't one of the named cases.
 //
-// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/failed-break-glass-login-is-audited-without-leaking-the-failure-mode-to-the-client
+// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/failed-break-glass-login-records-the-attempted-identifier-without-a-principal-id
 //
 // Pins both clauses: the client receives a generic invalid_credentials response (X-Edr-Auth-Reason=invalid_credentials) while the
 // audit row records action=auth.breakglass.failure with the precise failure reason in the row's payload.

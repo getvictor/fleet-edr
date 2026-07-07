@@ -399,7 +399,7 @@ func TestAppControlREST_CreateRule_RecordsFanoutFailures(t *testing.T) {
 	assert.Empty(t, r.inserter.snapshot(), "a failed batch enqueues nothing")
 }
 
-// spec:server-application-control/rule-lifecycle-audit-events/creating-a-rule-emits-an-audit-event
+// spec:server-application-control/rule-lifecycle-audit-events/creating-a-rule-records-the-acting-principal
 //
 // TestAppControlREST_CreateRule_AuditCarriesIdentityReasonAndDiff pins the spec scenario "creating a rule emits an audit event":
 // a successful rule create must leave exactly one audit event carrying the operator's identity (the session user_id), the
