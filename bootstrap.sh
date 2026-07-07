@@ -73,6 +73,11 @@ if [[ ! -s secrets/edr_dsn || "$mysql_root_existed" == "0" ]]; then
 	printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$(cat secrets/mysql_root)" > secrets/edr_dsn
 	printf 'generated secrets/edr_dsn\n'
 fi
+
+# ClickHouse event archive DSN (ADR-0015). The default user is passwordless on the private compose network, so this is a
+# fixed string, but it rides a secret file like edr_dsn so a ClickHouse password can be added later without editing the
+# compose. gen_secret leaves an existing file untouched, so a rerun never disturbs it.
+gen_secret secrets/clickhouse_dsn printf 'clickhouse://default:@clickhouse:9000/edr'
 # 0644, not 0600: Compose bind-mounts a file secret into the container with the
 # host file's owner and mode (the uid/gid/mode long-syntax options are Swarm
 # only and ignored here), and the server image runs as nonroot, so a 0600 file
