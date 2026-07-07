@@ -605,10 +605,19 @@ func TestGatewayLossReconnectNoCommandLoss_RealMySQL(t *testing.T) {
 	// to a locally-held connection immediately (the 1s watch is the backstop).
 	firstGateway := r.BuildControlGateway(stubVerifier{}, nil)
 	firstAddr, stopFirst := serveGateway(t, firstGateway)
+	// Register teardown immediately so an early require failure between here and the intentional mid-test loss below cannot leak the
+	// running server/stream into other parallel tests. stopFirst is wrapped in sync.OnceFunc because the test also stops it explicitly to
+	// model the gateway loss; the Once makes the later cleanup call a no-op (serveGateway's stop drains its serveDone channel exactly once).
+	stopFirstOnce := sync.OnceFunc(stopFirst)
+	t.Cleanup(stopFirstOnce)
 
 	firstConn, err := grpc.NewClient(firstAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
-	firstStreamCtx, cancelFirstStream := context.WithCancel(controlConnectCtx("tok-a"))
+	t.Cleanup(func() { _ = firstConn.Close() })
+	// A timeout on the stream context bounds the blocking Recv below, so a delivery regression fails in seconds instead of hanging until
+	// the global test timeout. cancelFirstStream still tears the stream down early to model the gateway loss.
+	firstStreamCtx, cancelFirstStream := context.WithTimeout(controlConnectCtx("tok-a"), 10*time.Second)
+	t.Cleanup(cancelFirstStream)
 	firstStream, err := control.NewControlChannelClient(firstConn).Connect(firstStreamCtx)
 	require.NoError(t, err)
 
@@ -629,7 +638,7 @@ func TestGatewayLossReconnectNoCommandLoss_RealMySQL(t *testing.T) {
 	// Lose the gateway and its whole in-memory connection registry (the sanctioned stateful tier goes away), before any outcome lands.
 	cancelFirstStream()
 	require.NoError(t, firstConn.Close())
-	stopFirst()
+	stopFirstOnce()
 
 	// The queued command survived the in-process loss: durable state lives in MySQL, not in the gateway's memory. This is the
 	// load-bearing assertion.
@@ -652,7 +661,7 @@ func TestGatewayLossReconnectNoCommandLoss_RealMySQL(t *testing.T) {
 	secondConn, err := grpc.NewClient(secondAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = secondConn.Close() })
-	secondStreamCtx, cancelSecondStream := context.WithCancel(controlConnectCtx("tok-a"))
+	secondStreamCtx, cancelSecondStream := context.WithTimeout(controlConnectCtx("tok-a"), 10*time.Second)
 	defer cancelSecondStream()
 	secondStream, err := control.NewControlChannelClient(secondConn).Connect(secondStreamCtx)
 	require.NoError(t, err)
