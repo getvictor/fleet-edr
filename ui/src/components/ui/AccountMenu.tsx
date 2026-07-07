@@ -35,10 +35,12 @@ export function AccountMenu({ user, authMethod, onLogout }: AccountMenuProps) {
         className="account-menu__trigger"
         aria-haspopup="true"
         aria-expanded={open}
+        // The email is deliberately not rendered in the always-visible bar (shoulder-surfing): the avatar shows only the initial and
+        // the signed-in identity is revealed in the dropdown on click. aria-label keeps the trigger named for assistive tech.
+        aria-label="Account menu"
         onClick={() => { setOpen((v) => !v); }}
       >
         <span className="account-menu__avatar" aria-hidden="true">{user.email.charAt(0) || "?"}</span>
-        <span className="account-menu__email">{user.email}</span>
         {badge !== null && (
           <span className="account-menu__auth-method" title="This session was minted via the break-glass recovery flow.">
             {badge}
