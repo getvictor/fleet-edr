@@ -113,6 +113,9 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // techniquesByNodeId maps a process DB id to the deduped MITRE technique ids of its alerts (issue #585), so the hover tooltip can
   // show the technique mapping inline. Built from the same alert fetch that drives alertProcessIds.
   const [techniquesByNodeId, setTechniquesByNodeId] = useState<Map<number, string[]>>(new Map());
+  // alertRefreshKey bumps to re-run the alert-badge fetch in place after a triage action on the alert header, so a resolved alert
+  // loses its node dot + technique tag without a full host reload (the fetch keys on open + acknowledged, so resolving drops it).
+  const [alertRefreshKey, setAlertRefreshKey] = useState(0);
   // hoverTip is the evidence tooltip's position + content (issue #580); null when no node is hovered.
   const [hoverTip, setHoverTip] = useState<{ x: number; y: number; tooltip: NodeTooltip } | null>(null);
   const [query, setQuery] = useState("");
@@ -247,14 +250,18 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
 
   // Fetch this host's open + acknowledged alerts to mark nodes with an alert dot (by process DB id) and to map each node to its
   // alerts' MITRE technique ids for the inline tooltip tags (issue #585).
+  // Clear on host change so a slow/failed fetch cannot leave the previous host's alert dots + tooltip techniques on this host. Kept
+  // separate from the fetch effect below so an in-place refresh (alertRefreshKey) does not flash every dot off and back on.
   useEffect(() => {
-    if (!hostId) return;
-    let cancelled = false;
-    // Clear on host change so a slow/failed fetch cannot leave the previous host's alert dots + tooltip techniques on this host.
     /* eslint-disable react-hooks/set-state-in-effect */
     setAlertProcessIds(new Set());
     setTechniquesByNodeId(new Map());
     /* eslint-enable react-hooks/set-state-in-effect */
+  }, [hostId]);
+
+  useEffect(() => {
+    if (!hostId) return;
+    let cancelled = false;
     Promise.all([
       // Per-request catch so one failing status still marks nodes from the other; the badges are best-effort.
       listAlerts({ host_id: hostId, status: "open", limit: 1000 }).catch(() => []),
@@ -277,7 +284,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       })
       .catch(() => { /* alert badges are best-effort */ });
     return () => { cancelled = true; };
-  }, [hostId]);
+  }, [hostId, alertRefreshKey]);
 
   // Auto-select a process from the URL: ?process=<dbId> (alert list / fleet search) or ?pid=<pid>&at=<ms> (a timeline row, which
   // knows the pid but not the DB id). The resolution lives in selectNodeFromParams so this effect stays a single branch.
@@ -548,7 +555,11 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
             <AlertTriageActions
               alertId={alertDetail.id}
               status={alertDetail.status}
-              onStatusChange={(status) => { setAlertDetail((prev) => (prev ? { ...prev, status } : prev)); }}
+              onStatusChange={(status) => {
+                setAlertDetail((prev) => (prev ? { ...prev, status } : prev));
+                // Re-fetch the tree's alert badges so a resolved alert loses its node dot + technique tag in place.
+                setAlertRefreshKey((k) => k + 1);
+              }}
             />
           </div>
         </div>

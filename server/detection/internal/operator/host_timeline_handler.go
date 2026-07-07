@@ -73,8 +73,8 @@ func (h *Handler) handleHostTimeline(w http.ResponseWriter, r *http.Request) {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidEventType)
 		return
 	}
-	// ?chain= is the alert-chain scope: the client passes one `pid:fromIngestedNs:toIngestedNs` triple per chain process generation
-	// (the alerted process plus its ancestors and descendants) so the timeline mirrors the graph's focus. Absent means the full stream.
+	// ?chain= is the alert-chain scope: the client passes one `pid:pidversion` pair per chain process generation (the alerted process
+	// plus its ancestors and descendants) so the timeline mirrors the graph's focus. Absent means the full stream.
 	chain, ok := parseTimelineChain(q.Get("chain"))
 	if !ok {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidPID)

@@ -115,13 +115,18 @@ describe("ProcessTreeView process-optional alert", () => {
   it("offers the alert's triage controls in the header, the only triage surface for a process-optional alert", async () => {
     vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
     const statusSpy = vi.spyOn(api, "updateAlertStatus").mockResolvedValue(undefined);
+    const alertsSpy = vi.spyOn(api, "listAlerts").mockResolvedValue([]);
     renderTree("?alert=7&process=0&at=1750248000000");
 
     // A process-optional alert has no process node to click, so the alert header is the only place its status can change. The
-    // acknowledge control lives there and reflects the new status locally on success (no refetch).
+    // acknowledge control lives there and reflects the new status locally on success.
+    await waitFor(() => { expect(alertsSpy).toHaveBeenCalled(); });
+    const initialAlertFetches = alertsSpy.mock.calls.length;
     fireEvent.click(await screen.findByRole("button", { name: /acknowledge/i }));
     await waitFor(() => { expect(statusSpy).toHaveBeenCalledWith(7, "acknowledged"); });
     expect(await screen.findByText("acknowledged")).toBeInTheDocument();
+    // The tree's alert badges re-fetch after the status change so a resolved alert would lose its dot + technique tag in place.
+    await waitFor(() => { expect(alertsSpy.mock.calls.length).toBeGreaterThan(initialAlertFetches); });
   });
 
   it("still explains the alert (no blank canvas) when getAlertDetail fails", async () => {

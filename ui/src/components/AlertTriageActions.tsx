@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { updateAlertStatus } from "../api";
 import { useReauthRetry } from "../hooks/useReauthRetry";
 import { ReauthModal } from "./ReauthModal";
@@ -19,28 +19,33 @@ interface Props {
 export function AlertTriageActions({ alertId, status, onStatusChange }: Props) {
   const updateStatus = useCallback(async (id: number, newStatus: string) => updateAlertStatus(id, newStatus), []);
   const { call, modal } = useReauthRetry(updateStatus);
+  // A transition is single-flight: disable the controls while one is in flight so a quick Acknowledge-then-Resolve cannot land two
+  // PUTs whose promises resolve out of order and leave the locally-reflected status inconsistent with the analyst's last action.
+  const [pending, setPending] = useState(false);
 
   const change = (newStatus: string) => {
+    setPending(true);
     call(alertId, newStatus)
       .then(() => { onStatusChange(newStatus); })
-      .catch(() => { /* cancelled reauth / transient failure: leave the status unchanged */ });
+      .catch(() => { /* cancelled reauth / transient failure: leave the status unchanged */ })
+      .finally(() => { setPending(false); });
   };
 
   return (
     <div className="alert-triage" role="group" aria-label="Alert status">
       <span className={`status-text status-text--${status}`}>{status}</span>
       {status === "open" && (
-        <Button size="small" variant="inverse" onClick={() => { change("acknowledged"); }}>
+        <Button size="small" variant="inverse" disabled={pending} onClick={() => { change("acknowledged"); }}>
           Acknowledge
         </Button>
       )}
       {status !== "resolved" && (
-        <Button size="small" variant="inverse" onClick={() => { change("resolved"); }}>
+        <Button size="small" variant="inverse" disabled={pending} onClick={() => { change("resolved"); }}>
           Resolve
         </Button>
       )}
       {status === "resolved" && (
-        <Button size="small" variant="inverse" onClick={() => { change("open"); }}>
+        <Button size="small" variant="inverse" disabled={pending} onClick={() => { change("open"); }}>
           Reopen
         </Button>
       )}

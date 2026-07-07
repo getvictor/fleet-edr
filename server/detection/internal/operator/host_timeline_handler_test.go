@@ -144,6 +144,27 @@ func TestHostTimeline_ChainScope(t *testing.T) {
 	assert.ElementsMatch(t, []string{"a", "c"}, []string{out.Events[0].EventID, out.Events[1].EventID})
 }
 
+// spec:server-rest-api/host-event-timeline-endpoint/chain-scope-selects-generations-by-pid-and-pidversion
+//
+// A missing pidversion is not pidversion 0: an event that omits the field must match no generation, so a scope for (pid, 0) does not
+// sweep in legacy events that never carried pidversion (0 is itself a real kernel generation).
+func TestHostTimeline_ChainScopeExcludesMissingPidversion(t *testing.T) {
+	t.Parallel()
+	a := timelineArchive(t,
+		ev("z", "h1", 100, "exec", `{"pid":5,"pidversion":0,"path":"/sbin/launchd"}`), // genuine generation 0 -> in chain
+		ev("m", "h1", 200, "exec", `{"pid":5,"path":"/bin/legacy"}`),                  // pid 5, NO pidversion -> excluded
+	)
+	srv := newTimelineServer(t, a, allowAllAuthZ{})
+	resp := doGet(t, srv, "/api/hosts/h1/timeline?chain=5:0")
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	out := decodeTimeline(t, resp)
+	require.Len(t, out.Events, 1)
+	assert.EqualValues(t, 1, out.TotalMatched)
+	assert.Equal(t, "z", out.Events[0].EventID) // only the event that actually carries pidversion 0, not the pidversion-less one
+}
+
 func TestHostTimeline_InvalidChainRejected(t *testing.T) {
 	t.Parallel()
 	a := timelineArchive(t, ev("a", "h1", 100, "exec", `{"pid":1,"pidversion":10}`))

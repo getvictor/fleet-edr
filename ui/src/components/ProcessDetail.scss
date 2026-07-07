@@ -179,9 +179,10 @@
     gap: 0.25rem;
   }
 
-  // Shrink the shared copy button in this dense grid (36px reads as oversized against xx-small rows) and give the fleet-search pivot
-  // the same box so the two icons are the same size and align in the trailing column.
-  .copy-button,
+  // Shrink the shared copy button in the evidence row's action cluster (36px reads as oversized against xx-small rows) and give the
+  // fleet-search pivot the same box so the two icons are the same size and align in the trailing column. Scoped to the action cluster,
+  // not the whole panel, so a CopyButton rendered elsewhere under .process-detail keeps its default size.
+  &__row-actions .copy-button,
   &__pivot {
     width: 26px;
     height: 26px;

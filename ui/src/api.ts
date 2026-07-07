@@ -422,6 +422,12 @@ export interface ChainGeneration {
   pidversion: number;
 }
 
+// encodeChainGeneration is the single `pid:pidversion` wire encoding for one chain generation. Shared by the timeline query builder
+// and HostTimeline's filter-key computation so the two cannot silently diverge if the delimiter or field order ever changes.
+export function encodeChainGeneration(g: ChainGeneration): string {
+  return `${String(g.pid)}:${String(g.pidversion)}`;
+}
+
 // HostTimelineFilter is the host event timeline input (issue #583): the event-time window (ns strings), an optional subset of the
 // timeline event types, an optional case-insensitive payload text match, and an optional alert-chain scope. Empty fields are omitted
 // from the query.
@@ -449,7 +455,7 @@ export async function getHostTimeline(hostID: string, filter: HostTimelineFilter
   set(
     "chain",
     filter.chain && filter.chain.length > 0
-      ? filter.chain.map((g) => `${String(g.pid)}:${String(g.pidversion)}`).join(",")
+      ? filter.chain.map(encodeChainGeneration).join(",")
       : undefined,
   );
   set("cursor", cursor);

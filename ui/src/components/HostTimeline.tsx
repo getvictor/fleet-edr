@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import "./HostTimeline.scss";
-import { getHostTimeline, eventArtifactParam, listAlerts, getAlertDetail, type ChainGeneration } from "../api";
+import { getHostTimeline, eventArtifactParam, listAlerts, getAlertDetail, encodeChainGeneration, type ChainGeneration } from "../api";
 import type { EventRecord, NetworkConnectPayload, DNSQueryPayload, ExecPayload } from "../types";
 import { Table } from "./ui/Table";
 import { Badge } from "./ui/Badge";
@@ -79,7 +79,7 @@ export function HostTimeline({ hostId, bounds, emphasizePid, chainGenerations }:
   // order-independent encoding of the generations so toggling the scope on or off reloads the list without churning on walk order.
   const scopeChain = chainGenerations && chainGenerations.length > 0 ? chainGenerations : undefined;
   const scopeKey = scopeChain
-    ? scopeChain.map((g) => `${String(g.pid)}:${String(g.pidversion)}`).sort((a, b) => a.localeCompare(b))
+    ? scopeChain.map(encodeChainGeneration).sort((a, b) => a.localeCompare(b))
     : [];
   const filterKey = JSON.stringify({ h: hostId, from: bounds.fromNs, to: bounds.toNs, types: activeTypes, text, chain: scopeKey });
 
