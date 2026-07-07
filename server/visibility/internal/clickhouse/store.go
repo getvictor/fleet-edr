@@ -196,6 +196,21 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 		where = append(where, "positionCaseInsensitiveUTF8(payload, ?) > 0")
 		args = append(args, filter.Text)
 	}
+	if len(filter.Chain) > 0 {
+		// Alert-chain scope: keep only events belonging to one of the chain's process generations, matched by (pid, pidversion). pid is
+		// materialized (prunes granules); pidversion lives in the payload, extracted per row over that pruned set. The pair is unique
+		// across PID reuse, so a later process that reused a chain pid is excluded, and it is robust to ingest timing (unlike a window,
+		// which collapses to near-zero for a short-lived process whose fork and exit land in one batch). The JSONHas guard is required
+		// because JSONExtractInt returns 0 for a missing field: pidversion 0 is a real kernel generation, so without the guard a scope
+		// for (pid, 0) would sweep in legacy events that never carried pidversion. A tuple IN lets ClickHouse hash-match in one pass
+		// instead of walking an OR chain per row.
+		gens := make([]string, len(filter.Chain))
+		for i, g := range filter.Chain {
+			gens[i] = "(?, ?)"
+			args = append(args, g.PID, g.PIDVersion)
+		}
+		where = append(where, "(JSONHas(payload, 'pidversion') AND (pid, JSONExtractInt(payload, 'pidversion')) IN ("+strings.Join(gens, ", ")+"))")
+	}
 	return s.pageEventsByKeyset(ctx, strings.Join(where, " AND "), args, cursor, limit)
 }
 

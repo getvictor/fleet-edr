@@ -7,6 +7,7 @@ import {
   NANOSECONDS_PER_MILLISECOND,
 } from "../constants";
 import { ProcessDetail } from "./ProcessDetail";
+import { AlertTriageActions } from "./AlertTriageActions";
 import { HostHealthPanel } from "./HostHealthPanel";
 import { HostHeader } from "./HostHeader";
 import { HostTimeline } from "./HostTimeline";
@@ -21,6 +22,7 @@ import {
   buildPreservedIds,
   buildQueryFilterIds,
   buildVisibleRoots,
+  chainGenerations,
   collectMatches,
   findAlertChain,
   resolveAlertEntry,
@@ -111,6 +113,9 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   // techniquesByNodeId maps a process DB id to the deduped MITRE technique ids of its alerts (issue #585), so the hover tooltip can
   // show the technique mapping inline. Built from the same alert fetch that drives alertProcessIds.
   const [techniquesByNodeId, setTechniquesByNodeId] = useState<Map<number, string[]>>(new Map());
+  // alertRefreshKey bumps to re-run the alert-badge fetch in place after a triage action on the alert header, so a resolved alert
+  // loses its node dot + technique tag without a full host reload (the fetch keys on open + acknowledged, so resolving drops it).
+  const [alertRefreshKey, setAlertRefreshKey] = useState(0);
   // hoverTip is the evidence tooltip's position + content (issue #580); null when no node is hovered.
   const [hoverTip, setHoverTip] = useState<{ x: number; y: number; tooltip: NodeTooltip } | null>(null);
   const [query, setQuery] = useState("");
@@ -180,6 +185,16 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     return findAlertChain(roots, alertEntry.processId);
   }, [roots, focusAlertChain, alertEntry.processId]);
 
+  // The alert chain's process generations (pid + pidversion), so the Timeline can scope to the same chain the Graph shows (the
+  // "Alert chain / Full tree" toggle drives both). Non-null only when focused on a process-backed alert AND the chain has resolved from
+  // the fetched tree; null otherwise means the Timeline shows the full host stream. A resolved-but-empty chain also yields the full
+  // stream rather than blank.
+  const alertChainGenerations = useMemo(() => {
+    if (!alertChainIds) return null;
+    const gens = chainGenerations(roots, alertChainIds);
+    return gens.length > 0 ? gens : null;
+  }, [roots, alertChainIds]);
+
   // Never hide processes that have alerts attached, or that sit on the ancestor path of one -
   // even if their binary is in a system path, the analyst context matters.
   const preservedIds = useMemo(() => buildPreservedIds(roots, alertProcessIds), [roots, alertProcessIds]);
@@ -235,14 +250,18 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
 
   // Fetch this host's open + acknowledged alerts to mark nodes with an alert dot (by process DB id) and to map each node to its
   // alerts' MITRE technique ids for the inline tooltip tags (issue #585).
+  // Clear on host change so a slow/failed fetch cannot leave the previous host's alert dots + tooltip techniques on this host. Kept
+  // separate from the fetch effect below so an in-place refresh (alertRefreshKey) does not flash every dot off and back on.
   useEffect(() => {
-    if (!hostId) return;
-    let cancelled = false;
-    // Clear on host change so a slow/failed fetch cannot leave the previous host's alert dots + tooltip techniques on this host.
     /* eslint-disable react-hooks/set-state-in-effect */
     setAlertProcessIds(new Set());
     setTechniquesByNodeId(new Map());
     /* eslint-enable react-hooks/set-state-in-effect */
+  }, [hostId]);
+
+  useEffect(() => {
+    if (!hostId) return;
+    let cancelled = false;
     Promise.all([
       // Per-request catch so one failing status still marks nodes from the other; the badges are best-effort.
       listAlerts({ host_id: hostId, status: "open", limit: 1000 }).catch(() => []),
@@ -265,7 +284,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       })
       .catch(() => { /* alert badges are best-effort */ });
     return () => { cancelled = true; };
-  }, [hostId]);
+  }, [hostId, alertRefreshKey]);
 
   // Auto-select a process from the URL: ?process=<dbId> (alert list / fleet search) or ?pid=<pid>&at=<ms> (a timeline row, which
   // knows the pid but not the DB id). The resolution lives in selectNodeFromParams so this effect stays a single branch.
@@ -275,11 +294,12 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   }, [roots, searchParams, entryAlert]);
 
   useEffect(() => {
-    if (view !== "graph") return undefined; // the timeline view does no graph work; the fetch (and the d3 draw below) are graph-only
-    // Return fetchTree's cleanup so its stale-response guard actually fires: on a window/host/pin change the prior in-flight fetch is
-    // cancelled and cannot paint a stale tree over the newer one.
+    // Fetch the tree for the graph, and also when focused on an alert in the timeline view so the chain's pids resolve to scope the
+    // timeline (the d3 draw below is a no-op in timeline view because the graph's svg is not mounted). Return fetchTree's cleanup so its
+    // stale-response guard fires: on a window/host/pin change the prior in-flight fetch is cancelled and cannot paint a stale tree.
+    if (view !== "graph" && !(focusAlertChain && alertEntry.processId)) return undefined;
     return fetchTree(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch on mount
-  }, [fetchTree, view]);
+  }, [fetchTree, view, focusAlertChain, alertEntry.processId]);
 
   useEffect(() => {
     if (!svgRef.current) return;
@@ -523,18 +543,25 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
         </div>
       )}
 
-      {/* The finding detail (description + technique tags) is the "what and why" of the alert. It renders for every alert,
-          and is the primary surface for a process-optional alert whose graph is intentionally empty. */}
+      {/* The finding detail is the "what and why" of the alert: description, technique tags (linked to the rule doc), and the alert's
+          own triage controls. Triage lives here, on the alert surface, rather than inside a process node inspector (a process-optional
+          alert has no process to click, so this is the only place its status can change). It renders for every alert and is the primary
+          surface for a process-optional alert whose graph is intentionally empty. */}
       {alertDetail && (
         <div className="alert-detail-panel">
           <p className="alert-detail-panel__description">{alertDetail.description}</p>
-          {alertDetail.techniques && alertDetail.techniques.length > 0 && (
-            <div className="alert-detail-panel__techniques">
-              {alertDetail.techniques.map((t) => (
-                <Badge key={t} variant="neutral">{t}</Badge>
-              ))}
-            </div>
-          )}
+          <TechniqueTags techniques={alertDetail.techniques} ruleId={alertDetail.rule_id} className="alert-detail-panel__techniques" />
+          <div className="alert-detail-panel__actions">
+            <AlertTriageActions
+              alertId={alertDetail.id}
+              status={alertDetail.status}
+              onStatusChange={(status) => {
+                setAlertDetail((prev) => (prev ? { ...prev, status } : prev));
+                // Re-fetch the tree's alert badges so a resolved alert loses its node dot + technique tag in place.
+                setAlertRefreshKey((k) => k + 1);
+              }}
+            />
+          </div>
         </div>
       )}
 
@@ -547,7 +574,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       />
 
       {view === "timeline" ? (
-        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} />
+        <HostTimeline hostId={hostId} bounds={bounds} emphasizePid={emphasizePid} chainGenerations={alertChainGenerations ?? undefined} />
       ) : (
         <>
           {graphControls}

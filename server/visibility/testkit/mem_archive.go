@@ -207,7 +207,30 @@ func eventMatchesTimeline(e api.Event, filter api.HostTimelineFilter, types []st
 	if filter.Text != "" && !strings.Contains(strings.ToLower(string(e.Payload)), strings.ToLower(filter.Text)) {
 		return false
 	}
+	if len(filter.Chain) > 0 && !payloadMatchesChain(e.Payload, filter.Chain) {
+		return false
+	}
 	return true
+}
+
+// payloadMatchesChain mirrors the store's chain scope: an event belongs to a chain generation when its (pid, pidversion) parsed from
+// the payload matches one of the generations. An event that omits pidversion matches no generation: absence is not pidversion 0 (a
+// real kernel generation), so a scope for (pid, 0) must not sweep in legacy events that never carried the field. The pointer field
+// preserves that absence, where a plain int64 would collapse a missing pidversion to 0.
+func payloadMatchesChain(payload json.RawMessage, chain []api.ProcessGeneration) bool {
+	var p struct {
+		PID        int64  `json:"pid"`
+		PIDVersion *int64 `json:"pidversion"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil || p.PIDVersion == nil {
+		return false
+	}
+	for _, g := range chain {
+		if p.PID == g.PID && *p.PIDVersion == g.PIDVersion {
+			return true
+		}
+	}
+	return false
 }
 
 // eventMatchesSearch reports whether an event satisfies a fleet-wide search filter: right type, matching artifact value, and within

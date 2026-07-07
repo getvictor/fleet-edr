@@ -123,6 +123,59 @@ func TestHostTimeline_TextMatch(t *testing.T) {
 	assert.Equal(t, "d1", out.Events[0].EventID)
 }
 
+// spec:server-rest-api/host-event-timeline-endpoint/chain-scope-selects-generations-by-pid-and-pidversion
+func TestHostTimeline_ChainScope(t *testing.T) {
+	t.Parallel()
+	a := timelineArchive(t,
+		ev("a", "h1", 100, "exec", `{"pid":1,"pidversion":10,"path":"/bin/sh"}`),                      // pid 1 gen 10 -> in chain
+		ev("b", "h1", 200, "exec", `{"pid":1,"pidversion":11,"path":"/usr/bin/curl"}`),                // pid 1 REUSED, gen 11 -> not in chain
+		ev("c", "h1", 300, "network_connect", `{"pid":3,"pidversion":20,"remote_address":"1.2.3.4"}`), // pid 3 gen 20 -> in chain
+	)
+	srv := newTimelineServer(t, a, allowAllAuthZ{})
+	// Chain = pid 1 generation 10 and pid 3 generation 20. Event "b" reuses pid 1 in a later generation (11), so it MUST be excluded:
+	// exactly the PID-reuse case a raw-pid filter would wrongly include.
+	resp := doGet(t, srv, "/api/hosts/h1/timeline?chain=1:10,3:20")
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	out := decodeTimeline(t, resp)
+	require.Len(t, out.Events, 2)
+	assert.EqualValues(t, 2, out.TotalMatched) // total reflects the scoped generations, not every event that reused the pids
+	assert.ElementsMatch(t, []string{"a", "c"}, []string{out.Events[0].EventID, out.Events[1].EventID})
+}
+
+// spec:server-rest-api/host-event-timeline-endpoint/chain-scope-selects-generations-by-pid-and-pidversion
+//
+// A missing pidversion is not pidversion 0: an event that omits the field must match no generation, so a scope for (pid, 0) does not
+// sweep in legacy events that never carried pidversion (0 is itself a real kernel generation).
+func TestHostTimeline_ChainScopeExcludesMissingPidversion(t *testing.T) {
+	t.Parallel()
+	a := timelineArchive(t,
+		ev("z", "h1", 100, "exec", `{"pid":5,"pidversion":0,"path":"/sbin/launchd"}`), // genuine generation 0 -> in chain
+		ev("m", "h1", 200, "exec", `{"pid":5,"path":"/bin/legacy"}`),                  // pid 5, NO pidversion -> excluded
+	)
+	srv := newTimelineServer(t, a, allowAllAuthZ{})
+	resp := doGet(t, srv, "/api/hosts/h1/timeline?chain=5:0")
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	out := decodeTimeline(t, resp)
+	require.Len(t, out.Events, 1)
+	assert.EqualValues(t, 1, out.TotalMatched)
+	assert.Equal(t, "z", out.Events[0].EventID) // only the event that actually carries pidversion 0, not the pidversion-less one
+}
+
+func TestHostTimeline_InvalidChainRejected(t *testing.T) {
+	t.Parallel()
+	a := timelineArchive(t, ev("a", "h1", 100, "exec", `{"pid":1,"pidversion":10}`))
+	srv := newTimelineServer(t, a, allowAllAuthZ{})
+	for _, bad := range []string{"chain=1:notanumber", "chain=1", "chain=-1:2", "chain=1:2:3"} {
+		resp := doGet(t, srv, "/api/hosts/h1/timeline?"+bad)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, bad)
+		resp.Body.Close()
+	}
+}
+
 // spec:server-rest-api/host-event-timeline-endpoint/keyset-pagination-is-stable-and-complete
 func TestHostTimeline_KeysetPaginationStable(t *testing.T) {
 	t.Parallel()

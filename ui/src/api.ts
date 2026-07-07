@@ -415,13 +415,30 @@ export async function searchEvents(mode: EventSearchMode, filter: EventSearchFil
   return { ...res, events: res.events ?? [] };
 }
 
+// ChainGeneration identifies one alert-chain process generation by its pid and kernel pid generation (pidversion). The timeline matches
+// events on the (pid, pidversion) pair, which uniquely identifies the generation across PID reuse (a raw pid cannot).
+export interface ChainGeneration {
+  pid: number;
+  pidversion: number;
+}
+
+// encodeChainGeneration is the single `pid:pidversion` wire encoding for one chain generation. Shared by the timeline query builder
+// and HostTimeline's filter-key computation so the two cannot silently diverge if the delimiter or field order ever changes.
+export function encodeChainGeneration(g: ChainGeneration): string {
+  return `${String(g.pid)}:${String(g.pidversion)}`;
+}
+
 // HostTimelineFilter is the host event timeline input (issue #583): the event-time window (ns strings), an optional subset of the
-// timeline event types, and an optional case-insensitive payload text match. Empty fields are omitted from the query.
+// timeline event types, an optional case-insensitive payload text match, and an optional alert-chain scope. Empty fields are omitted
+// from the query.
 export interface HostTimelineFilter {
   from?: string;
   to?: string;
   types?: string[];
   text?: string;
+  // chain, when set, scopes the timeline to the alert chain's process generations (the alerted process plus its ancestors and
+  // descendants), mirroring the graph's focus. Omitted (or empty) shows the full host stream.
+  chain?: ChainGeneration[];
 }
 
 // getHostTimeline reads GET /api/hosts/{host_id}/timeline: the host's exec/network/DNS events interleaved newest-first over the window,
@@ -434,6 +451,13 @@ export async function getHostTimeline(hostID: string, filter: HostTimelineFilter
   set("to", filter.to);
   set("type", filter.types && filter.types.length > 0 ? filter.types.join(",") : undefined);
   set("text", filter.text);
+  // Encode each chain generation as `pid:pidversion`, comma-separated. The endpoint matches events on both so PID reuse is disambiguated.
+  set(
+    "chain",
+    filter.chain && filter.chain.length > 0
+      ? filter.chain.map(encodeChainGeneration).join(",")
+      : undefined,
+  );
   set("cursor", cursor);
   const qs = query.toString();
   const suffix = qs ? `?${qs}` : "";

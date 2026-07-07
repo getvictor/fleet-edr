@@ -1,0 +1,8 @@
+@use "../styles/var/padding" as *;
+
+.alert-triage {
+  display: flex;
+  align-items: center;
+  gap: $pad-small;
+  flex-wrap: wrap;
+}

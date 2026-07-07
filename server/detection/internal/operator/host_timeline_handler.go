@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
+
+// maxTimelineChain caps the alert-chain scope. The process tree is itself capped at processTreeMaxLimit nodes, so a chain cannot exceed
+// that; the cap bounds the OR-clause count against a malformed caller rather than a real chain.
+const maxTimelineChain = processTreeMaxLimit
 
 // HostTimelineReader is the host-scoped merged event timeline surface (issue #583): exec, network_connect, and dns_query events for one
 // host interleaved in event-time order. mysql.Store satisfies it by delegating to the visibility EventArchive, the same seam the
@@ -68,6 +73,13 @@ func (h *Handler) handleHostTimeline(w http.ResponseWriter, r *http.Request) {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidEventType)
 		return
 	}
+	// ?chain= is the alert-chain scope: the client passes one `pid:pidversion` pair per chain process generation (the alerted process
+	// plus its ancestors and descendants) so the timeline mirrors the graph's focus. Absent means the full stream.
+	chain, ok := parseTimelineChain(q.Get("chain"))
+	if !ok {
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidPID)
+		return
+	}
 
 	limit := parseSearchLimit(q)
 	result, err := h.hostTimeline.HostTimeline(ctx, visibilityapi.HostTimelineFilter{
@@ -76,6 +88,7 @@ func (h *Handler) handleHostTimeline(w http.ResponseWriter, r *http.Request) {
 		ToNs:       toNs,
 		EventTypes: types,
 		Text:       q.Get("text"),
+		Chain:      chain,
 	}, q.Get("cursor"), limit)
 	if err != nil {
 		if errors.Is(err, visibilityapi.ErrInvalidEventCursor) {
@@ -113,4 +126,34 @@ func parseTimelineTypes(raw string) ([]string, bool) {
 		types = append(types, t)
 	}
 	return types, true
+}
+
+// parseTimelineChain parses the optional ?chain= scope: a comma-separated list of `pid:pidversion` pairs, one per alert-chain process
+// generation. An empty param means no scope (the full host stream). A malformed pair, a negative value, or more than maxTimelineChain
+// entries makes ok=false so the handler rejects it with a 400 rather than scoping to the wrong set.
+func parseTimelineChain(raw string) ([]visibilityapi.ProcessGeneration, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, true
+	}
+	var chain []visibilityapi.ProcessGeneration
+	for entry := range strings.SplitSeq(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if len(chain) >= maxTimelineChain {
+			return nil, false
+		}
+		pidStr, verStr, ok := strings.Cut(entry, ":")
+		if !ok {
+			return nil, false
+		}
+		pid, e1 := strconv.ParseInt(pidStr, 10, 64)
+		ver, e2 := strconv.ParseInt(verStr, 10, 64)
+		if e1 != nil || e2 != nil || pid < 0 || ver < 0 {
+			return nil, false
+		}
+		chain = append(chain, visibilityapi.ProcessGeneration{PID: pid, PIDVersion: ver})
+	}
+	return chain, true
 }

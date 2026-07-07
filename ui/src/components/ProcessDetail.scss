@@ -122,53 +122,95 @@
     letter-spacing: 0.5px;
   }
 
-  &__alert {
-    background-color: $ui-yellow-banner;
-    border: 1px solid $ui-yellow-banner-outline;
-    border-radius: $border-radius;
-    padding: $pad-small;
-    margin-top: $pad-small;
-  }
-
-  &__alert-header {
+  // Related alerts are compact references, not restated alert cards: a linked row per alert (the alert page owns the body + triage).
+  &__alert-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    gap: $pad-small;
   }
 
-  &__alert-title {
+  &__alert-ref {
+    display: flex;
+    flex-direction: column;
+    gap: $pad-xxsmall;
+  }
+
+  &__alert-link {
+    display: flex;
+    align-items: center;
+    gap: $pad-xsmall;
+    text-decoration: none;
+    color: $core-fleet-black;
+
+    &:hover .process-detail__alert-name {
+      text-decoration: underline;
+    }
+  }
+
+  &__alert-name {
     font-size: $x-small;
     font-weight: $bold;
-    margin-top: $pad-xsmall;
-    color: $core-fleet-black;
     overflow-wrap: anywhere;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
-  &__alert-desc {
-    font-size: $xx-small;
-    color: $ui-fleet-black-75;
-    margin-top: $pad-xxsmall;
-    overflow-wrap: anywhere;
-    line-height: 1.4;
-  }
-
-  &__alert-actions {
-    margin-top: $pad-small;
+  // One label/value row: the value takes the width, the copy + search icons sit in a fixed trailing cluster so they line up as a
+  // single column down the panel (issue: the copy + "search all hosts" affordances read as scattered and oversized).
+  &__row {
     display: flex;
+    align-items: center;
     gap: $pad-xsmall;
   }
-}
 
-// Copy affordances on evidence rows (issue #580): keep the icon button on the text baseline without reflowing the value.
-.process-detail__copyable {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
+  &__value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 
-// Search pivot link on an evidence row (issue #582): sits beside the copy button, low-emphasis until hover.
-.process-detail__pivot {
-  font-size: 0.75rem;
-  white-space: nowrap;
+  &__row-actions {
+    flex: 0 0 auto;
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  // Shrink the shared copy button in the evidence row's action cluster (36px reads as oversized against xx-small rows) and give the
+  // fleet-search pivot the same box so the two icons are the same size and align in the trailing column. Scoped to the action cluster,
+  // not the whole panel, so a CopyButton rendered elsewhere under .process-detail keeps its default size.
+  &__row-actions .copy-button,
+  &__pivot {
+    width: 26px;
+    height: 26px;
+  }
+
+  &__pivot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    padding: 0;
+    background-color: $core-fleet-white;
+    border: 1px solid $ui-fleet-black-25;
+    border-radius: 4px;
+    color: $ui-fleet-black-75;
+    transition:
+      border-color 150ms ease-in-out,
+      color 150ms ease-in-out;
+
+    &:hover {
+      border-color: $ui-fleet-black-50;
+      color: $core-fleet-black;
+    }
+
+    &:focus-visible {
+      border-color: $core-fleet-green;
+      box-shadow: 0 0 0 3px rgba(0, 154, 125, 0.15);
+      outline: none;
+    }
+  }
 }

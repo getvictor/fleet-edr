@@ -47,6 +47,31 @@ describe("HostTimeline", () => {
     expect(spy.mock.calls[0][1]).toMatchObject({ from: "1000", to: "9000" });
   });
 
+  // spec:web-ui/host-event-timeline-view/timeline-scopes-to-the-alert-chain
+  it("scopes the query to the alert chain's process generations and shows a scope note", async () => {
+    const spy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+    const chain = [
+      { pid: 450, pidversion: 1010 },
+      { pid: 445, pidversion: 903 },
+    ];
+    render(
+      <MemoryRouter initialEntries={["/hosts/H1"]}>
+        <HostTimeline hostId="H1" bounds={BOUNDS} chainGenerations={chain} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => { expect(spy).toHaveBeenCalled(); });
+    expect(spy.mock.calls[0][1].chain).toEqual(chain);
+    expect(await screen.findByText(/scoped to the alert chain/i)).toBeInTheDocument();
+  });
+
+  it("omits the chain scope and the note when unscoped (full host stream)", async () => {
+    const spy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
+    renderTimeline();
+    await waitFor(() => { expect(spy).toHaveBeenCalled(); });
+    expect(spy.mock.calls[0][1].chain).toBeUndefined();
+    expect(screen.queryByText(/scoped to the alert chain/i)).not.toBeInTheDocument();
+  });
+
   // spec:web-ui/host-event-timeline-view/timeline-view-lists-window-events-filterable-by-type
   it("filters by event type when a chip is toggled", async () => {
     const spy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });

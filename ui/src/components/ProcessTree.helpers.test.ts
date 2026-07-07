@@ -6,6 +6,7 @@ import {
   countDescendants,
   toD3Hierarchy,
   collectMatches,
+  chainGenerations,
   findAlertChain,
   resolveAlertEntry,
   selectNodeFromParams,
@@ -186,6 +187,36 @@ describe("findAlertChain", () => {
 
   it("returns an empty set when the target is not in the tree", () => {
     expect(findAlertChain(roots, 999).size).toBe(0);
+  });
+});
+
+describe("chainGenerations", () => {
+  // ids 1 -> 2 -> 3 with distinct pidversions; id 4 is off-chain; id 5 (a chain node) has no pidversion.
+  const roots = [
+    node({
+      id: 1, pid: 100, pidversion: 10,
+      children: [
+        node({ id: 2, pid: 200, pidversion: 11, children: [node({ id: 3, pid: 300, pidversion: 12 })] }),
+        node({ id: 4, pid: 400, pidversion: 99 }),
+        node({ id: 5, pid: 500 }), // no pidversion (fork-only / pre-migration)
+      ],
+    }),
+  ];
+
+  it("maps chain node ids to (pid, pidversion) pairs and skips off-chain nodes", () => {
+    expect(chainGenerations(roots, new Set([1, 2, 3]))).toEqual([
+      { pid: 100, pidversion: 10 },
+      { pid: 200, pidversion: 11 },
+      { pid: 300, pidversion: 12 },
+    ]);
+  });
+
+  it("skips a chain node that has no pidversion (cannot be scoped precisely)", () => {
+    expect(chainGenerations(roots, new Set([1, 5]))).toEqual([{ pid: 100, pidversion: 10 }]);
+  });
+
+  it("returns an empty array for an empty id set", () => {
+    expect(chainGenerations(roots, new Set())).toEqual([]);
   });
 });
 

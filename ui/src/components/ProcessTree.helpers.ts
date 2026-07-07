@@ -148,6 +148,24 @@ export function findAlertChain(roots: ProcessNode[], targetDbId: number): Set<nu
   return related;
 }
 
+// chainGenerations maps a set of chain node DB ids (from findAlertChain) to their process generations: each node's (pid, pidversion).
+// The host timeline scopes on the (pid, pidversion) pair rather than raw pid so PID reuse does not pull in a different process that
+// later held the same pid. A node without a pidversion (a fork-only or pre-migration row) cannot be scoped precisely, so it is skipped;
+// its events do not appear in the scoped timeline, which is safer than over-including every reuse of its pid.
+export function chainGenerations(roots: ProcessNode[], ids: Set<number>): { pid: number; pidversion: number }[] {
+  const out: { pid: number; pidversion: number }[] = [];
+  const walk = (nodes: ProcessNode[]) => {
+    for (const n of nodes) {
+      if (ids.has(n.id) && n.pidversion !== undefined) {
+        out.push({ pid: n.pid, pidversion: n.pidversion });
+      }
+      if (n.children) walk(n.children);
+    }
+  };
+  walk(roots);
+  return out;
+}
+
 function findNodeByDbId(nodes: ProcessNode[], dbId: number): ProcessNode | null {
   for (const n of nodes) {
     if (n.id === dbId) return n;

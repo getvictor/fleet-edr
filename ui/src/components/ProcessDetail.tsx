@@ -1,9 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   getProcessDetail,
   listAlertsByProcessId,
-  updateAlertStatus,
   createCommand,
   getCommand,
   ReauthRequiredError,
@@ -49,14 +48,51 @@ const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
 
 // VERDICT_BADGE maps the signer category to the panel badge's tone: the two identity-less categories read as attention (high for no
 // signature at all, medium for ad-hoc), a verifiable Developer ID reads informational, and platform/signed are neutral facts.
-// SearchPivot is the "search all hosts for this artifact" affordance next to an evidence row (issue #582): a link to the fleet-wide
-// search pre-filtered by one param. Rendered only for artifacts the search endpoint can filter (path, hash, uid, signing verdict).
+// SearchPivot is the "search all hosts for this artifact" affordance next to an evidence row (issue #582): an icon button (a magnifying
+// glass, boxed to match the copy button so the two line up in the row's trailing action column) linking to the fleet-wide search
+// pre-filtered by one param. Rendered only for artifacts the search endpoint can filter (path, hash, uid, signing verdict).
 function SearchPivot({ param, value, label }: { readonly param: string; readonly value: string; readonly label: string }) {
   const qs = new URLSearchParams({ [param]: value }).toString();
   return (
     <Link className="process-detail__pivot" to={`/search?${qs}`} aria-label={label} title={label}>
-      Search all hosts
+      <svg
+        viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+        fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
+      >
+        <circle cx="7" cy="7" r="4.5" />
+        <path d="m10.5 10.5 4 4" />
+      </svg>
     </Link>
+  );
+}
+
+interface EvidenceRowProps {
+  readonly label: string;
+  readonly children: ReactNode;
+  // valueClassName carries per-row value treatments (break-all for paths, the smaller mono size for hashes).
+  readonly valueClassName?: string;
+  readonly copy?: { readonly value: string; readonly label: string };
+  readonly pivot?: { readonly param: string; readonly value: string; readonly label: string };
+}
+
+// EvidenceRow is one label/value pair in the process-detail grid. The value takes the row's width and any copy / fleet-search
+// affordances sit in a fixed trailing cluster, so the icons form one aligned column down the panel instead of scattering inline
+// after each value (issue: the copy + "search all hosts" controls looked unaligned and oversized).
+function EvidenceRow({ label, children, valueClassName, copy, pivot }: EvidenceRowProps) {
+  const valueClass = valueClassName ? `process-detail__value ${valueClassName}` : "process-detail__value";
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd className="process-detail__row">
+        <span className={valueClass}>{children}</span>
+        {(copy || pivot) && (
+          <span className="process-detail__row-actions">
+            {copy && <CopyButton value={copy.value} label={copy.label} />}
+            {pivot && <SearchPivot param={pivot.param} value={pivot.value} label={pivot.label} />}
+          </span>
+        )}
+      </dd>
+    </>
   );
 }
 
@@ -133,24 +169,15 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
     return () => { clearInterval(timer); };
   }, [killCommand]);
 
-  // kill_process is reauth-gated by the chokepoint when the session
-  // is stale. Same pattern for alert.resolve on critical
-  // alerts. Wrap both mutations through useReauthRetry so the
-  // operator gets an inline reauth modal + the action retries on
-  // success. Non-gated mutations (e.g. alert.acknowledge or kill on
-  // a fresh session) pass through unchanged: useReauthRetry is a
-  // no-op until the chokepoint throws ReauthRequiredError.
+  // kill_process is reauth-gated by the chokepoint when the session is stale. Wrap it through useReauthRetry so the operator gets an
+  // inline reauth modal + the action retries on success. Kill on a fresh session passes through unchanged: useReauthRetry is a no-op
+  // until the chokepoint throws ReauthRequiredError. Alert triage (acknowledge / resolve / reopen) lives on the alert header now, not
+  // here: the node inspector references the process's alerts as links rather than owning their lifecycle.
   const sendKillCommand = useCallback(
     async (): Promise<{ id: number }> => createCommand(hostId, "kill_process", { pid: node.pid }),
     [hostId, node.pid],
   );
   const { call: callKill, modal: killReauthModal } = useReauthRetry(sendKillCommand);
-
-  const updateStatus = useCallback(
-    async (alertId: number, newStatus: string) => updateAlertStatus(alertId, newStatus),
-    [],
-  );
-  const { call: callUpdateStatus, modal: alertReauthModal } = useReauthRetry(updateStatus);
 
   const handleKillProcess = useCallback(() => {
     if (killSending) return;
@@ -187,16 +214,6 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       .finally(() => { setKillSending(false); });
   }, [callKill, hostId, node.pid, killSending]);
 
-  const applyAlertStatus = (prev: Alert[], alertId: number, newStatus: string): Alert[] => {
-    return prev.map((a) => (a.id === alertId ? { ...a, status: newStatus } : a));
-  };
-
-  const handleAlertStatusChange = (alertId: number, newStatus: string) => {
-    callUpdateStatus(alertId, newStatus)
-      .then(() => { setAlerts((prev) => applyAlertStatus(prev, alertId, newStatus)); })
-      .catch(() => { /* ignore */ });
-  };
-
   const verdict = deriveSigningVerdict(node.code_signing);
 
   const killDisabled = killSending
@@ -228,104 +245,74 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       </div>
 
       <dl className="process-detail__list">
-        <dt>PID</dt>
-        <dd>{node.pid}</dd>
-        <dt>PPID</dt>
-        <dd>{node.ppid}</dd>
-        <dt>Path</dt>
-        <dd className="process-detail__break process-detail__copyable">
+        <EvidenceRow label="PID">{node.pid}</EvidenceRow>
+        <EvidenceRow label="PPID">{node.ppid}</EvidenceRow>
+        <EvidenceRow
+          label="Path"
+          valueClassName="process-detail__break"
+          copy={node.path ? { value: node.path, label: "Copy path" } : undefined}
+          pivot={node.path ? { param: "path", value: node.path, label: "Search all hosts for this path" } : undefined}
+        >
           {node.path || "(unknown)"}
-          {node.path && <CopyButton value={node.path} label="Copy path" />}
-          {node.path && <SearchPivot param="path" value={node.path} label="Search all hosts for this path" />}
-        </dd>
+        </EvidenceRow>
         {node.args && (
-          <>
-            <dt>Args</dt>
-            <dd className="process-detail__break process-detail__copyable">
-              {formatCommandLine(node.args, node.path)}
-              <CopyButton value={formatCommandLine(node.args, node.path)} label="Copy command line" />
-            </dd>
-          </>
+          <EvidenceRow
+            label="Args"
+            valueClassName="process-detail__break"
+            copy={{ value: formatCommandLine(node.args, node.path), label: "Copy command line" }}
+          >
+            {formatCommandLine(node.args, node.path)}
+          </EvidenceRow>
         )}
         {node.uid !== undefined && (
-          <>
-            <dt>UID</dt>
-            <dd className="process-detail__copyable">
-              {node.uid}
-              <SearchPivot param="uid" value={String(node.uid)} label="Search all hosts for this UID" />
-            </dd>
-          </>
+          <EvidenceRow label="UID" pivot={{ param: "uid", value: String(node.uid), label: "Search all hosts for this UID" }}>
+            {node.uid}
+          </EvidenceRow>
         )}
-        {node.gid !== undefined && (
-          <>
-            <dt>GID</dt>
-            <dd>{node.gid}</dd>
-          </>
-        )}
+        {node.gid !== undefined && <EvidenceRow label="GID">{node.gid}</EvidenceRow>}
         {node.sha256 && (
-          <>
-            <dt>SHA256</dt>
-            <dd className="process-detail__hash process-detail__copyable">
-              {node.sha256}
-              <CopyButton value={node.sha256} label="Copy SHA256" />
-              <SearchPivot param="hash" value={node.sha256} label="Search all hosts for this hash" />
-            </dd>
-          </>
+          <EvidenceRow
+            label="SHA256"
+            valueClassName="process-detail__hash"
+            copy={{ value: node.sha256, label: "Copy SHA256" }}
+            pivot={{ param: "hash", value: node.sha256, label: "Search all hosts for this hash" }}
+          >
+            {node.sha256}
+          </EvidenceRow>
         )}
         {node.cdhash && (
-          <>
-            <dt>CDHash</dt>
-            <dd className="process-detail__hash process-detail__copyable">
-              {node.cdhash}
-              <CopyButton value={node.cdhash} label="Copy cdhash" />
-            </dd>
-          </>
+          <EvidenceRow label="CDHash" valueClassName="process-detail__hash" copy={{ value: node.cdhash, label: "Copy cdhash" }}>
+            {node.cdhash}
+          </EvidenceRow>
         )}
         {/* Fork-only nodes (no exec yet) run the parent's inherited image and carry no signature of their own; a verdict there
             would be a false conviction, matching the tree tooltip's rule. */}
         {node.exec_time_ns && (
-          <>
-            <dt>Signing</dt>
-            <dd className="process-detail__copyable">
-              <Badge variant={VERDICT_BADGE[verdict.kind]}>{verdict.label}</Badge>
-              <SearchPivot param="signing" value={verdict.kind} label="Search all hosts for this signing verdict" />
-            </dd>
-          </>
+          <EvidenceRow label="Signing" pivot={{ param: "signing", value: verdict.kind, label: "Search all hosts for this signing verdict" }}>
+            <Badge variant={VERDICT_BADGE[verdict.kind]}>{verdict.label}</Badge>
+          </EvidenceRow>
         )}
         {node.code_signing?.signing_id && (
-          <>
-            <dt>Signing ID</dt>
-            <dd className="process-detail__break process-detail__copyable">
-              {node.code_signing.signing_id}
-              <CopyButton value={node.code_signing.signing_id} label="Copy signing id" />
-            </dd>
-          </>
+          <EvidenceRow
+            label="Signing ID"
+            valueClassName="process-detail__break"
+            copy={{ value: node.code_signing.signing_id, label: "Copy signing id" }}
+          >
+            {node.code_signing.signing_id}
+          </EvidenceRow>
         )}
         {node.code_signing?.team_id && (
-          <>
-            <dt>Team ID</dt>
-            <dd className="process-detail__copyable">
-              {node.code_signing.team_id}
-              <CopyButton value={node.code_signing.team_id} label="Copy team id" />
-            </dd>
-          </>
+          <EvidenceRow label="Team ID" copy={{ value: node.code_signing.team_id, label: "Copy team id" }}>
+            {node.code_signing.team_id}
+          </EvidenceRow>
         )}
-        <dt>Fork</dt>
-        <dd>{formatTimestamp(node.fork_time_ns)}</dd>
-        {node.exec_time_ns && (
-          <>
-            <dt>Exec</dt>
-            <dd>{formatTimestamp(node.exec_time_ns)}</dd>
-          </>
-        )}
+        <EvidenceRow label="Fork">{formatTimestamp(node.fork_time_ns)}</EvidenceRow>
+        {node.exec_time_ns && <EvidenceRow label="Exec">{formatTimestamp(node.exec_time_ns)}</EvidenceRow>}
         {node.exit_time_ns && (
-          <>
-            <dt>Exit</dt>
-            <dd>
-              {formatTimestamp(node.exit_time_ns)}
-              {node.exit_code === undefined ? "" : ` (code ${String(node.exit_code)})`}
-            </dd>
-          </>
+          <EvidenceRow label="Exit">
+            {formatTimestamp(node.exit_time_ns)}
+            {node.exit_code === undefined ? "" : ` (code ${String(node.exit_code)})`}
+          </EvidenceRow>
         )}
       </dl>
 
@@ -390,56 +377,28 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
         />
       )}
 
+      {/* Related alerts are references, not a second copy of the alert. Each row links to the alert page, which owns the alert's
+          severity/description and its triage (acknowledge / resolve) actions. Restating the full alert card here duplicated what the
+          alert breadcrumb + detail already show one panel over. The technique tags stay because they link to the rule doc page (the
+          only linked technique surface reachable from the graph, issue #585); everything else collapses to the link. */}
       {alerts.length > 0 && (
         <div className="process-detail__alerts">
-          <h4 className="process-detail__alerts-title">Alerts</h4>
-          {alerts.map((a) => (
-            <div key={a.id} className="process-detail__alert">
-              <div className="process-detail__alert-header">
-                <Badge variant={SEVERITY_VARIANTS[a.severity] ?? "neutral"}>
-                  {a.severity}
-                </Badge>
-                <span className={`status-text status-text--${a.status}`}>{a.status}</span>
-              </div>
-              <div className="process-detail__alert-title">{a.title}</div>
-              <div className="process-detail__alert-desc">{a.description}</div>
-              {/* Inline MITRE technique tags (issue #585), linked to the rule doc page so the mapping is one click from the panel. */}
-              <TechniqueTags techniques={a.techniques} ruleId={a.rule_id} className="process-detail__alert-techniques" />
-              <div className="process-detail__alert-actions">
-                {a.status === "open" && (
-                  <Button
-                    size="small"
-                    variant="inverse"
-                    onClick={() => { handleAlertStatusChange(a.id, "acknowledged"); }}
-                  >
-                    Acknowledge
-                  </Button>
-                )}
-                {a.status !== "resolved" && (
-                  <Button
-                    size="small"
-                    variant="inverse"
-                    onClick={() => { handleAlertStatusChange(a.id, "resolved"); }}
-                  >
-                    Resolve
-                  </Button>
-                )}
-                {a.status === "resolved" && (
-                  <Button
-                    size="small"
-                    variant="inverse"
-                    onClick={() => { handleAlertStatusChange(a.id, "open"); }}
-                  >
-                    Reopen
-                  </Button>
-                )}
-              </div>
-            </div>
-          ))}
+          <h4 className="process-detail__alerts-title">Related alerts</h4>
+          <ul className="process-detail__alert-list">
+            {alerts.map((a) => (
+              <li key={a.id} className="process-detail__alert-ref">
+                <Link className="process-detail__alert-link" to={`/alerts/${String(a.id)}`}>
+                  <Badge variant={SEVERITY_VARIANTS[a.severity] ?? "neutral"}>{a.severity}</Badge>
+                  <span className="process-detail__alert-name">{a.title}</span>
+                  <span className={`status-text status-text--${a.status}`}>{a.status}</span>
+                </Link>
+                <TechniqueTags techniques={a.techniques} ruleId={a.rule_id} className="process-detail__alert-techniques" />
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       <ReauthModal {...killReauthModal} />
-      <ReauthModal {...alertReauthModal} />
     </Card>
   );
 }

@@ -43,6 +43,14 @@
     padding: 0.35rem 0.6rem;
   }
 
+  // Note that the timeline is scoped to the alert chain (mirrors the graph's focus); sits after the text box in the filter row.
+  &__scope-note {
+    align-self: center;
+    color: $core-vibrant-blue;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
   &__mono {
     font-family: ui-monospace, sfmono-regular, Menlo, monospace;
     font-size: 0.85rem;
