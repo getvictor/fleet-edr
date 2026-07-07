@@ -27,6 +27,9 @@ printf '%s' "$MYSQL_PASS" > secrets/mysql_root
 printf 'root:%s@tcp(mysql:3306)/edr?parseTime=true&tls=false' "$MYSQL_PASS" > secrets/edr_dsn
 printf '%s' "$(openssl rand -hex 32)" > secrets/secret_key
 printf 'pilot-enroll-secret-rotate-me' > secrets/enroll_secret
+# ClickHouse holds the event archive (ADR-0015). Its default user is passwordless on the private compose network, so this
+# DSN is a fixed string; it lives in a secret file for parity with edr_dsn (add a ClickHouse password here later if you harden it).
+printf 'clickhouse://default:@clickhouse:9000/edr' > secrets/clickhouse_dsn
 # 0644, not 0600: Compose bind-mounts a file secret with the host file's owner
 # and mode (the uid/gid/mode long-syntax options are Swarm only), and the server
 # image runs as nonroot, so a 0600 file owned by your shell user is unreadable

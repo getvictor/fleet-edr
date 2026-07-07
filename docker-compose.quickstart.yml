@@ -34,6 +34,31 @@ services:
       retries: 20
       start_period: 10s
 
+  # ClickHouse event archive (ADR-0015): the durable event store the server writes ingested events to and reads them back
+  # from. Reachable only on the private compose network (no host port), same posture as mysql. The default user is
+  # passwordless; the DSN rides a docker secret so a password can be added later without editing this file.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: edr
+      # Required for the default user to authenticate over the network with an empty password; without it the server's
+      # ClickHouse ping fails with code 516 (AUTHENTICATION_FAILED). Mirrors the dev/demo clickhouse service.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      # ClickHouse opens many files; the stock 1024 soft limit trips "too many open files" under load.
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - edr-clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   server:
     # Pin EDR_VERSION in .env to a release tag for production; bootstrap.sh warns
     # when it defaults to `latest`.
@@ -41,6 +66,8 @@ services:
     restart: unless-stopped
     depends_on:
       mysql:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
     # Pass .env through to the server so any server variable (OIDC/SSO, session
     # timeouts, JIT provisioning, etc.) can be set there without editing this
@@ -57,6 +84,9 @@ services:
       EDR_DSN_FILE: /run/secrets/edr_dsn
       EDR_ENROLL_SECRET_FILE: /run/secrets/enroll_secret
       EDR_SECRET_KEY_FILE: /run/secrets/secret_key
+      # ClickHouse event archive DSN (ADR-0015). Passwordless on the private network; blank env so the *_FILE path wins.
+      EDR_CLICKHOUSE_DSN: ""
+      EDR_CLICKHOUSE_DSN_FILE: /run/secrets/clickhouse_dsn
       # Caddy terminates TLS in front; the server listens plaintext on the
       # private Docker network only. It is never published to the host, so the
       # only way in is through Caddy.
@@ -100,6 +130,7 @@ services:
       - enroll_secret
       - edr_dsn
       - secret_key
+      - clickhouse_dsn
 
   caddy:
     image: caddy:2
@@ -118,6 +149,7 @@ services:
 
 volumes:
   edr-mysql-data:
+  edr-clickhouse-data:
   caddy-data:
   caddy-config:
 
@@ -130,3 +162,5 @@ secrets:
     file: ./secrets/edr_dsn
   secret_key:
     file: ./secrets/secret_key
+  clickhouse_dsn:
+    file: ./secrets/clickhouse_dsn

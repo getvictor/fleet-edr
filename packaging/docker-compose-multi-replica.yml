@@ -27,6 +27,8 @@ x-server: &server
   depends_on:
     mysql:
       condition: service_healthy
+    clickhouse:
+      condition: service_healthy
   environment:
     # Same shared MySQL for every replica: the durable state lives here, which
     # is what makes the app tier stateless and horizontally scalable.
@@ -38,6 +40,11 @@ x-server: &server
     # token hashed or a cookie minted on one replica must verify on another. The shared
     # secret file guarantees that.
     EDR_SECRET_KEY_FILE: /run/secrets/secret_key
+    # ClickHouse event archive DSN (ADR-0015). Every replica points at the one shared clickhouse service below: MySQL
+    # holds the event_queue work queue, ClickHouse is the shared archive both replicas read and write. Passwordless on
+    # the private network; blank env so the *_FILE path wins.
+    EDR_CLICKHOUSE_DSN: ""
+    EDR_CLICKHOUSE_DSN_FILE: /run/secrets/clickhouse_dsn
     # Each replica terminates TLS on the proxy-to-backend hop (the EDR binary
     # never serves plaintext HTTP; see issue #140). Reuse the public cert or a
     # backend cert from your internal CA.
@@ -57,6 +64,7 @@ x-server: &server
     - enroll_secret
     - edr_dsn
     - secret_key
+    - clickhouse_dsn
   # No host port: replicas are reachable only through the proxy. The proxy
   # fans out to them by service name on the compose network.
 
@@ -73,6 +81,31 @@ services:
       - mysql_root
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping --silent 2>/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # One shared ClickHouse event archive (ADR-0015) for every replica: the durable event store both servers write
+  # ingested events to and read them back from, the ClickHouse counterpart to the single shared MySQL. Reachable only on
+  # the private compose network (no host port). The default user is passwordless; the DSN rides a docker secret.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: edr
+      # Required for the default user to authenticate over the network with an empty password; without it the server's
+      # ClickHouse ping fails with code 516 (AUTHENTICATION_FAILED). Mirrors the dev/demo clickhouse service.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      # ClickHouse opens many files; the stock 1024 soft limit trips "too many open files" under load.
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - edr-clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -99,6 +132,7 @@ services:
 
 volumes:
   edr-mysql-data:
+  edr-clickhouse-data:
 
 secrets:
   mysql_root:
@@ -112,3 +146,8 @@ secrets:
   # Generate once: `openssl rand -hex 32 > secrets/secret_key`.
   secret_key:
     file: ./secrets/secret_key
+  # Fixed passwordless DSN for the shared clickhouse service. In a secret file for
+  # parity with edr_dsn (a ClickHouse password, if added, would live here).
+  # Generate once: `printf 'clickhouse://default:@clickhouse:9000/edr' > secrets/clickhouse_dsn`.
+  clickhouse_dsn:
+    file: ./secrets/clickhouse_dsn

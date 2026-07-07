@@ -32,6 +32,31 @@ services:
       retries: 20
       start_period: 10s
 
+  # ClickHouse event archive (ADR-0015): the durable event store the server writes ingested events to and reads them back
+  # from. Reachable only on the private compose network (no host port), same posture as mysql. The default user is
+  # passwordless; the DSN rides a docker secret so a password can be added later without editing this file.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8@sha256:1ffa82edee000a42c09313bd9f1293d94c570aee74babc1b3ca9983a35fa597b
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: edr
+      # Required for the default user to authenticate over the network with an empty password; without it the server's
+      # ClickHouse ping fails with code 516 (AUTHENTICATION_FAILED). Mirrors the dev/demo clickhouse service.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      # ClickHouse opens many files; the stock 1024 soft limit trips "too many open files" under load.
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - edr-clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   server:
     # Set EDR_VERSION in .env to pin a release tag (recommended). `latest` is
     # fine for dev but unsafe for production because image digests can drift.
@@ -41,6 +66,8 @@ services:
     restart: unless-stopped
     depends_on:
       mysql:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
     environment:
       # The MySQL DSN needs the runtime root password that MYSQL reads from
@@ -58,6 +85,10 @@ services:
       # without it. Read from a docker-secret file so it never lands in
       # `docker inspect`. Changing it invalidates every enrolled host.
       EDR_SECRET_KEY_FILE: /run/secrets/secret_key
+      # ClickHouse event archive DSN (ADR-0015), the event store the server refuses to boot without. Passwordless on the
+      # private network; blank env so the *_FILE path wins and no value lands in `docker inspect`.
+      EDR_CLICKHOUSE_DSN: ""
+      EDR_CLICKHOUSE_DSN_FILE: /run/secrets/clickhouse_dsn
       # TLS cert paths are unconditionally required (issue #140 removed the
       # EDR_ALLOW_INSECURE_HTTP opt-out). Mount fullchain.pem + privkey.pem
       # under ./tls/ (or override EDR_TLS_DIR to point at your cert store).
@@ -76,6 +107,7 @@ services:
       - enroll_secret
       - edr_dsn
       - secret_key
+      - clickhouse_dsn
     ports:
       - "${EDR_LISTEN:-8088}:8088"
     # No server-side HEALTHCHECK: the distroless/static base has no shell
@@ -88,6 +120,7 @@ services:
 
 volumes:
   edr-mysql-data:
+  edr-clickhouse-data:
 
 secrets:
   mysql_root:
@@ -100,3 +133,8 @@ secrets:
     file: ./secrets/edr_dsn
   secret_key:
     file: ./secrets/secret_key
+  # Fixed passwordless DSN pointing at the clickhouse service on the private
+  # network. In a secret file for parity with edr_dsn (a ClickHouse password,
+  # if added, would live here). See README.
+  clickhouse_dsn:
+    file: ./secrets/clickhouse_dsn
