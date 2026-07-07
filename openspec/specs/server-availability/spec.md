@@ -32,11 +32,20 @@ Every bounded context that owns database tables (identity, endpoint, rules, resp
 
 The server SHALL NOT retain in-process state that outlives a single request and that a peer replica would need to serve a subsequent request correctly. Durable state SHALL live in the shared MySQL store; per-request state MAY ride in signed cookies; short-lived per-replica performance caches are permitted only when losing them on a restart is harmless. This invariant is what lets any replica behind the load balancer serve any request and lets a replica restart without customer-visible state loss. It is enforced at review time against `docs/adr/0010-stateless-server.md`. The invariant is observable end to end: state written by one replica must be servable by any other replica through the shared store.
 
+A single sanctioned exception is the agent control-connection gateway. The gateway's only in-process state is, per connection: the live socket (keyed by host), the connection's authentication metadata (token epoch and expiry, so it can be re-checked against the revocation snapshot without a database lookup), and the set of in-flight command identifiers. It persists nothing durable: all command state remains in the shared MySQL store. The loss of a gateway or any of its connections SHALL force the affected agents to reconnect (and to fall back to the polled command path meanwhile) with no command loss, because the command rows and their statuses live in the shared store. This is a named, bounded stateful tier, not a license for request-surviving authority elsewhere.
+
 #### Scenario: State written on one replica is served by another
 
 - **GIVEN** durable state was written to the shared MySQL store by a request handled on one replica
 - **WHEN** a later request that depends on that state is routed to a different replica
 - **THEN** the second replica serves it correctly from the shared store, with no reliance on any request-surviving in-process state from the first replica
+
+#### Scenario: Losing the gateway forces reconnect without command loss
+
+- **GIVEN** a host holding a control connection on a gateway that then stops
+- **WHEN** the gateway and its connections are lost
+- **THEN** the host reconnects (to the same or another replica) and meanwhile falls back to the polled command path
+- **AND** no queued command is lost, because command state was never held only in the gateway's memory
 
 ### Requirement: TLS may be terminated by a front proxy
 
@@ -150,7 +159,7 @@ The system SHALL run its single-instance periodic maintenance tasks (event reten
 
 ### Requirement: The processor scales across replicas via SKIP LOCKED
 
-The system SHALL claim event batches for processing with row-level `SELECT ... FOR UPDATE SKIP LOCKED` so the event processor runs on every replica concurrently, each claiming a disjoint set of unprocessed events, and no event row is claimed by more than one replica at a time. This is the deliberate counterpart to the leader-gated periodic tasks: throughput-bound event processing scales horizontally across the replica fleet rather than running on a single elected replica.
+The system SHALL claim event batches for processing with row-level `SELECT ... FOR UPDATE SKIP LOCKED` so the event processor runs concurrently both across every replica and across multiple worker goroutines within a single replica, each claimer receiving a disjoint set of unprocessed events, and no event row claimed by more than one claimer at a time. This is the deliberate counterpart to the leader-gated periodic tasks: throughput-bound event processing scales horizontally across the replica fleet and vertically across the cores of one replica, rather than running on a single elected replica or a single goroutine. The intra-replica worker count is a fixed compiled constant, not an operator knob, and the in-process workers share one process-graph builder and one detection engine so cross-batch builder state stays coherent.
 
 #### Scenario: Two replicas claim disjoint event batches
 
@@ -158,6 +167,13 @@ The system SHALL claim event batches for processing with row-level `SELECT ... F
 - **WHEN** both run the SKIP LOCKED claim
 - **THEN** each replica receives a batch of events
 - **AND** no event appears in both replicas' batches
+
+#### Scenario: Concurrent workers within one replica claim disjoint event batches
+
+- **GIVEN** unprocessed events in the shared store and multiple processor workers in one replica claiming batches concurrently
+- **WHEN** the workers run the SKIP LOCKED claim
+- **THEN** each worker receives a disjoint batch and no event is claimed by more than one worker
+- **AND** the materialized process forest is the same as if the events had been claimed by a single worker
 
 ### Requirement: Sessions and CSRF tokens validate across any replica
 
@@ -197,3 +213,14 @@ The default getting-started deployment SHALL be a single host the operator contr
 - **GIVEN** the default single-host topology whose public edge is a plain reverse proxy with no managed ruleset
 - **WHEN** an enrolled agent uploads an event batch whose payloads contain attack signatures (a reverse-shell command line and a C2 URL with a SQL-injection fragment)
 - **THEN** the request reaches the server and is handled by the ingest endpoint, accepted and persisted, rather than being blocked by the edge before it arrives
+
+### Requirement: The shared database connection pool is bounded
+
+The system SHALL bound the shared MySQL connection pool with a fixed maximum number of open connections, so that intra-replica processor-worker concurrency multiplied across the replica fleet cannot exhaust the database server's connection limit. The ceiling is a compiled constant sized to the worker count with headroom for request-path queries, not an operator-configurable knob, and it is applied when the process-wide pool is opened.
+
+#### Scenario: Worker concurrency cannot exhaust database connections
+
+- **GIVEN** a replica running its processor workers plus request-path query load
+- **WHEN** the workers and request handlers acquire connections concurrently
+- **THEN** the total open connections the replica holds is capped at the compiled pool ceiling
+- **AND** demand above the ceiling waits for a pooled connection rather than opening an unbounded number

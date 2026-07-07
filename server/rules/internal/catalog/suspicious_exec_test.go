@@ -252,6 +252,7 @@ func TestSuspiciousExecPathTraversal(t *testing.T) {
 	assert.Contains(t, findings[0].Description, "..")
 }
 
+// spec:server-detection-rules-engine/canonical-rule-naming/a-multi-arm-rule-raises-one-canonical-title-across-arms
 func TestSuspiciousExecDetectsShellWithOutboundConnection(t *testing.T) {
 	t.Parallel()
 	s := openCatalogStore(t)

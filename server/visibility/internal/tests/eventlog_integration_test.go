@@ -183,7 +183,7 @@ func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
 	assert.Equal(t, []string{"e1"}, ids(reclaimed), "an expired claim is re-delivered on a later Claim")
 }
 
-// spec:server-event-ingestion/horizontally-scalable-ingestion-service/two-ingestion-replicas-run-against-the-same-database
+// spec:server-event-ingestion/horizontally-scalable-ingestion-service/two-ingestion-replicas-run-against-the-same-backing-stores
 //
 // Two EventLog instances over one MySQL event_queue model two ingestion replicas that share only their backing store. Both replicas
 // append the same event_id space concurrently; the queue's idempotent INSERT IGNORE (with deadlock retry) must absorb the contention

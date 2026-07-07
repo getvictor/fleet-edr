@@ -114,6 +114,37 @@ func TestRecordStatus_HTTP_LastWriterWins(t *testing.T) {
 	assert.EqualValues(t, 200, row.ReportedAtNs)
 }
 
+// spec:agent-status-reporting/the-agent-posts-an-idempotent-status-snapshot/re-posting-an-unchanged-snapshot-is-a-no-op-for-the-server-view
+// Posting the identical snapshot twice (same reported_at_ns and the same components) must leave the server's stored health view
+// exactly as the first post left it: the last-writer-wins guard replaces with equal values, so components and reported_at_ns are
+// unchanged and no second row appears. This proves idempotence for the server view, distinct from the LWW replacement case above.
+func TestRecordStatus_HTTP_RepostUnchangedIsNoOp(t *testing.T) {
+	t.Parallel()
+	uuid := "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+	_, db, srv, token := statusFixture(t, uuid)
+
+	snapshot := `{"agent_version":"0.4.0","reported_at_ns":150,"components":[
+		{"type":"endpoint_security_extension","status":"unhealthy","reason":"never_connected","message":"no session","last_transition_ns":90},
+		{"type":"network_extension","status":"healthy","reason":"activated","message":"ok","last_transition_ns":80}
+	]}`
+
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, snapshot))
+	afterFirst, ok := readHealth(t, db, uuid)
+	require.True(t, ok, "the first post must store a health row")
+
+	require.Equal(t, http.StatusNoContent, postStatus(t, srv, token, snapshot))
+	afterSecond, ok := readHealth(t, db, uuid)
+	require.True(t, ok, "the second post must leave the health row in place")
+
+	assert.Equal(t, afterFirst, afterSecond, "re-posting an unchanged snapshot must leave the stored health view unchanged")
+	assert.EqualValues(t, 150, afterSecond.ReportedAtNs, "the reported_at_ns is unchanged")
+	assert.Equal(t, string(afterFirst.Components), string(afterSecond.Components), "the stored components are unchanged")
+
+	var rowCount int
+	require.NoError(t, db.GetContext(t.Context(), &rowCount, `SELECT COUNT(*) FROM host_health WHERE host_id = ?`, uuid))
+	assert.Equal(t, 1, rowCount, "an idempotent re-post must not append a second health row")
+}
+
 // TestRecordStatus_HTTP_FutureTimestampClamped proves a wildly-future snapshot time cannot freeze the host's health row: the future
 // stamp is clamped to ~now on write, so a subsequent correctly-stamped report still wins the last-writer-wins race.
 func TestRecordStatus_HTTP_FutureTimestampClamped(t *testing.T) {

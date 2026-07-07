@@ -128,7 +128,7 @@ The system SHALL treat the `event_id` as the unique key for an event. A re-submi
 
 ### Requirement: Decoupled processing pipeline
 
-The system SHALL persist incoming events with a status that marks them as not yet processed. A separate processing path SHALL be responsible for materializing the process graph and running detection rules. The ingestion path MUST NOT block on or fail because of downstream processing work.
+The system SHALL, on accepting a batch, durably store every retained event in the event archive AND enqueue each event on a separate work queue that marks it not yet processed. A separate processing path SHALL claim queued work to materialize the process graph and run detection rules; it claims from the work queue, not from the archive. Claimed work SHALL be removed from the queue once processing completes, so the queue holds only the in-flight working set while the archive holds the retained history. The ingestion path MUST NOT block on or fail because of downstream processing work.
 
 #### Scenario: Ingestion accepts events while the processor is busy
 
@@ -137,25 +137,41 @@ The system SHALL persist incoming events with a status that marks them as not ye
 - **THEN** the system persists the new events and responds with HTTP 200 without waiting for any processing work
 - **AND** the new events become visible to the processor in a subsequent processing cycle
 
+#### Scenario: An accepted batch is both archived and enqueued
+
+- **GIVEN** an enrolled host with a valid bearer token
+- **WHEN** the agent submits a well-formed batch
+- **THEN** every retained event is durably stored in the event archive
+- **AND** every retained event is enqueued on the work queue marked not yet processed
+- **AND** the system responds with HTTP 200 only after both writes succeed
+
+#### Scenario: Acknowledged work is pruned from the queue
+
+- **GIVEN** events that have been claimed and acknowledged (fully processed) alongside others still unprocessed or in-flight
+- **WHEN** the queue-prune sweep runs
+- **THEN** the acknowledged events are removed from the work queue in bounded batches
+- **AND** the unprocessed and in-flight events remain claimable
+- **AND** the durable history in the event archive is unaffected
+
 ### Requirement: Horizontally scalable ingestion service
 
-The system SHALL support running the ingestion endpoint as a standalone service that shares only the database with the processing service. Multiple replicas of the ingestion service MUST be able to accept agent traffic concurrently against the same database without coordinating with each other.
+The system SHALL support running the ingestion endpoint as a standalone service that shares only its backing stores (the event archive and the work queue) with the processing service. Multiple replicas of the ingestion service MUST be able to accept agent traffic concurrently against the same backing stores without coordinating with each other.
 
-#### Scenario: Two ingestion replicas run against the same database
+#### Scenario: Two ingestion replicas run against the same backing stores
 
-- **GIVEN** two replicas of the ingestion service backed by the same database
+- **GIVEN** two replicas of the ingestion service backed by the same event archive and work queue
 - **WHEN** different agents post batches to each replica concurrently
 - **THEN** every accepted event from both replicas is durably persisted
 - **AND** neither replica observes errors caused by the other
 
 ### Requirement: Transparent persistence failure reporting
 
-The system SHALL return HTTP 5xx when the underlying database write fails so that the agent retries the batch. The system MUST NOT acknowledge a batch that was not durably persisted.
+The system SHALL return HTTP 5xx when a durable write fails so that the agent retries the batch. A batch SHALL be acknowledged only when every retained event has been durably written to BOTH the event archive AND the work queue; if either write fails the system MUST respond with 5xx and MUST NOT acknowledge the batch.
 
-#### Scenario: The database is temporarily unavailable
+#### Scenario: A backing store is temporarily unavailable
 
 - **GIVEN** an authenticated agent
-- **WHEN** the database write for an otherwise valid batch fails
+- **WHEN** the write of an otherwise valid batch to either the event archive or the work queue fails
 - **THEN** the system responds with HTTP 5xx and an opaque error code
 - **AND** the agent is expected to retry the batch later
 
@@ -178,22 +194,6 @@ The system SHALL process `snapshot_heartbeat` events for their freshness side ef
 - **THEN** exactly N minus H rows are persisted to `events`
 - **AND** the response reports N events accepted
 
-### Requirement: Event storage drops redundant indexes
-
-The system SHALL NOT carry secondary indexes on the `events` table that are strictly subsumed by another index's left prefix or that serve no query, so index storage does not dominate disk on high-volume hosts. Specifically, an index on `host_id` alone and an index on `event_type` alone are redundant (the former is a left-prefix of an existing composite; the latter matches no query, since every event-type predicate is anchored by a leading `host_id`) and MUST NOT be present. Indexes that a query relies on MUST be retained, including the index backing the unprocessed-event claim (`processed, host_id, timestamp_ns`) and the index backing per-process network/DNS correlation.
-
-#### Scenario: A duplicate event is still rejected after the index diet
-
-- **GIVEN** the events table with the redundant `host_id`-only and `event_type`-only indexes removed
-- **WHEN** an event with an already-stored `event_id` is submitted
-- **THEN** the duplicate is silently dropped and no second row is created
-
-#### Scenario: The unprocessed-event claim still works after the index diet
-
-- **GIVEN** the events table with the redundant indexes removed
-- **WHEN** the processor claims a batch of unprocessed events ordered by host and time
-- **THEN** the claim is served by the retained `(processed, host_id, timestamp_ns)` index and returns the batch
-
 ### Requirement: Ingest acceptance is content-neutral
 
 The authenticated event-ingest path SHALL decide acceptance solely on host-token authentication, structural request validation (JSON shape, per-request event count, body size, and host-id match), and server health. It SHALL NOT inspect event payload content for attack signatures, and SHALL NOT reject a batch because its captured command lines, file paths, or network indicators resemble an attack. Agent telemetry legitimately carries such strings, so content inspection belongs to no layer of a supported deployment. Concretely, the path returns `200` on success, `401` for a missing or invalid host token, `400` or `413` for a malformed or oversized batch, and `500`/`503` on a server or database error; it SHALL never return a `403` content-block. A `403` reaching an agent is therefore diagnosably produced by an edge in front of the server, not by the server.
@@ -209,3 +209,55 @@ The authenticated event-ingest path SHALL decide acceptance solely on host-token
 - **GIVEN** any request to the authenticated ingest path, across its success and validation-failure outcomes
 - **WHEN** the server handles it
 - **THEN** the response status is `200` (success), `401` (authentication), `400` or `413` (validation), or `500`/`503` (server), and never `403`
+
+### Requirement: Durable event archive with bounded retention
+
+The system SHALL retain every accepted, non-heartbeat event in a durable, queryable event archive that is the source of truth for per-process network/DNS correlation and for historical and hunting queries. The archive SHALL be deduplicated by `event_id`, so at-least-once delivery (a retried batch or a re-queued event) never surfaces a duplicate event in query results and a previously stored event's content is not altered by a re-submission. The archive SHALL age events out automatically once they are older than the configured retention window (time-based expiry), without an explicit per-event delete pass on the ingest path. Aging an event out of the archive SHALL NOT remove evidence that has been independently retained for an alert.
+
+#### Scenario: An accepted event is queryable from the archive
+
+- **GIVEN** an enrolled host that has posted a well-formed batch
+- **WHEN** a per-process correlation or hunting read runs for that host within the retention window
+- **THEN** the archive returns the host's events for the queried window
+
+#### Scenario: A re-delivered event is not duplicated in the archive
+
+- **GIVEN** an event already stored in the archive
+- **WHEN** the same `event_id` is delivered again (an agent retry or a re-queued batch)
+- **THEN** archive query results contain a single event for that `event_id`
+- **AND** the previously stored content is unchanged
+
+#### Scenario: An event older than the retention window ages out
+
+- **GIVEN** events in the archive older than the configured retention window
+- **WHEN** the time-based expiry runs
+- **THEN** those events are no longer present in archive query results
+- **AND** no explicit per-event delete pass was issued on the ingest path
+
+### Requirement: Platform-tagged event envelope
+
+The ingest path SHALL accept an optional `platform` field on each event, where a present value MUST be one of `darwin`, `windows`, or `linux`. The server SHALL reject an event whose platform is present but not one of those values. The server SHALL normalize an absent platform to `darwin`, the default for an agent predating this contract, so that every persisted event carries a concrete platform. The server SHALL persist the platform through both the work queue and the event archive so downstream processing, including rule evaluation, observes it.
+
+#### Scenario: An event carrying a valid platform is accepted
+
+- **GIVEN** an event whose `platform` is `windows`
+- **WHEN** the ingest path validates the batch
+- **THEN** the event is accepted and its platform is `windows`
+
+#### Scenario: An event without a platform is normalized to darwin
+
+- **GIVEN** an event that omits `platform`
+- **WHEN** the ingest path validates the batch
+- **THEN** the event is accepted and its platform is `darwin`
+
+#### Scenario: An event with an unknown platform is rejected
+
+- **GIVEN** an event whose `platform` is a value other than darwin, windows, or linux
+- **WHEN** the ingest path validates the batch
+- **THEN** the request is rejected with status 400 and the error code names the offending index
+
+#### Scenario: Platform survives the queue to rule evaluation
+
+- **GIVEN** a batch containing a windows event and an event with no platform
+- **WHEN** the events are fanned out to the work queue the detection engine claims from
+- **THEN** the queued windows event carries platform `windows` and the platform-less event carries the normalized `darwin`

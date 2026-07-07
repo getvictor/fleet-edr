@@ -55,6 +55,9 @@ func withServiceAccountActor(h http.Handler) http.Handler {
 // principal, never rejected at the store layer with "actor is required". A table over these routes keeps a future actor-shape assumption
 // from silently re-breaking service-account automation. App-control write routes share the same actorIdentifierFromContext path and are
 // covered by the app-control REST suite.
+// spec:server-detection-rules-engine/durable-detection-configuration-surface/a-service-account-adds-an-exclusion-and-is-attributed
+// spec:server-identity-service-accounts/service-account-actions-are-attributable-to-the-service-account-principal/a-service-account-creates-a-detection-exclusion-and-is-attributed
+// spec:server-identity-service-accounts/service-account-actions-are-attributable-to-the-service-account-principal/a-service-account-reachable-write-never-fails-on-actor-shape
 func TestServiceAccount_WriteRoutes_NotRejectedForActorShape(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)

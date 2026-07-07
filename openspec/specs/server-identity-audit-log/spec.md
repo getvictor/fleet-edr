@@ -8,50 +8,42 @@ This capability defines the EDR server audit trail. Every authentication outcome
 
 ### Requirement: Authentication outcomes write an audit row
 
-The system SHALL record an audit row for every authentication outcome, success or failure, regardless of authentication method. Action names MUST follow the pattern `auth.<flow>.<outcome>` where `<flow>` is one of `oidc` or `breakglass` (named after the _flow_ that produced the outcome, not the credential type: the break-glass flow combines a local password and a WebAuthn assertion under a single `breakglass` flow so dashboards stay cohesive). The action name MUST be one of `auth.oidc.success`, `auth.oidc.failure`, `auth.oidc.callback.error`, `auth.breakglass.success`, or `auth.breakglass.failure`. The row MUST include the request timestamp, the source IP, the user agent, the request id, the action name, the decision (`allow`, `deny`, or `error`), the reason, and (when known) the actor user id and identity id. Audit row writes MUST NOT block on the user response: a write failure SHALL be logged at ERROR and counted as a metric but the user request continues.
+The system SHALL record an audit row for every authentication outcome, success or failure, regardless of authentication method. Action names MUST follow the pattern `auth.<flow>.<outcome>` where `<flow>` is one of `oidc` or `breakglass` (named after the _flow_ that produced the outcome, not the credential type: the break-glass flow combines a local password and a WebAuthn assertion under a single `breakglass` flow so dashboards stay cohesive). The action name MUST be one of `auth.oidc.success`, `auth.oidc.failure`, `auth.oidc.callback.error`, `auth.breakglass.success`, or `auth.breakglass.failure`. The row MUST include the request timestamp, the source IP, the user agent, the request id, the action name, the decision (`allow`, `deny`, or `error`), the reason, and the acting principal (its type, its principal id, and a snapshot display label). The principal id MAY be null ONLY for a pre-authentication failure where no principal was resolved; such a row MUST still record the attempted identifier in the label so a brute force across identifiers is visible. Audit row writes MUST NOT block on the user response: a write failure SHALL be logged at ERROR and counted as a metric but the user request continues.
 
-#### Scenario: Successful SSO login is audited
+#### Scenario: Successful SSO login is audited with the user principal
 
 - **GIVEN** a successful Okta OIDC callback that mints a session
 - **WHEN** the response is sent
-- **THEN** an audit row exists with `action='auth.oidc.success'`, `decision='allow'`, the actor's user id and identity id, and the request id
+- **THEN** an audit row exists with `action='auth.oidc.success'`, `decision='allow'`, the actor principal of type `user` with its principal id and snapshot label, and the request id
 
-#### Scenario: Failed break-glass login is audited without leaking the failure mode to the client
+#### Scenario: Failed break-glass login records the attempted identifier without a principal id
 
 - **GIVEN** a break-glass login attempt with a wrong password
 - **WHEN** the server validates the submission
 - **THEN** the client receives a generic invalid-credentials response
-- **AND** the audit row records `action='auth.breakglass.failure'` and the precise failure reason in the row's `reason` field (e.g. `password_mismatch`, `webauthn_assertion_invalid`)
-
-#### Scenario: Audit write failure does not fail the user request
-
-- **GIVEN** a transient database failure when inserting the audit row for a successful login
-- **WHEN** the recorder attempts the insert
-- **THEN** the user request still completes successfully (the session is still minted)
-- **AND** the failure is logged at ERROR with a unique structured key
-- **AND** the `edr_audit_write_failures_total` metric is incremented
+- **AND** the audit row records `action='auth.breakglass.failure'`, a null principal id, the attempted identifier in the label, and the precise failure reason in the row's `reason` field (e.g. `password_mismatch`, `webauthn_assertion_invalid`)
 
 ### Requirement: Authorization decisions on state-changing actions write an audit row
 
-The system SHALL record an audit row for every authorization decision on a state-changing action, including allow, deny, and error outcomes. Read-only actions SHALL be sampled at a configurable fraction (`audit.read_sampling`, default `0.0` in the current release). When the actor is a break-glass account, the read-sampling fraction MUST be treated as `1.0` regardless of configuration so every break-glass action is auditable end-to-end.
+The system SHALL record an audit row for every authorization decision on a state-changing action, including allow, deny, and error outcomes. Every such row MUST name the acting principal by its type, principal id, and snapshot display label, and MUST NOT collapse the actor to an empty or zero value regardless of whether the actor is a human user or a service account. Read-only actions SHALL be sampled at a configurable fraction (`audit.read_sampling`, default `0.0` in the current release). When the actor is a break-glass account, the read-sampling fraction MUST be treated as `1.0` regardless of configuration so every break-glass action is auditable end-to-end.
 
-#### Scenario: State-changing allow is recorded
+#### Scenario: State-changing allow names the acting principal
 
 - **GIVEN** an authorization decision of `allow` on a state-changing action (for example, host isolate)
 - **WHEN** the chokepoint records the decision
-- **THEN** an audit row exists with `decision='allow'`, the action name, the resource type and id, and the actor
+- **THEN** an audit row exists with `decision='allow'`, the action name, the resource type and id, and the acting principal's type, id, and snapshot label
 
-#### Scenario: Read sampling defaults skip non-break-glass reads
+#### Scenario: A service-account action is attributed to the service account, not to nobody
 
-- **GIVEN** `audit.read_sampling = 0.0` and a non-break-glass actor
-- **WHEN** the chokepoint records an allow decision on a read action
-- **THEN** no audit row is written
+- **GIVEN** a service-account actor performing a state-changing action
+- **WHEN** the chokepoint records the decision
+- **THEN** the audit row names a principal of type `service_account` with the service account's principal id and label, never an empty or zero actor
 
-#### Scenario: Break-glass reads are always recorded
+#### Scenario: A deleted user's history resolves its snapshot label without a join
 
-- **GIVEN** `audit.read_sampling = 0.0` and a break-glass actor
-- **WHEN** the chokepoint records an allow decision on a read action
-- **THEN** an audit row IS written despite the sampling configuration
+- **GIVEN** an audit row written for a user who is later deleted
+- **WHEN** the audit log is read back
+- **THEN** the row still shows the actor's principal id and the label captured at action time, with no join to a mutable user row
 
 ### Requirement: Audit rows are dual-emitted to slog and OTel
 

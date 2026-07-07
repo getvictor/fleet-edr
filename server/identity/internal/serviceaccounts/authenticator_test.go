@@ -23,6 +23,7 @@ type fakeAllow struct{ allowed bool }
 
 func (f fakeAllow) Allowed(string, int64) bool { return f.allowed }
 
+// spec:server-identity-authorization/the-authenticated-actor-carries-a-typed-principal/a-service-account-request-carries-a-service-account-principal
 func TestAuthenticator_validTokenResolvesActor(t *testing.T) {
 	t.Parallel()
 	a := NewAuthenticator(

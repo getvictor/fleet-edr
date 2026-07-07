@@ -159,6 +159,7 @@ const appControlPayload = `{"policy_id":7,"policy_version":1,"rules":[]}`
 func TestControlClient(t *testing.T) {
 	t.Parallel()
 
+	// spec:agent-command-executor/the-control-connection-is-preferred-and-polling-is-the-degraded-floor/commands-flow-over-the-connection-when-it-is-up
 	t.Run("pushed command is executed and its outcome reported", func(t *testing.T) {
 		t.Parallel()
 		fake := &fakeGateway{push: []*control.Command{
@@ -178,6 +179,7 @@ func TestControlClient(t *testing.T) {
 		assert.Equal(t, int64(7), outs[0].GetId())
 	})
 
+	// spec:agent-control-channel/delivery-is-at-least-once-and-idempotent-by-command-identity/a-re-delivered-command-re-reports-its-recorded-outcome-without-repeating-the-side-effect
 	t.Run("re-delivered command re-reports its outcome without re-executing", func(t *testing.T) {
 		t.Parallel()
 		// The gateway pushes the same command id twice (the lost-ack / reconnect re-delivery case).
@@ -194,6 +196,7 @@ func TestControlClient(t *testing.T) {
 		}
 	})
 
+	// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/a-half-open-connection-is-detected-and-re-established
 	t.Run("reconnects with backoff after a dropped stream", func(t *testing.T) {
 		t.Parallel()
 		// The gateway fails the first stream; the client must back off and reconnect, then receive and execute the pushed command.
@@ -221,6 +224,7 @@ func TestControlClient(t *testing.T) {
 		assert.Contains(t, string(outs[1].GetResult()), "unknown command type")
 	})
 
+	// spec:agent-control-channel/commands-on-the-connection-are-scoped-to-the-authenticated-host/a-connection-never-receives-another-host-s-commands
 	t.Run("command addressed to a different host is dropped without executing", func(t *testing.T) {
 		t.Parallel()
 		// The first command targets another host (a server routing bug); it must not run and must not report any outcome, since

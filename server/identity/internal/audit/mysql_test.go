@@ -81,6 +81,7 @@ func TestRecord_RoundTrip(t *testing.T) {
 
 // The Recorder snapshots the acting principal (id + display label) onto the row at write time, so it needs no join and survives the
 // user later being deleted. ADR-0017 replaced the live users-table email lookup with this snapshot.
+// spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/a-deleted-user-s-history-resolves-its-snapshot-label-without-a-join
 func TestRecord_SnapshotsActorPrincipal(t *testing.T) {
 	t.Parallel()
 	store, db := newStore(t)
@@ -113,6 +114,7 @@ func TestRecord_SnapshotsActorPrincipal(t *testing.T) {
 // TestRecord_SnapshotsServiceAccountPrincipal exercises the principal-model attribution path directly (Actor set, no legacy
 // UserID/ActorEmail bridge): a service-account action is recorded with its svc_ principal id and name, and reads back as a
 // service_account row with no user id. This is the #514 attribution guarantee for non-human actors.
+// spec:server-identity-audit-log/authorization-decisions-on-state-changing-actions-write-an-audit-row/a-service-account-action-is-attributed-to-the-service-account-not-to-nobody
 func TestRecord_SnapshotsServiceAccountPrincipal(t *testing.T) {
 	t.Parallel()
 	store, _ := newStore(t)
@@ -471,9 +473,8 @@ func TestRecord_DualEmitFiresEvenOnInsertFailure(t *testing.T) {
 	assert.True(t, sawInsertFailed, "INSERT failure must emit a separate ERROR log")
 }
 
-// spec:server-identity-audit-log/authentication-outcomes-write-an-audit-row/audit-write-failure-does-not-fail-the-user-request
-//
-// Pins the failure-handling clauses of the scenario: when the audit INSERT fails (transient DB outage simulated by a closed
+// Pins the audit-write-failure resilience clause (normative in the audit-log requirement body, not a discrete scenario, so no spec marker):
+// when the audit INSERT fails (transient DB outage simulated by a closed
 // connection), Record (a) logs the failure at ERROR with a unique structured key ("audit row INSERT failed") and (b) increments
 // the edr.audit.write_failures counter. The counter is registered against the global OTel meter, so the test installs a
 // ManualReader-backed MeterProvider as the global before constructing the Store, then collects it after the forced failure. The

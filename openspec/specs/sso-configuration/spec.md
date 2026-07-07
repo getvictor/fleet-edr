@@ -22,25 +22,6 @@ The system SHALL persist the deployment's OIDC provider configuration (issuer UR
 - **WHEN** the server process restarts with no `EDR_OIDC_*` environment variables set
 - **THEN** the OIDC login flow remains enabled using the stored configuration
 
-### Requirement: Environment variables seed the stored configuration on first boot only
-
-The system SHALL treat `EDR_OIDC_*` environment variables as a one-time bootstrap seed: on boot, when no stored OIDC configuration record exists and the env block is set, the server SHALL create the stored record from the env values. When a stored record already exists, the server SHALL NOT apply env values; it MUST treat the stored record as authoritative and MAY log once that env values are present but inert. This preserves existing env-only deployments on upgrade while making the stored record the governing source thereafter.
-
-#### Scenario: First boot seeds the record from env
-
-- **GIVEN** no stored OIDC configuration record exists
-- **AND** the `EDR_OIDC_*` environment block is fully set
-- **WHEN** the server boots
-- **THEN** a stored OIDC configuration record is created from the env values
-- **AND** subsequent SSO logins use the stored record
-
-#### Scenario: Env values are inert once a record exists
-
-- **GIVEN** a stored OIDC configuration record exists with one issuer
-- **AND** the `EDR_OIDC_ISSUER` environment variable is set to a different issuer
-- **WHEN** the server boots
-- **THEN** the stored record is unchanged and the login flow uses the stored issuer
-
 ### Requirement: Configuration changes apply without a server restart
 
 The system SHALL apply a saved OIDC configuration change to the live login flow without requiring a restart. After a successful update, a newly initiated login SHALL use the updated configuration. Because the deployment is multi-replica and stateless (no shared in-process state that a peer would need), each replica SHALL refresh its view of the configuration from the durable store; any in-process provider client a replica holds is a per-replica cache that is safe to lose and is rebuilt from the stored record when the record changes.
@@ -104,14 +85,22 @@ The system SHALL expose a test-connection action, gated on `sso.manage`, that va
 
 ### Requirement: Every configuration mutation is audited
 
-The system SHALL emit an audit row for every successful create, update, or secret rotation of the OIDC configuration, recording the acting operator's user id and the action. The audit row MUST NOT contain the client secret in any form. Test-connection, which persists nothing, need not emit a mutation audit row.
+The system SHALL emit an audit row for every successful create, update, or secret rotation of the OIDC configuration, recording the acting principal (a human user or a service account) by its principal id and a resolvable label, plus the action. The per-row attribution column (`updated_by`) SHALL store the acting principal id; a service-account update MUST record the service account's principal id rather than the interim `NULL`, and an environment-seed write with no operator SHALL record the system principal (principal id `sys`, type `system`). The audit row MUST NOT contain the client secret in any form. Test-connection, which persists nothing, need not emit a mutation audit row.
 
-#### Scenario: Saving a change writes an audit row
+#### Scenario: Saving a change writes an audit row naming the principal
 
 - **GIVEN** an admin holding `sso.manage`
 - **WHEN** the admin saves a configuration change
-- **THEN** an audit row is recorded with the acting user id and an SSO-configuration mutation action
+- **THEN** an audit row is recorded with the acting principal id and an SSO-configuration mutation action
+- **AND** the `updated_by` column stores that principal id
 - **AND** the audit row contains no client-secret value
+
+#### Scenario: A service-account update records the service-account principal, not NULL
+
+- **GIVEN** a service account holding `sso.manage`
+- **WHEN** it updates the OIDC configuration
+- **THEN** the update succeeds and the `updated_by` column and audit row record the service account's principal id
+- **AND** the interim behavior of recording `NULL` for a service-account updater no longer occurs
 
 ### Requirement: The Single sign-on admin settings page
 
