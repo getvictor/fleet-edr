@@ -220,6 +220,7 @@ func archiveArtifactEvent(id, host, etype string, ts int64, artifact string) vis
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/connection-search-finds-a-remote-address-across-hosts
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/dns-search-finds-a-query-name-across-hosts
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/host-filter-scopes-the-search
+// spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/absent-artifact-value-lists-recent-events
 func TestEventArchive_SearchEvents(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -261,6 +262,16 @@ func TestEventArchive_SearchEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Events, 1)
 	assert.Equal(t, "hostB", res.Events[0].HostID)
+
+	// An empty artifact value lists every event of the type (the recent-events mode), across hosts, still scoped to the type.
+	res, err = arch.SearchEvents(ctx, visibilityapi.EventSearchFilter{
+		EventType: "network_connect", FromNs: window.FromNs, ToNs: window.ToNs,
+	}, "", 50)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, res.TotalMatched, "no artifact filter lists all connection events")
+	ids = eventIDSet(res.Events)
+	assert.True(t, ids["c-a"] && ids["c-b"] && ids["c-other"], "includes every connection regardless of remote address")
+	assert.False(t, ids["d-a"], "still scoped to the connection event type")
 }
 
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/keyset-pagination-is-stable-and-complete

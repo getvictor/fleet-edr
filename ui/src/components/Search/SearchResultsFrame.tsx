@@ -10,20 +10,17 @@ interface Props {
   readonly total: number;
   readonly hasMore: boolean;
   readonly onLoadMore: () => void;
-  // emptyLabel is the mode's "nothing matched" message; prompt (optional) short-circuits to a call-to-action shown instead of running
-  // a search (the event modes need an artifact value before they can query, so they render a prompt rather than an empty result).
+  // emptyLabel is the mode's "nothing matched" message.
   readonly emptyLabel: string;
-  readonly prompt?: ReactNode;
   // children is the mode's result table, rendered only when there are rows.
   readonly children: ReactNode;
 }
 
-// SearchResultsFrame is the shared result shell for every search mode (issue #582): it owns the prompt / error / searching / empty /
-// count / load-more states so each mode supplies only its table. Driven by the useCursorList state a mode passes down. An error with
-// no rows replaces the table; an error with rows already shown (e.g. a failed "Load more") renders inline above them so the operator
-// keeps the results they had and can retry, rather than losing the page to a full error state.
-export function SearchResultsFrame({ loading, error, count, total, hasMore, onLoadMore, emptyLabel, prompt, children }: Props) {
-  if (prompt !== undefined && prompt !== null) return <EmptyState>{prompt}</EmptyState>;
+// SearchResultsFrame is the shared result shell for every search mode (issue #582): it owns the error / searching / empty / count /
+// load-more states so each mode supplies only its table. Driven by the useCursorList state a mode passes down. An error with no rows
+// replaces the table; an error with rows already shown (e.g. a failed "Load more") renders inline above them so the operator keeps the
+// results they had and can retry, rather than losing the page to a full error state.
+export function SearchResultsFrame({ loading, error, count, total, hasMore, onLoadMore, emptyLabel, children }: Props) {
   if (count === 0) {
     if (error) return <EmptyState>Error: {error}</EmptyState>;
     if (loading) return <EmptyState>Searching...</EmptyState>;

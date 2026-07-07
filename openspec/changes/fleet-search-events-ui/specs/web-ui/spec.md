@@ -2,7 +2,7 @@
 
 ### Requirement: Fleet-wide connection and DNS search
 
-The search page SHALL offer connection and DNS search modes alongside process search, selectable from the page and reflected in the URL so each mode is bookmarkable. Connection mode SHALL query the fleet-wide connection search endpoint for a remote address; DNS mode SHALL query the fleet-wide DNS search endpoint for a domain. Because those endpoints require an artifact value, each event mode SHALL prompt for the address or domain and SHALL NOT issue a search until one is supplied. Event results SHALL render as a table showing, per event, the time, the host (its enrollment hostname when known, else the host identifier), the originating process, and the mode-specific detail: for a connection the direction, protocol, and remote address with port; for a DNS query the query type and the resolved addresses. As with process search, the page SHALL show the total number of matches and, when more results remain, a control that loads and appends the next page, and SHALL let the operator narrow either mode to a single host.
+The search page SHALL offer connection and DNS search modes alongside process search, selectable from the page and reflected in the URL so each mode is bookmarkable. Connection mode SHALL query the fleet-wide connection search endpoint for a remote address; DNS mode SHALL query the fleet-wide DNS search endpoint for a domain. Like process mode, each event mode SHALL open on the fleet's most recent events of that type and narrow to an exact remote address or domain once one is supplied, rather than sitting behind a prompt until an artifact is entered. Event results SHALL render as a table showing, per event, the time, the host (its enrollment hostname when known, else the host identifier), the originating process, and the mode-specific detail: for a connection the direction, protocol, and remote address with port; for a DNS query the query type and the resolved addresses. As with process search, the page SHALL show the total number of matches and, when more results remain, a control that loads and appends the next page, and SHALL let the operator narrow either mode to a single host.
 
 #### Scenario: Connection mode lists fleet-wide connections to an address
 
@@ -17,11 +17,11 @@ The search page SHALL offer connection and DNS search modes alongside process se
 - **WHEN** the operator opens the search page in DNS mode with a domain in the URL
 - **THEN** the page shows a row per query with the host, the process, the query type, and the resolved addresses
 
-#### Scenario: An event mode prompts for the artifact before searching
+#### Scenario: An event mode opens on recent events
 
 - **GIVEN** the search page is opened in connection or DNS mode with no artifact value in the URL
 - **WHEN** the page renders
-- **THEN** it prompts for the remote address or domain and issues no search request
+- **THEN** it issues a search with no artifact filter and lists the fleet's most recent events of that type
 
 #### Scenario: Load more appends the next page of events
 

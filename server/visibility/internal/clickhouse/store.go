@@ -145,8 +145,14 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 		return api.EventSearchResult{}, fmt.Errorf("clickhouse search: unsupported event type %q", filter.EventType)
 	}
 
-	where := []string{"event_type = ?", col + " = ?"}
-	args := []any{filter.EventType, filter.Value}
+	where := []string{"event_type = ?"}
+	args := []any{filter.EventType}
+	if filter.Value != "" {
+		// Exact match on the materialized artifact column so the bloom skip index prunes granules. An empty value lists recent events
+		// of this type unfiltered (the ORDER BY prefix on event_type keeps that cheap).
+		where = append(where, col+" = ?")
+		args = append(args, filter.Value)
+	}
 	if filter.HostID != "" {
 		where = append(where, "host_id = ?")
 		args = append(args, filter.HostID)

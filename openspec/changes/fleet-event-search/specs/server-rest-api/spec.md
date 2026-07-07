@@ -2,7 +2,7 @@
 
 ### Requirement: Fleet-wide connection and DNS search endpoints
 
-The system SHALL expose `GET /api/search/connections` and `GET /api/search/dns`, each authorized by the process-read action, returning events from the archive matching an artifact value across all hosts: connections whose remote address equals the requested value, and DNS queries whose query name equals it. Each endpoint SHALL accept the artifact value (required; an absent or empty value is a 400), an optional `host_id` scoping the search to one host, and a `from`/`to` window over ingest time. Results SHALL be ordered newest-first, paginated by an opaque keyset cursor over `(timestamp_ns, event_id)` such that paging the full set yields every matching event exactly once with no skips or duplicates, and each response SHALL carry the page of events, a `next_cursor` when more remain, and `total_matched`. A malformed cursor SHALL be rejected with 400.
+The system SHALL expose `GET /api/search/connections` and `GET /api/search/dns`, each authorized by the process-read action, returning events from the archive across all hosts: connections whose remote address equals a requested value, and DNS queries whose query name equals it. Each endpoint SHALL accept the artifact value (optional; when absent or empty the endpoint lists the most recent events of that type across the fleet rather than rejecting the request, mirroring the process search), an optional `host_id` scoping the search to one host, and a `from`/`to` window over ingest time. Results SHALL be ordered newest-first, paginated by an opaque keyset cursor over `(timestamp_ns, event_id)` such that paging the full set yields every matching event exactly once with no skips or duplicates, and each response SHALL carry the page of events, a `next_cursor` when more remain, and `total_matched`. A malformed cursor SHALL be rejected with 400.
 
 #### Scenario: Connection search finds a remote address across hosts
 
@@ -23,11 +23,11 @@ The system SHALL expose `GET /api/search/connections` and `GET /api/search/dns`,
 - **WHEN** the client adds a `host_id`
 - **THEN** the response contains only that host's matching events
 
-#### Scenario: Missing artifact value is rejected
+#### Scenario: Absent artifact value lists recent events
 
 - **GIVEN** a request with no artifact value
 - **WHEN** the endpoint processes it
-- **THEN** the response status is 400
+- **THEN** it returns the most recent events of that type across the fleet, newest-first, with no artifact filter applied
 
 #### Scenario: Keyset pagination is stable and complete
 

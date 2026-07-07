@@ -88,20 +88,21 @@ describe("EventSearch DNS mode", () => {
   });
 });
 
-describe("EventSearch prompt + pagination + error", () => {
-  // spec:web-ui/fleet-wide-connection-and-dns-search/an-event-mode-prompts-for-the-artifact-before-searching
-  it("prompts for the artifact and issues no request when the value is absent", async () => {
-    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [], total_matched: 0 });
+describe("EventSearch recent events + pagination + error", () => {
+  // spec:web-ui/fleet-wide-connection-and-dns-search/an-event-mode-opens-on-recent-events
+  it("lists recent connections and issues a request when no artifact value is supplied", async () => {
+    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [connEvent("a", "H1")], total_matched: 1 });
     renderEvent("connections", "");
-    expect(await screen.findByText(/Enter a remote address/i)).toBeInTheDocument();
-    expect(spy).not.toHaveBeenCalled();
+    expect(await screen.findByText("mac-a.local")).toBeInTheDocument();
+    // The request fired with no artifact filter (recent events across the fleet), rather than sitting behind a prompt.
+    expect(spy).toHaveBeenCalledWith("connections", expect.objectContaining({ value: "" }), undefined);
   });
 
-  it("prompts for a domain in DNS mode with no value", async () => {
-    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [], total_matched: 0 });
+  it("lists recent DNS lookups when no domain is supplied", async () => {
+    const spy = vi.spyOn(api, "searchEvents").mockResolvedValue({ events: [dnsEvent("d1", "H1")], total_matched: 1 });
     renderEvent("dns", "");
-    expect(await screen.findByText(/Enter a domain/i)).toBeInTheDocument();
-    expect(spy).not.toHaveBeenCalled();
+    expect(await screen.findByText("nslookup (7)")).toBeInTheDocument();
+    expect(spy).toHaveBeenCalledWith("dns", expect.objectContaining({ value: "" }), undefined);
   });
 
   // spec:web-ui/fleet-wide-connection-and-dns-search/load-more-appends-the-next-page-of-events

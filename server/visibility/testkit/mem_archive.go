@@ -236,7 +236,11 @@ func payloadMatchesChain(payload json.RawMessage, chain []api.ProcessGeneration)
 // eventMatchesSearch reports whether an event satisfies a fleet-wide search filter: right type, matching artifact value, and within
 // the optional host + ingest-window bounds. Extracted so SearchEvents stays flat.
 func eventMatchesSearch(e api.Event, filter api.EventSearchFilter, field string) bool {
-	if e.EventType != filter.EventType || payloadString(e.Payload, field) != filter.Value {
+	if e.EventType != filter.EventType {
+		return false
+	}
+	// An empty artifact value lists recent events of this type unfiltered, mirroring the store; a supplied value matches exactly.
+	if filter.Value != "" && payloadString(e.Payload, field) != filter.Value {
 		return false
 	}
 	if filter.HostID != "" && e.HostID != filter.HostID {

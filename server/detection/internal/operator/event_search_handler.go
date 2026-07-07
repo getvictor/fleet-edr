@@ -52,11 +52,9 @@ func (h *Handler) serveEventSearch(w http.ResponseWriter, r *http.Request, event
 	}
 
 	q := r.URL.Query()
+	// An absent artifact value is allowed: it lists the most recent events of this type across the fleet (newest-first, same
+	// pagination), matching how the process search opens on recent processes. A supplied value narrows to that exact address / domain.
 	value := q.Get(valueParam)
-	if value == "" {
-		h.writeError(ctx, w, http.StatusBadRequest, errMissingArtifact)
-		return
-	}
 	fromNs, ok := parseNonNegativeParam(q, "from")
 	if !ok {
 		h.writeError(ctx, w, http.StatusBadRequest, errBadWindow)

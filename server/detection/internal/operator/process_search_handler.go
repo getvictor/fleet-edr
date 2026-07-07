@@ -26,6 +26,14 @@ var validSigningClasses = map[string]bool{
 	"unsigned": true, "invalid": true, "ad-hoc": true, "developer-id": true, "platform": true, "signed": true,
 }
 
+// validExitReasons is the accepted exit_reason filter vocabulary, the same closed set the graph writes (api.ExitReason*). A value
+// outside it is a 400 rather than a silently-empty fleet query, matching the signing filter: an analyst must be able to trust that the
+// filter they typed was applied, not silently misspelled into zero results.
+var validExitReasons = map[string]bool{
+	api.ExitReasonEvent: true, api.ExitReasonTTLReconciliation: true, api.ExitReasonPIDReuse: true,
+	api.ExitReasonReExec: true, api.ExitReasonHostReconciled: true,
+}
+
 // ProcessSearchReader is the fleet-wide process search surface the operator handler serves at GET /api/search/processes (issue #582).
 // mysql.Store satisfies it. A dependency distinct from api.Service, matching the HostDetailReader seam, so the alert/host read
 // interface and its mocks stay untouched.
@@ -66,6 +74,10 @@ func (h *Handler) handleProcessSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if sc := filter.Signing; sc != "" && !validSigningClasses[sc] {
 		h.writeError(ctx, w, http.StatusBadRequest, errInvalidSigning)
+		return
+	}
+	if er := filter.ExitReason; er != "" && !validExitReasons[er] {
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidExitReason)
 		return
 	}
 	// Parse from/to strictly: ParseInt64Param would silently default an unparseable value to 0, turning a mistyped or negative bound

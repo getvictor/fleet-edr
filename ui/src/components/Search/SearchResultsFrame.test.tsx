@@ -20,12 +20,6 @@ function frame(over: Partial<Parameters<typeof SearchResultsFrame>[0]> = {}) {
 }
 
 describe("SearchResultsFrame", () => {
-  it("shows the prompt and nothing else when a prompt is set", () => {
-    frame({ prompt: "Type something", count: 0 });
-    expect(screen.getByText("Type something")).toBeInTheDocument();
-    expect(screen.queryByText("a-row")).not.toBeInTheDocument();
-  });
-
   it("shows a full-page error when there are no rows", () => {
     frame({ error: "boom", count: 0 });
     expect(screen.getByText("Error: boom")).toBeInTheDocument();

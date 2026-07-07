@@ -113,6 +113,7 @@ func TestHandleProcessSearch_MalformedCursorIs400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
+// spec:server-rest-api/fleet-wide-process-search-endpoint/an-out-of-vocabulary-filter-value-is-rejected
 func TestHandleProcessSearch_RejectsBadInput(t *testing.T) {
 	t.Parallel()
 	sr := fakeProcessSearch{fn: func(context.Context, api.ProcessSearchFilter, string, int) (api.ProcessSearchResult, error) {
@@ -124,6 +125,8 @@ func TestHandleProcessSearch_RejectsBadInput(t *testing.T) {
 	cases := []struct{ name, query string }{
 		{"unknown signing class", "?signing=notarized"},
 		{"misspelled signing class", "?signing=platfor" + "m_typo"},
+		{"unknown exit reason", "?exit_reason=terminated"},
+		{"misspelled exit reason", "?exit_reason=pid_reused"},
 		{"unparseable from", "?from=abc"},
 		{"negative from", "?from=-100"},
 		{"unparseable to", "?to=notanumber"},
