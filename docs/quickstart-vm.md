@@ -29,7 +29,7 @@ Event telemetry dominates storage and a busy host can add many GB per day, so si
 3. Run the bootstrap, passing your domain and a pinned release version:
 
    ```sh
-   EDR_DOMAIN=edr.example.com EDR_VERSION=v0.3.0 ./bootstrap.sh
+   EDR_DOMAIN=edr.example.com EDR_VERSION=v0.4.0 ./bootstrap.sh
    ```
 
    It generates the secrets (`secrets/`), writes `.env`, and starts the stack. It is safe to re-run; it never overwrites an existing secret.

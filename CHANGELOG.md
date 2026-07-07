@@ -2,7 +2,9 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
-## [0.4.0] (unreleased)
+## [0.4.0] (2026-07-07)
+
+Feature release on top of 0.3.0. The headline is a re-architected event store: raw telemetry now lives in a ClickHouse archive backed by a small MySQL work queue, which unlocks fleet-wide hunting (process, connection, and DNS search), a host event timeline, and a flexible time-navigation control across the investigation surface. Also in this release: a unified principal model that makes every service-account action fully attributable, the groundwork for Windows agents (a platform-tagged event contract, a driverless ETW process sensor, and platform-scoped detection rules), agent health reporting on the Hosts page, and detection-reliability fixes that close a concurrent-processing race which could silently drop alerts. Read the upgrade notes below before upgrading: `EDR_CLICKHOUSE_DSN` is now required, and the `EDR_OIDC_*` SSO seeding variables are removed.
 
 ### Upgrade notes (action required)
 
