@@ -37,6 +37,9 @@ interface Props {
   readonly hostId: string;
   readonly node: ProcessNode;
   readonly onClose: () => void;
+  // currentAlertId is the alert whose page is open (when entered from an alert). Its own row is dropped from "Related alerts" so the
+  // panel never links back to the page you are already on; other alerts on the process still show.
+  readonly currentAlertId?: number;
 }
 
 const SEVERITY_VARIANTS: Record<string, BadgeVariant> = {
@@ -105,7 +108,7 @@ const VERDICT_BADGE: Record<SigningVerdictKind, BadgeVariant> = {
   signed: "neutral",
 };
 
-export function ProcessDetail({ hostId, node, onClose }: Props) {
+export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) {
   const [searchParams] = useSearchParams();
   // Show-in-timeline preserves the host page's other params (notably ?at= / ?alert=, which anchor the shared time window) so the
   // graph->timeline pivot keeps the window; it only swaps the graph's ?process= selection for the timeline's view + pid emphasis.
@@ -215,6 +218,9 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
   }, [callKill, hostId, node.pid, killSending]);
 
   const verdict = deriveSigningVerdict(node.code_signing);
+
+  // Drop the alert whose page is already open so "Related alerts" never links back to itself; other alerts on this process remain.
+  const relatedAlerts = currentAlertId === undefined ? alerts : alerts.filter((a) => a.id !== currentAlertId);
 
   const killDisabled = killSending
     || (killCommand !== null
@@ -380,12 +386,13 @@ export function ProcessDetail({ hostId, node, onClose }: Props) {
       {/* Related alerts are references, not a second copy of the alert. Each row links to the alert page, which owns the alert's
           severity/description and its triage (acknowledge / resolve) actions. Restating the full alert card here duplicated what the
           alert breadcrumb + detail already show one panel over. The technique tags stay because they link to the rule doc page (the
-          only linked technique surface reachable from the graph, issue #585); everything else collapses to the link. */}
-      {alerts.length > 0 && (
+          only linked technique surface reachable from the graph, issue #585); everything else collapses to the link. The alert whose
+          page is currently open is dropped: linking back to the page you are already on is noise, not a reference. */}
+      {relatedAlerts.length > 0 && (
         <div className="process-detail__alerts">
           <h4 className="process-detail__alerts-title">Related alerts</h4>
           <ul className="process-detail__alert-list">
-            {alerts.map((a) => (
+            {relatedAlerts.map((a) => (
               <li key={a.id} className="process-detail__alert-ref">
                 <Link className="process-detail__alert-link" to={`/alerts/${String(a.id)}`}>
                   <Badge variant={SEVERITY_VARIANTS[a.severity] ?? "neutral"}>{a.severity}</Badge>

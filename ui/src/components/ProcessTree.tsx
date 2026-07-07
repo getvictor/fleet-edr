@@ -8,7 +8,6 @@ import {
 } from "../constants";
 import { ProcessDetail } from "./ProcessDetail";
 import { AlertTriageActions } from "./AlertTriageActions";
-import { HostHealthPanel } from "./HostHealthPanel";
 import { HostHeader } from "./HostHeader";
 import { HostTimeline } from "./HostTimeline";
 import { type NodeTooltip } from "./node-tooltip";
@@ -309,7 +308,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
       return;
     }
     // Clear any lingering tooltip before re-rendering: a collapse/expand can remove the hovered node without a mouseleave firing.
-    // Disable set-state-in-effect for the synchronous reset, matching HostHealthPanel.
+    // Disable set-state-in-effect for the synchronous reset, matching HostHeader.
     /* eslint-disable react-hooks/set-state-in-effect */
     setHoverTip(null);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -483,8 +482,6 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     <>
       <HostHeader hostId={hostId} actions={headerActions} />
 
-      {hostId ? <HostHealthPanel hostId={hostId} /> : null}
-
       {alertDetail && (
         <div className="alert-breadcrumb">
           <Link to="/alerts" className="alert-breadcrumb__back">&larr; Alerts</Link>
@@ -510,6 +507,17 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           <span className="alert-breadcrumb__time">
             {new Date(alertDetail.created_at).toLocaleString()}
           </span>
+          {/* Status + triage sit in the alert header itself (next to its id/severity/title), the industry-standard place for a
+              detection's lifecycle controls, rather than floating on their own row below the description. */}
+          <AlertTriageActions
+            alertId={alertDetail.id}
+            status={alertDetail.status}
+            onStatusChange={(status) => {
+              setAlertDetail((prev) => (prev ? { ...prev, status } : prev));
+              // Re-fetch the tree's alert badges so a resolved alert loses its node dot + technique tag in place.
+              setAlertRefreshKey((k) => k + 1);
+            }}
+          />
           {/* Process-optional alerts have no chain to focus, so this generic chain toggle would be a confusing second control
               next to the info bar's widen/collapse button below. Show it only for process-backed alerts. */}
           {!isProcessOptionalAlert && (
@@ -543,25 +551,13 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
         </div>
       )}
 
-      {/* The finding detail is the "what and why" of the alert: description, technique tags (linked to the rule doc), and the alert's
-          own triage controls. Triage lives here, on the alert surface, rather than inside a process node inspector (a process-optional
-          alert has no process to click, so this is the only place its status can change). It renders for every alert and is the primary
-          surface for a process-optional alert whose graph is intentionally empty. */}
+      {/* The finding detail is the "what and why" of the alert: its description and technique tags (linked to the rule doc). The
+          alert's status + triage controls live in the header row above, next to its id/severity/title. This renders for every alert
+          and is the primary surface for a process-optional alert whose graph is intentionally empty. */}
       {alertDetail && (
         <div className="alert-detail-panel">
           <p className="alert-detail-panel__description">{alertDetail.description}</p>
           <TechniqueTags techniques={alertDetail.techniques} ruleId={alertDetail.rule_id} className="alert-detail-panel__techniques" />
-          <div className="alert-detail-panel__actions">
-            <AlertTriageActions
-              alertId={alertDetail.id}
-              status={alertDetail.status}
-              onStatusChange={(status) => {
-                setAlertDetail((prev) => (prev ? { ...prev, status } : prev));
-                // Re-fetch the tree's alert badges so a resolved alert loses its node dot + technique tag in place.
-                setAlertRefreshKey((k) => k + 1);
-              }}
-            />
-          </div>
         </div>
       )}
 
@@ -590,6 +586,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
             hoverTip={hoverTip}
             selectedNode={selectedNode}
             onCloseDetail={() => { setSelectedNode(null); }}
+            currentAlertId={alertDetail?.id}
           />
         </>
       )}
@@ -609,13 +606,15 @@ interface GraphBodyProps {
   readonly hoverTip: { x: number; y: number; tooltip: NodeTooltip } | null;
   readonly selectedNode: ProcessNode | null;
   readonly onCloseDetail: () => void;
+  readonly currentAlertId?: number;
 }
 
 // GraphBody is the process-graph half of the host page: the fetch/status banners, the d3 canvas (drawn into svgRef by ProcessTreeView's
 // effect), the hover tooltip, and the selected-process detail aside. Split out of ProcessTreeView (issue #583) so the graph's status
 // conditionals don't nest under the graph/timeline view branch and inflate the parent's cognitive complexity.
 function GraphBody({
-  hostId, loading, error, isProcessOptionalAlert, focusAlertChain, onFocusAlertChain, rootsEmpty, svgRef, hoverTip, selectedNode, onCloseDetail,
+  hostId, loading, error, isProcessOptionalAlert, focusAlertChain, onFocusAlertChain, rootsEmpty, svgRef, hoverTip, selectedNode,
+  onCloseDetail, currentAlertId,
 }: GraphBodyProps) {
   return (
     <>
@@ -675,7 +674,7 @@ function GraphBody({
         </div>
         {selectedNode && (
           <aside className="process-tree__detail">
-            <ProcessDetail hostId={hostId} node={selectedNode} onClose={onCloseDetail} />
+            <ProcessDetail hostId={hostId} node={selectedNode} onClose={onCloseDetail} currentAlertId={currentAlertId} />
           </aside>
         )}
       </div>

@@ -25,7 +25,7 @@ export function ActivityHistogram({ hostId, fromNs, toNs, onSelectBucket }: Acti
 
   useEffect(() => {
     // Reset so a stale strip never shows over another window while the new fetch is in flight. Disable set-state-in-effect for the
-    // synchronous reset, matching HostHealthPanel.
+    // synchronous reset, matching ProcessTree.
     /* eslint-disable react-hooks/set-state-in-effect */
     setHist(null);
     /* eslint-enable react-hooks/set-state-in-effect */

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { HostHeader } from "./HostHeader";
 import * as api from "../api";
-import type { HostDetail } from "../types";
+import type { HostDetail, HostHealth } from "../types";
 
 const NANOSECONDS_PER_MILLISECOND = 1_000_000;
+const MINUTE_MS = 60 * 1000;
 
 function detailFixture(overrides: Partial<HostDetail> = {}): HostDetail {
   return {
@@ -112,5 +113,117 @@ describe("HostHeader", () => {
     expect(screen.queryByText("offline")).not.toBeInTheDocument();
     // With no detail there is nothing to disclose, so no Details trigger renders; the raw-id title is itself selectable.
     expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+  });
+});
+
+function healthFixture(overrides: Partial<HostHealth> = {}): HostHealth {
+  return {
+    overall_status: "healthy",
+    reported_at_ns: Date.now() * NANOSECONDS_PER_MILLISECOND,
+    components: [],
+    ...overrides,
+  };
+}
+
+// Agent health rides inside the host Details popover, not a standalone card: the trigger carries an attention dot only when the rollup is
+// not healthy, and opening the popover reveals the rollup pill plus the per-component conditions. These pin the reworked surface that
+// replaced HostHealthPanel.
+describe("HostHeader agent health", () => {
+  // spec:web-ui/the-host-detail-surfaces-the-health-conditions/the-detail-lists-a-component-with-its-message-and-age
+  it("flags an unhealthy agent with an attention dot and lists each component's message and age when opened", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        overall_status: "unhealthy",
+        components: [
+          {
+            type: "endpoint_security_extension",
+            status: "unhealthy",
+            reason: "never_connected",
+            message: "Security extension not activated",
+            last_transition_ns: (Date.now() - 5 * MINUTE_MS) * NANOSECONDS_PER_MILLISECOND,
+          },
+          {
+            type: "network_extension",
+            status: "healthy",
+            reason: "activated",
+            message: "Network extension connected",
+            last_transition_ns: Date.now() * NANOSECONDS_PER_MILLISECOND,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    // The unhealthy rollup surfaces as an attention marker on the always-visible trigger, before the popover is even opened.
+    const trigger = await screen.findByRole("button", { name: /Details/ });
+    await waitFor(() => {
+      expect(trigger).toHaveAttribute("title", "Agent needs attention");
+    });
+
+    fireEvent.click(trigger);
+
+    // Opening reveals the self-describing rollup pill plus the failing component with its friendly label, message, and age.
+    expect(screen.getByText("Agent needs attention")).toBeInTheDocument();
+    expect(screen.getByText("Security extension")).toBeInTheDocument();
+    expect(screen.getByText("Security extension not activated")).toBeInTheDocument();
+    expect(screen.getByText("5m ago")).toBeInTheDocument();
+    expect(screen.getByText("Network extension")).toBeInTheDocument();
+  });
+
+  // spec:web-ui/the-host-detail-surfaces-the-health-conditions/a-fully-healthy-host-shows-a-single-healthy-rollup
+  it("shows no attention dot when healthy and reveals the single healthy rollup on demand", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        components: [
+          {
+            type: "endpoint_security_extension",
+            status: "healthy",
+            reason: "activated",
+            message: "Security extension connected",
+            last_transition_ns: Date.now() * NANOSECONDS_PER_MILLISECOND,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    // A healthy agent rolls up to one pill, revealed only on demand; the per-component condition is available once the popover is open.
+    expect(await screen.findByText("Agent healthy")).toBeInTheDocument();
+    expect(screen.getByText("Security extension connected")).toBeInTheDocument();
+    // Health is now loaded and healthy, so the always-visible trigger carries no attention marker.
+    expect(screen.getByRole("button", { name: "Details" })).not.toHaveAttribute("title");
+  });
+
+  it("uses an amber (not red) attention dot when the agent is degraded", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(healthFixture({ overall_status: "degraded" }));
+    renderHeader(detail.host_id);
+
+    const trigger = await screen.findByRole("button", { name: /Details/ });
+    await waitFor(() => {
+      expect(trigger).toHaveAttribute("title", "Agent needs attention");
+    });
+    // The dot's tone distinguishes a degraded agent (amber --warn) from a fully unhealthy one (red --crit).
+    expect(trigger.querySelector(".host-header__health-dot--warn")).not.toBeNull();
+    expect(trigger.querySelector(".host-header__health-dot--crit")).toBeNull();
+  });
+
+  it("carries no attention marker when health is unknown", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(healthFixture({ overall_status: "unknown", components: null }));
+    renderHeader(detail.host_id);
+
+    // Unknown means no snapshot yet, nothing actionable: open the popover to prove health resolved, then assert the trigger stays clean.
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    expect(await screen.findByText("Agent unknown")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details" })).not.toHaveAttribute("title");
   });
 });
