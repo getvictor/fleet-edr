@@ -67,7 +67,7 @@ You'll see two real macOS hosts (an engineer laptop and a CI build server), each
 
 Notes:
 
-- Super admin: the demo account is an `admin` with SSO login; for a `super_admin` break-glass account, open the one-shot `BREAK-GLASS ADMIN SETUP` redemption URL the server prints on first boot for `admin@fleet-edr.local` (valid one hour) and register a WebAuthn passkey. Retrieve it with `docker compose -f docker-compose.demo.yml logs server | grep -A3 BREAK-GLASS`.
+- Super admin: the demo account is an `admin` with SSO login; for a `super_admin` break-glass account, open the one-shot `BREAK-GLASS ADMIN SETUP` redemption URL for `admin@fleet-edr.local` that the server prints on each boot until it is redeemed (valid one hour), and register a WebAuthn passkey. Retrieve it with `docker compose -f docker-compose.demo.yml logs server | grep -A4 BREAK-GLASS`.
 - The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement and Apple Silicon, so it cannot run in Docker. The demo exercises the server, UI, and detection pipeline; deploy on a real Mac (above) to see live capture.
 - Response actions enqueue but never complete in the demo because no live agent is connected.
 - Evaluation only: empty MySQL password, self-signed cert, checked-in dev secrets. Do not expose it to the internet.
