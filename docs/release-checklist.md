@@ -37,7 +37,7 @@ On the same release-prep branch, alongside the archive from step 1:
 
 1. Create the annotated RC tag on the merged commit: `git tag -a vX.Y.Z-rc.N -m "vX.Y.Z-rc.N"` and push it.
 2. The `v*` push triggers `release.yml`. Its `openspec-archived` job runs first; every publishing job (`macos-pkg`, `docker-server`, `docker-demo-seed`) depends on it via `needs:`, so the release fails before any signing if `openspec/changes/` still holds a non-archive folder. That is the automated backstop for the "nothing un-archived remains" check (step 1, item 5).
-3. The RC is signed and published but does not advance `:latest`. Use it for the validation in steps 4 through 6.
+3. The RC is signed and published but does not advance `:latest`. Use it for the validation in steps 4 through 7.
 
 ## 4. Run candidate-only validation against the RC
 
@@ -51,18 +51,29 @@ These layers do not run per-PR (`docs/testing-strategy.md`); the RC is where the
 
 Drive the built UI from the RC server image and walk the core operator journeys to catch rendering and interaction regressions the automated suites do not assert: sign-in, host list, process tree, alert detail, and policy / app-control editing.
 
-## 6. Deploy the RC to the dogfood server and enroll a real device
+## 6. Review the demo stack on the RC
+
+The Mac-free demo (`docker-compose.demo.yml`) floats to the released `:latest` server + seeder images, so promoting a stable tag makes the public demo run this release. v0.4.0+ also hard-requires ClickHouse (ADR-0015), which the demo compose provisions, so a boot or seeding regression on the new image would otherwise surface only after `:latest` moves. Eyeball the demo against the RC first, pinned to the RC tag:
+
+```sh
+docker compose -f docker-compose.demo.yml down -v   # start clean (discards any prior demo data)
+EDR_VERSION=vX.Y.Z-rc.N docker compose -f docker-compose.demo.yml up
+```
+
+Open https://localhost:8088/ui/, sign in through the bundled dex IdP (`demo@fleet-edr.local` / `demo`), and confirm the seeded corpus renders end to end: the process graph, the fired ATT&CK alerts, and the application-control block. The `EDR_VERSION` pin selects the same tag for both the server and the one-shot seeder. Start clean with `down -v` when switching image versions: the seeder skips replay when demo data is already present, and v0.4.0+ reads events from ClickHouse, so stale MySQL-only demo data from a prior `latest` run would render an empty event view.
+
+## 7. Deploy the RC to the dogfood server and enroll a real device
 
 Roll the candidate server image onto the live dogfood deployment, enroll an actual Mac, and confirm on real hardware: enrollment succeeds, telemetry flows, and at least one real detection fires end to end. This is the last gate that exercises the full product the way a pilot customer would.
 
-If any of steps 4 through 6 surfaces a blocker, fix it on `main` and return to step 3 with `rc.N+1`. Only a clean RC is promoted.
+If any of steps 4 through 7 surfaces a blocker, fix it on `main` and return to step 3 with `rc.N+1`. Only a clean RC is promoted.
 
-## 7. Promote to a stable tag
+## 8. Promote to a stable tag
 
 1. Create the annotated stable tag on the same commit the clean RC was built from: `git tag -a vX.Y.Z -m "vX.Y.Z"` and push it.
 2. `release.yml` re-runs and, because this is a non-`-rc` tag, advances `:latest` and produces the final signed pkg, the two mobileconfig profiles, the SBOMs, the `SHA256SUMS`, and the cosign bundles.
 
-## 8. Verify the published release
+## 9. Verify the published release
 
 Run the `verify-release` skill against the stable tag. It confirms the GitHub Release carries every expected artifact and that each one verifies: asset completeness, checksums, per-artifact Sigstore bundles, the server image signature (plus the `:latest` digest match for a stable tag), the build-provenance attestations, and the macOS Gatekeeper checks on the pkg. Any failure means the release is not safe to announce.
 

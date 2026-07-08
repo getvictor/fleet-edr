@@ -173,6 +173,14 @@ services:
       EDR_DEMO_OIDC_CLIENT_SECRET: edr-demo-client-secret-do-not-use-in-prod
       EDR_DEMO_OIDC_EXTERNAL_URL: https://localhost:8088
       EDR_DEMO_OIDC_DEFAULT_ROLE: analyst
+      # Pre-provision the demo SSO account so first dex login lands as `admin` instead of the JIT default analyst: the seeder binds the
+      # dex-issued OIDC subject below to an `admin` user, and login matches that (provider, subject) identity and reuses it rather than
+      # JIT-provisioning. This is the only sound way to seed a privileged demo user: the JIT default role is clamped to analyst/auditor
+      # by design (identity/bootstrap clampJITRole), so an SSO claim can never auto-grant admin. EDR_DEMO_OIDC_SUBJECT is the dex
+      # local-connector subject for the demo@fleet-edr.local static user (userID de300000-...-0001, connID `local`), stable for the
+      # checked-in dex config. Break-glass (admin@fleet-edr.local) stays the super_admin path.
+      EDR_DEMO_OIDC_SUBJECT: "CiRkZTMwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDESBWxvY2Fs"
+      EDR_DEMO_ROLE: admin
     volumes:
       - tls:/tls:ro
 
