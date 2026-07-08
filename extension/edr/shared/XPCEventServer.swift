@@ -6,29 +6,33 @@ import os.log
 /// up an XPC listener.
 ///
 /// Production: only binaries signed with the Fleet Device Management team ID (FDG8Q7N4CC, chained to the Apple anchor)
-/// pass. Debug builds additionally accept the pinned cdhash of the locally-built ad-hoc agent so dev iteration on
-/// SIP-disabled VMs works: `go build` produces an ad-hoc signature with no team ID, so the strict production requirement
-/// would lock dev iteration out (observed on edr-dev as "Received message forbidden due to code signing requirement"
-/// rejecting the agent's hello message). The cdhash clause pins to ONE specific hash, not "any ad-hoc binary," so a
-/// different ad-hoc-signed process cannot impersonate the agent. The active `peerCodeSigningRequirement` constant below
-/// excludes the ad-hoc branch from release builds so production binaries are team-id-only even if the .debug string is
-/// left in source.
+/// pass. Debug builds additionally accept the locally-built ad-hoc agent by its code-signing IDENTIFIER so dev iteration
+/// on SIP-disabled VMs works: `go build` produces an ad-hoc signature with no team ID, so the strict production
+/// requirement would lock dev iteration out (observed on edr-dev as "Received message forbidden due to code signing
+/// requirement" rejecting the agent's hello message). Pinning the identifier rather than a content-derived cdhash is the
+/// deferred tightening ADR-0007 anticipated: `task build:agent` re-signs the ad-hoc binary with the fixed identifier
+/// `fleet-edr-agent` (the same designated identifier the notarized release carries), so the pin no longer goes stale on
+/// every rebuild the way the old committed cdhash did (issue #623). The active `peerCodeSigningRequirement` constant
+/// below excludes the ad-hoc branch from release builds so production binaries are team-id-only even if the .debug string
+/// is left in source.
 enum PeerCodeSigningRequirement {
     /// FDM team ID. Every signed peer that reaches us in production must chain to a leaf cert carrying this OU.
     static let teamID = "FDG8Q7N4CC"
 
-    /// Cdhash of the locally-built ad-hoc agent binary. Update via `task build:agent` followed by
-    /// `codesign -d -r -` against `agent/tmp/fleet-edr-agent` to read the new hash. Go's deterministic builds keep this
-    /// stable across rebuilds of identical source, so the update cadence matches Go-side code changes, not every build.
-    static let adHocCDHashDebug = "b854184cd523298f078a3281c721ed715c3fe626"
+    /// Code-signing identifier of the locally-built ad-hoc agent. `task build:agent` re-signs the binary with
+    /// `--identifier fleet-edr-agent` so this value is stable across every rebuild (unlike the content-derived cdhash it
+    /// replaced), and it matches the designated identifier the notarized release carries, so no dev re-pinning is needed.
+    static let agentIdentifierDebug = "fleet-edr-agent"
 
     /// Production requirement string: Apple anchor + FDM team ID, nothing else. Used by release-configured extensions.
     static let production = "anchor apple generic and certificate leaf[subject.OU] = \"\(teamID)\""
 
-    /// Debug requirement string: production + the pinned ad-hoc cdhash. Used by debug-configured extensions only.
+    /// Debug requirement string: production + the ad-hoc agent's fixed identifier. Used by debug-configured extensions
+    /// only. On a SIP-disabled dev VM this accepts an ad-hoc binary claiming the agent identifier; that is the accepted
+    /// dev-side trade the .debug branch makes, and it never reaches release builds (see peerCodeSigningRequirement).
     static let debug = """
         (anchor apple generic and certificate leaf[subject.OU] = "\(teamID)") or \
-        cdhash H"\(adHocCDHashDebug)"
+        identifier "\(agentIdentifierDebug)"
         """
 }
 
