@@ -2,7 +2,7 @@
 # (docker-compose.demo.yml). It backs the one reviewer SSO account so a
 # reviewer can sign in and click around without an MDM, a Mac, or a real IdP.
 #
-# A single static user is signed in with: demo@fleet-edr.local / demo. The demo
+# A single static user is defined here: demo@fleet-edr.local / demo. The demo
 # seeder pre-binds this user's dex subject to an admin role binding
 # (docker-compose.demo.yml EDR_DEMO_OIDC_SUBJECT + EDR_DEMO_ROLE), so first
 # sign-in matches that pre-bound identity (admin) rather than JIT-provisioning
