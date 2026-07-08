@@ -49,6 +49,15 @@ tasks:
     desc: Build the macOS agent binary into agent/tmp/
     cmds:
       - go build -o {{.AGENT_BIN}} {{.AGENT_PKG}}
+      # Pin a STABLE ad-hoc code-signing identifier so the debug extension's XPC peer requirement keeps matching the
+      # locally-built agent across rebuilds (issue #623). `go build` on arm64 macOS ad-hoc-signs with the linker default
+      # identifier "a.out" and a content-derived cdhash, both of which change on every meaningful rebuild; the old pin was
+      # that cdhash, so it went stale constantly. Re-signing with an explicit identifier fixes it to "fleet-edr-agent",
+      # the same designated identifier the notarized release carries (packaging/pkg/build.sh derives it from the binary
+      # name), so XPCEventServer.debug can pin `identifier "fleet-edr-agent"` and never need re-pinning. Darwin-only:
+      # codesign exists only on macOS and the XPC peer gate only runs there.
+      - cmd: codesign --force --sign - --identifier fleet-edr-agent {{.AGENT_BIN}}
+        platforms: [darwin]
 
   build:agent:linux:
     desc: |

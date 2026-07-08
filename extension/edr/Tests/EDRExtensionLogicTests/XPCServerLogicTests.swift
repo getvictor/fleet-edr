@@ -57,31 +57,36 @@ final class XPCServerLogicTests: XCTestCase {
     }
 
     // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-rejected-in-production-builds
-    func testProductionRequirementExcludesAdHocCDHashClause() {
-        // The cdhash clause must NOT appear in the production requirement string; if it did, a release extension could
-        // be tricked into accepting an arbitrary ad-hoc-signed binary whose cdhash happens to match the constant.
+    func testProductionRequirementExcludesAdHocIdentifierClause() {
+        // The lone-identifier clause must NOT appear in the production requirement string; if it did, a release extension
+        // could be tricked into accepting an arbitrary binary that merely claims the agent identifier, with no anchor or
+        // team-ID chain. Production stays anchor + team-ID only.
         XCTAssertFalse(PeerCodeSigningRequirement.production.contains("cdhash"),
                        "production requirement must exclude every cdhash clause")
-        XCTAssertFalse(PeerCodeSigningRequirement.production.contains(PeerCodeSigningRequirement.adHocCDHashDebug),
-                       "production requirement must not embed the debug cdhash constant")
+        XCTAssertFalse(PeerCodeSigningRequirement.production.contains("identifier \"\(PeerCodeSigningRequirement.agentIdentifierDebug)\""),
+                       "production requirement must not accept the ad-hoc agent by identifier alone")
     }
 
-    // The canonical-ID slug is derived from the spec heading and lands above the test on one line per the spectrace
-    // marker contract; the resulting comment exceeds the 150-char SwiftLint default. Per-line disable is the right
-    // exception here because the slug is a fixed external contract, not a stylistic choice.
+    // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-by-its-signing-identifier
+    // Transitional second marker: covers the pre-rename canonical scenario (cdhash-matches-the-pinned-value) that stays
+    // in openspec/specs until issue #623's change is archived, when the MODIFIED requirement replaces it with the
+    // identifier scenario above. Drop this line at archive time (the canonical scenario it points at is gone by then).
+    // The canonical-ID slug lands on one line per the spectrace marker contract; this pre-rename slug exceeds the
+    // 150-char SwiftLint limit, so a per-line disable is the right exception until archive drops the line.
     // swiftlint:disable:next line_length
     // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-when-its-code-directory-hash-matches-the-pinned-value
-    func testDebugRequirementPinsTheAdHocCDHashAndIncludesProductionClause() {
-        // Debug requirement = production-style team-id clause OR cdhash clause for the pinned ad-hoc agent. The pin is
-        // a single specific hash; arbitrary ad-hoc binaries don't match. Asserting both halves catches a regression
-        // where either clause is accidentally dropped (which would either lock dev iteration out or open the gate to
-        // every ad-hoc binary).
+    func testDebugRequirementPinsTheAgentIdentifierAndIncludesProductionClause() {
+        // Debug requirement = production-style team-id clause OR the ad-hoc agent's fixed code-signing identifier. The
+        // identifier is stable across rebuilds (task build:agent pins it with --identifier fleet-edr-agent), so the dev
+        // pin no longer goes stale the way the old committed cdhash did (issue #623). Asserting both halves catches a
+        // regression where either clause is dropped (which would lock dev iteration out or drop production team-id
+        // acceptance), and that the content-derived cdhash clause is gone.
         XCTAssertTrue(PeerCodeSigningRequirement.debug.contains("FDG8Q7N4CC"),
                       "debug requirement must still accept the FDM team ID")
-        XCTAssertTrue(PeerCodeSigningRequirement.debug.contains("cdhash"),
-                      "debug requirement must accept the pinned ad-hoc cdhash")
-        XCTAssertTrue(PeerCodeSigningRequirement.debug.contains(PeerCodeSigningRequirement.adHocCDHashDebug),
-                      "debug requirement must pin the exact ad-hoc cdhash constant")
+        XCTAssertTrue(PeerCodeSigningRequirement.debug.contains("identifier \"\(PeerCodeSigningRequirement.agentIdentifierDebug)\""),
+                      "debug requirement must accept the ad-hoc agent by its fixed identifier")
+        XCTAssertFalse(PeerCodeSigningRequirement.debug.contains("cdhash"),
+                       "debug requirement must no longer pin a content-derived cdhash (issue #623)")
     }
 
     // spec:extension-xpc-server/peer-code-signing-validation/a-correctly-signed-agent-is-accepted
