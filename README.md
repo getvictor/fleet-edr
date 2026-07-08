@@ -61,12 +61,13 @@ Want to look before deploying? Evaluate the full server, UI, and detection pipel
 docker compose -f docker-compose.demo.yml up
 ```
 
-Open <https://localhost:8088/ui/>, accept the self-signed certificate warning, and sign in with the bundled SSO account `demo@fleet-edr.local` / `demo`.
+Open <https://localhost:8088/ui/>, accept the self-signed certificate warning, and sign in through the bundled IdP with the demo account `demo@fleet-edr.local` / `demo`. It signs in as an **admin**: user invitations, policy authoring, and every host and alert action, so you can drive the full operator surface. For a **super admin** (which also covers deployment and SSO configuration), use the break-glass login described in the notes below.
 
 You'll see two real macOS hosts (an engineer laptop and a CI build server), each with a deep process graph and correlated network and DNS activity drawn from genuine scrubbed captures. Woven into that ambient activity are five fired ATT&CK detections: a credential keychain dump and a DNS C2 beacon (exec, DNS, and outbound connection correlated across all three streams), plus sudoers tampering, launchd persistence, and an application-control block. Every alert comes from the real ingestion and detection pipeline, not hand-inserted rows, and the benign activity raises no false alarms.
 
 Notes:
 
+- Super admin: the demo account is an `admin`; for a `super_admin` (which also covers deployment and SSO configuration), open the one-shot `BREAK-GLASS ADMIN SETUP` redemption URL the server prints on first boot for `admin@fleet-edr.local` (valid one hour) and register a WebAuthn passkey. Retrieve it with `docker compose -f docker-compose.demo.yml logs server | grep -A3 BREAK-GLASS`.
 - The on-device half (system extension, network extension, agent) needs an Apple-granted Endpoint Security entitlement and Apple Silicon, so it cannot run in Docker. The demo exercises the server, UI, and detection pipeline; deploy on a real Mac (above) to see live capture.
 - Response actions enqueue but never complete in the demo because no live agent is connected.
 - Evaluation only: empty MySQL password, self-signed cert, checked-in dev secrets. Do not expose it to the internet.
