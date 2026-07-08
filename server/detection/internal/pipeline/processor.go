@@ -2,22 +2,36 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/fleetdm/edr/server/detection/internal/engine"
-	"github.com/fleetdm/edr/server/detection/internal/graph"
+	"github.com/fleetdm/edr/server/detection/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
+
+// batchBuilder materializes a claimed event batch into the process graph before rule evaluation reads it. *graph.Builder is the
+// production implementation; the interface lets the processor's unit tests drive its claim / nack / ack accounting without a graph
+// store or a live MySQL.
+type batchBuilder interface {
+	ProcessBatch(ctx context.Context, events []visibilityapi.Event) error
+}
+
+// batchEvaluator runs the detection rules over a materialized batch. *engine.Engine is the production implementation.
+type batchEvaluator interface {
+	Evaluate(ctx context.Context, events []visibilityapi.Event) error
+}
 
 // Processor claims events from the visibility EventLog work queue and runs them through the graph builder, then evaluates detection
 // rules over the same batch. Decouples event ingestion from graph materialization so the write path (intake) runs independently of the
 // processing path. Post-cutover (ADR-0015) the queue is the only work source; the durable archive is read-only correlation storage.
 type Processor struct {
 	eventLog    visibilityapi.EventLog
-	builder     *graph.Builder
-	detection   *engine.Engine
+	builder     batchBuilder
+	detection   batchEvaluator
+	metrics     api.MetricsRecorder
 	logger      *slog.Logger
 	interval    time.Duration
 	batch       int
@@ -30,8 +44,8 @@ type Processor struct {
 // graph builder serialises its cross-batch exit buffer, and rule evaluation is read-then-dedup-insert).
 func NewProcessor(
 	eventLog visibilityapi.EventLog,
-	builder *graph.Builder,
-	det *engine.Engine,
+	builder batchBuilder,
+	det batchEvaluator,
 	logger *slog.Logger,
 	interval time.Duration,
 	batchSize int,
@@ -58,6 +72,11 @@ func NewProcessor(
 		concurrency: concurrency,
 	}
 }
+
+// SetMetrics installs the OTel recorder the processor counts materialization-miss retries on (issue #631). Called by
+// Runner.SetMetrics during cmd/main's two-phase wiring; nil-safe (an unset recorder no-ops the retry counter). Set-once before Run,
+// like the sibling runners' recorders, so the running worker loops only read it.
+func (p *Processor) SetMetrics(m api.MetricsRecorder) { p.metrics = m }
 
 // Run fans out p.concurrency worker loops and blocks until ctx is cancelled and every worker returns. Each worker claims its own
 // disjoint batches, so the processor scales across the replica's cores the same way it scales across replicas (server-availability spec).
@@ -126,7 +145,7 @@ func (p *Processor) processOnce(ctx context.Context) int {
 	// Run detection rules after processes are materialized.
 	if p.detection != nil {
 		if err := p.detection.Evaluate(ctx, events); err != nil {
-			p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
+			p.logDetectionRetry(ctx, err)
 			if nackErr := p.eventLog.Nack(ctx, eventIDs); nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
@@ -142,4 +161,26 @@ func (p *Processor) processOnce(ctx context.Context) int {
 		return 0
 	}
 	return len(events)
+}
+
+// logDetectionRetry accounts for a detection batch failure the caller is about to nack. A not-yet-materialized subject or flow
+// process (rulesapi.ErrProcessNotYetMaterialized) is an expected, transient ordering race between concurrently processed batches
+// (issue #535 intra-replica workers, ADR-0011 cross-replica claimers). Under any sustained materialization-miss condition (a replica
+// behind on graph materialization, an agent dropping fork/exec, a ClickHouse re-seed) the same batch re-nacks on every poll tick, so
+// warn-logging it per retry floods the logs and the OTLP export (issue #631, observed ~130 WARN/min from a single host). Bound that:
+// count the retry on the edr.detection.materialization_retries counter and log it at DEBUG so it stays visible under a debug log level
+// without polluting normal operation. The count is taken here, at detection, not gated on the caller's subsequent Nack succeeding: a
+// deferred batch is retried either way (the immediate nack, or a claim-lease-expiry re-offer if that nack fails), so the counter
+// measures the miss condition itself and stays honest even during a visibility-queue outage that fails the nack. A genuine
+// (non-materialization) failure, e.g. an alert persistence error, keeps its per-retry WARN line because it is rare and each
+// occurrence is a real problem an operator must see.
+func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
+	if errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
+		if p.metrics != nil {
+			p.metrics.DetectionMaterializationRetry(ctx)
+		}
+		p.logger.DebugContext(ctx, "detection batch awaiting process materialization, will retry", "err", err)
+		return
+	}
+	p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
 }

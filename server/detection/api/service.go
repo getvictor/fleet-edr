@@ -102,4 +102,11 @@ type MetricsRecorder interface {
 	// QueueRowsPruned is called by the pipeline's queue-prune sweep on every pass with the number of acked rows removed from the event
 	// work queue (the visibility EventLog), so operators can watch the sweep keep pace with ingest (ADR-0015).
 	QueueRowsPruned(ctx context.Context, n int64)
+	// DetectionMaterializationRetry is called by the processor each time rule evaluation defers a batch because an event's subject or
+	// flow process was not materialized yet (a transient ordering race; issue #631). It counts the miss condition itself, not the nack
+	// that follows: a deferred batch is always retried (an immediate nack, or a claim-lease-expiry re-offer if that nack fails), so the
+	// count is taken at detection and does not depend on the nack succeeding. It is the bounded, observable replacement for
+	// warn-logging every retry: the processor logs the retry at DEBUG and increments this counter, so a sustained materialization-miss
+	// backlog stays detectable without flooding the logs or the OTLP export.
+	DetectionMaterializationRetry(ctx context.Context)
 }

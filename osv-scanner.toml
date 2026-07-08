@@ -1,0 +1,22 @@
+# OSV-Scanner ignore list for the root Go module (go.mod). osv-scanner auto-loads the
+# osv-scanner.toml that sits next to the scanned lockfile, so this file must live at the
+# repo root for the CI scan (.github/workflows/osv-scanner.yml, `--recursive ./`) to honor
+# it. Every entry must carry a reason a reviewer can audit; prefer fixing the dependency
+# over ignoring it. The stdlib crypto/tls advisories (GO-2026-5856, GO-2026-4970) are NOT
+# ignored here: they are fixed by the go 1.26.5 directive bump in this same change.
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+# golang.org/x/crypto/openpgp: the advisory declares the openpgp package unsafe by design
+# and unmaintained, with NO fixed version (the guidance is to migrate to a maintained fork).
+# A version bump therefore cannot clear it. This project does not use that package:
+# `go mod why golang.org/x/crypto/openpgp` reports "main module does not need package
+# golang.org/x/crypto/openpgp", and govulncheck confirms it is imported-only and never
+# called in either binary. x/crypto stays a direct dependency for its other packages; only
+# the openpgp subpackage is flagged, and it is unreachable in our code. Revisit if we ever
+# import x/crypto/openpgp (at which point switch to github.com/ProtonMail/go-crypto/openpgp).
+reason = """\
+x/crypto/openpgp is unmaintained with no fixed version; this repo never imports it \
+(go mod why: main module does not need it; govulncheck: not called), so it is unreachable. \
+Revisit only if x/crypto/openpgp is ever imported, then move to the ProtonMail fork.\
+"""

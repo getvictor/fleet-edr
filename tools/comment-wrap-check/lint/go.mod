@@ -10,7 +10,7 @@
 // and the golangci-lint plugin registrar.
 module github.com/fleetdm/edr/tools/comment-wrap-check/lint
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/golangci/plugin-module-register v0.1.2

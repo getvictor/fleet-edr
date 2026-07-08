@@ -62,9 +62,13 @@ func NewRunner(opts RunnerOptions) *Runner {
 	}
 }
 
-// SetMetrics propagates the metrics recorder to the processTTL, retention, and queue-prune sweeps (the processor itself doesn't take a
-// recorder directly; alert metrics flow through engine.SetMetrics). Called by Detection.SetMetrics.
+// SetMetrics propagates the metrics recorder to the processor and the processTTL, retention, and queue-prune sweeps. The processor
+// counts materialization-miss retries (issue #631); its alert metrics still flow separately through engine.SetMetrics. Called by
+// Detection.SetMetrics.
 func (r *Runner) SetMetrics(m api.MetricsRecorder) {
+	if r.processor != nil {
+		r.processor.SetMetrics(m)
+	}
 	if r.processTTL != nil {
 		r.processTTL.SetMetrics(m)
 	}

@@ -307,6 +307,10 @@ func (m *recordingMetrics) ProcessRetentionRowsDeleted(_ context.Context, n int6
 // this fake, so it is a no-op here.
 func (m *recordingMetrics) QueueRowsPruned(_ context.Context, _ int64) {}
 
+// DetectionMaterializationRetry satisfies the recorder interface; the materialization-miss retry counter is asserted by the pipeline
+// package's processor unit tests (issue #631), not this fake, so it is a no-op here.
+func (m *recordingMetrics) DetectionMaterializationRetry(_ context.Context) {}
+
 func (m *recordingMetrics) snapshot() (events, alerts int, reconciled int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
