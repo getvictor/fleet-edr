@@ -157,7 +157,7 @@ services:
       EDR_DEMO_CA_CERT: /tls/dev.crt
       # SSO seed (issue #512): the seeder writes the dex connection config into the durable oidc_config store; the server reads no
       # EDR_OIDC_* and picks it up at login. EDR_SECRET_KEY MUST match the server's so the sealed client secret decrypts at login.
-      # EXTERNAL_URL is the browser-facing base; the redirect is derived as <url>/api/auth/callback. JIT lands dex users at analyst.
+      # EDR_DEMO_OIDC_EXTERNAL_URL is the browser-facing base; the redirect is <url>/api/auth/callback. JIT lands dex users at analyst.
       EDR_SECRET_KEY: demo-only-secret-key-do-not-use-in-prod-0123456789
       EDR_DEMO_OIDC_ISSUER: http://dex.demo.localhost:5556/dex
       EDR_DEMO_OIDC_CLIENT_ID: edr-demo
