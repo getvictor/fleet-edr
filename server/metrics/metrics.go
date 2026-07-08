@@ -274,10 +274,10 @@ func (r *Recorder) QueueDropped(ctx context.Context, n int64, lossy bool) {
 	r.queueDropped.Add(ctx, n, metric.WithAttributes(attribute.Bool("lossy", lossy)))
 }
 
-// DetectionMaterializationRetry satisfies detection api.MetricsRecorder. The processor calls it once per batch it re-queues because a
-// rule saw an event whose subject or flow process had not been materialized yet (issue #631). This counter is the observable signal
-// for a sustained materialization-miss backlog: the processor logs each such retry at DEBUG rather than WARN, so operators alert on a
-// sustained non-zero rate here instead of scraping a flood of retry log lines. Kept attribute-free to bound cardinality.
+// DetectionMaterializationRetry satisfies detection api.MetricsRecorder. The processor calls it once per batch whose rule evaluation
+// reported a not-yet-materialized subject or flow process (issue #631). This counter is the observable signal for a sustained
+// materialization-miss backlog: the processor logs each such retry at DEBUG rather than WARN, so operators alert on a sustained
+// non-zero rate here instead of scraping a flood of retry log lines. Kept attribute-free to bound cardinality.
 func (r *Recorder) DetectionMaterializationRetry(ctx context.Context) {
 	if r == nil || r.detectionMaterializationRetries == nil {
 		return

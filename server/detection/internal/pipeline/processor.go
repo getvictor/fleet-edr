@@ -169,8 +169,11 @@ func (p *Processor) processOnce(ctx context.Context) int {
 // behind on graph materialization, an agent dropping fork/exec, a ClickHouse re-seed) the same batch re-nacks on every poll tick, so
 // warn-logging it per retry floods the logs and the OTLP export (issue #631, observed ~130 WARN/min from a single host). Bound that:
 // count the retry on the edr.detection.materialization_retries counter and log it at DEBUG so it stays visible under a debug log level
-// without polluting normal operation. A genuine (non-materialization) failure, e.g. an alert persistence error, keeps its per-retry
-// WARN line because it is rare and each occurrence is a real problem an operator must see.
+// without polluting normal operation. The count is taken here, at detection, not gated on the caller's subsequent Nack succeeding: a
+// deferred batch is retried either way (the immediate nack, or a claim-lease-expiry re-offer if that nack fails), so the counter
+// measures the miss condition itself and stays honest even during a visibility-queue outage that fails the nack. A genuine
+// (non-materialization) failure, e.g. an alert persistence error, keeps its per-retry WARN line because it is rare and each
+// occurrence is a real problem an operator must see.
 func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 	if errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
 		if p.metrics != nil {
