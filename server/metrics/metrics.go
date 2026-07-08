@@ -54,14 +54,15 @@ type GaugeSource interface {
 // Recorder is the write surface instrumentation code uses. Every method is safe to call from any goroutine and safe on a nil receiver
 // (methods short-circuit) so call sites don't need defensive `if r != nil` blocks.
 type Recorder struct {
-	eventsIngested              metric.Int64Counter
-	heartbeatsDropped           metric.Int64Counter
-	alertsCreated               metric.Int64Counter
-	processRetentionRowsDeleted metric.Int64Counter
-	queueRowsPruned             metric.Int64Counter
-	processesReconciled         metric.Int64Counter
-	queueDropped                metric.Int64Counter
-	httpRequestDuration         metric.Float64Histogram
+	eventsIngested                  metric.Int64Counter
+	heartbeatsDropped               metric.Int64Counter
+	alertsCreated                   metric.Int64Counter
+	processRetentionRowsDeleted     metric.Int64Counter
+	queueRowsPruned                 metric.Int64Counter
+	processesReconciled             metric.Int64Counter
+	queueDropped                    metric.Int64Counter
+	detectionMaterializationRetries metric.Int64Counter
+	httpRequestDuration             metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
 	enrolledGauge metric.Int64ObservableGauge
@@ -129,6 +130,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.agent.queue.dropped",
 		metric.WithDescription("Events dropped by agent queue cap. Attribute `lossy=true` means data loss; `lossy=false` means already-delivered rows trimmed for space."),
 		metric.WithUnit(unitEvent),
+	)
+	r.detectionMaterializationRetries, _ = meter.Int64Counter(
+		"edr.detection.materialization_retries",
+		metric.WithDescription("Detection batches re-queued because an event's subject or flow process was not materialized yet (a transient ordering race). A sustained non-zero rate means a replica is behind on graph materialization or agents are dropping fork/exec."),
+		metric.WithUnit("{retry}"),
 	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
 	// recognizes http.server.request.duration and its standard attributes. The histogram's count gives request rate, a status-code
@@ -266,4 +272,15 @@ func (r *Recorder) QueueDropped(ctx context.Context, n int64, lossy bool) {
 		return
 	}
 	r.queueDropped.Add(ctx, n, metric.WithAttributes(attribute.Bool("lossy", lossy)))
+}
+
+// DetectionMaterializationRetry satisfies detection api.MetricsRecorder. The processor calls it once per batch it re-queues because a
+// rule saw an event whose subject or flow process had not been materialized yet (issue #631). This counter is the observable signal
+// for a sustained materialization-miss backlog: the processor logs each such retry at DEBUG rather than WARN, so operators alert on a
+// sustained non-zero rate here instead of scraping a flood of retry log lines. Kept attribute-free to bound cardinality.
+func (r *Recorder) DetectionMaterializationRetry(ctx context.Context) {
+	if r == nil || r.detectionMaterializationRetries == nil {
+		return
+	}
+	r.detectionMaterializationRetries.Add(ctx, 1)
 }

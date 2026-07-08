@@ -66,8 +66,11 @@ func TestQueuePruneRunner_RecordsMetric(t *testing.T) {
 	assert.Equal(t, int64(5), rec.queuePruned, "the pruned count is recorded to the metrics recorder")
 }
 
-// capturingRecorder is a MetricsRecorder that only captures the queue-prune count; the rest are inert.
-type capturingRecorder struct{ queuePruned int64 }
+// capturingRecorder is a MetricsRecorder that captures the queue-prune count and the materialization-retry count; the rest are inert.
+type capturingRecorder struct {
+	queuePruned            int64
+	materializationRetries int64
+}
 
 func (c *capturingRecorder) EventsIngested(context.Context, string, int)         {}
 func (c *capturingRecorder) EventsHeartbeatDropped(context.Context, string, int) {}
@@ -75,3 +78,6 @@ func (c *capturingRecorder) AlertCreated(context.Context, string, string)       
 func (c *capturingRecorder) ProcessesTTLReconciled(context.Context, int64)       {}
 func (c *capturingRecorder) ProcessRetentionRowsDeleted(context.Context, int64)  {}
 func (c *capturingRecorder) QueueRowsPruned(_ context.Context, n int64)          { c.queuePruned += n }
+func (c *capturingRecorder) DetectionMaterializationRetry(context.Context) {
+	c.materializationRetries++
+}
