@@ -24,7 +24,7 @@ A debug-configured extension MAY additionally accept the locally-built ad-hoc ag
 - **WHEN** a process without a chain to the Apple anchor attempts to connect
 - **THEN** the extension cancels the connection
 
-#### Scenario: An ad-hoc-signed peer is accepted in debug builds when its code-signing identifier matches the dev agent
+#### Scenario: An ad-hoc-signed peer is accepted in debug builds by its signing identifier
 
 - **GIVEN** a debug-configured extension's XPC service is listening, built to accept the dev agent by its fixed code-signing identifier for local-iteration use on a SIP-disabled developer VM
 - **WHEN** a process ad-hoc-signed with the dev agent's code-signing identifier attempts to connect

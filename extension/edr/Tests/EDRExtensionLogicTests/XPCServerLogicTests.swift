@@ -67,14 +67,12 @@ final class XPCServerLogicTests: XCTestCase {
                        "production requirement must not accept the ad-hoc agent by identifier alone")
     }
 
-    // The canonical-ID slug is derived from the spec heading and lands above the test on one line per the spectrace
-    // marker contract; the resulting comment exceeds the 150-char SwiftLint default. Per-line disable is the right
-    // exception here because the slug is a fixed external contract, not a stylistic choice.
-    // swiftlint:disable:next line_length
-    // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-when-its-code-signing-identifier-matches-the-dev-agent
+    // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-by-its-signing-identifier
     // Transitional second marker: covers the pre-rename canonical scenario (cdhash-matches-the-pinned-value) that stays
     // in openspec/specs until issue #623's change is archived, when the MODIFIED requirement replaces it with the
     // identifier scenario above. Drop this line at archive time (the canonical scenario it points at is gone by then).
+    // The canonical-ID slug lands on one line per the spectrace marker contract; this pre-rename slug exceeds the
+    // 150-char SwiftLint limit, so a per-line disable is the right exception until archive drops the line.
     // swiftlint:disable:next line_length
     // spec:extension-xpc-server/peer-code-signing-validation/an-ad-hoc-signed-peer-is-accepted-in-debug-builds-when-its-code-directory-hash-matches-the-pinned-value
     func testDebugRequirementPinsTheAgentIdentifierAndIncludesProductionClause() {
