@@ -55,6 +55,34 @@ func getLogger() *slog.Logger {
 	return slog.Default()
 }
 
+// GenerationSink receives every raw event envelope on the XPC receive path so a consumer (agent/procgen.Registry) can maintain a live
+// pid -> pidversion map for kill_process generation verification (issue #627). It is fed BEFORE the drop-on-full upload delivery in
+// onEvent, so the map sees every event the extension delivered regardless of upload-queue backpressure. Kept as a tiny local interface so
+// the receiver does not import agent/procgen.
+type GenerationSink interface {
+	ObserveEventBytes(data []byte)
+}
+
+// generationSink holds the installed GenerationSink. Package-level (like logger) because onEvent is a CGo callback reached via a global
+// receiver map, and one agent owns exactly one registry shared across its Mach-service receivers. Only ever stores the same concrete type.
+var generationSink atomic.Value
+
+// SetGenerationSink installs the sink fed by the darwin receive path. Call once at startup before Connect. A nil sink is ignored.
+func SetGenerationSink(s GenerationSink) {
+	if s != nil {
+		generationSink.Store(s)
+	}
+}
+
+// getGenerationSink returns the installed GenerationSink, or nil when none is set (Windows/headless, or before wiring).
+func getGenerationSink() GenerationSink {
+	v := generationSink.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(GenerationSink)
+}
+
 // dropWarnInterval is the minimum gap between aggregated "channel full" warnings for one receiver. The first drop after a quiet
 // period logs immediately so operators see the onset promptly; further drops within the interval are counted and folded into the
 // next summary. A sustained overflow therefore collapses from one log line per dropped event (which floods the agent log when a

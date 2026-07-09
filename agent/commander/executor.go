@@ -3,8 +3,11 @@ package commander
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"syscall"
+
+	"github.com/fleetdm/edr/agent/procgen"
 )
 
 // Command is the agent-side view of a server command to execute. The json tags decode the poll-path response body; the control-channel
@@ -59,7 +62,11 @@ type Executor struct {
 	sender ApplicationControlSender
 	ledger Ledger
 	// kill is the process-termination syscall, injectable so tests exercise the kill_process path without signalling a real process.
-	kill   func(pid int, sig syscall.Signal) error
+	kill func(pid int, sig syscall.Signal) error
+	// gen is the live pid -> pidversion map used to pin a kill to the operator-selected process generation (issue #627). Nil disables the
+	// check (the kill then falls back to pid-only, today's behavior), which is why it is optional and set via SetGeneration rather than a
+	// constructor argument: only the production agent wires it, tests and the degraded path leave it nil.
+	gen    *procgen.Registry
 	logger *slog.Logger
 }
 
@@ -70,6 +77,12 @@ func NewExecutor(sender ApplicationControlSender, ledger Ledger, logger *slog.Lo
 		logger = slog.Default()
 	}
 	return &Executor{sender: sender, ledger: ledger, kill: defaultKill, logger: logger}
+}
+
+// SetGeneration installs the live process-generation registry used to pin kill_process to the operator-selected generation (issue #627).
+// A nil registry (the default) disables the check and the kill falls back to pid-only. Set once at wiring time, shared across transports.
+func (e *Executor) SetGeneration(gen *procgen.Registry) {
+	e.gen = gen
 }
 
 // Execute drives one command through the acknowledged-then-completed-or-failed lifecycle, deduplicated by command identity via the
@@ -182,6 +195,15 @@ func (e *Executor) runKill(ctx context.Context, cmd Command) (string, json.RawMe
 	if payload.PID <= 0 {
 		return StatusFailed, marshalResult("invalid pid")
 	}
+	// #627: when the operator selected a specific process generation (pidversion) and we track this pid's live generation, refuse the kill
+	// if the pid no longer holds that generation (PID reuse or a re-exec between tree load and execution), so we never SIGKILL an unrelated
+	// process. A match or an untracked pid (never seen, since-exited, or lost across an agent restart) falls through to the kill, so the
+	// check only ever strengthens the pid-only behavior and never blocks a kill that would previously have succeeded.
+	if payload.PIDVersion != nil && e.gen.Check(payload.PID, *payload.PIDVersion) == procgen.VerdictMismatch {
+		e.logger.WarnContext(ctx, "commander kill_process refused: process generation mismatch",
+			"pid", payload.PID, "expected_pidversion", *payload.PIDVersion, "cmd_id", cmd.ID)
+		return StatusFailed, marshalResult(fmt.Sprintf("process generation mismatch: pid %d is no longer pidversion %d (PID reuse or re-exec); kill refused", payload.PID, *payload.PIDVersion))
+	}
 	e.logger.InfoContext(ctx, "commander kill_process", "pid", payload.PID, "cmd_id", cmd.ID)
 	if err := e.kill(payload.PID, syscall.SIGKILL); err != nil {
 		return StatusFailed, marshalResult(err.Error())
@@ -233,6 +255,10 @@ func (e *Executor) runSetApplicationControl(ctx context.Context, cmd Command) (s
 
 type killPayload struct {
 	PID int `json:"pid"`
+	// PIDVersion is the kernel process generation (audit_token_to_pidversion) the operator selected in the UI. Optional: absent for
+	// pre-migration / boot-snapshot nodes that carry no pidversion, in which case the kill proceeds by pid alone (issue #627). A pointer so
+	// a present-but-zero generation is distinguishable from an absent field.
+	PIDVersion *uint32 `json:"pidversion,omitempty"`
 }
 
 // setApplicationControlPayload mirrors server/rules/api.SetApplicationControlPayload. Field names + json tags are load-bearing: the

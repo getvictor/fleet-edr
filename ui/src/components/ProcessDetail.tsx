@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   getProcessDetail,
@@ -176,9 +176,16 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
   // inline reauth modal + the action retries on success. Kill on a fresh session passes through unchanged: useReauthRetry is a no-op
   // until the chokepoint throws ReauthRequiredError. Alert triage (acknowledge / resolve / reopen) lives on the alert header now, not
   // here: the node inspector references the process's alerts as links rather than owning their lifecycle.
+  // Pin the kill to the exact process generation the operator is looking at: include pidversion so the agent refuses the kill if this PID
+  // has since been reused or re-exec'd (issue #627). Omitted for pre-migration / boot-snapshot nodes that carry no pidversion, where the
+  // agent falls back to a pid-only kill.
+  const killPayload = useMemo<Record<string, unknown>>(
+    () => (node.pidversion === undefined ? { pid: node.pid } : { pid: node.pid, pidversion: node.pidversion }),
+    [node.pid, node.pidversion],
+  );
   const sendKillCommand = useCallback(
-    async (): Promise<{ id: number }> => createCommand(hostId, "kill_process", { pid: node.pid }),
-    [hostId, node.pid],
+    async (): Promise<{ id: number }> => createCommand(hostId, "kill_process", killPayload),
+    [hostId, killPayload],
   );
   const { call: callKill, modal: killReauthModal } = useReauthRetry(sendKillCommand);
 
@@ -191,7 +198,7 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
           id: res.id,
           host_id: hostId,
           command_type: "kill_process",
-          payload: { pid: node.pid },
+          payload: killPayload,
           status: "pending",
           created_at: new Date().toISOString(),
         });
@@ -208,14 +215,14 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
           id: 0,
           host_id: hostId,
           command_type: "kill_process",
-          payload: { pid: node.pid },
+          payload: killPayload,
           status: "failed",
           created_at: new Date().toISOString(),
           result: { error: "Failed to send command" },
         });
       })
       .finally(() => { setKillSending(false); });
-  }, [callKill, hostId, node.pid, killSending]);
+  }, [callKill, hostId, killPayload, killSending]);
 
   const verdict = deriveSigningVerdict(node.code_signing);
 
