@@ -1,8 +1,9 @@
 name: Demo nightly
 
 # Nightly health check for the README's one-command, Mac-free demo
-# (docker-compose.demo.yml). On any failure it pings ntfy.sh with a link to the
-# run.
+# (docker-compose.demo.yml). On any failure it pings the ntfy.sh topic named by
+# the NTFY_TOPIC repo secret with a link to the run (skipped when the secret is
+# unset).
 #
 # It runs the demo in TWO modes (matrix), because they verify different things:
 #
@@ -51,6 +52,10 @@ jobs:
     name: Smoke-test the ${{ matrix.mode }} demo stack
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Scopes the NTFY_TOPIC secret (failure-notification topic) to a dedicated environment, matching how the other
+    # custom-secret jobs (release-signing, sonarcloud, codecov) are gated. The environment is auto-created on first run;
+    # a maintainer adds NTFY_TOPIC to it. Until then the notify step soft-skips (see below).
+    environment: ntfy
     permissions:
       contents: read
     strategy:
@@ -181,12 +186,21 @@ jobs:
         run: task test:e2e:demo
 
       - name: Notify ntfy.sh on failure
+        # Topic comes from the NTFY_TOPIC repo secret, not a hardcoded public topic: an ntfy topic name is its only access
+        # control, so a topic committed to a public repo can be read (and spoofed) by anyone who reads the source. When the
+        # secret is unset (forks, or before a maintainer configures it) the step soft-skips rather than posting to an empty
+        # topic or failing the run.
         if: failure()
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
+          if [ -z "${NTFY_TOPIC}" ]; then
+            echo "NTFY_TOPIC secret is not set; skipping the demo-failure notification."
+            exit 0
+          fi
           printf '%s demo failed: %s\n' "${MODE}" "${RUN_URL}" \
-            | curl -s -H "Title: EDR demo failed (${MODE})" -d @- https://ntfy.sh/fleet-edr-demo
+            | curl -s -H "Title: EDR demo failed (${MODE})" -d @- "https://ntfy.sh/${NTFY_TOPIC}"
 
       - name: Collect compose logs
         # Only on failure: the logs are a debugging aid for a broken run, and on
