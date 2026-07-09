@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/fleetdm/edr/agent/procgen"
 )
 
 // defaultPollInterval is the fallback Interval when Config.Interval is zero.
@@ -43,6 +45,9 @@ type Config struct {
 	// Ledger is the durable dedup store shared with the control client so a command executed on the push path is not re-executed by the
 	// poll path after a stream drop (issue #558). Nil disables dedup (the poll path then relies only on the server's pending filter).
 	Ledger Ledger
+	// Generation is the live pid -> pidversion registry (issue #627), shared with the control client so both transports run the same
+	// kill_process generation check. Nil disables the check (kill falls back to pid-only).
+	Generation *procgen.Registry
 }
 
 // Commander polls the server for pending commands and dispatches them.
@@ -65,10 +70,12 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	executor := NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
+	executor.SetGeneration(cfg.Generation)
 	return &Commander{
 		cfg:      cfg,
 		client:   client,
-		executor: NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger),
+		executor: executor,
 		logger:   logger,
 	}
 }

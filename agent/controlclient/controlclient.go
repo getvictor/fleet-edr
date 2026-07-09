@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/fleetdm/edr/agent/commander"
+	"github.com/fleetdm/edr/agent/procgen"
 	"github.com/fleetdm/edr/internal/control"
 )
 
@@ -40,6 +41,9 @@ type Config struct {
 	// Ledger is the durable dedup store shared with the poll path so a command executed over the stream is not re-executed on a restart
 	// or by the poll path after a stream drop (issue #558). Nil disables dedup (tests).
 	Ledger commander.Ledger
+	// Generation is the live pid -> pidversion registry (issue #627), shared with the poll path so both transports run the same
+	// kill_process generation check. Nil disables the check (kill falls back to pid-only).
+	Generation *procgen.Registry
 	// OnConnectedChange reports stream up (true) / down (false) so the commander can suspend / resume polling. Nil is allowed.
 	OnConnectedChange func(bool)
 	Logger            *slog.Logger
@@ -80,9 +84,11 @@ func New(cfg Config) *Client {
 		// receiver.NewLoop. Replacing it with the 30s default would silently slow reconnects far past what the caller asked for.
 		maxB = initial
 	}
+	executor := commander.NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
+	executor.SetGeneration(cfg.Generation)
 	return &Client{
 		cfg:            cfg,
-		executor:       commander.NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger),
+		executor:       executor,
 		logger:         logger,
 		initialBackoff: initial,
 		maxBackoff:     maxB,

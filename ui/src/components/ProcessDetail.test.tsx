@@ -268,6 +268,18 @@ describe("ProcessDetail kill action", () => {
     await waitFor(() => expect(screen.getByText(/process killed/i)).toBeInTheDocument());
   });
 
+  it("includes the node's pidversion in the kill payload so the agent can pin the generation (issue #627)", async () => {
+    render(<ProcessDetail hostId="h1" node={makeNode({ pid: 1234, pidversion: 77 })} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /kill process/i }));
+    await waitFor(() => { expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234, pidversion: 77 }); });
+  });
+
+  it("omits pidversion from the kill payload for a node that has none (agent falls back to pid-only)", async () => {
+    render(<ProcessDetail hostId="h1" node={makeNode({ pid: 1234, pidversion: undefined })} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /kill process/i }));
+    await waitFor(() => { expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234 }); });
+  });
+
   it("shows a failed status when the kill command dispatch rejects", async () => {
     vi.mocked(api.createCommand).mockRejectedValue(new Error("dispatch failed"));
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);

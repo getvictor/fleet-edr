@@ -2,6 +2,12 @@
 
 Notable changes to Fleet EDR, newest first. This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0).
 
+## [Unreleased]
+
+### Fixed
+
+- **Kill process is pinned to the exact process it targeted.** The "Kill process" action now carries the selected process generation, and the agent refuses the kill (reporting a generation mismatch) if that PID was reused or re-exec'd before the command ran, so a stale kill can no longer terminate an unrelated process.
+
 ## [0.4.0] (2026-07-07)
 
 Feature release on top of 0.3.0. A re-architected event store adds fleet-wide hunting (process, connection, and DNS search), a per-host event timeline, and flexible time navigation across the investigation views. Also new: every service-account action is now fully attributable, agent health shows on the Hosts page, and the groundwork for Windows agents lands (no change for a macOS-only fleet). Read the upgrade notes before upgrading: `EDR_CLICKHOUSE_DSN` is now required and the `EDR_OIDC_*` SSO variables are removed.

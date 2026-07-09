@@ -36,6 +36,7 @@ import (
 	"github.com/fleetdm/edr/agent/hostid"
 	"github.com/fleetdm/edr/agent/hostinfo"
 	"github.com/fleetdm/edr/agent/metrics"
+	"github.com/fleetdm/edr/agent/procgen"
 	"github.com/fleetdm/edr/agent/proctable"
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
@@ -209,6 +210,12 @@ func run() error {
 	healthRegistry := health.NewRegistry()
 	pidTable := proctable.New()
 
+	// genRegistry accumulates the live pid -> pidversion map from the ESF exec/fork/exit stream so the command executor can pin a
+	// kill_process to the operator-selected generation (issue #627). Install the receiver sink BEFORE the telemetry sensors start so the
+	// map sees events from the first one; it is also handed to both command transports below. Per-replica cache, safe to lose (ADR-0010).
+	genRegistry := procgen.NewRegistry()
+	receiver.SetGenerationSink(genRegistry)
+
 	// Start the platform's telemetry sensor(s): the macOS ESF + network-extension XPC loops, or the Windows ETW sensor. Each variant
 	// registers its own health components before starting (so the first status check-in already reports a not-yet-active sensor, the
 	// fresh-install gap issue #359 surfaces) and drives its loop(s) through the shared receiver.Loop machinery. See
@@ -253,6 +260,7 @@ func run() error {
 		appControlSender: esfDispatcher,
 		streamConnected:  &streamConnected,
 		ledger:           commandLedger,
+		generation:       genRegistry,
 		logger:           logger,
 	}
 	startCommander(ctx, hostID, cfg.ServerURL, agentTransport, cmdDeps)
@@ -391,7 +399,10 @@ type commandDeps struct {
 	appControlSender commander.ApplicationControlSender
 	streamConnected  *atomic.Bool
 	ledger           commander.Ledger
-	logger           *slog.Logger
+	// generation is the live pid -> pidversion registry (issue #627), fed by the ESF receive path and shared by both command transports so
+	// a kill_process command is refused when its target PID has since been reused / re-exec'd.
+	generation *procgen.Registry
+	logger     *slog.Logger
 }
 
 // startCommander spins up the command-poll loop when we have a host_id. With no host_id the agent keeps running (events still upload)
@@ -412,6 +423,8 @@ func startCommander(ctx context.Context, hostID, serverURL string, transport htt
 		StreamConnected: deps.streamConnected.Load,
 		// Shared durable dedup so the poll path does not re-execute a command the control client already ran (issue #558).
 		Ledger: deps.ledger,
+		// Shared live generation map so a kill_process is pinned to the operator-selected process generation (issue #627).
+		Generation: deps.generation,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, deps.logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -458,6 +471,7 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 		OnAuthFail:               deps.tokenProvider.OnUnauthorized,
 		ApplicationControlSender: deps.appControlSender,
 		Ledger:                   deps.ledger,
+		Generation:               deps.generation,
 		OnConnectedChange:        deps.streamConnected.Store,
 		Logger:                   logger,
 	})

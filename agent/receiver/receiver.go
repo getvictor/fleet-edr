@@ -202,6 +202,11 @@ func onEvent(receiverID int, data unsafe.Pointer, length int) {
 	}
 
 	buf := C.GoBytes(data, C.int(length))
+	// #627: feed the generation registry here, before the drop-on-full upload delivery below, so the pid -> pidversion map sees every
+	// event the extension delivered regardless of upload-queue backpressure (the map's fidelity tracks XPC delivery, not queue depth).
+	if sink := getGenerationSink(); sink != nil {
+		sink.ObserveEventBytes(buf)
+	}
 	TryDeliverEvent(recv.events, Event{Data: buf}, recv.serviceName, recv.drops)
 }
 
