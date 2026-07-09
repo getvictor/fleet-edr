@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/testdb/full"
+	"github.com/fleetdm/edr/test/fakeagent"
 )
 
 // insertRole ensures a role row exists so role_bindings' FK is satisfied. INSERT IGNORE because the identity testkit already seeds
@@ -157,6 +159,113 @@ func runTestConfig(serverURL string) config {
 	}
 }
 
+// recordingEventsServer serves the seeder's HTTP contract and records the ordered event_type list of each POST /api/events batch, so
+// a test can assert postWovenEnvelopes' barrier split (the fork/exec/dns lifecycle batch lands before the network_connect batch).
+func recordingEventsServer(t *testing.T) (*httptest.Server, func() [][]string) {
+	t.Helper()
+	var mu sync.Mutex
+	var batches [][]string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
+		var envs []struct {
+			EventType string `json:"event_type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&envs); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		types := make([]string, len(envs))
+		for i, e := range envs {
+			types[i] = e.EventType
+		}
+		mu.Lock()
+		batches = append(batches, types)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts, func() [][]string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([][]string, len(batches))
+		copy(out, batches)
+		return out
+	}
+}
+
+// beaconEnvelopes builds the dns_c2_beacon-shaped four-event stream (fork, exec, dns_query, network_connect) for one pid: the
+// timeline whose same-batch connect-before-exec race postWovenEnvelopes' barrier removes.
+func beaconEnvelopes(hostID string) (int, []fakeagent.Envelope) {
+	const pid = 7777
+	mk := func(eventType, payload string) fakeagent.Envelope {
+		return fakeagent.Envelope{EventID: eventType + "-id", HostID: hostID, EventType: eventType, Payload: []byte(payload)}
+	}
+	return pid, []fakeagent.Envelope{
+		mk("fork", `{"child_pid":7777,"parent_pid":1}`),
+		mk("exec", `{"pid":7777,"path":"/tmp/.update"}`),
+		mk("dns_query", `{"pid":7777,"query_name":"kx7gq2vphj9k3mzw.example.net","response_addresses":["203.0.113.66"]}`),
+		mk("network_connect", `{"pid":7777,"direction":"outbound","remote_address":"203.0.113.66"}`),
+	}
+}
+
+// TestPostWovenEnvelopes_NoConnectSingleBatch pins that an attack with no network_connect (the file-write / exec rules) is posted as
+// one unsplit batch, unchanged from before the barrier. No db is touched because the barrier never runs.
+func TestPostWovenEnvelopes_NoConnectSingleBatch(t *testing.T) {
+	t.Parallel()
+	ts, batches := recordingEventsServer(t)
+	s := newSeeder(runTestConfig(ts.URL), nil, testHTTPClient(), discardLogger())
+	envs := []fakeagent.Envelope{
+		{EventType: "fork", Payload: []byte(`{"child_pid":5,"parent_pid":1}`)},
+		{EventType: "exec", Payload: []byte(`{"pid":5,"path":"/usr/bin/security"}`)},
+		{EventType: "file_event", Payload: []byte(`{"pid":5,"path":"/etc/sudoers"}`)},
+	}
+	require.NoError(t, s.postWovenEnvelopes(t.Context(), "h", "tok", "sudoers-tamper.yaml", envs))
+	got := batches()
+	require.Len(t, got, 1, "no network_connect must post a single unsplit batch")
+	assert.Equal(t, []string{"fork", "exec", "file_event"}, got[0])
+}
+
+// TestPostWovenEnvelopes_FlowBarrier pins the dns_c2_beacon fix (demo-nightly released-leg flake): the connect is released only after
+// its process row commits, so the beacon rule never evaluates the connect before the exec materialises and drops the alert past its
+// tight flow-process grace.
+func TestPostWovenEnvelopes_FlowBarrier(t *testing.T) {
+	t.Parallel()
+	const hostID = "de300dc2-0000-0000-0000-0000000000aa"
+
+	t.Run("connect posted only after the process materialises", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t)
+		pid, envs := beaconEnvelopes(hostID)
+		insertProcess(t, db, hostID, pid) // pre-materialise so waitForProcess clears on the first tick
+		ts, batches := recordingEventsServer(t)
+		s := newSeeder(runTestConfig(ts.URL), db, testHTTPClient(), discardLogger())
+		require.NoError(t, s.postWovenEnvelopes(t.Context(), hostID, "tok", "dns-c2-beacon.yaml", envs))
+		got := batches()
+		require.Len(t, got, 2, "expected a lifecycle batch then a separate connect batch")
+		assert.Equal(t, []string{"fork", "exec", "dns_query"}, got[0], "lifecycle batch")
+		assert.Equal(t, []string{"network_connect"}, got[1], "connect released after the barrier")
+	})
+
+	t.Run("connect withheld when the process never materialises", func(t *testing.T) {
+		t.Parallel()
+		db := full.Open(t) // no insertProcess: the connecting pid never materialises
+		_, envs := beaconEnvelopes(hostID)
+		ts, batches := recordingEventsServer(t)
+		cfg := runTestConfig(ts.URL)
+		cfg.pollInterval = time.Millisecond
+		cfg.verifyTimeout = 30 * time.Millisecond
+		s := newSeeder(cfg, db, testHTTPClient(), discardLogger())
+		err := s.postWovenEnvelopes(t.Context(), hostID, "tok", "dns-c2-beacon.yaml", envs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "never materialised")
+		got := batches()
+		require.Len(t, got, 1, "only the lifecycle batch posts; the connect stays withheld")
+		assert.NotContains(t, got[0], "network_connect")
+	})
+}
+
 // appControlTarget finds the app-control attack in the host manifest and returns the (captured host UUID, offset pid) the
 // fabricated block event will target, replicating the seeder's pid offset so a test can pre-materialise that process row.
 func appControlTarget(t *testing.T) (string, int) {
@@ -180,6 +289,35 @@ func appControlTarget(t *testing.T) (string, int) {
 	return "", 0
 }
 
+type hostPID struct {
+	hostID string
+	pid    int
+}
+
+// flowConnectTargets walks the manifest for every woven attack whose scenario emits a network_connect and returns the (captured host
+// UUID, offset connecting pid) pairs, replicating the seeder's pid offset. postWovenEnvelopes' flow barrier waits on each of these
+// rows before releasing its connect, and the test server runs no processor, so a full-seed test must pre-materialise them (same
+// reason as appControlTarget).
+func flowConnectTargets(t *testing.T) []hostPID {
+	t.Helper()
+	var out []hostPID
+	for _, h := range hostManifest {
+		_, hostID, err := loadHostEnvelopes(h.File)
+		require.NoError(t, err)
+		for i, atk := range h.Attacks {
+			sc, err := loadAttackScenario(atk.File)
+			require.NoError(t, err)
+			offsetScenarioPIDs(sc, attackPIDOffsetBase+i*attackPIDOffsetStride)
+			for _, ev := range sc.Timeline {
+				if ev.Type == "network_connect" && ev.PID > 1 {
+					out = append(out, hostPID{hostID, ev.PID})
+				}
+			}
+		}
+	}
+	return out
+}
+
 func TestRunSeedsEndToEnd(t *testing.T) {
 	t.Parallel()
 	db := full.Open(t)
@@ -191,6 +329,11 @@ func TestRunSeedsEndToEnd(t *testing.T) {
 	// run the real processor, so weaveAttack's waitForProcess + verify need their rows seeded directly).
 	acHost, acPID := appControlTarget(t)
 	insertProcess(t, db, acHost, acPID)
+	// postWovenEnvelopes' flow barrier waits for each beacon connect's process row before releasing the connect; pre-materialise
+	// those too, for the same reason as the app-control row above (the test server runs no processor).
+	for _, tgt := range flowConnectTargets(t) {
+		insertProcess(t, db, tgt.hostID, tgt.pid)
+	}
 	// One detection alert per woven attack's expected rule + an app-control alert, on a DEMO host so the scoped verify counts
 	// them. The keychain alert is inserted by the loop, so alreadySeeded would normally short-circuit the replay; force runs it
 	// anyway.

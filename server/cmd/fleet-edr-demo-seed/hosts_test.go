@@ -152,6 +152,35 @@ func TestPickAttackAnchorPID(t *testing.T) {
 	})
 }
 
+// TestEnvelopePID pins the pid extraction the flow-barrier post relies on: a usable top-level pid returns (pid, true); a missing,
+// zero, or unparseable pid returns (0, false) so postWovenEnvelopes skips the barrier for that connect instead of blocking on a pid
+// no exec will materialise.
+func TestEnvelopePID(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		env     fakeagent.Envelope
+		wantPID int
+		wantOK  bool
+	}{
+		{"network_connect with pid", fakeagent.Envelope{EventType: "network_connect", Payload: []byte(`{"pid":4321,"remote_address":"203.0.113.66"}`)}, 4321, true},
+		{"exec with pid", fakeagent.Envelope{EventType: "exec", Payload: []byte(`{"pid":10}`)}, 10, true},
+		{"no pid field", fakeagent.Envelope{EventType: "network_connect", Payload: []byte(`{"remote_address":"203.0.113.66"}`)}, 0, false},
+		{"zero pid", fakeagent.Envelope{EventType: "network_connect", Payload: []byte(`{"pid":0}`)}, 0, false},
+		{"negative pid", fakeagent.Envelope{EventType: "network_connect", Payload: []byte(`{"pid":-1}`)}, 0, false},
+		{"malformed payload", fakeagent.Envelope{EventType: "network_connect", Payload: []byte(`{`)}, 0, false},
+		{"nil payload", fakeagent.Envelope{EventType: "network_connect"}, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pid, ok := envelopePID(tc.env)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantPID, pid)
+		})
+	}
+}
+
 // TestReparentAttackToHost confirms the launchd-rooted top of an offset attack subtree is re-pointed at the captured anchor pid,
 // while deeper (already-offset) parent links and a missing anchor (<= 1) are left alone.
 func TestReparentAttackToHost(t *testing.T) {
