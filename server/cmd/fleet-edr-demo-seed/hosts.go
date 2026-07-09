@@ -290,8 +290,8 @@ func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wove
 	if err != nil {
 		return fmt.Errorf("materialise %s: %w", atk.File, err)
 	}
-	if err := s.postEnvelopes(ctx, token, envs); err != nil {
-		return fmt.Errorf("post %s events: %w", atk.File, err)
+	if err := s.postWovenEnvelopes(ctx, hostID, token, atk.File, envs); err != nil {
+		return err
 	}
 	s.logger.InfoContext(ctx, "wove attack onto host",
 		"file", atk.File, "host_id", hostID, "rule", atk.ExpectRule, "kind", string(atk.Kind), "events", len(envs))
@@ -314,6 +314,65 @@ func (s *seeder) weaveAttack(ctx context.Context, hostID, token string, atk wove
 	}
 	s.logger.InfoContext(ctx, "posted application-control block", "host_id", hostID, "pid", pid, "path", execPath)
 	return nil
+}
+
+// postWovenEnvelopes posts a woven attack's envelopes with a process-materialization barrier before any network_connect. A
+// flow-correlated rule (dns_c2_beacon) fires on the connect but resolves it back to the process a SEPARATE exec materialized; if the
+// connect and its exec ride the same ingest batch and the connect is evaluated first, the rule's tight flow-process grace
+// (flowProcessMaterializationGrace) lapses and the alert is silently dropped, not merely delayed. So post the lifecycle (fork / exec /
+// dns_query) first, wait for each connecting pid's process row to commit, then release the connects. Attacks with no network_connect
+// (the file-write / exec rules, which resolve their own subject process under the wider grace) keep the single-batch post unchanged.
+// Mirrors the app-control block barrier in weaveAttack. This is a demo-replay determinism fix only: it changes ingest ordering, not any
+// detection timing, so it cannot mask a real materialization race in production, where a beacon connect trails its exec by seconds.
+func (s *seeder) postWovenEnvelopes(ctx context.Context, hostID, token, file string, envs []fakeagent.Envelope) error {
+	var lifecycle, connects []fakeagent.Envelope
+	for _, e := range envs {
+		if e.EventType == "network_connect" {
+			connects = append(connects, e)
+			continue
+		}
+		lifecycle = append(lifecycle, e)
+	}
+	if len(connects) == 0 {
+		if err := s.postEnvelopes(ctx, token, envs); err != nil {
+			return fmt.Errorf("post %s events: %w", file, err)
+		}
+		return nil
+	}
+	if err := s.postEnvelopes(ctx, token, lifecycle); err != nil {
+		return fmt.Errorf("post %s lifecycle events: %w", file, err)
+	}
+	seen := make(map[int]struct{}, len(connects))
+	for _, c := range connects {
+		pid, ok := envelopePID(c)
+		if !ok {
+			continue
+		}
+		if _, dup := seen[pid]; dup {
+			continue
+		}
+		seen[pid] = struct{}{}
+		if err := s.waitForProcess(ctx, hostID, pid); err != nil {
+			return fmt.Errorf("%s connect pid %d never materialised: %w", file, pid, err)
+		}
+	}
+	if err := s.postEnvelopes(ctx, token, connects); err != nil {
+		return fmt.Errorf("post %s network_connect events: %w", file, err)
+	}
+	return nil
+}
+
+// envelopePID extracts the top-level pid an event's payload carries (network_connect and the other single-process events all encode it
+// as "pid"). Returns false when the payload has no usable pid so postWovenEnvelopes skips the barrier for that connect rather than
+// blocking on a pid that no exec will ever materialise.
+func envelopePID(e fakeagent.Envelope) (int, bool) {
+	var p struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(e.Payload, &p); err != nil || p.PID <= 0 {
+		return 0, false
+	}
+	return p.PID, true
 }
 
 // offsetScenarioPIDs bumps every pid field in the scenario's timeline by offset, preserving kernel/launchd sentinels (values

@@ -109,20 +109,53 @@ jobs:
         # graph, detection alerts, or app-control alert fail to materialise.
         # `docker wait` blocks until the one-shot container stops and prints its
         # exit code (the job timeout bounds a hung seeder).
+        #
+        # Attempts are asymmetric by leg. The source leg is built from the
+        # checkout, so a seeder failure there is a real regression we want to
+        # surface: it gets ONE attempt. The released leg runs the PUBLISHED seeder
+        # image, which still carries the pre-fix dns_c2_beacon materialisation race
+        # (the beacon's network_connect can be evaluated before its exec's process
+        # row commits, dropping the alert). That race is fixed in the seeder source
+        # but cannot reach an already-published image, so the released leg retries
+        # on a clean stack. Remove the retry once `latest` ships the barrier fix.
         run: |
           set -euo pipefail
-          seeder_cid="$(docker compose ps -aq seeder)"
-          if [ -z "${seeder_cid}" ]; then
-            echo "::error::seeder container was never created"
-            exit 1
+
+          run_seeder() {
+            local seeder_cid code
+            seeder_cid="$(docker compose ps -aq seeder)"
+            if [ -z "${seeder_cid}" ]; then
+              echo "::error::seeder container was never created"
+              return 1
+            fi
+            code="$(docker wait "${seeder_cid}")"
+            echo "seeder exited with code ${code}"
+            [ "${code}" = "0" ]
+          }
+
+          attempts=1
+          if [ "${MODE}" = "released" ]; then
+            attempts=3
           fi
-          code="$(docker wait "${seeder_cid}")"
-          echo "seeder exited with code ${code}"
-          if [ "${code}" != "0" ]; then
-            echo "::error::demo seeder failed (exit ${code}); the demo pipeline did not materialise"
+
+          for attempt in $(seq 1 "${attempts}"); do
+            echo "seeder attempt ${attempt}/${attempts}"
+            if run_seeder; then
+              exit 0
+            fi
+            echo "::warning::seeder attempt ${attempt}/${attempts} failed"
             docker compose logs --no-color seeder || true
-            exit 1
-          fi
+            if [ "${attempt}" -lt "${attempts}" ]; then
+              # Clean retry: wipe volumes so the idempotent seeder replays from
+              # scratch instead of short-circuiting on the partial data the failed
+              # attempt left, then reboot the stack for a fresh run.
+              docker compose down -v || true
+              docker compose up -d
+            fi
+          done
+
+          echo "::error::demo seeder failed after ${attempts} attempt(s); the demo pipeline did not materialise"
+          exit 1
 
       - name: Probe unauthenticated API + UI endpoints
         # Validate against the demo's self-signed localhost cert (minted by the
