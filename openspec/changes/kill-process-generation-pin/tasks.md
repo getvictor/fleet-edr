@@ -26,6 +26,6 @@
 ## 6. Tests
 
 - [x] `agent/procgen/procgen_test.go`: table + property-based coverage of observe/forget/Check and `ObserveEventBytes` (exec/fork set, exit clears, missing pidversion and non-process events ignored, malformed JSON ignored).
-- [x] `agent/commander/executor_generation_test.go`: runKill match kills, mismatch refuses (no signal, reason), unknown/absent/no-pidversion fall back, nil registry never refuses. Scenario markers on the gate subtests.
+- [x] `agent/commander/executor_generation_test.go`: runKill match kills, mismatch refuses (no signal, reason), unknown/absent/no-pidversion fall back, nil registry never refuses. Scenario markers on the gate subtests. Property-based JSON round-trip for `killPayload` (the new `pidversion` wire field).
 - [x] `agent/receiver/generation_sink_test.go`: `SetGenerationSink` / `getGenerationSink` round-trip and nil-safety.
 - [x] `ui/src/components/ProcessDetail.test.tsx`: the kill payload includes `pidversion` when the node has one and omits it otherwise.

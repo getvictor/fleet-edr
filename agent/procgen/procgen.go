@@ -11,6 +11,7 @@
 package procgen
 
 import (
+	"bytes"
 	"encoding/json"
 	"sync"
 )
@@ -77,8 +78,12 @@ func (r *Registry) forget(pid int) {
 	r.mu.Unlock()
 }
 
-// Len returns the number of tracked pids. Observability/test aid.
+// Len returns the number of tracked pids. Observability/test aid. Nil-safe like the rest of the Registry API (a nil registry tracks
+// nothing), so a caller holding a degraded/absent registry does not have to special-case it.
 func (r *Registry) Len() int {
+	if r == nil {
+		return 0
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.gen)
@@ -89,6 +94,16 @@ func (r *Registry) Len() int {
 // the field) and event types other than exec/fork/exit are ignored. Malformed JSON is ignored so a bad event never breaks delivery. This
 // is invoked on the XPC receive path BEFORE the lossy upload queue, so the map's fidelity tracks XPC delivery rather than the queue depth.
 func (r *Registry) ObserveEventBytes(data []byte) {
+	// Nil-safe: this runs off the GenerationSink interface, which can carry a typed-nil *Registry; degrade to a no-op rather than panic.
+	if r == nil {
+		return
+	}
+	// Fast path: the receive path sees every event, and network_connect / dns_query dominate volume, so skip the JSON parse unless the raw
+	// bytes could be one of the three process-lifecycle events we track. A false positive (the literal appears in a path or domain) just
+	// falls through to the full parse; there are no false negatives because a real exec/fork/exit always carries "event_type":"<kind>".
+	if !bytes.Contains(data, []byte(`"exec"`)) && !bytes.Contains(data, []byte(`"fork"`)) && !bytes.Contains(data, []byte(`"exit"`)) {
+		return
+	}
 	var env eventEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return

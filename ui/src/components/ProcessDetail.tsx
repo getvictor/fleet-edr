@@ -180,6 +180,8 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
   // has since been reused or re-exec'd (issue #627). Omitted for pre-migration / boot-snapshot nodes that carry no pidversion, where the
   // agent falls back to a pid-only kill.
   const killPayload = useMemo<Record<string, unknown>>(
+    // node.pidversion is number | undefined (ProcessNode in types.ts); the API contract never yields null, so an absent generation is exactly
+    // undefined. Omit the field entirely in that case (pid-only kill) rather than send pidversion: null.
     () => (node.pidversion === undefined ? { pid: node.pid } : { pid: node.pid, pidversion: node.pidversion }),
     [node.pid, node.pidversion],
   );

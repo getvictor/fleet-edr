@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	"github.com/fleetdm/edr/agent/procgen"
 )
@@ -95,6 +97,26 @@ func TestRunKill_NilRegistryFallsBack(t *testing.T) {
 	status, _ := e.run(t.Context(), Command{ID: 1, CommandType: "kill_process", Payload: json.RawMessage(`{"pid":10,"pidversion":3}`)})
 	assert.Equal(t, StatusCompleted, status)
 	assert.True(t, killed)
+}
+
+// TestKillPayload_JSONRoundTrip is the property-based Marshal-then-Unmarshal identity check the repo requires for a new wire-format field
+// (issue #627 added the optional pidversion to the kill_process payload). It pins the json tags and the *uint32 pointer semantics
+// (omitempty drops an absent generation; a present one round-trips by value) so a future encoding change cannot silently break
+// compatibility across the UI / server / agent boundary.
+func TestKillPayload_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(t *rapid.T) {
+		want := killPayload{PID: rapid.Int().Draw(t, "pid")}
+		if rapid.Bool().Draw(t, "hasPidversion") {
+			v := rapid.Uint32().Draw(t, "pidversion")
+			want.PIDVersion = &v
+		}
+		b, err := json.Marshal(want)
+		require.NoError(t, err)
+		var got killPayload
+		require.NoError(t, json.Unmarshal(b, &got))
+		assert.Equal(t, want, got)
+	})
 }
 
 // exitBytes / execBytes here mirror the procgen test builders so the executor test drives the same ObserveEventBytes path. json.Marshal
