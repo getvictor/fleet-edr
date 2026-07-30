@@ -79,7 +79,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ---------------------------------------------------------------
 # Stage 3: runtime
 # ---------------------------------------------------------------
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 
 # Non-secret defaults. Operators override via compose env or EDR_*_FILE mounts.
 ENV EDR_LISTEN_ADDR=":8088" \
