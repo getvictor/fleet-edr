@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { listAlerts, ReauthRequiredError, updateAlertStatus } from "../api";
 import type { Alert } from "../types";
 import { useReauthRetry } from "../hooks/useReauthRetry";

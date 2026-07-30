@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { listHosts } from "../api";
 import type { HostSummary } from "../types";
 import { formatRelativeNs, isOnline } from "../time";

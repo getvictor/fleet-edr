@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useCan, PermissionAction } from "../../permissions-core";
 import { useDismiss } from "./useDismiss";
 import "./AccountMenu.scss";

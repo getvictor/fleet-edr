@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams } from "react-router";
 import { getAlertDetail } from "../api";
 import type { AlertDetail } from "../types";
 import { ProcessTreeView } from "./ProcessTree";

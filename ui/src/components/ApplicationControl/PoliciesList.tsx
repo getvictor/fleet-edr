@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { listAppControlPolicies } from "../../api";
 import type { ApplicationControlPolicy } from "../../types";
 import { PageHeader } from "../ui/PageHeader";

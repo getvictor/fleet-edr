@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { fetchRuleDocs, type RuleDocEntry } from "../api";
 import { PageHeader } from "./ui/PageHeader";
 import { Table, EmptyState } from "./ui/Table";

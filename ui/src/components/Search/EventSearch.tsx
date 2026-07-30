@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { searchEvents, eventArtifactParam, type EventSearchMode } from "../../api";
 import type { EventRecord, NetworkConnectPayload, DNSQueryPayload } from "../../types";
 import { Table } from "../ui/Table";

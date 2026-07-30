@@ -1,5 +1,5 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter, Routes, Route, Link } from "react-router-dom";
+import { MemoryRouter, Routes, Route, Link } from "react-router";
 import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import * as api from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
