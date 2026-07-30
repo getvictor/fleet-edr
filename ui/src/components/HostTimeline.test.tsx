@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter, Link } from "react-router-dom";
+import { MemoryRouter, Link } from "react-router";
 
 import { HostTimeline } from "./HostTimeline";
 import * as api from "../api";

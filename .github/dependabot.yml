@@ -15,8 +15,15 @@ version: 2
 #     version bumps are usually small and we want to stay current.
 
 updates:
+  # The agent and the server share ONE Go module rooted at the repo (there is no
+  # agent/go.mod or server/go.mod). `directory` must name the directory holding the
+  # manifest, so this has to be "/". Two entries pointed at "/agent" and "/server"
+  # until 2026-07-30; neither directory has a go.mod, so Dependabot never ran a Go
+  # version-update job and the module silently drifted. Only alert-driven security
+  # PRs came through, which is why govulncheck and OSV-Scanner went red on main with
+  # no Dependabot PR to fix them. Keep this a single "/" entry.
   - package-ecosystem: "gomod"
-    directory: "/agent"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "friday"
@@ -27,35 +34,14 @@ updates:
       default-days: 10
       semver-major-days: 30
     groups:
-      agent-minor-and-patch:
+      go-minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-    labels: ["dependencies", "go", "agent"]
+    labels: ["dependencies", "go"]
     commit-message:
-      prefix: "deps(agent)"
-
-  - package-ecosystem: "gomod"
-    directory: "/server"
-    schedule:
-      interval: "weekly"
-      day: "friday"
-      time: "06:00"
-      timezone: "America/Chicago"
-    open-pull-requests-limit: 5
-    cooldown:
-      default-days: 10
-      semver-major-days: 30
-    groups:
-      server-minor-and-patch:
-        update-types: ["minor", "patch"]
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
-    labels: ["dependencies", "go", "server"]
-    commit-message:
-      prefix: "deps(server)"
+      prefix: "deps(go)"
 
   - package-ecosystem: "npm"
     directory: "/ui"

@@ -1,5 +1,5 @@
 import classnames from "classnames";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation } from "react-router";
 import "./TopNav.scss";
 import { useCan } from "../../permissions-core";
 import { AccountMenu } from "./AccountMenu";

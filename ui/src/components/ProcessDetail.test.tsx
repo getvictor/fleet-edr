@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import type { ReactElement } from "react";
 import { ProcessDetail } from "./ProcessDetail";
 import { PermissionsProvider } from "../permissions";
@@ -189,7 +189,7 @@ describe("ProcessDetail network + re-exec", () => {
   it("shows the loading message then the network section once detail resolves", async () => {
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
     expect(screen.getByText(/loading network data/i)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/no network activity/i)).toBeInTheDocument());
+    expect(await screen.findByText(/no network activity/i)).toBeInTheDocument();
   });
 
   it("renders the re-exec chain with the prior-generation count and the current entry", async () => {
@@ -199,7 +199,7 @@ describe("ProcessDetail network + re-exec", () => {
       }),
     );
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText(/1 prior generation/i)).toBeInTheDocument());
+    expect(await screen.findByText(/1 prior generation/i)).toBeInTheDocument();
     expect(screen.getByText("/bin/sh")).toBeInTheDocument();
     expect(screen.getByText(/current/i)).toBeInTheDocument();
   });
@@ -265,7 +265,7 @@ describe("ProcessDetail kill action", () => {
     await screen.findByText("pending");
 
     await vi.advanceTimersByTimeAsync(2100);
-    await waitFor(() => expect(screen.getByText(/process killed/i)).toBeInTheDocument());
+    expect(await screen.findByText(/process killed/i)).toBeInTheDocument();
   });
 
   it("includes the node's pidversion in the kill payload so the agent can pin the generation (issue #627)", async () => {
@@ -284,7 +284,7 @@ describe("ProcessDetail kill action", () => {
     vi.mocked(api.createCommand).mockRejectedValue(new Error("dispatch failed"));
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /kill process/i }));
-    await waitFor(() => expect(screen.getByText(/failed: failed to send command/i)).toBeInTheDocument());
+    expect(await screen.findByText(/failed: failed to send command/i)).toBeInTheDocument();
   });
 
   // spec:web-ui/the-kill-action-is-disabled-once-the-process-has-exited/an-exited-process-cannot-be-killed-from-the-detail-panel

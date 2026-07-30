@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import { searchProcesses, type ProcessSearchFilter } from "../../api";
 import type { Process } from "../../types";
 import { Table } from "../ui/Table";

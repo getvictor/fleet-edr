@@ -24,7 +24,7 @@
 # `docker manifest inspect node:20 --verbose` and copying the manifest digest.
 # Dependabot's docker ecosystem keeps these current; do not strip the digest
 # during a tag bump.
-FROM --platform=$BUILDPLATFORM node:26@sha256:b46a10d964ad15136ebdf9012142131481caa0697d7a4d4eafe4bbabd818f876 AS ui-build
+FROM --platform=$BUILDPLATFORM node:26@sha256:0473e7dc433a1310f436edee02aa79737ec78a4b345433ab0963d4a256f9ad85 AS ui-build
 # package*.json first for layer-cache reuse: npm ci only reruns when
 # dependencies change, not every source edit.
 WORKDIR /src/ui
@@ -41,7 +41,7 @@ RUN npm run build
 # ---------------------------------------------------------------
 # Stage 2: Go binary
 # ---------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.26.5@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.5@sha256:3aff6657219a4d9c14e27fb1d8976c49c29fddb70ba835014f477e1c70636647 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
@@ -79,7 +79,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ---------------------------------------------------------------
 # Stage 3: runtime
 # ---------------------------------------------------------------
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:b7bb25d9f7c31d2bdd1982feb4dafcaf137703c7075dbe2febb41c24212b946f
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
 
 # Non-secret defaults. Operators override via compose env or EDR_*_FILE mounts.
 ENV EDR_LISTEN_ADDR=":8088" \

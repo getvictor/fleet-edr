@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { DetectionConfig } from "./DetectionConfig";
 import { PermissionsProvider } from "../../permissions";
 import { PermissionAction } from "../../permissions-core";

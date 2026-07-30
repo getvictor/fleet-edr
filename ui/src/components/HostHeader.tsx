@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import "./HostHeader.scss";
 import { getHostDetail, getHostHealth } from "../api";
 import type { HostDetail, HostHealth } from "../types";

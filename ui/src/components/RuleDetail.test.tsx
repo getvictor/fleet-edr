@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { MemoryRouter, Routes, Route } from "react-router";
 import { RuleDetail } from "./RuleDetail";
 import * as api from "../api";
 import type { RuleDocEntry } from "../api";
@@ -72,7 +72,7 @@ describe("RuleDetail loading and error states", () => {
   it("renders the unknown-rule empty state with a back link when the id is not found", async () => {
     mockDocs([makeEntry({ id: "other_rule" })]);
     renderAt("missing_rule");
-    await waitFor(() => expect(screen.getByText(/unknown rule/i)).toBeInTheDocument());
+    expect(await screen.findByText(/unknown rule/i)).toBeInTheDocument();
     expect(screen.getByText("missing_rule", { selector: "code" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /back to coverage/i })).toHaveAttribute("href", "/coverage");
   });
@@ -82,7 +82,7 @@ describe("RuleDetail body", () => {
   it("renders the title, summary, ATT&CK link, and split description paragraphs", async () => {
     mockDocs([makeEntry()]);
     renderAt("suspicious_exec");
-    await waitFor(() => expect(screen.getByText("Suspicious exec")).toBeInTheDocument());
+    expect(await screen.findByText("Suspicious exec")).toBeInTheDocument();
     expect(screen.getByText("Detects suspicious execution.")).toBeInTheDocument();
     expect(screen.getByText("First paragraph.")).toBeInTheDocument();
     expect(screen.getByText("Second paragraph.")).toBeInTheDocument();
@@ -93,7 +93,7 @@ describe("RuleDetail body", () => {
   it("renders the false-positive and limitations lists", async () => {
     mockDocs([makeEntry()]);
     renderAt("suspicious_exec");
-    await waitFor(() => expect(screen.getByText("Known false-positive sources")).toBeInTheDocument());
+    expect(await screen.findByText("Known false-positive sources")).toBeInTheDocument();
     expect(screen.getByText("build scripts")).toBeInTheDocument();
     expect(screen.getByText("Limitations")).toBeInTheDocument();
     expect(screen.getByText("macOS only")).toBeInTheDocument();
@@ -113,7 +113,7 @@ describe("RuleDetail body", () => {
       }),
     ]);
     renderAt("suspicious_exec");
-    await waitFor(() => expect(screen.getByText("Bare rule")).toBeInTheDocument());
+    expect(await screen.findByText("Bare rule")).toBeInTheDocument();
     expect(screen.getByText(/no mapping/i)).toBeInTheDocument();
     expect(screen.queryByText("Configuration")).not.toBeInTheDocument();
     expect(screen.queryByText("Known false-positive sources")).not.toBeInTheDocument();

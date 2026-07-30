@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import "./SearchPage.scss";
 import { ProcessSearch } from "./ProcessSearch";
 import { EventSearch } from "./EventSearch";

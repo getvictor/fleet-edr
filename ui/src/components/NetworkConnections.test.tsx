@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render as rtlRender, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { NetworkConnections } from "./NetworkConnections";
 import type { EventRecord, NetworkConnectPayload, DNSQueryPayload } from "../types";
 

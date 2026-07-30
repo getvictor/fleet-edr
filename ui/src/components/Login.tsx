@@ -9,7 +9,7 @@
 // actionable than a generic 500.
 
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import { Button } from "./ui/Button";
 import { Card } from "./ui/Card";
 import { oidcLoginUrl } from "../auth";
