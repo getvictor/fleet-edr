@@ -277,7 +277,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), {
       target: { value: "platform" },
     });
@@ -290,7 +290,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), {
       target: { value: "LEGACY" },
     });
@@ -303,7 +303,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/filter by rule type/i), { target: { value: "TEAMID" } });
     expect(identifiersInTable()).toEqual(["ABCDE12345"]);
   });
@@ -313,7 +313,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     const statusSelect = screen.getByLabelText(/filter by status/i);
     fireEvent.change(statusSelect, { target: { value: "enabled" } });
     expect(identifiersInTable()).toHaveLength(3);
@@ -326,7 +326,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/filter by source/i), { target: { value: "import" } });
     const ids = identifiersInTable();
     expect(ids).toHaveLength(2);
@@ -338,7 +338,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/filter by rule type/i), { target: { value: "BINARY" } });
     fireEvent.change(screen.getByLabelText(/filter by status/i), { target: { value: "enabled" } });
     expect(identifiersInTable()).toHaveLength(1);
@@ -350,7 +350,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/filter by rule type/i), { target: { value: "TEAMID" } });
     fireEvent.change(screen.getByLabelText(/filter by source/i), { target: { value: "import" } });
     expect(screen.queryByRole("table")).toBeNull();
@@ -365,7 +365,7 @@ describe("PolicyDetail", () => {
       makePolicy({ rules: makeFilterFixture() }),
     );
     renderPolicyDetailAt("/app-control/policies/7");
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     // No filter applied -> no summary line.
     expect(screen.queryByText(/showing \d+ of \d+ rules/i)).toBeNull();
     // Type something into the search to activate the filter.
@@ -402,13 +402,13 @@ describe("PolicyDetail", () => {
         </Routes>
       </MemoryRouter>,
     );
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(await screen.findByRole("table")).toBeInTheDocument();
     // Activate the filter on policy 7.
     fireEvent.change(screen.getByLabelText(/search rules by identifier or comment/i), { target: { value: "platform" } });
     expect(screen.getByText(/showing 1 of 4 rules/i)).toBeInTheDocument();
     // Switch to policy 8 via in-router navigation (no router remount).
     fireEvent.click(screen.getByRole("link", { name: /switch/i }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Other" })).toBeInTheDocument());
+    expect(await screen.findByRole("heading", { name: "Other" })).toBeInTheDocument();
     // Filter is back to defaults: no summary line; search input is empty.
     expect(screen.queryByText(/showing \d+ of \d+ rules/i)).toBeNull();
     const searchInput = screen.getByLabelText(/search rules by identifier or comment/i);

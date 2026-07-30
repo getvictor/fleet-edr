@@ -73,7 +73,7 @@ describe("BreakGlassSetup submit happy path", () => {
 
     await waitFor(() => { expect(auth.breakglassBeginSetup).toHaveBeenCalledWith("abc"); });
     await waitFor(() => { expect(auth.breakglassFinishSetup).toHaveBeenCalledWith("abc", VALID_PASSWORD, "my key", { id: "attest" }); });
-    await waitFor(() => expect(screen.getByText("ALERTS")).toBeInTheDocument());
+    expect(await screen.findByText("ALERTS")).toBeInTheDocument();
   });
 
   it("strips just /ui when the redirect is exactly /ui", async () => {
@@ -81,7 +81,7 @@ describe("BreakGlassSetup submit happy path", () => {
     renderAt();
     fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: VALID_PASSWORD } });
     fireEvent.click(screen.getByRole("button", { name: /register security key/i }));
-    await waitFor(() => expect(screen.getByText("HOME")).toBeInTheDocument());
+    expect(await screen.findByText("HOME")).toBeInTheDocument();
   });
 });
 

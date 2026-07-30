@@ -76,7 +76,7 @@ describe("BreakGlassLogin submit happy path", () => {
     await waitFor(() => { expect(auth.breakglassBeginLogin).toHaveBeenCalledWith("ops@example.com"); });
     await waitFor(() => { expect(finishSpy).toHaveBeenCalledWith("ops@example.com", "pw", { id: "asrt" }); });
     // /ui/alerts → /alerts (the basename strip; the sink route is at /alerts).
-    await waitFor(() => expect(screen.getByText("ALERTS")).toBeInTheDocument());
+    expect(await screen.findByText("ALERTS")).toBeInTheDocument();
   });
 
   it("strips just /ui when the redirect is exactly /ui (no trailing slash)", async () => {
@@ -86,7 +86,7 @@ describe("BreakGlassLogin submit happy path", () => {
     fireEvent.change(screen.getByLabelText(/password/i), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: /sign in with security key/i }));
     // /ui → "/" (slice("/ui".length) is empty; fallback to "/")
-    await waitFor(() => expect(screen.getByText("HOME")).toBeInTheDocument());
+    expect(await screen.findByText("HOME")).toBeInTheDocument();
   });
 
   it("does NOT strip a redirect that isn't /ui-prefixed (e.g. /uipreview)", async () => {

@@ -9,7 +9,12 @@
 # workflow at the same time (workflows use `go-version-file: go.mod` where
 # possible, which already tracks this file's Go pin via go.mod).
 golang 1.26.5
-nodejs 22.21.0
+# 22.23.2 is the current 22.x LTS, and >= the 22.22.0 floor react-router 8.3.0
+# declares in engines.node. The pin sat at 22.21.0, below that floor, so a fresh
+# mise/asdf install produced an EBADENGINE-warning install while CI (which
+# installs a floating `node-version: 22`) silently ran a newer runtime. Pinning to
+# the version CI actually resolves keeps local dev and CI on the same runtime.
+nodejs 22.23.2
 golangci-lint 2.11.3
 lefthook 1.8.0
 task 3.50.0
