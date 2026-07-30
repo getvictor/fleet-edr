@@ -124,17 +124,18 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event,
 	// per descendant row.
 	seenOsa := map[int]struct{}{}
 	var findings []api.Finding
+	var miss pendingMiss
 	for _, evt := range events {
 		f, osaPID, err := r.evalEvent(ctx, evt, s, seenOsa)
-		if err != nil {
-			return nil, err
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fatal
 		}
 		if f != nil {
 			findings = append(findings, *f)
 			seenOsa[osaPID] = struct{}{}
 		}
 	}
-	return findings, nil
+	return findings, miss.err
 }
 
 // evalEvent inspects a single event and returns (finding, osaPID, err) on a match. osaPID is the PID of the osascript ancestor that

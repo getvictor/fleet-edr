@@ -79,6 +79,7 @@ type applicationControlBlockPayload struct {
 // the authoritative gate, this rule is best-effort over the residual.
 func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
+	var miss pendingMiss
 	for _, evt := range events {
 		if evt.EventType != applicationControlBlockEventType {
 			continue
@@ -91,8 +92,8 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 			continue
 		}
 		proc, err := resolveSubjectProcess(ctx, gr, evt, p.PID)
-		if err != nil {
-			return nil, fmt.Errorf("application control block: %w", err)
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fmt.Errorf("application control block: %w", fatal)
 		}
 		if proc == nil {
 			continue
@@ -107,6 +108,9 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},
 		})
+	}
+	if miss.err != nil {
+		return findings, fmt.Errorf("application control block: %w", miss.err)
 	}
 	return findings, nil
 }

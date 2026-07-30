@@ -86,6 +86,7 @@ type keychainDumpPayload struct {
 
 func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
+	var miss pendingMiss
 	for _, evt := range events {
 		if evt.EventType != "exec" {
 			continue
@@ -103,8 +104,8 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 		}
 
 		proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
-		if err != nil {
-			return nil, err
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fatal
 		}
 		if proc == nil {
 			// The exec's own row never materialized within the grace window (a young miss raises the retryable
@@ -122,7 +123,7 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			EventIDs:    []string{evt.EventID},
 		})
 	}
-	return findings, nil
+	return findings, miss.err
 }
 
 // findDumpKeychainArg returns the matched subcommand (e.g. "dump-keychain") and true when argv invokes a flagged subcommand as the

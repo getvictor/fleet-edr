@@ -27,10 +27,23 @@ func insertRole(t *testing.T, db *sqlx.DB, id string) {
 	require.NoError(t, err)
 }
 
+// insertProcess writes an EXEC-IMAGED process row (exec_time_ns set), which is what waitForProcess gates on: a bare fork row carries
+// its parent's path, so the consumers the barrier releases (the app-control block, dns_c2_beacon's suspicion gate) cannot act on it.
+// insertForkOnlyProcess covers the pre-exec shape.
 func insertProcess(t *testing.T, db *sqlx.DB, hostID string, pid int) {
 	t.Helper()
 	_, err := db.ExecContext(t.Context(),
-		`INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns) VALUES (?, ?, 1, '/bin/x', 1)`, hostID, pid)
+		`INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns, exec_time_ns) VALUES (?, ?, 1, '/bin/x', 1, 1)`,
+		hostID, pid)
+	require.NoError(t, err)
+}
+
+// insertForkOnlyProcess writes a row in the pre-exec state the graph builder produces from a fork alone: the path is inherited from
+// the parent and exec_time_ns is NULL. waitForProcess must NOT treat this as materialised (issue #661).
+func insertForkOnlyProcess(t *testing.T, db *sqlx.DB, hostID string, pid int) {
+	t.Helper()
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO processes (host_id, pid, ppid, path, fork_time_ns) VALUES (?, ?, 1, '/bin/parent', 1)`, hostID, pid)
 	require.NoError(t, err)
 }
 
@@ -129,6 +142,20 @@ func TestWaitForProcess(t *testing.T) {
 	err := s.waitForProcess(ctx, "HOST-B", 999)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not met within")
+
+	// A fork-only row must NOT satisfy the barrier: its path is the parent's, so releasing the woven network_connect against it makes
+	// dns_c2_beacon's suspicion gate decline the process, and that is a negative match no retry recovers (issue #661).
+	insertForkOnlyProcess(t, db, "HOST-B", 300)
+	err = s.waitForProcess(ctx, "HOST-B", 300)
+	require.Error(t, err, "a pre-exec fork row is not a materialised process for barrier purposes")
+	assert.Contains(t, err.Error(), "not met within")
+
+	// Imaging that same pid with the exec releases it.
+	_, err = db.ExecContext(ctx,
+		`UPDATE processes SET path = '/tmp/.update', exec_time_ns = 2 WHERE host_id = ? AND pid = 300`, "HOST-B")
+	require.NoError(t, err)
+	s.cfg.verifyTimeout = time.Second
+	require.NoError(t, s.waitForProcess(ctx, "HOST-B", 300))
 }
 
 // demoServer stands in for the EDR ingest API: readiness, enroll (echoing the requested host id), and events.

@@ -419,11 +419,21 @@ func (s *seeder) slideArchiveEvents(ctx context.Context, inClause string, hostAr
 	return nil
 }
 
-// waitForProcess polls until at least one process row exists for the host/pid, or verifyTimeout elapses.
+// waitForProcess polls until the host/pid has an EXEC-IMAGED process row (exec_time_ns set), or verifyTimeout elapses.
+//
+// Requiring the exec image, not merely a row, is the point. The graph builder writes the row on the fork and only fills in the real
+// path when it applies the exec; a fork row carries the path inherited from its parent (handleFork uses GetParentPath), and when the
+// fork and exec land in different claim batches the fork row is visible on its own for a while. Every consumer this barrier gates on
+// keys off the exec'd image: the app-control block references the exec path, and dns_c2_beacon's suspicion gate reads proc.Path and
+// silently declines a process whose path is still the parent shell. Waiting on a bare row therefore released the follow-up event
+// against a row that could not satisfy the rule, and that miss is a negative match rather than a retryable one, so no retry recovered
+// it (issue #661).
 func (s *seeder) waitForProcess(ctx context.Context, hostID string, pid int) error {
 	return s.poll(ctx, s.cfg.verifyTimeout, func() (bool, error) {
 		var n int
-		err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM processes WHERE host_id = ? AND pid = ?`, hostID, pid).Scan(&n)
+		err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM processes WHERE host_id = ? AND pid = ? AND exec_time_ns IS NOT NULL`,
+			hostID, pid).Scan(&n)
 		if err != nil {
 			return false, err
 		}

@@ -80,17 +80,7 @@ type persistenceLaunchCtlPayload struct {
 }
 
 func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
-	var findings []api.Finding
-	for _, evt := range events {
-		f, err := r.evalEvent(ctx, evt, s)
-		if err != nil {
-			return nil, err
-		}
-		if f != nil {
-			findings = append(findings, *f)
-		}
-	}
-	return findings, nil
+	return evalEachEvent(ctx, events, s, r.evalEvent)
 }
 
 // evalEvent returns a finding for a single event, or nil when the event doesn't match.

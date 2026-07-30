@@ -3470,3 +3470,83 @@ func TestStore_SearchProcesses_PaginationProperty(t *testing.T) {
 		assert.Equal(rt, wantIDs, gotIDs, "paging with size %d must reproduce the full order exactly", pageSize)
 	})
 }
+
+// missWithFindingStub emits a finding for every "trigger" event AND always reports a retryable materialization miss, standing in for a
+// real rule whose batch mixed a resolvable event with a permanently orphaned one (the demo corpus's captured connects, issue #661).
+type missWithFindingStub struct{ id string }
+
+func (r *missWithFindingStub) ID() string           { return r.id }
+func (r *missWithFindingStub) DisplayName() string  { return "Miss-with-finding stub" }
+func (r *missWithFindingStub) Techniques() []string { return nil }
+func (r *missWithFindingStub) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: r.DisplayName(), Summary: "test fixture", Severity: rulesapi.SeverityHigh}
+}
+
+func (r *missWithFindingStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	var out []api.Finding
+	for _, e := range events {
+		if e.EventType != "trigger" {
+			continue
+		}
+		var p struct {
+			ProcessID int64 `json:"process_id"`
+		}
+		if err := json.Unmarshal(e.Payload, &p); err != nil || p.ProcessID == 0 {
+			continue
+		}
+		out = append(out, api.Finding{
+			HostID:      e.HostID,
+			RuleID:      r.id,
+			Severity:    rulesapi.SeverityHigh,
+			Title:       "Resolvable trigger",
+			Description: "resolved alongside an unresolvable event in the same batch",
+			ProcessID:   p.ProcessID,
+			EventIDs:    []string{e.EventID},
+		})
+	}
+	return out, fmt.Errorf("event orphan references pid 999999: %w", rulesapi.ErrProcessNotYetMaterialized)
+}
+
+func (r *missWithFindingStub) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType {
+	return nil
+}
+func (r *missWithFindingStub) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
+
+// TestEngine_PersistsFindingsReportedAlongsideRetryableMiss is the persistence half of the issue #661 fix.
+//
+// The engine used to discard a rule's findings whenever that rule also reported a retryable materialization miss, because the error
+// check ran before the persist loop. A batch that contained both a resolvable trigger and an orphaned event therefore wrote no alert,
+// and the resolvable finding only landed if a later retry happened to find the batch clean, which for a permanently orphaned event
+// never happened before the resolvable event's own grace window expired.
+//
+// The finding must now persist on the first pass, with the miss still reported so the processor nacks and retries.
+// spec:server-detection-rules-engine/retryable-evaluation-on-unmaterialized-subject-process/findings-resolved-in-a-batch-persist-alongside-a-retryable-miss
+func TestEngine_PersistsFindingsReportedAlongsideRetryableMiss(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{&missWithFindingStub{id: "stub-miss-with-finding"}}})
+
+	procID := mustInsertProcess(t, ctx, d, "host-miss", 100)
+	events := []api.Event{
+		{EventID: "fork-miss", HostID: "host-miss", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-miss", HostID: "host-miss", TimestampNs: 2000, EventType: "trigger",
+			Payload: json.RawMessage(`{"process_id":` + strconv.FormatInt(procID, 10) + `}`)},
+	}
+	insertEventsViaIngest(ctx, t, d, "host-miss", events)
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-miss"})
+		return len(alerts) >= 1
+	}, 5*time.Second, 50*time.Millisecond,
+		"the resolvable finding must persist even though the same batch reported a retryable miss")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-miss"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 1, "alert dedup keeps the repeatedly-retried batch idempotent")
+	assert.Equal(t, "stub-miss-with-finding", alerts[0].RuleID)
+}
