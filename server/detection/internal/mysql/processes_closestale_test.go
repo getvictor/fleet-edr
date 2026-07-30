@@ -57,30 +57,75 @@ func TestCloseStaleProcess_LeavesLaterGenerationOpen(t *testing.T) {
 	assert.Zero(t, impossible, "no process record may carry an exit_time_ns earlier than its own fork_time_ns")
 }
 
-// TestCloseStaleProcess_ClosesEarlierGeneration keeps the actual PID-reuse path honest: a generation that really did start before the
-// incoming fork is still closed at the fork's timestamp.
+// TestCloseStaleProcess_OrderingBoundary walks the full ordering relation between an existing generation's fork_time_ns and the
+// incoming fork's timestamp. Only a generation that started strictly EARLIER is displaced, so the predicate is `<`, and the equal
+// case is the one that decides `<` vs `<=`: two records stamped at the same instant are not a reuse of one another, so the existing
+// one stays open. Without the equal case a `<=` regression would pass the other two.
 // spec:server-process-graph-builder/pid-reuse-creates-a-new-generation/a-new-fork-lands-on-a-stale-pid
-func TestCloseStaleProcess_ClosesEarlierGeneration(t *testing.T) {
+func TestCloseStaleProcess_OrderingBoundary(t *testing.T) {
 	t.Parallel()
-	s := newTestStore(t)
-	ctx := t.Context()
 
-	const host = "h-reuse"
-	const pid = 4242
-	const oldForkNs = int64(1_000_000_000)
-	const newForkNs = oldForkNs + 5_000_000_000
+	const incomingForkNs = int64(6_000_000_000)
 
-	oldRow, err := s.InsertProcess(ctx, api.Process{HostID: host, PID: pid, Path: "/old", ForkTimeNs: oldForkNs})
-	require.NoError(t, err)
+	cases := []struct {
+		name        string
+		existingNs  int64
+		wantClosed  bool
+		explanation string
+	}{
+		{
+			name:        "earlier generation is displaced",
+			existingNs:  incomingForkNs - 5_000_000_000,
+			wantClosed:  true,
+			explanation: "a genuinely stale generation is still closed by the reusing fork",
+		},
+		{
+			name:        "generation at the same instant stays open",
+			existingNs:  incomingForkNs,
+			wantClosed:  false,
+			explanation: "same-instant records are not a reuse of one another, so the predicate is < and not <=",
+		},
+		{
+			name:        "later generation stays open",
+			existingNs:  incomingForkNs + 10_000_000,
+			wantClosed:  false,
+			explanation: "a record stamped after the fork was merely processed first (issue #661)",
+		},
+	}
 
-	require.NoError(t, s.CloseStaleProcess(ctx, host, pid, newForkNs))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			ctx := t.Context()
+			const host = "h-reuse"
+			const pid = 4242
 
-	got, err := s.GetProcessByPID(ctx, host, pid, oldForkNs+1)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, oldRow, got.ID)
-	require.NotNil(t, got.ExitTimeNs, "a genuinely stale generation is still closed by the reusing fork")
-	assert.Equal(t, newForkNs, *got.ExitTimeNs)
-	require.NotNil(t, got.ExitReason)
-	assert.Equal(t, api.ExitReasonPIDReuse, *got.ExitReason)
+			row, err := s.InsertProcess(ctx, api.Process{HostID: host, PID: pid, Path: "/old", ForkTimeNs: tc.existingNs})
+			require.NoError(t, err)
+
+			require.NoError(t, s.CloseStaleProcess(ctx, host, pid, incomingForkNs))
+
+			// Read at the record's own fork time so it brackets regardless of which side of the incoming fork it sits on.
+			got, err := s.GetProcessByPID(ctx, host, pid, tc.existingNs)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, row, got.ID)
+
+			if tc.wantClosed {
+				require.NotNil(t, got.ExitTimeNs, tc.explanation)
+				assert.Equal(t, incomingForkNs, *got.ExitTimeNs)
+				require.NotNil(t, got.ExitReason)
+				assert.Equal(t, api.ExitReasonPIDReuse, *got.ExitReason)
+			} else {
+				assert.Nil(t, got.ExitTimeNs, tc.explanation)
+			}
+
+			// The invariant, restated per case: no record may exit before it forked.
+			var impossible int
+			require.NoError(t, s.DB().GetContext(ctx, &impossible,
+				`SELECT COUNT(*) FROM processes WHERE exit_time_ns IS NOT NULL AND exit_time_ns < fork_time_ns`))
+			assert.Zero(t, impossible, "no process record may carry an exit_time_ns earlier than its own fork_time_ns")
+		})
+	}
 }

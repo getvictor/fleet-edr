@@ -27,9 +27,9 @@
 ## 5. Tests
 
 - [x] 5.1 `TestDNSC2Beacon_OrphanedConnectDoesNotMaskResolvableBeacon`: an orphaned connect ordered FIRST in the batch must not stop the resolvable beacon from firing, and the miss must still be reported. Verified to fail against the pre-fix rule.
-- [x] 5.2 `TestEngine_Evaluate_RetryableMissDoesNotSuppressLaterRules` and `TestEngine_Evaluate_NonRetryableFailureStillIsolatedPerRule`.
+- [x] 5.2 `TestEngine_Evaluate_AFailingRuleDoesNotSuppressLaterRules`: table-driven over the retryable and non-retryable error classes, asserting a later-registered rule still runs in both.
 - [x] 5.3 `TestEngine_PersistsFindingsReportedAlongsideRetryableMiss` (DB-backed): the resolved finding persists, and dedup keeps the retried batch idempotent.
-- [x] 5.4 `TestCloseStaleProcess_LeavesLaterGenerationOpen`: a fork arriving after the exec-synthesized record leaves it open and writes no impossible lifetime.
+- [x] 5.4 `TestCloseStaleProcess_LeavesLaterGenerationOpen`: a fork arriving after the exec-synthesized record leaves it open and writes no impossible lifetime. `TestCloseStaleProcess_OrderingBoundary` then walks the whole ordering relation (earlier / equal / later); the equal case is what pins the predicate as `<` rather than `<=`.
 - [x] 5.5 Extend `TestWaitForProcess` so a fork-only row does not satisfy the barrier and imaging it with the exec releases it.
 
 ## 6. End-to-end verification on the demo stack

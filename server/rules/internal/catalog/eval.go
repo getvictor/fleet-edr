@@ -8,7 +8,7 @@ import (
 )
 
 // pendingMiss accumulates the retryable materialization miss (api.ErrProcessNotYetMaterialized) a rule's per-event loop hit, so the
-// loop can keep evaluating the REST of the batch instead of returning on the first miss.
+// loop can keep evaluating the rest of the batch instead of returning on the first miss.
 //
 // Bailing on the first miss is what issue #661 was: one permanently orphaned event masked every other event in the same batch. The
 // demo corpus carries nine captured network_connect events whose fork/exec predate the capture, so their process rows never
