@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router";
 import { HostList } from "./components/HostList";
 import { ProcessTreeView } from "./components/ProcessTree";
 import { AlertGraphRoute } from "./components/AlertGraphRoute";

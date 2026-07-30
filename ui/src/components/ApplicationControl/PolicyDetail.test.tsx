@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
-import { Link, MemoryRouter, Routes, Route } from "react-router-dom";
+import { Link, MemoryRouter, Routes, Route } from "react-router";
 import { PolicyDetail } from "./PolicyDetail";
 import * as api from "../../api";
 import type { ApplicationControlPolicy, ApplicationControlRule } from "../../types";

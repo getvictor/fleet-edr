@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback, type RefObject } from "react";
-import { useParams, useSearchParams, useLocation, Link } from "react-router-dom";
+import { useParams, useSearchParams, useLocation, Link } from "react-router";
 import * as d3 from "d3";
 import { getAlertDetail, getProcessTree, listAlerts } from "../api";
 import type { AlertDetail, ProcessNode } from "../types";

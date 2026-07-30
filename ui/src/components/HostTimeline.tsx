@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import "./HostTimeline.scss";
 import { getHostTimeline, eventArtifactParam, listAlerts, getAlertDetail, encodeChainGeneration, type ChainGeneration } from "../api";
 import type { EventRecord, NetworkConnectPayload, DNSQueryPayload, ExecPayload } from "../types";

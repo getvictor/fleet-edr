@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { Login } from "./Login";
 
 // Login renders the post-Phase-4c single-CTA login page: "Continue with single sign-on" + a break-glass footer link.

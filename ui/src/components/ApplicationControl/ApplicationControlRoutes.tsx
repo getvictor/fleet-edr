@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router";
 import { PoliciesList } from "./PoliciesList";
 import { PolicyDetail } from "./PolicyDetail";
 
