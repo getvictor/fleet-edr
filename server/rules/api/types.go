@@ -83,9 +83,18 @@ type Rule interface {
 	// test asserts every registered rule returns a non-empty set of valid platforms.
 	Platforms() []Platform
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
-	// mutate state. Returning an error skips the rule for this batch (logged at WARN), except an error wrapping
-	// ErrProcessNotYetMaterialized, which the engine propagates so the processor retries the whole batch. Returning nil findings is
-	// the common case.
+	// mutate state. Returning nil findings is the common case.
+	//
+	// The two error classes are handled differently, and the difference matters to rule authors. An ordinary error discards this
+	// rule's findings for the batch and is logged at WARN, isolating a misbehaving rule from the rest. An error wrapping
+	// ErrProcessNotYetMaterialized does NOT discard them: the engine persists whatever findings came back alongside it and still
+	// propagates the miss, so the processor retries the batch and alert dedup makes the re-run idempotent.
+	//
+	// An implementation MUST NOT abandon the rest of the batch when one event raises ErrProcessNotYetMaterialized. Finish evaluating
+	// every event, then return the findings that DID resolve together with the miss: the engine persists those findings and still
+	// retries the batch. Bailing on the first miss lets a permanently orphaned event (its fork/exec never captured, so its row never
+	// arrives) mask a real finding elsewhere in the same batch until that finding's own grace window has elapsed, at which point it
+	// degrades to the silent skip and is lost for good (issue #661). The catalog's pendingMiss helper implements this policy.
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 	// SupportedExclusionMatchTypes returns the exclusion match types this rule consults at evaluation time, i.e. the match types it
 	// passes to the ExclusionResolver. It returns no match types (nil or an empty slice, treated alike) for a rule that consults no

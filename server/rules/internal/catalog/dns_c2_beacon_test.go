@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"testing"
@@ -213,4 +214,83 @@ func TestDNSC2Beacon_ZeroIngestStampSkipsSilently(t *testing.T) {
 	findings, err := (&DNSC2Beacon{}).Evaluate(t.Context(), []api.Event{evt}, gr)
 	require.NoError(t, err, "a zero ingest stamp is never in grace")
 	assert.Empty(t, findings)
+}
+
+// perPIDGraphReader resolves each pid independently, which recordingGraphReader cannot do (it returns one process for every lookup).
+// The masking regression needs a batch where one connect's pid never materialises while another's does.
+type perPIDGraphReader struct {
+	procByPID      map[int]*api.Process
+	netEventsByPID map[int][]api.Event
+}
+
+func (r *perPIDGraphReader) GetProcessByPID(_ context.Context, _ string, pid int, _ int64) (*api.Process, error) {
+	return r.procByPID[pid], nil
+}
+
+func (r *perPIDGraphReader) GetProcessByPIDVersion(_ context.Context, _ string, _ int, _ uint32, _ int64) (*api.Process, error) {
+	return nil, nil
+}
+
+func (r *perPIDGraphReader) GetChildProcesses(_ context.Context, _ string, _ int, _ api.TimeRange) ([]api.Process, error) {
+	return nil, nil
+}
+
+func (r *perPIDGraphReader) GetExecChain(_ context.Context, current api.Process) ([]api.Process, error) {
+	return []api.Process{current}, nil
+}
+
+func (r *perPIDGraphReader) GetNetworkEventsForProcess(_ context.Context, _ string, pid int, _ api.TimeRange) ([]api.Event, error) {
+	return r.netEventsByPID[pid], nil
+}
+
+// TestDNSC2Beacon_OrphanedConnectDoesNotMaskResolvableBeacon is the named repro for issue #661.
+//
+// The demo corpus carries captured network_connect events whose fork/exec predate the capture, so their process rows never
+// materialise. Those connects reach resolveFlowProcess (which runs BEFORE the suspicion gate) and raise the retryable sentinel on
+// every single retry. The rule used to return on the first such event, so a real beacon connect LATER in the same batch was never
+// evaluated: the processor nacked and re-claimed every poll tick, the orphan never resolved, and the batch only advanced once the
+// orphan aged out of its grace. By then the beacon connect was itself past the grace measured from its own ingest stamp, so it
+// degraded to the silent skip and the Critical alert was lost for good.
+//
+// The rule must now finish the batch: the resolvable beacon fires, and the orphan's miss is still reported so the batch is retried.
+// spec:server-detection-rules-engine/retryable-evaluation-on-unmaterialized-flow-process/an-unresolvable-event-does-not-mask-resolvable-findings-in-the-same-batch
+func TestDNSC2Beacon_OrphanedConnectDoesNotMaskResolvableBeacon(t *testing.T) {
+	t.Parallel()
+
+	const beaconPID = 4242
+	now := time.Now().UnixNano()
+	beaconProc := &api.Process{ID: 99, HostID: "fixture-host", PID: beaconPID, Path: "/tmp/.update"}
+	dnsQuery := api.Event{
+		EventID:     "beacon-dns",
+		HostID:      "fixture-host",
+		EventType:   "dns_query",
+		TimestampNs: 500,
+		Payload:     json.RawMessage(`{"pid":4242,"query_name":"kx7gq2vphj9k3mzw.example.net","response_addresses":["203.0.113.66"]}`),
+	}
+	gr := &perPIDGraphReader{
+		// 97531 (the orphan, from dnsC2OutboundConnect) is absent: its row never arrives.
+		procByPID:      map[int]*api.Process{beaconPID: beaconProc},
+		netEventsByPID: map[int][]api.Event{beaconPID: {dnsQuery}},
+	}
+
+	beaconConnect := api.Event{
+		EventID:      "beacon-connect",
+		HostID:       "fixture-host",
+		TimestampNs:  1000,
+		IngestedAtNs: now,
+		EventType:    "network_connect",
+		Payload:      json.RawMessage(`{"pid":4242,"direction":"outbound","remote_address":"203.0.113.66","remote_port":443}`),
+	}
+	// The orphan is deliberately FIRST: that is the ordering the old early return lost the beacon on.
+	events := []api.Event{dnsC2OutboundConnect(now), beaconConnect}
+
+	findings, err := (&DNSC2Beacon{}).Evaluate(t.Context(), events, gr)
+
+	require.ErrorIs(t, err, api.ErrProcessNotYetMaterialized,
+		"the orphan's miss must still be reported so the processor retries the batch")
+	require.Len(t, findings, 1, "the resolvable beacon later in the batch must still fire despite the earlier orphan")
+	assert.Equal(t, "dns_c2_beacon", findings[0].RuleID)
+	assert.Equal(t, int64(99), findings[0].ProcessID)
+	assert.Equal(t, api.SeverityCritical, findings[0].Severity, "a high-entropy domain escalates to Critical")
+	assert.Equal(t, []string{"beacon-dns", "beacon-connect"}, findings[0].EventIDs)
 }

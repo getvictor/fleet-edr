@@ -7,6 +7,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Fixed
 
 - **Kill process is pinned to the exact process it targeted.** The "Kill process" action now carries the selected process generation, and the agent refuses the kill (reporting a generation mismatch) if that PID was reused or re-exec'd before the command ran, so a stale kill can no longer terminate an unrelated process.
+- **Alerts are no longer silently dropped while the server is catching up on process data.** A busy or briefly backlogged server could discard a finding instead of retrying it, losing that alert permanently and with nothing in the logs to show it happened. The DNS C2 beacon rule was the most exposed, because it waits the shortest time and its alerts are Critical. Affected detections now fire normally. No action is required, but alerts missed before this upgrade are not backfilled.
 
 ## [0.4.0] (2026-07-07)
 

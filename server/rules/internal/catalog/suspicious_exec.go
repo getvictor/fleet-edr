@@ -153,14 +153,17 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 	// semantics, which would otherwise be order-dependent on event arrival within a single pass.
 	seenShell := map[int]struct{}{}
 	var findings []api.Finding
+	// One event whose process row is still missing defers the batch without ending either pass, so it cannot mask a finding another
+	// event in the same batch would produce (issue #661). The miss spans both passes: it is reported once, after pass 2.
+	var miss pendingMiss
 
 	for _, evt := range events {
 		if evt.EventType != "exec" {
 			continue
 		}
 		f, shellPID, err := r.evalExec(ctx, evt, s, events, seenShell)
-		if err != nil {
-			return nil, err
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fatal
 		}
 		if f != nil {
 			findings = append(findings, *f)
@@ -173,8 +176,8 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 			continue
 		}
 		f, shellPID, err := r.evalNetwork(ctx, evt, s, events, seenShell)
-		if err != nil {
-			return nil, err
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fatal
 		}
 		if f != nil {
 			findings = append(findings, *f)
@@ -182,7 +185,7 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 		}
 	}
 
-	return findings, nil
+	return findings, miss.err
 }
 
 // findShellExecEventID scans the current batch for an exec event matching the shell's PID and host so the finding's EventIDs can

@@ -74,11 +74,16 @@ type applicationControlBlockPayload struct {
 	PolicyVersion int64   `json:"policy_version"`
 }
 
-// Evaluate maps each accepted block event to a Finding. Missing process row → skip the event (the graph builder hasn't materialised
-// the exec yet; the next batch will see it after re-ingest). Missing or malformed payload fields → skip; the validator at ingest is
-// the authoritative gate, this rule is best-effort over the residual.
+// Evaluate maps each accepted block event to a Finding. Missing process row → defer the batch while the event is still inside the
+// materialization grace window (resolveSubjectProcess raises the retryable miss, which this loop records without abandoning the
+// remaining events, so the processor re-evaluates once the graph builder commits the exec); once the event is past that window the
+// row is assumed never to arrive and the event is skipped. Missing or malformed payload fields → skip; these checks are this rule's
+// OWN gate, not a backstop behind an earlier one. Ingest validates the event envelope only (event_id, host_id, event_type,
+// timestamp_ns, plus host pinning) and never unmarshals or schema-validates the payload, so a malformed
+// application_control_block payload reaches this rule intact and is dropped here or nowhere.
 func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
+	var miss pendingMiss
 	for _, evt := range events {
 		if evt.EventType != applicationControlBlockEventType {
 			continue
@@ -91,8 +96,8 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 			continue
 		}
 		proc, err := resolveSubjectProcess(ctx, gr, evt, p.PID)
-		if err != nil {
-			return nil, fmt.Errorf("application control block: %w", err)
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fmt.Errorf("application control block: %w", fatal)
 		}
 		if proc == nil {
 			continue
@@ -107,6 +112,9 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},
 		})
+	}
+	if miss.err != nil {
+		return findings, fmt.Errorf("application control block: %w", miss.err)
 	}
 	return findings, nil
 }

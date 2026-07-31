@@ -97,14 +97,29 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 // historical state, not new attacker activity. Letting rules see
 // them would generate false positives every time the extension
 // restarts.
+// A retryable materialization miss from one rule does NOT stop the remaining rules: it is remembered and returned after every rule
+// has run. Returning immediately meant an earlier rule stuck waiting on a process row that never materializes suppressed every rule
+// after it in registration order for the whole of that rule's grace window, and the suppressed rules then got their first real
+// evaluation only once their own (possibly shorter) grace had already elapsed, so a resolvable finding degraded to the silent skip
+// and was lost. dns_c2_beacon is registered last and carries the tightest grace, so it was the one that lost alerts (issue #661).
+// Non-retryable failures keep their existing semantics: a rule-evaluation error is logged and swallowed (per-rule isolation), and an
+// alert-persistence error aborts immediately because the batch must be retried before any more findings are written.
 func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 	live := filterSnapshotEvents(events)
+	var pendingMiss error
 	for _, rule := range e.rules {
-		if err := e.evaluateRule(ctx, rule, live); err != nil {
+		err := e.evaluateRule(ctx, rule, live)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
 			return err
 		}
+		if pendingMiss == nil {
+			pendingMiss = err
+		}
 	}
-	return nil
+	return pendingMiss
 }
 
 // evaluateRule opens a per-rule span carrying rule_id (observability-instrumentation spec) so detection latency and alert counts
@@ -129,17 +144,21 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 	}
 
 	findings, err := rule.Evaluate(ctx, scoped, e.store)
+	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
+	// recorded but the findings are still persisted below rather than thrown away with the error. Only a non-retryable failure
+	// discards the batch's findings: that path means the rule itself misbehaved, so its output is not trustworthy.
+	var retryableMiss error
 	if err != nil {
 		span.RecordError(err)
-		if errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
-			// A concurrently processed batch has not committed this event's subject process row yet (intra-replica workers since
-			// issue #535, cross-replica claimers per ADR-0011). This is a retryable ordering condition, not a rule bug: fail the
-			// batch so the processor nacks it and re-evaluates once the row lands. Alert dedup makes the re-run idempotent, and
-			// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
-			return fmt.Errorf("rule %s: %w", rule.ID(), err)
+		if !errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
+			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
+			return nil
 		}
-		e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
-		return nil
+		// A concurrently processed batch has not committed this event's subject process row yet (intra-replica workers since
+		// issue #535, cross-replica claimers per ADR-0011). This is a retryable ordering condition, not a rule bug: fail the
+		// batch so the processor nacks it and re-evaluates once the row lands. Alert dedup makes the re-run idempotent, and
+		// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
+		retryableMiss = fmt.Errorf("rule %s: %w", rule.ID(), err)
 	}
 	span.SetAttributes(attribute.Int("alert_count", len(findings)))
 
@@ -150,7 +169,7 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 			return err
 		}
 	}
-	return nil
+	return retryableMiss
 }
 
 // routeFinding applies the per-host resolved mode to a single finding before persistence (issue #459): a `disabled` (rule, host)

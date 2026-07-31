@@ -76,6 +76,7 @@ type dyldPayload struct {
 
 func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
+	var miss pendingMiss
 	for _, evt := range events {
 		if evt.EventType != "exec" {
 			continue
@@ -90,8 +91,8 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 		}
 
 		proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
-		if err != nil {
-			return nil, err
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fatal
 		}
 		if proc == nil {
 			continue
@@ -107,7 +108,7 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 			EventIDs:    []string{evt.EventID},
 		})
 	}
-	return findings, nil
+	return findings, miss.err
 }
 
 // matchDyldArg returns the matching DYLD env prefix when the exec is launching with one

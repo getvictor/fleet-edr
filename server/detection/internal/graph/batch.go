@@ -242,9 +242,16 @@ func (s *batchSession) UpdateProcessExit(_ context.Context, u mysql.ProcessExitU
 	return 1, nil
 }
 
+// CloseStaleProcess mirrors mysql.Store.CloseStaleProcess exactly, including its fork_time_ns < closedAtNs bound; the differential
+// test asserts the overlay and the store agree. See the store's docstring for why that bound is load-bearing (issue #661).
 func (s *batchSession) CloseStaleProcess(_ context.Context, hostID string, pid int, closedAtNs int64) error {
 	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
 		if r.proc.ExitTimeNs != nil {
+			continue
+		}
+		// Only a generation that started before this fork can be the one the fork displaces. A row stamped at or after the fork is a
+		// later generation that was merely processed first (a concurrent batch delivered its exec ahead of the fork).
+		if r.proc.ForkTimeNs >= closedAtNs {
 			continue
 		}
 		ct := closedAtNs

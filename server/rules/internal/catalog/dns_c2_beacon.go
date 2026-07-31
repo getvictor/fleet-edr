@@ -127,17 +127,22 @@ func (r *DNSC2Beacon) Evaluate(ctx context.Context, events []api.Event, s api.Gr
 	// additionally dedups on ProcessID across batches.
 	seenPID := map[int]struct{}{}
 	var findings []api.Finding
+	// A connect whose process row is still missing defers the batch but must NOT end the loop: this rule resolves the flow's process
+	// BEFORE its suspicion gate, so an orphaned connect (its fork/exec never captured) reaches the resolution step and raises the
+	// retryable sentinel on every retry, forever. Returning there let one such connect mask a real beacon later in the same batch
+	// until that beacon's own grace had elapsed, at which point it was silently dropped (issue #661). See pendingMiss in eval.go.
+	var miss pendingMiss
 	for _, evt := range events {
 		f, pid, err := r.evalEvent(ctx, evt, s, seenPID)
-		if err != nil {
-			return nil, err
+		if fatal := miss.absorb(err); fatal != nil {
+			return nil, fatal
 		}
 		if f != nil {
 			findings = append(findings, *f)
 			seenPID[pid] = struct{}{}
 		}
 	}
-	return findings, nil
+	return findings, miss.err
 }
 
 // evalEvent inspects one event. On a match it returns (finding, pid, nil); pid is the connecting process's PID for

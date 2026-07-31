@@ -393,11 +393,21 @@ func (s *Store) GetExecChain(ctx context.Context, current api.Process) ([]api.Pr
 // CloseStaleProcess force-closes a process record that hasn't exited yet. Used to handle PID reuse: when a fork arrives for a PID
 // that already has an active (non-exited) record, close the old one first. exit_reason is set to ExitReasonPIDReuse so analysts can
 // distinguish this synthesis path.
+//
+// fork_time_ns < closedAtNs is load-bearing, not an optimization. PID reuse means a NEW fork takes over a pid an OLDER generation
+// held, so only a generation that started BEFORE this fork can be the one being displaced. A row whose own fork_time is at or after
+// the incoming fork's timestamp is a later generation that merely got processed first, which happens whenever concurrent claim
+// batches (issue #535) split a fork/exec pair and deliver the exec's batch first: the exec synthesizes its row stamped at the exec
+// time, then the fork arrives 10ms "earlier". Without this bound that row was closed at the fork's timestamp, giving it an
+// exit_time_ns BEFORE its own fork_time_ns. Every time-bracketed lookup (GetProcessByPID's
+// `exit_time_ns IS NULL OR exit_time_ns >= atNs`) then skipped the correctly exec-imaged row and resolved the bare fork row instead,
+// whose path is only the parent's. dns_c2_beacon reads proc.Path for its suspicion gate, so it declined the process as unremarkable
+// and silently dropped a Critical beacon alert with no retry (issue #661).
 func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, closedAtNs int64) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE processes SET exit_time_ns = ?, exit_ingested_at_ns = ?, exit_reason = ?
-		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL`,
-		closedAtNs, closedAtNs, api.ExitReasonPIDReuse, hostID, pid,
+		WHERE host_id = ? AND pid = ? AND exit_time_ns IS NULL AND fork_time_ns < ?`,
+		closedAtNs, closedAtNs, api.ExitReasonPIDReuse, hostID, pid, closedAtNs,
 	)
 	return err
 }
