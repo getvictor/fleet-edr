@@ -77,8 +77,10 @@ type applicationControlBlockPayload struct {
 // Evaluate maps each accepted block event to a Finding. Missing process row → defer the batch while the event is still inside the
 // materialization grace window (resolveSubjectProcess raises the retryable miss, which this loop records without abandoning the
 // remaining events, so the processor re-evaluates once the graph builder commits the exec); once the event is past that window the
-// row is assumed never to arrive and the event is skipped. Missing or malformed payload fields → skip; the validator at ingest is
-// the authoritative gate, this rule is best-effort over the residual.
+// row is assumed never to arrive and the event is skipped. Missing or malformed payload fields → skip; these checks are this rule's
+// OWN gate, not a backstop behind an earlier one. Ingest validates the event envelope only (event_id, host_id, event_type,
+// timestamp_ns, plus host pinning) and never unmarshals or schema-validates the payload, so a malformed
+// application_control_block payload reaches this rule intact and is dropped here or nowhere.
 func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
 	var miss pendingMiss
