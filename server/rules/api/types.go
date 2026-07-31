@@ -83,9 +83,12 @@ type Rule interface {
 	// test asserts every registered rule returns a non-empty set of valid platforms.
 	Platforms() []Platform
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
-	// mutate state. Returning an error skips the rule for this batch (logged at WARN), except an error wrapping
-	// ErrProcessNotYetMaterialized, which the engine propagates so the processor retries the whole batch. Returning nil findings is
-	// the common case.
+	// mutate state. Returning nil findings is the common case.
+	//
+	// The two error classes are handled differently, and the difference matters to rule authors. An ordinary error discards this
+	// rule's findings for the batch and is logged at WARN, isolating a misbehaving rule from the rest. An error wrapping
+	// ErrProcessNotYetMaterialized does NOT discard them: the engine persists whatever findings came back alongside it and still
+	// propagates the miss, so the processor retries the batch and alert dedup makes the re-run idempotent.
 	//
 	// An implementation MUST NOT abandon the rest of the batch when one event raises ErrProcessNotYetMaterialized. Finish evaluating
 	// every event, then return the findings that DID resolve together with the miss: the engine persists those findings and still
