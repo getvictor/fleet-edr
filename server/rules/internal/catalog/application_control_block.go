@@ -74,8 +74,10 @@ type applicationControlBlockPayload struct {
 	PolicyVersion int64   `json:"policy_version"`
 }
 
-// Evaluate maps each accepted block event to a Finding. Missing process row → skip the event (the graph builder hasn't materialised
-// the exec yet; the next batch will see it after re-ingest). Missing or malformed payload fields → skip; the validator at ingest is
+// Evaluate maps each accepted block event to a Finding. Missing process row → defer the batch while the event is still inside the
+// materialization grace window (resolveSubjectProcess raises the retryable miss, which this loop records without abandoning the
+// remaining events, so the processor re-evaluates once the graph builder commits the exec); once the event is past that window the
+// row is assumed never to arrive and the event is skipped. Missing or malformed payload fields → skip; the validator at ingest is
 // the authoritative gate, this rule is best-effort over the residual.
 func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Event, gr api.GraphReader) ([]api.Finding, error) {
 	var findings []api.Finding
