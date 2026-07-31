@@ -82,6 +82,7 @@ let package = Package(
                 "networkextension/networkextension.entitlements",
                 "networkextension/main.swift",
                 "networkextension/DNSProxyProvider.swift",
+                "networkextension/DNSProxyTypes.swift",
                 "networkextension/NetworkEventSerializer.swift",
                 "networkextension/NetworkFilter.swift",
                 "networkextension/XPCServer.swift",
@@ -109,6 +110,19 @@ let package = Package(
                 // NetworkPayloads.swift holds the NetworkConnect/DNSQuery Codable structs (no NetworkExtension import, no
                 // EventEnvelope) so their pidversion wire shape is unit-testable here (issue #403, Copilot review).
                 "networkextension/NetworkPayloads.swift",
+                // DNSForwardPolicy.swift decides HOW a claimed flow is forwarded, keeping our forward out of another
+                // provider's tunnel (issue #656). Declining such flows is NOT viable: returning false from handleNewFlow
+                // kills the flow rather than handing it back to the OS. Pure Foundation with the entitlement probe
+                // injected, so the routing matrix is unit-testable without a live flow.
+                "networkextension/DNSForwardPolicy.swift",
+                // InterfaceSnapshot.swift keeps the name-keyed NWInterface view used to pin an upstream forward to the
+                // interface the client bound its flow to (issue #656). Network + os only, no NetworkExtension import, so the
+                // name matching and parameter construction are unit-testable here.
+                "networkextension/InterfaceSnapshot.swift",
+                // NetworkExtensionProviderLookup.swift is the impure half of that decision: the SecCode entitlement walk plus
+                // its (pid, pidversion) cache. Security + os only (no NetworkExtension import), so the caching and fail-open
+                // behaviour compile and are exercisable here.
+                "networkextension/NetworkExtensionProviderLookup.swift",
                 // The XPC server is now shared by both extensions (shared/XPCEventServer.swift): the listener, hello-ack
                 // handshake, pending buffer, peer code-signing, and the dispatchInbound decision. The per-extension
                 // XPCServer.swift wrappers (thin XPCEventServer instantiations) stay out of this logic module; the
