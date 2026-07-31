@@ -223,7 +223,7 @@ func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
 	})
 }
 
-// TestEngine_Evaluate_RetryableMissDoesNotSuppressLaterRules is the engine half of the issue #661 repro.
+// TestEngine_Evaluate_AFailingRuleDoesNotSuppressLaterRules is the engine half of the issue #661 repro.
 //
 // Rules are evaluated in registration order and the engine used to return on the first retryable miss, so every rule after the
 // missing one was skipped for as long as that rule kept missing. A rule waiting on a process row that never materialises holds its
