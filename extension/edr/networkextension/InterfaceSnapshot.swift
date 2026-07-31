@@ -33,6 +33,13 @@ final class InterfaceSnapshot {
         monitor.start(queue: queue)
     }
 
+    /// stop releases the path monitor. Called from `stopProxy` so the monitor and its dispatch queue do not outlive the
+    /// proxy's active lifetime: `stopProxy` is invoked on configuration changes, not only at process exit, so a monitor
+    /// left running would accumulate one per start/stop cycle.
+    func stop() {
+        monitor.cancel()
+    }
+
     /// update replaces the snapshot. Internal rather than private so tests can drive it without a live path monitor.
     func update(with interfaces: [NWInterface]) {
         // uniquingKeysWith keeps the first entry: names are unique on a live system, so a duplicate would be a platform

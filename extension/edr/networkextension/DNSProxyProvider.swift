@@ -5,54 +5,6 @@ import os.log
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "DNSProxy")
 
-/// Wire-format + flow-control constants for DNS proxying.
-private enum DNSProxy {
-    /// RFC 1035 §4.2.2: TCP DNS messages are prefixed with a two-byte big-endian length.
-    static let tcpLengthPrefixBytes = 2
-    /// 16-bit length means the upper bound on a TCP DNS payload is UInt16.max bytes.
-    static let tcpMaxMessageBytes = Int(UInt16.max)
-    /// Safety cancel for an idle TCP DNS connection after the flow has signalled FIN
-    /// upstream. 30s is past any sane resolver round-trip but bounded enough that a
-    /// misbehaving upstream cannot pin our flow + NWConnection pair forever.
-    static let tcpUpstreamLingerSeconds: Double = 30
-    /// Deadline for a single UDP DNS forward (connect + send + receive). Past this the upstream is treated as failed: the
-    /// flow is released (fail-open) and the failure is recorded so the health watchdog can bypass a wedged upstream. 3s is
-    /// past a sane resolver round-trip but short enough that a stuck upstream cannot pin the client's resolution. Before
-    /// this existed the UDP path waited on `receiveMessage` with no timeout, so a wedged upstream hung every claimed query
-    /// indefinitely and took down all DNS (the 2026-06-20 incident).
-    static let udpForwardDeadlineSeconds: Double = 3
-}
-
-/// Process attribution context for a single DNS flow. Bundled to keep function
-/// parameter counts manageable.
-private struct FlowContext {
-    let pid: pid_t
-    let uid: uid_t
-    let path: String
-    /// Kernel PID generation of the querying process when the flow carried an audit token; nil otherwise (issue #403).
-    let pidVersion: UInt32?
-}
-
-/// How a claimed flow's forward must leave the host: the policy's routing decision plus the interface the client bound,
-/// if any. Bundled for the same parameter-count reason FlowContext exists, and because the two are only ever meaningful
-/// together (a tunnel-avoiding route deliberately ignores the bound interface).
-private struct ForwardRoute {
-    let routing: DNSForwardPolicy.Routing
-    let boundInterface: NWInterface?
-}
-
-/// Per-datagram UDP forward state, bundled so the send / receive helpers stay under the parameter-count limit (same reason
-/// FlowContext exists). One UDPForward exists per outbound query: it carries the upstream connection, the flow to write the
-/// answer back to, the once-guarded completion, and the deadline timer.
-private struct UDPForward {
-    let connection: Network.NWConnection
-    let responseEndpoint: Network.NWEndpoint
-    let flow: NEAppProxyUDPFlow
-    let ctx: FlowContext
-    let completion: DNSForwardCompletion
-    let deadline: DispatchWorkItem
-}
-
 /// DNSProxyProvider intercepts DNS queries, captures metadata for EDR telemetry,
 /// and forwards queries to the originally-intended DNS server. Process attribution
 /// is done via audit tokens on the incoming flow.
@@ -89,6 +41,9 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     }
 
     override func stopProxy(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        // Release the path monitor started in startProxy. stopProxy runs on configuration changes, not only at process
+        // exit, so leaving it running would leak a monitor and its queue on every start/stop cycle.
+        interfaces.stop()
         logger.info("DNS proxy stopping: \(String(describing: reason))")
         completionHandler()
     }
@@ -209,9 +164,10 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         // Emit telemetry (best-effort).
         emitDNSTelemetry(datagram: datagram, ctx: ctx, proto: "udp")
 
-        // Forward to the originally-intended DNS server. The system excludes this
-        // extension's own connections from the DNS proxy chain, so there's no
-        // infinite loop.
+        // Forward to the originally-intended DNS server. The system excludes this extension's own connections from the
+        // DNS proxy chain, so OUR forward cannot loop back into us. That guarantee does not extend to another
+        // network-extension provider's flows, which is what `route.routing` exists to handle: those are forwarded off
+        // tunnel interfaces so we cannot re-enter a tunnel whose provider is waiting on this answer (issue #656).
         let connection = Network.NWConnection(
             to: endpoint,
             using: InterfaceSnapshot.udpParameters(routing: route.routing, boundInterface: route.boundInterface))

@@ -40,14 +40,25 @@ struct DNSForwardPolicy {
     /// Code-signing identifier of this extension. Flows attributed to us take ordinary routing, and skip the entitlement
     /// probe: the system already keeps our own outbound connections out of the proxy chain, so there is no loop to break,
     /// and our provider holds the very entitlement the probe tests for.
+    ///
+    /// May be empty if the caller could not determine it (`Bundle.main.bundleIdentifier` is documented to be present for a
+    /// system extension, but a misconfigured bundle can leave it nil). An empty value matches NOTHING rather than matching
+    /// every unattributed flow: see `routing`.
     let ownSigningIdentifier: String
 
     /// routing chooses how to forward this flow. `sourceIsNetworkExtensionProvider` is the injected entitlement probe:
     /// true when the flow's source process holds `com.apple.developer.networking.networkextension`. It is an autoclosure
     /// so the SecCode walk is skipped for our own flows, keeping the common path to one string comparison.
+    ///
+    /// The `isEmpty` guard is load-bearing. A flow can arrive with an empty `sourceAppSigningIdentifier`, and if our own
+    /// identifier were also empty the two would compare equal, silently skipping the probe and granting tunnel egress to
+    /// exactly the unattributed flows least able to justify it. An empty own identifier therefore never matches, so every
+    /// flow is decided by the probe instead.
     func routing(sourceSigningIdentifier: String,
                  sourceIsNetworkExtensionProvider: @autoclosure () -> Bool) -> Routing {
-        guard sourceSigningIdentifier != ownSigningIdentifier else { return .honourBoundInterface }
+        if !ownSigningIdentifier.isEmpty, sourceSigningIdentifier == ownSigningIdentifier {
+            return .honourBoundInterface
+        }
         return sourceIsNetworkExtensionProvider() ? .avoidTunnelEgress : .honourBoundInterface
     }
 }

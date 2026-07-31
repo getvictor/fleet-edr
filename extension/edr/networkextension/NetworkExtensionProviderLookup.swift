@@ -25,7 +25,7 @@ final class NetworkExtensionProviderLookup {
     static let shared = NetworkExtensionProviderLookup()
 
     /// The entitlement that defines a network-extension provider.
-    private static let networkExtensionEntitlement = "com.apple.developer.networking.networkextension"
+    fileprivate static let networkExtensionEntitlement = "com.apple.developer.networking.networkextension"
 
     /// Cap on memoised verdicts. Each entry is a key plus a Bool, so a few thousand is negligible memory, and it bounds the
     /// growth a churn of short-lived resolver processes could otherwise cause.
@@ -40,6 +40,15 @@ final class NetworkExtensionProviderLookup {
 
     private let lock = OSAllocatedUnfairLock<[Key: Bool]>(initialState: [:])
 
+    /// Reads the entitlement for one audit token. Injected so the caching, purge, and fail-open behaviour are unit-testable
+    /// without a live process, the same seam `DNSProxyHealth` uses for its clock and `DNSForwardPolicy` for this very
+    /// probe. Production uses the SecCode walk below.
+    private let readEntitlement: (Data) -> Bool
+
+    init(readEntitlement: @escaping (Data) -> Bool = NetworkExtensionProviderLookup.readEntitlementViaSecCode) {
+        self.readEntitlement = readEntitlement
+    }
+
     /// isProvider reports whether the process identified by `auditToken` holds the network-extension entitlement.
     ///
     /// Returns false when the token is absent or the process cannot be resolved. That is the deliberate fail-open choice
@@ -53,7 +62,7 @@ final class NetworkExtensionProviderLookup {
 
         if let cached = lock.withLock({ $0[key] }) { return cached }
 
-        let verdict = readEntitlement(auditToken: auditToken)
+        let verdict = readEntitlement(auditToken)
         lock.withLock { cache in
             // Purge wholesale rather than evicting one entry: see the type comment on why LRU bookkeeping is not worth it
             // at DNS flow rates.
@@ -63,12 +72,17 @@ final class NetworkExtensionProviderLookup {
         return verdict
     }
 
-    /// readEntitlement performs the SecCode walk for one process. Separated from the caching so the cost is obvious at the
-    /// call site and so a failure returns the same fail-open false the cache stores.
-    private func readEntitlement(auditToken: Data) -> Bool {
+    /// readEntitlementViaSecCode performs the SecCode walk for one process. Separated from the caching so the cost is
+    /// obvious at the call site and so a failure returns the same fail-open false the cache stores.
+    ///
+    /// Both failure branches log at debug. They are fail-open decisions on a security-relevant path, and a silent
+    /// fail-open branch is precisely what made issues #657 and #661 undiagnosable from logs; debug is not persisted, so
+    /// this cannot flood the log store while still being reachable with `log stream --level debug`.
+    static func readEntitlementViaSecCode(auditToken: Data) -> Bool {
         var code: SecCode?
         let attributes = [kSecGuestAttributeAudit: auditToken] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code else {
+            logger.debug("Could not resolve a flow's source process for the entitlement check; treating it as ordinary")
             return false
         }
 
@@ -81,8 +95,9 @@ final class NetworkExtensionProviderLookup {
         guard status == errSecSuccess,
               let info = information as? [String: Any],
               let entitlements = info[kSecCodeInfoEntitlementsDict as String] as? [String: Any] else {
+            logger.debug("Could not read a source process's entitlements (status \(status)); treating it as ordinary")
             return false
         }
-        return entitlements[Self.networkExtensionEntitlement] != nil
+        return entitlements[networkExtensionEntitlement] != nil
     }
 }

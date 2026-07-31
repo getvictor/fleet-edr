@@ -100,6 +100,20 @@ final class InterfaceSnapshotTests: XCTestCase {
         XCTAssertEqual(parameters.prohibitedInterfaceTypes, [.other])
     }
 
+    func testStopIsSafeAndLeavesTheSnapshotReadable() throws {
+        // stopProxy runs on configuration changes, not only at process exit, so the monitor must be releasable. Stopping
+        // must not trap, and must not corrupt an already-published snapshot that in-flight forwards may still read.
+        let interfaces = try liveInterfaces()
+        let snapshot = InterfaceSnapshot()
+        snapshot.start()
+        snapshot.update(with: interfaces)
+        snapshot.stop()
+        XCTAssertNotNil(snapshot.interface(named: try XCTUnwrap(interfaces.first).name))
+        // Idempotent: a second stop (or a stop before start) must be harmless.
+        snapshot.stop()
+        InterfaceSnapshot().stop()
+    }
+
     func testParametersUseTheExpectedTransport() {
         // Guards against a copy-paste swap between the two builders: a TCP DNS flow forwarded over UDP (or the reverse)
         // would corrupt the 2-byte-length-prefixed TCP wire format.

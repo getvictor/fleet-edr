@@ -67,10 +67,26 @@ final class DNSForwardPolicyTests: XCTestCase {
     }
 
     func testEmptySigningIdentifierIsDecidedByTheProbe() {
-        // A flow can arrive with an empty signing identifier. It must not accidentally match an empty ownSigningIdentifier
-        // and thereby skip the probe.
+        // A flow can arrive with an empty signing identifier. It must not accidentally match our own identifier and
+        // thereby skip the probe.
         XCTAssertEqual(policy().routing(sourceSigningIdentifier: "", sourceIsNetworkExtensionProvider: true),
                        .avoidTunnelEgress)
+    }
+
+    func testEmptyOwnIdentifierMatchesNothing() {
+        // The provider builds this from `Bundle.main.bundleIdentifier ?? ""`. That is documented to be present for a
+        // system extension, but a misconfigured bundle can leave it nil, and an empty own identifier must then match
+        // NOTHING rather than matching every unattributed flow: the latter would grant tunnel egress to exactly the
+        // flows least able to justify it, silently and only on a misconfigured host.
+        let degraded = DNSForwardPolicy(ownSigningIdentifier: "")
+        var probeCalls = 0
+        let routing = degraded.routing(sourceSigningIdentifier: "",
+                                       sourceIsNetworkExtensionProvider: { probeCalls += 1; return true }())
+        XCTAssertEqual(routing, .avoidTunnelEgress)
+        XCTAssertEqual(probeCalls, 1, "the probe must decide when our own identifier is unknown")
+        // A named source is likewise decided by the probe, not by a spurious match against the empty own identifier.
+        XCTAssertEqual(degraded.routing(sourceSigningIdentifier: "com.example.app",
+                                        sourceIsNetworkExtensionProvider: false), .honourBoundInterface)
     }
 
     // The spec marker ID is a single unwrappable token; disable line_length for it as the other marked suites do.

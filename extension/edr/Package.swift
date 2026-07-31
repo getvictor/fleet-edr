@@ -82,6 +82,7 @@ let package = Package(
                 "networkextension/networkextension.entitlements",
                 "networkextension/main.swift",
                 "networkextension/DNSProxyProvider.swift",
+                "networkextension/DNSProxyTypes.swift",
                 "networkextension/NetworkEventSerializer.swift",
                 "networkextension/NetworkFilter.swift",
                 "networkextension/XPCServer.swift",

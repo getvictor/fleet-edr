@@ -11,7 +11,7 @@
 
 ## 3. Provider wiring
 
-- [x] `extension/edr/networkextension/DNSProxyProvider.swift`: consult the forward policy in `handleNewFlow`; build the flow context once and thread it plus the `ForwardRoute` through the UDP and TCP paths; keep tunnel-avoiding outcomes out of `health.record`; note each routed-around provider once; correct the stale "no infinite loop" header comment and the bypass comment that claimed the watchdog fails open.
+- [x] `extension/edr/networkextension/DNSProxyProvider.swift`: consult the forward policy in `handleNewFlow`; build the flow context once and thread it plus the `ForwardRoute` through the UDP and TCP paths; keep tunnel-avoiding outcomes out of `health.record`; note each routed-around provider once; correct BOTH copies of the stale "no infinite loop" comment (the class header and the one at the UDP forward site) and the bypass comment that claimed the watchdog fails open.
 
 ## 4. Spec
 
@@ -31,11 +31,11 @@
 
   A first implementation DECLINED those flows, which is what the issue asks for. The VM proved that wrong and the design was reworked; the measurement is recorded in `DNSForwardPolicy`'s type comment. Declining, and separately a diagnostic build that declined every flow:
 
-  | client | declined | proxy configuration disabled |
-  |------------------------- | ------------------ | ---------------------------- |
-  | `dig` (v4 and v6)        | no answer          | resolves                     |
-  | Go probe                 | connection refused | resolves                     |
-  | `dscacheutil`            | 0 addresses        | resolves                     |
-  | `ping` name resolution   | fails              | resolves                     |
+  | client                 | declined           | proxy configuration disabled |
+  | ---------------------- | ------------------ | ---------------------------- |
+  | `dig` (v4 and v6)      | no answer          | resolves                     |
+  | Go probe               | connection refused | resolves                     |
+  | `dscacheutil`          | 0 addresses        | resolves                     |
+  | `ping` name resolution | fails              | resolves                     |
 
   With the shipped routing design instead, on the same host: the entitled probe and entitled `dig` resolve over both v4 and v6, ordinary clients are unchanged, each routed-around provider is logged exactly once (2 lines for 2 providers, not one per flow), and `dns_query` telemetry is emitted for BOTH classes (6 + 2 events for the two entitled binaries, alongside the ordinary ones) where declining had produced none.
