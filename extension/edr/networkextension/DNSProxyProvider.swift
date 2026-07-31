@@ -75,20 +75,17 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
         // Self-heal: if upstream forwarding is sustainedly wedged, do NOT claim the flow. Returning false hands the flow
         // to the system resolver, so a broken proxy fails open instead of taking down all DNS (the 2026-06-20 incident).
-        // We lose dns_query telemetry for the bypass window, which is the correct trade for a monitoring tap. policyActive
-        // is false until the network-response enforcement plane lands; an active policy will force claim + rebuild instead
-        // of bypass so a blocked domain can never resolve via the system resolver (see resilient-network-enforcement).
+        // We lose dns_query telemetry for the bypass window, which is the correct trade for a monitoring tap. The bypass
+        // latches and backs off, and the restore attempt claims only a bounded number of flows, so recovering does not
+        // stall the host's live query traffic (the 2026-07-27 incident). policyActive is false until the network-response
+        // enforcement plane lands; an active policy will force claim + rebuild instead of bypass so a blocked domain can
+        // never resolve via the system resolver (see resilient-network-enforcement).
         let decision = health.decide(policyActive: false)
-        if decision.verdict == .bypass {
-            if decision.transitioned {
-                logger.error("DNS proxy entering bypass: upstream forwarding sustainedly failing; handing DNS to the system resolver")
-            }
-            return false
+        if let transition = decision.transition {
+            logTransition(transition)
         }
-        if decision.transitioned {
-            // verdict flipped back to .claim: we just exited a bypass window (upstream recovered, or the failure samples
-            // aged out so we are probing again). Logged once, not per flow.
-            logger.info("DNS proxy resuming: claiming DNS flows again after a bypass window")
+        if decision.verdict == .bypass {
+            return false
         }
 
         if let udpFlow = flow as? NEAppProxyUDPFlow {
@@ -101,6 +98,28 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             return true
         }
         return false
+    }
+
+    /// logTransition emits one line per watchdog state change. Logged from the single decide() call that produced the
+    /// change, never per flow: every DNS lookup reaches handleNewFlow, so a per-flow line would be the log flood the
+    /// watchdog exists to prevent. The three cases are distinct messages on purpose. During the 2026-07-27 incident the
+    /// log carried nothing but repeated "entering bypass", which left no way to tell one sustained bypass from the
+    /// re-trip loop that was actually happening.
+    private func logTransition(_ transition: DNSProxyHealth.Transition) {
+        switch transition {
+        case .enteredBypass(let trip, let hold):
+            logger.error("""
+            DNS proxy entering bypass (consecutive trip \(trip, format: .decimal)): upstream forwarding sustainedly \
+            failing; handing DNS to the system resolver for \(hold, format: .fixed(precision: 0))s
+            """)
+        case .startedProbe(let trip, let budget):
+            logger.info("""
+            DNS proxy probing upstream after bypass hold (consecutive trip \(trip, format: .decimal)): claiming up to \
+            \(budget, format: .decimal) flows; all others stay on the system resolver
+            """)
+        case .resumed:
+            logger.info("DNS proxy resuming: upstream healthy, claiming DNS flows again")
+        }
     }
 
     // MARK: UDP flow handling
