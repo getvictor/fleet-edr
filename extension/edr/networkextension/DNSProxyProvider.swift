@@ -33,6 +33,14 @@ private struct FlowContext {
     let pidVersion: UInt32?
 }
 
+/// How a claimed flow's forward must leave the host: the policy's routing decision plus the interface the client bound,
+/// if any. Bundled for the same parameter-count reason FlowContext exists, and because the two are only ever meaningful
+/// together (a tunnel-avoiding route deliberately ignores the bound interface).
+private struct ForwardRoute {
+    let routing: DNSForwardPolicy.Routing
+    let boundInterface: NWInterface?
+}
+
 /// Per-datagram UDP forward state, bundled so the send / receive helpers stay under the parameter-count limit (same reason
 /// FlowContext exists). One UDPForward exists per outbound query: it carries the upstream connection, the flow to write the
 /// answer back to, the once-guarded completion, and the deadline timer.
@@ -54,15 +62,28 @@ private struct UDPForward {
 ///
 /// Safety: The proxy forwards all datagrams unchanged. Parsing is best-effort
 /// and only used for telemetry. If parsing fails, forwarding still succeeds.
-/// The system excludes this extension's own outbound connections from the proxy
-/// chain, so there's no infinite loop.
+///
+/// The system keeps THIS extension's own outbound connections out of the proxy chain, so our own forward cannot loop back
+/// into us. That guarantee does not extend to a second network extension that is itself a resolver, which is what issue
+/// #656 broke: see DNSForwardPolicy for the deadlock and the routing that prevents it.
 final class DNSProxyProvider: NEDNSProxyProvider {
     private let serializer = NetworkEventSerializer()
     /// Self-heal watchdog. Accounts UDP upstream-forward outcomes; when forwarding is sustainedly failing it tells
     /// handleNewFlow to stop claiming DNS flows so the system resolver takes over (fail-open). See DNSProxyHealth + ADR-0014.
     private let health = DNSProxyHealth()
+    /// Chooses how to route a claimed flow's forward so it can never re-enter another provider's tunnel (issue #656). Our
+    /// own signing identifier is carved out because our provider holds the same entitlement the probe keys on.
+    private let forwardPolicy = DNSForwardPolicy(ownSigningIdentifier: Bundle.main.bundleIdentifier ?? "")
+    private let providerLookup = NetworkExtensionProviderLookup.shared
+    /// Signing identifiers already reported as tunnel-avoiding, so the fact is logged once per provider rather than once
+    /// per flow. Bounded by the number of network extensions installed on the host, which is a handful.
+    private let notedPeers = OSAllocatedUnfairLock<Set<String>>(initialState: [])
+    /// Live interface snapshot, used to pin an upstream forward to the interface the client bound its flow to. Started in
+    /// startProxy so the first flow already has a snapshot to match against.
+    private let interfaces = InterfaceSnapshot()
 
     override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
+        interfaces.start()
         logger.info("DNS proxy started")
         completionHandler(nil)
     }
@@ -73,13 +94,31 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     }
 
     override func handleNewFlow(_ flow: NEAppProxyFlow) -> Bool {
-        // Self-heal: if upstream forwarding is sustainedly wedged, do NOT claim the flow. Returning false hands the flow
-        // to the system resolver, so a broken proxy fails open instead of taking down all DNS (the 2026-06-20 incident).
-        // We lose dns_query telemetry for the bypass window, which is the correct trade for a monitoring tap. The bypass
-        // latches and backs off, and the restore attempt claims only a bounded number of flows, so recovering does not
-        // stall the host's live query traffic (the 2026-07-27 incident). policyActive is false until the network-response
-        // enforcement plane lands; an active policy will force claim + rebuild instead of bypass so a blocked domain can
-        // never resolve via the system resolver (see resilient-network-enforcement).
+        let identity = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
+        let signingIdentifier = flow.metaData.sourceAppSigningIdentifier
+
+        // Decide how this flow's forward must be routed (issue #656). We deliberately do NOT decline another provider's
+        // flows: returning false does not hand a DNS flow back to the system, it kills it, so declining would trade a
+        // deadlock that needs a VPN for a guaranteed resolution failure. See DNSForwardPolicy for the measurement.
+        let routing = forwardPolicy.routing(
+            sourceSigningIdentifier: signingIdentifier,
+            sourceIsNetworkExtensionProvider: providerLookup.isProvider(auditToken: flow.metaData.sourceAppAuditToken,
+                                                                        identity: identity)
+        )
+        if routing == .avoidTunnelEgress {
+            noteTunnelAvoidance(signingIdentifier: signingIdentifier)
+        }
+
+        // Self-heal watchdog. WARNING: this bypass does NOT fail open, contrary to its original design intent. Returning
+        // false does not hand a DNS flow back to the system resolver: measured on edr-dev with a build that declined every
+        // flow, nothing on the host resolved at all (dig against either configured resolver, dscacheutil, and ping all
+        // failed), while the same queries succeeded the moment the proxy configuration was disabled. The incident record
+        // agrees: the watchdog fired 18 times and host DNS recovered in none of those windows, and only disabling the
+        // configuration restored it. So a bypass is a host-wide DNS outage, not a safety valve. The latch and backoff
+        // added for issue #657 still bound how often we enter it and how many queries a probe stalls, which is why this is
+        // left in place rather than ripped out mid-change, but the real fix is to tear down the proxy configuration
+        // instead of declining flows. Tracked separately; do not add new callers of this bypass until it is.
+        // policyActive is false until the network-response enforcement plane lands.
         let decision = health.decide(policyActive: false)
         if let transition = decision.transition {
             logTransition(transition)
@@ -88,56 +127,60 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             return false
         }
 
+        // Built once here rather than per flow-type handler: the audit-token parse and proc_pidpath are the same work for
+        // both, and the claim decision above already needed the identity.
+        let ctx = FlowContext(pid: identity.pid, uid: identity.uid, path: processPath(for: identity.pid),
+                              pidVersion: identity.pidversion)
+
         if let udpFlow = flow as? NEAppProxyUDPFlow {
-            handleUDPFlow(udpFlow)
+            handleUDPFlow(udpFlow, ctx: ctx, routing: routing)
             return true
         }
         // TCP DNS is rare but must be handled to avoid breaking large responses.
         if let tcpFlow = flow as? NEAppProxyTCPFlow {
-            handleTCPFlow(tcpFlow)
+            handleTCPFlow(tcpFlow, ctx: ctx, routing: routing)
             return true
         }
         return false
     }
 
-    /// logTransition emits one line per watchdog state change. Logged from the single decide() call that produced the
-    /// change, never per flow: every DNS lookup reaches handleNewFlow, so a per-flow line would be the log flood the
-    /// watchdog exists to prevent. The three cases are distinct messages on purpose. During the 2026-07-27 incident the
-    /// log carried nothing but repeated "entering bypass", which left no way to tell one sustained bypass from the
-    /// re-trip loop that was actually happening.
-    private func logTransition(_ transition: DNSProxyHealth.Transition) {
-        switch transition {
-        case .enteredBypass(let trip, let hold):
-            logger.error("""
-            DNS proxy entering bypass (consecutive trip \(trip, format: .decimal)): upstream forwarding sustainedly \
-            failing; handing DNS to the system resolver for \(hold, format: .fixed(precision: 0))s
-            """)
-        case .startedProbe(let trip, let budget):
-            logger.info("""
-            DNS proxy probing upstream after bypass hold (consecutive trip \(trip, format: .decimal)): claiming up to \
-            \(budget, format: .decimal) flows; all others stay on the system resolver
-            """)
-        case .resumed:
-            logger.info("DNS proxy resuming: upstream healthy, claiming DNS flows again")
-        }
+    /// noteTunnelAvoidance reports, once per provider, that we are keeping that provider's DNS forwards off tunnel
+    /// interfaces. A per-flow line would flood the log on a host whose tunnel provider resolves continuously (the
+    /// incident host produced 730 such flows in 18 minutes); the operator needs to know WHICH provider is being routed
+    /// around, not how often.
+    private func noteTunnelAvoidance(signingIdentifier: String) {
+        let firstTime = notedPeers.withLock { $0.insert(signingIdentifier).inserted }
+        guard firstTime else { return }
+        logger.info("""
+        Keeping DNS forwards for \(signingIdentifier, privacy: .public) off tunnel interfaces: it is itself a network \
+        extension, and routing its resolver traffic back through a tunnel can deadlock host DNS
+        """)
+    }
+
+    /// boundInterface resolves the interface the client bound this flow to, so an ordinary forward can be pinned to it.
+    /// Only a BOUND flow yields one: an unbound flow expressed no interface preference, so forcing one on it would change
+    /// routing for the overwhelmingly common case rather than honouring a choice the client actually made.
+    private func boundInterface(for flow: NEAppProxyFlow) -> NWInterface? {
+        guard flow.isBound, let bound = flow.networkInterface else { return nil }
+        return interfaces.interface(named: String(cString: nw_interface_get_name(bound)))
     }
 
     // MARK: UDP flow handling
 
-    private func handleUDPFlow(_ flow: NEAppProxyUDPFlow) {
-        let info = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let ctx = FlowContext(pid: info.pid, uid: info.uid, path: processPath(for: info.pid), pidVersion: info.pidversion)
+    private func handleUDPFlow(_ flow: NEAppProxyUDPFlow, ctx: FlowContext, routing: DNSForwardPolicy.Routing) {
+        // Captured before open() so the forward path does not have to reach back into the flow for it.
+        let route = ForwardRoute(routing: routing, boundInterface: boundInterface(for: flow))
 
         flow.open(withLocalFlowEndpoint: nil) { [weak self] error in
             if let error {
                 logger.error("Failed to open UDP flow: \(error.localizedDescription)")
                 return
             }
-            self?.readUDPDatagrams(flow: flow, ctx: ctx)
+            self?.readUDPDatagrams(flow: flow, ctx: ctx, route: route)
         }
     }
 
-    private func readUDPDatagrams(flow: NEAppProxyUDPFlow, ctx: FlowContext) {
+    private func readUDPDatagrams(flow: NEAppProxyUDPFlow, ctx: FlowContext, route: ForwardRoute) {
         flow.readDatagrams { [weak self] pairs, error in
             guard let self else { return }
 
@@ -153,29 +196,34 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             }
 
             for (datagram, endpoint) in pairs {
-                self.forwardUDPDatagram(datagram, to: endpoint, flow: flow, ctx: ctx)
+                self.forwardUDPDatagram(datagram, to: endpoint, flow: flow, ctx: ctx, route: route)
             }
 
             // Continue reading for more datagrams on this flow.
-            self.readUDPDatagrams(flow: flow, ctx: ctx)
+            self.readUDPDatagrams(flow: flow, ctx: ctx, route: route)
         }
     }
 
     private func forwardUDPDatagram(_ datagram: Data, to endpoint: Network.NWEndpoint,
-                                    flow: NEAppProxyUDPFlow, ctx: FlowContext) {
+                                    flow: NEAppProxyUDPFlow, ctx: FlowContext, route: ForwardRoute) {
         // Emit telemetry (best-effort).
         emitDNSTelemetry(datagram: datagram, ctx: ctx, proto: "udp")
 
         // Forward to the originally-intended DNS server. The system excludes this
         // extension's own connections from the DNS proxy chain, so there's no
         // infinite loop.
-        let connection = Network.NWConnection(to: endpoint, using: .udp)
+        let connection = Network.NWConnection(
+            to: endpoint,
+            using: InterfaceSnapshot.udpParameters(routing: route.routing, boundInterface: route.boundInterface))
 
         // One outcome per forward, recorded once. On failure we fail open: cancel the upstream connection and release the
         // flow so the client retries or rolls over instead of being pinned on a wedged proxy. The recorded failure feeds
         // the health watchdog, which bypasses to the system resolver once enough forwards fail in a row.
         let completion = DNSForwardCompletion { [weak self, weak flow] ok in
-            self?.health.record(ok: ok)
+            // Tunnel-avoiding forwards are excluded: they are denied the tunnel by design, so on a full-tunnel host
+            // they fail by construction, and counting them would drive the watchdog toward a bypass that takes host DNS
+            // down rather than opening it.
+            if route.routing.feedsHealthWatchdog { self?.health.record(ok: ok) }
             // Break the retain cycle before cancelling: connection -> stateUpdateHandler closure -> UDPForward ->
             // completion -> (this closure captures connection). Without clearing the handler, connection, completion, and
             // the NEAppProxyUDPFlow all leak on every query. Clearing it drops the closure's strong refs.
@@ -269,10 +317,9 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
     // MARK: TCP flow handling
 
-    private func handleTCPFlow(_ flow: NEAppProxyTCPFlow) {
-        let info = extractProcessInfo(from: flow.metaData.sourceAppAuditToken)
-        let ctx = FlowContext(pid: info.pid, uid: info.uid, path: processPath(for: info.pid), pidVersion: info.pidversion)
+    private func handleTCPFlow(_ flow: NEAppProxyTCPFlow, ctx: FlowContext, routing: DNSForwardPolicy.Routing) {
         let upstreamEndpoint = flow.remoteFlowEndpoint
+        let pinned = boundInterface(for: flow)
 
         flow.open(withLocalFlowEndpoint: nil) { [weak self] error in
             if let error {
@@ -280,7 +327,9 @@ final class DNSProxyProvider: NEDNSProxyProvider {
                 return
             }
 
-            let connection = Network.NWConnection(to: upstreamEndpoint, using: .tcp)
+            let connection = Network.NWConnection(
+                to: upstreamEndpoint,
+                using: InterfaceSnapshot.tcpParameters(routing: routing, boundInterface: pinned))
             connection.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
@@ -420,6 +469,32 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
         if let data = serializer.serialize(eventType: "dns_query", payload: payload) {
             XPCServer.shared.send(data: data)
+        }
+    }
+}
+
+/// Operator-facing logging for the DNS proxy. Split into an extension so the provider's own body stays within SwiftLint's
+/// type_body_length cap and so the flow-handling logic reads without the message text interleaved.
+private extension DNSProxyProvider {
+    /// logTransition emits one line per watchdog state change. Logged from the single decide() call that produced the
+    /// change, never per flow: every DNS lookup reaches handleNewFlow, so a per-flow line would be the log flood the
+    /// watchdog exists to prevent. The three cases are distinct messages on purpose. During the 2026-07-27 incident the
+    /// log carried nothing but repeated "entering bypass", which left no way to tell one sustained bypass from the
+    /// re-trip loop that was actually happening.
+    func logTransition(_ transition: DNSProxyHealth.Transition) {
+        switch transition {
+        case .enteredBypass(let trip, let hold):
+            logger.error("""
+            DNS proxy entering bypass (consecutive trip \(trip, format: .decimal)): upstream forwarding sustainedly \
+            failing; handing DNS to the system resolver for \(hold, format: .fixed(precision: 0))s
+            """)
+        case .startedProbe(let trip, let budget):
+            logger.info("""
+            DNS proxy probing upstream after bypass hold (consecutive trip \(trip, format: .decimal)): claiming up to \
+            \(budget, format: .decimal) flows; all others stay on the system resolver
+            """)
+        case .resumed:
+            logger.info("DNS proxy resuming: upstream healthy, claiming DNS flows again")
         }
     }
 }
