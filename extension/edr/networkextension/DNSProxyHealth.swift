@@ -71,9 +71,10 @@ final class DNSProxyHealth {
         /// Ceiling on the doubling hold. A host whose upstream is wedged for an hour probes twelve times, not 120 times,
         /// and still recovers within five minutes of the upstream coming back.
         var bypassHoldMax: TimeInterval = 300
-        /// How many flows a probe may claim. These are live client queries, so each one risks a forward-deadline stall:
-        /// the budget is the blast radius of one restore attempt. Defaults to the failure-rate sample floor, which is the
-        /// fewest outcomes that can produce a verdict.
+        /// How many flows a probe may claim. These carry live client queries, so each one risks a forward-deadline stall:
+        /// the budget is the blast radius of one restore attempt, measured in flows. A single UDP flow can carry more than
+        /// one query, so the stalled-query count is this budget times the datagrams per flow, not the budget itself.
+        /// Defaults to the failure-rate sample floor, which is the fewest outcomes that can produce a verdict.
         var probeClaimBudget: Int = 5
         /// How long a probe waits for its claimed flows to produce outcomes before giving up as inconclusive. Must exceed
         /// the proxy's per-forward deadline (3s), since a wedged upstream only reports failure once that deadline fires.
@@ -160,7 +161,8 @@ final class DNSProxyHealth {
 
     /// takeVerdict maps the settled state to this flow's verdict, consuming one unit of probe budget when it claims.
     /// Caller holds the lock. A probe whose budget is spent bypasses while it waits for its claimed flows to report, so the
-    /// number of client queries a restore attempt can stall is exactly `probeClaimBudget`.
+    /// number of FLOWS a restore attempt can claim is exactly `probeClaimBudget`. That is a bound on flows, not on queries:
+    /// the provider forwards every datagram on a claimed UDP flow, so a flow carrying several queries stalls each of them.
     private func takeVerdict() -> Verdict {
         switch state {
         case .claiming:
