@@ -115,6 +115,9 @@ let package = Package(
                 // kills the flow rather than handing it back to the OS. Pure Foundation with the entitlement probe
                 // injected, so the routing matrix is unit-testable without a live flow.
                 "networkextension/DNSForwardPolicy.swift",
+                // DNSUpstreamFailover.swift is the rule for picking a second resolver when the first will not answer,
+                // and the scoping that stops it substituting a resolver the client chose deliberately (issue #673).
+                "networkextension/DNSUpstreamFailover.swift",
                 // InterfaceSnapshot.swift keeps the name-keyed NWInterface view used to pin an upstream forward to the
                 // interface the client bound its flow to (issue #656). Network + os only, no NetworkExtension import, so the
                 // name matching and parameter construction are unit-testable here.

@@ -17,12 +17,15 @@ enum DNSProxy {
     /// upstream. 30s is past any sane resolver round-trip but bounded enough that a
     /// misbehaving upstream cannot pin our flow + NWConnection pair forever.
     static let tcpUpstreamLingerSeconds: Double = 30
-    /// Deadline for a single UDP DNS forward (connect + send + receive). Past this the upstream is treated as failed: the
-    /// flow is released (fail-open) and the failure is recorded so the health watchdog can bypass a wedged upstream. 3s is
-    /// past a sane resolver round-trip but short enough that a stuck upstream cannot pin the client's resolution. Before
-    /// this existed the UDP path waited on `receiveMessage` with no timeout, so a wedged upstream hung every claimed query
-    /// indefinitely and took down all DNS (the 2026-06-20 incident).
-    static let udpForwardDeadlineSeconds: Double = 3
+    /// Deadline for ONE attempt at a UDP DNS forward (connect + send + receive). Past this the attempt is treated as
+    /// failed. Before any deadline existed the UDP path waited on `receiveMessage` forever, so a wedged upstream hung
+    /// every claimed query and took down all DNS (the 2026-06-20 incident).
+    ///
+    /// 1.5s per attempt, with at most one failover attempt (issue #673), keeps the worst case a client can experience at
+    /// the same 3s the single 1x3s attempt used to cost, while giving a query that the first resolver will not answer a
+    /// real second chance. A typical resolver answers in well under 100ms, so 1.5s is ample headroom; the old 3s was
+    /// chosen as "past a sane round-trip" and is over-conservative by more than an order of magnitude.
+    static let udpForwardDeadlineSeconds: Double = 1.5
 }
 
 /// Process attribution context for a single DNS flow. Bundled to keep function
@@ -41,6 +44,25 @@ struct FlowContext {
 struct ForwardRoute {
     let routing: DNSForwardPolicy.Routing
     let boundInterface: NWInterface?
+}
+
+/// One attempt at forwarding a single DNS datagram upstream. Bundled for the same parameter-count reason FlowContext
+/// exists, and because an attempt is only meaningful as a whole.
+///
+/// `target` and `replyEndpoint` differ only on a failover attempt (issue #673): the query goes to a different resolver,
+/// but the answer must still be written back to the flow as though it came from the resolver the client originally
+/// asked, or the client will discard a reply from an address it never queried.
+struct UDPForwardRequest {
+    let datagram: Data
+    /// Where this attempt sends the query.
+    let target: Network.NWEndpoint
+    /// The source address the client must see on the answer: always the originally-intended resolver.
+    let replyEndpoint: Network.NWEndpoint
+    let flow: NEAppProxyUDPFlow
+    let ctx: FlowContext
+    let route: ForwardRoute
+    /// True when this is already the failover attempt, so a failure ends the query instead of chaining another retry.
+    let isFailover: Bool
 }
 
 /// Per-datagram UDP forward state, bundled so the send / receive helpers stay under the parameter-count limit (same reason
