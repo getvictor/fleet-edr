@@ -1,5 +1,4 @@
 import Foundation
-import os
 import SystemConfiguration
 
 /// SystemResolverCache vends the host's configured DNS resolver addresses to the failover path, cheaply.
@@ -15,8 +14,13 @@ import SystemConfiguration
 /// seconds of staleness cannot pick a resolver that was never configured; it can at worst retry one that just went
 /// away, which fails the same way the first attempt did.
 ///
+/// The refresh is asynchronous, and that is the point. `addresses()` is called from an `NWConnection` completion closure
+/// on the DNS failure path, so it must never block on an XPC round trip: a stale-but-present list is served immediately
+/// and the refresh happens on a background queue. `prime()` fills the cache at proxy start so the first failover of an
+/// outage, the one that matters most, never meets an empty cache.
+///
 /// Thread safety. `SCDynamicStore` is not documented as thread-safe and this is reached from concurrent `NWConnection`
-/// completion closures, so both the cache and the underlying read are serialised by the lock.
+/// completion closures, so the cache is serialised by a lock and the underlying read happens on one serial queue.
 ///
 /// The reader is injected so the caching, the TTL and the failure branch are unit-testable without touching `configd`.
 final class SystemResolverCache {
@@ -29,6 +33,10 @@ final class SystemResolverCache {
     private let lock = NSLock()
     private var cached: [String] = []
     private var readAt: TimeInterval?
+    private var refreshing = false
+    /// One serial queue for the dynamic-store read, so the store is never touched concurrently and a refresh cannot
+    /// pile up behind itself when many queries fail at once.
+    private let refreshQueue = DispatchQueue(label: "com.fleetdm.edr.networkextension.resolvers")
 
     init(ttl: TimeInterval = 5,
          now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
@@ -38,15 +46,49 @@ final class SystemResolverCache {
         self.read = read
     }
 
-    /// addresses returns the configured resolver addresses, reading through at most once per TTL.
+    /// prime fills the cache synchronously. Called once from `startProxy`, off the DNS path, so that the first failover
+    /// of an outage does not have to wait for a cold read.
+    func prime() {
+        refresh()
+    }
+
+    /// addresses returns the configured resolver addresses WITHOUT blocking.
+    ///
+    /// A stale list is served as-is while a refresh runs in the background. Staleness is harmless here: the value only
+    /// chooses which resolver to retry against, and a few seconds of it can at worst name a resolver that just went
+    /// away, which fails exactly as the first attempt did. Blocking, by contrast, would put an XPC round trip inside a
+    /// connection completion on the failure path, where concurrent failing queries would queue behind it at the moment
+    /// the host is already unhealthy.
     func addresses() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        let currentTime = now()
-        if let readAt, currentTime - readAt < ttl { return cached }
-        cached = read()
-        readAt = currentTime
-        return cached
+        let (value, stale) = lock.withLockValue { () -> ([String], Bool) in
+            guard let readAt else { return (cached, true) }
+            return (cached, now() - readAt >= ttl)
+        }
+        if stale { scheduleRefresh() }
+        return value
+    }
+
+    /// scheduleRefresh kicks a background read, at most one at a time.
+    private func scheduleRefresh() {
+        let shouldStart = lock.withLockValue { () -> Bool in
+            guard !refreshing else { return false }
+            refreshing = true
+            return true
+        }
+        guard shouldStart else { return }
+        refreshQueue.async { [weak self] in self?.refresh() }
+    }
+
+    /// refresh performs the read and publishes the result. Runs on `refreshQueue` (or on the caller during `prime`),
+    /// never with the lock held, so the XPC round trip cannot block another thread's `addresses()`.
+    private func refresh() {
+        let servers = read()
+        let stamp = now()
+        lock.withLockValue {
+            cached = servers
+            readAt = stamp
+            refreshing = false
+        }
     }
 
     /// dynamicStoreReader builds the production reader, creating the `SCDynamicStore` session ONCE and capturing it.
@@ -65,5 +107,15 @@ final class SystemResolverCache {
             }
             return servers
         }
+    }
+}
+
+private extension NSLock {
+    /// withLockValue runs `body` under the lock and returns its result. Named to avoid colliding with the
+    /// `withLock` that newer platforms vend, so the intent stays obvious at every call site above.
+    func withLockValue<T>(_ body: () -> T) -> T {
+        lock()
+        defer { unlock() }
+        return body()
     }
 }

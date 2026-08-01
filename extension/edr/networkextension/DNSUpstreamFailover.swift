@@ -18,7 +18,8 @@ import Network
 /// retry could hand back a wrong address for an internal name. A failed lookup is the correct outcome, and it is the same
 /// outcome the client would get without the proxy in the path.
 ///
-/// Pure Foundation, so the selection rule is unit-testable without a live resolver or a provider instance.
+/// Foundation and Network only, no NetworkExtension import, so the selection rule is unit-testable without a live
+/// resolver or a provider instance.
 enum DNSUpstreamFailover {
     /// Chooses a resolver to try after `failedServer` did not answer: the first configured resolver that is not the
     /// one that just failed. That is not round-robin, and it deliberately may be earlier in the list than the failed

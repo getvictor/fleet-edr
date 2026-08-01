@@ -54,6 +54,7 @@ final class DNSProxyHealthTests: XCTestCase {
         XCTAssertEqual(health.status(), .degraded)
     }
 
+    // spec:extension-network-response/dns-proxy-reports-forwarding-degradation-without-leaving-the-dns-path/forwarding-recovery-is-reported
     func testRecoveryIsReportedOnce() {
         let clock = FakeClock()
         let health = makeHealth(clock, window: 30, minSamples: 5)

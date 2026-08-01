@@ -39,7 +39,6 @@ The system SHALL account upstream-forwarding outcomes over a recent window and S
 - **GIVEN** DNS proxying is enabled and a client addresses a resolver that is not in the system DNS configuration
 - **WHEN** the forward to that resolver fails or reaches its deadline
 - **THEN** the system does not substitute a different resolver
-- **AND** the flow is released so the client fails promptly
 
 #### Scenario: Forwarding recovery is reported
 
