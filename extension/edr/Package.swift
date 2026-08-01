@@ -97,9 +97,9 @@ let package = Package(
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",
                 "networkextension/DNSParser.swift",
-                // DNSProxyHealth.swift is the DNS proxy's self-heal watchdog: a sliding-window failure accumulator +
-                // claim/bypass decision. Pure Foundation (no NetworkExtension import), so its decision logic is
-                // unit-testable here without a live resolver. DNSProxyProvider (Xcode-only NE target) holds an instance.
+                // DNSProxyHealth.swift is the DNS proxy's forwarding-health REPORTER: a sliding-window failure
+                // accumulator that says degraded/recovered once per change and decides nothing (issue #673). Pure
+                // Foundation (no NetworkExtension import), so it is unit-testable here without a live resolver.
                 "networkextension/DNSProxyHealth.swift",
                 // DNSForwardCompletion.swift is the once-only, atomic deadline-vs-receive resolver for a UDP forward.
                 // Pure Foundation, so its claim/fail state-machine transitions are unit-testable.
@@ -115,6 +115,13 @@ let package = Package(
                 // kills the flow rather than handing it back to the OS. Pure Foundation with the entitlement probe
                 // injected, so the routing matrix is unit-testable without a live flow.
                 "networkextension/DNSForwardPolicy.swift",
+                // DNSUpstreamFailover.swift is the rule for picking a second resolver when the first will not answer,
+                // and the scoping that stops it substituting a resolver the client chose deliberately (issue #673).
+                "networkextension/DNSUpstreamFailover.swift",
+                // SystemResolverCache.swift holds the single dynamic-store session and the short-lived cache behind the
+                // failover's resolver lookup, so a resolver outage cannot turn into a configd round trip per query. The
+                // reader is injected, so the caching and TTL are unit-testable without touching configd.
+                "networkextension/SystemResolverCache.swift",
                 // InterfaceSnapshot.swift keeps the name-keyed NWInterface view used to pin an upstream forward to the
                 // interface the client bound its flow to (issue #656). Network + os only, no NetworkExtension import, so the
                 // name matching and parameter construction are unit-testable here.

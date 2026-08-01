@@ -20,8 +20,9 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", categ
 /// #656 broke: see DNSForwardPolicy for the deadlock and the routing that prevents it.
 final class DNSProxyProvider: NEDNSProxyProvider {
     private let serializer = NetworkEventSerializer()
-    /// Self-heal watchdog. Accounts UDP upstream-forward outcomes; when forwarding is sustainedly failing it tells
-    /// handleNewFlow to stop claiming DNS flows so the system resolver takes over (fail-open). See DNSProxyHealth + ADR-0014.
+    /// Forwarding-health REPORTER. Accounts UDP upstream-forward outcomes and reports degraded/recovered once per
+    /// change. It does not decide anything: it used to tell handleNewFlow to stop claiming flows, which terminated them
+    /// rather than handing them to the system resolver (issue #673). See DNSProxyHealth.
     private let health = DNSProxyHealth()
     /// Chooses how to route a claimed flow's forward so it can never re-enter another provider's tunnel (issue #656). Our
     /// own signing identifier is carved out because our provider holds the same entitlement the probe keys on.
@@ -33,9 +34,14 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     /// Live interface snapshot, used to pin an upstream forward to the interface the client bound its flow to. Started in
     /// startProxy so the first flow already has a snapshot to match against.
     private let interfaces = InterfaceSnapshot()
+    /// Resolver list for the failover decision, read through a short-lived cache over one dynamic-store session.
+    private let resolvers = SystemResolverCache()
 
     override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
         interfaces.start()
+        // Warm the resolver cache off the DNS path so the first failover of an outage is unlikely to meet a cold read.
+        // Asynchronous: startProxy must not wait on a configd round trip to report the proxy ready.
+        resolvers.prime()
         logger.info("DNS proxy started")
         completionHandler(nil)
     }
@@ -64,23 +70,11 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             noteTunnelAvoidance(signingIdentifier: signingIdentifier)
         }
 
-        // Self-heal watchdog. WARNING: this bypass does NOT fail open, contrary to its original design intent. Returning
-        // false does not hand a DNS flow back to the system resolver: measured on edr-dev with a build that declined every
-        // flow, nothing on the host resolved at all (dig against either configured resolver, dscacheutil, and ping all
-        // failed), while the same queries succeeded the moment the proxy configuration was disabled. The incident record
-        // agrees: the watchdog fired 18 times and host DNS recovered in none of those windows, and only disabling the
-        // configuration restored it. So a bypass is a host-wide DNS outage, not a safety valve. The latch and backoff
-        // added for issue #657 still bound how often we enter it and how many queries a probe stalls, which is why this is
-        // left in place rather than ripped out mid-change, but the real fix is to tear down the proxy configuration
-        // instead of declining flows. Tracked separately; do not add new callers of this bypass until it is.
-        // policyActive is false until the network-response enforcement plane lands.
-        let decision = health.decide(policyActive: false)
-        if let transition = decision.transition {
-            logTransition(transition)
-        }
-        if decision.verdict == .bypass {
-            return false
-        }
+        // NOTE: there is deliberately no "should we claim this flow?" question here any more (issue #673). The old
+        // watchdog answered it with a bypass implemented as `return false`, which Apple documents as TERMINATING the
+        // flow rather than handing it to the system resolver, so it took host DNS down instead of failing open. The
+        // health accounting survives as a REPORTER only; a failing upstream is now answered by trying another system
+        // resolver, not by leaving the DNS path. See DNSProxyHealth and DNSUpstreamFailover.
 
         // Built once here rather than per flow-type handler: the audit-token parse and proc_pidpath are the same work for
         // both, and the claim decision above already needed the identity.
@@ -151,7 +145,11 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             }
 
             for (datagram, endpoint) in pairs {
-                self.forwardUDPDatagram(datagram, to: endpoint, flow: flow, ctx: ctx, route: route)
+                // Emitted once per datagram, here rather than per attempt, so a failover does not produce a second
+                // dns_query event for the same question (best-effort; never gates forwarding).
+                self.emitDNSTelemetry(datagram: datagram, ctx: ctx, proto: "udp")
+                self.forwardUDPDatagram(UDPForwardRequest(datagram: datagram, target: endpoint, replyEndpoint: endpoint,
+                                                          flow: flow, ctx: ctx, route: route, isFailover: false))
             }
 
             // Continue reading for more datagrams on this flow.
@@ -159,36 +157,40 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         }
     }
 
-    private func forwardUDPDatagram(_ datagram: Data, to endpoint: Network.NWEndpoint,
-                                    flow: NEAppProxyUDPFlow, ctx: FlowContext, route: ForwardRoute) {
-        // Emit telemetry (best-effort).
-        emitDNSTelemetry(datagram: datagram, ctx: ctx, proto: "udp")
-
-        // Forward to the originally-intended DNS server. The system excludes this extension's own connections from the
-        // DNS proxy chain, so OUR forward cannot loop back into us. That guarantee does not extend to another
-        // network-extension provider's flows, which is what `route.routing` exists to handle: those are forwarded off
-        // tunnel interfaces so we cannot re-enter a tunnel whose provider is waiting on this answer (issue #656).
+    private func forwardUDPDatagram(_ request: UDPForwardRequest) {
+        // Forward to the intended DNS server. The system excludes this extension's own connections from the DNS proxy
+        // chain, so OUR forward cannot loop back into us. That guarantee does not extend to another network-extension
+        // provider's flows, which is what `route.routing` exists to handle: those are forwarded off tunnel interfaces so
+        // we cannot re-enter a tunnel whose provider is waiting on this answer (issue #656).
+        let route = request.route
         let connection = Network.NWConnection(
-            to: endpoint,
+            to: request.target,
             using: InterfaceSnapshot.udpParameters(routing: route.routing, boundInterface: route.boundInterface))
 
-        // One outcome per forward, recorded once. On failure we fail open: cancel the upstream connection and release the
-        // flow so the client retries or rolls over instead of being pinned on a wedged proxy. The recorded failure feeds
-        // the health watchdog, which bypasses to the system resolver once enough forwards fail in a row.
-        let completion = DNSForwardCompletion { [weak self, weak flow] ok in
-            // Tunnel-avoiding forwards are excluded: they are denied the tunnel by design, so on a full-tunnel host
-            // they fail by construction, and counting them would drive the watchdog toward a bypass that takes host DNS
-            // down rather than opening it.
-            if route.routing.feedsHealthWatchdog { self?.health.record(ok: ok) }
+        // One outcome per ATTEMPT, resolved once. A failed first attempt does not end the query: when the client was
+        // using the system's configured resolvers we try the next one before giving up (issue #673). Only the final
+        // outcome is accounted, so a query rescued by the failover is not recorded as a failure.
+        let completion = DNSForwardCompletion { [weak self, weak flow = request.flow] ok in
             // Break the retain cycle before cancelling: connection -> stateUpdateHandler closure -> UDPForward ->
             // completion -> (this closure captures connection). Without clearing the handler, connection, completion, and
             // the NEAppProxyUDPFlow all leak on every query. Clearing it drops the closure's strong refs.
             connection.stateUpdateHandler = nil
             connection.cancel()
-            if !ok {
-                flow?.closeReadWithError(nil)
-                flow?.closeWriteWithError(nil)
+            guard let self else { return }
+            if ok {
+                self.recordForwardOutcome(ok: true, route: route)
+                return
             }
+            if !request.isFailover, let flow, let retry = self.failoverRequest(for: request, flow: flow) {
+                self.forwardUDPDatagram(retry)
+                return
+            }
+            self.recordForwardOutcome(ok: false, route: route)
+            // Nothing left to try: release the flow so the client fails fast rather than being pinned on a proxy that
+            // cannot answer. This closes one query; it does not remove us from the DNS path, which is not something a
+            // provider can do per flow without terminating it.
+            flow?.closeReadWithError(nil)
+            flow?.closeWriteWithError(nil)
         }
         // The deadline races the receive: failIfPending resolves to a failure only if the receive path has not already
         // claimed the forward, so a near-deadline success is never reclassified as a failure.
@@ -197,20 +199,20 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             // a deadline that starts running just as the receive path cancels it must not emit a "timed out" line on a
             // forward that ultimately succeeded: that would be a misleading operator signal / false alert.
             if completion.failIfPending() {
-                logger.error("Upstream UDP forward timed out after \(DNSProxy.udpForwardDeadlineSeconds, format: .fixed(precision: 0))s")
+                logger.debug("Upstream UDP forward attempt timed out after \(DNSProxy.udpForwardDeadlineSeconds)s")
             }
         }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + DNSProxy.udpForwardDeadlineSeconds,
                                                              execute: deadline)
 
-        let forward = UDPForward(connection: connection, responseEndpoint: endpoint, flow: flow, ctx: ctx,
-                                 completion: completion, deadline: deadline)
+        let forward = UDPForward(connection: connection, responseEndpoint: request.replyEndpoint, flow: request.flow,
+                                 ctx: request.ctx, completion: completion, deadline: deadline)
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                self?.sendUDPAndReceive(forward, datagram: datagram)
+                self?.sendUDPAndReceive(forward, datagram: request.datagram)
             case .failed(let error):
-                logger.error("Upstream UDP connection failed: \(error.localizedDescription)")
+                logger.debug("Upstream UDP connection failed: \(error.localizedDescription)")
                 deadline.cancel()
                 completion.failIfPending()
             case .cancelled:
@@ -220,55 +222,6 @@ final class DNSProxyProvider: NEDNSProxyProvider {
             }
         }
         connection.start(queue: .global(qos: .userInitiated))
-    }
-
-    private func sendUDPAndReceive(_ forward: UDPForward, datagram: Data) {
-        forward.connection.send(content: datagram, completion: .contentProcessed { [weak self] error in
-            if let error {
-                logger.error("Failed to send UDP datagram: \(error.localizedDescription)")
-                forward.deadline.cancel()
-                forward.completion.failIfPending()
-                return
-            }
-            self?.receiveUDPResponse(forward)
-        })
-    }
-
-    /// receiveUDPResponse reads the upstream DNS reply and forwards it back to the
-    /// originating flow. Split out of sendUDPAndReceive so each closure holds only one
-    /// level of nested asynchronous work.
-    private func receiveUDPResponse(_ forward: UDPForward) {
-        forward.connection.receiveMessage { [weak self] responseData, _, _, recvError in
-            forward.deadline.cancel()
-
-            // Atomically claim the forward before touching the flow. If the deadline already won (fail-open, flow closed),
-            // claimResponse returns false and a late reply emits no spurious telemetry and does not write to the closed
-            // flow. Once claimed, the deadline's failIfPending is a no-op, so this success cannot be reclassified.
-            guard forward.completion.claimResponse() else { return }
-
-            if let recvError {
-                logger.debug("UDP receive error: \(recvError.localizedDescription)")
-                forward.completion.resolveResponse(ok: false)
-                return
-            }
-            guard let responseData, !responseData.isEmpty else {
-                forward.completion.resolveResponse(ok: false)
-                return
-            }
-
-            // Enrich telemetry with response addresses.
-            self?.emitDNSResponseTelemetry(response: responseData, ctx: forward.ctx, proto: "udp")
-
-            forward.flow.writeDatagrams([(responseData, forward.responseEndpoint)]) { writeError in
-                if let writeError {
-                    logger.error("Failed to write UDP response: \(writeError.localizedDescription)")
-                    forward.completion.resolveResponse(ok: false)
-                    return
-                }
-                // Upstream answered and the client received it: a healthy forward.
-                forward.completion.resolveResponse(ok: true)
-            }
-        }
     }
 
     // MARK: TCP flow handling
@@ -429,28 +382,98 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     }
 }
 
-/// Operator-facing logging for the DNS proxy. Split into an extension so the provider's own body stays within SwiftLint's
-/// type_body_length cap and so the flow-handling logic reads without the message text interleaved.
+/// Failover selection and health accounting for the DNS proxy. Split into an extension so the provider's own body stays
+/// within SwiftLint's type_body_length cap; same-file `private` still reaches the stored properties.
 private extension DNSProxyProvider {
-    /// logTransition emits one line per watchdog state change. Logged from the single decide() call that produced the
-    /// change, never per flow: every DNS lookup reaches handleNewFlow, so a per-flow line would be the log flood the
-    /// watchdog exists to prevent. The three cases are distinct messages on purpose. During the 2026-07-27 incident the
-    /// log carried nothing but repeated "entering bypass", which left no way to tell one sustained bypass from the
-    /// re-trip loop that was actually happening.
-    func logTransition(_ transition: DNSProxyHealth.Transition) {
-        switch transition {
-        case .enteredBypass(let trip, let hold):
+    /// failoverRequest builds the second attempt when the first resolver did not answer, or nil when no failover is
+    /// appropriate. The selection rule (and why a client-chosen resolver is never substituted) lives in
+    /// DNSUpstreamFailover; this only bridges it to Network framework types.
+    func failoverRequest(for request: UDPForwardRequest, flow: NEAppProxyUDPFlow) -> UDPForwardRequest? {
+        guard let failed = DNSUpstreamFailover.address(of: request.target),
+              let next = DNSUpstreamFailover.nextServer(afterFailing: failed, systemServers: systemResolverAddresses()),
+              let port = DNSUpstreamFailover.port(of: request.target) else { return nil }
+        logger.debug("Retrying a DNS forward against another system resolver after the first did not answer")
+        return UDPForwardRequest(datagram: request.datagram,
+                                 target: .hostPort(host: .init(next), port: port),
+                                 replyEndpoint: request.replyEndpoint,
+                                 flow: flow, ctx: request.ctx, route: request.route, isFailover: true)
+    }
+
+    /// systemResolverAddresses returns the host's configured resolvers for the failover decision.
+    ///
+    /// Reads through `SystemResolverCache`, which holds one dynamic-store session and caches the result briefly. That
+    /// matters because this sits on the FAILURE path: when a resolver stops answering every query fails and every one
+    /// of them lands here, so a per-call configd round trip would storm exactly when the host is already unhealthy.
+    func systemResolverAddresses() -> [String] {
+        resolvers.addresses()
+    }
+
+    /// recordForwardOutcome feeds the health accounting and logs a status change once, never per forward.
+    ///
+    /// Tunnel-avoiding forwards are excluded: they are denied the tunnel by design, so on a full-tunnel host they fail by
+    /// construction and would drag the reported status to degraded without anything actually being wrong with the host's
+    /// DNS (issue #656).
+    func recordForwardOutcome(ok: Bool, route: ForwardRoute) {
+        guard route.routing.feedsHealthWatchdog else { return }
+        guard let status = health.record(ok: ok) else { return }
+        switch status {
+        case .degraded:
             logger.error("""
-            DNS proxy entering bypass (consecutive trip \(trip, format: .decimal)): upstream forwarding sustainedly \
-            failing; handing DNS to the system resolver for \(hold, format: .fixed(precision: 0))s
+            DNS forwarding is degraded: upstream resolvers are not answering. Queries are being retried against other \
+            system resolvers where possible; the proxy stays in the DNS path because leaving it would terminate flows
             """)
-        case .startedProbe(let trip, let budget):
-            logger.info("""
-            DNS proxy probing upstream after bypass hold (consecutive trip \(trip, format: .decimal)): claiming up to \
-            \(budget, format: .decimal) flows; all others stay on the system resolver
-            """)
-        case .resumed:
-            logger.info("DNS proxy resuming: upstream healthy, claiming DNS flows again")
+        case .healthy:
+            logger.info("DNS forwarding recovered: upstream resolvers are answering again")
+        }
+    }
+
+    func sendUDPAndReceive(_ forward: UDPForward, datagram: Data) {
+        forward.connection.send(content: datagram, completion: .contentProcessed { [weak self] error in
+            if let error {
+                logger.error("Failed to send UDP datagram: \(error.localizedDescription)")
+                forward.deadline.cancel()
+                forward.completion.failIfPending()
+                return
+            }
+            self?.receiveUDPResponse(forward)
+        })
+    }
+
+    /// receiveUDPResponse reads the upstream DNS reply and forwards it back to the
+    /// originating flow. Split out of sendUDPAndReceive so each closure holds only one
+    /// level of nested asynchronous work.
+    func receiveUDPResponse(_ forward: UDPForward) {
+        forward.connection.receiveMessage { [weak self] responseData, _, _, recvError in
+            forward.deadline.cancel()
+
+            // Atomically claim the forward before touching the flow. If the deadline already won (this attempt was
+            // resolved as failed and may have been retried elsewhere), claimResponse returns false and a late reply emits
+            // no spurious telemetry and does not write to a flow that has moved on. Once claimed, the deadline's
+            // failIfPending is a no-op, so this success cannot be reclassified.
+            guard forward.completion.claimResponse() else { return }
+
+            if let recvError {
+                logger.debug("UDP receive error: \(recvError.localizedDescription)")
+                forward.completion.resolveResponse(ok: false)
+                return
+            }
+            guard let responseData, !responseData.isEmpty else {
+                forward.completion.resolveResponse(ok: false)
+                return
+            }
+
+            // Enrich telemetry with response addresses.
+            self?.emitDNSResponseTelemetry(response: responseData, ctx: forward.ctx, proto: "udp")
+
+            forward.flow.writeDatagrams([(responseData, forward.responseEndpoint)]) { writeError in
+                if let writeError {
+                    logger.error("Failed to write UDP response: \(writeError.localizedDescription)")
+                    forward.completion.resolveResponse(ok: false)
+                    return
+                }
+                // Upstream answered and the client received it: a healthy forward.
+                forward.completion.resolveResponse(ok: true)
+            }
         }
     }
 }
