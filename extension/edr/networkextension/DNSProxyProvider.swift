@@ -39,8 +39,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 
     override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
         interfaces.start()
-        // Fill the resolver cache here, off the DNS path, so the first failover of an outage never waits on a cold
-        // dynamic-store read (issue #673 review).
+        // Warm the resolver cache off the DNS path so the first failover of an outage is unlikely to meet a cold read.
+        // Asynchronous: startProxy must not wait on a configd round trip to report the proxy ready.
         resolvers.prime()
         logger.info("DNS proxy started")
         completionHandler(nil)

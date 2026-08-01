@@ -14,13 +14,16 @@ import SystemConfiguration
 /// seconds of staleness cannot pick a resolver that was never configured; it can at worst retry one that just went
 /// away, which fails the same way the first attempt did.
 ///
-/// The refresh is asynchronous, and that is the point. `addresses()` is called from an `NWConnection` completion closure
+/// Every read is asynchronous, and that is the point. `addresses()` is called from an `NWConnection` completion closure
 /// on the DNS failure path, so it must never block on an XPC round trip: a stale-but-present list is served immediately
-/// and the refresh happens on a background queue. `prime()` fills the cache at proxy start so the first failover of an
-/// outage, the one that matters most, never meets an empty cache.
+/// and the refresh happens on a background queue. `prime()` warms the cache at proxy start so the first failover of an
+/// outage, the one that matters most, is unlikely to meet an empty cache; it is asynchronous too, because `startProxy`
+/// must not wait on configd to report the proxy ready. A cold cache is handled rather than avoided: `addresses()`
+/// returns an empty list, no failover is offered for that one query, and the refresh it schedules warms the next.
 ///
 /// Thread safety. `SCDynamicStore` is not documented as thread-safe and this is reached from concurrent `NWConnection`
-/// completion closures, so the cache is serialised by a lock and the underlying read happens on one serial queue.
+/// completion closures, so EVERY read goes through one serial queue, guarded by a single-flight flag, and the cache
+/// itself is guarded by a lock. There is deliberately no path that reads the store on a caller's thread.
 ///
 /// The reader is injected so the caching, the TTL and the failure branch are unit-testable without touching `configd`.
 final class SystemResolverCache {
@@ -35,21 +38,29 @@ final class SystemResolverCache {
     private var readAt: TimeInterval?
     private var refreshing = false
     /// One serial queue for the dynamic-store read, so the store is never touched concurrently and a refresh cannot
-    /// pile up behind itself when many queries fail at once.
-    private let refreshQueue = DispatchQueue(label: "com.fleetdm.edr.networkextension.resolvers")
+    /// pile up behind itself when many queries fail at once. Injected so a test can await a refresh deterministically
+    /// by draining it, rather than polling for the published value.
+    private let refreshQueue: DispatchQueue
 
     init(ttl: TimeInterval = 5,
          now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         queue: DispatchQueue = DispatchQueue(label: "com.fleetdm.edr.networkextension.resolvers"),
          read: @escaping () -> [String] = SystemResolverCache.dynamicStoreReader()) {
         self.ttl = ttl
         self.now = now
+        self.refreshQueue = queue
         self.read = read
     }
 
-    /// prime fills the cache synchronously. Called once from `startProxy`, off the DNS path, so that the first failover
-    /// of an outage does not have to wait for a cold read.
+    /// prime warms the cache. Called once from `startProxy`, so the first failover of an outage is unlikely to meet a
+    /// cold cache.
+    ///
+    /// Asynchronous, and routed through the same single-flight scheduler as any other refresh, for two reasons:
+    /// `startProxy` must not block on a configd round trip to report the proxy ready (a slow or starting configd would
+    /// otherwise delay the provider coming up, on the very path where providers failing to start has already bitten
+    /// us), and the dynamic-store session must only ever be touched from the serial queue.
     func prime() {
-        refresh()
+        scheduleRefresh()
     }
 
     /// addresses returns the configured resolver addresses WITHOUT blocking.
@@ -79,8 +90,8 @@ final class SystemResolverCache {
         refreshQueue.async { [weak self] in self?.refresh() }
     }
 
-    /// refresh performs the read and publishes the result. Runs on `refreshQueue` (or on the caller during `prime`),
-    /// never with the lock held, so the XPC round trip cannot block another thread's `addresses()`.
+    /// refresh performs the read and publishes the result. Only ever runs on `refreshQueue`, and never with the lock
+    /// held, so the XPC round trip can neither race another read of the store nor block another thread's `addresses()`.
     private func refresh() {
         let servers = read()
         let stamp = now()

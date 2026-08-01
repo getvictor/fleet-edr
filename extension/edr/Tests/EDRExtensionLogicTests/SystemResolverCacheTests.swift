@@ -12,20 +12,33 @@ final class SystemResolverCacheTests: XCTestCase {
         func advance(_ seconds: TimeInterval) { t += seconds }
     }
 
-    /// Wait for an asynchronous refresh to publish, without sleeping a fixed amount.
-    private func waitForRefresh(_ cache: SystemResolverCache, toEqual expected: [String]) {
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline, cache.addresses() != expected { usleep(2000) }
-        XCTAssertEqual(cache.addresses(), expected)
+    /// The serial queue the cache refreshes on. Draining it is a deterministic await: no polling, no sleeping, and no
+    /// wall-clock timeout to tune.
+    private let refreshQueue = DispatchQueue(label: "SystemResolverCacheTests.refresh")
+
+    private func makeCache(ttl: TimeInterval = 5, now: @escaping () -> TimeInterval,
+                           read: @escaping () -> [String]) -> SystemResolverCache {
+        SystemResolverCache(ttl: ttl, now: now, queue: refreshQueue, read: read)
     }
 
-    func testPrimeFillsTheCacheSynchronously() {
+    /// awaitRefresh blocks until any in-flight refresh has published, by draining the serial refresh queue behind it.
+    private func awaitRefresh() {
+        refreshQueue.sync {}
+    }
+
+    func testPrimeWarmsTheCacheWithoutBlockingTheCaller() {
         let clock = FakeClock()
-        var reads = 0
-        let cache = SystemResolverCache(ttl: 5, now: clock.now, read: { reads += 1; return ["192.168.1.1"] })
-        // prime() runs at startProxy, off the DNS path, so the first failover of an outage never meets a cold cache.
+        let release = DispatchSemaphore(value: 0)
+        let cache = makeCache(now: clock.now, read: {
+            release.wait()          // hold the "configd read" open
+            return ["192.168.1.1"]
+        })
+        // prime() runs inside startProxy. It must not block the proxy reporting itself ready on a configd round trip:
+        // a slow or starting configd would otherwise delay the provider coming up.
         cache.prime()
-        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(cache.addresses(), [], "prime must not have blocked waiting for the read")
+        release.signal()
+        awaitRefresh()
         XCTAssertEqual(cache.addresses(), ["192.168.1.1"])
     }
 
@@ -33,7 +46,7 @@ final class SystemResolverCacheTests: XCTestCase {
         let clock = FakeClock()
         let started = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
-        let cache = SystemResolverCache(ttl: 5, now: clock.now, read: {
+        let cache = makeCache(now: clock.now, read: {
             started.signal()
             release.wait()          // hold the "configd read" open
             return ["192.168.1.1"]
@@ -43,14 +56,17 @@ final class SystemResolverCacheTests: XCTestCase {
         XCTAssertEqual(cache.addresses(), [], "a cold cache must return empty rather than wait for the read")
         XCTAssertEqual(started.wait(timeout: .now() + 2), .success, "the refresh must have been kicked off")
         release.signal()
-        waitForRefresh(cache, toEqual: ["192.168.1.1"])
+        awaitRefresh()
+        XCTAssertEqual(cache.addresses(), ["192.168.1.1"])
     }
 
     func testRepeatedReadsInsideTheTTLHitTheCache() {
         let clock = FakeClock()
         var reads = 0
-        let cache = SystemResolverCache(ttl: 5, now: clock.now, read: { reads += 1; return ["192.168.1.1"] })
+        let cache = makeCache(now: clock.now, read: { reads += 1; return ["192.168.1.1"] })
         cache.prime()
+        awaitRefresh()
+        XCTAssertEqual(cache.addresses(), ["192.168.1.1"])
         // This is the outage shape: every query fails, so every query asks for the resolver list. Without the cache
         // each of these would be an XPC round trip to configd at the moment the host is already struggling.
         for _ in 0..<500 { _ = cache.addresses() }
@@ -60,8 +76,9 @@ final class SystemResolverCacheTests: XCTestCase {
     func testReadsAgainAfterTheTTLExpires() {
         let clock = FakeClock()
         var reads = 0
-        let cache = SystemResolverCache(ttl: 5, now: clock.now, read: { reads += 1; return ["192.168.1.\(reads)"] })
+        let cache = makeCache(now: clock.now, read: { reads += 1; return ["192.168.1.\(reads)"] })
         cache.prime()
+        awaitRefresh()
         XCTAssertEqual(cache.addresses(), ["192.168.1.1"])
         clock.advance(4.9)
         XCTAssertEqual(cache.addresses(), ["192.168.1.1"], "still inside the TTL")
@@ -70,15 +87,17 @@ final class SystemResolverCacheTests: XCTestCase {
         // lands shortly after, so a network change is picked up rather than pinned for the process lifetime.
         clock.advance(0.2)
         _ = cache.addresses()
-        waitForRefresh(cache, toEqual: ["192.168.1.2"])
+        awaitRefresh()
+        XCTAssertEqual(cache.addresses(), ["192.168.1.2"])
         XCTAssertEqual(reads, 2)
     }
 
     func testAnEmptyReadIsCachedRatherThanRetriedPerQuery() {
         let clock = FakeClock()
         var reads = 0
-        let cache = SystemResolverCache(ttl: 5, now: clock.now, read: { reads += 1; return [] })
+        let cache = makeCache(now: clock.now, read: { reads += 1; return [] })
         cache.prime()
+        awaitRefresh()
         // A host with no resolver list is exactly a host in trouble. Retrying the lookup per query would be the storm
         // this cache exists to prevent, so an empty answer must cache like any other.
         for _ in 0..<50 { XCTAssertTrue(cache.addresses().isEmpty) }
