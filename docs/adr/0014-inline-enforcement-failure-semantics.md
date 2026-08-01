@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-06-21
 - Deciders: getvictor
+- Amended: 2026-08-01 (issue #673)
+
+> **Amendment (2026-08-01, issue #673): a DNS proxy cannot bypass itself.** This ADR's self-heal clause used "handing DNS back to the system resolver" as its worked example. That is not available on macOS. `NEDNSProxyProvider` documents `handleNewFlow` returning `NO` as terminating the flow ("In this case the flow is terminated"), and measurement agreed: with every flow declined, `dig`, `dscacheutil` and `ping` all failed to resolve, while the same queries succeeded the moment the proxy configuration was disabled. An enabled DNS proxy is the configured resolver, so there is no other path for the OS to fall back to. The principle in this ADR stands (observation must not take the asset down); the mechanism named for DNS does not exist. The DNS proxy now stays in the path, retries a failing query against another system resolver, and reports degradation rather than acting on it. Removing the proxy from the path at all requires stopping the provider or tearing down its configuration, neither of which is a per-flow decision.
 
 ## Context
 
@@ -29,7 +32,7 @@ The EDR remains a deliberate inline enforcement point. Its inline components obe
 
 3. **Blocks are enforced locally, independent of network health.** A denial is synthesized on device (an `AUTH_EXEC` deny verdict; a local `NXDOMAIN` or sinkhole answer) without depending on an upstream or the forwarding path, so enforcement survives a degraded sensor that can no longer forward allowed traffic.
 
-4. **Every inline decision is bounded, and the path self-heals.** Every synchronous decision and every upstream forward carries a deadline and a defined outcome on expiry; nothing pins a flow indefinitely. A monitoring-path wedge MUST recover without a reboot: when no enforcement policy is active the component may bypass itself (return the function to the OS, for example handing DNS back to the system resolver) and retry; when an enforcement policy is active it rebuilds rather than open-bypasses, so containment and blocks are never silently dropped. Containment state is declarative, persisted, re-applied on restart, and always preserves a management lifeline to the EDR server so an operator can lift it.
+4. **Every inline decision is bounded, and the path self-heals.** Every synchronous decision and every upstream forward carries a deadline and a defined outcome on expiry; nothing pins a flow indefinitely. A monitoring-path wedge MUST recover without a reboot: where the platform offers a way to hand the function back to the OS the component may do so and retry; when an enforcement policy is active it rebuilds rather than open-bypasses, so containment and blocks are never silently dropped. Containment state is declarative, persisted, re-applied on restart, and always preserves a management lifeline to the EDR server so an operator can lift it.
 
 ## Consequences
 

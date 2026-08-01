@@ -77,6 +77,25 @@ final class DNSUpstreamFailoverTests: XCTestCase {
         XCTAssertEqual(DNSUpstreamFailover.port(of: .hostPort(host: "192.168.1.1", port: 53)), 53)
     }
 
+    func testMatchesAddressesByValueNotByString() {
+        // The failed server is rendered from an NWEndpoint on the flow; the candidates come from the dynamic store.
+        // The two need not spell an address the same way, and a textual compare would fail closed, silently disabling
+        // the failover for a host whose resolver is written in the expanded form.
+        XCTAssertTrue(DNSUpstreamFailover.sameAddress("fd00::1", "fd00:0:0:0:0:0:0:1"))
+        XCTAssertTrue(DNSUpstreamFailover.sameAddress("fe80::1%en0", "fe80::1"))
+        XCTAssertFalse(DNSUpstreamFailover.sameAddress("fd00::1", "fd00::2"))
+        XCTAssertTrue(DNSUpstreamFailover.sameAddress("192.168.1.1", "192.168.1.1"))
+        XCTAssertFalse(DNSUpstreamFailover.sameAddress("192.168.1.1", "192.168.1.2"))
+    }
+
+    func testExpandedIPv6SystemEntryStillCountsAsSystemConfigured() {
+        // End to end through the selection rule: the flow says `fd00::1`, the system configuration says the expanded
+        // form. Before value comparison this returned nil, i.e. no failover at all.
+        XCTAssertEqual(DNSUpstreamFailover.nextServer(afterFailing: "fd00::1",
+                                                      systemServers: ["fd00:0:0:0:0:0:0:1", "192.168.1.1"]),
+                       "192.168.1.1")
+    }
+
     func testUnknownFailedServerYieldsNoFailover() {
         // A flow whose target we could not render must not silently pick the first system resolver: that would redirect
         // a query we cannot even attribute to a server the client may never have used.

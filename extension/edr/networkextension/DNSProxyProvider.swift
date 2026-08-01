@@ -2,7 +2,6 @@ import Foundation
 import Network
 import NetworkExtension
 import os.log
-import SystemConfiguration
 
 private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", category: "DNSProxy")
 
@@ -21,8 +20,9 @@ private let logger = Logger(subsystem: "com.fleetdm.edr.networkextension", categ
 /// #656 broke: see DNSForwardPolicy for the deadlock and the routing that prevents it.
 final class DNSProxyProvider: NEDNSProxyProvider {
     private let serializer = NetworkEventSerializer()
-    /// Self-heal watchdog. Accounts UDP upstream-forward outcomes; when forwarding is sustainedly failing it tells
-    /// handleNewFlow to stop claiming DNS flows so the system resolver takes over (fail-open). See DNSProxyHealth + ADR-0014.
+    /// Forwarding-health REPORTER. Accounts UDP upstream-forward outcomes and reports degraded/recovered once per
+    /// change. It does not decide anything: it used to tell handleNewFlow to stop claiming flows, which terminated them
+    /// rather than handing them to the system resolver (issue #673). See DNSProxyHealth.
     private let health = DNSProxyHealth()
     /// Chooses how to route a claimed flow's forward so it can never re-enter another provider's tunnel (issue #656). Our
     /// own signing identifier is carved out because our provider holds the same entitlement the probe keys on.
@@ -34,6 +34,8 @@ final class DNSProxyProvider: NEDNSProxyProvider {
     /// Live interface snapshot, used to pin an upstream forward to the interface the client bound its flow to. Started in
     /// startProxy so the first flow already has a snapshot to match against.
     private let interfaces = InterfaceSnapshot()
+    /// Resolver list for the failover decision, read through a short-lived cache over one dynamic-store session.
+    private let resolvers = SystemResolverCache()
 
     override func startProxy(options _: [String: Any]? = nil, completionHandler: @escaping (Error?) -> Void) {
         interfaces.start()
@@ -394,27 +396,13 @@ private extension DNSProxyProvider {
                                  flow: flow, ctx: request.ctx, route: request.route, isFailover: true)
     }
 
-    /// systemResolverAddresses flattens the resolver addresses from the system DNS configuration, in configuration
-    /// order. Read per failover rather than cached: failovers are rare, and a cached copy would go stale across the
-    /// network changes that matter most here.
-    /// systemResolverAddresses reads the host's configured resolvers from the dynamic store, the same source
-    /// `scutil --dns` reads.
+    /// systemResolverAddresses returns the host's configured resolvers for the failover decision.
     ///
-    /// NOT `NEDNSProxyProvider.systemDNSSettings`, despite that being the obvious candidate: measured on macOS 26.3
-    /// inside a running DNS proxy provider it returns nil, while the host genuinely had two resolvers configured. A
-    /// failover built on it can never fire, which is worse than no failover because it implies a safety property that
-    /// does not exist. The dynamic store returns the real list.
-    ///
-    /// Read per failover rather than cached: failovers are rare, and a cached copy would go stale across exactly the
-    /// network changes that matter here.
+    /// Reads through `SystemResolverCache`, which holds one dynamic-store session and caches the result briefly. That
+    /// matters because this sits on the FAILURE path: when a resolver stops answering every query fails and every one
+    /// of them lands here, so a per-call configd round trip would storm exactly when the host is already unhealthy.
     func systemResolverAddresses() -> [String] {
-        guard let store = SCDynamicStoreCreate(nil, "com.fleetdm.edr.networkextension" as CFString, nil, nil),
-              let dns = SCDynamicStoreCopyValue(store, "State:/Network/Global/DNS" as CFString) as? [String: Any],
-              let servers = dns["ServerAddresses"] as? [String] else {
-            logger.debug("No system resolver list available; a failing forward cannot be retried elsewhere")
-            return []
-        }
-        return servers
+        resolvers.addresses()
     }
 
     /// recordForwardOutcome feeds the health accounting and logs a status change once, never per forward.
@@ -455,9 +443,10 @@ private extension DNSProxyProvider {
         forward.connection.receiveMessage { [weak self] responseData, _, _, recvError in
             forward.deadline.cancel()
 
-            // Atomically claim the forward before touching the flow. If the deadline already won (fail-open, flow closed),
-            // claimResponse returns false and a late reply emits no spurious telemetry and does not write to the closed
-            // flow. Once claimed, the deadline's failIfPending is a no-op, so this success cannot be reclassified.
+            // Atomically claim the forward before touching the flow. If the deadline already won (this attempt was
+            // resolved as failed and may have been retried elsewhere), claimResponse returns false and a late reply emits
+            // no spurious telemetry and does not write to a flow that has moved on. Once claimed, the deadline's
+            // failIfPending is a no-op, so this success cannot be reclassified.
             guard forward.completion.claimResponse() else { return }
 
             if let recvError {

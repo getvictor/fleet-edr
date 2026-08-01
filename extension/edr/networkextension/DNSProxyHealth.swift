@@ -74,6 +74,11 @@ final class DNSProxyHealth {
 
         let status = currentStatus()
         guard status != lastReported else { return nil }
+        // Below the sample floor the window carries no verdict, so it reads healthy. Do NOT turn that into a recovery
+        // report on the back of an outcome that just failed: after a traffic gap longer than the window, the next
+        // failing forward would otherwise log "forwarding recovered" in the middle of an outage, which is precisely the
+        // wrong signal for an operator diagnosing DNS. Recovery has to be carried by a forward that actually worked.
+        if status == .healthy, !ok, outcomes.count < max(1, config.minSamples) { return nil }
         lastReported = status
         return status
     }

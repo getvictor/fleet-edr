@@ -69,6 +69,23 @@ final class DNSProxyHealthTests: XCTestCase {
         for _ in 0..<5 { XCTAssertNil(health.record(ok: true)) }
     }
 
+    func testAFailedForwardNeverReportsRecovery() {
+        let clock = FakeClock()
+        let health = makeHealth(clock, window: 30, minSamples: 5)
+        for _ in 0..<5 { _ = health.record(ok: false) }
+        XCTAssertEqual(health.status(), .degraded)
+
+        // A traffic gap longer than the window empties the samples, so the window reads healthy for want of evidence.
+        // The next forward still FAILS. Reporting "recovered" off that would hand an operator an all-clear in the middle
+        // of an outage, which is the worst possible moment to be wrong.
+        clock.advance(31)
+        XCTAssertNil(health.record(ok: false), "a failed forward must never carry a recovery report")
+        XCTAssertNil(health.record(ok: false))
+
+        // Recovery still arrives, but only on a forward that actually worked.
+        XCTAssertEqual(health.record(ok: true), .healthy)
+    }
+
     func testOccasionalFailuresAreNotDegradation() {
         let clock = FakeClock()
         let health = makeHealth(clock, minSamples: 5, failureRate: 0.8)
