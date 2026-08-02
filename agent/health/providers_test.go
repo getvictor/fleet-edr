@@ -8,6 +8,11 @@ import (
 )
 
 // TestGradeProviders covers the grading that replaced "an XPC session means healthy" for the network extension (issue #649).
+//
+// spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/a-report-with-a-running-provider-and-no-fault-is-healthy
+// spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/an-extension-with-no-running-capture-provider-is-unhealthy
+// spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/a-stopped-capture-provider-is-unhealthy-and-named
+// spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/a-deliberately-disabled-provider-does-not-make-the-component-unhealthy
 func TestGradeProviders(t *testing.T) {
 	t.Parallel()
 	const name = "Network extension"
@@ -88,6 +93,7 @@ func TestGradeProviders(t *testing.T) {
 	}
 }
 
+// spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/connectivity-without-a-provider-report-is-degraded-not-healthy
 func TestMarkProvidersAndAwaiting(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()

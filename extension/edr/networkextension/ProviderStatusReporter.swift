@@ -34,23 +34,27 @@ final class ProviderStatusReporter {
 
     /// recordStarted notes that a provider is now capturing.
     func recordStarted(_ provider: ProviderLiveness.Provider) {
-        let changed = lock.withLock { liveness.record(provider, .running) }
+        lock.lock()
+        let changed = liveness.record(provider, .running)
+        lock.unlock()
         guard changed else { return }
         logger.info("Provider \(provider.rawValue, privacy: .public) is running")
         publish()
     }
 
-    /// recordStopped notes that a provider stopped, and grades it by WHY.
+    /// recordStopped notes that a provider stopped, and grades it by WHY it stopped and WHICH provider it was.
     ///
-    /// A deliberate stop (an operator disabling the DNS proxy, a configuration being removed) drops the provider from
-    /// the report entirely, so it grades as "never started" rather than as a fault. DNS proxying is opt-in, so without
-    /// this a host that deliberately turned it off would report unhealthy forever. Any other reason is a fault and is
-    /// reported, which is the shape the 2026-07-17 incident took.
+    /// A stop graded as deliberate absence drops the provider from the report entirely, so it reads as "never started"
+    /// rather than as a fault. That covers session lifecycle for either provider (logout, user switch, a superceded
+    /// configuration) and an operator switching off the opt-in DNS proxy, which is a supported configuration rather than
+    /// a degradation. An operator switching off the mandatory content filter is NOT absence: it is reported stopped, so
+    /// a host that has been quietly stripped of network capture is visible. Any other reason is a fault for either
+    /// provider, which is the shape the 2026-07-17 incident took.
     func recordStopped(_ provider: ProviderLiveness.Provider, reason: Int) {
-        let deliberate = ProviderLiveness.isDeliberateStop(reason: reason)
-        let changed = lock.withLock {
-            deliberate ? liveness.forget(provider) : liveness.record(provider, .stopped)
-        }
+        let deliberate = ProviderLiveness.isDeliberateAbsence(provider: provider, reason: reason)
+        lock.lock()
+        let changed = deliberate ? liveness.forget(provider) : liveness.record(provider, .stopped)
+        lock.unlock()
         guard changed else { return }
         let grading = deliberate ? "deliberately disabled" : "a fault"
         logger.info("""
@@ -64,19 +68,13 @@ final class ProviderStatusReporter {
     /// completes the hello handshake, because this state is level-triggered: an agent that connects minutes after the
     /// providers started would otherwise wait for a transition that never comes.
     func publish() {
-        let snapshot = lock.withLock { liveness.snapshot }
+        lock.lock()
+        let snapshot = liveness.snapshot
+        lock.unlock()
         guard let data = serialize(ProviderStatusPayload(providers: snapshot)) else {
             logger.error("Could not serialize provider status; agent health will fall back to its grace period")
             return
         }
         broadcast(data)
-    }
-}
-
-private extension NSLock {
-    func withLock<T>(_ body: () -> T) -> T {
-        lock()
-        defer { unlock() }
-        return body()
     }
 }

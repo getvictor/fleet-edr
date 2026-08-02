@@ -26,8 +26,13 @@ enum XPCServer {
 /// listener merely being up (issue #649). The listener starts in main.swift BEFORE the providers do, so "the agent
 /// connected" has never been evidence that anything is capturing.
 enum ProviderStatus {
+    /// One serializer for the lifetime of the process. NetworkEventSerializer.init does an IOKit lookup for the hardware
+    /// UUID and builds a JSONEncoder, so constructing one per publish would redo that synchronous work on every provider
+    /// transition and on every agent handshake.
+    private static let serializer = NetworkEventSerializer()
+
     static let shared = ProviderStatusReporter(
         broadcast: { XPCServer.shared.send(data: $0) },
-        serialize: { NetworkEventSerializer().serialize(eventType: ProviderStatusReporter.eventType, payload: $0) }
+        serialize: { serializer.serialize(eventType: ProviderStatusReporter.eventType, payload: $0) }
     )
 }

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,6 +11,9 @@ import (
 
 // TestParseProviderStatus pins the filter that keeps the network extension's liveness control message out of the upload queue
 // while letting every ordinary event through untouched (issue #649).
+//
+// spec:agent-status-reporting/capture-provider-status-is-a-control-message-not-telemetry/a-provider-status-message-is-not-uploaded
+// spec:agent-status-reporting/capture-provider-status-is-a-control-message-not-telemetry/ordinary-telemetry-is-unaffected-by-the-filter
 func TestParseProviderStatus(t *testing.T) {
 	t.Parallel()
 	t.Run("recognises a status message and returns its providers", func(t *testing.T) {
@@ -59,6 +64,58 @@ func TestParseProviderStatus(t *testing.T) {
 			providers, ok := parseProviderStatus([]byte(body))
 			assert.False(t, ok, body)
 			assert.Nil(t, providers)
+		}
+	})
+}
+
+// FuzzParseProviderStatus drives the parser with arbitrary bytes. It decodes untrusted input off the XPC event channel, which the
+// testing-strategy matrix puts squarely in the fuzz column, and the two invariants asserted here are the ones the call site in
+// startReceiverLoop actually depends on:
+//
+//   - `ok` is true for exactly those inputs that really are provider-status envelopes. A false positive silently DROPS a
+//     telemetry event (the receiver loop returns early), which is the expensive direction of this bug and is invisible at runtime.
+//   - a recognised message never yields a nil map, so the caller can hand it straight to GradeProviders without a nil check.
+func FuzzParseProviderStatus(f *testing.F) {
+	f.Add([]byte(`{"event_type":"ne_provider_status","payload":{"providers":{"content_filter":"running"}}}`))
+	f.Add([]byte(`{"event_type":"ne_provider_status","payload":{"providers":{}}}`))
+	f.Add([]byte(`{"event_type":"ne_provider_status","payload":{}}`))
+	f.Add([]byte(`{"event_type":"ne_provider_status"}`))
+	f.Add([]byte(`{"event_type":"exec","payload":{"pid":1}}`))
+	f.Add([]byte(`{"event_type":"ne_provider_status","payload":{"providers":null}}`))
+	f.Add([]byte(`not json`))
+	f.Add([]byte(``))
+	// Found by this fuzzer on first run. encoding/json matches struct tags case-insensitively, so a case-variant KEY still
+	// decodes; only the VALUE comparison is exact. Kept as a seed because it pins that behaviour deliberately: every other
+	// event_type decode in the agent (eventHeader, reconcile, the Windows mapper) is a plain struct-tag decode with the same
+	// semantics, so tightening this one parser alone would make it the odd one out rather than make the agent safer.
+	f.Add([]byte(`{"event_tYpe":"ne_provider_status","payload":{}}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		providers, ok := parseProviderStatus(data)
+
+		// Independent oracle: decode into a generic map and ask only "does some key that encoding/json would bind to
+		// event_type carry the control value". Written against the decoder's real semantics rather than the
+		// implementation's own peek, so a regression that widens the match on the VALUE side shows up as a disagreement.
+		var oracle map[string]json.RawMessage
+		wantOK := false
+		if json.Unmarshal(data, &oracle) == nil {
+			for key, raw := range oracle {
+				if !strings.EqualFold(key, "event_type") {
+					continue
+				}
+				var eventType string
+				if json.Unmarshal(raw, &eventType) == nil && eventType == providerStatusEventType {
+					wantOK = true
+					break
+				}
+			}
+		}
+		require.Equal(t, wantOK, ok, "drop decision disagrees with the event_type actually present in %q", data)
+
+		if ok {
+			require.NotNil(t, providers, "a recognised status message must never yield a nil map")
+		} else {
+			require.Nil(t, providers)
 		}
 	})
 }

@@ -49,19 +49,30 @@ struct ProviderLiveness {
         static let userSwitch = 13
     }
 
-    /// Stop reasons that mean somebody turned this provider off on purpose, as opposed to it failing. A deliberate stop
-    /// makes the provider ABSENT from the report rather than `stopped`, because DNS proxying in particular is opt-in:
-    /// a host that has deliberately disabled it must not read as unhealthy forever.
-    ///
-    /// Everything else (providerFailed, noNetworkAvailable, configurationFailed, connectionFailed, ...) is a fault and
-    /// reports `stopped`, which is what the 2026-07-17 incident looked like from the outside.
-    static let deliberateStopReasons: Set<Int> = [
-        StopReason.userInitiated, StopReason.providerDisabled, StopReason.configurationDisabled,
-        StopReason.configurationRemoved, StopReason.superceded, StopReason.userLogout, StopReason.userSwitch
+    /// Stop reasons that mean the session hosting this provider is going away or being replaced, rather than the provider
+    /// failing. These are ordinary lifecycle events for BOTH providers: a login/logout cycle, or the session being replaced
+    /// during an activation or upgrade. Grading them as faults would report unhealthy every time a user logs out.
+    static let lifecycleStopReasons: Set<Int> = [
+        StopReason.superceded, StopReason.userLogout, StopReason.userSwitch, StopReason.configurationRemoved
     ]
 
-    static func isDeliberateStop(reason: Int) -> Bool {
-        deliberateStopReasons.contains(reason)
+    /// Stop reasons that mean somebody turned this specific provider off on purpose. Whether that is benign depends on
+    /// WHICH provider: DNS proxying is opt-in, so a host that has deliberately disabled it is correctly configured and
+    /// must not read as unhealthy forever. The content filter is not optional, so an operator switching it off is exactly
+    /// the tamper-adjacent state this component exists to surface, and it stays in the report as `stopped`.
+    static let operatorDisabledStopReasons: Set<Int> = [
+        StopReason.userInitiated, StopReason.providerDisabled, StopReason.configurationDisabled
+    ]
+
+    /// isDeliberateAbsence answers whether a stop should make the provider ABSENT from the report rather than `stopped`.
+    ///
+    /// Absence and `stopped` are graded differently by the agent (absent is not by itself unhealthy), so this is the
+    /// decision that determines whether a stop pages anyone. Anything not named here (providerFailed, noNetworkAvailable,
+    /// configurationFailed, connectionFailed, ...) is a fault for either provider, which is what the 2026-07-17 incident
+    /// looked like from the outside.
+    static func isDeliberateAbsence(provider: Provider, reason: Int) -> Bool {
+        if lifecycleStopReasons.contains(reason) { return true }
+        return provider == .dnsProxy && operatorDisabledStopReasons.contains(reason)
     }
 
     /// forget drops a provider from the report entirely, so it grades as "never started" rather than "stopped". Used

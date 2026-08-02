@@ -41,16 +41,48 @@ final class ProviderLivenessTests: XCTestCase {
         XCTAssertFalse(liveness.forget(.dnsProxy), "forgetting an absent provider is not a transition")
     }
 
-    func testDeliberateStopReasonsAreDistinguishedFromFaults() {
-        // NEProviderStopReason raw values. Deliberate: userInitiated(1), providerDisabled(5), configurationDisabled(9),
-        // configurationRemoved(10), superceded(11), userLogout(12), userSwitch(13).
-        for reason in [1, 5, 9, 10, 11, 12, 13] {
-            XCTAssertTrue(ProviderLiveness.isDeliberateStop(reason: reason), "reason \(reason) is deliberate")
+    func testSessionLifecycleStopsAreAbsenceForEitherProvider() {
+        // NEProviderStopReason raw values for "the session is going away or being replaced": superceded(11),
+        // userLogout(12), userSwitch(13), configurationRemoved(10). Grading these as faults would report the extension
+        // unhealthy on every logout and on every activation that supercedes the running configuration.
+        for reason in [10, 11, 12, 13] {
+            for provider in ProviderLiveness.Provider.allCases {
+                XCTAssertTrue(
+                    ProviderLiveness.isDeliberateAbsence(provider: provider, reason: reason),
+                    "reason \(reason) is session lifecycle for \(provider.rawValue)"
+                )
+            }
         }
-        // Faults, including the shapes the 2026-07-17 incident produced: providerFailed(2), configurationFailed(7),
+    }
+
+    // spec:agent-status-reporting/network-extension-health-reflects-capture-provider-liveness/disabling-the-mandatory-content-filter-stays-visible
+    func testOperatorDisablingIsAbsenceOnlyForTheOptInDNSProxy() {
+        // userInitiated(1), providerDisabled(5), configurationDisabled(9): somebody switched this provider off.
+        for reason in [1, 5, 9] {
+            // DNS proxying is opt-in, so a host that turned it off is correctly configured, not degraded.
+            XCTAssertTrue(
+                ProviderLiveness.isDeliberateAbsence(provider: .dnsProxy, reason: reason),
+                "reason \(reason) on the opt-in DNS proxy is a supported configuration"
+            )
+            // The content filter is not optional. An operator switching it off leaves the host with no network capture,
+            // which is the tamper-adjacent state this component exists to surface, so it stays in the report as stopped.
+            XCTAssertFalse(
+                ProviderLiveness.isDeliberateAbsence(provider: .contentFilter, reason: reason),
+                "reason \(reason) on the mandatory content filter must stay visible"
+            )
+        }
+    }
+
+    func testFaultsAreNeverAbsenceForEitherProvider() {
+        // Including the shapes the 2026-07-17 incident produced: providerFailed(2), configurationFailed(7),
         // connectionFailed(14), and the unspecified none(0).
         for reason in [0, 2, 3, 4, 6, 7, 8, 14] {
-            XCTAssertFalse(ProviderLiveness.isDeliberateStop(reason: reason), "reason \(reason) is a fault")
+            for provider in ProviderLiveness.Provider.allCases {
+                XCTAssertFalse(
+                    ProviderLiveness.isDeliberateAbsence(provider: provider, reason: reason),
+                    "reason \(reason) is a fault for \(provider.rawValue)"
+                )
+            }
         }
     }
 

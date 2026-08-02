@@ -242,11 +242,16 @@ final class XPCEventServer {
     /// so a deep buffer (worst case pendingSendCap) can't monopolise the serial queue for the whole drain and stall an
     /// inbound hello / disconnect queued behind it. In-order delivery is preserved, so the "delivers every buffered
     /// event in the order it was emitted" contract still holds.
-    private func flushPendingTo(_ peer: XPCPeer) {
-        guard !pendingBuffer.isEmpty else { return }
+    /// `whenDrained` runs once every buffered event has been sent to this peer, or immediately when there was nothing
+    /// buffered. It does NOT run if the peer disconnected mid-drain, because there is no longer anyone to tell.
+    private func flushPendingTo(_ peer: XPCPeer, whenDrained: (() -> Void)? = nil) {
+        guard !pendingBuffer.isEmpty else {
+            whenDrained?()
+            return
+        }
         let drained = pendingBuffer.drain()
         log.info("XPC flushing \(drained.count, privacy: .public) buffered events to newly-connected peer")
-        flushChunks(drained[...], to: peer)
+        flushChunks(drained[...], to: peer, whenDrained: whenDrained)
     }
 
     /// flushChunks sends the next flushChunkSize events from `remaining`, then re-dispatches itself on `queue` for the
@@ -255,7 +260,7 @@ final class XPCEventServer {
     /// tolerates the interleave. If the peer disconnected since the previous chunk (its ERROR handler ran on `queue` and
     /// removed it from `peers`), the remaining sends would be no-ops against a cancelled connection, so we stop early -
     /// consistent with the "stop sending events to a peer once its connection closes" disconnect-cleanup contract.
-    private func flushChunks(_ remaining: ArraySlice<Data>, to peer: XPCPeer) {
+    private func flushChunks(_ remaining: ArraySlice<Data>, to peer: XPCPeer, whenDrained: (() -> Void)? = nil) {
         guard peers.contains(peer) else {
             log.info("XPC flush aborted mid-drain: peer disconnected before all buffered events were sent")
             return
@@ -270,10 +275,12 @@ final class XPCEventServer {
             xpc_connection_send_message(peer.connection, msg)
         }
         let next = remaining.dropFirst(chunk.count)
-        if !next.isEmpty {
-            queue.async { [weak self] in
-                self?.flushChunks(next, to: peer)
-            }
+        guard !next.isEmpty else {
+            whenDrained?()
+            return
+        }
+        queue.async { [weak self] in
+            self?.flushChunks(next, to: peer, whenDrained: whenDrained)
         }
     }
 
@@ -296,10 +303,15 @@ final class XPCEventServer {
             // Receipt of hello is positive proof this peer is the real agent (not a phantom). Flush any events
             // buffered while no peer was connected so the agent picks them up immediately rather than after the
             // first natural exec.
-            flushPendingTo(peer)
-            // Level-triggered state the new peer has not seen yet (provider liveness, #649). Runs after the flush so
-            // the status lands behind any buffered events rather than being overtaken by them.
-            onPeerConnected?()
+            //
+            // Level-triggered state the new peer has not seen yet (provider liveness, #649) is published from the
+            // drain completion, NOT inline after this call. flushChunks only sends its first chunk synchronously and
+            // re-dispatches the rest, so publishing inline would put the current snapshot ahead of any still-queued
+            // chunks; a stale provider-status event replayed out of that buffer would then land last and overwrite
+            // correct liveness with an older view until the next transition, which for a wedged provider never comes.
+            flushPendingTo(peer) { [weak self] in
+                self?.onPeerConnected?()
+            }
         case .applyApplicationControl(let data):
             onApplicationControl?(data)
         case .rejectMissingData:
