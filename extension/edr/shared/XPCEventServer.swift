@@ -160,6 +160,17 @@ final class XPCEventServer {
     /// network extension passes nil (no inbound control messages), so an application_control.update it never receives
     /// would be a no-op rather than a crash.
     private let onApplicationControl: ((Data) -> Void)?
+    /// Called each time a peer completes the hello handshake. The network extension uses it to re-broadcast current
+    /// provider liveness (issue #649): that state is level-triggered, not an event, so an agent that connects after the
+    /// providers started must be told the current state rather than waiting for a transition that may never come.
+    /// Buffered events cannot carry it reliably either, since a busy host can evict a status message from the bounded
+    /// pending buffer before the agent ever connects.
+    ///
+    /// Supplied to `start` rather than to `init` so the caller can reference something that itself references this
+    /// server. As a stored property initialised from a static, that mutual reference is a compile-time circular
+    /// reference; assigned here, before the listener is activated, each side resolves lazily at first use. Written once
+    /// on the caller's thread before any peer can exist, read thereafter on `queue`.
+    private var onPeerConnected: (() -> Void)?
     private var listener: xpc_connection_t?
     private var peers: Set<XPCPeer> = []
     private let queue = DispatchQueue(label: "com.fleetdm.edr.xpceventserver")
@@ -173,7 +184,8 @@ final class XPCEventServer {
         self.onApplicationControl = onApplicationControl
     }
 
-    func start() {
+    func start(onPeerConnected: (() -> Void)? = nil) {
+        self.onPeerConnected = onPeerConnected
         let conn = xpc_connection_create_mach_service(
             serviceName, queue,
             UInt64(XPC_CONNECTION_MACH_SERVICE_LISTENER)
@@ -285,6 +297,9 @@ final class XPCEventServer {
             // buffered while no peer was connected so the agent picks them up immediately rather than after the
             // first natural exec.
             flushPendingTo(peer)
+            // Level-triggered state the new peer has not seen yet (provider liveness, #649). Runs after the flush so
+            // the status lands behind any buffered events rather than being overtaken by them.
+            onPeerConnected?()
         case .applyApplicationControl(let data):
             onApplicationControl?(data)
         case .rejectMissingData:

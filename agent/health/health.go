@@ -5,6 +5,9 @@
 package health
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,6 +35,13 @@ const (
 	reasonActivated      = "activated"
 	reasonNeverConnected = "never_connected"
 	reasonConnectionLost = "connection_lost"
+	// Provider-liveness reasons for the network extension (issue #649). Its XPC listener starts before its providers do, so an
+	// established XPC session has never been evidence that anything is capturing: a process with no running provider reported
+	// healthy while the host produced no network or DNS telemetry for 24+ hours. These reasons are what that state now looks like.
+	// The reason vocabulary is open by contract (server/endpoint/api/status.go), so adding to it needs no server change.
+	reasonAwaitingProviders  = "awaiting_provider_status"
+	reasonNoProvidersRunning = "no_providers_running"
+	reasonProviderStopped    = "provider_stopped"
 )
 
 // Component is one condition in a status snapshot. The JSON tags match the server's ComponentHealth exactly; reason and message are
@@ -124,6 +134,64 @@ func (r *Registry) MarkConnected(compType string) {
 	r.transition(compType, func(s *componentState) {
 		s.everConnected = true
 		s.set(StatusHealthy, reasonActivated, s.displayName+" connected")
+	})
+}
+
+// Provider states as they appear on the wire from the extension. A provider that has never started is ABSENT from the map rather
+// than carrying a state, which is what lets "never started" and "started then stopped" grade differently. A deliberate stop (an
+// operator disabling the opt-in DNS proxy) is reported as absence too, so it does not read as a fault forever.
+const (
+	ProviderRunning = "running"
+	ProviderStopped = "stopped"
+)
+
+// GradeProviders grades a provider-liveness snapshot into a component status. Pure, so every case is unit-testable without a
+// registry or a live extension.
+//
+// An empty map means the extension is up and talking but nothing is capturing: that is the #649 failure, and it is unhealthy even
+// though the XPC session is perfectly healthy. A provider reported stopped is a fault the extension chose to surface (a deliberate
+// stop is filtered out extension-side and arrives as absence). Anything else is running.
+func GradeProviders(displayName string, providers map[string]string) (Status, string, string) {
+	stopped := make([]string, 0, len(providers))
+	running := 0
+	for name, state := range providers {
+		switch state {
+		case ProviderStopped:
+			stopped = append(stopped, name)
+		case ProviderRunning:
+			running++
+		}
+	}
+	sort.Strings(stopped)
+	switch {
+	case len(stopped) > 0:
+		return StatusUnhealthy, reasonProviderStopped,
+			fmt.Sprintf("%s stopped capturing: %s", displayName, strings.Join(stopped, ", "))
+	case running == 0:
+		return StatusUnhealthy, reasonNoProvidersRunning, displayName + " is running but no capture provider started"
+	default:
+		return StatusHealthy, reasonActivated, displayName + " connected"
+	}
+}
+
+// MarkProviders records a provider-liveness snapshot for compType, replacing whatever the XPC session alone implied. No-op for an
+// unregistered type.
+func (r *Registry) MarkProviders(compType string, providers map[string]string) {
+	r.transition(compType, func(s *componentState) {
+		s.everConnected = true
+		status, reason, message := GradeProviders(s.displayName, providers)
+		s.set(status, reason, message)
+	})
+}
+
+// MarkAwaitingProviders records that compType has an XPC session but has not yet said which providers are running. Degraded rather
+// than healthy: connectivity is no longer taken as proof of capture. In practice this lasts milliseconds, because the extension
+// re-publishes liveness on every hello; it persists only against an extension too old to report, where "we do not know" is the
+// honest answer. No-op for an unregistered type.
+func (r *Registry) MarkAwaitingProviders(compType string) {
+	r.transition(compType, func(s *componentState) {
+		s.everConnected = true
+		s.set(StatusDegraded, reasonAwaitingProviders, s.displayName+" connected; awaiting provider status")
 	})
 }
 

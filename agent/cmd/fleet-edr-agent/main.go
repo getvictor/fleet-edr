@@ -587,6 +587,10 @@ type receiverLoopParams struct {
 	// set together; when either is nil the loop reports no health for the service.
 	health    *health.Registry
 	component string
+	// providerLiveness makes this loop grade health on which capture providers the extension reports running, rather than on the XPC
+	// session alone (issue #649). Set only for the network extension, whose XPC listener comes up before its providers do, so a
+	// connected session there has never meant anything is capturing.
+	providerLiveness bool
 	// connectorFactory overrides how the loop builds its Connector. Nil uses the default XPC receiver (macOS); the Windows sensor seam
 	// sets it to build an ETW-backed Connector instead, so both platforms share the same reconnect/backoff/heartbeat + health machinery.
 	connectorFactory func() receiver.Connector
@@ -601,6 +605,15 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 	}
 	hooks := receiver.LoopHooks{
 		OnEvent: func(ctx context.Context, evt receiver.Event) {
+			// Provider-liveness status is a control message, not telemetry: it rides the event channel because the XPC bridge
+			// only surfaces messages carrying a `data` blob, but the agent consumes it for health and never uploads it
+			// (issue #649). Handled before anything else so it cannot reach the proctable or the upload queue.
+			if p.providerLiveness && p.health != nil {
+				if providers, ok := parseProviderStatus(evt.Data); ok {
+					p.health.MarkProviders(p.component, providers)
+					return
+				}
+			}
 			// Fill a btm_launch_item_add event's executable_code_signing from the on-disk signing of the registered
 			// executable: the sandboxed extension cannot read it on a SIP-enabled host, so the agent (unsandboxed root,
 			// off the ES callback thread) computes it here. No-op for every other event and on the linux headless build.
@@ -625,6 +638,13 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 			if priorConnected != nil {
 				priorConnected(c)
 			}
+			// A connected XPC session is proof the extension PROCESS is up, which for the network extension is not the same as
+			// its providers capturing (issue #649). Hold at degraded until the extension says which providers are running; it
+			// re-publishes that on every hello, so this resolves within milliseconds in practice.
+			if p.providerLiveness {
+				p.health.MarkAwaitingProviders(p.component)
+				return
+			}
 			p.health.MarkConnected(p.component)
 		}
 		hooks.OnDisconnected = func() {
@@ -644,6 +664,32 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 		HeartbeatTimeout:  xpcHeartbeatPingTimeout,
 	}, hooks, p.logger)
 	loop.Run(ctx)
+}
+
+// providerStatusEventType is the control event_type the network extension broadcasts its provider liveness under. Wire contract
+// shared with ProviderStatusReporter.eventType in the extension; changing one without the other silently leaves health stuck at
+// "awaiting provider status".
+const providerStatusEventType = "ne_provider_status"
+
+// parseProviderStatus recognises a provider-liveness control message and returns the provider-to-state map it carries. The second
+// result is false for every ordinary telemetry event, which is the overwhelmingly common case, so the check is a cheap type peek
+// before any further decoding.
+func parseProviderStatus(data []byte) (map[string]string, bool) {
+	var envelope struct {
+		EventType string `json:"event_type"`
+		Payload   struct {
+			Providers map[string]string `json:"providers"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.EventType != providerStatusEventType {
+		return nil, false
+	}
+	// A nil map is meaningful and must not be conflated with "not a status message": it is what the extension sends when NO
+	// provider has started, which is exactly the condition this whole mechanism exists to surface.
+	if envelope.Payload.Providers == nil {
+		return map[string]string{}, true
+	}
+	return envelope.Payload.Providers, true
 }
 
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.

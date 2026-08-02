@@ -17,3 +17,17 @@ enum XPCServer {
         logger: Logger(subsystem: "com.fleetdm.edr.networkextension", category: "XPCServer")
     )
 }
+
+/// Holds the provider-liveness broadcaster. A separate type from XPCServer on purpose: the two reference each other
+/// (the server re-publishes on peer hello, the reporter sends through the server), and Swift rejects that as a circular
+/// reference when both are statics of the same type. Split apart, each side resolves lazily at first use.
+///
+/// Broadcasts which providers are actually running so agent health keys on provider liveness rather than on the XPC
+/// listener merely being up (issue #649). The listener starts in main.swift BEFORE the providers do, so "the agent
+/// connected" has never been evidence that anything is capturing.
+enum ProviderStatus {
+    static let shared = ProviderStatusReporter(
+        broadcast: { XPCServer.shared.send(data: $0) },
+        serialize: { NetworkEventSerializer().serialize(eventType: ProviderStatusReporter.eventType, payload: $0) }
+    )
+}
