@@ -72,7 +72,7 @@ final class ProviderStatusReporter {
         let snapshot = liveness.snapshot
         lock.unlock()
         guard let data = serialize(ProviderStatusPayload(providers: snapshot)) else {
-            logger.error("Could not serialize provider status; agent health will fall back to its grace period")
+            logger.error("Could not serialize provider status; agent health stays degraded until a later report arrives")
             return
         }
         broadcast(data)

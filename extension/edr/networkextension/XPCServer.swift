@@ -29,6 +29,11 @@ enum ProviderStatus {
     /// One serializer for the lifetime of the process. NetworkEventSerializer.init does an IOKit lookup for the hardware
     /// UUID and builds a JSONEncoder, so constructing one per publish would redo that synchronous work on every provider
     /// transition and on every agent handshake.
+    ///
+    /// Sharing one instance across concurrent callers is safe and is what the rest of this extension already does:
+    /// NetworkFilter and DNSProxyProvider each hold a single serializer that serves concurrent flow callbacks at far higher
+    /// rates than provider transitions. NetworkEventSerializer is CHECKED Sendable (not `@unchecked`), so the compiler has
+    /// verified its stored encoder is Sendable, and that encoder is configured once at init and never mutated afterwards.
     private static let serializer = NetworkEventSerializer()
 
     static let shared = ProviderStatusReporter(

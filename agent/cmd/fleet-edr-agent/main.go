@@ -679,27 +679,29 @@ const providerStatusEventType = "ne_provider_status"
 // result is false for every ordinary telemetry event, which is the overwhelmingly common case, so the check is a cheap type peek
 // before any further decoding.
 func parseProviderStatus(data []byte) (map[string]string, bool) {
-	// Peek at event_type with `payload` left as raw bytes. This runs on every network-extension event, and ordinary telemetry
-	// (a network_connect per flow) is the overwhelmingly common case, so the common path must not decode the payload: a
-	// json.RawMessage field is scanned for its extent and skipped, where a nested struct would allocate and populate a map
-	// for every flow the host makes.
+	// Peek at event_type ALONE. This runs on every network-extension event and ordinary telemetry (a network_connect per
+	// flow) is the overwhelmingly common case, so the common path must touch the payload as little as possible: with no
+	// payload field declared, encoding/json walks past it without allocating. Capturing it as a json.RawMessage would copy
+	// the payload bytes for every flow the host makes, and decoding it into a struct would additionally build a map.
 	var hdr struct {
-		EventType string          `json:"event_type"`
-		Payload   json.RawMessage `json:"payload"`
+		EventType string `json:"event_type"`
 	}
 	if err := json.Unmarshal(data, &hdr); err != nil || hdr.EventType != providerStatusEventType {
 		return nil, false
 	}
 	// Past this point event_type has identified a control message, so every path returns true: it must be kept out of the
-	// upload queue whether or not its payload decodes. An empty map is meaningful rather than a parse failure, because it is
-	// what the extension sends when NO provider has started, which is the condition this whole mechanism exists to surface.
-	var payload struct {
-		Providers map[string]string `json:"providers"`
+	// upload queue whether or not its payload decodes. The second pass costs a re-parse, which is free in aggregate because
+	// it only runs on the rare control message. An empty map is meaningful rather than a parse failure, because it is what
+	// the extension sends when NO provider has started, the condition this whole mechanism exists to surface.
+	var envelope struct {
+		Payload struct {
+			Providers map[string]string `json:"providers"`
+		} `json:"payload"`
 	}
-	if err := json.Unmarshal(hdr.Payload, &payload); err != nil || payload.Providers == nil {
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Payload.Providers == nil {
 		return map[string]string{}, true
 	}
-	return payload.Providers, true
+	return envelope.Payload.Providers, true
 }
 
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.
