@@ -28,6 +28,7 @@ final class NetworkFilter: NEFilterDataProvider {
                 logger.error("Failed to apply filter settings: \(error.localizedDescription)")
             } else {
                 logger.info("Network filter started")
+                ProviderStatus.shared.recordStarted(.contentFilter)
             }
             completionHandler(error)
         }
@@ -35,6 +36,7 @@ final class NetworkFilter: NEFilterDataProvider {
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logger.info("Network filter stopping: \(String(describing: reason))")
+        ProviderStatus.shared.recordStopped(.contentFilter, reason: reason.rawValue)
         completionHandler()
     }
 

@@ -17,3 +17,27 @@ enum XPCServer {
         logger: Logger(subsystem: "com.fleetdm.edr.networkextension", category: "XPCServer")
     )
 }
+
+/// Holds the provider-liveness broadcaster. A separate type from XPCServer on purpose: the two reference each other
+/// (the server re-publishes on peer hello, the reporter sends through the server), and Swift rejects that as a circular
+/// reference when both are statics of the same type. Split apart, each side resolves lazily at first use.
+///
+/// Broadcasts which providers are actually running so agent health keys on provider liveness rather than on the XPC
+/// listener merely being up (issue #649). The listener starts in main.swift BEFORE the providers do, so "the agent
+/// connected" has never been evidence that anything is capturing.
+enum ProviderStatus {
+    /// One serializer for the lifetime of the process. NetworkEventSerializer.init does an IOKit lookup for the hardware
+    /// UUID and builds a JSONEncoder, so constructing one per publish would redo that synchronous work on every provider
+    /// transition and on every agent handshake.
+    ///
+    /// Sharing one instance across concurrent callers is safe and is what the rest of this extension already does:
+    /// NetworkFilter and DNSProxyProvider each hold a single serializer that serves concurrent flow callbacks at far higher
+    /// rates than provider transitions. NetworkEventSerializer is CHECKED Sendable (not `@unchecked`), so the compiler has
+    /// verified its stored encoder is Sendable, and that encoder is configured once at init and never mutated afterwards.
+    private static let serializer = NetworkEventSerializer()
+
+    static let shared = ProviderStatusReporter(
+        broadcast: { XPCServer.shared.send(data: $0) },
+        serialize: { serializer.serialize(eventType: ProviderStatusReporter.eventType, payload: $0) }
+    )
+}

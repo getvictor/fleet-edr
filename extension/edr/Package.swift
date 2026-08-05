@@ -86,6 +86,7 @@ let package = Package(
                 "networkextension/NetworkEventSerializer.swift",
                 "networkextension/NetworkFilter.swift",
                 "networkextension/XPCServer.swift",
+                "networkextension/ProviderStatusReporter.swift",
                 "com.fleetdm.edr.notify.plist"
             ],
             sources: [
@@ -118,6 +119,10 @@ let package = Package(
                 // DNSUpstreamFailover.swift is the rule for picking a second resolver when the first will not answer,
                 // and the scoping that stops it substituting a resolver the client chose deliberately (issue #673).
                 "networkextension/DNSUpstreamFailover.swift",
+                // ProviderLiveness.swift is the pure state machine + wire shape behind provider-liveness health
+                // (issue #649): which providers have started, which have stopped, and what the agent is told. No
+                // NetworkExtension import, so the transitions and the snapshot are unit-testable here.
+                "networkextension/ProviderLiveness.swift",
                 // SystemResolverCache.swift holds the single dynamic-store session and the short-lived cache behind the
                 // failover's resolver lookup, so a resolver outage cannot turn into a configd round trip per query. The
                 // reader is injected, so the caching and TTL are unit-testable without touching configd.

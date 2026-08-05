@@ -43,6 +43,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         // Asynchronous: startProxy must not wait on a configd round trip to report the proxy ready.
         resolvers.prime()
         logger.info("DNS proxy started")
+        ProviderStatus.shared.recordStarted(.dnsProxy)
         completionHandler(nil)
     }
 
@@ -51,6 +52,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         // exit, so leaving it running would leak a monitor and its queue on every start/stop cycle.
         interfaces.stop()
         logger.info("DNS proxy stopping: \(String(describing: reason))")
+        ProviderStatus.shared.recordStopped(.dnsProxy, reason: reason.rawValue)
         completionHandler()
     }
 
