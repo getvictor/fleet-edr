@@ -176,17 +176,22 @@ func TestRepeatedFailuresStopRetryingAndEscalate(t *testing.T) {
 		require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter), "attempt %d should launch", attempt)
 		rem.waitForCall(t)
 	}
-	// Budget spent: further reports must not launch anything, however long the provider stays stopped.
-	for range 3 {
-		clock.advance(10 * time.Minute)
-		assert.Empty(t, c.Observe(ctx, stoppedFilter))
-	}
-	assert.Equal(t, 3, rem.callCount(), "must not exceed the attempt budget")
-
-	require.Eventually(t, func() bool { return hs.count() == 1 }, 2*time.Second, 10*time.Millisecond,
-		"exhaustion must escalate exactly once so the operator sees automation gave up")
+	require.Eventually(t, func() bool { return hs.count() >= 1 }, 2*time.Second, 10*time.Millisecond,
+		"exhausting the budget must escalate so the operator sees automation gave up")
 	assert.Contains(t, hs.failures[0], "content_filter")
 	assert.Contains(t, hs.failures[0], "operator action required")
+
+	// Budget spent: further reports must not launch anything, however long the provider stays stopped, AND each report must
+	// re-assert the escalation. The receiver loop calls MarkProviders before Observe, so every report overwrites the reason
+	// with provider_stopped; without the re-assertion self_heal_failed would survive microseconds and the operator would
+	// never see that automation had given up.
+	for range 3 {
+		clock.advance(10 * time.Minute)
+		before := hs.count()
+		assert.Empty(t, c.Observe(ctx, stoppedFilter))
+		assert.Equal(t, before+1, hs.count(), "every report while exhausted must re-assert the escalation")
+	}
+	assert.Equal(t, 3, rem.callCount(), "must not exceed the attempt budget")
 }
 
 // spec:agent-status-reporting/remediation-attempts-are-bounded-and-escalate-on-exhaustion/a-successful-remediation-restores-the-budget
@@ -219,6 +224,35 @@ func TestSuccessfulRemediationRestoresTheBudget(t *testing.T) {
 	assert.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
 	rem.waitForCall(t)
 	assert.Equal(t, 4, rem.callCount())
+}
+
+// spec:agent-status-reporting/remediation-attempts-are-bounded-and-escalate-on-exhaustion/repeated-failures-stop-retrying-and-escalate
+func TestEnablesThatSucceedButNeverRestoreTheProviderAreAlsoBounded(t *testing.T) {
+	t.Parallel()
+	// The nastier half of the bound. Every enable is ACCEPTED, so the error path never runs, but the provider stays
+	// stopped in every report. A budget that only counted failures would retry forever here, rewriting NetworkExtension
+	// preferences indefinitely while the host stayed blind, which is exactly the repair loop the design forbids.
+	rem := newFakeRemediator(nil)
+	hs := &fakeHealth{}
+	c, clock := testController(t, rem, hs)
+	ctx := context.Background()
+
+	c.Observe(ctx, stoppedFilter)
+	for attempt := 1; attempt <= 3; attempt++ {
+		clock.advance(2 * time.Minute)
+		require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter), "attempt %d should launch", attempt)
+		rem.waitForCall(t)
+	}
+	require.Eventually(t, func() bool { return hs.count() >= 1 }, 2*time.Second, 10*time.Millisecond)
+	// The diagnosis must distinguish this from "the enable kept failing": here the command worked every time and the
+	// provider still is not capturing, so re-enabling is not what the fault needs.
+	assert.Contains(t, hs.failures[0], "still not capturing")
+
+	for range 3 {
+		clock.advance(10 * time.Minute)
+		assert.Empty(t, c.Observe(ctx, stoppedFilter))
+	}
+	assert.Equal(t, 3, rem.callCount(), "a succeeding-but-ineffective enable must still burn the budget")
 }
 
 func TestOnlyOneRemediationRunsPerProviderAtATime(t *testing.T) {
@@ -282,4 +316,67 @@ func (b *blockingRemediator) count() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.calls
+}
+
+// spec:agent-status-reporting/remediation-attempts-are-bounded-and-escalate-on-exhaustion/repeated-failures-stop-retrying-and-escalate
+func TestFlappingBetweenStoppedAndAbsentDoesNotRefreshTheBudget(t *testing.T) {
+	t.Parallel()
+	// Absence is NOT recovery. A provider is also absent when the operator disabled it, when nothing has started yet, and
+	// when parseProviderStatus could not decode the payload and returned an empty map. If absence reset the budget, a
+	// provider alternating between stopped and absent would get a fresh three attempts every cycle and maxAttempts would
+	// bound nothing, so the agent would rewrite NetworkExtension preferences forever while the host stayed blind.
+	rem := newFakeRemediator(errors.New("save failed"))
+	c, clock := testController(t, rem, &fakeHealth{})
+	ctx := context.Background()
+	absent := map[string]string{}
+
+	for range 10 {
+		clock.advance(2 * time.Minute)
+		if launched := c.Observe(ctx, stoppedFilter); len(launched) > 0 {
+			rem.waitForCall(t)
+		}
+		clock.advance(2 * time.Minute)
+		c.Observe(ctx, absent) // ambiguous: must be treated as "no new information"
+	}
+	assert.LessOrEqual(t, rem.callCount(), 3, "absence must not hand back a fresh attempt budget")
+}
+
+func TestAffirmativeRunningReportRestoresTheBudget(t *testing.T) {
+	t.Parallel()
+	// The counterpart to the flap test: an explicit running report IS proof the heal took, so it clears the state.
+	rem := newFakeRemediator(errors.New("save failed"))
+	c, clock := testController(t, rem, &fakeHealth{})
+	ctx := context.Background()
+
+	c.Observe(ctx, stoppedFilter)
+	for range 3 {
+		clock.advance(2 * time.Minute)
+		require.NotEmpty(t, c.Observe(ctx, stoppedFilter))
+		rem.waitForCall(t)
+	}
+	clock.advance(10 * time.Minute)
+	require.Empty(t, c.Observe(ctx, stoppedFilter), "budget spent")
+
+	c.Observe(ctx, map[string]string{"content_filter": ProviderRunning})
+	c.Observe(ctx, stoppedFilter)
+	clock.advance(2 * time.Minute)
+	assert.NotEmpty(t, c.Observe(ctx, stoppedFilter), "a running report must restore the budget")
+}
+
+func TestAttemptsAreSpacedByBackoffAloneNotBackoffPlusGrace(t *testing.T) {
+	t.Parallel()
+	// The grace window is a property of the STOP, not of each retry. Re-applying it per attempt made the real gap
+	// backoff + grace, which is neither what the constants say nor what a reader would predict.
+	rem := newFakeRemediator(errors.New("save failed"))
+	c, clock := testController(t, rem, &fakeHealth{}) // grace 30s, backoff 1s
+	ctx := context.Background()
+
+	c.Observe(ctx, stoppedFilter)
+	clock.advance(31 * time.Second) // past the grace window
+	require.NotEmpty(t, c.Observe(ctx, stoppedFilter), "first attempt after grace")
+	rem.waitForCall(t)
+
+	// Attempt 2 is eligible one backoff later (1s * attempt 1), NOT one backoff plus another full grace window.
+	clock.advance(2 * time.Second)
+	assert.NotEmpty(t, c.Observe(ctx, stoppedFilter), "second attempt must be eligible after the backoff alone")
 }

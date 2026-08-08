@@ -17,13 +17,14 @@ const (
 	// defaultMaxAttempts bounds retries for one stop. Past this the fault is not the kind re-enabling fixes, and continuing
 	// would rewrite system configuration forever while hiding the real problem behind apparent recovery.
 	defaultMaxAttempts = 3
-	// defaultBackoff is the wait after a failed attempt, doubled per attempt. Spacing matters because each attempt writes
-	// NetworkExtension preferences, which briefly disrupts the very flows the provider is meant to capture.
+	// defaultBackoff is the base wait between attempts, scaled linearly by attempt number (1x, 2x, 3x). Spacing matters
+	// because each attempt writes NetworkExtension preferences, which briefly disrupts the very flows the provider is
+	// meant to capture.
 	defaultBackoff = 30 * time.Second
 )
 
 // Remediator re-enables one capture provider. Injected so the controller's policy is testable without the host app; the
-// darwin implementation runs the host-app subcommand, and non-darwin builds get a stub that reports it is unsupported.
+// darwin implementation runs the host-app subcommand, and non-darwin builds supply nil, which makes the controller inert.
 type Remediator interface {
 	Enable(ctx context.Context, provider string) error
 }
@@ -69,16 +70,23 @@ type Controller struct {
 
 // providerState is what the controller remembers about one provider between reports.
 type providerState struct {
-	// stoppedSince is when this provider was first reported stopped in the current stop. Zero means it is not stopped.
-	stoppedSince time.Time
+	// eligibleAt is the earliest time the next remediation may run. Set to stop-time + grace when the stop is first seen,
+	// then to now + backoff after each attempt. It is a single explicit deadline rather than a stop timestamp the grace
+	// window is re-applied to, because re-applying grace to a backed-off timestamp made the real gap between attempts
+	// backoff + grace, which is neither what the constants say nor what anyone reading them would predict.
+	eligibleAt time.Time
 	// attempts counts remediations tried for the CURRENT stop. Reset when the provider is seen running again, so a host
 	// that fails intermittently over a long period is retried each time rather than being written off permanently.
 	attempts int
 	// remediating guards against a second remediation being launched for a provider while one is in flight; reports keep
 	// arriving during the several seconds an enable takes.
 	remediating bool
-	// exhausted records that the budget for the current stop is spent, so repeated reports do not re-escalate or re-log.
-	exhausted bool
+	// escalation is the operator-facing diagnosis recorded when the budget was spent; empty means the budget remains. It is
+	// retained rather than being a bare bool because it has to be RE-ASSERTED on every later report: the receiver loop calls
+	// MarkProviders before Observe, and that overwrites the component's reason with provider_stopped. Without re-asserting,
+	// self_heal_failed would survive for microseconds after the final attempt and the operator would never see that
+	// automation had given up, which is the whole point of having a distinct reason.
+	escalation string
 }
 
 // New builds a Controller. A nil Remediator disables remediation entirely, which is what non-darwin builds get.
@@ -122,52 +130,81 @@ func (c *Controller) Observe(ctx context.Context, providers map[string]string) [
 	if c.remediator == nil {
 		return nil
 	}
+	launched, attempts, reassert := c.plan(ctx, providers)
+	// Both of these run OUTSIDE the controller's mutex: escalate takes the health registry's lock, and holding two locks in
+	// an order nothing else guarantees is how deadlocks get built.
+	for provider, detail := range reassert {
+		c.escalate(provider, detail)
+	}
+	for _, name := range launched {
+		go c.remediate(ctx, name, attempts[name])
+	}
+	return launched
+}
+
+// plan is the locked half of Observe: it advances the per-provider state and reports what the caller should do. Split out so
+// the mutex is released before any call that reaches the health registry or spawns a remediation.
+func (c *Controller) plan(ctx context.Context, providers map[string]string) (
+	launched []string, attempts map[string]int, reassert map[string]string,
+) {
 	stopped := map[string]bool{}
 	for _, p := range Remediable(providers) {
 		stopped[p] = true
+	}
+	running := map[string]bool{}
+	for name, state := range providers {
+		if state == ProviderRunning {
+			running[name] = true
+		}
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Any provider NOT reported stopped is either running or deliberately absent. Both mean there is nothing to fix, so
-	// clear its state: that is what resets the attempt budget after a successful heal.
+	// ONLY an affirmative running report clears the state and restores the attempt budget. Absence is not recovery: a
+	// provider is also absent when the operator disabled it, when nothing has started yet, and when parseProviderStatus
+	// could not decode the payload and returned an empty map. Clearing on absence would hand a fresh budget to a provider
+	// that alternates between stopped and any of those, so maxAttempts would stop bounding anything and the agent would
+	// rewrite NetworkExtension preferences without limit. Each rewrite briefly disrupts the very flows the provider
+	// captures, so that failure mode is sustained capture loss, not just log noise.
 	for name, st := range c.state {
-		if stopped[name] {
+		if !running[name] {
 			continue
 		}
-		if st.attempts > 0 || !st.stoppedSince.IsZero() {
-			c.logger.InfoContext(ctx, "capture provider no longer stopped; clearing self-heal state",
-				"provider", name, "attempts", st.attempts)
-		}
+		c.logger.InfoContext(ctx, "capture provider is running again; clearing self-heal state",
+			"provider", name, "attempts", st.attempts)
 		delete(c.state, name)
 	}
 
 	now := c.now()
-	var launched []string
+	attempts = map[string]int{}
+	reassert = map[string]string{}
 	for name := range stopped {
 		st := c.state[name]
 		if st == nil {
-			st = &providerState{stoppedSince: now}
-			c.state[name] = st
+			// First report of this stop: nothing is eligible until the grace window passes, because a stop is routine
+			// during an activation or upgrade cutover and usually clears on its own within seconds.
+			c.state[name] = &providerState{eligibleAt: now.Add(c.grace)}
 			c.logger.InfoContext(ctx, "capture provider stopped; starting self-heal grace window",
 				"provider", name, "grace", c.grace)
 			continue
 		}
-		if st.remediating || st.exhausted {
+		if st.escalation != "" {
+			// Budget spent. Re-assert the escalation the caller will publish, because MarkProviders already overwrote the
+			// component's reason with provider_stopped moments ago.
+			reassert[name] = st.escalation
 			continue
 		}
-		if now.Sub(st.stoppedSince) < c.grace {
+		if st.remediating || now.Before(st.eligibleAt) {
 			continue
 		}
 		st.remediating = true
 		st.attempts++
-		attempt := st.attempts
+		attempts[name] = st.attempts
 		launched = append(launched, name)
-		go c.remediate(ctx, name, attempt)
 	}
 	sort.Strings(launched)
-	return launched
+	return launched, attempts, reassert
 }
 
 // remediate runs one enable attempt and records the outcome. It deliberately does NOT verify the provider came back: the
@@ -186,31 +223,54 @@ func (c *Controller) remediate(ctx context.Context, provider string, attempt int
 		return
 	}
 	st.remediating = false
-	if err == nil {
-		// Push the next eligible attempt out by the backoff even on success, so that if the provider is still stopped in
-		// the next report (the enable did not take) we do not immediately retry.
-		st.stoppedSince = c.now().Add(c.backoff * time.Duration(attempt))
-		c.mu.Unlock()
-		c.logger.InfoContext(ctx, "capture provider re-enabled; awaiting the extension's next report to confirm",
-			"provider", provider, "attempt", attempt)
-		return
-	}
+	// The budget bounds ATTEMPTS, not failures. An enable that returns success but does not actually bring the provider
+	// back still burns one: the provider is still stopped in the next report, so a success-only path that skipped this
+	// check would retry forever, rewriting NetworkExtension preferences indefinitely while the host stayed blind. That is
+	// the unbounded repair loop this design exists to avoid, and it is reachable whenever the enable is accepted but
+	// ineffective. Only a report showing the provider no longer stopped clears the state and restores the budget.
 	exhausted := attempt >= c.maxAttempts
-	st.exhausted = exhausted
-	if !exhausted {
-		st.stoppedSince = c.now().Add(c.backoff * time.Duration(attempt))
+	var detail string
+	if exhausted {
+		// The two shapes need different diagnoses. "Every enable failed" points at the host app or the configuration
+		// daemon; "every enable succeeded and it is still stopped" says re-enabling is simply not what this fault needs.
+		if err == nil {
+			detail = "was re-enabled " + strconv.Itoa(attempt) + " times but is still not capturing"
+		} else {
+			detail = "could not be automatically restored after " + strconv.Itoa(attempt) + " attempts"
+		}
+		st.escalation = detail
+	} else {
+		// Space the next attempt by the backoff alone. The grace window is a property of the stop, not of each retry, so it
+		// is deliberately NOT re-applied here.
+		st.eligibleAt = c.now().Add(c.backoff * time.Duration(attempt))
 	}
 	c.mu.Unlock()
 
-	if !exhausted {
+	switch {
+	case err == nil && !exhausted:
+		c.logger.InfoContext(ctx, "capture provider re-enabled; awaiting the extension's next report to confirm",
+			"provider", provider, "attempt", attempt)
+	case err == nil:
+		c.logger.ErrorContext(ctx, "capture provider still stopped after every enable succeeded; operator action required",
+			"provider", provider, "attempts", attempt)
+	case !exhausted:
 		c.logger.WarnContext(ctx, "could not re-enable capture provider; will retry",
 			"provider", provider, "attempt", attempt, "max", c.maxAttempts, "err", err)
+	default:
+		c.logger.ErrorContext(ctx, "giving up on re-enabling capture provider; operator action required",
+			"provider", provider, "attempts", attempt, "err", err)
+	}
+	if exhausted {
+		c.escalate(provider, detail)
+	}
+}
+
+// escalate publishes the operator-facing "automation gave up" state. Separate from the log lines because the two failure
+// shapes (the enable kept failing, versus the enable kept succeeding without effect) need different diagnoses but the same
+// health treatment.
+func (c *Controller) escalate(provider, detail string) {
+	if c.health == nil {
 		return
 	}
-	c.logger.ErrorContext(ctx, "giving up on re-enabling capture provider; operator action required",
-		"provider", provider, "attempts", attempt, "err", err)
-	if c.health != nil {
-		c.health.MarkSelfHealFailed(c.component,
-			"could not automatically restore "+provider+" after "+strconv.Itoa(attempt)+" attempts; operator action required")
-	}
+	c.health.MarkSelfHealFailed(c.component, provider+" "+detail+"; operator action required")
 }

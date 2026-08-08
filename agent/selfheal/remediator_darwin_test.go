@@ -4,12 +4,15 @@ package selfheal
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/fleetdm/edr/agent/codesign"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,4 +85,77 @@ func TestNewRemediatorDefaultsToTheInstalledHostApp(t *testing.T) {
 	r, ok := NewRemediator("").(*hostAppRemediator)
 	require.True(t, ok)
 	assert.Equal(t, HostAppPath, r.path)
+}
+
+// signingFixture builds a remediator whose identity check reads from a fixed table instead of the real Security framework.
+func signingFixture(t *testing.T, path string, byPath map[string]*codesign.Result) *hostAppRemediator {
+	t.Helper()
+	self, err := os.Executable()
+	require.NoError(t, err)
+	return &hostAppRemediator{
+		path:   path,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		evaluate: func(p string) (*codesign.Result, bool) {
+			if p == self {
+				res, ok := byPath["self"]
+				return res, ok
+			}
+			res, ok := byPath[p]
+			return res, ok
+		},
+	}
+}
+
+func TestEnableRefusesAHostAppSignedByAnotherTeam(t *testing.T) {
+	t.Parallel()
+	// /Applications is drwxrwxr-x root:admin on stock macOS, and renaming a directory needs write on the PARENT, so a
+	// non-root admin can swap the whole bundle. This remediator is the only thing that runs that path as root, so without
+	// the identity check it would be an admin-to-root escalation.
+	path, argvFile := stubHostApp(t, 0)
+	r := signingFixture(t, path, map[string]*codesign.Result{
+		"self": {TeamID: "FDG8Q7N4CC"},
+		path:   {TeamID: "ATTACKER99"},
+	})
+	err := r.Enable(context.Background(), "content_filter")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to run")
+	assert.Contains(t, err.Error(), "ATTACKER99")
+	// The substituted binary must not have executed at all.
+	_, statErr := os.Stat(argvFile)
+	assert.True(t, os.IsNotExist(statErr), "the foreign-signed host app must never be exec'd")
+}
+
+func TestEnableAcceptsAHostAppSignedByTheSameTeam(t *testing.T) {
+	t.Parallel()
+	path, argvFile := stubHostApp(t, 0)
+	r := signingFixture(t, path, map[string]*codesign.Result{
+		"self": {TeamID: "FDG8Q7N4CC"},
+		path:   {TeamID: "FDG8Q7N4CC"},
+	})
+	require.NoError(t, r.Enable(context.Background(), "content_filter"))
+	// #nosec G304 -- path is this test's own t.TempDir output, not external input.
+	raw, err := os.ReadFile(argvFile)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"enable-filter"}, strings.Fields(string(raw)))
+}
+
+func TestEnableAllowsAnAdHocAgentBuildWithoutVerifying(t *testing.T) {
+	t.Parallel()
+	// A dev or QA agent is ad-hoc signed and carries no team, so there is nothing to compare the host app against. Failing
+	// closed here would break every local build for no security gain: a dev host is not the threat model.
+	path, _ := stubHostApp(t, 0)
+	r := signingFixture(t, path, map[string]*codesign.Result{
+		"self": {TeamID: ""},
+		path:   {TeamID: "ANYTHING"},
+	})
+	assert.NoError(t, r.Enable(context.Background(), "content_filter"))
+}
+
+func TestEnableRefusesWhenTheHostAppSigningCannotBeRead(t *testing.T) {
+	t.Parallel()
+	path, _ := stubHostApp(t, 0)
+	r := signingFixture(t, path, map[string]*codesign.Result{"self": {TeamID: "FDG8Q7N4CC"}})
+	err := r.Enable(context.Background(), "content_filter")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not read code signing")
 }

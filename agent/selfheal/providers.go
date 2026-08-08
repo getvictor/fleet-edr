@@ -18,6 +18,11 @@ import "sort"
 // ABSENT from the map instead, which is what makes remediation safe to run without asking.
 const ProviderStopped = "stopped"
 
+// ProviderRunning is the state reported for a provider that is capturing. It is the ONLY affirmative evidence that a remediation
+// worked: absence is ambiguous (the operator disabled it, nothing has started yet, or the payload did not decode), so absence must
+// never be read as recovery.
+const ProviderRunning = "running"
+
 // subcommand maps a provider wire identifier to the host-app subcommand that re-enables it. A provider missing from this
 // table is reported but not remediable, which is the honest default for one this build does not know how to restore: it
 // still shows up as unhealthy, it just is not acted on.
