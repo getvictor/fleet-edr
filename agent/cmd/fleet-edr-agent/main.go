@@ -41,6 +41,7 @@ import (
 	"github.com/fleetdm/edr/agent/queue"
 	"github.com/fleetdm/edr/agent/receiver"
 	"github.com/fleetdm/edr/agent/reconcile"
+	"github.com/fleetdm/edr/agent/selfheal"
 	"github.com/fleetdm/edr/agent/uploader"
 	"github.com/fleetdm/edr/internal/control"
 	"github.com/fleetdm/edr/internal/logging"
@@ -591,6 +592,10 @@ type receiverLoopParams struct {
 	// session alone (issue #649). Set only for the network extension, whose XPC listener comes up before its providers do, so a
 	// connected session there has never meant anything is capturing.
 	providerLiveness bool
+	// selfHeal restores capture providers the extension reports stopped (issue #632). Nil disables remediation, which is what
+	// the ESF loop and every non-darwin build get. Fed from the same report that drives health, so there is one account of
+	// what is running rather than two that can disagree.
+	selfHeal *selfheal.Controller
 	// connectorFactory overrides how the loop builds its Connector. Nil uses the default XPC receiver (macOS); the Windows sensor seam
 	// sets it to build an ETW-backed Connector instead, so both platforms share the same reconnect/backoff/heartbeat + health machinery.
 	connectorFactory func() receiver.Connector
@@ -614,6 +619,11 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 				if providers, ok := parseProviderStatus(evt.Data); ok {
 					if p.health != nil {
 						p.health.MarkProviders(p.component, providers)
+					}
+					// Remediation reads the same report health just graded, so "what is unhealthy" and "what gets fixed"
+					// cannot drift apart (issue #632).
+					if p.selfHeal != nil {
+						p.selfHeal.Observe(ctx, providers)
 					}
 					return
 				}

@@ -42,6 +42,11 @@ const (
 	reasonAwaitingProviders  = "awaiting_provider_status"
 	reasonNoProvidersRunning = "no_providers_running"
 	reasonProviderStopped    = "provider_stopped"
+	// reasonSelfHealFailed distinguishes "automatic recovery is still working on it" from "automatic recovery gave up and a
+	// human is needed" (issue #632). Without the distinction an operator watching provider_stopped cannot tell a transient
+	// stop the agent is about to fix from one it has already failed to fix three times, which is the difference between
+	// ignoring the alert and driving to the host.
+	reasonSelfHealFailed = "self_heal_failed"
 )
 
 // Component is one condition in a status snapshot. The JSON tags match the server's ComponentHealth exactly; reason and message are
@@ -192,6 +197,19 @@ func (r *Registry) MarkAwaitingProviders(compType string) {
 	r.transition(compType, func(s *componentState) {
 		s.everConnected = true
 		s.set(StatusDegraded, reasonAwaitingProviders, s.displayName+" connected; awaiting provider status")
+	})
+}
+
+// MarkSelfHealFailed records that automatic recovery exhausted its attempts for compType and a human is now required
+// (issue #632). Unhealthy like the provider_stopped state it replaces, but under a distinct reason so an operator can tell
+// a stop the agent is still working on from one it has already given up on.
+//
+// Deliberately NOT sticky: the next provider report calls MarkProviders and overwrites this, so a provider that comes back
+// by any route (a later manual activate, a reboot, an operator toggle) clears the escalation without needing its own reset
+// path. No-op for an unregistered type.
+func (r *Registry) MarkSelfHealFailed(compType, message string) {
+	r.transition(compType, func(s *componentState) {
+		s.set(StatusUnhealthy, reasonSelfHealFailed, s.displayName+": "+message)
 	})
 }
 
