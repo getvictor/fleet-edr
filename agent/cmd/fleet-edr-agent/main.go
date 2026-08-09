@@ -42,6 +42,7 @@ import (
 	"github.com/fleetdm/edr/agent/receiver"
 	"github.com/fleetdm/edr/agent/reconcile"
 	"github.com/fleetdm/edr/agent/selfheal"
+	"github.com/fleetdm/edr/agent/sensorevent"
 	"github.com/fleetdm/edr/agent/uploader"
 	"github.com/fleetdm/edr/internal/control"
 	"github.com/fleetdm/edr/internal/logging"
@@ -596,6 +597,9 @@ type receiverLoopParams struct {
 	// the ESF loop and every non-darwin build get. Fed from the same report that drives health, so there is one account of
 	// what is running rather than two that can disagree.
 	selfHeal *selfheal.Controller
+	// transitions records capture-provider state changes as durable events (issue #684). Nil disables the recording, which
+	// is what the ESF loop and every non-darwin build get.
+	transitions *sensorevent.Transitions
 	// connectorFactory overrides how the loop builds its Connector. Nil uses the default XPC receiver (macOS); the Windows sensor seam
 	// sets it to build an ETW-backed Connector instead, so both platforms share the same reconnect/backoff/heartbeat + health machinery.
 	connectorFactory func() receiver.Connector
@@ -616,14 +620,19 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 			// Whether we can RECORD the status is a separate question from whether it is telemetry: a control message must be
 			// dropped either way, so the health nil-check guards only the recording.
 			if p.providerLiveness {
-				if providers, ok := parseProviderStatus(evt.Data); ok {
+				if status, ok := parseProviderStatus(evt.Data); ok {
 					if p.health != nil {
-						p.health.MarkProviders(p.component, providers)
+						p.health.MarkProviders(p.component, status.Providers)
 					}
 					// Remediation reads the same report health just graded, so "what is unhealthy" and "what gets fixed"
 					// cannot drift apart (issue #632).
 					if p.selfHeal != nil {
-						p.selfHeal.Observe(ctx, providers)
+						p.selfHeal.Observe(ctx, status.Providers)
+					}
+					// Health is level state, so it forgets a stop the moment the self-heal repairs it. This writes the
+					// transition down so the tamper evidence outlives the repair (issue #684).
+					if p.transitions != nil {
+						p.transitions.Observe(ctx, status.Providers, status.StopReasons)
 					}
 					return
 				}
@@ -688,7 +697,14 @@ const providerStatusEventType = "ne_provider_status"
 // parseProviderStatus recognises a provider-liveness control message and returns the provider-to-state map it carries. The second
 // result is false for every ordinary telemetry event, which is the overwhelmingly common case, so the check is a cheap type peek
 // before any further decoding.
-func parseProviderStatus(data []byte) (map[string]string, bool) {
+// providerStatus is a decoded provider-liveness control message: the graded state per provider, plus the raw platform stop
+// reason for stopped ones. The reasons map is nil against an extension too old to send it, which is a supported skew.
+type providerStatus struct {
+	Providers   map[string]string
+	StopReasons map[string]int
+}
+
+func parseProviderStatus(data []byte) (providerStatus, bool) {
 	// Peek at event_type ALONE. This runs on every network-extension event and ordinary telemetry (a network_connect per
 	// flow) is the overwhelmingly common case, so the common path must touch the payload as little as possible: with no
 	// payload field declared, encoding/json walks past it without allocating. Capturing it as a json.RawMessage would copy
@@ -697,7 +713,7 @@ func parseProviderStatus(data []byte) (map[string]string, bool) {
 		EventType string `json:"event_type"`
 	}
 	if err := json.Unmarshal(data, &hdr); err != nil || hdr.EventType != providerStatusEventType {
-		return nil, false
+		return providerStatus{}, false
 	}
 	// Past this point event_type has identified a control message, so every path returns true: it must be kept out of the
 	// upload queue whether or not its payload decodes. The second pass costs a re-parse, which is free in aggregate because
@@ -705,13 +721,14 @@ func parseProviderStatus(data []byte) (map[string]string, bool) {
 	// the extension sends when NO provider has started, the condition this whole mechanism exists to surface.
 	var envelope struct {
 		Payload struct {
-			Providers map[string]string `json:"providers"`
+			Providers   map[string]string `json:"providers"`
+			StopReasons map[string]int    `json:"stop_reasons"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Payload.Providers == nil {
-		return map[string]string{}, true
+		return providerStatus{Providers: map[string]string{}}, true
 	}
-	return envelope.Payload.Providers, true
+	return providerStatus{Providers: envelope.Payload.Providers, StopReasons: envelope.Payload.StopReasons}, true
 }
 
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.

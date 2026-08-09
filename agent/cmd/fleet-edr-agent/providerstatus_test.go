@@ -18,30 +18,30 @@ func TestParseProviderStatus(t *testing.T) {
 	t.Parallel()
 	t.Run("recognises a status message and returns its providers", func(t *testing.T) {
 		t.Parallel()
-		providers, ok := parseProviderStatus([]byte(`{
+		status, ok := parseProviderStatus([]byte(`{
 			"event_id":"e1","host_id":"h1","timestamp_ns":1,"platform":"darwin",
 			"event_type":"ne_provider_status",
 			"payload":{"providers":{"content_filter":"running","dns_proxy":"stopped"}}
 		}`))
 		require.True(t, ok)
-		assert.Equal(t, map[string]string{"content_filter": "running", "dns_proxy": "stopped"}, providers)
+		assert.Equal(t, map[string]string{"content_filter": "running", "dns_proxy": "stopped"}, status.Providers)
 	})
 
 	t.Run("an empty provider set is a status message, not a miss", func(t *testing.T) {
 		t.Parallel()
 		// This is the #649 signal itself: the extension is up and NOTHING started. Treating it as "not a status message"
 		// would drop the one report that matters and leave health stuck at awaiting.
-		providers, ok := parseProviderStatus([]byte(`{"event_type":"ne_provider_status","payload":{"providers":{}}}`))
+		status, ok := parseProviderStatus([]byte(`{"event_type":"ne_provider_status","payload":{"providers":{}}}`))
 		require.True(t, ok)
-		assert.Empty(t, providers)
+		assert.Empty(t, status.Providers)
 	})
 
 	t.Run("a missing providers map still reports as a status message", func(t *testing.T) {
 		t.Parallel()
-		providers, ok := parseProviderStatus([]byte(`{"event_type":"ne_provider_status","payload":{}}`))
+		status, ok := parseProviderStatus([]byte(`{"event_type":"ne_provider_status","payload":{}}`))
 		require.True(t, ok)
-		assert.NotNil(t, providers, "a nil map would be indistinguishable from a parse miss at the call site")
-		assert.Empty(t, providers)
+		assert.NotNil(t, status.Providers, "a nil map would be indistinguishable from a parse miss at the call site")
+		assert.Empty(t, status.Providers)
 	})
 
 	t.Run("ordinary telemetry is left alone", func(t *testing.T) {
@@ -52,18 +52,18 @@ func TestParseProviderStatus(t *testing.T) {
 			`{"event_type":"dns_query","payload":{"query_name":"example.com"}}`,
 			`{"event_type":"network_connect","payload":{}}`,
 		} {
-			providers, ok := parseProviderStatus([]byte(body))
+			status, ok := parseProviderStatus([]byte(body))
 			assert.False(t, ok, body)
-			assert.Nil(t, providers)
+			assert.Nil(t, status.Providers)
 		}
 	})
 
 	t.Run("malformed or empty input is not a status message", func(t *testing.T) {
 		t.Parallel()
 		for _, body := range []string{``, `not json`, `{`, `[]`, `null`} {
-			providers, ok := parseProviderStatus([]byte(body))
+			status, ok := parseProviderStatus([]byte(body))
 			assert.False(t, ok, body)
-			assert.Nil(t, providers)
+			assert.Nil(t, status.Providers)
 		}
 	})
 }
@@ -91,7 +91,7 @@ func FuzzParseProviderStatus(f *testing.F) {
 	f.Add([]byte(`{"event_tYpe":"ne_provider_status","payload":{}}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		providers, ok := parseProviderStatus(data)
+		status, ok := parseProviderStatus(data)
 
 		// Independent oracle: decode into a generic map and ask only "does some key that encoding/json would bind to
 		// event_type carry the control value". Written against the decoder's real semantics rather than the
@@ -113,9 +113,9 @@ func FuzzParseProviderStatus(f *testing.F) {
 		require.Equal(t, wantOK, ok, "drop decision disagrees with the event_type actually present in %q", data)
 
 		if ok {
-			require.NotNil(t, providers, "a recognised status message must never yield a nil map")
+			require.NotNil(t, status.Providers, "a recognised status message must never yield a nil map")
 		} else {
-			require.Nil(t, providers)
+			require.Nil(t, status.Providers)
 		}
 	})
 }

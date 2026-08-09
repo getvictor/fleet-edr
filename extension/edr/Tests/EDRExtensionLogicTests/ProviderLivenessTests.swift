@@ -102,4 +102,51 @@ final class ProviderLivenessTests: XCTestCase {
         let json = try XCTUnwrap(String(bytes: data, encoding: .utf8))
         XCTAssertTrue(json.contains("\"providers\""))
     }
+
+    func testStopReasonIsCarriedAlongsideTheGradedState() {
+        var liveness = ProviderLiveness()
+        liveness.record(.contentFilter, .running)
+        XCTAssertTrue(liveness.reasonSnapshot.isEmpty, "a running provider carries no stop reason")
+
+        // The graded state answers "is this a fault?"; the raw reason lets a detection consumer discriminate for itself
+        // rather than trusting a verdict that has already collapsed the distinction (issue #684).
+        liveness.record(.contentFilter, .stopped, reason: ProviderLiveness.StopReason.userInitiated)
+        XCTAssertEqual(liveness.reasonSnapshot, ["content_filter": 1])
+        XCTAssertEqual(liveness.snapshot, ["content_filter": "stopped"])
+    }
+
+    func testStartingClearsAStaleStopReason() {
+        var liveness = ProviderLiveness()
+        liveness.record(.contentFilter, .stopped, reason: ProviderLiveness.StopReason.userInitiated)
+        liveness.record(.contentFilter, .running)
+        // A running provider reporting the reason it stopped for last time would be read as a live fault by anything
+        // consuming the map without cross-checking the state.
+        XCTAssertTrue(liveness.reasonSnapshot.isEmpty)
+    }
+
+    func testForgettingAProviderDropsItsStopReason() {
+        var liveness = ProviderLiveness()
+        liveness.record(.dnsProxy, .stopped, reason: ProviderLiveness.StopReason.configurationDisabled)
+        XCTAssertTrue(liveness.forget(.dnsProxy))
+        XCTAssertTrue(liveness.reasonSnapshot.isEmpty, "a deliberately disabled provider leaves no fault evidence behind")
+    }
+
+    func testPayloadEncodesStopReasonsUnderTheWireKey() throws {
+        let payload = ProviderStatusPayload(providers: ["content_filter": "stopped"], stopReasons: ["content_filter": 1])
+        let data = try JSONEncoder().encode(payload)
+        let json = try XCTUnwrap(String(bytes: data, encoding: .utf8))
+        // The agent reads payload.stop_reasons; pin the snake_case key so a Swift-side rename cannot silently orphan it.
+        XCTAssertTrue(json.contains("\"stop_reasons\""))
+        let decoded = try JSONDecoder().decode(ProviderStatusPayload.self, from: data)
+        XCTAssertEqual(decoded.stopReasons, ["content_filter": 1])
+    }
+
+    func testPayloadOmittingStopReasonsStillDecodes() throws {
+        // Version skew across an upgrade: an older extension sends no stop_reasons at all. Additive by design, so this must
+        // decode rather than fail and take provider-liveness reporting down with it.
+        let data = Data("{\"providers\":{\"content_filter\":\"running\"}}".utf8)
+        let decoded = try JSONDecoder().decode(ProviderStatusPayload.self, from: data)
+        XCTAssertEqual(decoded.providers, ["content_filter": "running"])
+        XCTAssertNil(decoded.stopReasons)
+    }
 }
