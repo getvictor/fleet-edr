@@ -19,5 +19,11 @@ type telemetryDeps struct {
 	pidTable      *proctable.Table
 	health        *health.Registry
 	esfDispatcher *receiver.Dispatcher
-	hostID        string
+	// hostID is the value at sensor-start time. Fine for the Windows ETW sensor, which stamps it once into a connector.
+	hostID string
+	// hostIDFn reads the CURRENT host id. Anything that stamps an id onto an event must use this rather than hostID: a
+	// re-enrollment (which OnUnauthorized can trigger at any time) replaces the agent's identity, and an event carrying
+	// the superseded value is attributed to a host that may no longer exist. agent/reconcile takes the same provider
+	// function for the same reason.
+	hostIDFn func() string
 }

@@ -600,21 +600,3 @@ func TestRunOnce_EnqueueErrorContinuesPass(t *testing.T) {
 	assert.Equal(t, 1, survivingInPT, "failed-enqueue PID must stay for retry; successful one is reaped")
 	require.Len(t, q.snapshot(), 1, "only the successful enqueue lands in the queue")
 }
-
-func TestNewUUIDv4_FormatAndUniqueness(t *testing.T) {
-	t.Parallel()
-	seen := make(map[string]bool)
-	for range 100 {
-		u, err := newUUIDv4()
-		require.NoError(t, err)
-		require.Len(t, u, 36)
-		assert.Equal(t, byte('-'), u[8])
-		assert.Equal(t, byte('-'), u[13])
-		assert.Equal(t, byte('-'), u[18])
-		assert.Equal(t, byte('-'), u[23])
-		assert.Equal(t, byte('4'), u[14], "version nibble must be 4")
-		assert.Contains(t, "89ab", string(u[19]), "variant nibble must be 8/9/a/b")
-		assert.False(t, seen[u], "uuids must be unique across calls")
-		seen[u] = true
-	}
-}

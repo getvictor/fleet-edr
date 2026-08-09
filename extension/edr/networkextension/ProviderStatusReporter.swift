@@ -53,7 +53,7 @@ final class ProviderStatusReporter {
     func recordStopped(_ provider: ProviderLiveness.Provider, reason: Int) {
         let deliberate = ProviderLiveness.isDeliberateAbsence(provider: provider, reason: reason)
         lock.lock()
-        let changed = deliberate ? liveness.forget(provider) : liveness.record(provider, .stopped)
+        let changed = deliberate ? liveness.forget(provider) : liveness.record(provider, .stopped, reason: reason)
         lock.unlock()
         guard changed else { return }
         let grading = deliberate ? "deliberately disabled" : "a fault"
@@ -70,8 +70,9 @@ final class ProviderStatusReporter {
     func publish() {
         lock.lock()
         let snapshot = liveness.snapshot
+        let reasons = liveness.reasonSnapshot
         lock.unlock()
-        guard let data = serialize(ProviderStatusPayload(providers: snapshot)) else {
+        guard let data = serialize(ProviderStatusPayload(providers: snapshot, stopReasons: reasons)) else {
             logger.error("Could not serialize provider status; agent health stays degraded until a later report arrives")
             return
         }
