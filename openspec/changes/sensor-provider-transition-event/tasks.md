@@ -60,4 +60,6 @@
 
   Re-enabling the DNS proxy afterwards did record a `state=running` transition, which is correct: absence to running is a real change and worth recording. It carries no stop reason, so a rule keyed on stops does not see it.
 
+- [x] Re-verified after the review fixes, which changed the event path (the `Decoded` baseline guard and the live host-id lookup). Same host, agent restarted onto the fixed build: the server-side count went from 3 to exactly 5, the stopped/running pair and nothing else. `content_filter stopped stop_reason=1` at 15:41:25.745, `running` at 15:41:57.938. Exactly two is the assertion that matters here: the agent restart in the middle of this run means its first report after reconnect was a baseline, so any regression in that guard, or in the decoded-versus-unreadable distinction, would have shown up as extra events rather than missing ones.
+
 - [ ] Not covered: an agent pkg upgrade. The rule in the follow-up change depends on an upgrade producing lifecycle stop reasons rather than operator-driven ones, and that has still never been observed on a real upgrade. It is the assumption most likely to make a naive rule fire fleet-wide, so it is called out here rather than discovered later.
