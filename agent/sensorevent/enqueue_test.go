@@ -57,3 +57,27 @@ func TestEnqueueEmitterSurfacesQueueFailures(t *testing.T) {
 	)
 	assert.Error(t, emit(context.Background(), EventType, map[string]any{}))
 }
+
+func TestEnqueueEmitterReadsTheHostIDPerEvent(t *testing.T) {
+	t.Parallel()
+	// The id is looked up per event, not captured at construction. A re-enrollment (which OnUnauthorized can trigger at any
+	// time) replaces the agent's identity, and tamper evidence stamped with the superseded id is attributed to a host that
+	// may no longer exist. The first wiring of this captured a by-value snapshot and defeated exactly that.
+	current := "BEFORE-REENROLL"
+	var bodies [][]byte
+	emit := NewEnqueueEmitter(
+		func() string { return current },
+		func(_ context.Context, b []byte) error { bodies = append(bodies, b); return nil },
+		func() int64 { return 1 },
+	)
+	require.NoError(t, emit(context.Background(), EventType, map[string]any{}))
+	current = "AFTER-REENROLL"
+	require.NoError(t, emit(context.Background(), EventType, map[string]any{}))
+
+	require.Len(t, bodies, 2)
+	var first, second map[string]any
+	require.NoError(t, json.Unmarshal(bodies[0], &first))
+	require.NoError(t, json.Unmarshal(bodies[1], &second))
+	assert.Equal(t, "BEFORE-REENROLL", first["host_id"])
+	assert.Equal(t, "AFTER-REENROLL", second["host_id"], "the id must be re-read, not captured")
+}

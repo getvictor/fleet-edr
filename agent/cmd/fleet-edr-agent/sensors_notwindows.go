@@ -51,7 +51,7 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 			// Health forgets a stop as soon as the self-heal repairs it, so the transition is written down separately as
 			// durable tamper evidence (issue #684).
 			transitions: sensorevent.New(
-				sensorevent.NewEnqueueEmitter(func() string { return d.hostID }, d.enqueue, func() int64 { return time.Now().UnixNano() }),
+				sensorevent.NewEnqueueEmitter(d.hostIDFn, d.enqueue, func() int64 { return time.Now().UnixNano() }),
 				d.logger,
 			),
 			selfHeal: selfheal.New(selfheal.Options{

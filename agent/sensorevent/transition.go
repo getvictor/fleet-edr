@@ -70,8 +70,10 @@ func (t *Transitions) Observe(ctx context.Context, providers map[string]string, 
 	var emitted []string
 	for provider, state := range providers {
 		if state != StateRunning && state != StateStopped {
-			// An unrecognised state from a newer extension. Record it so it still forms a baseline for the next diff, but
-			// do not invent an event whose meaning this build does not know.
+			// An unrecognised state from a newer extension. The baseline is deliberately LEFT ALONE rather than advanced to
+			// it: "we do not know what this means" is not evidence the provider changed, and recording it would make the
+			// next recognised state differ from the baseline and emit a transition that never happened. Holding the last
+			// known state means a later running or stopped report is still judged against the last thing we understood.
 			continue
 		}
 		if t.last[provider] == state {

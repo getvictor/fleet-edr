@@ -230,6 +230,7 @@ func run() error {
 		health:        healthRegistry,
 		esfDispatcher: esfDispatcher,
 		hostID:        hostID,
+		hostIDFn:      tokenProvider.HostID,
 	})
 	go runUploader(ctx, up, logger)
 
@@ -631,7 +632,8 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 					}
 					// Health is level state, so it forgets a stop the moment the self-heal repairs it. This writes the
 					// transition down so the tamper evidence outlives the repair (issue #684).
-					if p.transitions != nil {
+					// Only a report we could actually read may move the transition baseline; see providerStatus.Decoded.
+					if p.transitions != nil && status.Decoded {
 						p.transitions.Observe(ctx, status.Providers, status.StopReasons)
 					}
 					return
@@ -702,6 +704,11 @@ const providerStatusEventType = "ne_provider_status"
 type providerStatus struct {
 	Providers   map[string]string
 	StopReasons map[string]int
+	// Decoded distinguishes "the extension told us nothing is running" from "we could not read what it told us". Both
+	// produce an empty Providers map, and health treats them the same (either way nothing is capturing), but transition
+	// recording must not: feeding an undecodable report to the recorder would drop every provider from its baseline and
+	// make the next valid report look like a fresh set of transitions, manufacturing tamper evidence out of a parse error.
+	Decoded bool
 }
 
 func parseProviderStatus(data []byte) (providerStatus, bool) {
@@ -728,7 +735,12 @@ func parseProviderStatus(data []byte) (providerStatus, bool) {
 	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Payload.Providers == nil {
 		return providerStatus{Providers: map[string]string{}}, true
 	}
-	return providerStatus{Providers: envelope.Payload.Providers, StopReasons: envelope.Payload.StopReasons}, true
+	// An explicitly decoded `{}` IS valid and meaningful: it is what the extension sends when no provider has started.
+	return providerStatus{
+		Providers:   envelope.Payload.Providers,
+		StopReasons: envelope.Payload.StopReasons,
+		Decoded:     true,
+	}, true
 }
 
 // eventHeader is a minimal struct for peeking at event_type, pid, path, and uid.

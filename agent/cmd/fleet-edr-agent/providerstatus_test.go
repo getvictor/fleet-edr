@@ -66,6 +66,50 @@ func TestParseProviderStatus(t *testing.T) {
 			assert.Nil(t, status.Providers)
 		}
 	})
+
+	t.Run("a stopped provider carries its raw stop reason", func(t *testing.T) {
+		t.Parallel()
+		// The reason is what lets a detection consumer tell an operator-driven stop from an upgrade. A regression that
+		// mangles it while provider states still decode would pass every other case in this table.
+		status, ok := parseProviderStatus([]byte(`{
+			"event_type":"ne_provider_status",
+			"payload":{"providers":{"content_filter":"stopped"},"stop_reasons":{"content_filter":1}}
+		}`))
+		require.True(t, ok)
+		assert.Equal(t, map[string]string{"content_filter": "stopped"}, status.Providers)
+		assert.Equal(t, map[string]int{"content_filter": 1}, status.StopReasons)
+		assert.True(t, status.Decoded)
+	})
+
+	t.Run("an extension that sends no stop_reasons still decodes", func(t *testing.T) {
+		t.Parallel()
+		// Version skew across an upgrade. The states are the load-bearing part; the reasons are additive.
+		status, ok := parseProviderStatus([]byte(`{"event_type":"ne_provider_status","payload":{"providers":{"dns_proxy":"running"}}}`))
+		require.True(t, ok)
+		assert.Equal(t, map[string]string{"dns_proxy": "running"}, status.Providers)
+		assert.Nil(t, status.StopReasons)
+		assert.True(t, status.Decoded)
+	})
+
+	t.Run("an undecodable payload is a control message but NOT a usable report", func(t *testing.T) {
+		t.Parallel()
+		// Both an undecodable payload and a genuine "nothing is running" report yield an empty map, and health treats them
+		// alike. Transition recording must not: feeding an undecodable report to the recorder would clear its baseline and
+		// make the next valid report look like a fresh set of transitions, inventing tamper evidence from a parse error.
+		status, ok := parseProviderStatus([]byte(`{"event_type":"ne_provider_status","payload":{"providers":"not-a-map"}}`))
+		require.True(t, ok, "still a control message, so it must stay out of the upload queue")
+		assert.Empty(t, status.Providers)
+		assert.False(t, status.Decoded, "an unreadable report must not be used as a transition baseline")
+	})
+
+	t.Run("an explicitly empty provider set IS a usable report", func(t *testing.T) {
+		t.Parallel()
+		// The #649 signal itself: the extension is up and nothing started. Distinct from an unreadable payload.
+		status, ok := parseProviderStatus([]byte(`{"event_type":"ne_provider_status","payload":{"providers":{}}}`))
+		require.True(t, ok)
+		assert.Empty(t, status.Providers)
+		assert.True(t, status.Decoded, "an explicit empty map is information, not a parse failure")
+	})
 }
 
 // FuzzParseProviderStatus drives the parser with arbitrary bytes. It decodes untrusted input off the XPC event channel, which the
