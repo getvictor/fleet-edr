@@ -33,4 +33,29 @@
 
 - [x] `go test ./agent/... ./internal/...`, `go vet -tags integration`, builds for darwin, linux and windows. `agent/sensorevent` coverage 92.5%. `swift test` 224 tests.
 - [x] `golangci-lint` (0 issues); `swiftlint --strict` (0 violations); `openspec validate sensor-provider-transition-event --strict`; spectrace 775/775 with 0 invalid references.
-- [ ] Live macOS VM: pending.
+- [x] Live macOS VM (edr-dev, macOS 26.3, sysext `1.1/23`) against `task dev:server`, reading the events out of the server's ClickHouse archive rather than trusting the agent's logs.
+
+  **A mandatory provider switched off leaves durable evidence.** Stop reason 1 (`userInitiated`), graded a fault:
+
+  | time         | event                                                                                 |
+  | ------------ | ------------------------------------------------------------------------------------- |
+  | 10:23:00.223 | extension: `content_filter stopped (reason 1); treating it as a fault`                 |
+  | 10:23:00.313 | agent: recorded transition `state=stopped stop_reason=1`, 90ms after the extension     |
+  | 10:23:37.910 | agent: self-heal restoring the provider                                                |
+  | 10:23:38.118 | extension: `content_filter is running`                                                 |
+  | 10:23:38.133 | agent: recorded transition `state=running`, no stop reason                             |
+
+  On the server:
+
+  ```
+  {"provider":"content_filter","state":"stopped","stop_reason":1}
+  {"provider":"content_filter","state":"running"}
+  ```
+
+  That pair is the whole point of the change, and the contrast with health makes it concrete: after the self-heal, `host_health` for this host reads `healthy / activated` and carries no trace that anything happened, while the two events still say the provider was switched off and came back 38 seconds later.
+
+  **The opt-in DNS proxy leaves none.** Stop reason 9 (`configurationDisabled`) on the opt-in provider is graded deliberate, so #649 reports it ABSENT and no transition is recorded. Verified twice over: no agent log line, and the server-side count for the whole run was exactly 2, not 3.
+
+  Re-enabling the DNS proxy afterwards did record a `state=running` transition, which is correct: absence to running is a real change and worth recording. It carries no stop reason, so a rule keyed on stops does not see it.
+
+- [ ] Not covered: an agent pkg upgrade. The rule in the follow-up change depends on an upgrade producing lifecycle stop reasons rather than operator-driven ones, and that has still never been observed on a real upgrade. It is the assumption most likely to make a naive rule fire fleet-wide, so it is called out here rather than discovered later.
