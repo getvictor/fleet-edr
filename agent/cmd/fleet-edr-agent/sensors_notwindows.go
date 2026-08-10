@@ -4,9 +4,12 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"github.com/fleetdm/edr/agent/health"
 	"github.com/fleetdm/edr/agent/receiver"
+	"github.com/fleetdm/edr/agent/selfheal"
+	"github.com/fleetdm/edr/agent/sensorevent"
 )
 
 // startTelemetrySensors starts the macOS telemetry sensors: the Endpoint Security extension loop and, when enabled, the network
@@ -42,6 +45,21 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 			// Only this loop: the network extension's XPC listener starts before its providers, so health here must key on
 			// which providers report themselves running (issue #649).
 			providerLiveness: true,
+			// A provider that stops takes its telemetry stream with it and, before this, stayed stopped until a human ran
+			// the host app's activate by hand (issue #632). The controller re-enables it from the same report health grades,
+			// so a pkg upgrade or a settings toggle recovers on its own.
+			// Health forgets a stop as soon as the self-heal repairs it, so the transition is written down separately as
+			// durable tamper evidence (issue #684).
+			transitions: sensorevent.New(
+				sensorevent.NewEnqueueEmitter(d.hostIDFn, d.enqueue, func() int64 { return time.Now().UnixNano() }),
+				d.logger,
+			),
+			selfHeal: selfheal.New(selfheal.Options{
+				Remediator: selfheal.NewRemediator(""),
+				Health:     d.health,
+				Component:  health.ComponentNetworkExtension,
+				Logger:     d.logger,
+			}),
 		})
 	}
 }

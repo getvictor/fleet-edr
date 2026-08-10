@@ -15,8 +15,6 @@ package reconcile
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/agent/proctable"
+	"github.com/fleetdm/edr/internal/eventid"
 )
 
 const (
@@ -42,10 +41,6 @@ const (
 	// RFC 4122 §4.4 specifies how to derive a v4 UUID from random bytes: clear the version nibble in byte 6 and set 0b0100 (version 4);
 	// clear the variant nibble's top two bits in byte 8 and set 0b10 (RFC 4122 variant). The masks below are the bit-pattern definitions,
 	// not arbitrary tuning knobs.
-	uuidV4VersionMask byte = 0x0f
-	uuidV4VersionBits byte = 0x40
-	uuidV4VariantMask byte = 0x3f
-	uuidV4VariantBits byte = 0x80
 )
 
 // Enqueuer is the narrow queue-surface needed by the reconciler. The agent's
@@ -148,7 +143,7 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 		logger:     opts.Logger,
 		now:        opts.Now,
 		kill:       opts.Kill,
-		newID:      newUUIDv4,
+		newID:      eventid.NewV4,
 		marshal:    json.Marshal,
 	}
 }
@@ -306,22 +301,3 @@ func (r *Reconciler) emitEvent(ctx context.Context, eventType, hostID string, no
 
 // newUUIDv4 returns an RFC-4122 v4 UUID without taking on a non-stdlib dependency. The agent already imports crypto/rand for
 // elsewhere; this is a 12-line copy of what google/uuid.NewRandom does, scoped to one call site.
-func newUUIDv4() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & uuidV4VersionMask) | uuidV4VersionBits
-	b[8] = (b[8] & uuidV4VariantMask) | uuidV4VariantBits
-	out := make([]byte, 36)
-	hex.Encode(out[0:8], b[0:4])
-	out[8] = '-'
-	hex.Encode(out[9:13], b[4:6])
-	out[13] = '-'
-	hex.Encode(out[14:18], b[6:8])
-	out[18] = '-'
-	hex.Encode(out[19:23], b[8:10])
-	out[23] = '-'
-	hex.Encode(out[24:36], b[10:16])
-	return string(out), nil
-}
