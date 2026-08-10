@@ -37,6 +37,12 @@ struct ProviderLiveness {
 
     private(set) var states: [Provider: State] = [:]
 
+    /// The platform stop reason last recorded for each provider that is currently `stopped`. Carried alongside the graded
+    /// state, not instead of it, because the grading answers "is this a fault?" while a detection consumer needs the raw
+    /// value to discriminate for itself (issue #684). Cleared when a provider starts, so a running provider never reports
+    /// a stale reason from a previous stop.
+    private(set) var stopReasons: [Provider: Int] = [:]
+
     /// `NEProviderStopReason` raw values, mirrored as integers so this type stays free of the NetworkExtension import
     /// and therefore unit-testable. Only the reasons this rule cares about are named; the rest are faults by default.
     enum StopReason {
@@ -79,16 +85,23 @@ struct ProviderLiveness {
     /// for a deliberate stop.
     @discardableResult
     mutating func forget(_ provider: Provider) -> Bool {
-        states.removeValue(forKey: provider) != nil
+        stopReasons.removeValue(forKey: provider)
+        return states.removeValue(forKey: provider) != nil
     }
 
     /// record marks a provider's new state and reports whether that changed anything, so the caller only broadcasts on
     /// a real transition rather than on every start/stop callback the framework happens to deliver.
     @discardableResult
-    mutating func record(_ provider: Provider, _ state: State) -> Bool {
-        guard states[provider] != state else { return false }
+    mutating func record(_ provider: Provider, _ state: State, reason: Int? = nil) -> Bool {
+        let changed = states[provider] != state
         states[provider] = state
-        return true
+        switch state {
+        case .running:
+            stopReasons[provider] = nil
+        case .stopped:
+            stopReasons[provider] = reason
+        }
+        return changed
     }
 
     /// snapshot renders the wire payload: provider identifier to state, for every provider observed so far. A provider
@@ -98,6 +111,16 @@ struct ProviderLiveness {
         var out: [String: String] = [:]
         for (provider, state) in states {
             out[provider.rawValue] = state.rawValue
+        }
+        return out
+    }
+
+    /// reasonSnapshot renders the wire payload's stop-reason map: provider identifier to the platform reason it stopped for.
+    /// Only stopped providers appear.
+    var reasonSnapshot: [String: Int] {
+        var out: [String: Int] = [:]
+        for (provider, reason) in stopReasons {
+            out[provider.rawValue] = reason
         }
         return out
     }
@@ -116,7 +139,19 @@ struct ProviderStatusPayload: Codable, Sendable {
     /// Provider identifier to state, e.g. `["content_filter": "running"]`.
     let providers: [String: String]
 
+    /// Provider identifier to the platform stop reason, for stopped providers only (issue #684). A SEPARATE field rather
+    /// than a richer `providers` value on purpose: the extension and the agent ship together but can skew across an
+    /// upgrade, and an additive field lets an older agent ignore it and a newer agent tolerate its absence, where changing
+    /// the shape of `providers` would break liveness reporting in both directions.
+    let stopReasons: [String: Int]?
+
+    init(providers: [String: String], stopReasons: [String: Int]? = nil) {
+        self.providers = providers
+        self.stopReasons = stopReasons
+    }
+
     enum CodingKeys: String, CodingKey {
         case providers
+        case stopReasons = "stop_reasons"
     }
 }
