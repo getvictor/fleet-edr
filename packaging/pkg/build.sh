@@ -100,8 +100,14 @@ cp "$ROOT/agent/com.fleetdm.edr.agent.plist" \
     "$AGENT_ROOT/Library/LaunchDaemons/com.fleetdm.edr.agent.plist"
 
 echo "==> codesigning fleet-edr-agent"
+# --identifier is pinned rather than left to codesign's default. For a bare Mach-O signed ad-hoc, codesign derives
+# `fleet-edr-agent-<hash>`, and the extension's debug XPC peer requirement pins the bare `fleet-edr-agent`, so a dry-run
+# pkg installs an agent the extension then refuses to talk to (it reports never_connected and the host silently loses
+# telemetry). Setting it explicitly also makes the release path deterministic rather than relying on codesign's default
+# happening to match what XPCEventServer documents the notarized release as carrying. Matches `task build:agent`.
 # shellcheck disable=SC2086  # intentional word-split on CODESIGN_FLAGS + KEYCHAIN_ARG
-codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG "$AGENT_ROOT/usr/local/bin/fleet-edr-agent"
+codesign $CODESIGN_FLAGS --identifier fleet-edr-agent --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+    "$AGENT_ROOT/usr/local/bin/fleet-edr-agent"
 
 echo "==> packaging agent component pkg"
 # Install scripts (preinstall + postinstall) attach to the COMPONENT pkg via
