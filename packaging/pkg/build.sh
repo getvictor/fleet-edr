@@ -119,8 +119,17 @@ codesign $CODESIGN_FLAGS --identifier "$AGENT_SIGNING_IDENTIFIER" --sign "$APP_I
 # here and only surfaces on an endpoint as an agent that installs, connects to nothing, and reports never_connected.
 # spec:release-packaging/the-packaged-agent-carries-the-identifier-the-extension-expects/the-packaged-agent-is-accepted-by-the-extension
 # spec:release-packaging/the-packaged-agent-carries-the-identifier-the-extension-expects/the-identifier-does-not-vary-with-signing-mode
-SIGNED_IDENTIFIER=$(codesign -dvv "$AGENT_ROOT/usr/local/bin/fleet-edr-agent" 2>&1 \
-    | sed -n 's/^Identifier=//p')
+# The read is a separate step from the extraction on purpose. This script is /bin/sh with `set -eu` and no portable
+# `pipefail`, so piping codesign straight into sed would let a codesign failure be masked by sed's success: the
+# identifier would come back empty and the mismatch branch below would report "the identifier is wrong" when the truth
+# is "codesign could not read the binary", with codesign's own diagnostics filtered into the pipe and lost. Capturing
+# first keeps the two failures distinguishable and preserves the diagnostics.
+if ! SIGNING_INFO=$(codesign -dvv "$AGENT_ROOT/usr/local/bin/fleet-edr-agent" 2>&1); then
+    echo "could not read the packaged agent's code signature:" >&2
+    echo "$SIGNING_INFO" >&2
+    exit 16
+fi
+SIGNED_IDENTIFIER=$(printf '%s\n' "$SIGNING_INFO" | sed -n 's/^Identifier=//p')
 if [ "$SIGNED_IDENTIFIER" != "$AGENT_SIGNING_IDENTIFIER" ]; then
     echo "agent signed with identifier '$SIGNED_IDENTIFIER', expected '$AGENT_SIGNING_IDENTIFIER';" \
         "the system extension's XPC peer requirement will reject it" >&2
