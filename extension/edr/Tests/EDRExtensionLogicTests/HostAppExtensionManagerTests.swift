@@ -355,15 +355,20 @@ final class HostAppExtensionManagerTests: XCTestCase {
     }
 
     // spec:host-app-extension-manager/a-staged-upgrade-surfaces-a-reboot-required-signal/activation-will-complete-after-reboot
-    func testAnActionableNoticeIsDistinctFromRoutineProgress() {
+    func testAnActionableNoticeIsDistinctFromRoutineProgress() throws {
         // A staged upgrade leaves the host without network and DNS coverage until it reboots, so its notice has to be
         // findable again later. It is normal output, not a failure, but logging it at the same level as every routine
         // progress line is what buries it: filtering the log by level is how an operator finds it after the fact.
         let recorder = RecordingReporter()
+        // XCTUnwrap rather than a default: a nil message means the notice was never produced, which is a failure of the
+        // thing under test. Substituting an empty string would leave the severity assertions below passing over a line
+        // that says nothing, which is the same silence this whole change is about.
+        let notice = try XCTUnwrap(rebootRequiredMessage(for: .activate, verdict: .rebootRequired))
         recorder.reporter.progress("activate request submitted")
-        recorder.reporter.warning(rebootRequiredMessage(for: .activate, verdict: .rebootRequired) ?? "")
+        recorder.reporter.warning(notice)
 
-        XCTAssertEqual(recorder.out.lines.count, 2, "both are normal output; neither is an error")
+        XCTAssertEqual(recorder.out.lines, ["activate request submitted", notice],
+                       "both are normal output; neither is an error")
         XCTAssertEqual(recorder.err.lines, [])
         XCTAssertEqual(recorder.severities.recorded, [.info, .warning],
                        "the reboot notice must outrank the routine line it sits next to")
