@@ -47,6 +47,10 @@ BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 APP_IDENTITY="Developer ID Application: VICTOR LYUBOSLAVSKY ($TEAM_ID)"
 INSTALLER_IDENTITY="Developer ID Installer: VICTOR LYUBOSLAVSKY ($TEAM_ID)"
 CODESIGN_FLAGS="--options runtime --timestamp --force"
+# Code-signing identifier the system extension's XPC peer requirement pins (XPCEventServer.agentIdentifierDebug). Set
+# explicitly at signing time because codesign's default differs by signing mode: an ad-hoc signature of a bare Mach-O
+# derives `fleet-edr-agent-<hash>`, which the extension rejects.
+AGENT_SIGNING_IDENTIFIER="fleet-edr-agent"
 
 KEYCHAIN_ARG=""
 if [ -n "${CI_KEYCHAIN:-}" ]; then
@@ -106,8 +110,22 @@ echo "==> codesigning fleet-edr-agent"
 # telemetry). Setting it explicitly also makes the release path deterministic rather than relying on codesign's default
 # happening to match what XPCEventServer documents the notarized release as carrying. Matches `task build:agent`.
 # shellcheck disable=SC2086  # intentional word-split on CODESIGN_FLAGS + KEYCHAIN_ARG
-codesign $CODESIGN_FLAGS --identifier fleet-edr-agent --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+codesign $CODESIGN_FLAGS --identifier "$AGENT_SIGNING_IDENTIFIER" --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
     "$AGENT_ROOT/usr/local/bin/fleet-edr-agent"
+
+# Assert what was actually produced rather than trusting the flag. This runs on BOTH paths, so the dry-run CI job
+# enforces the identifier for the ad-hoc mode and a real tag enforces it for the Developer ID mode; that is what makes
+# "does not vary with signing mode" a checked property instead of a claim. A wrong identifier is otherwise invisible
+# here and only surfaces on an endpoint as an agent that installs, connects to nothing, and reports never_connected.
+# spec:release-packaging/the-packaged-agent-carries-the-identifier-the-extension-expects/the-packaged-agent-is-accepted-by-the-extension
+# spec:release-packaging/the-packaged-agent-carries-the-identifier-the-extension-expects/the-identifier-does-not-vary-with-signing-mode
+SIGNED_IDENTIFIER=$(codesign -dvv "$AGENT_ROOT/usr/local/bin/fleet-edr-agent" 2>&1 \
+    | sed -n 's/^Identifier=//p')
+if [ "$SIGNED_IDENTIFIER" != "$AGENT_SIGNING_IDENTIFIER" ]; then
+    echo "agent signed with identifier '$SIGNED_IDENTIFIER', expected '$AGENT_SIGNING_IDENTIFIER';" \
+        "the system extension's XPC peer requirement will reject it" >&2
+    exit 15
+fi
 
 echo "==> packaging agent component pkg"
 # Install scripts (preinstall + postinstall) attach to the COMPONENT pkg via

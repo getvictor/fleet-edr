@@ -13,6 +13,7 @@ The release path is unaffected in practice, because the production peer requirem
 ## What changes
 
 - **The packaged agent is signed with an explicit `--identifier fleet-edr-agent`**, in both the dry-run and release paths. This matches what `task build:agent` already does for locally-built agents, and makes the value the extension pins a stated contract rather than a side effect of a tool default.
+- **The build asserts what it actually produced.** Passing the flag is not the same as verifying the result, and a wrong identifier is invisible at build time: it surfaces only on an endpoint, as an agent that installs, connects to nothing and reports never-connected. The build now reads the identifier back with `codesign -dvv` and fails the build if it is not the expected value. The assertion runs on both paths, so the dry-run job enforces it for ad-hoc signing and a real tag enforces it for Developer ID signing.
 
 ## What this deliberately does not do
 

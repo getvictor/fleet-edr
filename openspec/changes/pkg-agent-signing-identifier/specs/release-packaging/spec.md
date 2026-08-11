@@ -1,8 +1,8 @@
-# Release packaging: packaged agent signing identity delta
+# Release packaging: packaged agent code-signing identifier delta
 
 ## ADDED Requirements
 
-### Requirement: The packaged agent carries the code-signing identifier the extension expects
+### Requirement: The packaged agent carries the identifier the extension expects
 
 The system extension authenticates its XPC peer partly by code-signing identifier, so the agent shipped in the package MUST carry the identifier the extension is built to accept. The identifier SHALL be set explicitly at signing time rather than inherited from the signing tool's default, because that default varies with the signing mode: an ad-hoc signature of a bare executable derives a name that includes a content hash, which the extension does not accept.
 
