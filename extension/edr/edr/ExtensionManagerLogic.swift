@@ -264,25 +264,66 @@ let activateDNSProxyConfig = DNSProxyConfigIntent(
 )
 
 /// ReportStream is where an operator-facing message belongs: the command's normal output, or its error stream.
-///
-/// Split out as a pure decision (issue #687) for the same reason `postAggregateStep` is: `main.swift` is excluded from the
-/// SwiftPM logic module because it carries top-level executable code, so anything that lives only there cannot be unit
-/// tested. The routing rule is the part worth pinning, and a caller that captures normal output must still see failures.
 enum ReportStream: Equatable, Sendable {
     case standardOutput
     case standardError
 }
 
-/// reportStream returns the stream an extension-request outcome must be reported on.
-///
-/// Awaiting approval is deliberately NOT an error: on an unmanaged Mac it is the expected state, and the process stays
-/// alive while the request is pending, so reporting it as a failure would misdescribe a host that is working correctly and
-/// simply waiting for a human.
+/// reportStream returns the stream an extension-request outcome must be reported on. A caller that captures or pipes the
+/// command's normal output must still observe failures, which is what the install path's activation service does.
 func reportStream(for outcome: CompletionOutcome) -> ReportStream {
     switch outcome {
     case .completed, .willCompleteAfterReboot:
         .standardOutput
     case .failed:
         .standardError
+    }
+}
+
+/// approvalPendingMessage is what the command reports while an extension request waits on a human.
+///
+/// On an unmanaged Mac this is the EXPECTED state, not an error, and the process deliberately stays alive while the
+/// request is pending, so it belongs on standard output. Silence here is indistinguishable from a hang.
+let approvalPendingMessage = "Waiting for user approval in System Settings > General > Login Items & Extensions"
+
+/// Reporter is the operator-facing output boundary for the host app's CLI subcommands (issue #687).
+///
+/// The sinks are injected rather than called directly so this boundary is testable. That matters more than usual here:
+/// the defect being fixed was SILENCE, and a test that exercises only the routing rule cannot detect silence, a message
+/// sent to the wrong stream, or a log line that redacts its own content. `main.swift` carries top-level executable code
+/// and is excluded from the SwiftPM logic module, so a Reporter living there could not be tested at all.
+///
+/// The log sink receives the same text as the stream sink. That is the property that keeps the unified log readable:
+/// interpolating non-literals into an os_log message defaults them to `privacy: .private`, which is how the original
+/// failure reason came back as `<private>` even to someone who went looking for it.
+struct Reporter: Sendable {
+    /// Callers MUST pass only non-sensitive text: everything here is written to the unified log with public privacy, so
+    /// a caller that passes user data would publish it. The messages this type is used for name extension identifiers
+    /// and framework error conditions, neither of which is sensitive.
+    let writeOut: @Sendable (String) -> Void
+    let writeErr: @Sendable (String) -> Void
+    let writeLog: @Sendable (ReportStream, String) -> Void
+
+    func progress(_ message: String) {
+        writeOut(message)
+        writeLog(.standardOutput, message)
+    }
+
+    func failure(_ message: String) {
+        writeErr(message)
+        writeLog(.standardError, message)
+    }
+
+    /// outcome reports an extension-request result on whichever stream `reportStream` says it belongs to.
+    func outcome(_ outcome: CompletionOutcome, _ message: String) {
+        switch reportStream(for: outcome) {
+        case .standardOutput: progress(message)
+        case .standardError: failure(message)
+        }
+    }
+
+    /// approvalPending reports that the request is waiting on a human.
+    func approvalPending() {
+        progress(approvalPendingMessage)
     }
 }
