@@ -6,6 +6,40 @@ import SystemExtensions
 
 private let logger = Logger(subsystem: "com.fleetdm.edr", category: "main")
 
+/// Operator-facing reporting for the host app's CLI subcommands (issue #687).
+///
+/// Both halves of this exist because both were missing. The extension-request delegate reported only to the unified log,
+/// so a failed `edr activate` exited 1 with zero bytes on stdout and stderr and the operator had nothing to go on; and the
+/// log line it did emit interpolated non-literals, which os_log defaults to `privacy: .private`, so the reason read back
+/// as `<private>` even once you went looking for it. The command is invoked by the install path's activation LaunchAgent
+/// as well as by hand, so "exit 1 and say nothing" is what a customer's failed activation looks like from both sides.
+///
+/// Nothing reported here is sensitive: extension identifiers ship in the app bundle, and an OSSystemExtensionError
+/// description names a framework condition. So these are marked public deliberately rather than by omission.
+enum Report {
+    /// progress writes an operator-facing line to stdout and mirrors it to the unified log.
+    static func progress(_ message: String) {
+        print(message)
+        logger.info("\(message, privacy: .public)")
+    }
+
+    /// failure writes an operator-facing line to stderr and mirrors it to the unified log. stderr rather than stdout so a
+    /// caller that pipes or captures output still sees failures separately from the command's normal reporting.
+    static func failure(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+        logger.error("\(message, privacy: .public)")
+    }
+
+    /// outcome reports an extension-request result on whichever stream `reportStream` says it belongs to, so the routing
+    /// rule lives in the testable logic module rather than being re-decided at each call site.
+    static func outcome(_ outcome: CompletionOutcome, _ message: String) {
+        switch reportStream(for: outcome) {
+        case .standardOutput: progress(message)
+        case .standardError: failure(message)
+        }
+    }
+}
+
 /// ExtensionManager submits activation or deactivation requests for both system extensions (the ESF
 /// system extension and the network extension) and aggregates their completion outcomes through a
 /// CompletionAggregator. On the activate path a successful aggregate chains into enableContentFilter and
@@ -31,7 +65,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
             }
             request.delegate = self
             OSSystemExtensionManager.shared.submitRequest(request)
-            logger.info("\(self.action.rawValue) request submitted for \(extensionID)")
+            Report.progress("\(action.rawValue) request submitted for \(extensionID)")
         }
     }
 
@@ -44,7 +78,9 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
     }
 
     func requestNeedsUserApproval(_: OSSystemExtensionRequest) {
-        logger.info("Waiting for user approval in System Settings")
+        // On an unmanaged Mac this is the EXPECTED state, not an error, and the process stays alive while the request is
+        // pending. Reporting it is what distinguishes "waiting for you in System Settings" from "hung".
+        Report.progress("Waiting for user approval in System Settings > General > Login Items & Extensions")
     }
 
     func request(
@@ -54,14 +90,14 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         let outcome: CompletionOutcome
         switch result {
         case .completed:
-            logger.info("\(self.action.rawValue) completed for \(request.identifier)")
             outcome = .completed
+            Report.outcome(outcome, "\(action.rawValue) completed for \(request.identifier)")
         case .willCompleteAfterReboot:
-            logger.info("\(self.action.rawValue) will complete after reboot for \(request.identifier)")
             outcome = .willCompleteAfterReboot
+            Report.outcome(outcome, "\(action.rawValue) will complete after reboot for \(request.identifier)")
         @unknown default:
-            logger.error("Unknown result for \(request.identifier): \(result.rawValue)")
             outcome = .failed
+            Report.outcome(outcome, "Unknown result for \(request.identifier): \(result.rawValue)")
         }
         let complete = aggregator.record(outcome)
         if complete { finalizeAggregate() }
@@ -71,7 +107,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         _ request: OSSystemExtensionRequest,
         didFailWithError error: Error
     ) {
-        logger.error("\(self.action.rawValue) failed for \(request.identifier): \(error.localizedDescription)")
+        Report.outcome(.failed, "\(action.rawValue) failed for \(request.identifier): \(error.localizedDescription)")
         let complete = aggregator.record(.failed)
         if complete { finalizeAggregate() }
     }
@@ -88,7 +124,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         // the host reboots. Surface a distinct, operator-facing log line so a reboot is recognizably the fix rather than a
         // generic "will complete after reboot" info line (#399). A fresh install reports .allSucceeded and gets nothing.
         if let message = rebootRequiredMessage(for: action, verdict: verdict) {
-            logger.warning("\(message, privacy: .public)")
+            Report.progress(message)
         }
         switch postAggregateStep(for: action, verdict: verdict) {
         case .enableContentFilterThenDNSProxy:
@@ -105,7 +141,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
 private func enableContentFilter(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
     NEFilterManager.shared().loadFromPreferences { error in
         if let error {
-            print("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
+            Report.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
             exit(EXIT_FAILURE)
         }
         print("Loaded filter preferences, isEnabled=\(NEFilterManager.shared().isEnabled)")
@@ -121,10 +157,10 @@ private func enableContentFilter(then completion: @escaping () -> Void = { exit(
         print("Saving filter preferences...")
         NEFilterManager.shared().saveToPreferences { error in
             if let error {
-                print("ERROR: Failed to save filter preferences: \(error.localizedDescription)")
+                Report.failure("ERROR: Failed to save filter preferences: \(error.localizedDescription)")
                 exit(EXIT_FAILURE)
             }
-            print("Content filter enabled successfully")
+            Report.progress("Content filter enabled successfully")
             completion()
         }
     }
@@ -133,7 +169,7 @@ private func enableContentFilter(then completion: @escaping () -> Void = { exit(
 private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_SUCCESS) }) {
     NEDNSProxyManager.shared().loadFromPreferences { error in
         if let error {
-            print("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
+            Report.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
             exit(EXIT_FAILURE)
         }
 
@@ -146,10 +182,10 @@ private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_
 
         NEDNSProxyManager.shared().saveToPreferences { error in
             if let error {
-                print("ERROR: Failed to save DNS proxy preferences: \(error.localizedDescription)")
+                Report.failure("ERROR: Failed to save DNS proxy preferences: \(error.localizedDescription)")
                 exit(EXIT_FAILURE)
             }
-            print("DNS proxy enabled successfully")
+            Report.progress("DNS proxy enabled successfully")
             completion()
         }
     }
@@ -158,16 +194,16 @@ private func enableDNSProxy(then completion: @escaping () -> Void = { exit(EXIT_
 private func disableContentFilter() {
     NEFilterManager.shared().loadFromPreferences { error in
         if let error {
-            print("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
+            Report.failure("ERROR: Failed to load filter preferences: \(error.localizedDescription)")
             exit(EXIT_FAILURE)
         }
         NEFilterManager.shared().isEnabled = false
         NEFilterManager.shared().saveToPreferences { error in
             if let error {
-                print("ERROR: Failed to disable filter: \(error.localizedDescription)")
+                Report.failure("ERROR: Failed to disable filter: \(error.localizedDescription)")
                 exit(EXIT_FAILURE)
             }
-            print("Content filter disabled")
+            Report.progress("Content filter disabled")
             exit(EXIT_SUCCESS)
         }
     }
@@ -176,16 +212,16 @@ private func disableContentFilter() {
 private func disableDNSProxy() {
     NEDNSProxyManager.shared().loadFromPreferences { error in
         if let error {
-            print("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
+            Report.failure("ERROR: Failed to load DNS proxy preferences: \(error.localizedDescription)")
             exit(EXIT_FAILURE)
         }
         NEDNSProxyManager.shared().isEnabled = false
         NEDNSProxyManager.shared().saveToPreferences { error in
             if let error {
-                print("ERROR: Failed to disable DNS proxy: \(error.localizedDescription)")
+                Report.failure("ERROR: Failed to disable DNS proxy: \(error.localizedDescription)")
                 exit(EXIT_FAILURE)
             }
-            print("DNS proxy disabled")
+            Report.progress("DNS proxy disabled")
             exit(EXIT_SUCCESS)
         }
     }

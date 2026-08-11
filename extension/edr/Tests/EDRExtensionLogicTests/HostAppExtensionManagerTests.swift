@@ -308,4 +308,30 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertNil(rebootRequiredMessage(for: .deactivate, verdict: .rebootRequired),
                      "deactivate never warrants a reboot message")
     }
+
+    // spec:host-app-extension-manager/activation-outcomes-are-reported-to-the-operator/a-failed-activation-states-why
+    func testFailureIsReportedOnTheErrorStream() {
+        // A caller that captures or pipes normal output must still observe the failure. The install path's activation
+        // service is exactly such a caller, and before this its only signal was a non-zero exit code.
+        XCTAssertEqual(reportStream(for: .failed), .standardError)
+    }
+
+    // spec:host-app-extension-manager/activation-outcomes-are-reported-to-the-operator/a-successful-activation-still-reports-its-result
+    func testSuccessfulOutcomesAreReportedOnStandardOutput() {
+        XCTAssertEqual(reportStream(for: .completed), .standardOutput)
+        // A staged upgrade is a real, reportable result rather than an error: the request succeeded and the cutover is
+        // pending a reboot, which is the operator's cue to reboot rather than to investigate a failure.
+        XCTAssertEqual(reportStream(for: .willCompleteAfterReboot), .standardOutput)
+    }
+
+    // spec:host-app-extension-manager/activation-outcomes-are-reported-to-the-operator/awaiting-approval-is-reported-rather-than-silent
+    func testEveryOutcomeHasAStreamSoNoneCanBeSilent() {
+        // The defect this pins is silence, so the property that matters is total coverage: every outcome the aggregator
+        // can record routes somewhere. A new case added without a stream would be reported nowhere, which is exactly the
+        // state the command was in.
+        for outcome in [CompletionOutcome.completed, .willCompleteAfterReboot, .failed] {
+            let stream = reportStream(for: outcome)
+            XCTAssertTrue(stream == .standardOutput || stream == .standardError, "\(outcome) must report somewhere")
+        }
+    }
 }

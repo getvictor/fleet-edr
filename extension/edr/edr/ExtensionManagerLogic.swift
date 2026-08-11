@@ -262,3 +262,27 @@ let activateDNSProxyConfig = DNSProxyConfigIntent(
     localizedDescription: "Fleet EDR DNS Monitor",
     isEnabled: true
 )
+
+/// ReportStream is where an operator-facing message belongs: the command's normal output, or its error stream.
+///
+/// Split out as a pure decision (issue #687) for the same reason `postAggregateStep` is: `main.swift` is excluded from the
+/// SwiftPM logic module because it carries top-level executable code, so anything that lives only there cannot be unit
+/// tested. The routing rule is the part worth pinning, and a caller that captures normal output must still see failures.
+enum ReportStream: Equatable, Sendable {
+    case standardOutput
+    case standardError
+}
+
+/// reportStream returns the stream an extension-request outcome must be reported on.
+///
+/// Awaiting approval is deliberately NOT an error: on an unmanaged Mac it is the expected state, and the process stays
+/// alive while the request is pending, so reporting it as a failure would misdescribe a host that is working correctly and
+/// simply waiting for a human.
+func reportStream(for outcome: CompletionOutcome) -> ReportStream {
+    switch outcome {
+    case .completed, .willCompleteAfterReboot:
+        .standardOutput
+    case .failed:
+        .standardError
+    }
+}
