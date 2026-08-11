@@ -354,6 +354,21 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertEqual(recorder.err.lines, [])
     }
 
+    // spec:host-app-extension-manager/a-staged-upgrade-surfaces-a-reboot-required-signal/activation-will-complete-after-reboot
+    func testAnActionableNoticeIsDistinctFromRoutineProgress() {
+        // A staged upgrade leaves the host without network and DNS coverage until it reboots, so its notice has to be
+        // findable again later. It is normal output, not a failure, but logging it at the same level as every routine
+        // progress line is what buries it: filtering the log by level is how an operator finds it after the fact.
+        let recorder = RecordingReporter()
+        recorder.reporter.progress("activate request submitted")
+        recorder.reporter.warning(rebootRequiredMessage(for: .activate, verdict: .rebootRequired) ?? "")
+
+        XCTAssertEqual(recorder.out.lines.count, 2, "both are normal output; neither is an error")
+        XCTAssertEqual(recorder.err.lines, [])
+        XCTAssertEqual(recorder.severities.recorded, [.info, .warning],
+                       "the reboot notice must outrank the routine line it sits next to")
+    }
+
     func testNoOutcomeIsSilent() {
         // The defect this pins is silence, so the property is total coverage: every outcome the aggregator can record
         // produces exactly one operator-visible line and one log line, whichever stream it lands on.
@@ -376,15 +391,37 @@ private struct RecordingReporter {
     let out = Transcript()
     let err = Transcript()
     let log = Transcript()
+    let severities = SeverityLog()
     let reporter: Reporter
 
     init() {
-        let out = out, err = err, log = log
+        let out = out, err = err, log = log, severities = severities
         reporter = Reporter(
             writeOut: { out.append($0) },
             writeErr: { err.append($0) },
-            writeLog: { _, message in log.append(message) }
+            writeLog: { severity, message in
+                log.append(message)
+                severities.append(severity)
+            }
         )
+    }
+}
+
+/// SeverityLog records the level each message was logged at, so a test can tell an actionable notice from a routine one.
+private final class SeverityLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var levels: [ReportSeverity] = []
+
+    func append(_ severity: ReportSeverity) {
+        lock.lock()
+        defer { lock.unlock() }
+        levels.append(severity)
+    }
+
+    var recorded: [ReportSeverity] {
+        lock.lock()
+        defer { lock.unlock() }
+        return levels
     }
 }
 

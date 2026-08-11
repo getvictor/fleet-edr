@@ -20,10 +20,11 @@ private let logger = Logger(subsystem: "com.fleetdm.edr", category: "main")
 let reporter = Reporter(
     writeOut: { print($0) },
     writeErr: { try? FileHandle.standardError.write(contentsOf: Data(($0 + "\n").utf8)) },
-    writeLog: { stream, message in
-        switch stream {
-        case .standardOutput: logger.info("\(message, privacy: .public)")
-        case .standardError: logger.error("\(message, privacy: .public)")
+    writeLog: { severity, message in
+        switch severity {
+        case .info: logger.info("\(message, privacy: .public)")
+        case .warning: logger.warning("\(message, privacy: .public)")
+        case .error: logger.error("\(message, privacy: .public)")
         }
     }
 )
@@ -112,7 +113,7 @@ final class ExtensionManager: NSObject, OSSystemExtensionRequestDelegate {
         // the host reboots. Surface a distinct, operator-facing log line so a reboot is recognizably the fix rather than a
         // generic "will complete after reboot" info line (#399). A fresh install reports .allSucceeded and gets nothing.
         if let message = rebootRequiredMessage(for: action, verdict: verdict) {
-            reporter.progress(message)
+            reporter.warning(message)
         }
         switch postAggregateStep(for: action, verdict: verdict) {
         case .enableContentFilterThenDNSProxy:

@@ -286,6 +286,15 @@ func reportStream(for outcome: CompletionOutcome) -> ReportStream {
 /// request is pending, so it belongs on standard output. Silence here is indistinguishable from a hang.
 let approvalPendingMessage = "Waiting for user approval in System Settings > General > Login Items & Extensions"
 
+/// ReportSeverity is how prominent a reported line is in the system log. It is a SEPARATE axis from the stream: a staged
+/// upgrade's reboot notice is normal output an operator reads on stdout, but it is also the one line worth finding again
+/// later when filtering the log by level, which is what makes it the distinct signal #399 asked for.
+enum ReportSeverity: Equatable, Sendable {
+    case info
+    case warning
+    case error
+}
+
 /// Reporter is the operator-facing output boundary for the host app's CLI subcommands (issue #687).
 ///
 /// The sinks are injected rather than called directly so this boundary is testable. That matters more than usual here:
@@ -297,21 +306,28 @@ let approvalPendingMessage = "Waiting for user approval in System Settings > Gen
 /// interpolating non-literals into an os_log message defaults them to `privacy: .private`, which is how the original
 /// failure reason came back as `<private>` even to someone who went looking for it.
 struct Reporter: Sendable {
-    /// Callers MUST pass only non-sensitive text: everything here is written to the unified log with public privacy, so
-    /// a caller that passes user data would publish it. The messages this type is used for name extension identifiers
-    /// and framework error conditions, neither of which is sensitive.
+    /// Callers MUST pass only non-sensitive text. The production wiring in `main.swift` logs every message with public
+    /// privacy, so a caller that passed user data would publish it. What is reported today is extension identifiers and
+    /// framework error conditions, neither of which is sensitive.
     let writeOut: @Sendable (String) -> Void
     let writeErr: @Sendable (String) -> Void
-    let writeLog: @Sendable (ReportStream, String) -> Void
+    let writeLog: @Sendable (ReportSeverity, String) -> Void
 
     func progress(_ message: String) {
         writeOut(message)
-        writeLog(.standardOutput, message)
+        writeLog(.info, message)
+    }
+
+    /// warning reports a condition that is not a failure but that an operator has to act on, so it goes to normal output
+    /// while staying findable at a level above the routine lines around it.
+    func warning(_ message: String) {
+        writeOut(message)
+        writeLog(.warning, message)
     }
 
     func failure(_ message: String) {
         writeErr(message)
-        writeLog(.standardError, message)
+        writeLog(.error, message)
     }
 
     /// outcome reports an extension-request result on whichever stream `reportStream` says it belongs to.
