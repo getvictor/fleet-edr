@@ -308,4 +308,143 @@ final class HostAppExtensionManagerTests: XCTestCase {
         XCTAssertNil(rebootRequiredMessage(for: .deactivate, verdict: .rebootRequired),
                      "deactivate never warrants a reboot message")
     }
+
+    // spec:host-app-extension-manager/activation-outcomes-are-reported-to-the-operator/a-failed-activation-states-why
+    func testAFailureIsWrittenToStderrAndCarriesTheReason() {
+        let recorder = RecordingReporter()
+        recorder.reporter.outcome(.failed, "activate failed for com.fleetdm.edr.extension: operation not permitted")
+
+        // The reason has to survive verbatim onto the error stream. A caller that captures or pipes normal output must
+        // still observe the failure: the install path's activation service is exactly such a caller, and before this its
+        // only signal was a non-zero exit code.
+        XCTAssertEqual(recorder.err.lines, ["activate failed for com.fleetdm.edr.extension: operation not permitted"])
+        XCTAssertEqual(recorder.out.lines, [], "a failure must not be buried in normal output")
+
+        // And the same text, unabridged, has to reach the log. Interpolating a non-literal into an os_log message
+        // defaults it to `privacy: .private`, which is how the original failure reason read back as `<private>` even to
+        // an operator who went looking for it. Asserting the full string is what would catch a redacted reintroduction.
+        XCTAssertEqual(recorder.log.lines, ["activate failed for com.fleetdm.edr.extension: operation not permitted"])
+    }
+
+    // spec:host-app-extension-manager/activation-outcomes-are-reported-to-the-operator/a-successful-activation-still-reports-its-result
+    func testSucceedingOutcomesAreWrittenToStdout() {
+        let recorder = RecordingReporter()
+        recorder.reporter.outcome(.completed, "activate completed")
+        // A staged upgrade is a real, reportable result rather than an error: the request succeeded and the cutover is
+        // pending a reboot, which is the operator's cue to reboot rather than to investigate a failure.
+        recorder.reporter.outcome(.willCompleteAfterReboot, "activate will complete after reboot")
+
+        XCTAssertEqual(recorder.out.lines, ["activate completed", "activate will complete after reboot"])
+        XCTAssertEqual(recorder.err.lines, [], "a success on the error stream would read as a failure to any caller checking it")
+        XCTAssertEqual(recorder.log.lines, ["activate completed", "activate will complete after reboot"])
+    }
+
+    // spec:host-app-extension-manager/activation-outcomes-are-reported-to-the-operator/awaiting-approval-is-reported-rather-than-silent
+    func testAwaitingApprovalIsReportedAndNamesWhereToApprove() {
+        let recorder = RecordingReporter()
+        recorder.reporter.approvalPending()
+
+        // Pending approval is the state that looks most like a hang: the process deliberately stays alive, so with no
+        // message an operator cannot tell "waiting for you" from "wedged". The message must therefore say where to go.
+        XCTAssertEqual(recorder.out.lines.count, 1)
+        XCTAssertTrue(recorder.out.lines[0].contains("System Settings"),
+                      "the message must name where the approval happens, got: \(recorder.out.lines)")
+        XCTAssertEqual(recorder.log.lines, recorder.out.lines)
+        // On an unmanaged Mac this is the expected state, not a failure, so it must not be reported as one.
+        XCTAssertEqual(recorder.err.lines, [])
+    }
+
+    // spec:host-app-extension-manager/a-staged-upgrade-surfaces-a-reboot-required-signal/activation-will-complete-after-reboot
+    func testAnActionableNoticeIsDistinctFromRoutineProgress() throws {
+        // A staged upgrade leaves the host without network and DNS coverage until it reboots, so its notice has to be
+        // findable again later. It is normal output, not a failure, but logging it at the same level as every routine
+        // progress line is what buries it: filtering the log by level is how an operator finds it after the fact.
+        let recorder = RecordingReporter()
+        // XCTUnwrap rather than a default: a nil message means the notice was never produced, which is a failure of the
+        // thing under test. Substituting an empty string would leave the severity assertions below passing over a line
+        // that says nothing, which is the same silence this whole change is about.
+        let notice = try XCTUnwrap(rebootRequiredMessage(for: .activate, verdict: .rebootRequired))
+        recorder.reporter.progress("activate request submitted")
+        recorder.reporter.warning(notice)
+
+        XCTAssertEqual(recorder.out.lines, ["activate request submitted", notice],
+                       "both are normal output; neither is an error")
+        XCTAssertEqual(recorder.err.lines, [])
+        XCTAssertEqual(recorder.severities.recorded, [.info, .warning],
+                       "the reboot notice must outrank the routine line it sits next to")
+    }
+
+    func testNoOutcomeIsSilent() {
+        // The defect this pins is silence, so the property is total coverage: every outcome the aggregator can record
+        // produces exactly one operator-visible line and one log line, whichever stream it lands on.
+        for outcome in [CompletionOutcome.completed, .willCompleteAfterReboot, .failed] {
+            let recorder = RecordingReporter()
+            recorder.reporter.outcome(outcome, "reported")
+            XCTAssertEqual(recorder.out.lines.count + recorder.err.lines.count, 1,
+                           "\(outcome) must be reported exactly once")
+            XCTAssertEqual(recorder.log.lines, ["reported"], "\(outcome) must reach the log")
+        }
+    }
+}
+
+/// RecordingReporter is a Reporter wired to in-memory sinks, alongside the transcripts it writes to.
+///
+/// The sinks are what make the reporting boundary testable at all: the defect was SILENCE, and a test that only
+/// exercises the routing rule passes whether the command speaks or not. Capturing the log sink separately from the
+/// stream sinks is what pins the second half of the same defect, where the reason WAS logged but read back `<private>`.
+private struct RecordingReporter {
+    let out = Transcript()
+    let err = Transcript()
+    let log = Transcript()
+    let severities = SeverityLog()
+    let reporter: Reporter
+
+    init() {
+        let out = out, err = err, log = log, severities = severities
+        reporter = Reporter(
+            writeOut: { out.append($0) },
+            writeErr: { err.append($0) },
+            writeLog: { severity, message in
+                log.append(message)
+                severities.append(severity)
+            }
+        )
+    }
+}
+
+/// SeverityLog records the level each message was logged at, so a test can tell an actionable notice from a routine one.
+private final class SeverityLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var levels: [ReportSeverity] = []
+
+    func append(_ severity: ReportSeverity) {
+        lock.lock()
+        defer { lock.unlock() }
+        levels.append(severity)
+    }
+
+    var recorded: [ReportSeverity] {
+        lock.lock()
+        defer { lock.unlock() }
+        return levels
+    }
+}
+
+/// Transcript collects what a Reporter sink was handed. A class, not an array, so the escaping sink closures append to
+/// the same instance the assertions read.
+private final class Transcript: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    func append(_ line: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        recorded.append(line)
+    }
+
+    var lines: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
 }

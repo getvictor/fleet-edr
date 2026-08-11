@@ -262,3 +262,84 @@ let activateDNSProxyConfig = DNSProxyConfigIntent(
     localizedDescription: "Fleet EDR DNS Monitor",
     isEnabled: true
 )
+
+/// ReportStream is where an operator-facing message belongs: the command's normal output, or its error stream.
+enum ReportStream: Equatable, Sendable {
+    case standardOutput
+    case standardError
+}
+
+/// reportStream returns the stream an extension-request outcome must be reported on. A caller that captures or pipes the
+/// command's normal output must still observe failures, which is what the install path's activation service does.
+func reportStream(for outcome: CompletionOutcome) -> ReportStream {
+    switch outcome {
+    case .completed, .willCompleteAfterReboot:
+        .standardOutput
+    case .failed:
+        .standardError
+    }
+}
+
+/// approvalPendingMessage is what the command reports while an extension request waits on a human.
+///
+/// On an unmanaged Mac this is the EXPECTED state, not an error, and the process deliberately stays alive while the
+/// request is pending, so it belongs on standard output. Silence here is indistinguishable from a hang.
+let approvalPendingMessage = "Waiting for user approval in System Settings > General > Login Items & Extensions"
+
+/// ReportSeverity is how prominent a reported line is in the system log. It is a SEPARATE axis from the stream: a staged
+/// upgrade's reboot notice is normal output an operator reads on stdout, but it is also the one line worth finding again
+/// later when filtering the log by level, which is what makes it the distinct signal #399 asked for.
+enum ReportSeverity: Equatable, Sendable {
+    case info
+    case warning
+    case error
+}
+
+/// Reporter is the operator-facing output boundary for the host app's CLI subcommands (issue #687).
+///
+/// The sinks are injected rather than called directly so this boundary is testable. That matters more than usual here:
+/// the defect being fixed was SILENCE, and a test that exercises only the routing rule cannot detect silence, a message
+/// sent to the wrong stream, or a log line that redacts its own content. `main.swift` carries top-level executable code
+/// and is excluded from the SwiftPM logic module, so a Reporter living there could not be tested at all.
+///
+/// The log sink receives the same text as the stream sink. That is the property that keeps the unified log readable:
+/// interpolating non-literals into an os_log message defaults them to `privacy: .private`, which is how the original
+/// failure reason came back as `<private>` even to someone who went looking for it.
+struct Reporter: Sendable {
+    /// Callers MUST pass only non-sensitive text. The production wiring in `main.swift` logs every message with public
+    /// privacy, so a caller that passed user data would publish it. What is reported today is extension identifiers and
+    /// framework error conditions, neither of which is sensitive.
+    let writeOut: @Sendable (String) -> Void
+    let writeErr: @Sendable (String) -> Void
+    let writeLog: @Sendable (ReportSeverity, String) -> Void
+
+    func progress(_ message: String) {
+        writeOut(message)
+        writeLog(.info, message)
+    }
+
+    /// warning reports a condition that is not a failure but that an operator has to act on, so it goes to normal output
+    /// while staying findable at a level above the routine lines around it.
+    func warning(_ message: String) {
+        writeOut(message)
+        writeLog(.warning, message)
+    }
+
+    func failure(_ message: String) {
+        writeErr(message)
+        writeLog(.error, message)
+    }
+
+    /// outcome reports an extension-request result on whichever stream `reportStream` says it belongs to.
+    func outcome(_ outcome: CompletionOutcome, _ message: String) {
+        switch reportStream(for: outcome) {
+        case .standardOutput: progress(message)
+        case .standardError: failure(message)
+        }
+    }
+
+    /// approvalPending reports that the request is waiting on a human.
+    func approvalPending() {
+        progress(approvalPendingMessage)
+    }
+}
