@@ -22,6 +22,7 @@
 - [x] Mutation-checked: widening the window past the self-heal, dropping the provider comparison, unbounding the window on the left, and deciding immediately without waiting are each caught.
 - [x] `test/efficacy/corpus/T1562.001-sensor-tamper/`: the attack scenario, closing the corpus's Impair Defenses gap.
 - [x] `test/efficacy/noise/agent-upgrade-cutover.yaml`: the false-positive case that decides whether this is usable. It carries the same `stop_reason` as the attack scenario deliberately, so the two disagree if the rule ever regresses to judging on it.
+- [x] `scripts/uat/scenarios/sensor-tamper/`: the asserted L5 driver, so the live path is exercised by a harness rather than by hand. It switches off the real content filter, confirms the extension reported the stop, waits out the self-heal so the host is left capturing, and lets the driver poll `/api/alerts`. That covers the four pieces of production code upstream of the rule that the synthetic corpus never executes: the extension noticing, grading the stop a fault rather than an opt-out, the agent diffing liveness into an event, and the event reaching the server.
 - [x] `test/fakeagent`: `sensor_provider_transition` support. `stop_reason` is a pointer and is omitted when unset, because platform reason 0 is a real value and defaulting would assert something the scenario never said.
 
 ## 5. Verification
@@ -54,5 +55,6 @@
 
 ## 6. Not covered
 
+- [ ] The upgrade-cutover half is not automated in L5: reproducing it mutates installed extension versions and reliably drops SSH mid-cutover. Verified manually (1.017s resume, no alert) and pinned on every L6 run by `test/efficacy/noise/agent-upgrade-cutover.yaml`.
 - [ ] The remediation outcome on the alert, which issue #684 asks for. Whether the repair succeeded is not known when the stop must be reported. Called out in the proposal with the honest way to get it later.
 - [ ] A full pkg install, blocked by a separate defect found while attempting it: `task pkg:dryrun` produces a package whose app bundle AND both nested extensions carry only `get-task-allow`, because the dry-run path skips the entitlements re-sign that the release path performs. An app in that state cannot activate its extensions at all, so a dry-run install can never exercise the install path's most failure-prone step. Filed as #689. The cutover in step 3 above exercises the same extension replacement the postinstall triggers, so the rule's discriminator is verified against a real cutover even though a full pkg install is not.

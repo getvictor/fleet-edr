@@ -1,0 +1,31 @@
+# sensor-tamper scenario (issue #684).
+#
+# attack.sh switches off the mandatory content filter on the VM and waits for
+# the agent's self-heal to put it back. The driver polls /api/alerts for the
+# rule below, so the assertion that matters is made AFTER the provider has
+# already recovered: the alert has to outlive the repair that hides the tamper
+# from host health, which is the entire reason the rule exists.
+#
+# Unlike app-control-block this scenario keeps a `rules:` block, because the
+# rule_id is static and the driver's own poll is exactly the right assertion.
+# attack.sh asserts only the half the driver cannot see: that stopping a real
+# provider makes the extension report it and the agent emit the event.
+
+scenario_id: sensor-tamper
+description: >-
+  Switches off the EDR's own content filter on a live VM (MITRE T1562.001) and
+  asserts a sensor_tamper alert reaches the server, then confirms the agent's
+  self-heal restored capture so the host is left healthy and the alert is shown
+  to survive the repair.
+
+# The driver's alert-poll window. Sized to the real path: up to 60s for the
+# extension to report the stop, the rule's own 8s wait before it will decide,
+# then agent upload and batch processing. 180s is comfortably above the ~9s
+# observed end to end on edr-dev without being so wide that a genuinely
+# missing alert takes minutes to fail.
+within_seconds: 180
+
+rules:
+  - rule_id: sensor_tamper
+    severity: high
+    expect: alert
