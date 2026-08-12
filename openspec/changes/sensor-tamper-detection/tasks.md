@@ -26,9 +26,33 @@
 
 ## 5. Verification
 
-- [ ] Live macOS VM against `task dev:server`: the four QA steps on issue #684 (disable the mandatory filter, disable the opt-in DNS proxy, upgrade the agent pkg, exhaust the self-heal budget). BLOCKED: edr-dev cannot currently activate either extension, so it can neither produce a real cutover nor a real tamper. It needs rebuilding.
+- [x] Live macOS VM (edr-dev, macOS 26.3) against `task dev:server`, reading the alerts out of MySQL and the transitions out of ClickHouse rather than trusting agent logs. All four QA steps on issue #684:
+
+  **1. A mandatory provider switched off alerts, and the alert outlives the repair.**
+
+  | time (UTC)   | event                                                              |
+  | ------------ | ------------------------------------------------------------------ |
+  | 16:44:47.517 | `content_filter stopped`, platform reason 1                         |
+  | 16:44:56.545 | alert 1811 raised, 9.0s after the stop                              |
+  | 16:45:23.235 | `content_filter running`, the self-heal, 35.7s after the stop       |
+  | 16:45:25     | `host_health` back to `healthy / activated`                         |
+
+  Health carries no trace that anything happened; the alert is the only surviving record. That contrast is the whole reason the change exists.
+
+  **2. The opt-in DNS proxy switched off is silent.** No transition recorded at all (not a suppressed one), so the rule had nothing to judge, and health continued to report the host healthy. 64s of polling, no alert.
+
+  **3. An upgrade cutover does not fire.** Extension versions bumped 26 to 27 and re-activated, which is the same replacement the pkg postinstall triggers:
+
+  | time (UTC)   | event                                       |
+  | ------------ | ------------------------------------------- |
+  | 16:51:30.520 | `content_filter stopped`, platform reason 1 |
+  | 16:51:31.537 | `content_filter running`, 1.017s later      |
+
+  Alert count unchanged. The stop reason is byte-identical to the tamper in step 1, so this is the direct demonstration that reason-based discrimination would have alerted here and the recovery window does not. The measured 1.017s also confirms the 1.1s the design was built on.
+
+  **4. Exhausting the self-heal budget alerts, but the alert does not say so.** With the repair path broken, the three attempts failed and the agent logged "giving up on re-enabling capture provider; operator action required". The stop alerted (alert 1812, 13s after the stop, correct: it never recovered) and `host_health` reported `unhealthy / self_heal_failed` naming the provider. But the alert's own text is IDENTICAL to the step-1 alert that healed 35s later. Issue #684 asks for the alert to distinguish the two; it does not. This is the gap called out under "Not covered" below, now measured rather than predicted.
 
 ## 6. Not covered
 
 - [ ] The remediation outcome on the alert, which issue #684 asks for. Whether the repair succeeded is not known when the stop must be reported. Called out in the proposal with the honest way to get it later.
-- [ ] A real pkg upgrade, still never observed end to end. The rule is reason-agnostic so its design does not depend on one, but the noise scenario's 1.1s gap comes from an `edr activate` cutover rather than from a full pkg install.
+- [ ] A full pkg install, blocked by a separate defect found while attempting it: `task pkg:dryrun` produces a package whose app bundle AND both nested extensions carry only `get-task-allow`, because the dry-run path skips the entitlements re-sign that the release path performs. An app in that state cannot activate its extensions at all, so a dry-run install can never exercise the install path's most failure-prone step. Filed as #689. The cutover in step 3 above exercises the same extension replacement the postinstall triggers, so the rule's discriminator is verified against a real cutover even though a full pkg install is not.
