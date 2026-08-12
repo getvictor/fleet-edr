@@ -33,6 +33,9 @@ type EventArchive interface {
 	// Event time, not ingest time, because the caller (the sensor-tamper rule) measures the gap BETWEEN two events from the same
 	// producer on one host. Those share a clock, so event time is the honest measure of that gap, and it is also the indexed one.
 	// The cross-stream reads above bound on ingest time instead because they join two different producers whose clocks drift.
+	//
+	// Bounded, and the bound is REPORTED: a result larger than the implementation's cap returns ErrEventsTruncated rather than a
+	// truncated page, because a caller reasoning about what is ABSENT cannot tell a missing event from a dropped one.
 	EventsByTypeForHost(ctx context.Context, hostID, eventType string, tr httpserver.TimeRange) ([]Event, error)
 
 	// EventsByIDs returns the full envelopes for the given event_ids, ordered by (timestamp_ns, event_id). Alert evidence capture uses
@@ -102,6 +105,13 @@ type EventSearchResult struct {
 // browse view; pagination is driven by NextCursor, not the total, so nothing depends on it. A filtered search still reports the exact
 // count. The UI shows "Showing N" instead of "Showing N of M" when it sees this sentinel.
 const TotalNotCounted int64 = -1
+
+// ErrEventsTruncated is returned by a bounded read that matched more rows than its cap. It exists so a caller cannot mistake a
+// truncated result for a complete one. The sensor-tamper rule is why: it decides "capture never came back" from the ABSENCE of a
+// recovery in its window, so a silently truncated page would let a host that recovered be reported as tampered with, and the more
+// events a host emits the likelier that becomes. Failing the read loudly turns a hostile or noisy agent into an error an operator
+// sees rather than a false accusation against that host.
+var ErrEventsTruncated = errors.New("visibility: event read exceeded its row cap")
 
 // ErrInvalidEventCursor is returned by SearchEvents when the pagination cursor does not decode. The operator handler maps it to 400.
 var ErrInvalidEventCursor = errors.New("visibility: invalid event search cursor")

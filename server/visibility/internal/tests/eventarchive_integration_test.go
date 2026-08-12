@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"strconv"
@@ -371,6 +372,36 @@ func TestEventArchive_EventsByTypeForHost(t *testing.T) {
 	}
 	assert.Equal(t, []string{"stop", "resume"}, ids,
 		"this host, this type, inside the window, oldest first")
+}
+
+// TestEventArchive_EventsByTypeForHostOverflow pins the same overflow contract the in-memory archive has, against real ClickHouse.
+// The two implementations have to agree here specifically: rule tests run against the fake, so a fake that returns everything while
+// production silently truncates would hide the one failure the cap introduces.
+func TestEventArchive_EventsByTypeForHostOverflow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+	base := time.Now().UnixNano()
+	const transition = "sensor_provider_transition"
+	const cap = 1000
+
+	events := make([]visibilityapi.Event, 0, cap+1)
+	for i := range cap + 1 {
+		events = append(events, archiveEvent(fmt.Sprintf("ovf%05d", i), "hostOvf", transition, base+int64(i), 1))
+	}
+	require.NoError(t, arch.Insert(ctx, events))
+
+	_, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
+		FromNs: base, ToNs: base + int64(cap+1),
+	})
+	require.ErrorIs(t, err, visibilityapi.ErrEventsTruncated)
+
+	// Exactly at the cap is a complete answer.
+	got, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
+		FromNs: base, ToNs: base + int64(cap-1),
+	})
+	require.NoError(t, err)
+	assert.Len(t, got, cap)
 }
 
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/keyset-pagination-is-stable-and-complete

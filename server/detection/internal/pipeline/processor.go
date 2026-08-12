@@ -182,5 +182,13 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 		p.logger.DebugContext(ctx, "detection batch awaiting process materialization, will retry", "err", err)
 		return
 	}
+	// A rule that deferred for some other reason (sensor_tamper waits out its recovery window before it can tell a tamper from an
+	// upgrade cutover). Same DEBUG treatment so a recurring wait cannot flood the logs, but deliberately NOT counted on the
+	// materialization metric: that counter is how an operator detects a replica behind on graph materialization, and adding
+	// unrelated waits to it would make it report a problem that is not happening.
+	if errors.Is(err, rulesapi.ErrRetryBatch) {
+		p.logger.DebugContext(ctx, "detection batch not yet decidable, will retry", "err", err)
+		return
+	}
 	p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
 }

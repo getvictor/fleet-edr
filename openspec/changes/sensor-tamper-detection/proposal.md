@@ -27,7 +27,7 @@ What separates the two is what happens next. Recorded event timestamps from the 
 | tamper, repaired by the self-heal | **32.2 s** |
 | upgrade cutover                   | **1.1 s**  |
 
-A cutover's replacement provider is running about a second later because the extension is replacing itself; a tamper's repair has to wait out the agent's grace window first. The rule fires on a stop unless capture resumes within 5 seconds, which sits an order of magnitude from both populations. The threshold is not delicately tuned, and it is deliberately not derived from the self-heal's timing, so changing the repair does not silently retune the detection.
+A cutover's replacement provider is running about a second later because the extension is replacing itself; a tamper's repair has to wait out the agent's grace window first. The rule fires on a stop unless capture resumes within 5 seconds. The two populations are about 30x apart and the threshold sits between them, 4.5x above the slowest measured cutover and 6.4x below the fastest measured repair, so it is not delicately tuned, and it is deliberately not derived from the self-heal's timing, so changing the repair does not silently retune the detection.
 
 The cheaper version of this was ruled out by the same measurement: the agent uploads every second, so a 1.1s gap straddles batches too often for "suppress when the recovery is in the same batch" to hold.
 

@@ -86,11 +86,16 @@ func (r *SensorTamper) Doc() api.Documentation {
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{sensorTransitionEventType},
 		FalsePositives: []string{
-			"An upgrade whose replacement provider takes more than a few seconds to start. The upgrade cutover measured on a live host resumed capture in about a second; a host slow enough to exceed the window would also be a host that was genuinely not capturing for that long.",
+			"An upgrade whose replacement provider takes more than a few seconds to start. The upgrade cutover measured on a " +
+				"live host resumed capture in about a second; a host slow enough to exceed the window would also be a host " +
+				"that was genuinely not capturing for that long.",
 		},
 		Limitations: []string{
-			"Reports that capture stopped, not whether it was restored. The repair (or its failure) is carried by the following transition events on the host's timeline rather than by the alert.",
-			"An attacker who stops a provider and prevents the agent from reporting it at all (killing the agent, or blocking upload) produces no transition event and so no alert. That absence is covered by host health going stale, not by this rule.",
+			"Reports that capture stopped, not whether it was restored. The repair (or its failure) is carried by the " +
+				"following transition events on the host's timeline rather than by the alert.",
+			"An attacker who stops a provider and prevents the agent from reporting it at all (killing the agent, or " +
+				"blocking upload) produces no transition event and so no alert. That absence is covered by host health " +
+				"going stale, not by this rule.",
 		},
 	}
 }
@@ -108,9 +113,9 @@ const (
 )
 
 // sensorRecoveryWindow is how long after a stop a resumed provider still counts as an upgrade cutover rather than a
-// tamper. Measured populations are 1.1s (cutover) and 32-38s (tamper recovered by the self-heal), so 5s sits an order of
-// magnitude from both. It is deliberately NOT derived from the self-heal's grace window: coupling the two would mean a
-// change to the repair timing silently retunes the detection.
+// tamper. Measured populations are 1.1s (cutover) and 32-38s (tamper recovered by the self-heal), about 30x apart, and 5s
+// sits between them: 4.5x above the cutover and 6.4x below the fastest repair. It is deliberately NOT derived from the
+// self-heal's grace window, because coupling the two would let a change to the repair timing silently retune the detection.
 const sensorRecoveryWindow = 5 * time.Second
 
 // sensorRecoveryGrace is how long the rule waits before concluding that no recovery is coming. It must exceed the window, because a
@@ -157,7 +162,7 @@ func (r *SensorTamper) evalEvent(ctx context.Context, evt api.Event, s api.Graph
 		// the subject makes the re-run idempotent. Past the grace this branch is not taken and the stop is reported,
 		// so an unanswered stop cannot hold its batch indefinitely.
 		return nil, fmt.Errorf("sensor_tamper %s stop on host %s awaiting recovery window: %w",
-			p.Provider, evt.HostID, api.ErrProcessNotYetMaterialized)
+			p.Provider, evt.HostID, api.ErrRetryBatch)
 	}
 
 	return &api.Finding{

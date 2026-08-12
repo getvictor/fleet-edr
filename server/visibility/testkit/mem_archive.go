@@ -98,7 +98,9 @@ func (m *MemArchive) NetworkEventsForProcess(_ context.Context, hostID string, p
 	return out, nil
 }
 
-// EventsByTypeForHost mirrors the ClickHouse read: one host's events of a single type inside the EVENT-time range, oldest first.
+// EventsByTypeForHost mirrors the ClickHouse read: one host's events of a single type inside the EVENT-time range, oldest first,
+// with event_id breaking timestamp ties. The tiebreaker is part of mirroring: a fake that orders ties differently from the real
+// store is a fake that lets a test pass against behaviour production does not have.
 func (m *MemArchive) EventsByTypeForHost(_ context.Context, hostID, eventType string, tr httpserver.TimeRange) ([]api.Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -113,9 +115,22 @@ func (m *MemArchive) EventsByTypeForHost(_ context.Context, hostID, eventType st
 		}
 		out = append(out, e)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].TimestampNs < out[j].TimestampNs })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TimestampNs != out[j].TimestampNs {
+			return out[i].TimestampNs < out[j].TimestampNs
+		}
+		return out[i].EventID < out[j].EventID
+	})
+	// Same overflow contract as the ClickHouse store. A fake that returns everything while production truncates is a fake that
+	// hides the exact failure the cap introduces, so the cap and its error live in both.
+	if len(out) > EventsByTypeRowCap {
+		return nil, fmt.Errorf("mem archive events by type for host %s (%s): %w", hostID, eventType, api.ErrEventsTruncated)
+	}
 	return out, nil
 }
+
+// EventsByTypeRowCap mirrors the ClickHouse store's cap so a test can exercise the overflow path without 1000 rows of setup.
+const EventsByTypeRowCap = 1000
 
 // EventsByIDs returns the surviving envelopes for the given ids, ordered by (timestamp_ns, event_id). Unknown ids are omitted, matching
 // the archive's best-effort evidence contract.

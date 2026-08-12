@@ -112,7 +112,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 		if err == nil {
 			continue
 		}
-		if !errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
+		if !errors.Is(err, rulesapi.ErrRetryBatch) {
 			return err
 		}
 		if pendingMiss == nil {
@@ -150,7 +150,7 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 	var retryableMiss error
 	if err != nil {
 		span.RecordError(err)
-		if !errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
+		if !errors.Is(err, rulesapi.ErrRetryBatch) {
 			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
 			return nil
 		}

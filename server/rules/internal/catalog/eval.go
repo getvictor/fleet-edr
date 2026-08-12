@@ -32,7 +32,7 @@ func (p *pendingMiss) absorb(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, api.ErrProcessNotYetMaterialized) {
+	if errors.Is(err, api.ErrRetryBatch) {
 		if p.err == nil {
 			p.err = err
 		}

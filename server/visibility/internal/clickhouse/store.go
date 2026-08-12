@@ -116,21 +116,35 @@ func (s *Store) NetworkEventsForProcess(ctx context.Context, hostID string, pid 
 // ReplacingMergeTree duplicates. The WHERE clause is the table's sorting-key prefix (host_id, event_type, timestamp_ns), so this is
 // a primary-key range scan.
 //
+// event_id breaks timestamp ties, matching EventsByIDs. Without it two events sharing a timestamp come back in an order the engine
+// does not control, so a row cap could keep a different subset run to run.
+//
 // The row cap is not defensive padding: events are agent-supplied, so the number of rows a host can put inside any window is
 // controlled by the host, and an unbounded scan here would let one misbehaving or hostile agent turn a rule's correlation read into
 // an arbitrarily large result. The cap is far above what a real window holds (the caller's is seconds wide and its event type is
 // emitted on state CHANGES), so truncation cannot be reached by honest traffic.
+//
+// Reaching it is an ERROR, not a truncated page. The caller decides from what is absent, so handing it a silently shortened result
+// would let a host that emitted enough events to bury its own recovery be reported as tampered with. One row beyond the cap is
+// fetched purely to detect the overflow.
 func (s *Store) EventsByTypeForHost(ctx context.Context, hostID, eventType string, tr httpserver.TimeRange) ([]api.Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM events FINAL
 		WHERE host_id = ? AND event_type = ? AND timestamp_ns >= ? AND timestamp_ns <= ?
-		ORDER BY timestamp_ns
-		LIMIT ?`, hostID, eventType, tr.FromNs, tr.ToNs, eventsByTypeRowCap)
+		ORDER BY timestamp_ns, event_id
+		LIMIT ?`, hostID, eventType, tr.FromNs, tr.ToNs, eventsByTypeRowCap+1)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse events by type for host: %w", err)
 	}
-	return scanEvents(rows)
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) > eventsByTypeRowCap {
+		return nil, fmt.Errorf("clickhouse events by type for host %s (%s): %w", hostID, eventType, api.ErrEventsTruncated)
+	}
+	return events, nil
 }
 
 // eventsByTypeRowCap bounds EventsByTypeForHost. See the method comment for why a cap exists at all.

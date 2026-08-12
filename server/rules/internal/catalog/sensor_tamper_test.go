@@ -207,8 +207,12 @@ func TestSensorTamper_WaitsForTheWindowBeforeDeciding(t *testing.T) {
 			assert.Len(t, findings, tc.wantFinding)
 			if tc.wantRetry {
 				require.Error(t, err)
-				assert.ErrorIs(t, err, api.ErrProcessNotYetMaterialized,
+				require.ErrorIs(t, err, api.ErrRetryBatch,
 					"an undecided stop must ask for the batch again rather than alerting early")
+				// Deliberately NOT the materialization sentinel: this wait has nothing to do with the process graph, and
+				// raising that one would count it on the metric an operator uses to spot a replica falling behind (#631).
+				require.NotErrorIs(t, err, api.ErrProcessNotYetMaterialized,
+					"a recovery-window wait must not be reported as a process-materialization miss")
 				return
 			}
 			require.NoError(t, err)
@@ -312,8 +316,8 @@ func TestSensorTamper_LookupFailureIsNotSilence(t *testing.T) {
 
 	findings, err := (&SensorTamper{}).Evaluate(context.Background(), []api.Event{stop}, archive)
 	require.Error(t, err)
-	require.NotErrorIs(t, err, api.ErrProcessNotYetMaterialized,
-		"a broken reader is not a materialization race; retrying it would just multiply the failure")
+	require.NotErrorIs(t, err, api.ErrRetryBatch,
+		"a broken reader is not a wait; retrying it would just multiply the failure")
 	assert.Empty(t, findings)
 }
 
@@ -341,7 +345,7 @@ func TestSensorTamper_EvaluatesEveryStopInABatch(t *testing.T) {
 	archive := &transitionArchive{events: []api.Event{decided, undecided}}
 
 	findings, err := (&SensorTamper{}).Evaluate(context.Background(), []api.Event{undecided, decided}, archive)
-	require.ErrorIs(t, err, api.ErrProcessNotYetMaterialized, "the young stop still holds the batch for a retry")
+	require.ErrorIs(t, err, api.ErrRetryBatch, "the young stop still holds the batch for a retry")
 	require.Len(t, findings, 1, "the decided stop's finding must survive the undecided one")
 	assert.Equal(t, []string{"stop-old"}, findings[0].EventIDs)
 }
