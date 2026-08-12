@@ -7,8 +7,13 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// pendingMiss accumulates the retryable materialization miss (api.ErrProcessNotYetMaterialized) a rule's per-event loop hit, so the
-// loop can keep evaluating the rest of the batch instead of returning on the first miss.
+// pendingMiss accumulates the retryable error (anything wrapping api.ErrRetryBatch) a rule's per-event loop hit, so the loop can
+// keep evaluating the rest of the batch instead of returning on the first one.
+//
+// "Retryable" is broader than the materialization miss it was written for: api.ErrProcessNotYetMaterialized wraps ErrRetryBatch,
+// and sensor_tamper raises the general sentinel while it waits out a recovery window, which has nothing to do with the process
+// graph. Both mean the same thing here (this event cannot be decided yet, re-evaluate the batch); only the processor distinguishes
+// them, because it counts materialization misses on a metric that would lie if unrelated waits were added to it.
 //
 // Bailing on the first miss is what issue #661 was: one permanently orphaned event masked every other event in the same batch. The
 // demo corpus carries nine captured network_connect events whose fork/exec predate the capture, so their process rows never
@@ -24,8 +29,8 @@ import (
 // a resolvable event's grace window.
 type pendingMiss struct{ err error }
 
-// absorb classifies a per-event evaluation error. A retryable materialization miss is remembered (first one wins, so the reported
-// error names the event that started the wait) and absorb returns nil, telling the caller to continue the batch. Any other error is
+// absorb classifies a per-event evaluation error. A retryable error is remembered (first one wins, so the reported error names the
+// event that started the wait) and absorb returns nil, telling the caller to continue the batch. Any other error is
 // a genuine failure (a store error, a malformed graph read) and is returned unchanged for the caller to propagate immediately: those
 // are not per-event conditions and retrying the remaining events against a broken reader would just multiply the failure.
 func (p *pendingMiss) absorb(err error) error {
@@ -45,7 +50,7 @@ func (p *pendingMiss) absorb(err error) error {
 // per-event fan-out (privilege_launchd_plist_write, sudoers_tamper, ...) so the identical loop lives in one place instead of being
 // copy-pasted per rule.
 //
-// It returns the findings it did collect ALONGSIDE any retryable materialization miss, per the api.Rule.Evaluate contract: the engine
+// It returns the findings it did collect ALONGSIDE any retryable error, per the api.Rule.Evaluate contract: the engine
 // persists those findings and still treats the miss as a reason to retry the batch.
 func evalEachEvent(
 	ctx context.Context,
