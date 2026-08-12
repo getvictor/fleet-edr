@@ -1,6 +1,6 @@
-# sensor-tamper (L5)
+# sensor-tamper scenario
 
-Switches off the EDR's own content filter on a live VM and asserts the `sensor_tamper` alert (T1562.001, issue #684).
+L5 system test. Switches off the EDR's own content filter on a live VM and asserts the `sensor_tamper` alert (T1562.001, issue #684).
 
 ## What this covers that L6 cannot
 
@@ -23,6 +23,8 @@ EDR_SERVER_URL=https://127.0.0.1:8088 \
 EDR_SESSION_COOKIE=<edr_session cookie value> \
 task uat:l5 -- sensor-tamper --skip-install
 ```
+
+Keep the cookie out of your shell history: this is a live admin session, so prefer exporting it from a file (or a history-ignored command) rather than pasting the literal value.
 
 `--skip-install` targets an already-enrolled VM. Drop it (and pass `--pkg-path=`) to exercise the install path too, but note issue #689: a `pkg:dryrun` package cannot activate its extensions, so a dry-run pkg fails before this scenario gets to run.
 
@@ -52,6 +54,8 @@ Writing that sudoers file trips the `sudoers_tamper` rule (T1548.003) on the hos
 The alert assertion is deliberately the driver's, via `expected.yaml`: the rule id is static, so the driver's own poll is exactly the right check. `attack.sh` asserts only what the driver cannot see.
 
 The recovery wait is not cleanup politeness. The alert has to outlive the repair that hides the tamper from host health, which is the whole reason the rule exists, and the driver's poll runs after that repair has already landed. A scenario that returned early would also leave the next scenario running on a VM with no capture.
+
+A VM that has been off the network will fail this scenario, and the failure is real rather than spurious: the agent queues its events locally while it cannot upload, so both the stop and the recovery reach the server late and the alert lands after the poll window. Observed on one run here, where the recovery event was ingested 4m11s after it happened and the alert followed it. If the scenario fails with `miss: sensor_tamper`, compare the events' `ingested_at_ns` against their `timestamp_ns` before suspecting the rule; a large gap means the host could not talk to the server, not that the detection is broken.
 
 `Connection to <vm> closed by remote host` during the recovery wait is expected: the content filter coming back briefly drops the SSH session. The poll tolerates it and reconnects on the next iteration.
 

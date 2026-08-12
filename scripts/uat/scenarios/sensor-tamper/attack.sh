@@ -32,6 +32,9 @@ set -eEuo pipefail
 
 : "${UAT_VM_SSH_TARGET:?driver did not set UAT_VM_SSH_TARGET}"
 : "${UAT_SCRIPT_DIR:?driver did not set UAT_SCRIPT_DIR}"
+# Guarded like the other two rather than left to `set -u`: an unbound-variable abort names the shell, not the broken
+# driver contract, and this one is read deep inside a health check where that message would be actively misleading.
+: "${UAT_HOST_ID:?driver did not set UAT_HOST_ID}"
 
 # shellcheck disable=SC1091  # sourced path computed from UAT_SCRIPT_DIR; shellcheck cannot follow
 . "$UAT_SCRIPT_DIR/lib/common.sh"
@@ -76,10 +79,12 @@ RECOVER_TIMEOUT=90
 # precondition. Change-triggered signals answer "did it change"; they cannot
 # answer "what is it now".
 host_is_healthy() {
-  local body="${UAT_TMPDIR:-/tmp}/hosts-sensor-tamper.json"
-  uat_server_get "/api/hosts" "$body" || return 1
+  local body="${UAT_TMPDIR:-/tmp}/host-sensor-tamper.json"
+  # The per-host endpoint, not the fleet list: asking for one host's state should not pull every host's row and filter
+  # client-side. It also keeps the check honest on a populated server, where a paginated list could omit this host.
+  uat_server_get "/api/hosts/$UAT_HOST_ID" "$body" || return 1
   local status
-  status=$(jq -r --arg h "$UAT_HOST_ID" '.[]? | select(.host_id == $h) | .overall_status' "$body" 2>/dev/null)
+  status=$(jq -r '.overall_status' "$body" 2>/dev/null)
   [[ "$status" == "healthy" ]]
 }
 
@@ -100,8 +105,13 @@ saw_transition() {
   # info-level messages to root, so an unprivileged read comes back EMPTY and
   # the assertion fails while the provider is behaving perfectly. See the
   # scenario README for the sudoers entry this needs.
+  #
+  # The absolute /usr/bin/log matches that sudoers entry exactly. A bare `log`
+  # resolves through sudo's secure_path, so a host whose secure_path differs
+  # would be refused despite correct sudoers setup, and the scenario would
+  # fail for a reason that has nothing to do with the product.
   uat_ssh "$UAT_VM_SSH_TARGET" \
-    "sudo log show --start '$TAMPER_AT' --info --predicate 'subsystem CONTAINS \"com.fleetdm\"' 2>/dev/null \
+    "sudo /usr/bin/log show --start '$TAMPER_AT' --info --predicate 'subsystem CONTAINS \"com.fleetdm\"' 2>/dev/null \
        | grep -qE 'Provider $PROVIDER $want'"
 }
 
