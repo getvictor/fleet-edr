@@ -104,6 +104,18 @@ type Rule interface {
 	SupportedExclusionMatchTypes() []ExclusionMatchType
 }
 
+// ErrRetryBatch signals that a rule could not decide yet and the batch should be re-evaluated rather than acked. The engine treats
+// an Evaluate error wrapping it as retryable, unlike ordinary rule failures (which are logged and swallowed): it fails the batch so
+// the processor nacks it and re-evaluates. Alert dedup makes the re-run idempotent.
+//
+// It exists so "not decidable yet" is separable from WHY. The original reason was a subject process that had not materialized, and
+// a rule that waits for something else (sensor_tamper waits out a recovery window, which has nothing to do with the process graph)
+// must not be counted on the materialization-retry metric or logged as a materialization miss: that counter is how an operator
+// detects a replica behind on graph materialization, and polluting it with unrelated waits destroys the signal (issue #631).
+//
+// A rule raising this MUST bound how long it will keep raising it, or a batch that can never be decided retries forever.
+var ErrRetryBatch = errors.New("rules: batch not yet decidable")
+
 // ErrProcessNotYetMaterialized signals that rule evaluation saw an event whose own (subject) process row has not been written by
 // the graph builder yet. Since intra-replica processor concurrency (issue #535) two claim batches of the same host can be in flight
 // at once, so an event can be evaluated before the concurrent batch carrying its fork/exec commits; the same window exists across
@@ -112,7 +124,9 @@ type Rule interface {
 // makes the re-run idempotent. Rules raise it only while the event is younger than the materialization grace window, so an event
 // whose process genuinely never materializes (e.g. a pre-capture pid) degrades to the historical silent skip instead of retrying
 // forever.
-var ErrProcessNotYetMaterialized = errors.New("rules: subject process not yet materialized")
+// It wraps ErrRetryBatch, so a consumer asking "should this batch be retried" matches both, while a consumer reporting WHY (the
+// materialization counter and its log line) still distinguishes this specific cause.
+var ErrProcessNotYetMaterialized = fmt.Errorf("%w: subject process not yet materialized", ErrRetryBatch)
 
 // RuleMetadata is the per-rule descriptor the operator endpoints render. Used in two surfaces: GET /api/rules (the operator handler
 // maps the fields into a JSON-tagged ruleResponse struct, so the wire shape lives in rules/internal/operator and isn't on this

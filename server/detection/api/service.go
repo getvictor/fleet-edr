@@ -83,6 +83,16 @@ type GraphReader interface {
 	// process's DNS resolutions with its outbound connections. Pass a wide tr to retrieve all of a pid's network/DNS events; the
 	// caller bounds the correlation in-memory on timestamp_ns (network_connect and dns_query share the network-extension clock).
 	GetNetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr TimeRange) ([]Event, error)
+
+	// GetHostEventsByType returns one host's events of a single type whose EVENT time falls inside tr, oldest first. Used by rules
+	// whose signal is the RELATION between two events from one producer rather than a single event: sensor_tamper asks whether a
+	// stopped capture provider came back within a few seconds, which is what separates a routine upgrade cutover from somebody
+	// switching the sensor off (issue #684).
+	//
+	// Event time rather than ingest time: both events come from the same agent on the same host, so they share a clock, and the
+	// gap between them is the thing being measured. The window a caller passes must be narrow; this is a correlation read, not a
+	// history scan.
+	GetHostEventsByType(ctx context.Context, hostID, eventType string, tr TimeRange) ([]Event, error)
 }
 
 // MetricsRecorder is the optional OTel hook the engine + intake + pipeline goroutines write to. Nil-safe: cmd/main wires the

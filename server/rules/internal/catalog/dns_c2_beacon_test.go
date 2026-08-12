@@ -239,6 +239,10 @@ func (r *perPIDGraphReader) GetExecChain(_ context.Context, current api.Process)
 	return []api.Process{current}, nil
 }
 
+func (r *perPIDGraphReader) GetHostEventsByType(_ context.Context, _, _ string, _ api.TimeRange) ([]api.Event, error) {
+	return nil, nil
+}
+
 func (r *perPIDGraphReader) GetNetworkEventsForProcess(_ context.Context, _ string, pid int, _ api.TimeRange) ([]api.Event, error) {
 	return r.netEventsByPID[pid], nil
 }

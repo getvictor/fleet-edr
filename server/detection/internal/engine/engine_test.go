@@ -225,6 +225,48 @@ func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
 
 // TestEngine_Evaluate_AFailingRuleDoesNotSuppressLaterRules is the engine half of the issue #661 repro.
 //
+// TestEngine_Evaluate_MaterializationMissSurvivesAGenericWait pins which retryable cause reaches the processor when a batch
+// produces both kinds.
+//
+// The processor branches on the SPECIFIC sentinel to decide whether to count edr.detection.materialization_retries, the counter an
+// operator reads to spot a replica falling behind on the process graph (issue #631). Rules run in registration order and the first
+// retryable error is the one kept, so a rule that is merely waiting (sensor_tamper waits out its recovery window and raises the
+// generic ErrRetryBatch) would mask a real materialization miss from a rule registered after it, and the counter would under-report
+// precisely when the condition it exists for is happening. Both orderings are asserted because registration order is not something
+// this contract should depend on.
+func TestEngine_Evaluate_MaterializationMissSurvivesAGenericWait(t *testing.T) {
+	t.Parallel()
+
+	generic := fmt.Errorf("sensor_tamper awaiting recovery window: %w", rulesapi.ErrRetryBatch)
+	specific := fmt.Errorf("event x references pid 7: %w", rulesapi.ErrProcessNotYetMaterialized)
+
+	cases := []struct {
+		name  string
+		first error
+		last  error
+	}{
+		{"generic wait registered first", generic, specific},
+		{"materialization miss registered first", specific, generic},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			batch := []api.Event{{EventID: "e", HostID: "h", TimestampNs: 1, EventType: "exec", Payload: []byte("{}")}}
+
+			e := New(nil, nil)
+			e.Register(&failingRule{stubRule: stubRule{id: "first-rule"}, err: tc.first})
+			e.Register(&failingRule{stubRule: stubRule{id: "second-rule"}, err: tc.last})
+
+			err := e.Evaluate(t.Context(), batch)
+
+			require.ErrorIs(t, err, rulesapi.ErrRetryBatch, "either cause must still nack the batch")
+			require.ErrorIs(t, err, rulesapi.ErrProcessNotYetMaterialized,
+				"the materialization cause must survive so the processor still counts the retry")
+		})
+	}
+}
+
 // Rules are evaluated in registration order and the engine used to return on the first retryable miss, so every rule after the
 // missing one was skipped for as long as that rule kept missing. A rule waiting on a process row that never materialises holds its
 // own grace window open (30s for the subject-process rules), and the skipped rules only got their first real evaluation once that

@@ -44,6 +44,10 @@ func (stubGraphReader) GetChildProcesses(context.Context, string, int, api.TimeR
 func (stubGraphReader) GetExecChain(context.Context, api.Process) ([]api.Process, error) {
 	return nil, nil
 }
+func (stubGraphReader) GetHostEventsByType(context.Context, string, string, api.TimeRange) ([]api.Event, error) {
+	return nil, nil
+}
+
 func (stubGraphReader) GetNetworkEventsForProcess(context.Context, string, int, api.TimeRange) ([]api.Event, error) {
 	return nil, nil
 }

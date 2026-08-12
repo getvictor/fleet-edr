@@ -24,5 +24,6 @@ func New(resolver api.ExclusionResolver) []api.Rule {
 		&SudoersTamper{Exclusions: resolver},
 		&ApplicationControlBlock{},
 		&DNSC2Beacon{},
+		&SensorTamper{},
 	}
 }

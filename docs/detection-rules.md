@@ -25,6 +25,7 @@ Hand-edits to this file get overwritten on the next regeneration.
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | T1548.003 |
 | [`application_control_block`](#application_control_block) | Application control block | medium |  |
 | [`dns_c2_beacon`](#dns_c2_beacon) | DNS C2 beacon | high | T1071.004, T1568.002 |
+| [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | T1562.001 |
 
 ## suspicious_exec
 
@@ -305,4 +306,35 @@ A high-entropy, algorithmically generated domain name (the kind produced by a do
 - Sees plain UDP/TCP DNS only. Encrypted DNS (DoH/DoT) bypasses the proxy and is not correlated.
 - The current detection requires the program to have been launched from a temporary or world-writable path. Detecting beacons started by a scripting interpreter that is running non-interactively (for example, a shell script with no terminal) is a planned addition.
 - The lookup-then-connect window is bounded (currently 30 seconds). A beacon that looks up its domain far in advance of connecting is missed by design.
+
+## sensor_tamper
+
+**EDR sensor disabled**  
+Flags one of the EDR's own capture providers stopping without coming back within a few seconds.
+
+| | |
+| --- | --- |
+| Rule ID | `sensor_tamper` |
+| Severity | `high` |
+| ATT&CK | [`T1562.001`](https://attack.mitre.org/techniques/T1562/001/) |
+| Event types | `sensor_provider_transition` |
+
+### Description
+
+Detects tampering with the EDR itself. A capture provider (the content filter or the DNS proxy) stopping means the host stops reporting the telemetry that provider carries, so an attacker who can switch it off can work unobserved.
+
+The agent restores a stopped provider automatically, in about 35 seconds. That repair is why the rule exists rather than why it is unnecessary: agent health only reports what is true now, so once the provider is back the health view reads healthy and nothing records that it was ever off. The alert is the durable account.
+
+An agent upgrade also stops providers, as part of replacing the system extension, and the platform reports the same stop reason for that as for somebody switching capture off. The rule separates them by how fast capture resumes: an upgrade's replacement provider runs about a second later, while a stop that needed the automatic repair takes tens of seconds. A provider that resumes within a few seconds is therefore not reported.
+
+A provider an operator has deliberately turned off (the DNS proxy is optional) is reported as absent rather than stopped and never reaches this rule.
+
+### Known false-positive sources
+
+- An upgrade whose replacement provider takes more than a few seconds to start. The upgrade cutover measured on a live host resumed capture in about a second; a host slow enough to exceed the window would also be a host that was genuinely not capturing for that long.
+
+### Limitations
+
+- Reports that capture stopped, not whether it was restored. The repair (or its failure) is carried by the following transition events on the host's timeline rather than by the alert.
+- An attacker who stops a provider and prevents the agent from reporting it at all (killing the agent, or blocking upload) produces no transition event and so no alert. That absence is covered by host health going stale, not by this rule.
 

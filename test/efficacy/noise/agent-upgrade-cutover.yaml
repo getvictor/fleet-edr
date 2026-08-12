@@ -1,0 +1,38 @@
+# Ambient noise: an agent upgrade replacing the system extension.
+#
+# This is the false-positive case that decides whether tamper detection is
+# usable at all. Every agent upgrade stops the capture providers as part of
+# the cutover, so a rule that fires on "provider stopped" would alert on
+# every host in the fleet on every upgrade, and an alert that fires fleet-wide
+# on routine maintenance is one operators mute. Muted tamper alerting is how
+# an intruder walks past it.
+#
+# The stop below carries stop_reason 1 (userInitiated), the SAME reason a
+# deliberate disable carries. That is not artistic licence: it was measured on
+# a live host, where a routine extension cutover logged
+# `content_filter stopped (reason 1)` byte for byte identically to a tamper.
+# What separates them is that the replacement provider is running about a
+# second later, because the extension is replacing itself, while a tamper has
+# to wait tens of seconds for the agent's repair.
+#
+# Expected zero alerts. If sensor_tamper ever regresses to judging on the stop
+# reason, or its recovery window is widened past the cutover, this scenario
+# starts alerting and the noise gate fails.
+name: "noise: agent upgrade extension cutover"
+host:
+  id: BBBB0003-0000-0000-0000-000000000003
+  hostname: efficacy-noise-upgrade.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: sensor_provider_transition
+    provider: content_filter
+    state: stopped
+    stop_reason: 1
+
+  # The replacement provider from the new extension, measured at 1.1s on a
+  # live cutover. Well inside the rule's recovery window.
+  - at: 1100ms
+    type: sensor_provider_transition
+    provider: content_filter
+    state: running

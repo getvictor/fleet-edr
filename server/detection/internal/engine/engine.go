@@ -112,10 +112,18 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 		if err == nil {
 			continue
 		}
-		if !errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
+		if !errors.Is(err, rulesapi.ErrRetryBatch) {
 			return err
 		}
-		if pendingMiss == nil {
+		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
+		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
+		// this error to decide whether to count edr.detection.materialization_retries. Without the upgrade, a rule that is
+		// merely waiting (sensor_tamper waits out a recovery window) and happens to run earlier in registration order would
+		// mask a real materialization miss on the same batch, and the counter an operator uses to spot a replica falling
+		// behind would under-report exactly when it matters.
+		if pendingMiss == nil ||
+			(!errors.Is(pendingMiss, rulesapi.ErrProcessNotYetMaterialized) &&
+				errors.Is(err, rulesapi.ErrProcessNotYetMaterialized)) {
 			pendingMiss = err
 		}
 	}
@@ -150,7 +158,7 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 	var retryableMiss error
 	if err != nil {
 		span.RecordError(err)
-		if !errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) {
+		if !errors.Is(err, rulesapi.ErrRetryBatch) {
 			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
 			return nil
 		}

@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"strconv"
@@ -338,6 +339,69 @@ func TestEventArchive_SearchEvents(t *testing.T) {
 	ids = eventIDSet(res.Events)
 	assert.True(t, ids["c-a"] && ids["c-b"] && ids["c-other"], "includes every connection regardless of remote address")
 	assert.False(t, ids["d-a"], "still scoped to the connection event type")
+}
+
+// TestEventArchive_EventsByTypeForHost exercises the correlation read the sensor-tamper rule asks the archive for: what
+// did THIS host's own event stream do in the seconds after a capture provider stopped. The three exclusions are the ones
+// that would each break the rule in a different direction: another host's recovery would suppress a real tamper, another
+// event type would be parsed as a transition, and an event outside the window would answer a question about the wrong
+// moment.
+//
+// spec:server-detection-rules-engine/edr-sensor-tamper-detection/an-upgrade-cutover-does-not-fire
+func TestEventArchive_EventsByTypeForHost(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+	base := time.Now().UnixNano()
+	const transition = "sensor_provider_transition"
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
+		archiveEvent("stop", "hostA", transition, base, 1),
+		archiveEvent("resume", "hostA", transition, base+int64(time.Second), 1),
+		archiveEvent("other-host", "hostB", transition, base+int64(time.Second), 1),
+		archiveEvent("other-type", "hostA", "exec", base+int64(time.Second), 1),
+		archiveEvent("too-late", "hostA", transition, base+int64(time.Minute), 1),
+	}))
+
+	got, err := arch.EventsByTypeForHost(ctx, "hostA", transition, httpserver.TimeRange{
+		FromNs: base, ToNs: base + int64(5*time.Second),
+	})
+	require.NoError(t, err)
+	ids := make([]string, len(got))
+	for i, e := range got {
+		ids[i] = e.EventID
+	}
+	assert.Equal(t, []string{"stop", "resume"}, ids,
+		"this host, this type, inside the window, oldest first")
+}
+
+// TestEventArchive_EventsByTypeForHostOverflow pins the same overflow contract the in-memory archive has, against real ClickHouse.
+// The two implementations have to agree here specifically: rule tests run against the fake, so a fake that returns everything while
+// production silently truncates would hide the one failure the cap introduces.
+func TestEventArchive_EventsByTypeForHostOverflow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+	base := time.Now().UnixNano()
+	const transition = "sensor_provider_transition"
+	const cap = 1000
+
+	events := make([]visibilityapi.Event, 0, cap+1)
+	for i := range cap + 1 {
+		events = append(events, archiveEvent(fmt.Sprintf("ovf%05d", i), "hostOvf", transition, base+int64(i), 1))
+	}
+	require.NoError(t, arch.Insert(ctx, events))
+
+	_, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
+		FromNs: base, ToNs: base + int64(cap+1),
+	})
+	require.ErrorIs(t, err, visibilityapi.ErrEventsTruncated)
+
+	// Exactly at the cap is a complete answer.
+	got, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
+		FromNs: base, ToNs: base + int64(cap-1),
+	})
+	require.NoError(t, err)
+	assert.Len(t, got, cap)
 }
 
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/keyset-pagination-is-stable-and-complete

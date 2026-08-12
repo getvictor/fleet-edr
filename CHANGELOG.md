@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Investigate the new High alert `EDR sensor disabled` (MITRE T1562.001).** It means a host's capture provider was switched off and had not resumed 5 seconds later, so the host stopped reporting that telemetry. Investigate even when the host now reads healthy: the agent restores the provider by itself after about 35 seconds, which clears the health warning but does not make the stop legitimate. Agent upgrades and a deliberately disabled DNS proxy do not alert.
+
 ### Fixed
 
 - **Kill process is pinned to the exact process it targeted.** The "Kill process" action now carries the selected process generation, and the agent refuses the kill (reporting a generation mismatch) if that PID was reused or re-exec'd before the command ran, so a stale kill can no longer terminate an unrelated process.

@@ -32,6 +32,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"sudoers_tamper",
 		"application_control_block",
 		"dns_c2_beacon",
+		"sensor_tamper",
 	}
 	require.Len(t, got, len(wantIDs))
 	for i, want := range wantIDs {

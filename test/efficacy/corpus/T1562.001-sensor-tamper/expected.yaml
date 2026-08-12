@@ -1,0 +1,16 @@
+# Expected detection assertions for the T1562.001-sensor-tamper technique scenario.
+# rule_id: catalog rule ID that should fire (one row in /api/alerts when
+# the L6 runner polls). severity: pinned so a rule downgrade is visible.
+# within_seconds: per-rule SLA budget from POST to alert visibility.
+#
+# The budget is wider than the other techniques' because this rule deliberately
+# waits before deciding: an unanswered stop is held for its recovery window
+# rather than alerted on immediately, since a stop that resumes in about a
+# second is an upgrade cutover and not a tamper.
+scenario_id: T1562.001-sensor-tamper
+mitre: T1562.001
+within_seconds: 45
+rules:
+  - rule_id: sensor_tamper
+    severity: high
+    expect: alert
