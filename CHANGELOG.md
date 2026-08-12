@@ -4,6 +4,10 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Detection for tampering with the EDR's own sensor (MITRE T1562.001).** A new `EDR sensor disabled` rule raises a High alert when a host's capture provider stops and does not resume within a few seconds. The agent restores a stopped provider automatically in about 35 seconds and host health then reads healthy again, so previously an operator had no way to learn that capture had been switched off; the alert is the durable record. Agent upgrades also stop providers as part of replacing the system extension, and those are not reported, because capture resumes about a second later. Deliberately disabling the optional DNS proxy raises nothing.
+
 ### Fixed
 
 - **Kill process is pinned to the exact process it targeted.** The "Kill process" action now carries the selected process generation, and the agent refuses the kill (reporting a generation mismatch) if that PID was reused or re-exec'd before the command ran, so a stale kill can no longer terminate an unrelated process.
