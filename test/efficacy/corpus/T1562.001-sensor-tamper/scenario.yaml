@@ -1,0 +1,30 @@
+# spec:server-detection-rules-engine/edr-sensor-tamper-detection/a-capture-provider-stops-and-does-not-resume
+# T1562.001 Impair Defenses: Disable or Modify Tools.
+#
+# An admin switches off the EDR's own content filter, which is what an
+# intruder does before the noisy part of an intrusion: the host stops
+# reporting the telemetry that provider carries. The agent repairs this
+# by itself after about 35 seconds, and agent health only reports what is
+# true now, so without the alert the whole episode leaves nothing behind.
+#
+# The timeline stops here rather than including the repair. The repair is
+# what the sibling noise scenario covers (a fast resume, which is what an
+# upgrade looks like); recording it here too would just re-test that, and
+# a provider that never comes back is the more serious case anyway.
+#
+# stop_reason 1 is the platform's userInitiated. It is deliberately the
+# SAME reason the upgrade cutover in the noise lane carries, because that
+# is what was measured on a live host: the reason cannot tell the two
+# apart, so if the rule ever regresses to keying on it, these two
+# scenarios disagree and the corpus catches it.
+name: "T1562.001 EDR sensor disabled via content-filter stop"
+host:
+  id: AAAA1562-0001-0000-0000-000000000001
+  hostname: efficacy-t1562-001.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: sensor_provider_transition
+    provider: content_filter
+    state: stopped
+    stop_reason: 1

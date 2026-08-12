@@ -68,6 +68,12 @@
       "comment": "Covered by: credential_keychain_dump"
     },
     {
+      "techniqueID": "T1562.001",
+      "score": 1,
+      "color": "#31a354",
+      "comment": "Covered by: sensor_tamper"
+    },
+    {
       "techniqueID": "T1566.001",
       "score": 1,
       "color": "#31a354",

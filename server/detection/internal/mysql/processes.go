@@ -572,6 +572,12 @@ func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, p
 	return s.archive.NetworkEventsForProcess(ctx, hostID, pid, tr)
 }
 
+// GetHostEventsByType delegates to the visibility EventArchive for the same reason GetNetworkEventsForProcess does: the events live
+// in ClickHouse post-ADR-0015, while the caller (a detection rule holding a GraphReader) reaches the detection store.
+func (s *Store) GetHostEventsByType(ctx context.Context, hostID, eventType string, tr api.TimeRange) ([]api.Event, error) {
+	return s.archive.EventsByTypeForHost(ctx, hostID, eventType, tr)
+}
+
 // SearchEvents delegates the fleet-wide connection/DNS artifact search to the visibility EventArchive (issue #582), the same
 // post-cutover delegation GetNetworkEventsForProcess uses: the events live in ClickHouse, but the operator reader seam reaches the
 // detection store, so the store forwards. The visibility filter/result types are re-exported through the detection api so the seam's

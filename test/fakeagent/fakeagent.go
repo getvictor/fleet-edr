@@ -111,6 +111,13 @@ type Event struct {
 	InstigatorPID                int    `json:"instigator_pid,omitempty"`
 	InstigatorTeamID             string `json:"instigator_team_id,omitempty"`
 	InstigatorIsPlatformBinary   bool   `json:"instigator_is_platform_binary,omitempty"`
+
+	// sensor_provider_transition specifics (issue #684). Provider names the capture provider that changed state and
+	// State is "running" or "stopped". StopReason is a POINTER because zero is a real platform reason: an omitted
+	// reason and a reason of 0 are different claims, and the rule renders them differently.
+	Provider   string `json:"provider,omitempty"`
+	State      string `json:"state,omitempty"`
+	StopReason *int   `json:"stop_reason,omitempty"`
 }
 
 // Assertion is the M4/M10 detection-assertion shape. Parsed by M3 for forward compatibility but not consumed.
@@ -210,4 +217,7 @@ var knownEventTypes = map[string]bool{
 	"dns_query":           true,
 	"snapshot_heartbeat":  true,
 	"btm_launch_item_add": true,
+	// A capture provider of the agent's own network extension starting or stopping (issue #684). Corpus scenarios use it
+	// for the tamper case and, in the noise lane, for the upgrade cutover it must not be confused with.
+	"sensor_provider_transition": true,
 }

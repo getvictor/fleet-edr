@@ -39,6 +39,10 @@ func (r *recordingGraphReader) GetExecChain(_ context.Context, current api.Proce
 	return []api.Process{current}, nil
 }
 
+func (r *recordingGraphReader) GetHostEventsByType(_ context.Context, _, _ string, _ api.TimeRange) ([]api.Event, error) {
+	return nil, nil
+}
+
 func (r *recordingGraphReader) GetNetworkEventsForProcess(_ context.Context, _ string, _ int, _ api.TimeRange) ([]api.Event, error) {
 	return nil, nil
 }

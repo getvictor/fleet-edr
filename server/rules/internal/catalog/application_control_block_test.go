@@ -232,6 +232,10 @@ func (s *stubBlockGraphReader) GetExecChain(_ context.Context, current api.Proce
 	return []api.Process{current}, nil
 }
 
+func (s *stubBlockGraphReader) GetHostEventsByType(_ context.Context, _, _ string, _ api.TimeRange) ([]api.Event, error) {
+	return nil, nil
+}
+
 func (s *stubBlockGraphReader) GetNetworkEventsForProcess(_ context.Context, _ string, _ int, _ api.TimeRange) ([]api.Event, error) {
 	return nil, nil
 }

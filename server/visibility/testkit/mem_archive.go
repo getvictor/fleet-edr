@@ -98,6 +98,25 @@ func (m *MemArchive) NetworkEventsForProcess(_ context.Context, hostID string, p
 	return out, nil
 }
 
+// EventsByTypeForHost mirrors the ClickHouse read: one host's events of a single type inside the EVENT-time range, oldest first.
+func (m *MemArchive) EventsByTypeForHost(_ context.Context, hostID, eventType string, tr httpserver.TimeRange) ([]api.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []api.Event
+	for _, id := range m.order {
+		e := m.byID[id]
+		if e.HostID != hostID || e.EventType != eventType {
+			continue
+		}
+		if e.TimestampNs < tr.FromNs || e.TimestampNs > tr.ToNs {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].TimestampNs < out[j].TimestampNs })
+	return out, nil
+}
+
 // EventsByIDs returns the surviving envelopes for the given ids, ordered by (timestamp_ns, event_id). Unknown ids are omitted, matching
 // the archive's best-effort evidence contract.
 func (m *MemArchive) EventsByIDs(_ context.Context, eventIDs []string) ([]api.Event, error) {

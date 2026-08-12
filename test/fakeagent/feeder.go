@@ -244,6 +244,14 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 		return json.Marshal(struct {
 			PID int `json:"pid"`
 		}{ev.PID})
+	case "sensor_provider_transition":
+		// StopReason is omitted entirely when the scenario does not set it, rather than defaulting to 0: platform reason
+		// 0 is a real value, so emitting it would assert something the scenario never said.
+		return json.Marshal(struct {
+			Provider   string `json:"provider"`
+			State      string `json:"state"`
+			StopReason *int   `json:"stop_reason,omitempty"`
+		}{ev.Provider, ev.State, ev.StopReason})
 	case "btm_launch_item_add":
 		type codeSigning struct {
 			TeamID           string `json:"team_id"`

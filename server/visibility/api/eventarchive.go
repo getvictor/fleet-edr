@@ -26,6 +26,15 @@ type EventArchive interface {
 	// outbound connections.
 	NetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr httpserver.TimeRange) ([]Event, error)
 
+	// EventsByTypeForHost returns one host's events of a single type whose EVENT time falls inside tr, oldest first. Narrow by
+	// construction: (host_id, event_type, timestamp_ns) is the archive's sorting-key prefix, so the read is a primary-key range
+	// scan rather than a filter over the host's whole stream.
+	//
+	// Event time, not ingest time, because the caller (the sensor-tamper rule) measures the gap BETWEEN two events from the same
+	// producer on one host. Those share a clock, so event time is the honest measure of that gap, and it is also the indexed one.
+	// The cross-stream reads above bound on ingest time instead because they join two different producers whose clocks drift.
+	EventsByTypeForHost(ctx context.Context, hostID, eventType string, tr httpserver.TimeRange) ([]Event, error)
+
 	// EventsByIDs returns the full envelopes for the given event_ids, ordered by (timestamp_ns, event_id). Alert evidence capture uses
 	// it to snapshot a finding's triggering events into durable per-alert storage (alert_event_payloads) that outlives the archive's
 	// retention window. IDs with no surviving event (already aged out) are omitted rather than erroring, so capture stays best-effort.
