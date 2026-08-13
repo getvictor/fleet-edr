@@ -21,12 +21,12 @@ The Xcode project sets no `CODE_SIGN_ENTITLEMENTS` at all (zero occurrences in t
 
 The whole point was to make the dry-run package installable, so it was installed, and this is the first end-to-end pkg upgrade observed on this project (two earlier attempts, recorded on #684, never got past activation).
 
-| step | result |
-| --- | --- |
+| step                                                 | result                                                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | install over an existing install, higher app version | app replaced, both extensions activated at `1.1/28` automatically via the postinstall LaunchAgent |
-| providers after the upgrade | `content_filter` and `dns_proxy` both running, no re-consent prompted |
-| agent after the upgrade | XPC reconnected to both extensions, signed `fleet-edr-agent` |
-| install over an existing install, LOWER app version | app replaced, which is what the version-check change exists for |
+| providers after the upgrade                          | `content_filter` and `dns_proxy` both running, no re-consent prompted                             |
+| agent after the upgrade                              | XPC reconnected to both extensions, signed `fleet-edr-agent`                                      |
+| install over an existing install, LOWER app version  | app replaced, which is what the version-check change exists for                                   |
 
 ## What this does not do
 

@@ -2,7 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: The packaged app and extensions carry the entitlements they need to activate
+### Requirement: Packaged bundles carry the entitlements they need to activate
 
 The build SHALL sign the host app and both system extensions with their entitlements in EVERY build mode, and SHALL fail if any of the three is missing the entitlement that makes it usable.
 

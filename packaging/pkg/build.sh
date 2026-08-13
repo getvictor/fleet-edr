@@ -290,6 +290,24 @@ fi
 # exercise the install path's most failure-prone step. Running it in both modes
 # is what makes a dry-run package usable on a SIP-disabled dev VM, and it puts
 # this step under CI on every packaging PR rather than only at tag time.
+if [ "$DRY_RUN" -eq 1 ]; then
+    # A Debug build carries SwiftUI Previews scaffolding that the Release build does not. __preview.dylib is not linked by
+    # the main binary (otool shows only edr.debug.dylib) and has no business in an installer, and it arrives UNSIGNED from a
+    # fresh build. codesign refuses to seal a bundle containing unsigned nested code, so leaving it in place fails the outer
+    # signature with "code object is not signed at all". Dropping it fixes that and makes the dry-run artifact closer to the
+    # release one, which has no such file.
+    rm -f "$APP_BUNDLE/Contents/MacOS/__preview.dylib"
+
+    # Whatever nested Mach-Os remain must carry their own signature before the enclosing bundle can be sealed. The debug
+    # dylib IS linked, so it is signed rather than dropped. Signing an already-signed dylib is a no-op with --force, and the
+    # Release build produces none of these, which is why this is dry-run only.
+    for dylib in "$APP_BUNDLE/Contents/MacOS/"*.dylib; do
+        [ -f "$dylib" ] || continue
+        # shellcheck disable=SC2086
+        codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG "$dylib"
+    done
+fi
+
 SYSEXT_ENTITLEMENTS="$ROOT/extension/edr/extension/extension.entitlements"
 NETEXT_ENTITLEMENTS="$ROOT/extension/edr/networkextension/networkextension.entitlements"
 APP_ENTITLEMENTS="$ROOT/extension/edr/edr/edr.entitlements"
@@ -315,27 +333,55 @@ codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
 # silently skipped in one mode for months, and its absence is invisible until
 # somebody installs the package and watches the activation fail with a reason
 # the OS only reports as `<private>`. A comment cannot fail a build.
+# assert_entitlement <bundle> <key> <kind> <label>
+#
+# kind is "true" for a boolean that must be enabled, or "nonempty" for an array that must declare at least one member.
+# Checking that the KEY is present is not enough: `system-extension.install` set to false, or a networkextension array with
+# no provider types in it, both sign cleanly and both produce a bundle that cannot activate, which is the exact failure this
+# assertion exists to catch.
 assert_entitlement() {
-    bundle="$1"; key="$2"; label="$3"
-    if ! ents=$(codesign -d --entitlements - --xml "$bundle" 2>/dev/null); then
+    bundle="$1"; key="$2"; kind="$3"; label="$4"
+    ents_file="$STAGE/entitlements-readback.plist"
+    if ! codesign -d --entitlements - --xml "$bundle" > "$ents_file" 2>/dev/null; then
         echo "ERROR: could not read entitlements back off $label ($bundle)" >&2
         exit 17
     fi
-    case "$ents" in
-        *"<key>$key</key>"*) : ;;
-        *)
-            echo "ERROR: $label is signed without $key." >&2
-            echo "       It would install and then fail to activate. Check $SYSEXT_ENTITLEMENTS," >&2
-            echo "       $NETEXT_ENTITLEMENTS and $APP_ENTITLEMENTS, and that this script signed with them." >&2
-            exit 17
+    # plutil reads "." as a key-path separator, so an entitlement key's own dots must be escaped. Unescaped, every lookup
+    # reports "no value at that key path" for a key that is present, and the assertion fails on correctly signed bundles.
+    escaped_key=$(printf '%s' "$key" | sed 's/\./\\./g')
+    if ! value=$(plutil -extract "$escaped_key" raw -o - "$ents_file" 2>/dev/null); then
+        echo "ERROR: $label is signed without $key." >&2
+        echo "       It would install and then fail to activate. Check the entitlements plists and that this script" >&2
+        echo "       signed with them." >&2
+        exit 17
+    fi
+    case "$kind" in
+        true)
+            if [ "$value" != "true" ]; then
+                echo "ERROR: $label has $key set to '$value' rather than true, so the entitlement does nothing." >&2
+                exit 17
+            fi
+            ;;
+        nonempty)
+            # plutil prints an array's element count for a raw extract, so a declared-but-empty array reads as 0.
+            case "$value" in
+                ''|*[!0-9]*)
+                    echo "ERROR: $label has a non-array value for $key: '$value'." >&2
+                    exit 17
+                    ;;
+            esac
+            if [ "$value" -lt 1 ]; then
+                echo "ERROR: $label declares no values for $key, so it belongs to no extension category." >&2
+                exit 17
+            fi
             ;;
     esac
 }
-# spec:release-packaging/the-packaged-app-and-extensions-carry-the-entitlements-they-need-to-activate/every-build-mode-applies-the-entitlements
-# spec:release-packaging/the-packaged-app-and-extensions-carry-the-entitlements-they-need-to-activate/a-bundle-missing-its-entitlement-fails-the-build
-assert_entitlement "$APP_BUNDLE" "com.apple.developer.system-extension.install" "the host app"
-assert_entitlement "$SYSEXT" "com.apple.developer.endpoint-security.client" "the security extension"
-assert_entitlement "$NETEXT" "com.apple.developer.networking.networkextension" "the network extension"
+# spec:release-packaging/packaged-bundles-carry-the-entitlements-they-need-to-activate/every-build-mode-applies-the-entitlements
+# spec:release-packaging/packaged-bundles-carry-the-entitlements-they-need-to-activate/a-bundle-missing-its-entitlement-fails-the-build
+assert_entitlement "$APP_BUNDLE" "com.apple.developer.system-extension.install" true "the host app"
+assert_entitlement "$SYSEXT" "com.apple.developer.endpoint-security.client" true "the security extension"
+assert_entitlement "$NETEXT" "com.apple.developer.networking.networkextension" nonempty "the network extension"
 
 # Guard the extensions' user-facing display names. macOS reads
 # CFBundleDisplayName verbatim for the Login Items & Extensions and Full
