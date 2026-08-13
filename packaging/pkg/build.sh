@@ -175,15 +175,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
     mkdir -p "$STAGE/app-root/Applications"
     cp -R "$SRC_APP" "$STAGE/app-root/Applications/Fleet EDR.app"
 else
-    # Release build path: Developer ID-signed host app + sysext with provisioning
-    # profile embedded. Expects packaging/provisioning/*.provisionprofile to be
-    # checked in.
-    PROFILE_SYSEXT="$ROOT/packaging/provisioning/securityextension.provisionprofile"
-    if [ ! -f "$PROFILE_SYSEXT" ]; then
-        echo "missing $PROFILE_SYSEXT" >&2
-        exit 4
-    fi
-
+    # Release build path: Developer ID-signed host app + sysext. The provisioning profiles are embedded further down,
+    # after the shared bundle checks.
+    #
     # Scheme `edr` builds the host app with both extensions embedded. Scheme
     # `extension` is sysext-only and its archive lacks the host app, which
     # breaks the pkg build (pkgbuild wraps Fleet EDR.app).
@@ -201,30 +195,51 @@ else
     SRC_APP="$XCODE_BUILD/edr.xcarchive/Products/Applications/edr.app"
     mkdir -p "$STAGE/app-root/Applications"
     cp -R "$SRC_APP" "$STAGE/app-root/Applications/Fleet EDR.app"
+fi
 
+# ---------------------------------------------------------------
+# Locate and verify the embedded bundles. Shared by both modes: a staged app
+# missing an extension produces a package that installs and then does nothing,
+# which is worth failing the build over whichever way the app was built.
+# ---------------------------------------------------------------
+APP_BUNDLE="$STAGE/app-root/Applications/Fleet EDR.app"
+SYSEXT="$APP_BUNDLE/Contents/Library/SystemExtensions/com.fleetdm.edr.securityextension.systemextension"
+NETEXT="$APP_BUNDLE/Contents/Library/SystemExtensions/com.fleetdm.edr.networkextension.systemextension"
+if [ ! -d "$SYSEXT" ]; then
+    echo "ERROR: expected sysext bundle at $SYSEXT but it does not exist." >&2
+    echo "       Check the Xcode project's embedded-targets settings." >&2
+    exit 5
+fi
+# The Network Extension is a mandatory part of the shipped product (the
+# `edr` scheme embeds both extensions), so a missing NE bundle is a hard
+# failure, same as the sysext above. Distinct exit code for CI triage.
+if [ ! -d "$NETEXT" ]; then
+    echo "ERROR: expected NE bundle at $NETEXT but it does not exist." >&2
+    echo "       Check the Xcode project's embedded-targets settings." >&2
+    exit 14
+fi
+
+if [ "$DRY_RUN" -eq 0 ]; then
     # Embed the provisioning profiles inside each restricted-entitlement
     # bundle. Without them the sysext + NE load on SIP-disabled dev VMs but
     # fail at runtime on SIP-enabled systems: ES returns
     # ES_NEW_CLIENT_RESULT_ERR_NOT_ENTITLED; NE fails to register with
     # NetworkExtension framework.
-    SYSEXT="$STAGE/app-root/Applications/Fleet EDR.app/Contents/Library/SystemExtensions/com.fleetdm.edr.securityextension.systemextension"
-    if [ ! -d "$SYSEXT" ]; then
-        echo "ERROR: expected sysext bundle at $SYSEXT but it does not exist." >&2
-        echo "       Check the Xcode project's embedded-targets settings." >&2
-        exit 5
+    #
+    # Release-only, and that is the one thing a dry-run package cannot
+    # reproduce: profiles are issued per signing identity, so an ad-hoc
+    # package carries none and its restricted entitlements are honoured only
+    # where they are not enforced, i.e. a SIP-disabled dev VM. That is exactly
+    # where dry-run packages get installed; a SIP-on host still requires the
+    # release path.
+    PROFILE_SYSEXT="$ROOT/packaging/provisioning/securityextension.provisionprofile"
+    if [ ! -f "$PROFILE_SYSEXT" ]; then
+        echo "missing $PROFILE_SYSEXT" >&2
+        exit 4
     fi
     cp "$PROFILE_SYSEXT" "$SYSEXT/Contents/embedded.provisionprofile"
 
     PROFILE_NET="$ROOT/packaging/provisioning/networkextension.provisionprofile"
-    NETEXT="$STAGE/app-root/Applications/Fleet EDR.app/Contents/Library/SystemExtensions/com.fleetdm.edr.networkextension.systemextension"
-    # The Network Extension is a mandatory part of the shipped product (the
-    # `edr` scheme embeds both extensions), so a missing NE bundle is a hard
-    # failure, same as the sysext above. Distinct exit code for CI triage.
-    if [ ! -d "$NETEXT" ]; then
-        echo "ERROR: expected NE bundle at $NETEXT but it does not exist." >&2
-        echo "       Check the Xcode project's embedded-targets settings." >&2
-        exit 14
-    fi
     # Without an embedded provisioning profile the restricted-entitlement
     # re-sign below produces a NE that fails activation on SIP-on hosts: the
     # exact bug the entitlements re-sign exists to fix on the sysext side.
@@ -250,42 +265,77 @@ else
     fi
     cp "$PROFILE_HOST" "$STAGE/app-root/Applications/Fleet EDR.app/Contents/embedded.provisionprofile"
 
-    # Re-sign every bundle the edr.app embeds, bottom-up, with the hardened
-    # runtime flag AND the per-binary entitlements. Notary rejects any
-    # Mach-O inside the outer bundle that lacks `--options runtime`, so
-    # all three inner bundles + the app bundle itself get re-signed after
-    # the provisioning profile embed above (which invalidates the
-    # Xcode-time signature).
-    #
-    # `--entitlements` is load-bearing: a bare `codesign --sign` strips
-    # whatever entitlements the Xcode build embedded, leaving the binaries
-    # signed but with an empty entitlements blob. On SIP-disabled dev
-    # Macs that's fine (entitlements aren't enforced), but on a SIP-on
-    # pilot Mac OSSystemExtensionRequest fails before sysextd can stage
-    # the extension, with the user-visible symptom being "I never got the
-    # System Settings approval prompt." The entitlement plists below are
-    # the ones the Xcode targets reference; keep this codesign call in
-    # sync with the project's CODE_SIGN_ENTITLEMENTS settings.
-    SYSEXT_ENTITLEMENTS="$ROOT/extension/edr/extension/extension.entitlements"
-    NETEXT_ENTITLEMENTS="$ROOT/extension/edr/networkextension/networkextension.entitlements"
-    APP_ENTITLEMENTS="$ROOT/extension/edr/edr/edr.entitlements"
-    # All three bundles are mandatory, so all three entitlement plists are
-    # required (the NE bundle's presence is asserted above).
-    for f in "$SYSEXT_ENTITLEMENTS" "$NETEXT_ENTITLEMENTS" "$APP_ENTITLEMENTS"; do
-        [ -f "$f" ] || { echo "missing entitlements file: $f" >&2; exit 6; }
-    done
-
-    # shellcheck disable=SC2086
-    codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
-        --entitlements "$SYSEXT_ENTITLEMENTS" "$SYSEXT"
-    # shellcheck disable=SC2086
-    codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
-        --entitlements "$NETEXT_ENTITLEMENTS" "$NETEXT"
-    # shellcheck disable=SC2086
-    codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
-        --entitlements "$APP_ENTITLEMENTS" \
-        "$STAGE/app-root/Applications/Fleet EDR.app"
 fi
+
+# ---------------------------------------------------------------
+# Entitlements. Shared by both modes (issue #689).
+#
+# Re-sign every bundle the edr.app embeds, bottom-up, with the per-binary
+# entitlements (and, on the release path, the hardened runtime flag: notary
+# rejects any Mach-O inside the outer bundle that lacks `--options runtime`).
+# The release path additionally re-signs after the provisioning-profile embed
+# above, which invalidates the Xcode-time signature.
+#
+# `--entitlements` is load-bearing, and NOT because it preserves something the
+# Xcode build already did: the project sets no CODE_SIGN_ENTITLEMENTS at all,
+# so every bundle it produces carries only `get-task-allow`. This step is the
+# ONLY place the shipped entitlements are applied. Without it the app has no
+# `com.apple.developer.system-extension.install` and cannot even submit an
+# activation request, and neither extension declares a category, so sysextd
+# rejects it with "does not appear to belong to any extension categories". The
+# visible symptom is "I never got the System Settings approval prompt".
+#
+# It used to run on the release path only, which meant a dry-run package
+# installed but could never activate anything, so the dry run could not
+# exercise the install path's most failure-prone step. Running it in both modes
+# is what makes a dry-run package usable on a SIP-disabled dev VM, and it puts
+# this step under CI on every packaging PR rather than only at tag time.
+SYSEXT_ENTITLEMENTS="$ROOT/extension/edr/extension/extension.entitlements"
+NETEXT_ENTITLEMENTS="$ROOT/extension/edr/networkextension/networkextension.entitlements"
+APP_ENTITLEMENTS="$ROOT/extension/edr/edr/edr.entitlements"
+# All three bundles are mandatory, so all three entitlement plists are
+# required (the NE bundle's presence is asserted above).
+for f in "$SYSEXT_ENTITLEMENTS" "$NETEXT_ENTITLEMENTS" "$APP_ENTITLEMENTS"; do
+    [ -f "$f" ] || { echo "missing entitlements file: $f" >&2; exit 6; }
+done
+
+# shellcheck disable=SC2086
+codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+    --entitlements "$SYSEXT_ENTITLEMENTS" "$SYSEXT"
+# shellcheck disable=SC2086
+codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+    --entitlements "$NETEXT_ENTITLEMENTS" "$NETEXT"
+# shellcheck disable=SC2086
+codesign $CODESIGN_FLAGS --sign "$APP_IDENTITY" $KEYCHAIN_ARG \
+    --entitlements "$APP_ENTITLEMENTS" "$APP_BUNDLE"
+
+# Read the entitlements back off each signed bundle and fail the build if the
+# one that makes it activatable is absent. Same reasoning as the agent's
+# identifier assertion (#684 fallout): the step above is load-bearing, was
+# silently skipped in one mode for months, and its absence is invisible until
+# somebody installs the package and watches the activation fail with a reason
+# the OS only reports as `<private>`. A comment cannot fail a build.
+assert_entitlement() {
+    bundle="$1"; key="$2"; label="$3"
+    if ! ents=$(codesign -d --entitlements - --xml "$bundle" 2>/dev/null); then
+        echo "ERROR: could not read entitlements back off $label ($bundle)" >&2
+        exit 17
+    fi
+    case "$ents" in
+        *"<key>$key</key>"*) : ;;
+        *)
+            echo "ERROR: $label is signed without $key." >&2
+            echo "       It would install and then fail to activate. Check $SYSEXT_ENTITLEMENTS," >&2
+            echo "       $NETEXT_ENTITLEMENTS and $APP_ENTITLEMENTS, and that this script signed with them." >&2
+            exit 17
+            ;;
+    esac
+}
+# spec:release-packaging/the-packaged-app-and-extensions-carry-the-entitlements-they-need-to-activate/every-build-mode-applies-the-entitlements
+# spec:release-packaging/the-packaged-app-and-extensions-carry-the-entitlements-they-need-to-activate/a-bundle-missing-its-entitlement-fails-the-build
+assert_entitlement "$APP_BUNDLE" "com.apple.developer.system-extension.install" "the host app"
+assert_entitlement "$SYSEXT" "com.apple.developer.endpoint-security.client" "the security extension"
+assert_entitlement "$NETEXT" "com.apple.developer.networking.networkextension" "the network extension"
 
 # Guard the extensions' user-facing display names. macOS reads
 # CFBundleDisplayName verbatim for the Login Items & Extensions and Full
@@ -344,6 +394,19 @@ cp "$ROOT/packaging/pkg/com.fleetdm.edr.activate.plist" \
     "$STAGE/app-root/Library/LaunchAgents/com.fleetdm.edr.activate.plist"
 chmod 0644 "$STAGE/app-root/Library/LaunchAgents/com.fleetdm.edr.activate.plist"
 
+# Version-checking is what makes a release upgrade replace the app only when the version actually moves. It also makes a
+# DRY-RUN package useless for install testing, and silently so: every dry-run build stamps the Debug bundle's fixed 1.1/1,
+# so installing one over any existing install skips the app while still replacing the agent, reports "The upgrade was
+# successful", and leaves a host running a new agent against the OLD app and OLD extensions. Measured on edr-dev (#689).
+#
+# So: version-checked on release, never on a dry run. A dry-run package is an unsigned, unnotarized artifact for a
+# SIP-disabled dev VM, and there "always replace what is there" is the only behaviour that makes it worth installing.
+# spec:release-packaging/a-package-built-for-testing-replaces-what-is-already-installed/a-test-package-installs-over-an-existing-install
+BUNDLE_VERSION_CHECKED="true"
+if [ "$DRY_RUN" -eq 1 ]; then
+    BUNDLE_VERSION_CHECKED="false"
+fi
+
 echo "==> packaging app component pkg"
 sign_pkg pkgbuild \
     --identifier com.fleetdm.edr.app \
@@ -359,7 +422,7 @@ sign_pkg pkgbuild \
     <dict>
         <key>BundleHasStrictIdentifier</key><true/>
         <key>BundleIsRelocatable</key><false/>
-        <key>BundleIsVersionChecked</key><true/>
+        <key>BundleIsVersionChecked</key><$BUNDLE_VERSION_CHECKED/>
         <key>BundleOverwriteAction</key><string>upgrade</string>
         <key>RootRelativeBundlePath</key><string>Applications/Fleet EDR.app</string>
     </dict>
