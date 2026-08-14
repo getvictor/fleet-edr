@@ -33,6 +33,7 @@ package telemetryhealth
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
@@ -162,7 +163,15 @@ func Derive(reportedStatus string, activity visibilityapi.TelemetryActivity) []e
 // two days old, which is worse than rendering nothing.
 func message(dc derivedComponent, processEvents int64) string {
 	return fmt.Sprintf("reports healthy, but no %s events reached the server in the last %s while %d process events did; "+
-		"%s may be running without capturing", dc.stream, SilenceWindow, processEvents, dc.provider)
+		"%s may be running without capturing", dc.stream, humanDuration(SilenceWindow), processEvents, dc.provider)
+}
+
+// humanDuration renders a whole-unit duration the way an operator writes one. Go's own formatting spells two hours "2h0m0s", which
+// reads as machine output in the middle of a sentence a human is meant to act on.
+func humanDuration(d time.Duration) string {
+	s := d.String()
+	s = strings.TrimSuffix(s, "0s")
+	return strings.TrimSuffix(s, "0m")
 }
 
 // Rollup folds derived conditions into a host's reported rollup, returning the status an operator should actually see.

@@ -147,6 +147,8 @@ func TestDerive_ConditionShape(t *testing.T) {
 	assert.Contains(t, dns.Message, "dns_query", "the message must name the stream that went silent")
 	assert.Contains(t, dns.Message, "dns_proxy", "the message must name the provider to remediate")
 	assert.Contains(t, dns.Message, "1204", "the message must carry the evidence the host was not merely idle")
+	assert.Contains(t, dns.Message, "2h", "the window is stated in the message so an operator knows what 'no events' covers")
+	assert.NotContains(t, dns.Message, "2h0m0s", "Go's duration spelling reads as machine output mid-sentence")
 	assert.Zero(t, dns.LastTransitionNs,
 		"a window count cannot recover the instant the stream fell silent, and a stamped 'now' would date a days-old fault to page load")
 }

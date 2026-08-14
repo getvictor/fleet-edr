@@ -32,12 +32,15 @@
 - [x] 5.2 Suppress the relative age for conditions that carry no transition instant
 - [x] 5.3 UI tests for the derived rendering, the suppressed age, and the nothing-derived case
 
-## 6. Live QA on the VM
+## 6. Live QA against the dev server
 
-- [ ] 6.1 Confirm no derived condition during normal operation, including a period with genuinely no network activity
-- [ ] 6.2 Induce the wedge shape and confirm the host surfaces as degraded naming the provider
-- [ ] 6.3 Confirm the signal clears once flow telemetry resumes
-- [ ] 6.4 Confirm an offline host is not reported under this condition
+Run against `task dev:server` with real MySQL and real ClickHouse, seeding six hosts that all REPORT healthy and differ only in the telemetry that reached the server. The VM is not the right layer for this change: it touches no agent or extension code, and the endpoint-side wedge is already established by the 44-hour dogfood incident and its on-host log triage.
+
+- [x] 6.1 Confirm no derived condition during normal operation, including a period with genuinely no network activity
+- [x] 6.2 Induce the wedge shape and confirm the host surfaces as degraded naming the provider
+- [x] 6.3 Confirm the signal clears once flow telemetry resumes
+- [x] 6.4 Confirm an offline host is not reported under this condition
+- [ ] 6.5 Confirm the operator surface renders it (blocked: the Chrome extension is not connected; the API responses behind it are verified)
 
 ## 7. Follow-up
 
