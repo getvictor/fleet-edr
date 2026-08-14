@@ -170,27 +170,50 @@ func (m *MemArchive) TelemetryActivityForHosts(
 		if e.TimestampNs < w.Reference.FromNs || e.TimestampNs > w.Reference.ToNs {
 			continue
 		}
-		activity := out[e.HostID] // the zero value is the correct start; presence in the map is what the loop establishes
-		inWindow := e.TimestampNs >= w.SilentFromNs
-		switch e.EventType {
-		case "exec", "fork":
-			if inWindow {
-				activity.ProcessInWindow++
-			}
-		case "network_connect":
-			activity.ConnectInReference++
-			if inWindow {
-				activity.ConnectInWindow++
-			}
-		case "dns_query":
-			activity.DNSInReference++
-			if inWindow {
-				activity.DNSInWindow++
-			}
+		if !counted(e.EventType) {
+			// Skipped BEFORE the map entry is created, mirroring the real store's event_type predicate: there, a host whose
+			// only events are other types produces no group and so no row. Both ends have to agree, or a test could rely on
+			// a host being present that production omits.
+			continue
 		}
+		// The zero value is the correct start; what the loop establishes is PRESENCE in the map, which is the contract above.
+		activity := out[e.HostID]
+		countEvent(&activity, e.EventType, e.TimestampNs >= w.SilentFromNs)
 		out[e.HostID] = activity
 	}
 	return out, nil
+}
+
+// counted reports whether an event type contributes to telemetry activity at all. The real store expresses the same set as an
+// event_type predicate in its WHERE clause, which is what prunes its scan.
+func counted(eventType string) bool {
+	switch eventType {
+	case "exec", "fork", "network_connect", "dns_query":
+		return true
+	default:
+		return false
+	}
+}
+
+// countEvent folds one event into a host's running activity. Split out of the loop above so each half stays readable on its own: the
+// loop decides which events count, this decides what each one counts toward.
+func countEvent(activity *api.TelemetryActivity, eventType string, inWindow bool) {
+	switch eventType {
+	case "exec", "fork":
+		if inWindow {
+			activity.ProcessInWindow++
+		}
+	case "network_connect":
+		activity.ConnectInReference++
+		if inWindow {
+			activity.ConnectInWindow++
+		}
+	case "dns_query":
+		activity.DNSInReference++
+		if inWindow {
+			activity.DNSInWindow++
+		}
+	}
 }
 
 // EventsByIDs returns the surviving envelopes for the given ids, ordered by (timestamp_ns, event_id). Unknown ids are omitted, matching

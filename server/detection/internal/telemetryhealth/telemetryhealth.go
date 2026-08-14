@@ -51,11 +51,23 @@ const SilenceWindow = 2 * time.Hour
 // It is the guard against accusing a host whose provider is legitimately off, which is not a hypothetical: the DNS proxy is opt-in,
 // and the extension reports a deliberately disabled provider by OMITTING it rather than marking it stopped, so nothing in the health
 // snapshot distinguishes "the operator turned this off" from "this wedged". A host configured with no network extension at all has
-// the same shape. Requiring the stream to have produced something recently answers both without needing the endpoint's cooperation.
+// the same shape.
 //
-// Its cost is a ceiling on how long a wedge stays reported: a fault lasting longer than this empties the reference window too, and
-// the host stops being flagged. 7 days against the 44-hour incident on record is a 4x margin. Removing the ceiling entirely needs the
-// agent to publish its per-provider liveness map to the server, which is tracked separately.
+// It is a proxy for that question, NOT an answer to it, and the difference is worth being precise about because it cuts both ways:
+//
+//   - A provider that has been off for longer than this window is correctly never flagged, which covers the steady state (a fleet
+//     that does not run the DNS proxy, a host that never had the network extension).
+//   - A provider disabled DURING this window is still flagged, for as long as its last events remain inside it, because historical
+//     activity cannot distinguish "stopped on purpose yesterday" from "wedged yesterday". Deliberately disabling a provider on a
+//     busy host therefore produces a degraded reading that ages out rather than clearing at once.
+//   - A wedge lasting longer than this window stops being reported, because the reference window empties too.
+//
+// All three collapse into "the server is inferring intent from history because the endpoint never states it". The endpoint could
+// state it: the extension already tracks per-provider liveness and the agent already consumes it, but the map is collapsed into one
+// component before it is posted. Issue #702 publishes it, and with it this window and every limitation above can go.
+//
+// 7 days is chosen against the 44-hour incident on record, a 4x margin on the case that matters most (a real wedge staying reported
+// long enough to be seen), accepting the disabled-provider staleness above as the cost.
 const ReferenceWindow = 7 * 24 * time.Hour
 
 // Windows builds the archive read's bounds from the current time, so the two windows are derived in exactly one place and a caller
@@ -114,6 +126,18 @@ var derivedComponents = []derivedComponent{
 // but a flow stream it does use has delivered nothing while process telemetry continued.
 const ReasonNoFlowTelemetry = "no_flow_telemetry"
 
+// CanDerive reports whether a host with this reported rollup could produce a derived condition at all.
+//
+// Derive applies it too, so calling this first is never required for correctness. It exists so a caller can skip the telemetry read
+// for hosts that cannot produce a finding whatever the telemetry says, which on the fleet-wide list is most of the work: a host
+// already reporting a fault is not a candidate, and asking the archive about it is a query whose answer is discarded.
+//
+// It lives here rather than as a status comparison at the call site so that the gate and the policy it guards cannot drift apart:
+// widening Derive to a second status without widening this would silently stop the new case from ever being asked about.
+func CanDerive(reportedStatus string) bool {
+	return endpointapi.HealthStatus(reportedStatus) == endpointapi.HealthHealthy
+}
+
 // Derive returns the server-derived health conditions for one host, given the health rollup the agent reported and the host's
 // telemetry activity. It returns nil when there is nothing to say, which is the overwhelmingly common case.
 //
@@ -126,7 +150,7 @@ const ReasonNoFlowTelemetry = "no_flow_telemetry"
 // The activity argument is the host's own record from the archive. A host absent from the archive's result has no activity to reason
 // about; callers pass the zero value, which fails the process-activity gate and yields nothing.
 func Derive(reportedStatus string, activity visibilityapi.TelemetryActivity) []api.DerivedComponent {
-	if endpointapi.HealthStatus(reportedStatus) != endpointapi.HealthHealthy {
+	if !CanDerive(reportedStatus) {
 		return nil
 	}
 	// No process activity means the host is idle, asleep, offline, or unknown. Silence proves nothing there, and this is the gate

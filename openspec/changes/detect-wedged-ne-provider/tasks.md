@@ -44,4 +44,4 @@ Run against `task dev:server` with real MySQL and real ClickHouse, seeding six h
 
 ## 7. Follow-up
 
-- [ ] 7.1 File the agent-side change to publish the per-provider liveness map to the server, which removes the reference-window ceiling and lets the provider be named from the health claim rather than inferred from the silent stream
+- [x] 7.1 File the agent-side change to publish the per-provider liveness map to the server, which removes the reference-window ceiling and lets the provider be named from the health claim rather than inferred from the silent stream (filed as #702)

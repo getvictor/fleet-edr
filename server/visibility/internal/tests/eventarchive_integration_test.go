@@ -569,15 +569,20 @@ func TestEventArchive_TelemetryActivityForHosts(t *testing.T) {
 		archiveEvent("s2", "stale", "network_connect", ancient, 1),
 		// unrelated: a host the caller did not ask about, to pin that the host filter actually filters.
 		archiveEvent("u1", "unrelated", "exec", recent, 1),
+		// othertype: a host whose only events are of a type this read does not count. The event_type predicate that prunes the
+		// scan also decides this host produces no group at all, which is what the assertion below pins.
+		archiveEvent("o1", "othertype", "exit", recent, 1),
 	}))
 
-	got, err := arch.TelemetryActivityForHosts(ctx, []string{"wedged", "healthy", "stale", "never-seen"}, testWindows(now))
+	got, err := arch.TelemetryActivityForHosts(ctx, []string{"wedged", "healthy", "stale", "never-seen", "othertype"}, testWindows(now))
 	require.NoError(t, err)
 
 	assert.NotContains(t, got, "unrelated", "a host outside the requested set must not be counted")
 	assert.NotContains(t, got, "never-seen", "an unknown host must be absent, not present with zeroes")
 	assert.NotContains(t, got, "stale",
 		"a host whose only events predate the reference window must be absent, not reported as silent")
+	assert.NotContains(t, got, "othertype",
+		"an uncounted event type must not produce a group; the same predicate is what prunes the scan by the sorting key")
 
 	require.Contains(t, got, "wedged")
 	assert.Equal(t, int64(2), got["wedged"].ProcessInWindow, "exec and fork both count as process activity")

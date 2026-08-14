@@ -162,9 +162,11 @@ func placeholders(n int) string {
 // aggregates, so adding hosts widens the key filter rather than multiplying round trips. That is what lets the Hosts list derive the
 // signal for every row it returns at the cost of one query per page.
 //
-// The scan is key-pruned. The archive's sorting key leads with host_id, so an explicit host list is what makes this a set of key
-// ranges rather than a time-filtered scan of the whole fleet; the reference bound then prunes granules within each host's range by
-// the timestamp_ns min/max index.
+// The scan is key-pruned on all three leading key columns. The archive's sorting key is (host_id, event_type, timestamp_ns, ...), so
+// the explicit host list makes this a set of key ranges rather than a time-filtered scan of the whole fleet, the event_type predicate
+// narrows each of those ranges to the four streams actually counted (WITHOUT it the conditional aggregates still return the right
+// numbers, but only after reading every other event type this host produced, and exec/exit/network traffic dwarfs the rest), and the
+// reference bound then prunes granules by the timestamp_ns min/max index.
 //
 // No FINAL: see TelemetryActivity for why duplicate rows cannot change any decision made from these counts.
 func (s *Store) TelemetryActivityForHosts(
@@ -189,7 +191,9 @@ func (s *Store) TelemetryActivityForHosts(
 		       countIf(event_type = 'network_connect')                           AS connect_in_reference,
 		       countIf(event_type = 'dns_query')                                 AS dns_in_reference
 		FROM events
-		WHERE host_id IN (`+placeholders(len(hostIDs))+`) AND timestamp_ns >= ? AND timestamp_ns <= ?
+		WHERE host_id IN (`+placeholders(len(hostIDs))+`)
+		  AND event_type IN ('exec', 'fork', 'network_connect', 'dns_query')
+		  AND timestamp_ns >= ? AND timestamp_ns <= ?
 		GROUP BY host_id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse telemetry activity for hosts: %w", err)

@@ -198,6 +198,31 @@ func TestRollup(t *testing.T) {
 	}
 }
 
+// TestCanDerive pins the cheap gate callers use to skip the telemetry read entirely.
+//
+// Its whole value is being equivalent to what Derive itself enforces, so it is asserted against Derive rather than against a copy of
+// the rule: a CanDerive that said "no" where Derive says "yes" would silently switch the signal off for that status, and the tests
+// for Derive would still pass because they never call CanDerive.
+func TestCanDerive(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{
+		string(endpointapi.HealthHealthy),
+		string(endpointapi.HealthDegraded),
+		string(endpointapi.HealthUnhealthy),
+		string(endpointapi.HealthUnknown),
+		"",
+		"not-a-status",
+	} {
+		t.Run("status="+status, func(t *testing.T) {
+			t.Parallel()
+			// wedged() is the activity that produces findings whenever anything can, so Derive returning nothing for this
+			// status means the status alone ruled it out, which is exactly what CanDerive must report.
+			assert.Equal(t, len(telemetryhealth.Derive(status, wedged())) > 0, telemetryhealth.CanDerive(status),
+				"CanDerive must agree with Derive about whether this status can produce a condition")
+		})
+	}
+}
+
 // TestWindows pins the nesting the archive read depends on. A SilentFromNs outside the reference range would make the inner counts
 // meaningless (they are computed from rows the outer range already excluded), and the bug would show up as a signal that never fires
 // rather than as an error.

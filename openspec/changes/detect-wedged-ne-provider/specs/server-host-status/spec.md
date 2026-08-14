@@ -6,12 +6,16 @@
 
 The server SHALL derive per-host health conditions by contradicting the health a host reported against the telemetry that reached the server, so that a capture provider which has stopped delivering while continuing to report itself healthy is surfaced as degraded rather than healthy.
 
+The silence window SHALL be 2 hours and the reference window SHALL be 7 days, both measured back from the time of the read and both inclusive of their start instant. The silence window SHALL fall strictly inside the reference window. Neither window SHALL include events stamped after the time of the read, so that a host with a skewed clock cannot mask a fault.
+
 A derived condition SHALL be raised for a telemetry stream when all of the following hold, and SHALL NOT be raised otherwise:
 
 - the host's reported overall health is `healthy`, so there is a positive claim to contradict;
 - the host produced process telemetry inside the silence window, so the host is known to be doing work rather than idle;
 - the stream produced nothing inside the silence window;
 - the stream produced something inside the longer reference window, so the stream is one this host actually uses.
+
+The last condition is a proxy for "this host uses this provider", not an answer to it, because the endpoint does not report per-provider state (it collapses its provider liveness into a single component before posting). A provider deliberately disabled DURING the reference window is therefore still reported until its last events age out of that window. This is a known and bounded inaccuracy, not an intended behaviour, and it is removed by publishing per-provider liveness to the server.
 
 A derived condition SHALL name the provider an operator must remediate, SHALL carry status `degraded` rather than `unhealthy` (it is inferred from absence, not observed by the endpoint), and SHALL be reported separately from the conditions the agent itself reported, so an operator can tell the server's inference from the endpoint's claim.
 
