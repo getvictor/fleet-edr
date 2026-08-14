@@ -177,9 +177,7 @@ func (m *MemArchive) TelemetryActivityForHosts(
 			continue
 		}
 		// The zero value is the correct start; what the loop establishes is PRESENCE in the map, which is the contract above.
-		activity := out[e.HostID]
-		countEvent(&activity, e.EventType, e.TimestampNs >= w.SilentFromNs)
-		out[e.HostID] = activity
+		out[e.HostID] = countEvent(out[e.HostID], e.EventType, e.TimestampNs >= w.SilentFromNs)
 	}
 	return out, nil
 }
@@ -195,9 +193,13 @@ func counted(eventType string) bool {
 	}
 }
 
-// countEvent folds one event into a host's running activity. Split out of the loop above so each half stays readable on its own: the
-// loop decides which events count, this decides what each one counts toward.
-func countEvent(activity *api.TelemetryActivity, eventType string, inWindow bool) {
+// countEvent folds one event into a host's running activity and returns the result. Split out of the loop above so each half stays
+// readable on its own: the loop decides which events count, this decides what each one counts toward.
+//
+// It takes and returns a value rather than mutating through a pointer. The pointer version is the obvious shape and reads fine, but
+// it makes the counter reachable from a map index expression, which nilaway reports as a potential nil dereference; a value has no
+// such flow to analyse and the struct is five ints.
+func countEvent(activity api.TelemetryActivity, eventType string, inWindow bool) api.TelemetryActivity {
 	switch eventType {
 	case "exec", "fork":
 		if inWindow {
@@ -214,6 +216,7 @@ func countEvent(activity *api.TelemetryActivity, eventType string, inWindow bool
 			activity.DNSInWindow++
 		}
 	}
+	return activity
 }
 
 // EventsByIDs returns the surviving envelopes for the given ids, ordered by (timestamp_ns, event_id). Unknown ids are omitted, matching
