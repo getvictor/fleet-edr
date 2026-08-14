@@ -4,6 +4,8 @@ package tests
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -36,10 +38,21 @@ func clickhouseTestDSN(t *testing.T) string {
 }
 
 // safeDBName builds a per-test ClickHouse database name from the test name, keeping only [a-z0-9_] so it is always a valid unquoted
-// identifier (subtest names carry '/', spaces, etc.).
+// identifier (subtest names carry '/', spaces, etc.). Two extra components make the name collision-free, mirroring the MySQL side
+// in server/testdb:
+//
+//   - testdb.ProcessSalt() scopes the name to this `go test` process. The DDL below is DROP-then-CREATE, so without the salt two
+//     concurrent runs of the same test against one shared dev ClickHouse (two worktrees on one machine, or a sharded CI run) each
+//     drop the other's live database mid-test.
+//   - A hash of the ORIGINAL name disambiguates subtests that the character loop collapses onto each other ("T/A" and "T.A" both
+//     reduce to "t_a"), which the salt alone does not fix because both collide within the same process.
 func safeDBName(name string) string {
+	sum := sha256.Sum256([]byte(name))
+
 	var b strings.Builder
 	b.WriteString("edr_test_")
+	b.WriteString(testdb.ProcessSalt())
+	b.WriteString("_")
 	for _, r := range strings.ToLower(name) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
 			b.WriteRune(r)
@@ -47,6 +60,8 @@ func safeDBName(name string) string {
 			b.WriteRune('_')
 		}
 	}
+	b.WriteString("_")
+	b.WriteString(hex.EncodeToString(sum[:4]))
 	return b.String()
 }
 
