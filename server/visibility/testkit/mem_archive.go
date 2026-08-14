@@ -25,6 +25,19 @@ type MemArchive struct {
 	mu    sync.Mutex
 	byID  map[string]api.Event
 	order []string // event_ids in first-insert order, for deterministic iteration
+
+	// readErr, when set, makes the freshness read fail. Callers of that read are expected to degrade rather than propagate (an
+	// unreachable archive must not take an operator page down), and a behaviour that only shows up on failure needs a way to
+	// provoke the failure.
+	readErr error
+}
+
+// FailReads makes TelemetryActivityForHosts return err until cleared with nil, so a test can assert what a caller does when the
+// archive is unreachable.
+func (m *MemArchive) FailReads(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.readErr = err
 }
 
 // Compile-time check that MemArchive satisfies the published EventArchive contract.
@@ -131,6 +144,54 @@ func (m *MemArchive) EventsByTypeForHost(_ context.Context, hostID, eventType st
 
 // EventsByTypeRowCap mirrors the ClickHouse store's cap so a test can exercise the overflow path without 1000 rows of setup.
 const EventsByTypeRowCap = 1000
+
+// TelemetryActivityForHosts mirrors the ClickHouse read's counting AND its absence contract: a host with no events at all inside the
+// reference range gets no map entry, rather than an entry of zeroes. The distinction is load-bearing for the caller (issue #677),
+// which must not read "I have never heard of this host" as "this host went silent", so a fake that materialised zeroes would let a
+// test pass against a contract production does not offer.
+func (m *MemArchive) TelemetryActivityForHosts(
+	_ context.Context, hostIDs []string, w api.TelemetryActivityWindows,
+) (map[string]api.TelemetryActivity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.readErr != nil {
+		return nil, m.readErr
+	}
+	wanted := make(map[string]struct{}, len(hostIDs))
+	for _, id := range hostIDs {
+		wanted[id] = struct{}{}
+	}
+	out := make(map[string]api.TelemetryActivity, len(hostIDs))
+	for _, id := range m.order {
+		e := m.byID[id]
+		if _, ok := wanted[e.HostID]; !ok {
+			continue
+		}
+		if e.TimestampNs < w.Reference.FromNs || e.TimestampNs > w.Reference.ToNs {
+			continue
+		}
+		activity := out[e.HostID] // the zero value is the correct start; presence in the map is what the loop establishes
+		inWindow := e.TimestampNs >= w.SilentFromNs
+		switch e.EventType {
+		case "exec", "fork":
+			if inWindow {
+				activity.ProcessInWindow++
+			}
+		case "network_connect":
+			activity.ConnectInReference++
+			if inWindow {
+				activity.ConnectInWindow++
+			}
+		case "dns_query":
+			activity.DNSInReference++
+			if inWindow {
+				activity.DNSInWindow++
+			}
+		}
+		out[e.HostID] = activity
+	}
+	return out, nil
+}
 
 // EventsByIDs returns the surviving envelopes for the given ids, ordered by (timestamp_ns, event_id). Unknown ids are omitted, matching
 // the archive's best-effort evidence contract.

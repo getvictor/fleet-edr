@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -3549,4 +3550,134 @@ func TestEngine_PersistsFindingsReportedAlongsideRetryableMiss(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, alerts, 1, "alert dedup keeps the repeatedly-retried batch idempotent")
 	assert.Equal(t, "stub-miss-with-finding", alerts[0].RuleID)
+}
+
+// archiveEvent builds a minimal archive envelope for the telemetry-freshness tests, which care only about (host, type, time): the
+// derived-health read counts events per stream and never looks inside a payload.
+func archiveEvent(id, host, eventType string, ts int64) api.Event {
+	return api.Event{
+		EventID:      id,
+		HostID:       host,
+		TimestampNs:  ts,
+		IngestedAtNs: ts + 1,
+		EventType:    eventType,
+		Platform:     "darwin",
+		Payload:      json.RawMessage(`{"pid":1}`),
+	}
+}
+
+// TestHostHealth_DerivesWedgedProviderFromTelemetry covers the contradiction behind issue #677 through the real read paths: a host
+// whose agent reports every component healthy, whose process telemetry is still arriving, and whose flow telemetry has stopped.
+//
+// Both read paths are asserted in one test on purpose. The whole point of deriving at read time is that the Hosts list badge and the
+// host page cannot disagree about the same host, and a test that exercised only one of them would not notice if they diverged.
+//
+// spec:server-host-status/the-server-derives-health-conditions-its-endpoints-cannot-report/a-wedged-provider-is-surfaced-as-degraded
+// spec:server-host-status/the-server-derives-health-conditions-its-endpoints-cannot-report/the-host-list-badge-agrees-with-the-host-detail
+// spec:server-host-status/the-server-derives-health-conditions-its-endpoints-cannot-report/the-signal-clears-when-telemetry-resumes
+func TestHostHealth_DerivesWedgedProviderFromTelemetry(t *testing.T) {
+	t.Parallel()
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	// A fixed "now" so the event offsets below mean what they say regardless of how long the suite takes.
+	now := time.Now()
+	d.Store().SetNowForTest(func() time.Time { return now })
+
+	const wedgedHost = "WEDGED-UUID-0001"
+	const healthyHost = "HEALTHY-UUID-0002"
+	for _, h := range []string{wedgedHost, healthyHost} {
+		require.NoError(t, d.Service().RecordHostSeen(ctx, h, now))
+		_, err := d.Store().DB().ExecContext(ctx, `
+			INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
+			VALUES (?, ?, ?, ?)`,
+			h, "healthy",
+			`[{"type":"network_extension","status":"healthy","reason":"activated","last_transition_ns":90}]`, 100)
+		require.NoError(t, err)
+	}
+
+	recent := now.Add(-30 * time.Minute).UnixNano()
+	dayAgo := now.Add(-24 * time.Hour).UnixNano()
+	require.NoError(t, archive.Insert(ctx, []api.Event{
+		// The wedged host: still executing, but its flow streams stopped after producing normally a day ago.
+		archiveEvent("dw1", wedgedHost, "exec", recent),
+		archiveEvent("dw2", wedgedHost, "network_connect", dayAgo),
+		archiveEvent("dw3", wedgedHost, "dns_query", dayAgo),
+		// The control host: everything arriving now. It shares the reported health, so only telemetry separates the two.
+		archiveEvent("dh1", healthyHost, "exec", recent),
+		archiveEvent("dh2", healthyHost, "network_connect", recent),
+		archiveEvent("dh3", healthyHost, "dns_query", recent),
+	}))
+
+	detail, err := d.Store().HostHealth(ctx, wedgedHost)
+	require.NoError(t, err)
+	assert.Equal(t, "degraded", detail.OverallStatus,
+		"the effective rollup must fold in what the server derived, not repeat the healthy claim the agent made")
+	assert.Contains(t, string(detail.Components), "activated",
+		"the agent's own components must still be passed through verbatim alongside the contradiction")
+	require.Len(t, detail.DerivedComponents, 2, "both flow streams went silent, so both providers are named")
+	assert.Equal(t, "content_filter_delivery", detail.DerivedComponents[0].Type)
+	assert.Equal(t, "dns_proxy_delivery", detail.DerivedComponents[1].Type)
+
+	healthyDetail, err := d.Store().HostHealth(ctx, healthyHost)
+	require.NoError(t, err)
+	assert.Equal(t, "healthy", healthyDetail.OverallStatus)
+	assert.Empty(t, healthyDetail.DerivedComponents, "a host whose telemetry is arriving must be left alone")
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err)
+	byID := make(map[string]api.HostSummary, len(hosts))
+	for _, h := range hosts {
+		byID[h.HostID] = h
+	}
+	require.Contains(t, byID, wedgedHost)
+	assert.Equal(t, "degraded", byID[wedgedHost].OverallStatus,
+		"the list badge must agree with the host page, or an operator scanning the fleet never sees the wedge")
+	assert.Equal(t, "healthy", byID[healthyHost].OverallStatus)
+
+	// The host page header reads its own endpoint, and it exposes a field of the same name. All three must mean the same thing, or
+	// the signal silently disappears the day a surface switches which one it renders.
+	header, err := d.Store().HostDetail(ctx, wedgedHost)
+	require.NoError(t, err)
+	assert.Equal(t, "degraded", header.OverallStatus, "the host header rollup must fold in the same derived conditions")
+
+	// And it clears on its own once capture resumes. Nothing is persisted, so recovery needs no separate write path: the next read
+	// simply finds the stream producing again. This is the half an operator relies on after remediating, and a signal that latched
+	// would send them chasing a host that is already fixed.
+	require.NoError(t, archive.Insert(ctx, []api.Event{
+		archiveEvent("dw4", wedgedHost, "network_connect", now.Add(-time.Minute).UnixNano()),
+		archiveEvent("dw5", wedgedHost, "dns_query", now.Add(-time.Minute).UnixNano()),
+	}))
+	recovered, err := d.Store().HostHealth(ctx, wedgedHost)
+	require.NoError(t, err)
+	assert.Empty(t, recovered.DerivedComponents, "the derived conditions must clear once the streams produce again")
+	assert.Equal(t, "healthy", recovered.OverallStatus, "and the effective rollup must fall back to what the agent reported")
+}
+
+// TestHostHealth_DerivedSignalToleratesAnArchiveOutage pins the deliberate degrade-rather-than-fail choice: the derived signal is an
+// enrichment, and losing the event archive must not take the operator's host pages down with it.
+//
+// spec:server-host-status/the-server-derives-health-conditions-its-endpoints-cannot-report/an-unreadable-archive-degrades-rather-than-failing-the-request
+func TestHostHealth_DerivedSignalToleratesAnArchiveOutage(t *testing.T) {
+	t.Parallel()
+	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "OUTAGE-UUID-0001"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+	_, err := d.Store().DB().ExecContext(ctx, `
+		INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
+		VALUES (?, ?, ?, ?)`, host, "healthy", `[{"type":"network_extension","status":"healthy","last_transition_ns":90}]`, 100)
+	require.NoError(t, err)
+
+	archive.FailReads(errors.New("clickhouse unreachable"))
+
+	detail, err := d.Store().HostHealth(ctx, host)
+	require.NoError(t, err, "an archive outage must not fail the health detail")
+	assert.Equal(t, "healthy", detail.OverallStatus, "with no telemetry to judge, the reported health stands unchanged")
+	assert.Empty(t, detail.DerivedComponents)
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err, "an archive outage must not fail the hosts list")
+	assert.NotEmpty(t, hosts)
 }

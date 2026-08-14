@@ -121,6 +121,7 @@ function healthFixture(overrides: Partial<HostHealth> = {}): HostHealth {
     overall_status: "healthy",
     reported_at_ns: Date.now() * NANOSECONDS_PER_MILLISECOND,
     components: [],
+    derived_components: null,
     ...overrides,
   };
 }
@@ -225,5 +226,100 @@ describe("HostHeader agent health", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Details" }));
     expect(await screen.findByText("Agent unknown")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Details" })).not.toHaveAttribute("title");
+  });
+
+  // Server-derived conditions (issue #677). These are the ones the agent cannot report about itself: it believes it is healthy, and
+  // the contradiction is only visible from the server's side of the wire.
+  it("lists a server-derived condition alongside the agent's own, and lets it drive the attention dot", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        // The rollup already folds the derived condition in, which is what turns a host the agent called healthy amber.
+        overall_status: "degraded",
+        components: [
+          {
+            type: "network_extension",
+            status: "healthy",
+            reason: "activated",
+            message: "Network extension connected",
+            last_transition_ns: (Date.now() - 5 * MINUTE_MS) * NANOSECONDS_PER_MILLISECOND,
+          },
+        ],
+        derived_components: [
+          {
+            type: "dns_proxy_delivery",
+            status: "degraded",
+            reason: "no_flow_telemetry",
+            message: "reports healthy, but no dns_query events reached the server in the last 2h",
+            last_transition_ns: 0,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    // Both conditions are present, so an operator sees the agent's claim and the server's contradiction of it side by side.
+    expect(await screen.findByText("Network extension connected")).toBeInTheDocument();
+    expect(screen.getByText("DNS capture")).toBeInTheDocument();
+    expect(
+      screen.getByText("reports healthy, but no dns_query events reached the server in the last 2h"),
+    ).toBeInTheDocument();
+  });
+
+  // A derived condition has no observed transition instant, so it carries last_transition_ns 0. Rendering that through the relative
+  // formatter would date a fault that may be days old to the moment the page loaded, which is worse than showing no age at all.
+  it("renders no age for a derived condition, which has no transition instant", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        overall_status: "degraded",
+        components: [],
+        derived_components: [
+          {
+            type: "content_filter_delivery",
+            status: "degraded",
+            reason: "no_flow_telemetry",
+            message: "reports healthy, but no network_connect events reached the server in the last 2h",
+            last_transition_ns: 0,
+          },
+        ],
+      }),
+    );
+    const { container } = renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    expect(await screen.findByText("Connection capture")).toBeInTheDocument();
+
+    // The age element is absent entirely rather than rendering an epoch-relative string.
+    expect(container.querySelector(".host-header__health-since")).toBeNull();
+  });
+
+  it("shows nothing derived when the server has nothing to add", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        components: [
+          {
+            type: "network_extension",
+            status: "healthy",
+            reason: "activated",
+            message: "Network extension connected",
+            last_transition_ns: Date.now() * NANOSECONDS_PER_MILLISECOND,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    expect(await screen.findByText("Agent healthy")).toBeInTheDocument();
+    expect(screen.queryByText("DNS capture")).not.toBeInTheDocument();
+    expect(screen.queryByText("Connection capture")).not.toBeInTheDocument();
   });
 });

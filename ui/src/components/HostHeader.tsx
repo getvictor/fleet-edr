@@ -19,6 +19,10 @@ interface HostHeaderProps {
 const COMPONENT_LABELS: Record<string, string> = {
   endpoint_security_extension: "Security extension",
   network_extension: "Network extension",
+  // Server-derived conditions (issue #677). Labelled by what stopped arriving rather than by the provider's internal name, since
+  // that is what the operator is being told: the extension says it is fine, but this capture is not reaching us.
+  content_filter_delivery: "Connection capture",
+  dns_proxy_delivery: "DNS capture",
 };
 
 // healthDotClass maps the rollup to the attention dot on the Details trigger: none when healthy (green is "no news") or unknown (no
@@ -112,7 +116,9 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
   }, [detail.host_id]);
 
   const dotClass = healthDotClass(health?.overall_status);
-  const components = health?.components ?? [];
+  // Agent-reported conditions first, then the server's own. One list, because an operator diagnosing a host wants every condition in
+  // one place; the derived ones read as distinct through their labels and their "reports healthy, but..." message.
+  const components = [...(health?.components ?? []), ...(health?.derived_components ?? [])];
 
   return (
     <div className="host-header__details" ref={ref}>
@@ -143,7 +149,11 @@ function HostDetailsPopover({ detail }: { readonly detail: HostDetail }) {
                       <HealthBadge status={c.status} />
                       <span className="host-header__health-component">{COMPONENT_LABELS[c.type] ?? c.type}</span>
                       {c.message ? <span className="host-header__health-message">{c.message}</span> : null}
-                      <span className="host-header__health-since">{formatRelativeNs(c.last_transition_ns)}</span>
+                      {/* Server-derived conditions carry no transition instant (see HostHealth.derived_components); rendering one
+                          would date a possibly days-old fault to the moment the page loaded. */}
+                      {c.last_transition_ns > 0 && (
+                        <span className="host-header__health-since">{formatRelativeNs(c.last_transition_ns)}</span>
+                      )}
                     </li>
                   ))}
                 </ul>
