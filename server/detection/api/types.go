@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
 	"github.com/fleetdm/edr/server/sqlhelpers"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
@@ -171,7 +170,25 @@ type HostHealth struct {
 	Components    NullRawJSON `db:"components" json:"components"`
 	// db:"-" because this field is filled in after the query, not scanned from it: the derived conditions come from the event
 	// archive, not from the host_health row.
-	DerivedComponents []endpointapi.ComponentHealth `db:"-" json:"derived_components"`
+	DerivedComponents []DerivedComponent `db:"-" json:"derived_components"`
+}
+
+// DerivedComponent is one condition the server concluded about a host from telemetry, rather than one the agent reported.
+//
+// It mirrors the endpoint context's ComponentHealth wire shape field for field, so the console can render the reported and the
+// derived conditions as one list, but it is deliberately detection's OWN type rather than a re-export of that one. detection/api is
+// this context's published surface, and letting it hand out another bounded context's type would make every consumer of a detection
+// response a consumer of the endpoint contract too (arch-go enforces exactly this). The same reasoning already applies one field
+// above, where HostHealthUnknown mirrors the endpoint's spelling rather than importing its constant.
+//
+// LastTransitionNs is present for wire compatibility and is always zero today: a condition inferred from a window of absence has no
+// observed instant at which it began. Consumers must render nothing rather than an age when it is zero.
+type DerivedComponent struct {
+	Type             string `json:"type"`
+	Status           string `json:"status"`
+	Reason           string `json:"reason,omitempty"`
+	Message          string `json:"message,omitempty"`
+	LastTransitionNs int64  `json:"last_transition_ns"`
 }
 
 // HostDetail is the single-host identity + liveness view served at GET /api/hosts/{host_id} (issue #579): everything the host page's

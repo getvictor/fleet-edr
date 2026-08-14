@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/telemetryhealth"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
@@ -141,7 +142,7 @@ func TestDerive_ConditionShape(t *testing.T) {
 
 	dns := got[1]
 	assert.Equal(t, "dns_proxy_delivery", dns.Type)
-	assert.Equal(t, endpointapi.HealthDegraded, dns.Status,
+	assert.Equal(t, string(endpointapi.HealthDegraded), dns.Status,
 		"degraded, not unhealthy: this is inferred from absence, not observed by the endpoint")
 	assert.Equal(t, telemetryhealth.ReasonNoFlowTelemetry, dns.Reason)
 	assert.Contains(t, dns.Message, "dns_query", "the message must name the stream that went silent")
@@ -155,11 +156,11 @@ func TestDerive_ConditionShape(t *testing.T) {
 
 func TestRollup(t *testing.T) {
 	t.Parallel()
-	degraded := []endpointapi.ComponentHealth{{Type: "dns_proxy_delivery", Status: endpointapi.HealthDegraded}}
+	degraded := []api.DerivedComponent{{Type: "dns_proxy_delivery", Status: string(endpointapi.HealthDegraded)}}
 	cases := []struct {
 		name     string
 		reported string
-		derived  []endpointapi.ComponentHealth
+		derived  []api.DerivedComponent
 		want     string
 	}{
 		{

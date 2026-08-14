@@ -36,6 +36,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fleetdm/edr/server/detection/api"
 	endpointapi "github.com/fleetdm/edr/server/endpoint/api"
 	"github.com/fleetdm/edr/server/httpserver"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
@@ -124,7 +125,7 @@ const ReasonNoFlowTelemetry = "no_flow_telemetry"
 //
 // The activity argument is the host's own record from the archive. A host absent from the archive's result has no activity to reason
 // about; callers pass the zero value, which fails the process-activity gate and yields nothing.
-func Derive(reportedStatus string, activity visibilityapi.TelemetryActivity) []endpointapi.ComponentHealth {
+func Derive(reportedStatus string, activity visibilityapi.TelemetryActivity) []api.DerivedComponent {
 	if endpointapi.HealthStatus(reportedStatus) != endpointapi.HealthHealthy {
 		return nil
 	}
@@ -133,7 +134,7 @@ func Derive(reportedStatus string, activity visibilityapi.TelemetryActivity) []e
 	if activity.ProcessInWindow == 0 {
 		return nil
 	}
-	var out []endpointapi.ComponentHealth
+	var out []api.DerivedComponent
 	for _, dc := range derivedComponents {
 		if dc.inWindow(activity) > 0 {
 			continue // the stream is delivering
@@ -141,9 +142,11 @@ func Derive(reportedStatus string, activity visibilityapi.TelemetryActivity) []e
 		if dc.inReference(activity) == 0 {
 			continue // this host does not use this stream; its silence is not evidence of anything
 		}
-		out = append(out, endpointapi.ComponentHealth{
-			Type:    dc.componentType,
-			Status:  endpointapi.HealthDegraded,
+		out = append(out, api.DerivedComponent{
+			Type: dc.componentType,
+			// The endpoint context owns the health vocabulary, so the value is taken from its constant even though the field
+			// is a plain string here: one spelling, defined once, however many contexts render it.
+			Status:  string(endpointapi.HealthDegraded),
 			Reason:  ReasonNoFlowTelemetry,
 			Message: message(dc, activity.ProcessInWindow),
 		})
@@ -180,14 +183,14 @@ func humanDuration(d time.Duration) string {
 // becomes degraded when something was derived". It is written as a general worst-of anyway, over the same precedence the endpoint
 // context defines, so that adding a derived condition of another severity later cannot silently produce a rollup that disagrees with
 // the conditions beneath it.
-func Rollup(reportedStatus string, derived []endpointapi.ComponentHealth) string {
+func Rollup(reportedStatus string, derived []api.DerivedComponent) string {
 	if len(derived) == 0 {
 		return reportedStatus
 	}
 	worst := endpointapi.HealthStatus(reportedStatus)
 	for _, c := range derived {
-		if severity(c.Status) > severity(worst) {
-			worst = c.Status
+		if status := endpointapi.HealthStatus(c.Status); severity(status) > severity(worst) {
+			worst = status
 		}
 	}
 	return string(worst)
