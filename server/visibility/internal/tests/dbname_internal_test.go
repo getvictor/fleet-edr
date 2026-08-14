@@ -7,13 +7,33 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
 
 	"github.com/fleetdm/edr/server/testdb"
 )
 
-// TestSafeDBName_Properties pins the three properties openTestArchiveWithHandle's DROP-then-CREATE sequence relies on. It mirrors
-// TestSanitizeDBName_Properties in server/testdb for the ClickHouse side, where the DDL interpolates the name UNQUOTED, so the
-// charset rule is load-bearing rather than cosmetic.
+// isCHIdentifierRune reports whether a single rune is legal in an unquoted ClickHouse identifier. It mirrors the character filter
+// safeDBName applies, so the tests below check the output against the same alphabet the builder claims to emit.
+func isCHIdentifierRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'
+}
+
+// isValidCHIdentifier reports whether every rune is legal in an UNQUOTED ClickHouse identifier. The provisioning DDL in
+// openTestArchiveWithHandle interpolates the name without quoting, so this is load-bearing rather than cosmetic.
+func isValidCHIdentifier(s string) bool {
+	for _, r := range s {
+		if !isCHIdentifierRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// TestSafeDBName_Properties pins the properties openTestArchiveWithHandle's DROP-then-CREATE sequence relies on, on the specific
+// shapes that have caused real breakage. It mirrors TestSanitizeDBName_Properties in server/testdb for the ClickHouse side. These
+// stay example-based on purpose: the separator and injection rows are the auditable record of what went wrong, which is exactly
+// the case CLAUDE.md says PBT should not replace. TestSafeDBName_PBT generalises the same invariants over arbitrary input.
 func TestSafeDBName_Properties(t *testing.T) {
 	t.Parallel()
 
@@ -29,6 +49,7 @@ func TestSafeDBName_Properties(t *testing.T) {
 		{"backtick injection attempt", "TestEventArchive`drop"},
 		{"quote injection attempt", "TestEventArchive'; DROP DATABASE edr; --"},
 		{"uppercase is folded", "TESTEVENTARCHIVE"},
+		{"overlong name is truncated", "TestEventArchive/" + strings.Repeat("subtest_path_segment_", 20)},
 	}
 
 	for _, tc := range cases {
@@ -36,15 +57,11 @@ func TestSafeDBName_Properties(t *testing.T) {
 			t.Parallel()
 			got := safeDBName(tc.testName)
 
-			// Valid unquoted ClickHouse identifier: the DDL does not backtick-quote, so anything outside [a-z0-9_] would
-			// either break the statement or, for the quote case above, smuggle a second one in.
-			for _, r := range got {
-				assert.Truef(t, (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_',
-					"safeDBName(%q) = %q contains %q, which is not a valid unquoted identifier rune", tc.testName, got, r)
-			}
-
-			// The per-process salt keeps two concurrent `go test` processes from dropping each other's live database.
-			assert.Contains(t, got, testdb.ProcessSalt(), "per-process salt must be embedded for cross-process uniqueness")
+			assert.Truef(t, isValidCHIdentifier(got),
+				"safeDBName(%q) = %q must be a valid unquoted identifier", tc.testName, got)
+			assert.LessOrEqualf(t, len(got), maxClickHouseDBNameLen,
+				"safeDBName(%q) = %d bytes, over ClickHouse's %d-byte ceiling", tc.testName, len(got), maxClickHouseDBNameLen)
+			assert.Contains(t, got, testdb.ProcessSalt(), "per-process salt must survive for cross-process uniqueness")
 		})
 	}
 }
@@ -55,16 +72,31 @@ func TestSafeDBName_Properties(t *testing.T) {
 func TestSafeDBName_CollisionRegressions(t *testing.T) {
 	t.Parallel()
 
-	pairs := [][2]string{
-		{"TestX/A", "TestX.A"},
-		{"TestX/A", "TestX-A"},
-		{"TestX/A", "TestX A"},
-		{"TestX/A", "TestX`A"},
-		{"TestX/A", "TestX/a"},
+	cases := []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{"slash vs dot", "TestX/A", "TestX.A"},
+		{"slash vs hyphen", "TestX/A", "TestX-A"},
+		{"slash vs space", "TestX/A", "TestX A"},
+		{"slash vs backtick", "TestX/A", "TestX`A"},
+		{"case only", "TestX/A", "TestX/a"},
+		// Two overlong names sharing a truncated prefix: the readable segment is identical after truncation, so only the
+		// hash (taken over the FULL original name) separates them.
+		{
+			"overlong shared prefix",
+			"TestX/" + strings.Repeat("z", 300) + "left",
+			"TestX/" + strings.Repeat("z", 300) + "right",
+		},
 	}
-	for _, p := range pairs {
-		assert.NotEqualf(t, safeDBName(p[0]), safeDBName(p[1]),
-			"safeDBName(%q) must not collide with safeDBName(%q)", p[0], p[1])
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.NotEqualf(t, safeDBName(tc.left), safeDBName(tc.right),
+				"safeDBName(%q) must not collide with safeDBName(%q)", tc.left, tc.right)
+		})
 	}
 }
 
@@ -76,4 +108,31 @@ func TestSafeDBName_Idempotent(t *testing.T) {
 	first := safeDBName("TestRepeatable")
 	assert.Equal(t, first, safeDBName("TestRepeatable"))
 	assert.True(t, strings.HasPrefix(first, "edr_test_"), "prefix must stay stable: cleanup scripts key off it")
+}
+
+// TestSafeDBName_PBT generalises the invariants above across an input space no table can enumerate. A Go test name is a nearly
+// arbitrary string (subtests interpolate fixture data, and rapid's own generated names land here verbatim), so the identifier
+// and length guarantees have to hold for all of them, not just the shapes we thought to list.
+//
+// Properties: for any input, the output is a valid unquoted ClickHouse identifier, fits the measured 247-byte ceiling, carries
+// the per-process salt, keeps the edr_test_ prefix, and is deterministic.
+func TestSafeDBName_PBT(t *testing.T) {
+	t.Parallel()
+
+	// A vacuous Contains check would pass if the salt were ever empty, so assert it is not, once, up front.
+	require.NotEmpty(t, testdb.ProcessSalt(), "process salt must be non-empty")
+
+	rapid.Check(t, func(rt *rapid.T) {
+		name := rapid.String().Draw(rt, "testName")
+		got := safeDBName(name)
+
+		require.Truef(rt, isValidCHIdentifier(got),
+			"safeDBName(%q) = %q is not a valid unquoted identifier", name, got)
+		require.LessOrEqualf(rt, len(got), maxClickHouseDBNameLen,
+			"safeDBName(%q) = %d bytes, over the %d-byte ceiling", name, len(got), maxClickHouseDBNameLen)
+		require.Truef(rt, strings.HasPrefix(got, "edr_test_"), "safeDBName(%q) = %q lost its prefix", name, got)
+		require.Containsf(rt, got, testdb.ProcessSalt(),
+			"safeDBName(%q) = %q dropped the process salt; truncation must never reach it", name, got)
+		require.Equalf(rt, got, safeDBName(name), "safeDBName(%q) is not deterministic", name)
+	})
 }

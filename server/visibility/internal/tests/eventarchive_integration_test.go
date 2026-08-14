@@ -37,6 +37,12 @@ func clickhouseTestDSN(t *testing.T) string {
 	return dsn
 }
 
+// maxClickHouseDBNameLen is the longest database name this ClickHouse accepts. The server stores database metadata at
+// /var/lib/clickhouse/metadata/<name>.sql and writes it through a <name>.sql.tmp intermediate, so the name plus that 8-byte
+// suffix has to fit the filesystem's 255-byte NAME_MAX. Measured against the pinned 24.8 image: 247 succeeds, 248 fails with
+// "Cannot open file ... errno 36". The MySQL side caps at 64 for the same reason (a hard identifier ceiling), see sanitizeDBName.
+const maxClickHouseDBNameLen = 247
+
 // safeDBName builds a per-test ClickHouse database name from the test name, keeping only [a-z0-9_] so it is always a valid unquoted
 // identifier (subtest names carry '/', spaces, etc.). Two extra components make the name collision-free, mirroring the MySQL side
 // in server/testdb:
@@ -48,6 +54,7 @@ func clickhouseTestDSN(t *testing.T) string {
 //     reduce to "t_a"), which the salt alone does not fix because both collide within the same process.
 func safeDBName(name string) string {
 	sum := sha256.Sum256([]byte(name))
+	suffixHex := hex.EncodeToString(sum[:4])
 
 	var b strings.Builder
 	b.WriteString("edr_test_")
@@ -60,9 +67,15 @@ func safeDBName(name string) string {
 			b.WriteRune('_')
 		}
 	}
-	b.WriteString("_")
-	b.WriteString(hex.EncodeToString(sum[:4]))
-	return b.String()
+
+	// Truncate the readable segment only, never the salt or the hash: those two carry the entire uniqueness guarantee, while the
+	// readable part exists so a human can tell which test owns a leftover database. Byte-slicing is safe here because the loop
+	// above emits exactly one ASCII byte per input rune, so there is no multi-byte sequence to cut in half.
+	readable := b.String()
+	if maxReadable := maxClickHouseDBNameLen - 1 - len(suffixHex); len(readable) > maxReadable {
+		readable = readable[:maxReadable]
+	}
+	return readable + "_" + suffixHex
 }
 
 // openTestArchive provisions a per-test ClickHouse database on the instance named by EDR_CLICKHOUSE_TEST_DSN (so parallel tests do
