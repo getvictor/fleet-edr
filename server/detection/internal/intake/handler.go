@@ -378,8 +378,7 @@ func (h *Handler) readGzipBodyWithCap(w http.ResponseWriter, r *http.Request) ([
 // *http.MaxBytesError (the compressed-input cap was crossed mid-stream) is 413 body_too_large regardless of encoding; any
 // other error is the supplied 4xx errCode (`read_body` for a raw body, `invalid_gzip` for a malformed gzip stream).
 func (h *Handler) writeBodyReadFailure(ctx context.Context, w http.ResponseWriter, err error, malformedCode string) ([]byte, bool) {
-	var maxErr *http.MaxBytesError
-	if errors.As(err, &maxErr) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		writeErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, "body_too_large")
 		return nil, false
 	}
