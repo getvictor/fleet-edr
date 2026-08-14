@@ -267,7 +267,15 @@ tasks:
       EDR_TEST_DSN: '{{.EDR_TEST_DSN | default "root@tcp(127.0.0.1:33307)/edr_test?parseTime=true"}}'
       EDR_CLICKHOUSE_TEST_DSN: '{{.EDR_CLICKHOUSE_TEST_DSN | default "clickhouse://default:@127.0.0.1:19001/edr_test"}}'
     cmds:
-      - go test -race -count=1 -timeout=10m -tags=integration ./server/... ./internal/... ./test/integration/...
+      # -timeout=20m, not the 10m every other lane uses. This lane runs the DB-backed integration suites, and
+      # server/detection/internal/tests alone opens 109 isolated databases (full.Open applies all six bounded contexts'
+      # schemas per test) under -race. Measured on CI: ~250s typical, against a 600s ceiling. That is only 2.4x headroom
+      # for a package whose cost is dominated by shared MySQL and ClickHouse containers, and it blew through twice in two
+      # days (#690, #697) purely on contention: both times the timeout panic listed tests that had been running only 5-26s,
+      # so the binary was still making progress rather than deadlocked. A ceiling that fires on a slow neighbour is not
+      # protecting anything, it just produces failures someone reruns. 20m is ~4.7x the measured median and still bounded,
+      # so a genuine hang fails in a reasonable time. Unit-only lanes keep 10m; a hung unit test should fail fast.
+      - go test -race -count=1 -timeout=20m -tags=integration ./server/... ./internal/... ./test/integration/...
 
   test:integration:
     desc: |
@@ -403,7 +411,15 @@ tasks:
       # ./test/scale/... is included so M12's per-PR smoke (5 hosts x 5s
       # against integration.Setup) runs on every push. Wall-clock cost is
       # ~5s, dominated by the smoke's own load lane.
-      - go test -race -count=1 -timeout=10m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/... ./test/scale/...
+      # -timeout=20m, not the 10m every other lane uses. This lane runs the DB-backed integration suites, and
+      # server/detection/internal/tests alone opens 109 isolated databases (full.Open applies all six bounded contexts'
+      # schemas per test) under -race. Measured on CI: ~250s typical, against a 600s ceiling. That is only 2.4x headroom
+      # for a package whose cost is dominated by shared MySQL and ClickHouse containers, and it blew through twice in two
+      # days (#690, #697) purely on contention: both times the timeout panic listed tests that had been running only 5-26s,
+      # so the binary was still making progress rather than deadlocked. A ceiling that fires on a slow neighbour is not
+      # protecting anything, it just produces failures someone reruns. 20m is ~4.7x the measured median and still bounded,
+      # so a genuine hang fails in a reasonable time. Unit-only lanes keep 10m; a hung unit test should fail fast.
+      - go test -race -count=1 -timeout=20m -tags=integration -coverpkg=./server/...,./internal/... -coverprofile=coverage-server.out -covermode=atomic ./server/... ./internal/... ./test/integration/... ./test/scale/...
       - go tool cover -func=coverage-server.out | tail -1
 
   test:ui:
