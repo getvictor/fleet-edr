@@ -23,6 +23,8 @@
 package full
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -37,33 +39,37 @@ import (
 	visibilitytestkit "github.com/fleetdm/edr/server/visibility/testkit"
 )
 
-// Open creates an isolated test database (via testdb.Open) and
-// applies every bounded context's schema against it.
-func Open(t *testing.T) *sqlx.DB {
-	t.Helper()
-	db := testdb.Open(t)
-	ctx := t.Context()
+// Open creates an isolated test database with every bounded context's schema applied.
+//
+// The schema is built by running the migrations once per process and replayed as plain DDL for every test after that; see
+// testdb.OpenTemplated for why, and for what that preserves. Callers see no difference beyond the fixture being about 2.7x
+// cheaper, which matters because the heaviest package calls this 109 times.
+//
+// Takes testing.TB rather than *testing.T so a benchmark can measure the fixture it depends on. Optimising something that
+// cannot be measured is how a "faster" fixture quietly stops being faster.
+func Open(tb testing.TB) *sqlx.DB {
+	tb.Helper()
+	return testdb.OpenTemplated(tb, "full", applySchemas)
+}
 
-	if err := identitytestkit.ApplySchema(ctx, db); err != nil {
-		t.Fatalf("apply identity schema: %v", err)
+// applySchemas applies every context's schema in dependency order. Called once per process by OpenTemplated; the ordering
+// comment on the package doc explains why identity leads.
+func applySchemas(ctx context.Context, db *sqlx.DB) error {
+	for _, step := range []struct {
+		name  string
+		apply func(context.Context, *sqlx.DB) error
+	}{
+		{"identity", identitytestkit.ApplySchema},
+		{"endpoint", endpointtestkit.ApplySchema},
+		{"rules", rulestestkit.ApplySchema},
+		{"response", responsetestkit.ApplySchema},
+		{"detection", detectiontestkit.ApplySchema},
+		{"observability", observabilitytestkit.ApplySchema},
+		{"visibility", visibilitytestkit.ApplySchema},
+	} {
+		if err := step.apply(ctx, db); err != nil {
+			return fmt.Errorf("apply %s schema: %w", step.name, err)
+		}
 	}
-	if err := endpointtestkit.ApplySchema(ctx, db); err != nil {
-		t.Fatalf("apply endpoint schema: %v", err)
-	}
-	if err := rulestestkit.ApplySchema(ctx, db); err != nil {
-		t.Fatalf("apply rules schema: %v", err)
-	}
-	if err := responsetestkit.ApplySchema(ctx, db); err != nil {
-		t.Fatalf("apply response schema: %v", err)
-	}
-	if err := detectiontestkit.ApplySchema(ctx, db); err != nil {
-		t.Fatalf("apply detection schema: %v", err)
-	}
-	if err := observabilitytestkit.ApplySchema(ctx, db); err != nil {
-		t.Fatalf("apply observability schema: %v", err)
-	}
-	if err := visibilitytestkit.ApplySchema(ctx, db); err != nil {
-		t.Fatalf("apply visibility schema: %v", err)
-	}
-	return db
+	return nil
 }
