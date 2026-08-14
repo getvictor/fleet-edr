@@ -2,6 +2,8 @@ package testdb_test
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -15,7 +17,11 @@ import (
 // FOREIGN KEY onto it, a secondary index, and a migration-version table whose rows the replay has to carry over.
 func synthetic(ctx context.Context, db *sqlx.DB) error {
 	stmts := []string{
-		"CREATE TABLE parent (id BIGINT PRIMARY KEY, name VARCHAR(64) NOT NULL)",
+		// name_len is GENERATED: MySQL rejects an INSERT that names such a column, so the row copy has to skip it. The real
+		// schema has one (events.payload_pid, extracted from the JSON payload); without it here, dropping that filter would
+		// pass every test in this file and only break the full integration suite.
+		"CREATE TABLE parent (id BIGINT PRIMARY KEY, name VARCHAR(64) NOT NULL, " +
+			"name_len INT GENERATED ALWAYS AS (CHAR_LENGTH(name)) STORED)",
 		`CREATE TABLE child (
 			id BIGINT PRIMARY KEY,
 			parent_id BIGINT NOT NULL,
@@ -112,6 +118,11 @@ func TestOpenTemplated_ReplayCarriesSeededRows(t *testing.T) { //nolint:parallel
 		var seeded []string
 		require.NoError(t, db.SelectContext(t.Context(), &seeded, "SELECT name FROM parent ORDER BY id"))
 		assert.Equal(t, []string{"seeded"}, seeded, "the replay must carry rows the schema build inserted")
+
+		// And the generated column recomputes from the copied row rather than being copied (which MySQL would reject).
+		var nameLen int
+		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT name_len FROM parent WHERE id = 1").Scan(&nameLen))
+		assert.Equal(t, len("seeded"), nameLen, "the generated column must be recomputed in the replayed database")
 	})
 }
 
@@ -139,13 +150,15 @@ func TestOpenTemplated_ReplayLeavesForeignKeyChecksOn(t *testing.T) { //nolint:p
 func TestOpenTemplated_ParallelCallersShareOneBuild(t *testing.T) {
 	t.Parallel()
 	const key = "synthetic-parallel"
-	var builds int
+	// Atomic, because this counter's whole job is to catch OpenTemplated building concurrently. A plain int would be a data
+	// race in exactly that regression, and could lose an increment and report the count it was supposed to catch.
+	var builds atomic.Int64
 	counted := func(ctx context.Context, db *sqlx.DB) error {
-		builds++
+		builds.Add(1)
 		return synthetic(ctx, db)
 	}
 	for i := range 6 {
-		t.Run("caller", func(t *testing.T) {
+		t.Run(fmt.Sprintf("caller-%d", i), func(t *testing.T) {
 			t.Parallel()
 			db := testdb.OpenTemplated(t, key, counted)
 			var n int
@@ -154,6 +167,6 @@ func TestOpenTemplated_ParallelCallersShareOneBuild(t *testing.T) {
 		})
 	}
 	t.Cleanup(func() {
-		assert.Equal(t, 1, builds, "the schema must be built once per process, not once per caller")
+		assert.Equal(t, int64(1), builds.Load(), "the schema must be built once per process, not once per caller")
 	})
 }

@@ -198,8 +198,9 @@ func captureRows(ctx context.Context, db *sqlx.DB, table string, cols []string) 
 // would depend on pool scheduling, which is the worst kind to debug.
 //
 // Checks are disabled rather than the tables being dependency-sorted because SHOW TABLES returns alphabetical order and the
-// constraints form a graph; disabling is exact, and every constraint is still present in the created tables.
-func replaySchema(ctx context.Context, db *sqlx.DB, ddl []string, seed []seedInsert) error {
+// constraints form a graph; disabling is exact, and every constraint is still present in the created tables. The restore is
+// deferred so it happens on the failure path too.
+func replaySchema(ctx context.Context, db *sqlx.DB, ddl []string, seed []seedInsert) (err error) {
 	conn, err := db.Connx(ctx)
 	if err != nil {
 		return fmt.Errorf("pin connection: %w", err)
@@ -211,6 +212,20 @@ func replaySchema(ctx context.Context, db *sqlx.DB, ddl []string, seed []seedIns
 	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=0"); err != nil {
 		return fmt.Errorf("disable foreign key checks: %w", err)
 	}
+	// Deferred, so the restore also runs when a statement below fails. An early return with checks still off would hand a
+	// connection with referential integrity disabled back to the pool, and the next test to draw it would silently accept
+	// rows the schema forbids. That is a worse outcome than the replay error that caused it, and it would surface far from
+	// this code. Runs before the Close above (defers unwind last-in-first-out).
+	//
+	// context.Background() rather than ctx: on the failure path the caller is often already tearing down, and a restore
+	// skipped because the test context was cancelled would poison the connection just as thoroughly.
+	//nolint:contextcheck // context.Background() is deliberate here, not an oversight: see the comment above
+	defer func() {
+		if _, restoreErr := conn.ExecContext(context.Background(), "SET FOREIGN_KEY_CHECKS=1"); restoreErr != nil && err == nil {
+			err = fmt.Errorf("restore foreign key checks: %w", restoreErr)
+		}
+	}()
+
 	for _, stmt := range ddl {
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create table: %w", err)
@@ -220,12 +235,6 @@ func replaySchema(ctx context.Context, db *sqlx.DB, ddl []string, seed []seedIns
 		if _, err := conn.ExecContext(ctx, row.stmt, row.args...); err != nil {
 			return fmt.Errorf("restore seeded row: %w", err)
 		}
-	}
-	// Restore the session default before handing the connection back to the pool. Leaving it off would silently disable
-	// referential integrity for whichever test later drew this connection, which is exactly the kind of cross-test leak the
-	// per-test database exists to prevent.
-	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=1"); err != nil {
-		return fmt.Errorf("restore foreign key checks: %w", err)
 	}
 	return nil
 }
