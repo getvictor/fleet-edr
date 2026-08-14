@@ -34,6 +34,20 @@ updates:
       default-days: 10
       semver-major-days: 30
     groups:
+      # OpenTelemetry moves as a family and MUST land in one PR. The contrib bridges are released against an exact core
+      # version: otelslog v0.19.0 requires otel/log v0.20.0, v0.20.0 requires v0.21.0. A PR carrying one without the other
+      # does not compile, and it fails from INSIDE the bridge module ("undefined: log.KeyValue..."), which reads like our
+      # code is broken when it is not. Isolating the family into its own PR means a partial pair is obvious at a glance
+      # rather than buried among a dozen unrelated bumps (#695 shipped 14 updates and this was one of them).
+      #
+      # Grouping alone cannot GUARANTEE the pair stays together, because `cooldown` is evaluated per dependency and the
+      # bridges are published a day after the core. That is exactly how #695 split: otel/log v0.21.0 was released
+      # 2026-08-03 and otelslog v0.20.0 on 2026-08-04, so on the 2026-08-14 run the core was 11 days old (past the 10-day
+      # cooldown) and the bridge was 10 (still held). When that recurs, the fix is to bump the bridge to match rather than
+      # to revert the core.
+      opentelemetry:
+        patterns: ["go.opentelemetry.io/*"]
+        update-types: ["minor", "patch"]
       go-minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:
@@ -95,6 +109,16 @@ updates:
     open-pull-requests-limit: 3
     cooldown:
       default-days: 7
+    ignore:
+      # Patch bumps only for the Go image. Those are the security-relevant ones (a 1.26.x rebuild carries the toolchain
+      # CVE fixes) and they are safe to take automatically. Anything that moves the language version is a deliberate
+      # decision: it has to move in lockstep with go.mod, the lint module's go.mod, .tool-versions, and the other
+      # Dockerfile, or the nightly demo source leg goes red on its own while per-PR CI stays green.
+      #
+      # This also keeps release candidates out. Dependabot proposed `golang:1.27rc1` for the shipped server image in #693,
+      # which is a minor-version move by its reckoning and would have put a prerelease Go into the image we ship.
+      - dependency-name: "golang"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     labels: ["dependencies", "docker"]
     commit-message:
       prefix: "deps(docker)"
