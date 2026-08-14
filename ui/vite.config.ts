@@ -7,7 +7,7 @@ import react from "@vitejs/plugin-react";
 // surface in the bundle's source tree), so without the shim ESLint
 // flags `process.env.*` as an unsafe member access on an unresolved
 // type. Declaring the slice we use keeps the typing local + auditable.
-declare const process: { env: { UI_BUILD_SOURCEMAP?: string } };
+declare const process: { env: { UI_BUILD_SOURCEMAP?: string; EDR_DEV_PROXY_TARGET?: string } };
 
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
@@ -28,7 +28,9 @@ export default defineConfig(({ mode }) => ({
     proxy: {
       // The dev server (task dev:server) serves HTTPS on :8088 with a mkcert-signed local cert, so the proxy target is https and
       // secure:false skips cert verification for the self-signed dev chain. Dev/preview only; vite build ignores server.proxy.
-      "/api": { target: "https://localhost:8088", secure: false, changeOrigin: true },
+      // EDR_DEV_PROXY_TARGET overrides the port for a second checkout running its own dev server on a different one (two
+      // worktrees on one machine): without it, the second checkout's HMR silently proxies to the first checkout's backend.
+      "/api": { target: process.env.EDR_DEV_PROXY_TARGET ?? "https://localhost:8088", secure: false, changeOrigin: true },
     },
   },
   test: {
