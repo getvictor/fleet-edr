@@ -258,8 +258,7 @@ func (u *Uploader) uploadBatch(ctx context.Context, batch []queue.QueuedEvent) e
 // re-enroll, 413 splits or drops, a 400 records-and-audits (the quarantine path), any other 4xx is a blanket endpoint rejection
 // kept queued with a loud signal, and 5xx/network logs-and-returns. Extracted so uploadBatch stays under the Sonar S3776 budget.
 func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEvent, ids []int64, err error) error {
-	var tooLargeErr *requestEntityTooLargeError
-	if errors.As(err, &tooLargeErr) {
+	if _, ok := errors.AsType[*requestEntityTooLargeError](err); ok {
 		return u.handleBodyTooLarge(ctx, batch)
 	}
 
@@ -276,8 +275,7 @@ func (u *Uploader) handleUploadErr(ctx context.Context, batch []queue.QueuedEven
 	// signal, not a per-batch content verdict (#398). Keep the batch queued and back off to the next tick like a 5xx;
 	// emit a distinct loud signal so an operator sees "endpoint rejecting uploads" (wrong URL, unhealthy origin, WAF)
 	// instead of a silent quarantine-and-drop.
-	var rejectedErr *endpointRejectedError
-	if errors.As(err, &rejectedErr) {
+	if rejectedErr, ok := errors.AsType[*endpointRejectedError](err); ok {
 		u.logger.WarnContext(ctx, "uploader endpoint rejecting uploads; batch kept queued",
 			"audit", "uploader.endpoint_rejecting",
 			"status_code", rejectedErr.statusCode,
@@ -400,18 +398,15 @@ func (u *Uploader) uploadWithRetry(ctx context.Context, body []byte) error {
 		// Don't retry client errors (4xx): only server/network errors are retryable. 413 is its own non-retryable type because
 		// the caller (uploadBatch) branches into split-and-retry rather than the quarantine path; returning it from the retry
 		// loop preserves the typed-error chain that errors.As inspects upstream.
-		var tooLargeErr *requestEntityTooLargeError
-		if errors.As(err, &tooLargeErr) {
+		if tooLargeErr, ok := errors.AsType[*requestEntityTooLargeError](err); ok {
 			return tooLargeErr
 		}
-		var clientErr *clientError
-		if errors.As(err, &clientErr) {
+		if clientErr, ok := errors.AsType[*clientError](err); ok {
 			return clientErr
 		}
 		// A blanket endpoint rejection is sustained (a down / misconfigured edge), so within-cycle retries would just
 		// hammer it; return immediately and let the per-tick drain cadence back off (#398).
-		var rejectedErr *endpointRejectedError
-		if errors.As(err, &rejectedErr) {
+		if rejectedErr, ok := errors.AsType[*endpointRejectedError](err); ok {
 			return rejectedErr
 		}
 

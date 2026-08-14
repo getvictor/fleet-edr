@@ -144,7 +144,7 @@ func shouldSkipDir(dir, root string) bool {
 	if err != nil {
 		return false
 	}
-	first := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+	first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
 	switch first {
 	case ".git", "vendor", "tmp", "node_modules":
 		return true
