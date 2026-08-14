@@ -19,6 +19,12 @@ func isCHIdentifierRune(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_'
 }
 
+// saltedPrefix is the exact, delimiter-bounded head every generated name must carry: the literal prefix, this process's salt, and
+// the separator. The assertions below check this whole prefix rather than merely that the salt appears somewhere, so they pin the
+// salt's POSITION: a refactor that moved the salt into the readable segment, or dropped it while the sanitized test name happened
+// to contain those bytes, still fails. Containment alone would pass in both cases.
+func saltedPrefix() string { return "edr_test_" + testdb.ProcessSalt() + "_" }
+
 // isValidCHIdentifier reports whether every rune is legal in an UNQUOTED ClickHouse identifier. The provisioning DDL in
 // openTestArchiveWithHandle interpolates the name without quoting, so this is load-bearing rather than cosmetic.
 func isValidCHIdentifier(s string) bool {
@@ -61,7 +67,8 @@ func TestSafeDBName_Properties(t *testing.T) {
 				"safeDBName(%q) = %q must be a valid unquoted identifier", tc.testName, got)
 			assert.LessOrEqualf(t, len(got), maxClickHouseDBNameLen,
 				"safeDBName(%q) = %d bytes, over ClickHouse's %d-byte ceiling", tc.testName, len(got), maxClickHouseDBNameLen)
-			assert.Contains(t, got, testdb.ProcessSalt(), "per-process salt must survive for cross-process uniqueness")
+			assert.Truef(t, strings.HasPrefix(got, saltedPrefix()),
+				"safeDBName(%q) = %q must open with %q so the salt keeps its position", tc.testName, got, saltedPrefix())
 		})
 	}
 }
@@ -107,6 +114,8 @@ func TestSafeDBName_Idempotent(t *testing.T) {
 
 	first := safeDBName("TestRepeatable")
 	assert.Equal(t, first, safeDBName("TestRepeatable"))
+	// The bare literal, deliberately, not saltedPrefix(): a cleanup script sweeping leftovers from an earlier, already-exited
+	// process cannot know that process's salt, so "edr_test_" is the only stable handle it can match on.
 	assert.True(t, strings.HasPrefix(first, "edr_test_"), "prefix must stay stable: cleanup scripts key off it")
 }
 
@@ -130,9 +139,8 @@ func TestSafeDBName_PBT(t *testing.T) {
 			"safeDBName(%q) = %q is not a valid unquoted identifier", name, got)
 		require.LessOrEqualf(rt, len(got), maxClickHouseDBNameLen,
 			"safeDBName(%q) = %d bytes, over the %d-byte ceiling", name, len(got), maxClickHouseDBNameLen)
-		require.Truef(rt, strings.HasPrefix(got, "edr_test_"), "safeDBName(%q) = %q lost its prefix", name, got)
-		require.Containsf(rt, got, testdb.ProcessSalt(),
-			"safeDBName(%q) = %q dropped the process salt; truncation must never reach it", name, got)
+		require.Truef(rt, strings.HasPrefix(got, saltedPrefix()),
+			"safeDBName(%q) = %q must open with %q; truncation must never reach the salt", name, got, saltedPrefix())
 		require.Equalf(rt, got, safeDBName(name), "safeDBName(%q) is not deterministic", name)
 	})
 }
