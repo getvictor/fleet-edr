@@ -8,7 +8,7 @@
 # Bumping a version here is the single source of truth; update the CI
 # workflow at the same time (workflows use `go-version-file: go.mod` where
 # possible, which already tracks this file's Go pin via go.mod).
-golang 1.26.5
+golang 1.26.6
 # 22.23.2 is the current 22.x LTS and clears the 22.22.0 floor that react-router
 # 8.3.0 declares in engines.node. The pin sat at 22.21.0, below that floor, so a
 # fresh mise/asdf install warned EBADENGINE while CI, which installs a floating

@@ -10,14 +10,14 @@
 // and the golangci-lint plugin registrar.
 module github.com/fleetdm/edr/tools/comment-wrap-check/lint
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/golangci/plugin-module-register v0.1.2
-	golang.org/x/tools v0.44.0
+	golang.org/x/tools v0.49.0
 )
 
 require (
-	golang.org/x/mod v0.35.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/mod v0.40.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 )
