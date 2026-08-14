@@ -41,7 +41,7 @@ RUN npm run build
 # ---------------------------------------------------------------
 # Stage 2: Go binary
 # ---------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.26.5@sha256:3aff6657219a4d9c14e27fb1d8976c49c29fddb70ba835014f477e1c70636647 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27rc1@sha256:016d7b2a8dcddeb54626f397e6d7c58758db12d097ac4174b7b05e1de9e5bddc AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
