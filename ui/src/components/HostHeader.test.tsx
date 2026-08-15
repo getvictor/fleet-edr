@@ -322,4 +322,48 @@ describe("HostHeader agent health", () => {
     expect(screen.queryByText("DNS capture")).not.toBeInTheDocument();
     expect(screen.queryByText("Connection capture")).not.toBeInTheDocument();
   });
+
+  // Agent-reported providers (issue #702) render beside the extension that owns them, so an operator sees which capture is
+  // down rather than only that something under the network extension is.
+  it("names each capture provider the agent reports", async () => {
+    const detail = detailFixture();
+    vi.spyOn(api, "getHostDetail").mockResolvedValue(detail);
+    vi.spyOn(api, "getHostHealth").mockResolvedValue(
+      healthFixture({
+        overall_status: "unhealthy",
+        components: [
+          {
+            type: "network_extension",
+            status: "unhealthy",
+            reason: "provider_stopped",
+            message: "Network extension stopped capturing: dns_proxy",
+            last_transition_ns: (Date.now() - 5 * MINUTE_MS) * NANOSECONDS_PER_MILLISECOND,
+          },
+          {
+            type: "content_filter",
+            status: "healthy",
+            reason: "activated",
+            message: "Content filter is capturing",
+            last_transition_ns: (Date.now() - 30 * MINUTE_MS) * NANOSECONDS_PER_MILLISECOND,
+          },
+          {
+            type: "dns_proxy",
+            status: "unhealthy",
+            reason: "provider_stopped",
+            message: "DNS proxy stopped capturing",
+            last_transition_ns: (Date.now() - 5 * MINUTE_MS) * NANOSECONDS_PER_MILLISECOND,
+          },
+        ],
+      }),
+    );
+    renderHeader(detail.host_id);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    expect(await screen.findByText("Content filter")).toBeInTheDocument();
+    expect(screen.getByText("DNS proxy")).toBeInTheDocument();
+    expect(screen.getByText("DNS proxy stopped capturing")).toBeInTheDocument();
+    // Agent-reported conditions carry a real transition instant, unlike derived ones, so their age renders.
+    expect(screen.getAllByText("5m ago").length).toBeGreaterThan(0);
+  });
 });

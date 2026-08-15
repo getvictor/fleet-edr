@@ -42,6 +42,9 @@ const (
 	reasonAwaitingProviders  = "awaiting_provider_status"
 	reasonNoProvidersRunning = "no_providers_running"
 	reasonProviderStopped    = "provider_stopped"
+	// reasonProviderStateUnknown is for a provider state this build does not recognise, which a newer extension can
+	// produce. Distinct from the reasons above so an operator can tell "I do not know" from "I checked and it is down".
+	reasonProviderStateUnknown = "provider_state_unknown"
 	// reasonSelfHealFailed distinguishes "automatic recovery is still working on it" from "automatic recovery gave up and a
 	// human is needed" (issue #632). Without the distinction an operator watching provider_stopped cannot tell a transient
 	// stop the agent is about to fix from one it has already failed to fix three times, which is the difference between
@@ -91,15 +94,32 @@ type componentState struct {
 	everConnected    bool
 }
 
+// providerHealth is the remembered state of ONE capture provider inside a parent component's latest liveness report.
+//
+// It is not a componentState: a provider is never Registered, and it disappears from the snapshot the moment the extension
+// stops reporting it. Only the transition instant is remembered between reports, so an age can be reported honestly.
+type providerHealth struct {
+	state            string
+	lastTransitionNs int64
+}
+
 // Registry is the agent's concurrency-safe health state. Each monitored component is registered once at startup (seeding
 // unhealthy/never_connected) and then driven by the receiver loops' connect/disconnect transitions. The poster reads Snapshot(); a
 // buffered Changed() channel pulses on any status transition so the poster can report promptly rather than waiting for its periodic tick.
 type Registry struct {
-	mu      sync.Mutex
-	comps   map[string]*componentState
-	order   []string // registration order, for a stable Snapshot
-	nowNs   func() int64
-	changed chan struct{}
+	mu    sync.Mutex
+	comps map[string]*componentState
+	order []string // registration order, for a stable Snapshot
+	// providers is the per-parent-component view of the LATEST liveness report: parent component type -> provider -> state.
+	//
+	// Rendered into the snapshot rather than accumulated as registered components, which is the whole point (issue #702).
+	// Liveness is level state and so is the snapshot, so a provider the extension stops reporting must vanish from the
+	// snapshot too. The alternative, registering each provider on first sighting, would leave a provider an operator
+	// deliberately switched off asserting "running" forever, and a stale positive claim is worse than silence: the server
+	// contradicts that claim against arriving telemetry, so it would report a wedge on a provider that is simply off.
+	providers map[string]map[string]providerHealth
+	nowNs     func() int64
+	changed   chan struct{}
 }
 
 // NewRegistry returns an empty registry using the wall clock. Tests inject a clock via newRegistryWithClock.
@@ -109,9 +129,10 @@ func NewRegistry() *Registry {
 
 func newRegistryWithClock(nowNs func() int64) *Registry {
 	return &Registry{
-		comps:   map[string]*componentState{},
-		nowNs:   nowNs,
-		changed: make(chan struct{}, 1),
+		comps:     map[string]*componentState{},
+		providers: map[string]map[string]providerHealth{},
+		nowNs:     nowNs,
+		changed:   make(chan struct{}, 1),
 	}
 }
 
@@ -148,6 +169,14 @@ func (r *Registry) MarkConnected(compType string) {
 const (
 	ProviderRunning = "running"
 	ProviderStopped = "stopped"
+)
+
+// Provider wire identifiers this build knows by name. The set is NOT closed: the extension owns the vocabulary and an
+// unrecognised provider is still reported, under its own identifier (issue #702). These exist so the known two get a human
+// display name and so the server and agent share one spelling.
+const (
+	ProviderContentFilter = "content_filter"
+	ProviderDNSProxy      = "dns_proxy"
 )
 
 // GradeProviders grades a provider-liveness snapshot into a component status. Pure, so every case is unit-testable without a
@@ -187,6 +216,43 @@ func (r *Registry) MarkProviders(compType string, providers map[string]string) {
 		status, reason, message := GradeProviders(s.displayName, providers)
 		s.set(status, reason, message)
 	})
+	r.recordProviders(compType, providers)
+}
+
+// recordProviders folds a liveness report into the per-provider view the snapshot renders (issue #702).
+//
+// Two rules, and both matter to the server that reads the result:
+//
+//   - A provider MISSING from the report is dropped, not retained. The extension reports a deliberate opt-out by omission,
+//     so retaining the last known state would publish "running" for a provider an operator switched off.
+//   - A provider whose state is unchanged keeps its transition instant. Reports arrive on every handshake, so re-stamping
+//     each time would make every provider look like it had just changed and destroy the age the console shows.
+//
+// It is a no-op for an unregistered parent, matching transition, so a stray report cannot conjure providers under a
+// component this build does not monitor.
+func (r *Registry) recordProviders(compType string, providers map[string]string) {
+	r.mu.Lock()
+	if _, ok := r.comps[compType]; !ok {
+		r.mu.Unlock()
+		return
+	}
+	now := r.nowNs()
+	previous := r.providers[compType]
+	current := make(map[string]providerHealth, len(providers))
+	changed := len(previous) != len(providers)
+	for name, state := range providers {
+		if was, ok := previous[name]; ok && was.state == state {
+			current[name] = was
+			continue
+		}
+		current[name] = providerHealth{state: state, lastTransitionNs: now}
+		changed = true
+	}
+	r.providers[compType] = current
+	r.mu.Unlock()
+	if changed {
+		r.notify()
+	}
 }
 
 // MarkAwaitingProviders records that compType has an XPC session but has not yet said which providers are running. Degraded rather
@@ -272,8 +338,77 @@ func (r *Registry) Snapshot() []Component {
 			Message:          s.message,
 			LastTransitionNs: s.lastTransitionNs,
 		})
+		// Each parent's providers follow it, so the list reads as a hierarchy even though the wire is flat.
+		out = append(out, r.providerComponents(t)...)
 	}
 	return out
+}
+
+// providerComponents renders one parent's latest liveness report as its own components (issue #702).
+//
+// The server needs each provider's state as a POSITIVE claim it can contradict against arriving telemetry. Collapsed into
+// one component, "the network extension is healthy" says nothing about which of its providers are capturing, so a wedged
+// provider and a fully working host are indistinguishable on the wire.
+//
+// Sorted by name so the snapshot is stable across reports; the wire is compared as a whole by the server's last-writer-wins
+// upsert, and map iteration order would make every report look different.
+//
+// Caller holds the lock.
+func (r *Registry) providerComponents(compType string) []Component {
+	states := r.providers[compType]
+	if len(states) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(states))
+	for name := range states {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]Component, 0, len(names))
+	for _, name := range names {
+		p := states[name]
+		status, reason, message := gradeProvider(name, p.state)
+		out = append(out, Component{
+			Type:             name,
+			Status:           status,
+			Reason:           reason,
+			Message:          message,
+			LastTransitionNs: p.lastTransitionNs,
+		})
+	}
+	return out
+}
+
+// gradeProvider maps ONE provider's reported state to a component condition.
+//
+// A state this build does not recognise grades to unknown rather than to healthy or unhealthy. That is the honest answer
+// for a newer extension reporting a state this agent predates, and it is also the safe one in both directions: it is not a
+// positive "running" claim the server could contradict into a false alert, and it does not condemn a host either. The
+// server's rollup treats a lone unknown as not raising the overall status, so this cannot turn a healthy host amber.
+func gradeProvider(name, state string) (Status, string, string) {
+	display := providerDisplayName(name)
+	switch state {
+	case ProviderRunning:
+		return StatusHealthy, reasonActivated, display + " is capturing"
+	case ProviderStopped:
+		return StatusUnhealthy, reasonProviderStopped, display + " stopped capturing"
+	default:
+		return StatusUnknown, reasonProviderStateUnknown, display + " reported an unrecognized state"
+	}
+}
+
+// providerDisplayName gives the known providers a human name and falls back to the wire identifier for one this build does
+// not know, so a newer extension's provider is still legible rather than blank.
+func providerDisplayName(name string) string {
+	switch name {
+	case ProviderContentFilter:
+		return "Content filter"
+	case ProviderDNSProxy:
+		return "DNS proxy"
+	default:
+		return name
+	}
 }
 
 // Changed returns a channel that receives a value after any status transition. It is buffered with capacity one and sent non-blocking,
