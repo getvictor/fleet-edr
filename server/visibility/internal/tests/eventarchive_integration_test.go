@@ -562,14 +562,11 @@ func eventIDs(events []visibilityapi.Event) []string {
 	return ids
 }
 
-// testWindows builds the nested windows locally rather than importing the detection package that owns the production constants: that
-// package is internal to another bounded context, and this test is about the archive's counting mechanics, not about which windows
+// testWindow builds the read's bounds locally rather than importing the detection package that owns the production constant: that
+// package is internal to another bounded context, and this test is about the archive's counting mechanics, not about which window
 // the health derivation happens to choose.
-func testWindows(now time.Time) visibilityapi.TelemetryActivityWindows {
-	return visibilityapi.TelemetryActivityWindows{
-		Reference:    httpserver.TimeRange{FromNs: now.Add(-7 * 24 * time.Hour).UnixNano(), ToNs: now.UnixNano()},
-		SilentFromNs: now.Add(-2 * time.Hour).UnixNano(),
-	}
+func testWindow(now time.Time) httpserver.TimeRange {
+	return httpserver.TimeRange{FromNs: now.Add(-2 * time.Hour).UnixNano(), ToNs: now.UnixNano()}
 }
 
 // TestEventArchive_TelemetryActivityForHosts pins the counting read behind derived host health (issue #677) against real ClickHouse.
@@ -582,14 +579,13 @@ func TestEventArchive_TelemetryActivityForHosts(t *testing.T) {
 	ctx := context.Background()
 	arch := openTestArchive(t)
 	now := time.Now()
-	// Offsets are relative to now: inside the silence window (recent), inside the reference window but not the silence window
-	// (old), and outside both (ancient).
+	// Offsets are relative to now: inside the window, and outside it.
 	recent := now.Add(-30 * time.Minute).UnixNano()
 	old := now.Add(-24 * time.Hour).UnixNano()
-	ancient := now.Add(-30 * 24 * time.Hour).UnixNano()
 
 	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
-		// wedged: processes running now, both flow streams silent now but active a day ago. The shape of the real incident.
+		// wedged: processes running now, both flow streams silent inside the window though active a day ago (which is
+		// outside it, so those older events must NOT be counted).
 		archiveEvent("w1", "wedged", "exec", recent, 1),
 		archiveEvent("w2", "wedged", "fork", recent, 1),
 		archiveEvent("w3", "wedged", "network_connect", old, 1),
@@ -598,9 +594,9 @@ func TestEventArchive_TelemetryActivityForHosts(t *testing.T) {
 		archiveEvent("h1", "healthy", "exec", recent, 1),
 		archiveEvent("h2", "healthy", "network_connect", recent, 1),
 		archiveEvent("h3", "healthy", "dns_query", recent, 1),
-		// stale: its only events predate the reference window entirely, so it must not appear in the result at all.
-		archiveEvent("s1", "stale", "exec", ancient, 1),
-		archiveEvent("s2", "stale", "network_connect", ancient, 1),
+		// stale: its only events predate the window entirely, so it must not appear in the result at all.
+		archiveEvent("s1", "stale", "exec", old, 1),
+		archiveEvent("s2", "stale", "network_connect", old, 1),
 		// unrelated: a host the caller did not ask about, to pin that the host filter actually filters.
 		archiveEvent("u1", "unrelated", "exec", recent, 1),
 		// othertype: a host whose only events are of a type this read does not count. The event_type predicate that prunes the
@@ -608,13 +604,13 @@ func TestEventArchive_TelemetryActivityForHosts(t *testing.T) {
 		archiveEvent("o1", "othertype", "exit", recent, 1),
 	}))
 
-	got, err := arch.TelemetryActivityForHosts(ctx, []string{"wedged", "healthy", "stale", "never-seen", "othertype"}, testWindows(now))
+	got, err := arch.TelemetryActivityForHosts(ctx, []string{"wedged", "healthy", "stale", "never-seen", "othertype"}, testWindow(now))
 	require.NoError(t, err)
 
 	assert.NotContains(t, got, "unrelated", "a host outside the requested set must not be counted")
 	assert.NotContains(t, got, "never-seen", "an unknown host must be absent, not present with zeroes")
 	assert.NotContains(t, got, "stale",
-		"a host whose only events predate the reference window must be absent, not reported as silent")
+		"a host whose only events predate the window must be absent, not reported as silent")
 	assert.NotContains(t, got, "othertype",
 		"an uncounted event type must not produce a group; the same predicate is what prunes the scan by the sorting key")
 
@@ -622,8 +618,6 @@ func TestEventArchive_TelemetryActivityForHosts(t *testing.T) {
 	assert.Equal(t, int64(2), got["wedged"].ProcessInWindow, "exec and fork both count as process activity")
 	assert.Zero(t, got["wedged"].ConnectInWindow)
 	assert.Zero(t, got["wedged"].DNSInWindow)
-	assert.Equal(t, int64(1), got["wedged"].ConnectInReference, "the older flow events must still count toward the reference")
-	assert.Equal(t, int64(1), got["wedged"].DNSInReference)
 
 	require.Contains(t, got, "healthy")
 	assert.Equal(t, int64(1), got["healthy"].ConnectInWindow)
@@ -634,7 +628,7 @@ func TestEventArchive_TelemetryActivityForHosts(t *testing.T) {
 // so the Hosts list can call it unconditionally on a deployment with no hosts.
 func TestEventArchive_TelemetryActivityForHostsEmptyInput(t *testing.T) {
 	t.Parallel()
-	got, err := openTestArchive(t).TelemetryActivityForHosts(context.Background(), nil, testWindows(time.Now()))
+	got, err := openTestArchive(t).TelemetryActivityForHosts(context.Background(), nil, testWindow(time.Now()))
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }

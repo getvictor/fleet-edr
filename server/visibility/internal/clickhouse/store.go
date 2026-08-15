@@ -156,40 +156,34 @@ func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
 }
 
-// TelemetryActivityForHosts counts each telemetry stream per host over the two nested windows in one pass.
+// TelemetryActivityForHosts counts each telemetry stream per host over one window, in a single pass.
 //
-// One query, not one per host and not one per window: the whole read is a single scan of the reference range with conditional
-// aggregates, so adding hosts widens the key filter rather than multiplying round trips. That is what lets the Hosts list derive the
-// signal for every row it returns at the cost of one query per page.
+// One query, not one per host: the whole read is a single scan with conditional aggregates, so adding hosts widens the key
+// filter rather than multiplying round trips. That is what lets the Hosts list derive the signal for every row it returns at
+// the cost of one query per page.
 //
-// The scan is key-pruned on all three leading key columns. The archive's sorting key is (host_id, event_type, timestamp_ns, ...), so
-// the explicit host list makes this a set of key ranges rather than a time-filtered scan of the whole fleet, the event_type predicate
-// narrows each of those ranges to the four streams actually counted (WITHOUT it the conditional aggregates still return the right
-// numbers, but only after reading every other event type this host produced, and exec/exit/network traffic dwarfs the rest), and the
-// reference bound then prunes granules by the timestamp_ns min/max index.
+// The scan is key-pruned on all three leading key columns. The archive's sorting key is (host_id, event_type, timestamp_ns,
+// ...), so the explicit host list makes this a set of key ranges rather than a time-filtered scan of the whole fleet, the
+// event_type predicate narrows each of those ranges to the four streams actually counted, and the time bound then prunes
+// granules by the timestamp_ns min/max index.
 //
 // No FINAL: see TelemetryActivity for why duplicate rows cannot change any decision made from these counts.
 func (s *Store) TelemetryActivityForHosts(
-	ctx context.Context, hostIDs []string, w api.TelemetryActivityWindows,
+	ctx context.Context, hostIDs []string, tr httpserver.TimeRange,
 ) (map[string]api.TelemetryActivity, error) {
 	if len(hostIDs) == 0 {
 		return map[string]api.TelemetryActivity{}, nil
 	}
-	// Argument order follows the placeholders left to right: the three conditional aggregates each take the inner window's start,
-	// then the host key filter, then the reference bounds.
-	args := make([]any, 0, len(hostIDs)+5)
-	args = append(args, w.SilentFromNs, w.SilentFromNs, w.SilentFromNs)
+	args := make([]any, 0, len(hostIDs)+2)
 	for _, id := range hostIDs {
 		args = append(args, id)
 	}
-	args = append(args, w.Reference.FromNs, w.Reference.ToNs)
+	args = append(args, tr.FromNs, tr.ToNs)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT host_id,
-		       countIf(event_type IN ('exec', 'fork') AND timestamp_ns >= ?)     AS process_in_window,
-		       countIf(event_type = 'network_connect' AND timestamp_ns >= ?)     AS connect_in_window,
-		       countIf(event_type = 'dns_query' AND timestamp_ns >= ?)           AS dns_in_window,
-		       countIf(event_type = 'network_connect')                           AS connect_in_reference,
-		       countIf(event_type = 'dns_query')                                 AS dns_in_reference
+		       countIf(event_type IN ('exec', 'fork')) AS process_in_window,
+		       countIf(event_type = 'network_connect') AS connect_in_window,
+		       countIf(event_type = 'dns_query')       AS dns_in_window
 		FROM events
 		WHERE host_id IN (`+placeholders(len(hostIDs))+`)
 		  AND event_type IN ('exec', 'fork', 'network_connect', 'dns_query')
@@ -204,8 +198,7 @@ func (s *Store) TelemetryActivityForHosts(
 	for rows.Next() {
 		var hostID string
 		var a api.TelemetryActivity
-		if err := rows.Scan(&hostID, &a.ProcessInWindow, &a.ConnectInWindow, &a.DNSInWindow,
-			&a.ConnectInReference, &a.DNSInReference); err != nil {
+		if err := rows.Scan(&hostID, &a.ProcessInWindow, &a.ConnectInWindow, &a.DNSInWindow); err != nil {
 			return nil, fmt.Errorf("clickhouse scan telemetry activity: %w", err)
 		}
 		out[hostID] = a

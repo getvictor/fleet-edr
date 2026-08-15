@@ -43,9 +43,8 @@ type EventSearchResult = visibilityapi.EventSearchResult
 // HostTimelineFilter aliases the visibility host-event-timeline filter (issue #583), the same re-export pattern the search types use.
 type HostTimelineFilter = visibilityapi.HostTimelineFilter
 
-// TelemetryActivityWindows / TelemetryActivity alias the visibility telemetry-freshness read types (issue #677), the same re-export
-// pattern the search and timeline types use.
-type TelemetryActivityWindows = visibilityapi.TelemetryActivityWindows
+// TelemetryActivity aliases the visibility telemetry-freshness read type (issue #677), the same re-export pattern the search and
+// timeline types use.
 type TelemetryActivity = visibilityapi.TelemetryActivity
 
 // Platform constants and helpers are defined in the visibility context (the canonical event owner, ADR-0015) and re-exported here so

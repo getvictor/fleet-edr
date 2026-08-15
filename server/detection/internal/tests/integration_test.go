@@ -3760,7 +3760,12 @@ func TestHostHealth_DerivesWedgedProviderFromTelemetry(t *testing.T) {
 			INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
 			VALUES (?, ?, ?, ?)`,
 			h, "healthy",
-			`[{"type":"network_extension","status":"healthy","reason":"activated","last_transition_ns":90}]`, 100)
+			// The per-provider components are what the derived check reads (issue #702): the collapsed network_extension
+			// component says nothing about which providers are capturing, so a fixture carrying only it would assert no
+			// claim and derive nothing. This mirrors what a real agent posts.
+			`[{"type":"network_extension","status":"healthy","reason":"activated","last_transition_ns":90},`+
+				`{"type":"content_filter","status":"healthy","reason":"activated","last_transition_ns":90},`+
+				`{"type":"dns_proxy","status":"healthy","reason":"activated","last_transition_ns":90}]`, 100)
 		require.NoError(t, err)
 	}
 
@@ -3835,7 +3840,10 @@ func TestHostHealth_DerivedSignalToleratesAnArchiveOutage(t *testing.T) {
 	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
 	_, err := d.Store().DB().ExecContext(ctx, `
 		INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
-		VALUES (?, ?, ?, ?)`, host, "healthy", `[{"type":"network_extension","status":"healthy","last_transition_ns":90}]`, 100)
+		VALUES (?, ?, ?, ?)`, host, "healthy",
+		`[{"type":"network_extension","status":"healthy","last_transition_ns":90},`+
+			`{"type":"content_filter","status":"healthy","last_transition_ns":90},`+
+			`{"type":"dns_proxy","status":"healthy","last_transition_ns":90}]`, 100)
 	require.NoError(t, err)
 
 	archive.FailReads(errors.New("clickhouse unreachable"))

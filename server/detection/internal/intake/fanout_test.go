@@ -41,7 +41,7 @@ func (f *fakeEventArchive) EventsByIDs(context.Context, []string) ([]api.Event, 
 }
 
 func (f *fakeEventArchive) TelemetryActivityForHosts(
-	context.Context, []string, api.TelemetryActivityWindows,
+	context.Context, []string, httpserver.TimeRange,
 ) (map[string]api.TelemetryActivity, error) {
 	return nil, nil
 }
