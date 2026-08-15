@@ -35,7 +35,18 @@
 
 ## 6. Live QA on the VM (issue #691 QA steps)
 
-- [ ] 6.1 Disable the mandatory content filter and let the self-heal repair it: confirm ONE alert, unchanged from today
-- [ ] 6.2 Break the repair path, disable the filter, let all three attempts fail: confirm a second, distinct alert naming the provider
-- [ ] 6.3 Confirm host health still reports `unhealthy / self_heal_failed`, so the two surfaces agree
-- [ ] 6.4 Confirm no second alert arrives on subsequent liveness reports while the provider stays stopped
+Run on edr-dev 2026-08-15 against the real agent, extension, and dev server. One timeline covers all four:
+
+```
+12:17:15  content_filter stopped        self-heal repaired it
+12:17:53  content_filter running        -> ONE alert: sensor_tamper (high)
+12:20:11  content_filter stopped        repair path broken (chmod 000 on the host app)
+12:22:33  sensor_recovery_failed        -> SECOND alert: sensor_recovery_failed (critical)
+          enable_failed, attempts 3        142s after the stop: grace 30 + backoffs 30 and 60
+12:28:19  content_filter running        restored by hand
+```
+
+- [x] 6.1 Disable the mandatory content filter and let the self-heal repair it: confirm ONE alert, unchanged from today. Repaired in 38s, matching the ~35.7s on record; alert 1819 only, no recovery-failed event or alert
+- [x] 6.2 Break the repair path, disable the filter, let all three attempts fail: confirm a second, distinct alert naming the provider. Alerts 1820 (`sensor_tamper`, high) and 1821 (`sensor_recovery_failed`, critical), the latter reading "still stopped after 3 automatic repair attempts (every attempt to re-enable it failed)"
+- [x] 6.3 Confirm host health still reports `unhealthy / self_heal_failed`, so the two surfaces agree. Confirmed, and it returned to `healthy` once the filter was re-enabled
+- [x] 6.4 Confirm no second alert arrives on subsequent liveness reports while the provider stays stopped. Left stopped for a further 3 minutes with liveness republishing throughout: still exactly ONE event and ONE alert. This is the storm guard the unit test can only approximate, verified on real hardware
