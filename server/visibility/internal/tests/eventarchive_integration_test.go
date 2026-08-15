@@ -362,7 +362,7 @@ func TestEventArchive_SearchEvents(t *testing.T) {
 		EventType: "network_connect", FromNs: window.FromNs, ToNs: window.ToNs,
 	}, "", 50)
 	require.NoError(t, err)
-	assert.EqualValues(t, visibilityapi.TotalNotCounted, res.TotalMatched, "the recent-events browse skips the count")
+	assert.Equal(t, visibilityapi.TotalNotCounted, res.TotalMatched, "the recent-events browse skips the count")
 	require.Len(t, res.Events, 3, "no artifact filter lists all connection events")
 	ids = eventIDSet(res.Events)
 	assert.True(t, ids["c-a"] && ids["c-b"] && ids["c-other"], "includes every connection regardless of remote address")
@@ -411,25 +411,28 @@ func TestEventArchive_EventsByTypeForHostOverflow(t *testing.T) {
 	arch := openTestArchive(t)
 	base := time.Now().UnixNano()
 	const transition = "sensor_provider_transition"
-	const cap = 1000
+	// Mirrors the unexported eventsByTypeRowCap in server/visibility/internal/clickhouse/store.go. The test cannot import it
+	// across the internal boundary, so the value is duplicated here and the names are kept identical to make that link greppable.
+	// Named for the thing it bounds rather than `cap`, which would shadow the builtin.
+	const eventsByTypeRowCap = 1000
 
-	events := make([]visibilityapi.Event, 0, cap+1)
-	for i := range cap + 1 {
+	events := make([]visibilityapi.Event, 0, eventsByTypeRowCap+1)
+	for i := range eventsByTypeRowCap + 1 {
 		events = append(events, archiveEvent(fmt.Sprintf("ovf%05d", i), "hostOvf", transition, base+int64(i), 1))
 	}
 	require.NoError(t, arch.Insert(ctx, events))
 
 	_, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
-		FromNs: base, ToNs: base + int64(cap+1),
+		FromNs: base, ToNs: base + int64(eventsByTypeRowCap+1),
 	})
 	require.ErrorIs(t, err, visibilityapi.ErrEventsTruncated)
 
 	// Exactly at the cap is a complete answer.
 	got, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
-		FromNs: base, ToNs: base + int64(cap-1),
+		FromNs: base, ToNs: base + int64(eventsByTypeRowCap-1),
 	})
 	require.NoError(t, err)
-	assert.Len(t, got, cap)
+	assert.Len(t, got, eventsByTypeRowCap)
 }
 
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/keyset-pagination-is-stable-and-complete
