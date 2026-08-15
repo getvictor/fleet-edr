@@ -3042,6 +3042,83 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 	})
 }
 
+// TestProcessTree_WindowOverlapSemantics pins which processes a time range admits. The tree deliberately shows a process that was
+// ALIVE during the window, not merely one that started inside it, so a long-running process still appears in a short-window view.
+//
+// This exists because the overlap predicate was rewritten for issue #423 from a three-way OR (started inside, OR started before and
+// still running, OR started before and exited after the window began) into the equivalent "started at or before the window ends AND
+// had not already exited when it began". The two are equivalent only given the physical invariant that a process cannot exit before
+// it forks, and nothing in the suite covered the rule at all, so the rewrite would otherwise have rested entirely on a manual
+// measurement. The exit-exactly-at-the-window-start case is the boundary an off-by-one would break.
+//
+// spec:server-rest-api/per-host-process-forest/a-time-range-is-supplied
+func TestProcessTree_WindowOverlapSemantics(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	const host = "overlap-host"
+	// A base far from zero so "before the window" timestamps stay positive.
+	const base = int64(1_000_000_000_000)
+	const winFrom, winTo = base + 1_000, base + 2_000
+
+	seed := func(name string, pid int, forkNs int64, exitNs *int64) {
+		events := []api.Event{{
+			EventID: "fork-" + name, HostID: host, TimestampNs: forkNs, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":` + strconv.Itoa(pid) + `,"parent_pid":1}`),
+		}}
+		if exitNs != nil {
+			events = append(events, api.Event{
+				EventID: "exit-" + name, HostID: host, TimestampNs: *exitNs, EventType: "exit",
+				Payload: json.RawMessage(`{"pid":` + strconv.Itoa(pid) + `,"exit_code":0}`),
+			})
+		}
+		insertEventsViaIngest(ctx, t, d, host, events)
+	}
+	at := func(ns int64) *int64 { return &ns }
+
+	seed("inside", 101, winFrom+10, at(winFrom+20))      // wholly inside
+	seed("spanning", 102, winFrom-500, at(winTo+500))    // started before, ended after
+	seed("running", 103, winFrom-500, nil)               // started before, never exited
+	seed("exit-at-start", 104, winFrom-500, at(winFrom)) // boundary: exited exactly as the window opened
+	seed("ended-before", 105, winFrom-500, at(winFrom-100))
+	seed("started-after", 106, winTo+100, nil)
+
+	window := api.TimeRange{FromNs: winFrom, ToNs: winTo}
+	wantIn := []int{101, 102, 103, 104}
+	wantOut := []int{105, 106}
+
+	var pids map[int]bool
+	require.Eventually(t, func() bool {
+		res, err := d.Service().BuildTree(ctx, host, window, 1000, true, 0)
+		if err != nil {
+			return false
+		}
+		pids = map[int]bool{}
+		var walk func(nodes []api.ProcessNode)
+		walk = func(nodes []api.ProcessNode) {
+			for _, n := range nodes {
+				pids[n.PID] = true
+				walk(n.Children)
+			}
+		}
+		walk(res.Roots)
+		for _, pid := range wantIn {
+			if !pids[pid] {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 100*time.Millisecond, "every overlapping process must materialise and appear in the window")
+
+	for _, pid := range wantIn {
+		assert.Truef(t, pids[pid], "pid %d overlaps the window and MUST be present", pid)
+	}
+	for _, pid := range wantOut {
+		assert.Falsef(t, pids[pid], "pid %d does not overlap the window and MUST be absent", pid)
+	}
+}
+
 // ---- Health probes ---------------------------------------------------------
 
 func TestHealthRoutes_LivezReadyz(t *testing.T) {

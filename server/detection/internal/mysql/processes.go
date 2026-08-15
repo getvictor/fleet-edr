@@ -428,25 +428,31 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 	return path, err
 }
 
-// processTreeWindowPredicate is the lifetime-overlap predicate shared by GetProcessTree and CountProcessTree: a process is in the
-// window if it forked inside it, or forked before it and never exited, or forked before it and exited at or after its start.
+// processTreeWindowPredicate is the lifetime-overlap predicate shared by GetProcessTree and CountProcessTree: a process overlaps the
+// window if it started at or before the window ends and had not already exited when the window began.
 //
 // It is one constant rather than a copy per query because the count is only meaningful if it counts exactly the rows the SELECT
-// would have returned without its limit. Two hand-maintained copies of a five-clause predicate drift, and the failure mode of drift
-// is a "showing N of M" banner stating a confidently wrong number, which is the defect issue #423 exists to remove rather than
-// relocate. Bind with processTreeWindowArgs, which supplies the placeholders in this order.
+// would have returned without its limit. Two hand-maintained copies drift, and the failure mode of drift is a "showing N of M"
+// banner stating a confidently wrong number, which is the defect issue #423 exists to remove rather than relocate. Bind with
+// processTreeWindowArgs, which supplies the placeholders in this order.
+//
+// This replaced a three-way OR (forked inside the window, OR forked before and still running, OR forked before and exited after the
+// window began) that is logically equivalent given the physical invariant that a process cannot exit before it forks. The OR made
+// two of the three branches unbounded below on fork_time_ns, so the optimizer abandoned the index and full-scanned for any query it
+// could not stop early. Measured against a 631k-row copy of the dev database, one host, a 15-minute window matching 4,750 rows:
+// the count went from a 635k-row full scan at ~250 to 840 ms down to a 4,750-row index range scan at ~4 ms. The row query, which
+// could already stop early on ORDER BY + LIMIT, stays at ~4-5 ms and returns an identical id set. Adding the (host_id,
+// exit_time_ns) index a reviewer proposed does NOT help: the optimizer declines it for the OR shape (measured, ~253 ms vs ~250 ms
+// baseline). The rewrite is what makes it index-cheap, not the index.
 const processTreeWindowPredicate = `
 		WHERE host_id = ?
-		  AND (
-		    (fork_time_ns >= ? AND fork_time_ns <= ?)
-		    OR (fork_time_ns < ? AND exit_time_ns IS NULL)
-		    OR (fork_time_ns < ? AND exit_time_ns >= ?)
-		  )`
+		  AND fork_time_ns <= ?
+		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)`
 
 // processTreeWindowArgs returns the bind arguments for processTreeWindowPredicate in placeholder order. Returns a fresh slice per
 // call so a caller may append its own trailing arguments (the row query appends its LIMIT) without aliasing.
 func processTreeWindowArgs(hostID string, tr api.TimeRange) []any {
-	return []any{hostID, tr.FromNs, tr.ToNs, tr.FromNs, tr.FromNs, tr.FromNs}
+	return []any{hostID, tr.ToNs, tr.FromNs}
 }
 
 // GetProcessTree returns all processes for a host within a time range. Includes any process that was alive at any point during the
