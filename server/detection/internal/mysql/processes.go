@@ -473,10 +473,9 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 // CountProcessTree returns how many process rows overlap the window, independent of any row limit, so a caller can report what a
 // limited read did not return (issue #423).
 //
-// Unconditional, unlike the fleet-wide process search's count: that one skips the COUNT(*) for a fully-unfiltered browse because
-// counting the whole processes table is its expensive half, and it returns the TotalNotCounted sentinel instead. The tree read is
-// always scoped to one host_id and one window, which is the case that search's own rationale calls index-cheap, so there is no
-// browse-shaped reason to skip it here and no sentinel for callers to branch on.
+// Unlike GetProcessTree this cannot stop early: the row query walks idx_processes_host_time in fork-time order and stops once it has
+// `limit` rows, while counting has to evaluate every match. Callers should therefore run this only when the limit actually bound
+// (see graph.BuildTree), not on every tree read. There is no not-counted sentinel: when it does run, it returns the exact number.
 func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.TimeRange) (int64, error) {
 	var total int64
 	err := s.db.GetContext(ctx, &total, `

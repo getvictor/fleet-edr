@@ -3008,6 +3008,18 @@ func TestProcessTree_TruncationMetadata(t *testing.T) {
 			"TotalMatched MUST count every overlapping row; reporting the limit here is the silent-drop bug #423 exists to fix")
 	})
 
+	t.Run("a limit exactly equal to the match count is not truncated", func(t *testing.T) {
+		t.Parallel()
+		// The boundary the count-only-when-the-limit-bound branch turns on: the read comes back AT the limit, so the count runs,
+		// and it must then prove nothing was dropped rather than warn. Off-by-one here would warn on every perfectly complete
+		// read whose size happens to match the cap.
+		res, err := d.Service().BuildTree(t.Context(), host, window, int(full.TotalMatched), true, 0)
+		require.NoError(t, err)
+		assert.False(t, res.Truncated, "returning exactly every matching row is complete, not truncated")
+		assert.Equal(t, full.TotalMatched, res.Returned)
+		assert.Equal(t, full.TotalMatched, res.TotalMatched)
+	})
+
 	t.Run("the reported total ignores the requested limit", func(t *testing.T) {
 		t.Parallel()
 		small, err := d.Service().BuildTree(t.Context(), host, window, 1, true, 0)

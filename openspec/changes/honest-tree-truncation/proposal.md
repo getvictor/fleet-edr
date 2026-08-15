@@ -27,9 +27,17 @@ A client that derives the numerator is therefore re-implementing two server-side
 
 `truncated` is kept even though it equals `returned < total_matched`, because it states the server's own judgment rather than asking clients to infer it. Lazy expansion (#421) will truncate for a second reason (an unexpanded subtree, not a row cap), and a client keyed on the explicit flag keeps working when that lands.
 
-## Why the count is unconditional
+## Why the count runs only when the limit bound
 
-The fleet-wide process search skips its `COUNT(*)` for the fully-unfiltered browse and returns the `TotalNotCounted` sentinel, because counting the whole `processes` table is its expensive half. That rationale does not transfer: the tree read is always scoped to one `host_id` and one time window, which is the case the search's own comment calls "index-cheap" and for which it restores the exact count. So the tree always counts, and `total_matched` is always a real number. No sentinel, no client branch.
+`total_matched` is always an exact number, but the `COUNT(*)` behind it does not always run.
+
+The two queries have very different costs. The row read walks `idx_processes_host_time` in fork-time order and stops as soon as it has `limit` rows, so a wide window costs no more than a narrow one. A count cannot stop early; it has to evaluate every match. Running it on every tree load would convert a limit-bounded read into a full window scan, including for the overwhelming majority of reads that are nowhere near the cap.
+
+It is not needed there anyway: fewer rows returned than the limit *proves* the limit did not bind, so the rows in hand are every row that matched and the total is already known. The count therefore runs only when the read came back at the limit, which is exactly when the analyst needs the number. The common case pays nothing.
+
+There is no `TotalNotCounted` sentinel either way, unlike the fleet-wide process search, which returns one for a fully-unfiltered browse. That case does not arise here: a tree read is always scoped to one `host_id` and one window, so when the count does run it is the index-cheap kind the search's own rationale describes, and clients never see anything but a real number.
+
+The two statements are not atomic, so retention pruning between them can return a total below the rows already read. Reporting "showing 2,000 of 1,998" would be incoherent, so the rows actually read are the floor. The opposite skew needs no guard: a larger total is a truthful denominator.
 
 ## Why one shared predicate
 

@@ -41,19 +41,27 @@ func (q *Query) BuildTree(
 	if err != nil {
 		return api.ProcessTreeResult{}, err
 	}
-	total, err := q.store.CountProcessTree(ctx, hostID, tr)
-	if err != nil {
-		return api.ProcessTreeResult{}, err
-	}
 
 	// Returned counts the ROWS the limit admitted and is captured here, before aggregation: aggregateSiblingsPinned folds identical
 	// leaf siblings into "×N" headers, so counting the returned forest's nodes afterwards would report fewer processes than were
-	// actually read. The two queries are not atomic, so concurrent ingest can move the count between them; both directions are
-	// benign. A row inserted between them raises TotalMatched, which is a truthful larger denominator; a row pruned between them can
-	// leave Returned above TotalMatched, which reports Truncated false and shows the analyst no banner, never a negative remainder.
-	res := api.ProcessTreeResult{
-		Returned:     int64(len(procs)),
-		TotalMatched: total,
+	// actually read.
+	res := api.ProcessTreeResult{Returned: int64(len(procs)), TotalMatched: int64(len(procs))}
+
+	// The COUNT runs ONLY when the limit actually bound. Fewer rows than the limit proves the limit did not bind, so the rows in
+	// hand are every row that matched and the total is already known. This matters because the two queries have very different
+	// costs: the row query walks idx_processes_host_time in fork-time order and stops after `limit` rows, while a COUNT has to
+	// evaluate every match in the window. Counting unconditionally would turn a limit-bounded read into a full window scan on every
+	// tree load, including the overwhelming majority that are nowhere near the cap. The extra scan is now paid only when the read
+	// was truncated, which is exactly when the analyst needs the number.
+	if len(procs) == limit {
+		total, cerr := q.store.CountProcessTree(ctx, hostID, tr)
+		if cerr != nil {
+			return api.ProcessTreeResult{}, cerr
+		}
+		// The row read and the count are separate statements, so retention pruning between them can return a total below the rows
+		// already in hand. Reporting "showing 2000 of 1998" would be incoherent, so the rows actually read are the floor. The
+		// opposite skew (ingest adding rows between the two) needs no guard: a larger total is a truthful denominator.
+		res.TotalMatched = max(total, res.Returned)
 	}
 	res.Truncated = res.Returned < res.TotalMatched
 
