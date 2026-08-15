@@ -396,6 +396,29 @@ type AlertFilter struct {
 	Limit     int
 }
 
+// ProcessTreeResult is one process-tree read plus the metadata that lets a client be honest about what it is NOT showing (issue
+// #423). Roots is the forest, aggregated unless the caller asked to flatten. TotalMatched counts every process row whose lifetime
+// overlaps the window, computed independent of the row limit. Returned counts the rows that limit admitted, captured before
+// aggregation folded any of them into a group header. Truncated reports whether the limit dropped rows.
+//
+// Returned is carried rather than left for the client to derive, because both obvious derivations are wrong in exactly the cases
+// that matter: the handler clamps the requested limit, so a client computing min(requestedLimit, TotalMatched) can print a number
+// the server never returned; and aggregation collapses identical leaf siblings into "×N" nodes, so counting rendered nodes
+// undercounts the rows. A client re-deriving this would reintroduce the miscount the field exists to prevent.
+//
+// Truncated is stated explicitly even though it equals Returned < TotalMatched, so clients key on the server's own judgment rather
+// than inferring it. Lazy expansion (issue #421) will truncate for a second reason, an unexpanded subtree rather than a row cap,
+// and a client keyed on the flag keeps working when that lands.
+//
+// Unlike ProcessSearchResult, TotalMatched here is always a real count: see CountProcessTree for why the not-counted sentinel does
+// not apply to a host-and-window-scoped read.
+type ProcessTreeResult struct {
+	Roots        []ProcessNode `json:"roots"`
+	Returned     int64         `json:"returned"`
+	TotalMatched int64         `json:"total_matched"`
+	Truncated    bool          `json:"truncated"`
+}
+
 // ProcessNode is the tree shape the UI's process-tree view renders.
 // Wire shape preserved from server/graph.ProcessNode.
 type ProcessNode struct {

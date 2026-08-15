@@ -30,20 +30,40 @@ func NewQuery(s *mysql.Store) *Query {
 	return &Query{store: s}
 }
 
-// BuildTree returns a forest of process trees for the given host and time range. Unless flatten is set, repeated identical-path leaf
-// siblings under the same parent are collapsed into a single aggregated node (issue #416) so a busy host's grep×1000 / jspawnhelper×240
-// churn renders as a handful of `×N` nodes rather than thousands of dots. flatten opts out and returns the raw forest for an analyst
-// who wants every node.
-func (q *Query) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) ([]api.ProcessNode, error) {
+// BuildTree returns a forest of process trees for the given host and time range, plus the metadata describing what the row limit
+// left out (issue #423). Unless flatten is set, repeated identical-path leaf siblings under the same parent are collapsed into a
+// single aggregated node (issue #416) so a busy host's grep×1000 / jspawnhelper×240 churn renders as a handful of `×N` nodes rather
+// than thousands of dots. flatten opts out and returns the raw forest for an analyst who wants every node.
+func (q *Query) BuildTree(
+	ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64,
+) (api.ProcessTreeResult, error) {
 	procs, err := q.store.GetProcessTree(ctx, hostID, tr, limit)
 	if err != nil {
-		return nil, err
+		return api.ProcessTreeResult{}, err
 	}
+	total, err := q.store.CountProcessTree(ctx, hostID, tr)
+	if err != nil {
+		return api.ProcessTreeResult{}, err
+	}
+
+	// Returned counts the ROWS the limit admitted and is captured here, before aggregation: aggregateSiblingsPinned folds identical
+	// leaf siblings into "×N" headers, so counting the returned forest's nodes afterwards would report fewer processes than were
+	// actually read. The two queries are not atomic, so concurrent ingest can move the count between them; both directions are
+	// benign. A row inserted between them raises TotalMatched, which is a truthful larger denominator; a row pruned between them can
+	// leave Returned above TotalMatched, which reports Truncated false and shows the analyst no banner, never a negative remainder.
+	res := api.ProcessTreeResult{
+		Returned:     int64(len(procs)),
+		TotalMatched: total,
+	}
+	res.Truncated = res.Returned < res.TotalMatched
+
 	forest := buildForest(procs)
 	if flatten {
-		return forest, nil
+		res.Roots = forest
+		return res, nil
 	}
-	return aggregateSiblingsPinned(forest, pinnedID), nil
+	res.Roots = aggregateSiblingsPinned(forest, pinnedID)
+	return res, nil
 }
 
 // GetProcessDetail returns a process with its network connections, DNS queries, and re-exec chain. Method name matches the
