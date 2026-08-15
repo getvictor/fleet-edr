@@ -239,10 +239,9 @@
         "provider": { "type": "string", "description": "Capture provider wire identifier, e.g. content_filter or dns_proxy. Matches the extension's ProviderLiveness raw values." },
         "outcome": {
           "type": "string",
-          "enum": ["enable_failed", "enable_ineffective"],
-          "description": "Which of the two failure shapes was reached, because they point a responder at different things. enable_failed means the repair command itself kept failing, which implicates the host app or the configuration daemon. enable_ineffective means every repair reported SUCCESS and the provider stayed stopped anyway, which means re-enabling is simply not what this fault needs. Both leave the host not capturing."
+          "description": "Which failure shape was reached, because they point a responder at different things. Known values: enable_failed, meaning the repair command itself kept failing, which implicates the host app or the configuration daemon; and enable_ineffective, meaning every repair reported SUCCESS and the provider stayed stopped anyway, which means re-enabling is simply not what this fault needs. Both leave the host not capturing. Deliberately NOT an enum: a newer agent reporting a shape an older server has no phrasing for must still raise the finding, described in general terms, rather than being rejected at the boundary or silently dropped. The server's handling of an unrecognised value is a stated requirement, and an enum here would contradict it."
         },
-        "attempts": { "type": "integer", "description": "How many repair attempts were made before giving up. Bounded by the agent's attempt budget; carried so an analyst can see the repair was genuinely tried rather than skipped." }
+        "attempts": { "type": "integer", "minimum": 1, "description": "How many repair attempts were made before giving up. At least 1: the event is only emitted once the budget is spent, which cannot happen without an attempt. Bounded above by the agent's attempt budget; carried so an analyst can see the repair was genuinely tried rather than skipped." }
       }
     },
     "application_control_block_payload": {

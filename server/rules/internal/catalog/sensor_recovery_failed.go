@@ -145,7 +145,7 @@ func (r *SensorRecoveryFailed) evalEvent(_ context.Context, evt api.Event, _ api
 // collapses onto a single alert, while a later stop that also exhausts its budget raises its own. Keying on the provider
 // alone would let a failure today be silently suppressed by one from last month.
 func sensorRecoveryFailedSubject(provider, eventID string) string {
-	return "sensor_recovery_failed:" + provider + ":" + eventID
+	return providerSubject("sensor_recovery_failed", provider, eventID)
 }
 
 func sensorRecoveryFailedDescription(p sensorRecoveryFailedPayload) string {
