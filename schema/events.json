@@ -19,7 +19,7 @@
     },
     "event_type": {
       "type": "string",
-      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition"],
+      "enum": ["exec", "fork", "exit", "open", "network_connect", "dns_query", "application_control_block", "application_control_undecided", "application_control_resync", "snapshot_heartbeat", "btm_launch_item_add", "sensor_provider_transition", "sensor_recovery_failed"],
       "description": "Type of endpoint security event"
     },
     "platform": {
@@ -40,7 +40,8 @@
         { "$ref": "#/definitions/application_control_resync_payload" },
         { "$ref": "#/definitions/snapshot_heartbeat_payload" },
         { "$ref": "#/definitions/btm_launch_item_add_payload" },
-        { "$ref": "#/definitions/sensor_provider_transition_payload" }
+        { "$ref": "#/definitions/sensor_provider_transition_payload" },
+        { "$ref": "#/definitions/sensor_recovery_failed_payload" }
       ]
     }
   },
@@ -228,6 +229,20 @@
         "provider": { "type": "string", "description": "Capture provider wire identifier, e.g. content_filter or dns_proxy. Matches the extension's ProviderLiveness raw values." },
         "state": { "type": "string", "enum": ["running", "stopped"], "description": "State the provider transitioned INTO. Which stops appear here is decided by the extension's grading (issue #649): a stop it treats as deliberate absence is omitted from the report entirely and produces no transition, while a stop it treats as a fault appears as stopped. That grading is per provider, so switching off the OPTIONAL dns_proxy is absence and produces nothing, whereas switching off the mandatory content_filter is a fault and produces a stopped transition. The second case is the tamper-relevant one and is precisely what this event exists to record." },
         "stop_reason": { "type": "integer", "description": "Raw NEProviderStopReason from the platform, carried unreduced so a consumer discriminates for itself rather than trusting a pre-collapsed verdict. Omitted for a running transition. Operator-driven values (userInitiated 1, providerDisabled 5, configurationDisabled 9) are the tamper-relevant ones; session-lifecycle values (configurationRemoved 10, superceded 11, userLogout 12, userSwitch 13) are what an ordinary upgrade or logout produces." }
+      }
+    },
+    "sensor_recovery_failed_payload": {
+      "type": "object",
+      "required": ["provider", "outcome", "attempts"],
+      "description": "The agent's automatic repair of a stopped capture provider ran out of attempts and a human is now required (issues #632, #691). This is a separate event from sensor_provider_transition rather than a field on it, because it reports the outcome of REMEDIATION, not a change of provider state: the provider is still stopped, and no transition has occurred. It exists because the transition pair alone cannot express it. A stop with no following running transition means either 'still trying' or 'gave up', and those carry opposite urgency for an analyst; only the agent knows which, and only at the moment its budget is spent. Emitted exactly once per stop episode, at the edge where the budget is exhausted, NOT on every liveness report while the provider stays down.",
+      "properties": {
+        "provider": { "type": "string", "description": "Capture provider wire identifier, e.g. content_filter or dns_proxy. Matches the extension's ProviderLiveness raw values." },
+        "outcome": {
+          "type": "string",
+          "enum": ["enable_failed", "enable_ineffective"],
+          "description": "Which of the two failure shapes was reached, because they point a responder at different things. enable_failed means the repair command itself kept failing, which implicates the host app or the configuration daemon. enable_ineffective means every repair reported SUCCESS and the provider stayed stopped anyway, which means re-enabling is simply not what this fault needs. Both leave the host not capturing."
+        },
+        "attempts": { "type": "integer", "description": "How many repair attempts were made before giving up. Bounded by the agent's attempt budget; carried so an analyst can see the repair was genuinely tried rather than skipped." }
       }
     },
     "application_control_block_payload": {

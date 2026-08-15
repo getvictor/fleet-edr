@@ -34,6 +34,9 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 		component:    health.ComponentEndpointSecurityExtension,
 	})
 	if d.cfg.NetXPCService != "" {
+		// One emitter shared by both durable sensor records: the provider transitions and the repair-gave-up event go
+		// through the same queue on the same host.
+		emitter := sensorevent.NewEnqueueEmitter(d.hostIDFn, d.enqueue, func() int64 { return time.Now().UnixNano() })
 		go startReceiverLoop(ctx, receiverLoopParams{
 			logger:       d.logger,
 			serviceLabel: d.cfg.NetXPCService,
@@ -50,15 +53,24 @@ func startTelemetrySensors(ctx context.Context, d telemetryDeps) {
 			// so a pkg upgrade or a settings toggle recovers on its own.
 			// Health forgets a stop as soon as the self-heal repairs it, so the transition is written down separately as
 			// durable tamper evidence (issue #684).
-			transitions: sensorevent.New(
-				sensorevent.NewEnqueueEmitter(d.hostIDFn, d.enqueue, func() int64 { return time.Now().UnixNano() }),
-				d.logger,
-			),
+			transitions: sensorevent.New(emitter, d.logger),
 			selfHeal: selfheal.New(selfheal.Options{
 				Remediator: selfheal.NewRemediator(""),
 				Health:     d.health,
 				Component:  health.ComponentNetworkExtension,
 				Logger:     d.logger,
+				// The repair giving up is recorded durably as well as in health (issue #691). Health says what is true
+				// now, so once an operator fixes the host by hand it reads healthy again and nothing records that the
+				// host went uncaptured for however long it took them to notice. The alert is the durable account, the
+				// same argument that justified recording the stop itself.
+				OnEscalation: func(e selfheal.Escalation) {
+					if err := sensorevent.EmitRecoveryFailed(ctx, emitter, e.Provider, e.Outcome, e.Attempts); err != nil {
+						// Best effort by design: the health state is already published and the agent must keep
+						// running. Logged at WARN so a queue that is rejecting writes is visible.
+						d.logger.WarnContext(ctx, "could not record that automatic capture recovery gave up",
+							"provider", e.Provider, "outcome", e.Outcome, "err", err)
+					}
+				},
 			}),
 		})
 	}

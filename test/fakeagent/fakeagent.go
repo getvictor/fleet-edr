@@ -118,6 +118,13 @@ type Event struct {
 	Provider   string `json:"provider,omitempty"`
 	State      string `json:"state,omitempty"`
 	StopReason *int   `json:"stop_reason,omitempty"`
+
+	// sensor_recovery_failed specifics (issue #691). Outcome is "enable_failed" or "enable_ineffective" and Attempts is
+	// how many repairs were tried before the agent gave up. Provider above is reused rather than duplicated, since it
+	// names the same thing. Attempts is a plain int: unlike StopReason there is no meaningful zero, because the event is
+	// only emitted after at least one attempt.
+	Outcome  string `json:"outcome,omitempty"`
+	Attempts int    `json:"attempts,omitempty"`
 }
 
 // Assertion is the M4/M10 detection-assertion shape. Parsed by M3 for forward compatibility but not consumed.
@@ -220,4 +227,8 @@ var knownEventTypes = map[string]bool{
 	// A capture provider of the agent's own network extension starting or stopping (issue #684). Corpus scenarios use it
 	// for the tamper case and, in the noise lane, for the upgrade cutover it must not be confused with.
 	"sensor_provider_transition": true,
+	// The agent's automatic repair of a stopped capture provider running out of attempts (issue #691). Distinct from the
+	// transition above because the provider has not changed state: it is still stopped, and what changed is that the agent
+	// stopped trying.
+	"sensor_recovery_failed": true,
 }

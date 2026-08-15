@@ -36,6 +36,7 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"application_control_block":     {},
 		"dns_c2_beacon":                 {},
 		"sensor_tamper":                 {},
+		"sensor_recovery_failed":        {},
 	}
 
 	rules := New(nil)
