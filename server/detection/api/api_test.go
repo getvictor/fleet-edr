@@ -171,3 +171,70 @@ func TestIsValidationError_Property(t *testing.T) {
 			wrapDepth, isValidation)
 	})
 }
+
+// TestProcessTreeResult_WireRoundTrip_PBT pins Marshal . Unmarshal == identity for the process-tree response (issue #423), the
+// repo's standing requirement for a new wire-format struct. The metadata fields are what the UI binds to in order to say "showing N
+// of M", so a marshalling asymmetry (an omitempty that swallows a zero, a renamed tag) would present as a notice that silently stops
+// rendering rather than as a failure.
+//
+// Roots is generated as a small forest of scalar-only nodes: the nested payload types (JSON columns, string slices) own their round
+// trips in their own tests, and repeating them here would test those instead of this struct's shape. The generated counts are
+// deliberately unconstrained, including negative and inconsistent pairs, because this asserts the WIRE contract; whether a pair is
+// coherent is BuildTree's business and is pinned against a database in server/detection/internal/tests.
+func TestProcessTreeResult_WireRoundTrip_PBT(t *testing.T) {
+	t.Parallel()
+	rapid.Check(t, func(rt *rapid.T) {
+		n := rapid.IntRange(0, 3).Draw(rt, "root_count")
+		roots := make([]ProcessNode, n)
+		for i := range roots {
+			roots[i] = ProcessNode{Process: Process{
+				ID:         rapid.Int64().Draw(rt, "id"),
+				HostID:     rapid.StringMatching(`[a-zA-Z0-9-]{0,12}`).Draw(rt, "host"),
+				PID:        rapid.Int().Draw(rt, "pid"),
+				PPID:       rapid.Int().Draw(rt, "ppid"),
+				Path:       rapid.StringMatching(`[/a-zA-Z0-9._-]{0,24}`).Draw(rt, "path"),
+				ForkTimeNs: rapid.Int64().Draw(rt, "fork"),
+			}}
+		}
+		// A nil forest and an empty one are distinct on the wire (null vs []), so keep whichever rapid produced rather than
+		// normalising: the round trip has to preserve that distinction too.
+		if n == 0 && rapid.Bool().Draw(rt, "nil_roots") {
+			roots = nil
+		}
+
+		original := ProcessTreeResult{
+			Roots:        roots,
+			Returned:     rapid.Int64().Draw(rt, "returned"),
+			TotalMatched: rapid.Int64().Draw(rt, "total_matched"),
+			Truncated:    rapid.Bool().Draw(rt, "truncated"),
+		}
+
+		encoded, err := json.Marshal(original)
+		require.NoError(rt, err)
+
+		var rebuilt ProcessTreeResult
+		require.NoError(rt, json.Unmarshal(encoded, &rebuilt))
+		assert.Equal(rt, original, rebuilt)
+	})
+}
+
+// TestProcessTreeResult_WireFieldNames pins the literal JSON keys. The PBT above would still pass if every field were renamed in
+// lockstep, since it round-trips through this same struct; the UI binds to these exact names.
+func TestProcessTreeResult_WireFieldNames(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := json.Marshal(ProcessTreeResult{Returned: 2000, TotalMatched: 2588, Truncated: true})
+	require.NoError(t, err)
+
+	var generic map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &generic))
+	assert.Contains(t, generic, "roots")
+	assert.Contains(t, generic, "returned")
+	assert.Contains(t, generic, "total_matched")
+	assert.Contains(t, generic, "truncated")
+	// Present even when false: the UI branches on it, and an omitempty here would make "not truncated" indistinguishable from an
+	// older server that does not report truncation at all.
+	notTruncated, err := json.Marshal(ProcessTreeResult{})
+	require.NoError(t, err)
+	assert.Contains(t, string(notTruncated), `"truncated":false`)
+}
