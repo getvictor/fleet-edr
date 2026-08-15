@@ -12,6 +12,16 @@
 // claim made here needs two independent sources to disagree. The agent asserts that a specific provider is capturing; the archive says
 // that provider's stream produced nothing recently while process telemetry kept flowing. Neither half is evidence alone.
 //
+// # The residual risk of trusting a claim
+//
+// Gating on the endpoint's own claim means a host that claims nothing cannot be accused, where inferring use from history
+// would still have reported it. That is bounded by the reporting rules on the other side rather than by anything here: an
+// agent observing no running provider reports the owning extension as UNHEALTHY (issue #649), so an honest agent cannot
+// present a healthy extension with no provider claims, and that state is already visible as the extension's own condition.
+// What remains is an agent too old to report per provider, which loses this detection until upgraded, and a falsified
+// snapshot, which no gate chosen here would survive: an endpoint able to suppress its own claims can equally fabricate the
+// telemetry this check reads against them.
+//
 // The agent's half is a per-provider claim (issue #702). An earlier version of this could not read one, because the agent collapsed its
 // provider map into a single component before posting, and had to infer "this host uses this stream" from the stream's own history
 // instead. That proxy was inaccurate in two ways that are now simply gone: a provider disabled inside the history window kept being
