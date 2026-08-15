@@ -49,12 +49,55 @@ type EventArchive interface {
 	// cursor is a caller error.
 	SearchEvents(ctx context.Context, filter EventSearchFilter, cursor string, limit int) (EventSearchResult, error)
 
+	// TelemetryActivityForHosts reports, per host, whether each telemetry stream produced anything over two nested event-time
+	// windows. It answers a question about ABSENCE (issue #677: a network-extension provider that wedges keeps reporting itself
+	// healthy, and the only evidence is that its events stopped arriving while process telemetry kept flowing), so it counts
+	// rather than returning events: the caller needs "did this stream produce anything", not the events themselves.
+	//
+	// Hosts with no events in the reference window are ABSENT from the result rather than present with zeroes. A caller must not
+	// read that absence as silence: an unknown host and a host that produced nothing are indistinguishable here, and neither is
+	// evidence of a wedge (the wedge claim requires positive process activity, which an absent host by definition lacks).
+	TelemetryActivityForHosts(ctx context.Context, hostIDs []string, w TelemetryActivityWindows) (map[string]TelemetryActivity, error)
+
 	// HostTimeline returns one host's investigation events (exec, network_connect, dns_query) interleaved in event-time order,
 	// newest-first, over the filter's event-time window, optionally narrowed to a subset of those types and to a case-insensitive
 	// payload substring (issue #583). Keyset-paged over (timestamp_ns, event_id) from cursor, up to limit events, with a next cursor
 	// when more remain and total_matched independent of the page. Shares the EventSearchResult page shape and EventCursor codec with
 	// SearchEvents. A malformed cursor is a caller error.
 	HostTimeline(ctx context.Context, filter HostTimelineFilter, cursor string, limit int) (EventSearchResult, error)
+}
+
+// TelemetryActivityWindows bounds a telemetry-freshness read as two NESTED event-time ranges sharing an end.
+//
+// Reference is the outer range and answers "does this host use this stream at all". It is what keeps the read from accusing a host
+// whose provider is legitimately off: the macOS DNS proxy is opt-in, and a host running without the network extension registers no
+// such component, so on either the stream is permanently silent and its silence means nothing. Only a stream that WAS producing and then
+// stopped is evidence of anything.
+//
+// SilentFromNs starts the inner range, the recent window whose emptiness is the actual signal. It must fall inside Reference; a
+// caller that passes a SilentFromNs at or before Reference.FromNs collapses the two ranges and destroys the distinction above.
+type TelemetryActivityWindows struct {
+	Reference    httpserver.TimeRange
+	SilentFromNs int64
+}
+
+// TelemetryActivity is one host's per-stream event presence over the two windows of a TelemetryActivityWindows.
+//
+// The counts are NOT deduplicated against the archive's ReplacingMergeTree duplicates, and deliberately so: every decision made from
+// this type is "did this stream produce anything at all", which a duplicate cannot flip in either direction. Only ProcessInWindow is
+// read as a magnitude, and only to describe the contradiction to a human, where an occasional re-inserted event is immaterial. Paying
+// for FINAL over a multi-day reference window across a fleet would buy nothing.
+type TelemetryActivity struct {
+	// ProcessInWindow counts exec and fork events in the inner window: the evidence the host is awake and doing work, which is what
+	// makes an empty flow stream a contradiction rather than an idle machine.
+	ProcessInWindow int64
+	// ConnectInWindow and DNSInWindow count each flow stream in the inner window. Zero is the signal.
+	ConnectInWindow int64
+	DNSInWindow     int64
+	// ConnectInReference and DNSInReference count each flow stream over the outer window. Non-zero is what licenses reading the
+	// corresponding zero above as a fault.
+	ConnectInReference int64
+	DNSInReference     int64
 }
 
 // HostTimelineFilter selects events for one host's merged event timeline (issue #583). HostID is required. FromNs/ToNs bound event

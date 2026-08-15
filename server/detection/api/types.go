@@ -43,6 +43,11 @@ type EventSearchResult = visibilityapi.EventSearchResult
 // HostTimelineFilter aliases the visibility host-event-timeline filter (issue #583), the same re-export pattern the search types use.
 type HostTimelineFilter = visibilityapi.HostTimelineFilter
 
+// TelemetryActivityWindows / TelemetryActivity alias the visibility telemetry-freshness read types (issue #677), the same re-export
+// pattern the search and timeline types use.
+type TelemetryActivityWindows = visibilityapi.TelemetryActivityWindows
+type TelemetryActivity = visibilityapi.TelemetryActivity
+
 // Platform constants and helpers are defined in the visibility context (the canonical event owner, ADR-0015) and re-exported here so
 // detection code scopes rules and validates events without importing the visibility package directly, the same re-export pattern the
 // Severity constants use. NormalizePlatform maps an empty (legacy-agent) platform to PlatformDarwin.
@@ -135,6 +140,10 @@ type HostSummary struct {
 	// OverallStatus is the server-computed agent-health rollup for the host (issue #359), sourced from the endpoint context's host_health
 	// table (LEFT JOIN in ListHosts) and COALESCEd to HostHealthUnknown for a host that has never posted a status snapshot. It is the
 	// Hosts-list badge signal, distinct from the online/offline pill the UI derives from LastSeenNs.
+	//
+	// It carries server-derived conditions too (issue #677), folded in after the query: a host whose telemetry contradicts the health
+	// it reported reads as degraded here, so the list badge and the host page agree. The scan target is still the stored column; the
+	// fold happens in the service layer, which is why this stays a plain db-tagged field.
 	OverallStatus string `db:"overall_status" json:"overall_status"`
 }
 
@@ -146,10 +155,40 @@ const HostHealthUnknown = "unknown"
 // server-computed rollup; ReportedAtNs is the agent-stamped snapshot time; Components is the full ComponentHealth list exactly as the
 // agent sent it, passed through as raw JSON so a new component type needs no server change. A host with no snapshot yields
 // OverallStatus HostHealthUnknown and null Components.
+// DerivedComponents are conditions the SERVER concluded about this host, kept in their own field rather than merged into Components
+// (issue #677). Two reasons. Components is documented as the agent's list verbatim and is stored and served as opaque JSON, so
+// merging would mean decoding and re-encoding a payload the read path otherwise never inspects. And the whole point of a derived
+// condition is that it contradicts what the agent reported, which an operator can only weigh if the two are told apart. Null when
+// the server has nothing to add, which is the normal case.
+//
+// OverallStatus above is the EFFECTIVE rollup: it folds these in, so the badge an operator sees never disagrees with the conditions
+// listed beneath it. It is therefore no longer identical to the stored host_health.overall_status column, which remains the
+// agent-reported rollup and is what a future indexed "hosts needing attention" filter would select on.
 type HostHealth struct {
 	OverallStatus string      `db:"overall_status" json:"overall_status"`
 	ReportedAtNs  int64       `db:"reported_at_ns" json:"reported_at_ns"`
 	Components    NullRawJSON `db:"components" json:"components"`
+	// db:"-" because this field is filled in after the query, not scanned from it: the derived conditions come from the event
+	// archive, not from the host_health row.
+	DerivedComponents []DerivedComponent `db:"-" json:"derived_components"`
+}
+
+// DerivedComponent is one condition the server concluded about a host from telemetry, rather than one the agent reported.
+//
+// It mirrors the endpoint context's ComponentHealth wire shape field for field, so the console can render the reported and the
+// derived conditions as one list, but it is deliberately detection's OWN type rather than a re-export of that one. detection/api is
+// this context's published surface, and letting it hand out another bounded context's type would make every consumer of a detection
+// response a consumer of the endpoint contract too (arch-go enforces exactly this). The same reasoning already applies one field
+// above, where HostHealthUnknown mirrors the endpoint's spelling rather than importing its constant.
+//
+// LastTransitionNs is present for wire compatibility and is always zero today: a condition inferred from a window of absence has no
+// observed instant at which it began. Consumers must render nothing rather than an age when it is zero.
+type DerivedComponent struct {
+	Type             string `json:"type"`
+	Status           string `json:"status"`
+	Reason           string `json:"reason,omitempty"`
+	Message          string `json:"message,omitempty"`
+	LastTransitionNs int64  `json:"last_transition_ns"`
 }
 
 // HostDetail is the single-host identity + liveness view served at GET /api/hosts/{host_id} (issue #579): everything the host page's

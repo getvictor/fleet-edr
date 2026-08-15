@@ -40,6 +40,12 @@ func (f *fakeEventArchive) EventsByIDs(context.Context, []string) ([]api.Event, 
 	return nil, nil
 }
 
+func (f *fakeEventArchive) TelemetryActivityForHosts(
+	context.Context, []string, api.TelemetryActivityWindows,
+) (map[string]api.TelemetryActivity, error) {
+	return nil, nil
+}
+
 func (f *fakeEventArchive) SearchEvents(context.Context, api.EventSearchFilter, string, int) (api.EventSearchResult, error) {
 	return api.EventSearchResult{}, nil
 }
