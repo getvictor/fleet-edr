@@ -3084,17 +3084,27 @@ func TestProcessTree_WindowOverlapSemantics(t *testing.T) {
 	seed("ended-before", 105, winFrom-500, at(winFrom-100))
 	seed("started-after", 106, winTo+100, nil)
 
-	window := api.TimeRange{FromNs: winFrom, ToNs: winTo}
-	wantIn := []int{101, 102, 103, 104}
-	wantOut := []int{105, 106}
+	cases := []struct {
+		name    string
+		pid     int
+		overlap bool
+	}{
+		{"wholly inside the window", 101, true},
+		{"started before and ended after", 102, true},
+		{"started before and still running", 103, true},
+		{"exited exactly as the window opened", 104, true},
+		{"ended before the window opened", 105, false},
+		{"started after the window closed", 106, false},
+	}
 
-	var pids map[int]bool
+	window := api.TimeRange{FromNs: winFrom, ToNs: winTo}
+	pids := map[int]bool{}
 	require.Eventually(t, func() bool {
 		res, err := d.Service().BuildTree(ctx, host, window, 1000, true, 0)
 		if err != nil {
 			return false
 		}
-		pids = map[int]bool{}
+		clear(pids)
 		var walk func(nodes []api.ProcessNode)
 		walk = func(nodes []api.ProcessNode) {
 			for _, n := range nodes {
@@ -3103,19 +3113,21 @@ func TestProcessTree_WindowOverlapSemantics(t *testing.T) {
 			}
 		}
 		walk(res.Roots)
-		for _, pid := range wantIn {
-			if !pids[pid] {
+		for _, tc := range cases {
+			if tc.overlap && !pids[tc.pid] {
 				return false
 			}
 		}
 		return true
 	}, 10*time.Second, 100*time.Millisecond, "every overlapping process must materialise and appear in the window")
 
-	for _, pid := range wantIn {
-		assert.Truef(t, pids[pid], "pid %d overlaps the window and MUST be present", pid)
-	}
-	for _, pid := range wantOut {
-		assert.Falsef(t, pids[pid], "pid %d does not overlap the window and MUST be absent", pid)
+	// pids is fully populated by the poll above and never written again, so the subtests below only read it.
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equalf(t, tc.overlap, pids[tc.pid],
+				"pid %d: overlapping the window MUST decide presence in the tree", tc.pid)
+		})
 	}
 }
 
