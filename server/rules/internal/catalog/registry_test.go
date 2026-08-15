@@ -33,6 +33,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 		"application_control_block",
 		"dns_c2_beacon",
 		"sensor_tamper",
+		"sensor_recovery_failed",
 	}
 	require.Len(t, got, len(wantIDs))
 	for i, want := range wantIDs {

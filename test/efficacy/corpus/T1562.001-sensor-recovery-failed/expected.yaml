@@ -1,0 +1,20 @@
+# Expected detection assertions for the T1562.001-sensor-recovery-failed scenario.
+#
+# BOTH rules are asserted because the scenario feeds the full episode and an
+# operator sees both: sensor_tamper for the stop, sensor_recovery_failed for
+# the repair giving up. Asserting only the second would let a regression that
+# silently stopped reporting the stop pass unnoticed here.
+#
+# The budget matches the sibling scenario's, and for the same reason: the stop
+# alert is the slow half, because that rule deliberately waits out its recovery
+# window before deciding. This rule's own event is terminal and needs no wait.
+scenario_id: T1562.001-sensor-recovery-failed
+mitre: T1562.001
+within_seconds: 45
+rules:
+  - rule_id: sensor_tamper
+    severity: high
+    expect: alert
+  - rule_id: sensor_recovery_failed
+    severity: critical
+    expect: alert

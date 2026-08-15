@@ -208,7 +208,7 @@ func (r *SensorTamper) resumedWithinWindow(
 // (which the retry above does by design) collapses onto one alert, while a genuinely new stop later on raises a new one. Keying on the
 // provider alone would mean a tamper today is silently suppressed by an alert from last month.
 func sensorTamperSubject(provider, eventID string) string {
-	return "sensor_stop:" + provider + ":" + eventID
+	return providerSubject("sensor_stop", provider, eventID)
 }
 
 func sensorTamperDescription(p sensorTransitionPayload) string {

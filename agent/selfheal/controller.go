@@ -35,6 +35,26 @@ type HealthSink interface {
 	MarkSelfHealFailed(compType, message string)
 }
 
+// Escalation is what the controller reports when its repair budget for one provider is spent: the host is not capturing
+// that telemetry and will not start on its own.
+//
+// Outcome carries WHICH of the two failure shapes was reached rather than a bare "it failed", because they point a
+// responder at different things and the controller is the only place that can tell them apart (see remediate).
+type Escalation struct {
+	Provider string
+	Attempts int
+	Outcome  string
+}
+
+// The two shapes an exhausted budget can end in.
+const (
+	// OutcomeEnableFailed: the repair command itself kept failing, implicating the host app or the configuration daemon.
+	OutcomeEnableFailed = "enable_failed"
+	// OutcomeEnableIneffective: every repair reported success and the provider stayed stopped, so re-enabling is not what
+	// this fault needs. This is the more alarming of the two, because the automation believes it is working.
+	OutcomeEnableIneffective = "enable_ineffective"
+)
+
 // Options bundles the controller's dependencies. Zero values for the tunables take the package defaults.
 type Options struct {
 	Remediator  Remediator
@@ -47,6 +67,15 @@ type Options struct {
 	// Now is the clock, injected so tests drive the grace window and backoff without sleeping. It is called from the
 	// remediation goroutine as well as from Observe, so an injected clock MUST be safe for concurrent use.
 	Now func() time.Time
+	// OnEscalation is called exactly once per stop episode, at the moment the repair budget is spent. Optional; nil
+	// disables it.
+	//
+	// It is a callback rather than an event emitter because this package deliberately owns policy and not wire format
+	// (see the package comment): the caller decides that "the budget is spent" becomes a durable server-side event. It is
+	// deliberately NOT wired through escalate(), which re-runs on every later report to re-assert level health state.
+	// Health is idempotent under that; an event is an append, so emitting there would produce one event per liveness
+	// report for as long as the provider stayed down.
+	OnEscalation func(Escalation)
 }
 
 // Controller restores stopped capture providers. It observes the same liveness reports the health registry grades, so it
@@ -55,14 +84,15 @@ type Options struct {
 // Concurrency: Observe is called from the receiver loop's event callback and remediation runs on its own goroutine, so the
 // per-provider state is mutex-guarded. Only one remediation runs at a time per provider.
 type Controller struct {
-	remediator  Remediator
-	health      HealthSink
-	component   string
-	logger      *slog.Logger
-	grace       time.Duration
-	maxAttempts int
-	backoff     time.Duration
-	now         func() time.Time
+	remediator   Remediator
+	health       HealthSink
+	component    string
+	logger       *slog.Logger
+	grace        time.Duration
+	maxAttempts  int
+	backoff      time.Duration
+	now          func() time.Time
+	onEscalation func(Escalation)
 
 	mu    sync.Mutex
 	state map[string]*providerState
@@ -92,15 +122,16 @@ type providerState struct {
 // New builds a Controller. A nil Remediator disables remediation entirely, which is what non-darwin builds get.
 func New(opts Options) *Controller {
 	c := &Controller{
-		remediator:  opts.Remediator,
-		health:      opts.Health,
-		component:   opts.Component,
-		logger:      opts.Logger,
-		grace:       opts.Grace,
-		maxAttempts: opts.MaxAttempts,
-		backoff:     opts.Backoff,
-		now:         opts.Now,
-		state:       map[string]*providerState{},
+		remediator:   opts.Remediator,
+		health:       opts.Health,
+		component:    opts.Component,
+		logger:       opts.Logger,
+		grace:        opts.Grace,
+		maxAttempts:  opts.MaxAttempts,
+		backoff:      opts.Backoff,
+		now:          opts.Now,
+		onEscalation: opts.OnEscalation,
+		state:        map[string]*providerState{},
 	}
 	if c.logger == nil {
 		c.logger = slog.Default()
@@ -229,14 +260,16 @@ func (c *Controller) remediate(ctx context.Context, provider string, attempt int
 	// the unbounded repair loop this design exists to avoid, and it is reachable whenever the enable is accepted but
 	// ineffective. Only a report showing the provider no longer stopped clears the state and restores the budget.
 	exhausted := attempt >= c.maxAttempts
-	var detail string
+	var detail, outcome string
 	if exhausted {
 		// The two shapes need different diagnoses. "Every enable failed" points at the host app or the configuration
 		// daemon; "every enable succeeded and it is still stopped" says re-enabling is simply not what this fault needs.
 		if err == nil {
 			detail = "was re-enabled " + strconv.Itoa(attempt) + " times but is still not capturing"
+			outcome = OutcomeEnableIneffective
 		} else {
 			detail = "could not be automatically restored after " + strconv.Itoa(attempt) + " attempts"
+			outcome = OutcomeEnableFailed
 		}
 		st.escalation = detail
 	} else {
@@ -262,6 +295,11 @@ func (c *Controller) remediate(ctx context.Context, provider string, attempt int
 	}
 	if exhausted {
 		c.escalate(provider, detail)
+		// The EDGE, and the only place this fires. escalate() above runs again on every later report to re-assert health,
+		// which is safe for level state and would be an event storm for anything append-only (issue #691).
+		if c.onEscalation != nil {
+			c.onEscalation(Escalation{Provider: provider, Attempts: attempt, Outcome: outcome})
+		}
 	}
 }
 

@@ -380,3 +380,150 @@ func TestAttemptsAreSpacedByBackoffAloneNotBackoffPlusGrace(t *testing.T) {
 	clock.advance(2 * time.Second)
 	assert.NotEmpty(t, c.Observe(ctx, stoppedFilter), "second attempt must be eligible after the backoff alone")
 }
+
+// escalationRecorder captures the edge-triggered escalation callback. Mutex-guarded because the controller invokes it from
+// the remediation goroutine, not from Observe.
+type escalationRecorder struct {
+	mu   sync.Mutex
+	seen []Escalation
+}
+
+func (r *escalationRecorder) record(e Escalation) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen = append(r.seen, e)
+}
+
+func (r *escalationRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.seen)
+}
+
+func (r *escalationRecorder) first() Escalation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.seen[0]
+}
+
+// testControllerWithEscalation is testController plus the escalation callback under test.
+func testControllerWithEscalation(t *testing.T, rem Remediator, hs HealthSink, rec *escalationRecorder) (*Controller, *testClock) {
+	t.Helper()
+	clock := &testClock{t: time.Unix(1_700_000_000, 0)}
+	c := New(Options{
+		Remediator:   rem,
+		Health:       hs,
+		Component:    "network_extension",
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Grace:        30 * time.Second,
+		MaxAttempts:  3,
+		Backoff:      time.Second,
+		Now:          clock.now,
+		OnEscalation: rec.record,
+	})
+	return c, clock
+}
+
+// exhaustBudget drives one provider through every attempt in the budget, leaving the controller escalated.
+func exhaustBudget(t *testing.T, c *Controller, clock *testClock, rem *fakeRemediator) {
+	t.Helper()
+	ctx := context.Background()
+	c.Observe(ctx, stoppedFilter)
+	for attempt := 1; attempt <= 3; attempt++ {
+		clock.advance(2 * time.Minute)
+		require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter), "attempt %d should launch", attempt)
+		rem.waitForCall(t)
+	}
+}
+
+// spec:agent-status-reporting/an-exhausted-repair-is-recorded-durably-once/the-record-is-not-repeated-while-the-provider-stays-stopped
+//
+// TestEscalationIsReportedOnceEvenWhileHealthIsReasserted is the whole reason the escalation seam is edge-triggered rather
+// than hanging off escalate() (issue #691).
+//
+// Health is level state that something else keeps overwriting, so the controller re-asserts it on EVERY report for as long
+// as the provider stays down; the sibling test above pins exactly that. A durable event is an append, so the same
+// treatment would produce one event, and therefore one alert, per liveness report. The extension re-publishes liveness on
+// every agent handshake, so "per report" is a storm, not a duplicate.
+//
+// The assertion is deliberately a CONTRAST: over the same reports, health fires repeatedly and the escalation fires once.
+// Asserting the escalation count alone would still pass if someone moved the call into escalate() and the test happened
+// not to drive enough reports.
+func TestEscalationIsReportedOnceEvenWhileHealthIsReasserted(t *testing.T) {
+	t.Parallel()
+	rem := newFakeRemediator(errors.New("save failed"))
+	hs := &fakeHealth{}
+	rec := &escalationRecorder{}
+	c, clock := testControllerWithEscalation(t, rem, hs, rec)
+	ctx := context.Background()
+
+	exhaustBudget(t, c, clock, rem)
+	require.Eventually(t, func() bool { return rec.count() >= 1 }, 2*time.Second, 10*time.Millisecond,
+		"exhausting the budget must report the escalation once")
+
+	healthBefore := hs.count()
+	for range 5 {
+		clock.advance(10 * time.Minute)
+		assert.Empty(t, c.Observe(ctx, stoppedFilter))
+	}
+	assert.Greater(t, hs.count(), healthBefore, "health must keep being re-asserted, as the level-state contract requires")
+	assert.Equal(t, 1, rec.count(), "the durable escalation must fire once per stop episode, not once per report")
+}
+
+// spec:agent-status-reporting/an-exhausted-repair-is-recorded-durably-once/an-exhausted-repair-is-recorded
+//
+// TestEscalationNamesWhichFailureShapeItWas pins the field an analyst acts on. The two shapes implicate different parts of
+// the host (the repair command failing points at the host app; the repair succeeding without effect means re-enabling is
+// not what the fault needs), so collapsing them into "it failed" would discard the useful half.
+func TestEscalationNamesWhichFailureShapeItWas(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		enableErr   error
+		wantOutcome string
+	}{
+		{"every enable failed", errors.New("save failed"), OutcomeEnableFailed},
+		{"every enable succeeded and it stayed stopped", nil, OutcomeEnableIneffective},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rem := newFakeRemediator(tc.enableErr)
+			rec := &escalationRecorder{}
+			c, clock := testControllerWithEscalation(t, rem, &fakeHealth{}, rec)
+
+			exhaustBudget(t, c, clock, rem)
+			require.Eventually(t, func() bool { return rec.count() >= 1 }, 2*time.Second, 10*time.Millisecond)
+
+			got := rec.first()
+			assert.Equal(t, "content_filter", got.Provider)
+			assert.Equal(t, tc.wantOutcome, got.Outcome)
+			assert.Equal(t, 3, got.Attempts, "the attempt count is carried so the finding can say the repair was really tried")
+		})
+	}
+}
+
+// spec:agent-status-reporting/an-exhausted-repair-is-recorded-durably-once/a-successful-repair-records-nothing
+//
+// TestNoEscalationWhenTheProviderComesBack covers the ordinary case, which must stay silent. A repair that works is not an
+// operator-facing event, and reporting one would put an alert on every self-healed host.
+func TestNoEscalationWhenTheProviderComesBack(t *testing.T) {
+	t.Parallel()
+	rem := newFakeRemediator(nil)
+	rec := &escalationRecorder{}
+	c, clock := testControllerWithEscalation(t, rem, &fakeHealth{}, rec)
+	ctx := context.Background()
+
+	c.Observe(ctx, stoppedFilter)
+	clock.advance(2 * time.Minute)
+	require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
+	rem.waitForCall(t)
+
+	// The extension's next report shows it running, which is the only authority on recovery.
+	clock.advance(2 * time.Minute)
+	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": "running"}))
+	clock.advance(10 * time.Minute)
+	assert.Empty(t, c.Observe(ctx, map[string]string{"content_filter": "running"}))
+
+	assert.Zero(t, rec.count(), "a provider that came back must produce no escalation")
+}
