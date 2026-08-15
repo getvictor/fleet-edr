@@ -252,6 +252,12 @@ func buildPayload(ev Event) (json.RawMessage, error) {
 			State      string `json:"state"`
 			StopReason *int   `json:"stop_reason,omitempty"`
 		}{ev.Provider, ev.State, ev.StopReason})
+	case "sensor_recovery_failed":
+		return json.Marshal(struct {
+			Provider string `json:"provider"`
+			Outcome  string `json:"outcome"`
+			Attempts int    `json:"attempts"`
+		}{ev.Provider, ev.Outcome, ev.Attempts})
 	case "btm_launch_item_add":
 		type codeSigning struct {
 			TeamID           string `json:"team_id"`

@@ -21,3 +21,4 @@ func (*SudoersTamper) Platforms() []api.Platform           { return []api.Platfo
 func (*ApplicationControlBlock) Platforms() []api.Platform { return []api.Platform{api.PlatformDarwin} }
 func (*DNSC2Beacon) Platforms() []api.Platform             { return []api.Platform{api.PlatformDarwin} }
 func (*SensorTamper) Platforms() []api.Platform            { return []api.Platform{api.PlatformDarwin} }
+func (*SensorRecoveryFailed) Platforms() []api.Platform    { return []api.Platform{api.PlatformDarwin} }

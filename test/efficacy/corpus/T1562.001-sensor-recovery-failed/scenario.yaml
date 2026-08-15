@@ -1,0 +1,35 @@
+# spec:server-detection-rules-engine/edr-sensor-recovery-failure-detection/automatic-recovery-gives-up-and-raises-a-finding
+# T1562.001 Impair Defenses: Disable or Modify Tools.
+#
+# The sibling scenario in T1562.001-sensor-tamper covers capture being
+# switched off. This one covers the case that leaves the host actually
+# blind: the agent tried to put it back, used up its attempt budget, and
+# stopped trying.
+#
+# The two events are both here on purpose, in the order a real host
+# produces them. The stop raises the sensor_tamper alert seconds later,
+# when nobody yet knows how it ends; the exhaustion raises this one, once
+# the answer is settled. Feeding only the second would still fire this
+# rule, but it would not reproduce what an analyst actually sees, which
+# is two alerts on one host telling a story with an ending.
+#
+# outcome enable_ineffective is the more alarming of the two shapes and
+# the one measured on edr-dev during #690's QA: every re-enable reported
+# success and the provider stayed stopped, so the automation believed it
+# was working while the host reported nothing.
+name: "T1562.001 EDR sensor stays disabled after automatic recovery gives up"
+host:
+  id: AAAA1562-0002-0000-0000-000000000002
+  hostname: efficacy-t1562-002.local
+  os: macOS 26.0
+timeline:
+  - at: 0ms
+    type: sensor_provider_transition
+    provider: content_filter
+    state: stopped
+    stop_reason: 1
+  - at: 90s
+    type: sensor_recovery_failed
+    provider: content_filter
+    outcome: enable_ineffective
+    attempts: 3
