@@ -1,33 +1,55 @@
 package catalog
 
-// providerSubject builds the dedup subject for a process-less finding about a capture provider, bounding the part of it the
-// agent controls.
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+
+// providerSubject builds the dedup subject for a process-less finding about a capture provider, bounded so it always fits
+// its column whatever the agent sent.
 //
 // # Why a bound is needed
 //
-// alerts.subject is VARCHAR(255) and participates in the UNIQUE dedup key. The provider name arrives in an agent-supplied
-// JSON payload and is never length-validated on the way in, so a long or malformed one produces a subject the column
-// cannot hold. That failure does not stop at the one alert: a persistence error aborts the batch's evaluation, so it can
-// take other rules' findings down with it and drive repeated retries.
+// alerts.subject is VARCHAR(255) and participates in the UNIQUE dedup key, and BOTH halves of the subject are
+// agent-supplied and unvalidated: the provider comes from an event payload, and event_id is itself a VARCHAR(255) that
+// ingest never length-checks or parses as a UUID. A subject the column cannot hold fails the INSERT, and that failure does
+// not stop at the one alert: a persistence error aborts the batch's evaluation, so it can take other rules' findings down
+// with it and drive repeated retries.
 //
-// # Why the PROVIDER is what gets trimmed
+// # Two bounds, because the two halves are not interchangeable
 //
-// Truncating the finished subject would be worse than the bug it fixes. The event id sits at the end, and it is what makes
-// one stop distinct from another; cutting it would collapse separate incidents onto one subject, and dedup would silently
-// suppress real alerts. Trimming the provider instead cannot do that: the event id is already unique per event, so two
-// different records keep different subjects however aggressively their provider names are shortened. The provider is
-// carried in the subject for legibility, not for identity.
+// The provider is trimmed first, by rune so a multi-byte name is never cut into invalid UTF-8. That alone would be enough
+// if event ids were the 36-character UUIDs the agent actually emits, and an earlier version of this stopped there. It is
+// not enough in general: nothing prevents a near-255-character event_id, which overflows the budget however short the
+// provider is.
 //
-// Trimming by RUNE rather than byte, so a multi-byte name is never cut mid-character and turned into invalid UTF-8.
+// So the finished subject is length-checked too, and when it still does not fit it collapses to a hash of itself. That
+// keeps the property dedup depends on, which is that the subject is a FUNCTION of (provider, event id): the same record
+// always produces the same subject, and two different records produce different ones. The readable form is preferred
+// whenever it fits, because a hashed subject is opaque when someone is reading rows by hand; the provider is named in the
+// finding's description either way, so nothing an operator reads is lost.
+//
+// Truncating the finished subject instead would be the obvious move and is wrong. The event id sits at the end and is what
+// makes one record distinct from another, so cutting it would collapse separate incidents onto one subject and dedup would
+// then silently suppress real alerts, which is a worse failure than the oversized insert this prevents.
 func providerSubject(prefix, provider, eventID string) string {
 	if r := []rune(provider); len(r) > providerSubjectMaxRunes {
 		provider = string(r[:providerSubjectMaxRunes])
 	}
-	return prefix + ":" + provider + ":" + eventID
+	subject := prefix + ":" + provider + ":" + eventID
+	if len(subject) <= subjectMaxBytes {
+		return subject
+	}
+	sum := sha256.Sum256([]byte(subject))
+	return prefix + ":" + hex.EncodeToString(sum[:])
 }
 
-// providerSubjectMaxRunes bounds the provider portion. Set well above any real provider name (the longest the extension
-// reports is "content_filter") and low enough that the whole subject fits the column with room to spare: the longest prefix
-// here is 22 characters and an event id is a 36-character UUID, so the worst case is around 124. A generous fixed cap keeps
-// the arithmetic obvious, rather than deriving a remainder that would need revisiting whenever a prefix changed.
+// providerSubjectMaxRunes bounds the provider portion of a readable subject. Set well above any real provider name (the
+// longest the extension reports is "content_filter") so the trim is invisible in practice.
 const providerSubjectMaxRunes = 64
+
+// subjectMaxBytes mirrors alerts.subject VARCHAR(255). Measured in BYTES rather than characters, which is the conservative
+// reading: MySQL counts that column in characters, so anything within the byte budget is necessarily within the character
+// one. The hashed fallback is far shorter than either (the longest prefix here is 22, plus a colon and 64 hex characters),
+// so the bound holds with a wide margin rather than by exact arithmetic.
+const subjectMaxBytes = 255

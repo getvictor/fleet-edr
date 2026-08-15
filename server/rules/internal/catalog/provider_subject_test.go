@@ -13,6 +13,11 @@ import (
 // because the rules package must not depend on the store; the test's job is to notice if the two ever disagree.
 const alertsSubjectColumnLen = 255
 
+// hostileEventID is what makes the provider trim insufficient on its own. events.event_id is VARCHAR(255) and ingest never
+// checks its length or parses it as a UUID, so the id can consume the entire subject budget by itself however short the
+// provider is. The real agent emits 36-character UUIDs; nothing enforces that.
+var hostileEventID = strings.Repeat("E", 255)
+
 // spec:server-detection-rules-engine/edr-sensor-tamper-detection/a-capture-provider-stops-and-does-not-resume
 //
 // TestProviderSubject_FitsTheColumnForAnyProvider is the reason this helper exists. The provider arrives in agent-supplied
@@ -36,10 +41,17 @@ func TestProviderSubject_FitsTheColumnForAnyProvider(t *testing.T) {
 			t.Parallel()
 			for _, prefix := range []string{"sensor_stop", "sensor_recovery_failed"} {
 				got := providerSubject(prefix, tc.provider, eventID)
-				assert.LessOrEqual(t, len([]rune(got)), alertsSubjectColumnLen,
-					"%s subject must fit the column", prefix)
+				assert.LessOrEqual(t, len(got), alertsSubjectColumnLen, "%s subject must fit the column", prefix)
 				assert.True(t, utf8.ValidString(got), "trimming must not cut a multi-byte character in half")
-				assert.Contains(t, got, eventID, "the event id must survive whole; it is what makes the subject unique")
+				assert.Contains(t, got, eventID,
+					"with a normal event id the readable form is kept, and the id survives whole")
+
+				// And again with an event id that consumes the whole budget by itself, which the provider trim alone
+				// cannot save. Here the subject collapses to a hash, so the id no longer appears literally.
+				hostile := providerSubject(prefix, tc.provider, hostileEventID)
+				assert.LessOrEqual(t, len(hostile), alertsSubjectColumnLen,
+					"%s subject must fit the column even for an oversized event id", prefix)
+				assert.True(t, utf8.ValidString(hostile))
 			}
 		})
 	}
@@ -62,6 +74,14 @@ func TestProviderSubject_KeepsDistinctRecordsDistinct(t *testing.T) {
 	// And the same record must still collapse, which is what dedup depends on.
 	assert.Equal(t, first, providerSubject("sensor_stop", longA, "event-1"),
 		"re-evaluating one record must produce the same subject")
+
+	// The same two properties must hold on the HASHED path, which is where a naive implementation would break them: two
+	// oversized records differing only in their event id must still be told apart, and one must still be stable.
+	hashedA := providerSubject("sensor_stop", "content_filter", hostileEventID+"-a")
+	hashedB := providerSubject("sensor_stop", "content_filter", hostileEventID+"-b")
+	assert.NotEqual(t, hashedA, hashedB, "oversized records must stay distinct through the hash")
+	assert.Equal(t, hashedA, providerSubject("sensor_stop", "content_filter", hostileEventID+"-a"),
+		"the hashed subject must be a stable function of its inputs, or dedup breaks")
 }
 
 // TestProviderSubject_LeavesRealProvidersUntouched guards the ordinary path: the bound must be invisible in practice, or
