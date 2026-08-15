@@ -6,6 +6,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Added
 
+- **A host whose network capture has silently stopped is now shown as degraded, even while its agent reports itself healthy.** A macOS network extension provider can keep reporting that it is running after it has stopped delivering events, which leaves the host looking fine while its connection and DNS telemetry is missing. The Hosts page and the host's health details now flag this and name the provider to re-enable, which takes re-activating the extension on that host. The signal is raised after two hours with no events from that provider on a host that is otherwise active, and it clears by itself once capture resumes. A host that is idle, offline, or has that provider deliberately turned off is not flagged.
 - **Investigate the new High alert `EDR sensor disabled` (MITRE T1562.001).** It means a host's capture provider was switched off and had not resumed 5 seconds later, so the host stopped reporting that telemetry. Investigate even when the host now reads healthy: the agent restores the provider by itself after about 35 seconds, which clears the health warning but does not make the stop legitimate. Agent upgrades and a deliberately disabled DNS proxy do not alert.
 
 ### Fixed

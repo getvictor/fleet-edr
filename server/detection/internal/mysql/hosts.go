@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
+	"github.com/fleetdm/edr/server/detection/internal/telemetryhealth"
+	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
 
 // ListHosts returns a summary of all hosts that have sent events. The LEFT JOINs reach into the endpoint context's `enrollments` and
@@ -28,7 +30,69 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
 	}
+	// Fold in the conditions the server derives from telemetry the host cannot self-report on (issue #677), so the list badge and
+	// the host page cannot disagree about the same host. One archive query for the whole page, not one per row.
+	//
+	// Only candidate hosts are asked about. A host already reporting a fault cannot gain a derived condition whatever its telemetry
+	// says, so including it would buy an answer that is thrown away, and on a fleet where something is broadly wrong that is most of
+	// the list.
+	hostIDs := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if telemetryhealth.CanDerive(h.OverallStatus) {
+			hostIDs = append(hostIDs, h.HostID)
+		}
+	}
+	activity := s.telemetryActivity(ctx, hostIDs)
+	for i, h := range hosts {
+		derived := telemetryhealth.Derive(h.OverallStatus, activity[h.HostID])
+		hosts[i].OverallStatus = telemetryhealth.Rollup(h.OverallStatus, derived)
+	}
 	return hosts, nil
+}
+
+// derivedFor returns the derived conditions for a single host, reading the archive only when the host is a candidate for one.
+//
+// The guard is the point: without it, every host page load of an already-unhealthy host would spend an archive query to compute a
+// result that is discarded, which is the single-host mirror of the filter ListHosts applies to its page.
+func (s *Store) derivedFor(ctx context.Context, hostID, reportedStatus string) []api.DerivedComponent {
+	if !telemetryhealth.CanDerive(reportedStatus) {
+		return nil
+	}
+	return telemetryhealth.Derive(reportedStatus, s.telemetryActivity(ctx, []string{hostID})[hostID])
+}
+
+// telemetryActivityHostCap bounds how many hosts one derived-health read asks the archive about.
+//
+// Sized well past the product's stated target (10-500 endpoint pilots) so it is not reached in practice, and present only so that
+// the bound exists at all: this read hangs off an unpaginated list endpoint, and an argument list that grows with the fleet is a
+// property worth ruling out on the page an operator loads most.
+const telemetryActivityHostCap = 2000
+
+// telemetryActivity reads the per-host telemetry freshness backing the derived health conditions.
+//
+// A failure is logged and swallowed, returning nil. That is a deliberate asymmetry: this signal is an ENRICHMENT of the hosts list
+// and the host health detail, and taking either page down because the event archive is unreachable would trade a rare, low-severity
+// missed signal for a total loss of the operator's primary view, at exactly the moment (an infrastructure problem) they most need it.
+// Callers index the nil map freely; a missing entry is the zero activity, which derives nothing.
+func (s *Store) telemetryActivity(ctx context.Context, hostIDs []string) map[string]visibilityapi.TelemetryActivity {
+	if len(hostIDs) == 0 {
+		return nil
+	}
+	if len(hostIDs) > telemetryActivityHostCap {
+		// Bound the fan-in rather than growing one IN clause with the fleet. The hosts list is unpaginated, so this read's argument
+		// count would otherwise track fleet size on the operator's primary page; the enrichment is not worth an unbounded query.
+		// Truncation is logged because a silently-enriched prefix would read as "every host is fine" for the hosts left out.
+		s.logger.WarnContext(ctx, "derive telemetry health: host count over cap, enriching the first hosts only",
+			"hosts", len(hostIDs), "cap", telemetryActivityHostCap)
+		hostIDs = hostIDs[:telemetryActivityHostCap]
+	}
+	activity, err := s.archive.TelemetryActivityForHosts(ctx, hostIDs, telemetryhealth.Windows(s.now()))
+	if err != nil {
+		s.logger.WarnContext(ctx, "derive telemetry health: archive read failed, serving reported health only",
+			"hosts", len(hostIDs), "err", err)
+		return nil
+	}
+	return activity
 }
 
 // HostDetail returns the single-host identity + liveness view for the host page header (issue #579). Same cross-context posture as
@@ -61,6 +125,10 @@ func (s *Store) HostDetail(ctx context.Context, hostID string) (api.HostDetail, 
 		}
 		return api.HostDetail{}, fmt.Errorf("query host detail: %w", err)
 	}
+	// Same fold as ListHosts, for the same reason applied one level down: three endpoints expose a field called overall_status, and
+	// two of them meaning "effective" while this one meant "as reported" is exactly the kind of difference that survives review and
+	// then loses the signal the first time a UI reads the header's rollup instead of the health detail's.
+	d.OverallStatus = telemetryhealth.Rollup(d.OverallStatus, s.derivedFor(ctx, hostID, d.OverallStatus))
 	return d, nil
 }
 
@@ -75,11 +143,15 @@ func (s *Store) HostHealth(ctx context.Context, hostID string) (api.HostHealth, 
 		FROM host_health
 		WHERE host_id = ?`, hostID)
 	if errors.Is(err, sql.ErrNoRows) {
+		// No snapshot means no claim to contradict, so the derived check is skipped entirely rather than run against an unknown
+		// rollup: Derive would reject it anyway, and not asking spares the archive a query per never-checked-in host.
 		return api.HostHealth{OverallStatus: api.HostHealthUnknown}, nil
 	}
 	if err != nil {
 		return api.HostHealth{}, fmt.Errorf("query host health: %w", err)
 	}
+	h.DerivedComponents = s.derivedFor(ctx, hostID, h.OverallStatus)
+	h.OverallStatus = telemetryhealth.Rollup(h.OverallStatus, h.DerivedComponents)
 	return h, nil
 }
 

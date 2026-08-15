@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -27,7 +28,16 @@ type Store struct {
 	// webhookConsoleBaseURL is the deployment external URL used to derive the console deep link in delivery payloads. Set-once
 	// construction-phase config; an empty value yields a relative link in the payload.
 	webhookConsoleBaseURL string
+
+	// now supplies the current time for reads whose result depends on it, namely the telemetry-freshness windows behind derived
+	// host health (issue #677). Injectable so a test can place events at fixed offsets from a known instant rather than racing
+	// wall-clock; New defaults it to time.Now and nothing mutates it afterwards.
+	now func() time.Time
 }
+
+// SetNowForTest overrides the store's clock. Test-only, and named so: derived host health is a statement about a window ending
+// "now", so a test that cannot move now can only assert it by sleeping.
+func (s *Store) SetNowForTest(now func() time.Time) { s.now = now }
 
 // SetWebhookSealer wires the sealer used to encrypt webhook signing secrets at rest. Like SetMetrics it is set-once during
 // construction, before any request or loop reads it, so it is not guarded for concurrent mutation.
@@ -54,7 +64,7 @@ func New(db *sqlx.DB, archive visibilityapi.EventArchive, logger *slog.Logger) (
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Store{db: db, archive: archive, logger: logger}, nil
+	return &Store{db: db, archive: archive, logger: logger, now: time.Now}, nil
 }
 
 // DB returns the underlying *sqlx.DB. Used by integration tests that

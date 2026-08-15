@@ -25,6 +25,19 @@ type MemArchive struct {
 	mu    sync.Mutex
 	byID  map[string]api.Event
 	order []string // event_ids in first-insert order, for deterministic iteration
+
+	// readErr, when set, makes the freshness read fail. Callers of that read are expected to degrade rather than propagate (an
+	// unreachable archive must not take an operator page down), and a behaviour that only shows up on failure needs a way to
+	// provoke the failure.
+	readErr error
+}
+
+// FailReads makes TelemetryActivityForHosts return err until cleared with nil, so a test can assert what a caller does when the
+// archive is unreachable.
+func (m *MemArchive) FailReads(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.readErr = err
 }
 
 // Compile-time check that MemArchive satisfies the published EventArchive contract.
@@ -131,6 +144,80 @@ func (m *MemArchive) EventsByTypeForHost(_ context.Context, hostID, eventType st
 
 // EventsByTypeRowCap mirrors the ClickHouse store's cap so a test can exercise the overflow path without 1000 rows of setup.
 const EventsByTypeRowCap = 1000
+
+// TelemetryActivityForHosts mirrors the ClickHouse read's counting AND its absence contract: a host with no events at all inside the
+// reference range gets no map entry, rather than an entry of zeroes. The distinction is load-bearing for the caller (issue #677),
+// which must not read "I have never heard of this host" as "this host went silent", so a fake that materialised zeroes would let a
+// test pass against a contract production does not offer.
+func (m *MemArchive) TelemetryActivityForHosts(
+	_ context.Context, hostIDs []string, w api.TelemetryActivityWindows,
+) (map[string]api.TelemetryActivity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.readErr != nil {
+		return nil, m.readErr
+	}
+	wanted := make(map[string]struct{}, len(hostIDs))
+	for _, id := range hostIDs {
+		wanted[id] = struct{}{}
+	}
+	out := make(map[string]api.TelemetryActivity, len(hostIDs))
+	for _, id := range m.order {
+		e := m.byID[id]
+		if _, ok := wanted[e.HostID]; !ok {
+			continue
+		}
+		if e.TimestampNs < w.Reference.FromNs || e.TimestampNs > w.Reference.ToNs {
+			continue
+		}
+		if !counted(e.EventType) {
+			// Skipped BEFORE the map entry is created, mirroring the real store's event_type predicate: there, a host whose
+			// only events are other types produces no group and so no row. Both ends have to agree, or a test could rely on
+			// a host being present that production omits.
+			continue
+		}
+		// The zero value is the correct start; what the loop establishes is PRESENCE in the map, which is the contract above.
+		out[e.HostID] = countEvent(out[e.HostID], e.EventType, e.TimestampNs >= w.SilentFromNs)
+	}
+	return out, nil
+}
+
+// counted reports whether an event type contributes to telemetry activity at all. The real store expresses the same set as an
+// event_type predicate in its WHERE clause, which is what prunes its scan.
+func counted(eventType string) bool {
+	switch eventType {
+	case "exec", "fork", "network_connect", "dns_query":
+		return true
+	default:
+		return false
+	}
+}
+
+// countEvent folds one event into a host's running activity and returns the result. Split out of the loop above so each half stays
+// readable on its own: the loop decides which events count, this decides what each one counts toward.
+//
+// It takes and returns a value rather than mutating through a pointer. The pointer version is the obvious shape and reads fine, but
+// it makes the counter reachable from a map index expression, which nilaway reports as a potential nil dereference; a value has no
+// such flow to analyse and the struct is five ints.
+func countEvent(activity api.TelemetryActivity, eventType string, inWindow bool) api.TelemetryActivity {
+	switch eventType {
+	case "exec", "fork":
+		if inWindow {
+			activity.ProcessInWindow++
+		}
+	case "network_connect":
+		activity.ConnectInReference++
+		if inWindow {
+			activity.ConnectInWindow++
+		}
+	case "dns_query":
+		activity.DNSInReference++
+		if inWindow {
+			activity.DNSInWindow++
+		}
+	}
+	return activity
+}
 
 // EventsByIDs returns the surviving envelopes for the given ids, ordered by (timestamp_ns, event_id). Unknown ids are omitted, matching
 // the archive's best-effort evidence contract.

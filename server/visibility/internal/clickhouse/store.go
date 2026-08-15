@@ -150,6 +150,72 @@ func (s *Store) EventsByTypeForHost(ctx context.Context, hostID, eventType strin
 // eventsByTypeRowCap bounds EventsByTypeForHost. See the method comment for why a cap exists at all.
 const eventsByTypeRowCap = 1000
 
+// placeholders returns n comma-separated bind markers for an IN clause, e.g. "?, ?, ?". Callers append the matching arguments in the
+// same order. n must be positive; every caller here returns early on an empty set, since "IN ()" is not valid SQL.
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
+}
+
+// TelemetryActivityForHosts counts each telemetry stream per host over the two nested windows in one pass.
+//
+// One query, not one per host and not one per window: the whole read is a single scan of the reference range with conditional
+// aggregates, so adding hosts widens the key filter rather than multiplying round trips. That is what lets the Hosts list derive the
+// signal for every row it returns at the cost of one query per page.
+//
+// The scan is key-pruned on all three leading key columns. The archive's sorting key is (host_id, event_type, timestamp_ns, ...), so
+// the explicit host list makes this a set of key ranges rather than a time-filtered scan of the whole fleet, the event_type predicate
+// narrows each of those ranges to the four streams actually counted (WITHOUT it the conditional aggregates still return the right
+// numbers, but only after reading every other event type this host produced, and exec/exit/network traffic dwarfs the rest), and the
+// reference bound then prunes granules by the timestamp_ns min/max index.
+//
+// No FINAL: see TelemetryActivity for why duplicate rows cannot change any decision made from these counts.
+func (s *Store) TelemetryActivityForHosts(
+	ctx context.Context, hostIDs []string, w api.TelemetryActivityWindows,
+) (map[string]api.TelemetryActivity, error) {
+	if len(hostIDs) == 0 {
+		return map[string]api.TelemetryActivity{}, nil
+	}
+	// Argument order follows the placeholders left to right: the three conditional aggregates each take the inner window's start,
+	// then the host key filter, then the reference bounds.
+	args := make([]any, 0, len(hostIDs)+5)
+	args = append(args, w.SilentFromNs, w.SilentFromNs, w.SilentFromNs)
+	for _, id := range hostIDs {
+		args = append(args, id)
+	}
+	args = append(args, w.Reference.FromNs, w.Reference.ToNs)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT host_id,
+		       countIf(event_type IN ('exec', 'fork') AND timestamp_ns >= ?)     AS process_in_window,
+		       countIf(event_type = 'network_connect' AND timestamp_ns >= ?)     AS connect_in_window,
+		       countIf(event_type = 'dns_query' AND timestamp_ns >= ?)           AS dns_in_window,
+		       countIf(event_type = 'network_connect')                           AS connect_in_reference,
+		       countIf(event_type = 'dns_query')                                 AS dns_in_reference
+		FROM events
+		WHERE host_id IN (`+placeholders(len(hostIDs))+`)
+		  AND event_type IN ('exec', 'fork', 'network_connect', 'dns_query')
+		  AND timestamp_ns >= ? AND timestamp_ns <= ?
+		GROUP BY host_id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("clickhouse telemetry activity for hosts: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]api.TelemetryActivity, len(hostIDs))
+	for rows.Next() {
+		var hostID string
+		var a api.TelemetryActivity
+		if err := rows.Scan(&hostID, &a.ProcessInWindow, &a.ConnectInWindow, &a.DNSInWindow,
+			&a.ConnectInReference, &a.DNSInReference); err != nil {
+			return nil, fmt.Errorf("clickhouse scan telemetry activity: %w", err)
+		}
+		out[hostID] = a
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("clickhouse iterate telemetry activity: %w", err)
+	}
+	return out, nil
+}
+
 // EventsByIDs returns the full envelopes for the given event_ids, ordered by (timestamp_ns, event_id). Alert evidence capture snapshots
 // a finding's triggering events into alert_event_payloads with it (ADR-0015), so the evidence outlives the archive's retention window.
 // FINAL collapses ReplacingMergeTree duplicates; IDs with no surviving event are simply absent from the result, keeping capture
@@ -158,14 +224,12 @@ func (s *Store) EventsByIDs(ctx context.Context, eventIDs []string) ([]api.Event
 	if len(eventIDs) == 0 {
 		return nil, nil
 	}
-	placeholders := make([]string, len(eventIDs))
 	args := make([]any, len(eventIDs))
 	for i, id := range eventIDs {
-		placeholders[i] = "?"
 		args[i] = id
 	}
 	query := "SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload FROM events FINAL WHERE event_id IN (" +
-		strings.Join(placeholders, ", ") + ") ORDER BY timestamp_ns, event_id"
+		placeholders(len(eventIDs)) + ") ORDER BY timestamp_ns, event_id"
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse events by ids: %w", err)
@@ -223,12 +287,10 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 	}
 	where := []string{"host_id = ?"}
 	args := []any{filter.HostID}
-	placeholders := make([]string, len(types))
-	for i, t := range types {
-		placeholders[i] = "?"
+	for _, t := range types {
 		args = append(args, t)
 	}
-	where = append(where, "event_type IN ("+strings.Join(placeholders, ", ")+")")
+	where = append(where, "event_type IN ("+placeholders(len(types))+")")
 	if filter.FromNs > 0 {
 		where = append(where, "timestamp_ns >= ?")
 		args = append(args, filter.FromNs)

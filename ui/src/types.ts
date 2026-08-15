@@ -46,6 +46,11 @@ export interface HostHealth {
   overall_status: string;
   reported_at_ns: number;
   components: ComponentHealth[] | null;
+  // derived_components are conditions the SERVER concluded, not ones the agent reported (issue #677): a telemetry stream this host
+  // does use has gone silent while the agent's own health claims everything is fine. They are a separate field because they
+  // contradict the agent's report, and overall_status above already folds them in. Null when the server has nothing to add. These
+  // carry last_transition_ns 0: absence has no observed transition instant, so the UI must not render an age for them.
+  derived_components: ComponentHealth[] | null;
 }
 
 // Note: nanosecond timestamp fields (fork_time_ns, etc.) may lose precision
