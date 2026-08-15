@@ -4,6 +4,8 @@ package tests
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -35,11 +37,32 @@ func clickhouseTestDSN(t *testing.T) string {
 	return dsn
 }
 
+// maxClickHouseDBNameLen is the longest database name this ClickHouse accepts. The server stores database metadata at
+// /var/lib/clickhouse/metadata/<name>.sql and writes it through a <name>.sql.tmp intermediate, so the name plus that 8-byte
+// suffix has to fit the filesystem's 255-byte NAME_MAX. Measured against the pinned 24.8 image: 247 succeeds, 248 fails with
+// "Cannot open file ... errno 36". The MySQL side caps at 64 for the same reason (a hard identifier ceiling), see sanitizeDBName.
+const maxClickHouseDBNameLen = 247
+
 // safeDBName builds a per-test ClickHouse database name from the test name, keeping only [a-z0-9_] so it is always a valid unquoted
-// identifier (subtest names carry '/', spaces, etc.).
+// identifier (subtest names carry '/', spaces, etc.). Two extra components make the name collision-RESISTANT (not collision-free:
+// both are finite, so the guarantee is probabilistic), mirroring the MySQL side in server/testdb:
+//
+//   - testdb.ProcessSalt() scopes the name to this `go test` process. The DDL below is DROP-then-CREATE, so without the salt two
+//     concurrent runs of the same test against one shared dev ClickHouse (two worktrees on one machine, or a sharded CI run) each
+//     drop the other's live database mid-test.
+//   - A hash of the ORIGINAL name disambiguates subtests that the character loop collapses onto each other ("T/A" and "T.A" both
+//     reduce to "t_a"), which the salt alone does not fix because both collide within the same process.
+//
+// Each component is 4 bytes, so each contributes a 1-in-4-billion collision space: the salt across concurrent processes, the hash
+// across names within one process. Same sizing, and the same probabilistic caveat, as sanitizeDBName in server/testdb.
 func safeDBName(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	suffixHex := hex.EncodeToString(sum[:4])
+
 	var b strings.Builder
 	b.WriteString("edr_test_")
+	b.WriteString(testdb.ProcessSalt())
+	b.WriteString("_")
 	for _, r := range strings.ToLower(name) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
 			b.WriteRune(r)
@@ -47,7 +70,15 @@ func safeDBName(name string) string {
 			b.WriteRune('_')
 		}
 	}
-	return b.String()
+
+	// Truncate the readable segment only, never the salt or the hash: those two are what the uniqueness rests on, while the
+	// readable part exists so a human can tell which test owns a leftover database. Byte-slicing is safe here because the loop
+	// above emits exactly one ASCII byte per input rune, so there is no multi-byte sequence to cut in half.
+	readable := b.String()
+	if maxReadable := maxClickHouseDBNameLen - 1 - len(suffixHex); len(readable) > maxReadable {
+		readable = readable[:maxReadable]
+	}
+	return readable + "_" + suffixHex
 }
 
 // openTestArchive provisions a per-test ClickHouse database on the instance named by EDR_CLICKHOUSE_TEST_DSN (so parallel tests do
@@ -334,7 +365,7 @@ func TestEventArchive_SearchEvents(t *testing.T) {
 		EventType: "network_connect", FromNs: window.FromNs, ToNs: window.ToNs,
 	}, "", 50)
 	require.NoError(t, err)
-	assert.EqualValues(t, visibilityapi.TotalNotCounted, res.TotalMatched, "the recent-events browse skips the count")
+	assert.Equal(t, visibilityapi.TotalNotCounted, res.TotalMatched, "the recent-events browse skips the count")
 	require.Len(t, res.Events, 3, "no artifact filter lists all connection events")
 	ids = eventIDSet(res.Events)
 	assert.True(t, ids["c-a"] && ids["c-b"] && ids["c-other"], "includes every connection regardless of remote address")
@@ -383,25 +414,28 @@ func TestEventArchive_EventsByTypeForHostOverflow(t *testing.T) {
 	arch := openTestArchive(t)
 	base := time.Now().UnixNano()
 	const transition = "sensor_provider_transition"
-	const cap = 1000
+	// Mirrors the unexported eventsByTypeRowCap in server/visibility/internal/clickhouse/store.go. The test cannot import it
+	// across the internal boundary, so the value is duplicated here and the names are kept identical to make that link greppable.
+	// Named for the thing it bounds rather than `cap`, which would shadow the builtin.
+	const eventsByTypeRowCap = 1000
 
-	events := make([]visibilityapi.Event, 0, cap+1)
-	for i := range cap + 1 {
+	events := make([]visibilityapi.Event, 0, eventsByTypeRowCap+1)
+	for i := range eventsByTypeRowCap + 1 {
 		events = append(events, archiveEvent(fmt.Sprintf("ovf%05d", i), "hostOvf", transition, base+int64(i), 1))
 	}
 	require.NoError(t, arch.Insert(ctx, events))
 
 	_, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
-		FromNs: base, ToNs: base + int64(cap+1),
+		FromNs: base, ToNs: base + int64(eventsByTypeRowCap+1),
 	})
 	require.ErrorIs(t, err, visibilityapi.ErrEventsTruncated)
 
 	// Exactly at the cap is a complete answer.
 	got, err := arch.EventsByTypeForHost(ctx, "hostOvf", transition, httpserver.TimeRange{
-		FromNs: base, ToNs: base + int64(cap-1),
+		FromNs: base, ToNs: base + int64(eventsByTypeRowCap-1),
 	})
 	require.NoError(t, err)
-	assert.Len(t, got, cap)
+	assert.Len(t, got, eventsByTypeRowCap)
 }
 
 // spec:server-rest-api/fleet-wide-connection-and-dns-search-endpoints/keyset-pagination-is-stable-and-complete

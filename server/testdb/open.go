@@ -48,6 +48,13 @@ var processSalt = func() string {
 	return hex.EncodeToString(buf[:])
 }()
 
+// ProcessSalt returns the per-process random suffix Open mixes into every test database name. It is exported so suites that
+// provision databases on a different engine (the ClickHouse EventArchive suite under server/visibility/internal/tests) can derive
+// their names from the same salt. Without it, two concurrent `go test` processes running the same test name against one shared
+// dev instance provision, and then drop, the same database out from under each other. Returned by value rather than exposed as a
+// var so a caller cannot reassign it and silently re-open that collision.
+func ProcessSalt() string { return processSalt }
+
 func getAdminPool(baseDSN string) (*sqlx.DB, error) {
 	adminPoolOnce.Do(func() {
 		db, err := sqlx.Open("mysql", baseDSN)
