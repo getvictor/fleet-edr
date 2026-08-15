@@ -44,14 +44,17 @@ func clickhouseTestDSN(t *testing.T) string {
 const maxClickHouseDBNameLen = 247
 
 // safeDBName builds a per-test ClickHouse database name from the test name, keeping only [a-z0-9_] so it is always a valid unquoted
-// identifier (subtest names carry '/', spaces, etc.). Two extra components make the name collision-free, mirroring the MySQL side
-// in server/testdb:
+// identifier (subtest names carry '/', spaces, etc.). Two extra components make the name collision-RESISTANT (not collision-free:
+// both are finite, so the guarantee is probabilistic), mirroring the MySQL side in server/testdb:
 //
 //   - testdb.ProcessSalt() scopes the name to this `go test` process. The DDL below is DROP-then-CREATE, so without the salt two
 //     concurrent runs of the same test against one shared dev ClickHouse (two worktrees on one machine, or a sharded CI run) each
 //     drop the other's live database mid-test.
 //   - A hash of the ORIGINAL name disambiguates subtests that the character loop collapses onto each other ("T/A" and "T.A" both
 //     reduce to "t_a"), which the salt alone does not fix because both collide within the same process.
+//
+// Each component is 4 bytes, so each contributes a 1-in-4-billion collision space: the salt across concurrent processes, the hash
+// across names within one process. Same sizing, and the same probabilistic caveat, as sanitizeDBName in server/testdb.
 func safeDBName(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	suffixHex := hex.EncodeToString(sum[:4])
@@ -68,7 +71,7 @@ func safeDBName(name string) string {
 		}
 	}
 
-	// Truncate the readable segment only, never the salt or the hash: those two carry the entire uniqueness guarantee, while the
+	// Truncate the readable segment only, never the salt or the hash: those two are what the uniqueness rests on, while the
 	// readable part exists so a human can tell which test owns a leftover database. Byte-slicing is safe here because the loop
 	// above emits exactly one ASCII byte per input rune, so there is no multi-byte sequence to cut in half.
 	readable := b.String()
