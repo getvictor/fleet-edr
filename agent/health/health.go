@@ -368,10 +368,9 @@ func (r *Registry) Snapshot() []Component {
 //
 // Caller holds the lock.
 func (r *Registry) providerComponents(compType string) []Component {
+	// No early return for the empty case: an empty slice falls out of the loops below, and returning a literal nil here
+	// instead puts a nil into Snapshot's append chain, which nilaway then traces to every caller that indexes the result.
 	states := r.providers[compType]
-	if len(states) == 0 {
-		return nil
-	}
 	names := make([]string, 0, len(states))
 	for name := range states {
 		names = append(names, name)
