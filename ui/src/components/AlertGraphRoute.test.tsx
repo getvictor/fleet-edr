@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vite
 import * as api from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
 import { AlertGraphRoute } from "./AlertGraphRoute";
+import { treeResponse } from "../test/factories";
 
 // On success AlertGraphRoute renders the shared ProcessTreeView, which lays out a d3 tree. jsdom lacks the SVG geometry APIs d3 needs,
 // so stub them exactly as ProcessTree.test.tsx does or a non-empty render throws.
@@ -52,7 +53,7 @@ function renderRoute() {
 
 beforeEach(() => {
   // ProcessTreeView fetches the tree and this host's alerts on mount; resolve both to empty/known shapes so it renders.
-  vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+  vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
   vi.spyOn(api, "listAlerts").mockResolvedValue([]);
 });
 

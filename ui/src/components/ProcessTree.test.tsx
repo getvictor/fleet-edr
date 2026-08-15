@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, afterEach, describe, it, expect, vi } from "vite
 import * as api from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
 import { ProcessTreeView } from "./ProcessTree";
+import { treeResponse } from "../test/factories";
 
 // spec:web-ui/alert-pivots-to-the-host-process-tree/operator-pivots-from-a-process-optional-alert
 //
@@ -64,7 +65,7 @@ function renderTree(search: string) {
 }
 
 beforeEach(() => {
-  vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+  vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
   vi.spyOn(api, "listAlerts").mockResolvedValue([]);
 });
 
@@ -93,7 +94,7 @@ describe("ProcessTreeView process-optional alert", () => {
   it("widens and collapses via the single info-bar control", async () => {
     // Empty host tree so widening doesn't trigger the d3/SVG render path (jsdom lacks the SVG geometry APIs d3 needs); the
     // assertion is about the focus state flipping, not about drawing the forest.
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: [] });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse([]));
     vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
     renderTree("?alert=7&process=0&at=1750248000000");
 
@@ -133,7 +134,7 @@ describe("ProcessTreeView process-optional alert", () => {
     // The focus filter empties the forest from ?process=0 on mount, before (or even if never) alertDetail loads. Keying the
     // process-optional classification on the URL param means the explanation still renders, so a slow or failed
     // getAlertDetail never leaves a silent blank canvas. Regression guard for the Gemini/Qodo race finding on PR #466.
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
     vi.spyOn(api, "getAlertDetail").mockRejectedValue(new Error("alert detail unavailable"));
     renderTree("?alert=7&process=0&at=1750248000000");
 
@@ -173,7 +174,7 @@ describe("ProcessTreeView sibling aggregation", () => {
   });
 
   it("renders a ×N badge for an aggregated group and expands to the sample on click", async () => {
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: aggregatedForest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(aggregatedForest));
     renderTree("");
 
     // The aggregated node reads as a group header, not a single pid.
@@ -189,7 +190,7 @@ describe("ProcessTreeView sibling aggregation", () => {
   });
 
   it("expands via the chevron and collapses on a second activation", async () => {
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: aggregatedForest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(aggregatedForest));
     const { container } = renderTree("");
     await screen.findByText(/grep ×3/);
 
@@ -213,7 +214,7 @@ describe("ProcessTreeView sibling aggregation", () => {
     const forest: ProcessNode[] = [
       { ...process(1, 100, 1, "/bin/bash"), children: [aggregatedChild, alertedLeaf, exitedLeaf] },
     ];
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
     // Alert on the curl leaf so alertProcessIds drives its red dot.
     vi.spyOn(api, "listAlerts").mockResolvedValue([
       { id: 1, host_id: "h1", rule_id: "r", source: "detection", severity: "high", title: "t", description: "",
@@ -245,7 +246,7 @@ describe("ProcessTreeView show-system toggle visibility", () => {
   // spec:web-ui/the-process-tree-hides-the-system-noise-toggle-when-it-changes-nothing/the-toggle-is-hidden-when-there-is-no-system-noise-to-reveal
   it("hides the Show system toggle when the view has no hidden system processes", async () => {
     // The default forest (launchd -> fleet-edr-agent) has no system-path nodes, so flipping the toggle would change nothing.
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
     renderTree("");
     await screen.findByText(/launchd/);
     expect(screen.queryByText("Show system")).not.toBeInTheDocument();
@@ -256,7 +257,7 @@ describe("ProcessTreeView show-system toggle visibility", () => {
     const withSystemNode: ProcessNode[] = [
       { ...process(1, 100, 1, "/sbin/launchd"), children: [process(2, 200, 100, "/usr/libexec/opendirectoryd")] },
     ];
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: withSystemNode });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(withSystemNode));
     renderTree("");
     // The /usr/libexec child is hidden while showSystem is off, so the toggle that would reveal it is offered.
     expect(await screen.findByText("Show system")).toBeInTheDocument();
@@ -269,7 +270,7 @@ describe("ProcessTreeView process-backed alert", () => {
     // the process-optional explanation must NOT appear. This guards the regression that the explanation is gated on
     // process-optional-ness, not merely on "the focused chain came back empty".
     // Empty host tree so toggling focus off doesn't trigger the d3/SVG render path (jsdom lacks the SVG geometry APIs).
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: [] });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse([]));
     vi.spyOn(api, "getAlertDetail").mockResolvedValue({
       ...launchDaemonAlert,
       rule_id: "suspicious_exec",
@@ -298,7 +299,7 @@ describe("ProcessTreeView process-backed alert", () => {
 describe("ProcessTreeView alert route (entryAlert prop)", () => {
   it("focuses the chain and renders the breadcrumb from the prop, without a getAlertDetail fetch", async () => {
     // Empty host tree so toggling focus off doesn't hit the d3/SVG render path (jsdom lacks SVG geometry APIs).
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: [] });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse([]));
     const fetchSpy = vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
     const entryAlert: AlertDetail = { ...launchDaemonAlert, process_id: 99, rule_id: "suspicious_exec", title: "Suspicious exec chain" };
 
@@ -340,7 +341,7 @@ describe("ProcessTreeView conviction evidence", () => {
   ];
 
   beforeEach(() => {
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: signingForest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(signingForest));
   });
 
   // spec:web-ui/process-node-conviction-evidence/unsigned-and-ad-hoc-nodes-are-marked-in-the-graph
@@ -400,7 +401,7 @@ describe("ProcessTreeView alert-entry window", () => {
 describe("ProcessTreeView graph/timeline views (issue #583)", () => {
   // spec:web-ui/host-event-timeline-view/the-graph-and-timeline-share-one-time-window
   it("switches to the timeline over the same window the graph used", async () => {
-    const treeSpy = vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    const treeSpy = vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
     const tlSpy = vi.spyOn(api, "getHostTimeline").mockResolvedValue({ events: [], total_matched: 0 });
     renderTree("");
     await waitFor(() => { expect(treeSpy).toHaveBeenCalled(); });
@@ -414,7 +415,7 @@ describe("ProcessTreeView graph/timeline views (issue #583)", () => {
 
   // spec:web-ui/graph-and-timeline-cross-navigation/a-timeline-row-opens-its-process-in-the-graph
   it("resolves ?pid=&at= to the owning node and opens its detail", async () => {
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: forest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
     vi.spyOn(api, "getProcessDetail").mockResolvedValue({
       process: { ...process(2, 200, 100, "/usr/local/bin/fleet-edr-agent") },
       network_connections: [],
@@ -456,7 +457,7 @@ describe("ProcessTreeView chevron reflects rendered collapse state", () => {
     [...container.querySelectorAll("text.node__chevron")].map((c) => c.textContent);
 
   beforeEach(() => {
-    vi.spyOn(api, "getProcessTree").mockResolvedValue({ roots: chevronForest });
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(chevronForest));
   });
 
   it("shows the collapsed ▶ chevron and its +N count for a genuinely collapsed node (no query)", async () => {
@@ -494,5 +495,51 @@ describe("ProcessTreeView chevron reflects rendered collapse state", () => {
     const glyphs = chevronGlyphs(container);
     expect(glyphs).toContain("▼");
     expect(glyphs).not.toContain("▶");
+  });
+});
+
+describe("ProcessTreeView truncation notice (issue #423)", () => {
+  // The tree used to render a server-capped forest with no indication that anything was dropped, so an analyst who scoped a window
+  // and saw no `curl` concluded there was no `curl`. These pin that the page states what it is not showing, and equally that it does
+  // not cry wolf on a complete result.
+
+  // spec:web-ui/process-tree-visualization/a-truncated-tree-tells-the-analyst-what-is-missing
+  it("names both counts and how to see the rest when the server reports truncation", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(
+      treeResponse(forest, { returned: 2000, total_matched: 2588, truncated: true }),
+    );
+    renderTree("");
+
+    const notice = await screen.findByRole("status");
+    // Both numbers, thousands-separated the same way the search results count formats them.
+    expect(notice).toHaveTextContent(/Showing 2,000 of 2,588 processes/i);
+    // The remedies, so the notice is actionable rather than only alarming.
+    expect(notice).toHaveTextContent(/narrow the time range/i);
+    expect(notice).toHaveTextContent(/search/i);
+  });
+
+  // spec:web-ui/process-tree-visualization/a-complete-tree-shows-no-truncation-notice
+  it("shows no notice when the server returned everything that matched", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(
+      treeResponse(forest, { returned: 12, total_matched: 12, truncated: false }),
+    );
+    renderTree("");
+
+    // Wait for the tree itself so the assertion runs after the fetch resolved, not before it started.
+    expect(await screen.findByText(/fleet-edr-agent \(200\)/)).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing .* of .* processes/i)).not.toBeInTheDocument();
+  });
+
+  // A truncated read whose counts the page cannot trust is still better than a silent lie, but the page must not invent a warning
+  // the server did not raise: presence of the notice is exactly the server's `truncated`, never a client-side comparison.
+  it("keys the notice on the server's flag rather than comparing the counts itself", async () => {
+    vi.spyOn(api, "getProcessTree").mockResolvedValue(
+      treeResponse(forest, { returned: 10, total_matched: 99, truncated: false }),
+    );
+    renderTree("");
+
+    expect(await screen.findByText(/fleet-edr-agent \(200\)/)).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });
