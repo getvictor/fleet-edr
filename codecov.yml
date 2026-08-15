@@ -103,6 +103,11 @@ ignore:
   # spawns lived inline in main.go (excluded above) before ADR-0018 extracted them into per-platform sensors*.go files.
   - "**/cmd/**/sensors*.go"
   - "ui/vite.config.ts"
+  # UI test scaffolding (setup.ts, shared fixture factories). vitest's coverage config already excludes "src/test/**", so the
+  # collector never instruments these files and the LCOV contains no records for them. Without a matching ignore here, codecov reads
+  # "changed lines, no coverage data" as 0% and fails the patch gate on any edit to a test helper, which is a reporting artefact
+  # rather than a real coverage gap. Their logic is exercised by ui/src/test/*.test.ts.
+  - "ui/src/test/**"
   - "server/detection/testharness/**"
   - "schema/**"
   - "extension/edr/**"

@@ -428,8 +428,36 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (stri
 	return path, err
 }
 
+// processTreeWindowPredicate is the lifetime-overlap predicate shared by GetProcessTree and CountProcessTree: a process overlaps the
+// window if it started at or before the window ends and had not already exited when the window began.
+//
+// It is one constant rather than a copy per query because the count is only meaningful if it counts exactly the rows the SELECT
+// would have returned without its limit. Two hand-maintained copies drift, and the failure mode of drift is a "showing N of M"
+// banner stating a confidently wrong number, which is the defect issue #423 exists to remove rather than relocate. Bind with
+// processTreeWindowArgs, which supplies the placeholders in this order.
+//
+// This replaced a three-way OR (forked inside the window, OR forked before and still running, OR forked before and exited after the
+// window began) that is logically equivalent given the physical invariant that a process cannot exit before it forks. The OR made
+// two of the three branches unbounded below on fork_time_ns, so the optimizer abandoned the index and full-scanned for any query it
+// could not stop early. Measured against a 631k-row copy of the dev database, one host, a 15-minute window matching 4,750 rows:
+// the count went from a 635k-row full scan at ~250 to 840 ms down to a 4,750-row index range scan at ~4 ms. The row query, which
+// could already stop early on ORDER BY + LIMIT, stays at ~4-5 ms and returns an identical id set. Adding the (host_id,
+// exit_time_ns) index a reviewer proposed does NOT help: the optimizer declines it for the OR shape (measured, ~253 ms vs ~250 ms
+// baseline). The rewrite is what makes it index-cheap, not the index.
+const processTreeWindowPredicate = `
+		WHERE host_id = ?
+		  AND fork_time_ns <= ?
+		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)`
+
+// processTreeWindowArgs returns the bind arguments for processTreeWindowPredicate in placeholder order. Returns a fresh slice per
+// call so a caller may append its own trailing arguments (the row query appends its LIMIT) without aliasing.
+func processTreeWindowArgs(hostID string, tr api.TimeRange) []any {
+	return []any{hostID, tr.ToNs, tr.FromNs}
+}
+
 // GetProcessTree returns all processes for a host within a time range. Includes any process that was alive at any point during the
-// window so long-running processes still appear in short-window views.
+// window so long-running processes still appear in short-window views. Bounded by limit; pair with CountProcessTree to learn whether
+// that bound dropped anything.
 func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRange, limit int) ([]api.Process, error) {
 	var procs []api.Process
 	err := s.db.SelectContext(ctx, &procs, `
@@ -437,21 +465,34 @@ func (s *Store) GetProcessTree(ctx context.Context, hostID string, tr api.TimeRa
 		       fork_time_ns, fork_ingested_at_ns, exec_time_ns, exit_time_ns,
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns
-		FROM processes
-		WHERE host_id = ?
-		  AND (
-		    (fork_time_ns >= ? AND fork_time_ns <= ?)
-		    OR (fork_time_ns < ? AND exit_time_ns IS NULL)
-		    OR (fork_time_ns < ? AND exit_time_ns >= ?)
-		  )
+		FROM processes`+processTreeWindowPredicate+`
 		ORDER BY fork_time_ns DESC
 		LIMIT ?`,
-		hostID, tr.FromNs, tr.ToNs, tr.FromNs, tr.FromNs, tr.FromNs, limit,
+		append(processTreeWindowArgs(hostID, tr), limit)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query process tree: %w", err)
 	}
 	return procs, nil
+}
+
+// CountProcessTree returns how many process rows overlap the window, independent of any row limit, so a caller can report what a
+// limited read did not return (issue #423).
+//
+// Unlike GetProcessTree this cannot stop early: the row query walks idx_processes_host_time in fork-time order and stops once it has
+// `limit` rows, while counting has to evaluate every match. Callers should therefore run this only when the limit actually bound
+// (see graph.BuildTree), not on every tree read. There is no not-counted sentinel: when it does run, it returns the exact number.
+func (s *Store) CountProcessTree(ctx context.Context, hostID string, tr api.TimeRange) (int64, error) {
+	var total int64
+	err := s.db.GetContext(ctx, &total, `
+		SELECT COUNT(*)
+		FROM processes`+processTreeWindowPredicate,
+		processTreeWindowArgs(hostID, tr)...,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("count process tree: %w", err)
+	}
+	return total, nil
 }
 
 // EventAlreadyApplied reports whether a process row for (hostID, pid) already records eventID as the event that created it

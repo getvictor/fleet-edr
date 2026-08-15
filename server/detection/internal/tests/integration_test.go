@@ -1885,7 +1885,7 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		paths := flattenPaths(tree)
+		paths := flattenPaths(tree.Roots)
 		// All three exec'd paths must be present; the third one is the last event in the batch, so its presence implies every
 		// prior fork + exec has materialised.
 		return slices.Contains(paths, "/usr/bin/python3") &&
@@ -1896,11 +1896,11 @@ func TestGraph_BuildsTreeFromExecBatch(t *testing.T) {
 	tree, err := d.Service().BuildTree(ctx, "h",
 		api.TimeRange{FromNs: now - int64(time.Hour), ToNs: now + int64(time.Hour)}, 100, true, 0)
 	require.NoError(t, err)
-	assert.NotEmpty(t, tree, "BuildTree must return at least one root")
+	assert.NotEmpty(t, tree.Roots, "BuildTree must return at least one root")
 
 	// Final post-condition mirrors what Eventually waited on; kept as explicit asserts so a failure points at the missing path directly
 	// rather than at the polling timeout.
-	paths := flattenPaths(tree)
+	paths := flattenPaths(tree.Roots)
 	assert.Contains(t, paths, "/usr/bin/python3")
 	assert.Contains(t, paths, "/bin/sh")
 	assert.Contains(t, paths, "/tmp/payload")
@@ -2959,6 +2959,174 @@ func TestOperatorHTTP_ProcessTree_LimitClamping(t *testing.T) {
 			require.NoError(t, err)
 			defer resp.Body.Close()
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
+		})
+	}
+}
+
+// TestProcessTree_TruncationMetadata pins the honest-truncation contract (issue #423) against a real database, which is where it has
+// to be pinned: the whole point is that TotalMatched comes from a COUNT over the same window predicate the row query uses, and a fake
+// service can only echo numbers a test already chose.
+//
+// The expected totals are read from an unlimited call rather than hardcoded, so the test states the PROPERTIES (the total ignores the
+// limit; truncation is reported when the limit bites) instead of asserting how many rows the ingest path happens to materialise for a
+// given seed. A hardcoded count would break on any unrelated change to fork seeding and would not be testing this feature.
+//
+// spec:server-rest-api/per-host-process-forest/a-window-matching-more-processes-than-the-limit-is-reported-as-truncated
+// spec:server-rest-api/per-host-process-forest/a-window-inside-the-limit-is-not-reported-as-truncated
+// spec:server-rest-api/per-host-process-forest/the-reported-total-ignores-the-requested-limit
+func TestProcessTree_TruncationMetadata(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	const host = "trunc-host"
+	for _, pid := range []int{101, 102, 103} {
+		mustInsertProcess(t, ctx, d, host, pid)
+	}
+	window := api.TimeRange{FromNs: 0, ToNs: time.Now().UnixNano()}
+
+	// Establish ground truth with a limit far above anything the seed can produce.
+	full, err := d.Service().BuildTree(ctx, host, window, 1000, true, 0)
+	require.NoError(t, err)
+	require.Positive(t, full.TotalMatched, "seed must materialise at least one process or the rest of this test is vacuous")
+	require.GreaterOrEqual(t, full.TotalMatched, int64(2), "need at least two rows to place a limit strictly between 0 and the total")
+
+	t.Run("a window inside the limit is not truncated", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, full.Truncated, "a limit above the match count MUST NOT report truncation")
+		assert.Equal(t, full.TotalMatched, full.Returned, "an untruncated read returns every matching row")
+	})
+
+	t.Run("a limit below the match count reports truncation and the true total", func(t *testing.T) {
+		t.Parallel()
+		cut := full.TotalMatched - 1
+		res, err := d.Service().BuildTree(t.Context(), host, window, int(cut), true, 0)
+		require.NoError(t, err)
+		assert.True(t, res.Truncated, "a limit below the match count MUST report truncation")
+		assert.Equal(t, cut, res.Returned, "Returned counts the rows the limit admitted")
+		assert.Equal(t, full.TotalMatched, res.TotalMatched,
+			"TotalMatched MUST count every overlapping row; reporting the limit here is the silent-drop bug #423 exists to fix")
+	})
+
+	t.Run("a limit exactly equal to the match count is not truncated", func(t *testing.T) {
+		t.Parallel()
+		// The boundary the count-only-when-the-limit-bound branch turns on: the read comes back AT the limit, so the count runs,
+		// and it must then prove nothing was dropped rather than warn. Off-by-one here would warn on every perfectly complete
+		// read whose size happens to match the cap.
+		res, err := d.Service().BuildTree(t.Context(), host, window, int(full.TotalMatched), true, 0)
+		require.NoError(t, err)
+		assert.False(t, res.Truncated, "returning exactly every matching row is complete, not truncated")
+		assert.Equal(t, full.TotalMatched, res.Returned)
+		assert.Equal(t, full.TotalMatched, res.TotalMatched)
+	})
+
+	t.Run("the reported total ignores the requested limit", func(t *testing.T) {
+		t.Parallel()
+		small, err := d.Service().BuildTree(t.Context(), host, window, 1, true, 0)
+		require.NoError(t, err)
+		large, err := d.Service().BuildTree(t.Context(), host, window, 1000, true, 0)
+		require.NoError(t, err)
+		assert.Equal(t, large.TotalMatched, small.TotalMatched,
+			"the same window must report the same total regardless of the page size asked for")
+	})
+
+	t.Run("a window matching nothing is empty rather than truncated", func(t *testing.T) {
+		t.Parallel()
+		// Guards the boundary the Returned < TotalMatched comparison could get wrong: 0 < 0 must be false, so an empty window
+		// reports no truncation rather than warning about rows that do not exist.
+		empty, err := d.Service().BuildTree(t.Context(), "no-such-host", window, 10, true, 0)
+		require.NoError(t, err)
+		assert.False(t, empty.Truncated)
+		assert.Zero(t, empty.TotalMatched)
+		assert.Zero(t, empty.Returned)
+	})
+}
+
+// TestProcessTree_WindowOverlapSemantics pins which processes a time range admits. The tree deliberately shows a process that was
+// ALIVE during the window, not merely one that started inside it, so a long-running process still appears in a short-window view.
+//
+// This exists because the overlap predicate was rewritten for issue #423 from a three-way OR (started inside, OR started before and
+// still running, OR started before and exited after the window began) into the equivalent "started at or before the window ends AND
+// had not already exited when it began". The two are equivalent only given the physical invariant that a process cannot exit before
+// it forks, and nothing in the suite covered the rule at all, so the rewrite would otherwise have rested entirely on a manual
+// measurement. The exit-exactly-at-the-window-start case is the boundary an off-by-one would break.
+//
+// spec:server-rest-api/per-host-process-forest/a-time-range-is-supplied
+func TestProcessTree_WindowOverlapSemantics(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	const host = "overlap-host"
+	// A base far from zero so "before the window" timestamps stay positive.
+	const base = int64(1_000_000_000_000)
+	const winFrom, winTo = base + 1_000, base + 2_000
+
+	seed := func(name string, pid int, forkNs int64, exitNs *int64) {
+		events := []api.Event{{
+			EventID: "fork-" + name, HostID: host, TimestampNs: forkNs, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":` + strconv.Itoa(pid) + `,"parent_pid":1}`),
+		}}
+		if exitNs != nil {
+			events = append(events, api.Event{
+				EventID: "exit-" + name, HostID: host, TimestampNs: *exitNs, EventType: "exit",
+				Payload: json.RawMessage(`{"pid":` + strconv.Itoa(pid) + `,"exit_code":0}`),
+			})
+		}
+		insertEventsViaIngest(ctx, t, d, host, events)
+	}
+	at := func(ns int64) *int64 { return &ns }
+
+	seed("inside", 101, winFrom+10, at(winFrom+20))      // wholly inside
+	seed("spanning", 102, winFrom-500, at(winTo+500))    // started before, ended after
+	seed("running", 103, winFrom-500, nil)               // started before, never exited
+	seed("exit-at-start", 104, winFrom-500, at(winFrom)) // boundary: exited exactly as the window opened
+	seed("ended-before", 105, winFrom-500, at(winFrom-100))
+	seed("started-after", 106, winTo+100, nil)
+
+	cases := []struct {
+		name    string
+		pid     int
+		overlap bool
+	}{
+		{"wholly inside the window", 101, true},
+		{"started before and ended after", 102, true},
+		{"started before and still running", 103, true},
+		{"exited exactly as the window opened", 104, true},
+		{"ended before the window opened", 105, false},
+		{"started after the window closed", 106, false},
+	}
+
+	window := api.TimeRange{FromNs: winFrom, ToNs: winTo}
+	pids := map[int]bool{}
+	require.Eventually(t, func() bool {
+		res, err := d.Service().BuildTree(ctx, host, window, 1000, true, 0)
+		if err != nil {
+			return false
+		}
+		clear(pids)
+		var walk func(nodes []api.ProcessNode)
+		walk = func(nodes []api.ProcessNode) {
+			for _, n := range nodes {
+				pids[n.PID] = true
+				walk(n.Children)
+			}
+		}
+		walk(res.Roots)
+		for _, tc := range cases {
+			if tc.overlap && !pids[tc.pid] {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 100*time.Millisecond, "every overlapping process must materialise and appear in the window")
+
+	// pids is fully populated by the poll above and never written again, so the subtests below only read it.
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equalf(t, tc.overlap, pids[tc.pid],
+				"pid %d: overlapping the window MUST decide presence in the tree", tc.pid)
 		})
 	}
 }

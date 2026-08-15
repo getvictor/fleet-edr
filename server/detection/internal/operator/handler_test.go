@@ -24,7 +24,7 @@ import (
 // of server/response/internal/operator/handler_test.go's fakeService for cross-package consistency.
 type fakeService struct {
 	listHosts         func(ctx context.Context) ([]api.HostSummary, error)
-	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) ([]api.ProcessNode, error)
+	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) (api.ProcessTreeResult, error)
 	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error)
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
 	getAlert          func(ctx context.Context, id int64) (api.Alert, []string, error)
@@ -47,7 +47,7 @@ func (f fakeService) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return f.listHosts(ctx)
 }
 
-func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) ([]api.ProcessNode, error) {
+func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) (api.ProcessTreeResult, error) {
 	if f.buildTree == nil {
 		panic("fakeService.BuildTree not set")
 	}
@@ -232,8 +232,8 @@ func TestHandleProcessTree(t *testing.T) {
 
 	t.Run("svc error returns 500", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) ([]api.ProcessNode, error) {
-			return nil, errors.New("query failed")
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) (api.ProcessTreeResult, error) {
+			return api.ProcessTreeResult{}, errors.New("query failed")
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/tree")
@@ -244,8 +244,8 @@ func TestHandleProcessTree(t *testing.T) {
 
 	t.Run("nil roots normalized to empty array under roots key", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) ([]api.ProcessNode, error) {
-			return nil, nil
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) (api.ProcessTreeResult, error) {
+			return api.ProcessTreeResult{}, nil
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/tree")
@@ -259,9 +259,9 @@ func TestHandleProcessTree(t *testing.T) {
 	t.Run("limit param above max is clamped", func(t *testing.T) {
 		t.Parallel()
 		var sawLimit int
-		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, limit int, _ bool, _ int64) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, limit int, _ bool, _ int64) (api.ProcessTreeResult, error) {
 			sawLimit = limit
-			return nil, nil
+			return api.ProcessTreeResult{}, nil
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/tree?limit=999999")
@@ -286,9 +286,9 @@ func TestHandleProcessTree(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 				var sawFlatten bool
-				svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, flatten bool, _ int64) ([]api.ProcessNode, error) {
+				svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, flatten bool, _ int64) (api.ProcessTreeResult, error) {
 					sawFlatten = flatten
-					return nil, nil
+					return api.ProcessTreeResult{}, nil
 				}}
 				srv := newOperatorServer(t, svc, allowAllAuthZ{})
 				resp := doGet(t, srv, tc.path)
@@ -302,9 +302,9 @@ func TestHandleProcessTree(t *testing.T) {
 	t.Run("pin= is threaded to BuildTree so the alerted process is never aggregated", func(t *testing.T) {
 		t.Parallel()
 		var sawPin int64
-		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, _ bool, pinnedID int64) ([]api.ProcessNode, error) {
+		svc := fakeService{buildTree: func(_ context.Context, _ string, _ api.TimeRange, _ int, _ bool, pinnedID int64) (api.ProcessTreeResult, error) {
 			sawPin = pinnedID
-			return nil, nil
+			return api.ProcessTreeResult{}, nil
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/tree?pin=696697")
@@ -315,14 +315,14 @@ func TestHandleProcessTree(t *testing.T) {
 	// spec:server-rest-api/per-host-process-forest/repeated-identical-siblings-collapse-into-an-aggregated-node
 	t.Run("aggregated node wire shape is pinned", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) ([]api.ProcessNode, error) {
-			return []api.ProcessNode{{
+		svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) (api.ProcessTreeResult, error) {
+			return api.ProcessTreeResult{Roots: []api.ProcessNode{{
 				Process: api.Process{ID: 10, HostID: "host-a", PID: 200, PPID: 100, Path: "/usr/bin/grep", ForkTimeNs: 1000},
 				Aggregated: &api.AggregatedSiblings{
 					Count: 3, ExitedCount: 2, RunningCount: 1, FirstForkNs: 1000, LastForkNs: 3000,
 					Sample: []api.ProcessNode{{Process: api.Process{ID: 10, PID: 200, Path: "/usr/bin/grep", ForkTimeNs: 1000}}},
 				},
-			}}, nil
+			}}}, nil
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/tree")
@@ -355,6 +355,46 @@ func TestHandleProcessTree(t *testing.T) {
 		assert.Equal(t, int64(3000), node.Aggregated.LastForkNs)
 		require.Len(t, node.Aggregated.Sample, 1)
 		assert.Equal(t, 200, node.Aggregated.Sample[0].PID)
+	})
+
+	// The three metadata fields are what the UI's TreeResponse binds to, so a rename would silently stop the truncation notice from
+	// ever rendering rather than failing a build. Pinned here at the marshalling layer with literal JSON names; whether the counts
+	// are RIGHT is exercised against a real database in server/detection/internal/tests, since a fake can only echo them back.
+	t.Run("truncation metadata is carried on the wire under its literal field names", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name string
+			give api.ProcessTreeResult
+		}{
+			{"truncated", api.ProcessTreeResult{Returned: 2000, TotalMatched: 2588, Truncated: true}},
+			{"complete", api.ProcessTreeResult{Returned: 12, TotalMatched: 12, Truncated: false}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				svc := fakeService{buildTree: func(context.Context, string, api.TimeRange, int, bool, int64) (api.ProcessTreeResult, error) {
+					return tc.give, nil
+				}}
+				srv := newOperatorServer(t, svc, allowAllAuthZ{})
+				resp := doGet(t, srv, "/api/hosts/host-a/tree")
+				defer resp.Body.Close()
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				var parsed struct {
+					Returned     *int64 `json:"returned"`
+					TotalMatched *int64 `json:"total_matched"`
+					Truncated    *bool  `json:"truncated"`
+				}
+				require.NoError(t, json.NewDecoder(resp.Body).Decode(&parsed))
+				// Pointers so an omitted field is distinguishable from a zero value: `truncated: false` and "no truncated field at
+				// all" are the same after decoding into a bool, and only one of them is the contract.
+				require.NotNil(t, parsed.Returned, "returned MUST be present")
+				require.NotNil(t, parsed.TotalMatched, "total_matched MUST be present")
+				require.NotNil(t, parsed.Truncated, "truncated MUST be present even when false")
+				assert.Equal(t, tc.give.Returned, *parsed.Returned)
+				assert.Equal(t, tc.give.TotalMatched, *parsed.TotalMatched)
+				assert.Equal(t, tc.give.Truncated, *parsed.Truncated)
+			})
+		}
 	})
 }
 

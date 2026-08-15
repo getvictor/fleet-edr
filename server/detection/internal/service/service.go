@@ -58,8 +58,11 @@ func (s *Service) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	return s.query.ListHosts(ctx)
 }
 
-// BuildTree returns a forest of process trees for the host + window. flatten opts out of sibling aggregation (issue #416).
-func (s *Service) BuildTree(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) ([]api.ProcessNode, error) {
+// BuildTree returns a forest of process trees for the host + window, plus what the row limit left out (issue #423). flatten opts out
+// of sibling aggregation (issue #416).
+func (s *Service) BuildTree(
+	ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64,
+) (api.ProcessTreeResult, error) {
 	return s.query.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
 }
 

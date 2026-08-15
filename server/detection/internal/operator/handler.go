@@ -167,16 +167,17 @@ func (h *Handler) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 	// ParseIntParam would truncate a large id on a platform where int is 32-bit.
 	pinnedID := httpserver.ParseInt64Param(r, "pin", 0)
 
-	roots, err := h.svc.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
+	res, err := h.svc.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "build tree", "host_id", hostID, "err", err)
 		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)
 		return
 	}
-	if roots == nil {
-		roots = []api.ProcessNode{}
+	if res.Roots == nil {
+		// Marshal an empty forest as [] rather than null: the UI iterates roots unconditionally.
+		res.Roots = []api.ProcessNode{}
 	}
-	h.writeJSON(w, r, map[string]any{"roots": roots})
+	h.writeJSON(w, r, res)
 }
 
 func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {

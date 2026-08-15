@@ -109,6 +109,10 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   const bounds = useMemo(() => windowBounds(timeWindow, nowMs), [timeWindow, nowMs]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // truncation carries the two counts the "showing N of M" notice needs (issue #423), and is non-null ONLY when the server reported
+  // the read as truncated. Storing null in the untruncated case rather than the counts plus a flag keeps the notice's presence
+  // exactly equal to the server's own judgment, so the page cannot invent a warning the server did not raise.
+  const [truncation, setTruncation] = useState<{ returned: number; totalMatched: number } | null>(null);
   const [alertProcessIds, setAlertProcessIds] = useState<Set<number>>(new Set());
   // techniquesByNodeId maps a process DB id to the deduped MITRE technique ids of its alerts (issue #585), so the hover tooltip can
   // show the technique mapping inline. Built from the same alert fetch that drives alertProcessIds.
@@ -249,7 +253,11 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
     // negative id the id-keyed paths cannot match). This keeps the alerted process a first-class node so the alert-chain filter and the
     // alert dot can find it by its real id even when it has identical siblings. 0 (no alert) sends no pin.
     getProcessTree(hostId, bounds.fromNs, bounds.toNs, undefined, alertEntry.processId || undefined)
-      .then((res) => { if (!cancelled) setRoots(res.roots); })
+      .then((res) => {
+        if (cancelled) return;
+        setRoots(res.roots);
+        setTruncation(res.truncated ? { returned: res.returned, totalMatched: res.total_matched } : null);
+      })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Unknown error");
       })
@@ -596,6 +604,7 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
             focusAlertChain={focusAlertChain}
             onFocusAlertChain={setFocusAlertChain}
             rootsEmpty={roots.length === 0}
+            truncation={truncation}
             svgRef={svgRef}
             hoverTip={hoverTip}
             selectedNode={selectedNode}
@@ -616,6 +625,8 @@ interface GraphBodyProps {
   readonly focusAlertChain: boolean;
   readonly onFocusAlertChain: (v: boolean) => void;
   readonly rootsEmpty: boolean;
+  // truncation is non-null only when the server reported the read as truncated (issue #423).
+  readonly truncation: { returned: number; totalMatched: number } | null;
   readonly svgRef: RefObject<SVGSVGElement | null>;
   readonly hoverTip: { x: number; y: number; tooltip: NodeTooltip } | null;
   readonly selectedNode: ProcessNode | null;
@@ -627,13 +638,22 @@ interface GraphBodyProps {
 // effect), the hover tooltip, and the selected-process detail aside. Split out of ProcessTreeView (issue #583) so the graph's status
 // conditionals don't nest under the graph/timeline view branch and inflate the parent's cognitive complexity.
 function GraphBody({
-  hostId, loading, error, isProcessOptionalAlert, focusAlertChain, onFocusAlertChain, rootsEmpty, svgRef, hoverTip, selectedNode,
-  onCloseDetail, currentAlertId,
+  hostId, loading, error, isProcessOptionalAlert, focusAlertChain, onFocusAlertChain, rootsEmpty, truncation, svgRef, hoverTip,
+  selectedNode, onCloseDetail, currentAlertId,
 }: GraphBodyProps) {
   return (
     <>
       {loading && <p className="process-tree__status">Loading...</p>}
       {error && <p className="process-tree__status process-tree__status--error">Error: {error}</p>}
+      {/* The window matched more processes than the server returned, so the graph below is partial. Without this the page renders a
+          truncated tree that looks complete, and an analyst who sees no `curl` concludes there was no `curl` (issue #423). Phrasing
+          and number formatting match the search results count so "showing N of M" reads the same across the product. */}
+      {!loading && !error && truncation && (
+        <p className="process-tree__status process-tree__status--info" role="status">
+          Showing {truncation.returned.toLocaleString()} of {truncation.totalMatched.toLocaleString()} processes.
+          Narrow the time range or use search to see the rest.
+        </p>
+      )}
       {/* Process-optional alert: there is no attributed process chain, so this info bar is the SINGLE control for the graph
           (the generic chain toggle in the breadcrumb is hidden above). Focused: explain the empty graph + offer to widen.
           Widened: a short note + collapse back. Exactly one button in either state. */}
