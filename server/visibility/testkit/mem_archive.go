@@ -145,12 +145,12 @@ func (m *MemArchive) EventsByTypeForHost(_ context.Context, hostID, eventType st
 // EventsByTypeRowCap mirrors the ClickHouse store's cap so a test can exercise the overflow path without 1000 rows of setup.
 const EventsByTypeRowCap = 1000
 
-// TelemetryActivityForHosts mirrors the ClickHouse read's counting AND its absence contract: a host with no events at all inside the
-// reference range gets no map entry, rather than an entry of zeroes. The distinction is load-bearing for the caller (issue #677),
-// which must not read "I have never heard of this host" as "this host went silent", so a fake that materialised zeroes would let a
-// test pass against a contract production does not offer.
+// TelemetryActivityForHosts mirrors the ClickHouse read's counting AND its absence contract: a host with no counted events
+// inside the range gets no map entry, rather than an entry of zeroes. The distinction is load-bearing for the caller (issue
+// #677), which must not read "I have never heard of this host" as "this host went silent", so a fake that materialised zeroes
+// would let a test pass against a contract production does not offer.
 func (m *MemArchive) TelemetryActivityForHosts(
-	_ context.Context, hostIDs []string, w api.TelemetryActivityWindows,
+	_ context.Context, hostIDs []string, tr httpserver.TimeRange,
 ) (map[string]api.TelemetryActivity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -167,7 +167,7 @@ func (m *MemArchive) TelemetryActivityForHosts(
 		if _, ok := wanted[e.HostID]; !ok {
 			continue
 		}
-		if e.TimestampNs < w.Reference.FromNs || e.TimestampNs > w.Reference.ToNs {
+		if e.TimestampNs < tr.FromNs || e.TimestampNs > tr.ToNs {
 			continue
 		}
 		if !counted(e.EventType) {
@@ -176,8 +176,7 @@ func (m *MemArchive) TelemetryActivityForHosts(
 			// a host being present that production omits.
 			continue
 		}
-		// The zero value is the correct start; what the loop establishes is PRESENCE in the map, which is the contract above.
-		out[e.HostID] = countEvent(out[e.HostID], e.EventType, e.TimestampNs >= w.SilentFromNs)
+		out[e.HostID] = countEvent(out[e.HostID], e.EventType)
 	}
 	return out, nil
 }
@@ -198,23 +197,15 @@ func counted(eventType string) bool {
 //
 // It takes and returns a value rather than mutating through a pointer. The pointer version is the obvious shape and reads fine, but
 // it makes the counter reachable from a map index expression, which nilaway reports as a potential nil dereference; a value has no
-// such flow to analyse and the struct is five ints.
-func countEvent(activity api.TelemetryActivity, eventType string, inWindow bool) api.TelemetryActivity {
+// such flow to analyse and the struct is three ints.
+func countEvent(activity api.TelemetryActivity, eventType string) api.TelemetryActivity {
 	switch eventType {
 	case "exec", "fork":
-		if inWindow {
-			activity.ProcessInWindow++
-		}
+		activity.ProcessInWindow++
 	case "network_connect":
-		activity.ConnectInReference++
-		if inWindow {
-			activity.ConnectInWindow++
-		}
+		activity.ConnectInWindow++
 	case "dns_query":
-		activity.DNSInReference++
-		if inWindow {
-			activity.DNSInWindow++
-		}
+		activity.DNSInWindow++
 	}
 	return activity
 }

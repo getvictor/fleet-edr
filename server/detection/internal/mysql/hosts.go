@@ -18,11 +18,17 @@ import (
 // version and the agent-health rollup. LEFT so a host that has sent events but never enrolled or never posted health still returns;
 // COALESCE folds the outer-join NULLs into "" (strings) and HostHealthUnknown (rollup) so the scan targets stay plain strings.
 func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
-	var hosts []api.HostSummary
-	err := s.db.SelectContext(ctx, &hosts, `
+	// components rides along purely to derive health below (issue #702): the derived check reads each provider's own claim out
+	// of it, so it is scanned into a row struct rather than into HostSummary, which does not carry it on the wire.
+	var rows []struct {
+		api.HostSummary
+		Components api.NullRawJSON `db:"components"`
+	}
+	err := s.db.SelectContext(ctx, &rows, `
 		SELECT h.host_id, COALESCE(e.hostname, '') AS hostname, COALESCE(e.os_version, '') AS os_version,
 		       COALESCE(e.platform, '') AS platform,
-		       h.event_count, h.last_seen_ns, COALESCE(hh.overall_status, ?) AS overall_status
+		       h.event_count, h.last_seen_ns, COALESCE(hh.overall_status, ?) AS overall_status,
+		       hh.components
 		FROM hosts h
 		LEFT JOIN enrollments e ON e.host_id = h.host_id
 		LEFT JOIN host_health hh ON hh.host_id = h.host_id
@@ -30,21 +36,27 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
 	}
+	hosts := make([]api.HostSummary, len(rows))
+	claims := make(map[string]telemetryhealth.Claims, len(rows))
+	for i, r := range rows {
+		hosts[i] = r.HostSummary
+		claims[r.HostID] = telemetryhealth.ParseClaims(r.Components)
+	}
 	// Fold in the conditions the server derives from telemetry the host cannot self-report on (issue #677), so the list badge and
 	// the host page cannot disagree about the same host. One archive query for the whole page, not one per row.
 	//
-	// Only candidate hosts are asked about. A host already reporting a fault cannot gain a derived condition whatever its telemetry
-	// says, so including it would buy an answer that is thrown away, and on a fleet where something is broadly wrong that is most of
-	// the list.
+	// Only candidate hosts are asked about. A host claiming no capturing provider cannot gain a derived condition whatever its
+	// telemetry says, so including it would buy an answer that is thrown away, and on a fleet where hosts are offline or already
+	// reporting faults that is most of the list.
 	hostIDs := make([]string, 0, len(hosts))
 	for _, h := range hosts {
-		if telemetryhealth.CanDerive(h.OverallStatus) {
+		if claims[h.HostID].Any() {
 			hostIDs = append(hostIDs, h.HostID)
 		}
 	}
 	activity := s.telemetryActivity(ctx, hostIDs)
 	for i, h := range hosts {
-		derived := telemetryhealth.Derive(h.OverallStatus, activity[h.HostID])
+		derived := telemetryhealth.Derive(claims[h.HostID], activity[h.HostID])
 		hosts[i].OverallStatus = telemetryhealth.Rollup(h.OverallStatus, derived)
 	}
 	return hosts, nil
@@ -54,11 +66,11 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 //
 // The guard is the point: without it, every host page load of an already-unhealthy host would spend an archive query to compute a
 // result that is discarded, which is the single-host mirror of the filter ListHosts applies to its page.
-func (s *Store) derivedFor(ctx context.Context, hostID, reportedStatus string) []api.DerivedComponent {
-	if !telemetryhealth.CanDerive(reportedStatus) {
+func (s *Store) derivedFor(ctx context.Context, hostID string, claims telemetryhealth.Claims) []api.DerivedComponent {
+	if !claims.Any() {
 		return nil
 	}
-	return telemetryhealth.Derive(reportedStatus, s.telemetryActivity(ctx, []string{hostID})[hostID])
+	return telemetryhealth.Derive(claims, s.telemetryActivity(ctx, []string{hostID})[hostID])
 }
 
 // telemetryActivityHostCap bounds how many hosts one derived-health read asks the archive about.
@@ -86,7 +98,7 @@ func (s *Store) telemetryActivity(ctx context.Context, hostIDs []string) map[str
 			"hosts", len(hostIDs), "cap", telemetryActivityHostCap)
 		hostIDs = hostIDs[:telemetryActivityHostCap]
 	}
-	activity, err := s.archive.TelemetryActivityForHosts(ctx, hostIDs, telemetryhealth.Windows(s.now()))
+	activity, err := s.archive.TelemetryActivityForHosts(ctx, hostIDs, telemetryhealth.Window(s.now()))
 	if err != nil {
 		s.logger.WarnContext(ctx, "derive telemetry health: archive read failed, serving reported health only",
 			"hosts", len(hostIDs), "err", err)
@@ -101,8 +113,12 @@ func (s *Store) telemetryActivity(ctx context.Context, hostIDs []string) map[str
 // empty identity and an unknown rollup. enrolled_at converts to UnixNano in SQL (UNIX_TIMESTAMP handles the session-timezone
 // conversion for the TIMESTAMP column) so the scan target stays a plain int64 in the codebase's ns convention.
 func (s *Store) HostDetail(ctx context.Context, hostID string) (api.HostDetail, error) {
-	var d api.HostDetail
-	err := s.db.GetContext(ctx, &d, `
+	// As in ListHosts, components rides along only to derive health; HostDetail does not carry it on the wire.
+	var row struct {
+		api.HostDetail
+		Components api.NullRawJSON `db:"components"`
+	}
+	err := s.db.GetContext(ctx, &row, `
 		SELECT h.host_id,
 		       COALESCE(e.hostname, '')      AS hostname,
 		       COALESCE(e.platform, '')      AS platform,
@@ -114,7 +130,8 @@ func (s *Store) HostDetail(ctx context.Context, hostID string) (api.HostDetail, 
 		       CAST(COALESCE(UNIX_TIMESTAMP(e.enrolled_at), 0) * 1000000000 AS SIGNED) AS enrolled_at_ns,
 		       COALESCE(e.inventory_reported_at_ns, 0) AS inventory_reported_at_ns,
 		       h.event_count, h.last_seen_ns,
-		       COALESCE(hh.overall_status, ?) AS overall_status
+		       COALESCE(hh.overall_status, ?) AS overall_status,
+		       hh.components
 		FROM hosts h
 		LEFT JOIN enrollments e ON e.host_id = h.host_id
 		LEFT JOIN host_health hh ON hh.host_id = h.host_id
@@ -128,7 +145,9 @@ func (s *Store) HostDetail(ctx context.Context, hostID string) (api.HostDetail, 
 	// Same fold as ListHosts, for the same reason applied one level down: three endpoints expose a field called overall_status, and
 	// two of them meaning "effective" while this one meant "as reported" is exactly the kind of difference that survives review and
 	// then loses the signal the first time a UI reads the header's rollup instead of the health detail's.
-	d.OverallStatus = telemetryhealth.Rollup(d.OverallStatus, s.derivedFor(ctx, hostID, d.OverallStatus))
+	d := row.HostDetail
+	d.OverallStatus = telemetryhealth.Rollup(d.OverallStatus,
+		s.derivedFor(ctx, hostID, telemetryhealth.ParseClaims(row.Components)))
 	return d, nil
 }
 
@@ -150,7 +169,7 @@ func (s *Store) HostHealth(ctx context.Context, hostID string) (api.HostHealth, 
 	if err != nil {
 		return api.HostHealth{}, fmt.Errorf("query host health: %w", err)
 	}
-	h.DerivedComponents = s.derivedFor(ctx, hostID, h.OverallStatus)
+	h.DerivedComponents = s.derivedFor(ctx, hostID, telemetryhealth.ParseClaims(h.Components))
 	h.OverallStatus = telemetryhealth.Rollup(h.OverallStatus, h.DerivedComponents)
 	return h, nil
 }
