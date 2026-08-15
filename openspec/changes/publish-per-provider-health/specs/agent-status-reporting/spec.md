@@ -14,6 +14,8 @@ A provider whose reported state is unchanged SHALL keep the instant at which it 
 
 A provider state the agent does not recognise SHALL be reported as unknown rather than as running or stopped, so that a newer extension's vocabulary neither manufactures a claim that can be contradicted nor condemns the host.
 
+A liveness report the agent could not READ SHALL leave the provider view unchanged. An unreadable report is indistinguishable by value from the extension reporting that no provider is running, since both present as an empty set, so acting on it would clear every provider and the next readable report would re-add them as though each had just changed. A readable report carrying no providers is different and SHALL clear them, because that is the extension stating that nothing is capturing.
+
 The provider components SHALL be ordered stably across reports, since the server replaces its stored snapshot last-writer-wins and an unstable order would present an unchanged report as a change.
 
 #### Scenario: Each reported provider appears as its own component
@@ -35,6 +37,13 @@ The provider components SHALL be ordered stably across reports, since the server
 - **GIVEN** a provider reported in the same state across several liveness reports
 - **WHEN** the agent posts each snapshot
 - **THEN** the provider's component reports the instant it entered that state, not the time of the latest report
+
+#### Scenario: A report the agent could not read leaves the provider view untouched
+
+- **GIVEN** a snapshot carrying components for two running providers
+- **WHEN** the agent receives a liveness report whose payload it cannot read
+- **THEN** the provider components are unchanged, including the instants they carry
+- **AND** a readable report carrying no providers does clear them
 
 #### Scenario: An unrecognised provider state is reported as unknown
 

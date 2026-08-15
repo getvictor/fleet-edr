@@ -210,13 +210,26 @@ func GradeProviders(displayName string, providers map[string]string) (Status, st
 
 // MarkProviders records a provider-liveness snapshot for compType, replacing whatever the XPC session alone implied. No-op for an
 // unregistered type.
-func (r *Registry) MarkProviders(compType string, providers map[string]string) {
+func (r *Registry) MarkProviders(compType string, providers map[string]string, decoded bool) {
 	r.transition(compType, func(s *componentState) {
 		s.everConnected = true
 		status, reason, message := GradeProviders(s.displayName, providers)
 		s.set(status, reason, message)
 	})
-	r.recordProviders(compType, providers)
+	// Only a report we could actually READ may change the per-provider view, which is the same rule the durable transition
+	// recorder applies (issue #649 gives the caller a Decoded flag for exactly this).
+	//
+	// The distinction is not pedantic. An undecodable report arrives as an empty provider map, indistinguishable by value
+	// from the extension legitimately saying "nothing is running". Acting on it would clear every provider component and the
+	// next good report would re-add them with fresh transition instants, so a decode failure would manufacture a round of
+	// provider transitions and reset every age an operator reads. The parent's grading above is left on its pre-existing
+	// path deliberately; narrowing that is a separate behaviour change.
+	//
+	// decoded is a parameter rather than a second method the caller must remember to call, because a caller that does not
+	// know whether the report decoded cannot use this correctly, and the type should say so.
+	if decoded {
+		r.recordProviders(compType, providers)
+	}
 }
 
 // recordProviders folds a liveness report into the per-provider view the snapshot renders (issue #702).

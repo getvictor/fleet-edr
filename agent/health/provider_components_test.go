@@ -29,7 +29,7 @@ func TestSnapshot_ReportsEachProviderAsItsOwnComponent(t *testing.T) {
 	r.MarkProviders(ComponentNetworkExtension, map[string]string{
 		ProviderContentFilter: ProviderRunning,
 		ProviderDNSProxy:      ProviderStopped,
-	})
+	}, true)
 
 	byType := componentByType(r.Snapshot())
 
@@ -60,11 +60,11 @@ func TestSnapshot_DropsAProviderTheExtensionStopsReporting(t *testing.T) {
 	r.MarkProviders(ComponentNetworkExtension, map[string]string{
 		ProviderContentFilter: ProviderRunning,
 		ProviderDNSProxy:      ProviderRunning,
-	})
+	}, true)
 	require.Contains(t, componentByType(r.Snapshot()), ProviderDNSProxy)
 
 	// The operator disables the optional DNS proxy: the extension now omits it entirely.
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning}, true)
 
 	byType := componentByType(r.Snapshot())
 	assert.NotContains(t, byType, ProviderDNSProxy,
@@ -84,18 +84,18 @@ func TestSnapshot_KeepsTheTransitionInstantWhileAProviderIsUnchanged(t *testing.
 	r := newRegistryWithClock(seqClock(1000))
 	r.Register(ComponentNetworkExtension, "Network extension")
 
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning}, true)
 	first := componentByType(r.Snapshot())[ProviderContentFilter].LastTransitionNs
 	require.Positive(t, first)
 
 	for range 3 {
-		r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning})
+		r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning}, true)
 	}
 	assert.Equal(t, first, componentByType(r.Snapshot())[ProviderContentFilter].LastTransitionNs,
 		"an unchanged provider keeps its instant across repeated reports")
 
 	// A real state change does advance it.
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderStopped})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderStopped}, true)
 	assert.Greater(t, componentByType(r.Snapshot())[ProviderContentFilter].LastTransitionNs, first,
 		"a genuine transition must re-stamp")
 }
@@ -109,7 +109,7 @@ func TestSnapshot_GradesAnUnrecognizedProviderStateAsUnknown(t *testing.T) {
 	t.Parallel()
 	r := newRegistryWithClock(fixedClock(100))
 	r.Register(ComponentNetworkExtension, "Network extension")
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{"future_provider": "reconfiguring"})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{"future_provider": "reconfiguring"}, true)
 
 	got := componentByType(r.Snapshot())["future_provider"]
 	assert.Equal(t, StatusUnknown, got.Status)
@@ -134,7 +134,7 @@ func TestSnapshot_OrdersProvidersStably(t *testing.T) {
 
 	// Repeated identical reports must produce byte-identical order, which is what rules out map iteration order.
 	for range 5 {
-		r.MarkProviders(ComponentNetworkExtension, report)
+		r.MarkProviders(ComponentNetworkExtension, report, true)
 		got := make([]string, 0, len(want))
 		for _, c := range r.Snapshot() {
 			got = append(got, c.Type)
@@ -148,6 +148,43 @@ func TestSnapshot_OrdersProvidersStably(t *testing.T) {
 func TestMarkProviders_IgnoresAnUnregisteredParent(t *testing.T) {
 	t.Parallel()
 	r := newRegistryWithClock(fixedClock(100))
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{ProviderContentFilter: ProviderRunning}, true)
 	assert.Empty(t, r.Snapshot())
+}
+
+// spec:agent-status-reporting/the-agent-reports-each-capture-provider-as-its-own-component/a-report-the-agent-could-not-read-leaves-the-provider-view-untouched
+//
+// TestMarkProviders_AnUnreadableReportLeavesTheProviderViewUntouched covers the one input that is indistinguishable by
+// VALUE from a meaningful one.
+//
+// A control message whose payload does not decode arrives as an empty provider map, exactly like the extension legitimately
+// reporting that nothing is running. Acting on the first would clear every provider component, and the next good report
+// would re-add them with fresh instants, so a decode failure would manufacture a round of provider transitions and reset
+// every age an operator reads. The decoded flag is the only thing that separates them, which is why it is a parameter
+// rather than something a caller can forget.
+func TestMarkProviders_AnUnreadableReportLeavesTheProviderViewUntouched(t *testing.T) {
+	t.Parallel()
+	r := newRegistryWithClock(seqClock(1000))
+	r.Register(ComponentNetworkExtension, "Network extension")
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{
+		ProviderContentFilter: ProviderRunning,
+		ProviderDNSProxy:      ProviderRunning,
+	}, true)
+	stamp := componentByType(r.Snapshot())[ProviderContentFilter].LastTransitionNs
+	require.Positive(t, stamp)
+
+	// An undecodable report: same empty map, but we could not read it.
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{}, false)
+
+	after := componentByType(r.Snapshot())
+	require.Contains(t, after, ProviderContentFilter, "an unreadable report must not clear the provider view")
+	assert.Contains(t, after, ProviderDNSProxy)
+	assert.Equal(t, stamp, after[ProviderContentFilter].LastTransitionNs,
+		"and must not restamp it either, or a decode failure would reset every age")
+
+	// The SAME map, decoded, means the extension is telling us nothing is running, and that must clear them.
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{}, true)
+	cleared := componentByType(r.Snapshot())
+	assert.NotContains(t, cleared, ProviderContentFilter, "a readable empty report genuinely means no provider is running")
+	assert.NotContains(t, cleared, ProviderDNSProxy)
 }

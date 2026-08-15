@@ -344,14 +344,17 @@ describe("HostHeader agent health", () => {
             status: "healthy",
             reason: "activated",
             message: "Content filter is capturing",
-            last_transition_ns: (Date.now() - 30 * MINUTE_MS) * NANOSECONDS_PER_MILLISECOND,
+            last_transition_ns: (Date.now() - 30 * MINUTE_MS - 30 * 1000) * NANOSECONDS_PER_MILLISECOND,
           },
           {
             type: "dns_proxy",
             status: "unhealthy",
             reason: "provider_stopped",
             message: "DNS proxy stopped capturing",
-            last_transition_ns: (Date.now() - 5 * MINUTE_MS) * NANOSECONDS_PER_MILLISECOND,
+            // Deliberately MID-bucket (5m30s) rather than exactly 5m. formatRelativeNs floors to whole minutes and these
+            // epoch-nanosecond values exceed Number.MAX_SAFE_INTEGER, so a boundary-exact offset can round down to "4m ago"
+            // and flake. Half a minute either side of the boundary makes the floored value stable.
+            last_transition_ns: (Date.now() - 5 * MINUTE_MS - 30 * 1000) * NANOSECONDS_PER_MILLISECOND,
           },
         ],
       }),
