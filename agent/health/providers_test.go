@@ -109,11 +109,11 @@ func TestMarkProvidersAndAwaiting(t *testing.T) {
 	assert.Equal(t, reasonAwaitingProviders, r.Snapshot()[0].Reason)
 
 	// The extension then reports what is actually running.
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{"content_filter": ProviderRunning})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{"content_filter": ProviderRunning}, true)
 	assert.Equal(t, StatusHealthy, r.Snapshot()[0].Status)
 
 	// And a later fault flips it back, still on the same component.
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{"content_filter": ProviderStopped})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{"content_filter": ProviderStopped}, true)
 	assert.Equal(t, StatusUnhealthy, r.Snapshot()[0].Status)
 	assert.Equal(t, reasonProviderStopped, r.Snapshot()[0].Reason)
 
@@ -126,7 +126,7 @@ func TestMarkProvidersIgnoresUnregisteredComponent(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()
 	// No panic, no phantom component: the loop wires health generically and a misconfigured component must not crash the agent.
-	r.MarkProviders(ComponentNetworkExtension, map[string]string{"content_filter": ProviderRunning})
+	r.MarkProviders(ComponentNetworkExtension, map[string]string{"content_filter": ProviderRunning}, true)
 	r.MarkAwaitingProviders(ComponentNetworkExtension)
 	assert.Empty(t, r.Snapshot())
 }

@@ -19,6 +19,10 @@ interface HostHeaderProps {
 const COMPONENT_LABELS: Record<string, string> = {
   endpoint_security_extension: "Security extension",
   network_extension: "Network extension",
+  // Agent-reported capture providers (issue #702). The network extension reports each one separately, so a wedged provider is
+  // distinguishable from a healthy host rather than hidden inside the extension's single rollup above.
+  content_filter: "Content filter",
+  dns_proxy: "DNS proxy",
   // Server-derived conditions (issue #677). Labelled by what stopped arriving rather than by the provider's internal name, since
   // that is what the operator is being told: the extension says it is fine, but this capture is not reaching us.
   content_filter_delivery: "Connection capture",

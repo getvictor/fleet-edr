@@ -623,7 +623,7 @@ func startReceiverLoop(ctx context.Context, p receiverLoopParams) {
 			if p.providerLiveness {
 				if status, ok := parseProviderStatus(evt.Data); ok {
 					if p.health != nil {
-						p.health.MarkProviders(p.component, status.Providers)
+						p.health.MarkProviders(p.component, status.Providers, status.Decoded)
 					}
 					// Remediation reads the same report health just graded, so "what is unhealthy" and "what gets fixed"
 					// cannot drift apart (issue #632).
