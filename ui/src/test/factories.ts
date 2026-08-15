@@ -1,12 +1,14 @@
 import type { ProcessNode, TreeResponse } from "../types";
 
 // countAdmittedRows counts the process ROWS a forest represents, which is what the server's `returned` means: the rows its limit
-// admitted, before aggregation folded any of them. That is not the same as the number of nodes. Descendants count, and an aggregated
-// node stands for its whole group, so it contributes `count` rather than 1. Its `sample` members are those same rows re-listed for
-// display, so counting them too would double-count.
+// admitted, before aggregation folded any of them. That is not the same as the number of nodes: descendants count too.
+//
+// An aggregated node contributes its whole group size and the walk stops there. Its members are never separate rows to add on top:
+// the server ships such a node childless, and once the UI expands one, buildVisibleRoots re-parents the capped `sample` under
+// `children` while keeping `aggregated` set. Recursing in that state would count the sampled members twice.
 function countAdmittedRows(nodes: ProcessNode[]): number {
   return nodes.reduce(
-    (total, node) => total + (node.aggregated ? node.aggregated.count : 1) + countAdmittedRows(node.children ?? []),
+    (total, node) => total + (node.aggregated ? node.aggregated.count : 1 + countAdmittedRows(node.children ?? [])),
     0,
   );
 }
