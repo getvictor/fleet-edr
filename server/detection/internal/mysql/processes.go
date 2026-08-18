@@ -153,10 +153,11 @@ type ProcessExecUpdate struct {
 	CodeSigning api.NullRawJSON
 	SHA256      *string
 	CDHash      *string
-	// PIDVersion is the kernel PID generation from the exec event, when present. A re-exec keeps the same generation as the
-	// forked process, so this normally equals what the fork already stored; the UPDATE fills it via COALESCE so a fork that
-	// arrived without pidversion (or a missed fork) still gets the identity from the exec, without a present value clobbering
-	// an existing one to NULL.
+	// PIDVersion is the kernel PID generation from the exec event, when present. execve increments the generation, so this
+	// normally differs from what the fork stored for the same pid, and the exec's value is the one that must win: it identifies
+	// the image now running, which is what the agent's kill-time registry holds. The UPDATE takes it via COALESCE so a fork that
+	// arrived without pidversion (or a missed fork) still gets the identity from the exec, without an absent value clobbering an
+	// existing one to NULL.
 	PIDVersion *uint32
 	// ExecEventID is the event_id of the exec event applying this update. Stamped on the row so a re-claim of the same exec is
 	// recognized as already-applied (migration 00011), avoiding the case-b to case-c re-exec misroute.
@@ -547,15 +548,18 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 // pidversion is NULL (legacy agents, or a row whose audit token was unavailable) never match here, so correlation falls back to
 // GetProcessByPID for events that carry no pidversion (issue #403).
 //
-// A same-PID re-exec chain (issue #10) shares one pidversion across its generations (execve keeps the kernel generation), so the
-// identity can match more than one row. When it does, atNs disambiguates: the ORDER BY prefers the generation that was the
-// running image at atNs, bracketing on COALESCE(exec_time_ns, fork_time_ns) <= atNs and (exit_time_ns IS NULL OR atNs <=
-// exit_time_ns). The exit bound is inclusive, matching GetProcessByPID; at the exact re-exec instant the newer generation still
-// wins because its exec_time_ns equals that instant and the COALESCE tiebreak prefers it. A re-exec chain preserves the original
-// fork_time_ns on every generation, so fork_time_ns cannot order them; exec_time_ns (the image-replacement instant) is the
-// running-image boundary, and COALESCE falls back to fork_time_ns for a pre-exec (pure fork) generation. When the identity
-// matches a single row (the PID-reuse case) that row is returned regardless of atNs, so identity still beats clock skew; when no
-// generation brackets atNs the lookup falls back to the live, then newest-image, generation within the set.
+// The identity can still match more than one row for one pid, so the lookup must not assume a unique hit. execve increments the kernel
+// generation, so a re-exec chain (issue #10) written by the current builder gives every generation its own pidversion; rows written
+// before that fix inherited the prior generation's value instead, and those repeats stay as they are for the life of the row, since a
+// long-lived process keeps the value it was stored with until it exits and history is not rewritten. When the identity does match
+// several rows, atNs disambiguates: the ORDER BY prefers the generation that was the running image at atNs, bracketing on
+// COALESCE(exec_time_ns, fork_time_ns) <= atNs and (exit_time_ns IS NULL OR atNs <= exit_time_ns). The exit bound is inclusive,
+// matching GetProcessByPID; at the exact re-exec instant the newer generation still wins because its exec_time_ns equals that instant
+// and the COALESCE tiebreak prefers it. A re-exec chain preserves the original fork_time_ns on every generation, so fork_time_ns
+// cannot order them; exec_time_ns (the image-replacement instant) is the running-image boundary, and COALESCE falls back to
+// fork_time_ns for a pre-exec (pure fork) generation. When the identity matches a single row (now the common case, and always so for
+// PID reuse) that row is returned regardless of atNs, so identity still beats clock skew; when no generation brackets atNs the lookup
+// falls back to the live, then newest-image, generation within the set.
 func (s *Store) GetProcessByPIDVersion(ctx context.Context, hostID string, pid int, pidversion uint32, atNs int64) (*api.Process, error) {
 	var proc api.Process
 	err := s.db.GetContext(ctx, &proc, `

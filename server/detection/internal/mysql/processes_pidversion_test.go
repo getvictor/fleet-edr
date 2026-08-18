@@ -79,8 +79,10 @@ func TestGetProcessByPIDVersion(t *testing.T) {
 
 	t.Run("spec:server-process-graph-builder/network-and-dns-events-are-linked-to-the-process-at-event-time/a-flow-within-a-re-exec-chain-links-to-the-generation-running-at-the-event-time", func(t *testing.T) {
 		t.Parallel()
-		// A same-PID re-exec chain shares one pidversion across generations (execve keeps the kernel generation), so the identity
-		// matches more than one row. The chain preserves the original fork_time_ns on every generation and records the
+		// Two generations of one pid can share a pidversion: the builder no longer writes them that way (execve increments the kernel
+		// generation), but rows written before that fix inherited the prior generation's value and are still in the table, so this
+		// lookup must keep disambiguating instead of assuming the identity is unique. The chain preserves the original
+		// fork_time_ns on every generation and records the
 		// image-replacement instant in exec_time_ns, so exec_time_ns is the boundary that orders them. The earlier image ran
 		// [400, 500); the current image execs at 500 and is still alive. A flow's event time must pick the generation that was the
 		// running image then, NOT the live/newest one.
