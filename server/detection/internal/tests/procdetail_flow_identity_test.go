@@ -93,9 +93,19 @@ func TestProcessDetail_FlowAttributedToOwningGenerationDespiteIngestLag(t *testi
 
 	// The sibling generation must not claim the flow. Before the fix its open-ended window served it. Named by pidversion for the same
 	// determinism reason as above.
+	// Wait for the second batch to materialize before asserting on it. Only the owner generation was waited for above, and the sibling
+	// arrives in its own batch, so reading it straight away races the processor: that is what failed in CI at 4.5s, well inside the
+	// budget above, while passing locally where materialization won the race.
 	siblingGen := uint32(121026)
-	sibling, err := d.Service().GetProcessDetail(ctx, host, pid, now+500*ms, &siblingGen)
-	require.NoError(t, err)
+	var sibling *api.ProcessDetail
+	require.Eventually(t, func() bool {
+		p, err := d.Service().GetProcessDetail(ctx, host, pid, now+500*ms, &siblingGen)
+		if err != nil || p == nil {
+			return false
+		}
+		sibling = p
+		return true
+	}, 10*time.Second, 100*time.Millisecond, "the sibling generation must materialize before it can be asserted on")
 	require.NotNil(t, sibling)
 	assert.Equal(t, "/bin/sh", sibling.Process.Path, "resolved the sibling generation")
 	assert.Empty(t, sibling.NetworkConnections, "a flow carrying another generation's pidversion must not appear here")
