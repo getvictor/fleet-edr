@@ -3,6 +3,7 @@ import {
   listAlerts,
   getHostHealth,
   getProcessTree,
+  getProcessDetail,
   createAppControlRule,
   searchProcesses,
   searchEvents,
@@ -84,6 +85,31 @@ describe("getProcessTree pin parameter (issue #416)", () => {
     await getProcessTree("host-a", 1000, 2000, 2000, 696697);
     const [target] = fetchMock.mock.calls[0] as [URL];
     expect(target.toString()).toContain("pin=696697");
+  });
+});
+
+describe("getProcessDetail pidversion parameter (issue #716)", () => {
+  it("omits pidversion when not supplied, leaving the server on its as-of read", async () => {
+    const fetchMock = stubFetch({ process: {}, network_connections: [], dns_queries: [] });
+    await getProcessDetail("host-a", 1234, 5000);
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    const url = target.toString();
+    expect(url).toContain("/hosts/host-a/processes/1234?at=5000");
+    expect(url).not.toContain("pidversion");
+  });
+
+  it("appends pidversion so the named generation is the one returned", async () => {
+    const fetchMock = stubFetch({ process: {}, network_connections: [], dns_queries: [] });
+    await getProcessDetail("host-a", 1234, 5000, 151026);
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("pidversion=151026");
+  });
+
+  it("sends generation zero as a value, since it is a real kernel generation", async () => {
+    const fetchMock = stubFetch({ process: {}, network_connections: [], dns_queries: [] });
+    await getProcessDetail("host-a", 1234, 5000, 0);
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("pidversion=0");
   });
 });
 
@@ -267,7 +293,9 @@ describe("getHostTimeline query-string composition", () => {
 });
 
 describe("forbidden handler signalling", () => {
-  afterEach(() => { setForbiddenHandler(null); });
+  afterEach(() => {
+    setForbiddenHandler(null);
+  });
 
   // spec:web-ui/authorization-denials-degrade-gracefully/mid-session-revocation-degrades-and-refetches
   it("fires on an authz 403 (carrying the chokepoint reason header) so the UI can refresh permissions", async () => {
@@ -306,7 +334,9 @@ describe("forbidden handler signalling", () => {
 });
 
 describe("unauthorized handler signalling", () => {
-  afterEach(() => { setUnauthorizedHandler(null); });
+  afterEach(() => {
+    setUnauthorizedHandler(null);
+  });
 
   // spec:web-ui/authenticated-entry-to-the-application/mid-session-expiry-returns-the-operator-to-login
   it("fires on a 401 from a safe-method fetch so the app can redirect to login", async () => {
@@ -324,8 +354,9 @@ describe("unauthorized handler signalling", () => {
     stubFetch(null, 401);
     const onUnauthorized = vi.fn();
     setUnauthorizedHandler(onUnauthorized);
-    await expect(createAppControlRule(1, { rule_type: "team_id", identifier: "ABCDE12345", reason: "test" }))
-      .rejects.toBeInstanceOf(Unauthorized401Error);
+    await expect(createAppControlRule(1, { rule_type: "team_id", identifier: "ABCDE12345", reason: "test" })).rejects.toBeInstanceOf(
+      Unauthorized401Error,
+    );
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 

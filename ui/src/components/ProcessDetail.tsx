@@ -129,7 +129,7 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
   useEffect(() => {
     let cancelled = false;
     setLoading(true); // eslint-disable-line react-hooks/set-state-in-effect -- data fetch pattern
-    getProcessDetail(hostId, node.pid, atTime)
+    getProcessDetail(hostId, node.pid, atTime, node.pidversion)
       .then((result) => {
         if (!cancelled) setDetail(result);
       })
@@ -140,7 +140,7 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [hostId, node.pid, atTime]);
+  }, [hostId, node.pid, atTime, node.pidversion]);
 
   useEffect(() => {
     let cancelled = false;

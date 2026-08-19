@@ -632,3 +632,132 @@ func TestEventArchive_TelemetryActivityForHostsEmptyInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+// flowEvent builds a network_connect whose payload optionally carries a pidversion, so a test can express the three shapes the
+// generation-scoped read distinguishes: a flow owned by a generation, one owned by a sibling, and a legacy flow carrying none.
+// ingestedAtNs is set explicitly because the whole point of issue #716 is that a flow's ingest time can sit far from its own stamp.
+func flowEvent(id, host string, tsNs, ingestedAtNs int64, pid int, pidversion *int64) visibilityapi.Event {
+	payload := `{"pid":` + strconv.Itoa(pid) + `,"protocol":"tcp","direction":"outbound","remote_address":"15.204.95.87","remote_port":443`
+	if pidversion != nil {
+		payload += `,"pidversion":` + strconv.FormatInt(*pidversion, 10)
+	}
+	payload += `}`
+	return visibilityapi.Event{
+		EventID: id, HostID: host, TimestampNs: tsNs, IngestedAtNs: ingestedAtNs,
+		EventType: "network_connect", Platform: "darwin", Payload: json.RawMessage(payload),
+	}
+}
+
+func genPtr(v int64) *int64 { return &v }
+
+// readGenerationFlows polls NetworkEventsForGeneration until it returns wantN rows, absorbing read-after-insert lag the same way
+// readNetworkEvents does.
+func readGenerationFlows(
+	t *testing.T, arch visibilityapi.EventArchive, filter visibilityapi.ProcessFlowFilter, wantN int,
+) []visibilityapi.Event {
+	t.Helper()
+	var got []visibilityapi.Event
+	require.Eventually(t, func() bool {
+		var err error
+		got, err = arch.NetworkEventsForGeneration(context.Background(), filter)
+		return err == nil && len(got) == wantN
+	}, 5*time.Second, 100*time.Millisecond, "expected %d flows for pid %d generation %v", wantN, filter.PID, filter.PIDVersion)
+	return got
+}
+
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-flow-that-ingests-after-its-process-exited-is-still-attributed-to-it
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-sibling-generation-of-the-same-pid-does-not-claim-the-flow
+//
+// Issue #716 as SQL, with the measured shape from dogfood alert 785: one pid, two generations with different pidversions, and a flow
+// owned by the EXITED generation whose ingest lands 3.5s after that generation's exit ingest. The old pid-keyed window read dropped it
+// from the owner (2.0s past a 1s pad) and served it from the live sibling instead, so both halves are asserted here.
+func TestEventArchive_GenerationFlowsSurviveIngestLag(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+
+	const (
+		host = "h-716"
+		pid  = 51865
+	)
+	var (
+		ownerGen   = genPtr(121027) // the exited /bin/bash generation the alert fired on
+		siblingGen = genPtr(121026) // the still-live /bin/sh generation of the same pid
+	)
+	base := time.Now().UnixNano()
+	second := int64(time.Second)
+	// The owner exited at base+5s (ingest), and its flow ingested at base+8.5s: a 3.5s lag, past any tight window.
+	exitIngested := base + 5*second
+	flowIngested := exitIngested + 3500*int64(time.Millisecond)
+
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
+		flowEvent("nc-owner", host, base+4*second, flowIngested, pid, ownerGen),
+		flowEvent("nc-sibling", host, base+2*second, base+2*second, pid, siblingGen),
+		flowEvent("nc-legacy", host, base+3*second, base+3*second, pid, nil),
+	}))
+
+	// The owner's tight lifetime window ENDS before its flow ingested, which is exactly the #716 condition. Identity must carry it.
+	ownerWindow := httpserver.TimeRange{FromNs: base, ToNs: exitIngested + second}
+	wide := httpserver.TimeRange{FromNs: base - second, ToNs: base + 3600*second}
+
+	owner := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
+		HostID: host, PID: pid, PIDVersion: ownerGen, Bound: wide, IngestWindow: ownerWindow,
+	}, 2)
+	ownerIDs := []string{owner[0].EventID, owner[1].EventID}
+	assert.ElementsMatch(t, []string{"nc-legacy", "nc-owner"},
+		ownerIDs, "the owner sees its own flow by identity despite the ingest lag, plus the legacy flow via the window")
+
+	// The sibling must NOT claim the owner's flow. Its window is open-ended (it has not exited), which is precisely how the old
+	// pid-keyed read mis-attributed the flow to it.
+	sibling := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
+		HostID: host, PID: pid, PIDVersion: siblingGen, Bound: wide, IngestWindow: wide,
+	}, 2)
+	siblingIDs := []string{sibling[0].EventID, sibling[1].EventID}
+	assert.ElementsMatch(t, []string{"nc-legacy", "nc-sibling"},
+		siblingIDs, "the sibling sees only its own flow plus the legacy one, never the owner's")
+	assert.NotContains(t, siblingIDs, "nc-owner", "a flow carrying another generation's pidversion must not be rescued by timing")
+}
+
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-flow-without-a-kernel-generation-is-attributed-by-the-lifetime-window
+//
+// The legacy arm, including the JSONHas-guard case: pidversion 0 is a REAL kernel generation, so a flow carrying 0 must be judged by
+// identity (and so must not appear under a different generation) rather than treated as carrying no pidversion.
+func TestEventArchive_GenerationFlowsLegacyArm(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+
+	const (
+		host = "h-716-legacy"
+		pid  = 4242
+	)
+	base := time.Now().UnixNano()
+	second := int64(time.Second)
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
+		flowEvent("legacy-in", host, base+second, base+second, pid, nil),
+		flowEvent("legacy-out", host, base+900*second, base+900*second, pid, nil),
+		flowEvent("zero-gen", host, base+2*second, base+2*second, pid, genPtr(0)),
+	}))
+
+	wide := httpserver.TimeRange{FromNs: base - second, ToNs: base + 3600*second}
+	tight := httpserver.TimeRange{FromNs: base, ToNs: base + 10*second}
+
+	t.Run("a row with no pidversion judges every flow by the window", func(t *testing.T) {
+		got := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
+			HostID: host, PID: pid, PIDVersion: nil, Bound: wide, IngestWindow: tight,
+		}, 2)
+		ids := []string{got[0].EventID, got[1].EventID}
+		assert.ElementsMatch(t, []string{"legacy-in", "zero-gen"}, ids,
+			"a legacy ROW has no identity to match on, so the window admits modern and legacy flows alike, and excludes the far-out one")
+	})
+
+	t.Run("pidversion 0 is a real generation, not an absent one", func(t *testing.T) {
+		got := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
+			HostID: host, PID: pid, PIDVersion: genPtr(0), Bound: wide, IngestWindow: tight,
+		}, 2)
+		ids := []string{got[0].EventID, got[1].EventID}
+		assert.ElementsMatch(t, []string{"legacy-in", "zero-gen"}, ids,
+			"generation 0 matches the flow carrying 0 by identity, plus the no-pidversion flow inside the window")
+		assert.NotContains(t, ids, "legacy-out", "the legacy arm still respects the window")
+	})
+}

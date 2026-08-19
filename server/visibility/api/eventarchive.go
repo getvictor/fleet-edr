@@ -22,9 +22,16 @@ type EventArchive interface {
 	Insert(ctx context.Context, events []Event) error
 
 	// NetworkEventsForProcess returns the network_connect and dns_query events attributed to (hostID, pid) within tr, ordered by
-	// timestamp. Cross-stream correlation rules and the process-detail view consume it to join a process's DNS resolutions with its
-	// outbound connections.
+	// timestamp. Cross-stream correlation rules consume it to join a process's DNS resolutions with its outbound connections, keyed on
+	// pid alone because they re-correlate the results in memory.
+	//
+	// The process-detail view uses NetworkEventsForGeneration instead: a view that names ONE generation must not answer with a
+	// sibling generation's flows.
 	NetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr httpserver.TimeRange) ([]Event, error)
+
+	// NetworkEventsForGeneration returns the network_connect and dns_query events belonging to ONE process generation, ordered by
+	// timestamp. See ProcessFlowFilter for how a flow is attributed to a generation.
+	NetworkEventsForGeneration(ctx context.Context, filter ProcessFlowFilter) ([]Event, error)
 
 	// EventsByTypeForHost returns one host's events of a single type whose EVENT time falls inside tr, oldest first. Narrow by
 	// construction: (host_id, event_type, timestamp_ns) is the archive's sorting-key prefix, so the read is a primary-key range
@@ -102,6 +109,32 @@ type HostTimelineFilter struct {
 type ProcessGeneration struct {
 	PID        int64
 	PIDVersion int64
+}
+
+// ProcessFlowFilter selects the network_connect and dns_query events belonging to ONE process generation, for the process-detail view
+// (issue #716). A flow is attributed to the generation when EITHER of two arms matches:
+//
+//   - Identity: the flow's payload carries a pidversion and (pid, pidversion) equals this generation's. This arm is deliberately NOT
+//     bounded by IngestWindow. The pair is unique across PID reuse, so no window is needed to disambiguate, and requiring one is the
+//     #716 defect: a flow and its process's exit travel up the agent uploader in separate batches, so a short-lived process's flow
+//     routinely ingests seconds AFTER the exit and falls outside any tight window.
+//   - Legacy: the flow's payload carries NO pidversion (a pre-#403 agent, or a flow whose audit token was unavailable), and its
+//     ingest time falls inside IngestWindow. Identity cannot speak for these, so the window remains the only available evidence.
+//
+// PIDVersion nil means the PROCESS row predates pidversion capture. Identity is then unavailable on this side too, so every candidate
+// flow is judged by IngestWindow alone, which is the pre-#716 behavior.
+//
+// Bound applies to every candidate row in both arms. It exists to keep the scan pruned rather than to decide attribution, so it is
+// wide where IngestWindow is tight; an implementation MUST NOT narrow attribution with it.
+type ProcessFlowFilter struct {
+	HostID string
+	PID    int
+	// PIDVersion is the generation's kernel pid generation, nil when the process row carries none.
+	PIDVersion *int64
+	// Bound is the wide ingest bound applied to every candidate row, for scan pruning only.
+	Bound httpserver.TimeRange
+	// IngestWindow is the tight ingest window that attributes flows the identity arm cannot speak for.
+	IngestWindow httpserver.TimeRange
 }
 
 // EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class

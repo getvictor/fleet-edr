@@ -134,6 +134,23 @@ func (h *Handler) parseProcessSearchRequest(ctx context.Context, w http.Response
 	return filter, limit, true
 }
 
+// parsePIDVersionParam reads the optional `pidversion` query param naming one process generation. Absent -> (nil, true), meaning
+// "resolve by as-of instead". Present but unparseable, negative, or wider than a uint32 -> (nil, false) so the caller returns 400: a
+// typo must not quietly resolve a different generation than the one asked for, which is the whole point of addressing by identity.
+// The result is a pointer because a present zero is a real kernel generation and has to survive as a value, not collapse into absence.
+func parsePIDVersionParam(q url.Values) (*uint32, bool) {
+	raw := q.Get("pidversion")
+	if raw == "" {
+		return nil, true
+	}
+	v, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil {
+		return nil, false
+	}
+	pidVersion := uint32(v)
+	return &pidVersion, true
+}
+
 // parseNonNegativeParam reads an optional non-negative int64 query param. Absent -> (0, true), meaning "no bound". Present but
 // unparseable or negative -> (0, false) so the caller returns 400 rather than treating a bad bound as unbounded.
 func parseNonNegativeParam(q url.Values, name string) (int64, bool) {

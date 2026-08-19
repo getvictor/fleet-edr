@@ -339,13 +339,22 @@ export async function getHostHealth(hostId: string): Promise<HostHealth> {
   return fetchJSON<HostHealth>(`/hosts/${encodeURIComponent(hostId)}/health`);
 }
 
+// getProcessDetail reads one process generation. pidVersion names the exact generation and is what lets the panel reach a generation
+// other than the newest on that pid: every generation of a re-exec chain shares one fork time, so the `at` instant alone always
+// resolves the newest (issue #716). It is omitted from the query when undefined, which keeps the server on its as-of resolution for
+// nodes that predate the field.
 export async function getProcessDetail(
   hostId: string,
   pid: number,
-  atNs: number
+  atNs: number,
+  pidVersion?: number
 ): Promise<ProcessDetail> {
+  const params = new URLSearchParams({ at: String(atNs) });
+  if (pidVersion !== undefined) {
+    params.set("pidversion", String(pidVersion));
+  }
   return fetchJSON<ProcessDetail>(
-    `/hosts/${encodeURIComponent(hostId)}/processes/${String(pid)}?at=${String(atNs)}`
+    `/hosts/${encodeURIComponent(hostId)}/processes/${String(pid)}?${params.toString()}`
   );
 }
 

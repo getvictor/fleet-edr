@@ -66,10 +66,12 @@ func (s *Service) BuildTree(
 	return s.query.BuildTree(ctx, hostID, tr, limit, flatten, pinnedID)
 }
 
-// GetProcessDetail returns a process with its network connections,
-// DNS queries, and re-exec chain.
-func (s *Service) GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.ProcessDetail, error) {
-	return s.query.GetProcessDetail(ctx, hostID, pid, atTimeNs)
+// GetProcessDetail returns a process with its network connections, DNS queries, and re-exec chain. pidVersion is optional and names
+// one generation of pid; nil keeps the as-of resolution.
+func (s *Service) GetProcessDetail(
+	ctx context.Context, hostID string, pid int, atTimeNs int64, pidVersion *uint32,
+) (*api.ProcessDetail, error) {
+	return s.query.GetProcessDetail(ctx, hostID, pid, atTimeNs, pidVersion)
 }
 
 // ListAlerts returns alerts matching the filter.

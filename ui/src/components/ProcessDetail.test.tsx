@@ -152,10 +152,16 @@ describe("ProcessDetail metadata", () => {
       />,
     );
     expect(screen.getByRole("link", { name: "Search all hosts for this hash" })).toHaveAttribute("href", "/search?hash=abc123");
-    expect(screen.getByRole("link", { name: "Search all hosts for this path" })).toHaveAttribute("href", "/search?path=%2Fusr%2Fbin%2Fcurl");
+    expect(screen.getByRole("link", { name: "Search all hosts for this path" })).toHaveAttribute(
+      "href",
+      "/search?path=%2Fusr%2Fbin%2Fcurl",
+    );
     expect(screen.getByRole("link", { name: "Search all hosts for this UID" })).toHaveAttribute("href", "/search?uid=0");
     // Team T + platform flag -> developer-id verdict; the pivot carries the verdict kind, not the raw signing id.
-    expect(screen.getByRole("link", { name: "Search all hosts for this signing verdict" })).toHaveAttribute("href", "/search?signing=developer-id");
+    expect(screen.getByRole("link", { name: "Search all hosts for this signing verdict" })).toHaveAttribute(
+      "href",
+      "/search?signing=developer-id",
+    );
   });
 
   // spec:web-ui/host-page-search-pivots/unfilterable-artifacts-have-no-pivot
@@ -163,7 +169,10 @@ describe("ProcessDetail metadata", () => {
     render(
       <ProcessDetail
         hostId="h1"
-        node={makeNode({ exec_time_ns: 20 * NS, code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true } })}
+        node={makeNode({
+          exec_time_ns: 20 * NS,
+          code_signing: { team_id: "T", signing_id: "com.apple.curl", flags: 1, is_platform_binary: true },
+        })}
         onClose={vi.fn()}
       />,
     );
@@ -261,7 +270,9 @@ describe("ProcessDetail kill action", () => {
     render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /kill process/i }));
 
-    await waitFor(() => { expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234 }); });
+    await waitFor(() => {
+      expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234 });
+    });
     await screen.findByText("pending");
 
     await vi.advanceTimersByTimeAsync(2100);
@@ -271,13 +282,17 @@ describe("ProcessDetail kill action", () => {
   it("includes the node's pidversion in the kill payload so the agent can pin the generation (issue #627)", async () => {
     render(<ProcessDetail hostId="h1" node={makeNode({ pid: 1234, pidversion: 77 })} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /kill process/i }));
-    await waitFor(() => { expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234, pidversion: 77 }); });
+    await waitFor(() => {
+      expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234, pidversion: 77 });
+    });
   });
 
   it("omits pidversion from the kill payload for a node that has none (agent falls back to pid-only)", async () => {
     render(<ProcessDetail hostId="h1" node={makeNode({ pid: 1234, pidversion: undefined })} onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /kill process/i }));
-    await waitFor(() => { expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234 }); });
+    await waitFor(() => {
+      expect(api.createCommand).toHaveBeenCalledWith("h1", "kill_process", { pid: 1234 });
+    });
   });
 
   it("shows a failed status when the kill command dispatch rejects", async () => {
@@ -330,5 +345,25 @@ describe("ProcessDetail show-in-timeline pivot (issue #583)", () => {
     expect(href).toContain("view=timeline");
     expect(href).toContain("pid=1234");
     expect(href).not.toContain("process=42"); // graph selection is irrelevant in the timeline
+  });
+});
+
+// The detail fetch must name the generation it is showing. Every generation of a re-exec chain shares one fork time, so the `at`
+// instant alone always resolves the newest one and the panel would show a sibling's (empty) flows for the process an alert fired on
+// (issue #716). pidversion is what makes the shown generation the one asked for.
+describe("ProcessDetail generation addressing", () => {
+  // spec:server-rest-api/per-process-detail-with-re-exec-chain/a-named-generation-of-a-re-exec-chain-is-addressable
+  it("passes the node's pidversion so the fetch names the generation being shown", async () => {
+    render(<ProcessDetail hostId="h1" node={makeNode({ pidversion: 151026, exec_time_ns: 20 * NS })} onClose={vi.fn()} />);
+    await waitFor(() => {
+      expect(api.getProcessDetail).toHaveBeenCalledWith("h1", 1234, 20 * NS, 151026);
+    });
+  });
+
+  it("omits pidversion when the node carries none, leaving the server on its as-of read", async () => {
+    render(<ProcessDetail hostId="h1" node={makeNode({ exec_time_ns: 20 * NS })} onClose={vi.fn()} />);
+    await waitFor(() => {
+      expect(api.getProcessDetail).toHaveBeenCalledWith("h1", 1234, 20 * NS, undefined);
+    });
   });
 });

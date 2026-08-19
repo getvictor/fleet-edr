@@ -619,6 +619,13 @@ func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, p
 	return s.archive.NetworkEventsForProcess(ctx, hostID, pid, tr)
 }
 
+// GetNetworkEventsForGeneration delegates the generation-scoped flow read (issue #716) to the visibility EventArchive, the same
+// post-cutover delegation GetNetworkEventsForProcess uses. The process-detail view calls this instead of the pid-keyed read so a flow
+// attaches to the generation that owns it rather than to whichever sibling generation's ingest window happens to contain it.
+func (s *Store) GetNetworkEventsForGeneration(ctx context.Context, filter api.ProcessFlowFilter) ([]api.Event, error) {
+	return s.archive.NetworkEventsForGeneration(ctx, filter)
+}
+
 // GetHostEventsByType delegates to the visibility EventArchive for the same reason GetNetworkEventsForProcess does: the events live
 // in ClickHouse post-ADR-0015, while the caller (a detection rule holding a GraphReader) reaches the detection store.
 func (s *Store) GetHostEventsByType(ctx context.Context, hostID, eventType string, tr api.TimeRange) ([]api.Event, error) {

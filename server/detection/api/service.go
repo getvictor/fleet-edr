@@ -25,7 +25,10 @@ type Service interface {
 	// flatten returns the raw forest. pinnedID (0 = none) keeps that one process a first-class node, never folded into an aggregate,
 	// so the alert view can always locate the alerted process by its real id.
 	BuildTree(ctx context.Context, hostID string, tr TimeRange, limit int, flatten bool, pinnedID int64) (ProcessTreeResult, error)
-	GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*ProcessDetail, error)
+	// GetProcessDetail returns one process generation with its flows and re-exec chain. pidVersion is optional: when set it names the
+	// exact generation, which is the only way to address any but the newest member of a re-exec chain (all of whose generations share
+	// one fork_time_ns, so the as-of read cannot separate them). nil keeps the as-of resolution the tree and timeline pass.
+	GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64, pidVersion *uint32) (*ProcessDetail, error)
 	ListAlerts(ctx context.Context, filter AlertFilter) ([]Alert, error)
 	GetAlert(ctx context.Context, id int64) (Alert, []string, error) // alert + correlated event IDs
 	// GetAlertEvidence returns the self-contained triggering-event envelopes captured for an alert at creation time (ADR-0015), so the
