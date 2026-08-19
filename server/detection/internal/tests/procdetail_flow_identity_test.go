@@ -70,10 +70,14 @@ func TestProcessDetail_FlowAttributedToOwningGenerationDespiteIngestLag(t *testi
 			Payload: json.RawMessage(`{"pid":51865,"pidversion":121027,"query_name":"edr.fleetdm.site","query_type":"A"}`)},
 	})
 
-	// Read as of generation 1's exec instant: generation 2 has not forked yet, so the as-of bracket resolves the bash row.
+	// Address generation 1 by its pidversion rather than by an as-of read. This test is about ATTRIBUTION, and naming the generation
+	// keeps it from also depending on generation SELECTION, which is not deterministic here: the three batches above can materialize
+	// out of order (issue #717), and which row an as-of read resolves then depends on the order the workers happened to fold them in.
+	// This test failed in CI for exactly that reason while passing locally. The as-of path is covered by the addressing test below.
+	ownerGen := uint32(121027)
 	var owner *api.ProcessDetail
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, host, pid, now+100*ms, nil)
+		p, err := d.Service().GetProcessDetail(ctx, host, pid, now+100*ms, &ownerGen)
 		if err != nil || p == nil {
 			return false
 		}
@@ -87,8 +91,10 @@ func TestProcessDetail_FlowAttributedToOwningGenerationDespiteIngestLag(t *testi
 	assert.Equal(t, "nc-716", owner.NetworkConnections[0].EventID)
 	assert.Equal(t, "dns-716", owner.DNSQueries[0].EventID, "the fix covers dns_query, not only network_connect")
 
-	// The live sibling generation must not claim the flow. Before the fix its open-ended window served it.
-	sibling, err := d.Service().GetProcessDetail(ctx, host, pid, now+500*ms, nil)
+	// The sibling generation must not claim the flow. Before the fix its open-ended window served it. Named by pidversion for the same
+	// determinism reason as above.
+	siblingGen := uint32(121026)
+	sibling, err := d.Service().GetProcessDetail(ctx, host, pid, now+500*ms, &siblingGen)
 	require.NoError(t, err)
 	require.NotNil(t, sibling)
 	assert.Equal(t, "/bin/sh", sibling.Process.Path, "resolved the sibling generation")
