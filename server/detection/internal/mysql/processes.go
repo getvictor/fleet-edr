@@ -157,7 +157,9 @@ type ProcessExecUpdate struct {
 	// normally differs from what the fork stored for the same pid, and the exec's value is the one that must win: it identifies
 	// the image now running, which is what the agent's kill-time registry holds. The UPDATE takes it via COALESCE so a fork that
 	// arrived without pidversion (or a missed fork) still gets the identity from the exec, without an absent value clobbering an
-	// existing one to NULL.
+	// existing one to NULL. Keeping the existing value is deliberate rather than merely harmless: the agent's registry keeps the
+	// same value for an envelope that carried none, so the two sides agree and the row stays pinned against PID reuse, whereas a
+	// NULL would drop the pin and let a pid-only kill through unchecked.
 	PIDVersion *uint32
 	// ExecEventID is the event_id of the exec event applying this update. Stamped on the row so a re-claim of the same exec is
 	// recognized as already-applied (migration 00011), avoiding the case-b to case-c re-exec misroute.

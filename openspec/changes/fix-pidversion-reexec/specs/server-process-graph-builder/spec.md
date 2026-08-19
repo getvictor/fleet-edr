@@ -6,7 +6,7 @@
 
 The system SHALL preserve the full sequence of exec generations on a single PID. When an `exec` event arrives for a PID that already has an exec'd record, the system MUST close the prior generation and create a new linked record so that a chain like `python -> sh -> bash -> payload` is visible in its entirety.
 
-Each generation SHALL record the kernel PID generation (`pidversion`) reported by its own `exec` event, because execve increments that generation and the new image therefore has an identity the generation it replaced does not share. When the `exec` event reports no `pidversion`, the new generation MUST record none rather than inheriting the value of the generation it replaced: an absent identity leaves the record unpinned, which downstream consumers already handle by falling back to the event-time window, whereas an inherited one names a generation that no longer exists and causes a response action aimed at that record to be refused.
+Each generation SHALL record the kernel PID generation (`pidversion`) reported by its own `exec` event, because execve increments that generation and the new image therefore has an identity the generation it replaced does not share. Recording the replaced generation's value instead names an identity that no longer exists and causes a response action aimed at that record to be refused. When the `exec` event reports no `pidversion` at all, the new generation MUST keep the value of the generation it replaced: the agent derives the generation it enforces against from this same event stream, so an event that reports none leaves both sides holding the replaced value and therefore agreeing, and the record stays pinned well enough to still reject a response action aimed at a recycled PID, which arrives with a distant generation. Recording none in that case would instead drop the pin entirely and admit a response action that identifies its target by PID alone. This is the same rule the first `exec` after a fork already applies when it images its fork record.
 
 #### Scenario: A shell exec-optimization chain runs on one PID
 
@@ -24,12 +24,12 @@ Each generation SHALL record the kernel PID generation (`pidversion`) reported b
 - **AND** the closed generation keeps the `pidversion` it was stored with
 - **AND** the two generations of that PID do not share a `pidversion`
 
-#### Scenario: An exec event without a kernel generation records none
+#### Scenario: An exec event without a kernel generation keeps the replaced one
 
 - **GIVEN** a process record already exec'd on some PID and carrying a `pidversion`
 - **WHEN** an `exec` event replaces the image on the same PID without an intervening fork and reports no `pidversion`
-- **THEN** the new generation records no `pidversion`
-- **AND** it does not inherit the `pidversion` of the generation it replaced
+- **THEN** the new generation keeps the `pidversion` of the generation it replaced
+- **AND** the record stays pinned, so a response action identifying that PID by a different generation is still refused
 
 ### Requirement: Network and DNS events are linked to the process at event time
 

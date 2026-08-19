@@ -3,8 +3,8 @@
 ## 1. Record the exec event's own generation
 
 - [x] 1.1 Take `pidversion` from the exec event in `insertReExec` rather than from the generation being closed
-- [x] 1.2 Delete `pickPIDVersion`, whose only purpose was inheriting the prior value
-- [x] 1.3 Leave the generation unset when the exec event reports none, rather than inheriting
+- [x] 1.2 Delete `pickPIDVersion`, whose preference order was the defect: it took the prior value even when the event reported one
+- [x] 1.3 Keep the replaced generation when the exec event reports none, matching what the agent's own registry keeps, so the pin survives
 
 ## 2. Correct the premise wherever it was recorded
 

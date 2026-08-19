@@ -14,7 +14,7 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 ### Fixed
 
 - **A truncated process tree now says so; narrow the time range or use search to see the rest.** On a busy host the graph can return fewer processes than the window matched, and it previously gave no sign that any were missing, so an absent process was indistinguishable from a dropped one. It now states how many of the matching processes it is showing.
-- **Kill process is pinned to the exact process it targeted.** The "Kill process" action now carries the selected process generation, and the agent refuses the kill (reporting a generation mismatch) if that PID was reused or replaced its running image between you selecting it and the command reaching the host, so a stale kill can no longer terminate an unrelated process. A process that replaced its own image earlier in its life, which every `zsh -c` one-liner does, is killed normally.
+- **Kill process now terminates only the process you selected, and reports a generation mismatch instead of killing the wrong one.** If the PID was reused or replaced its running image before the command reached the host, the kill is refused: re-select the process from the tree and retry.
 - **Alerts are no longer silently dropped while the server is catching up on process data.** A busy or briefly backlogged server could discard a finding instead of retrying it, losing that alert permanently and with nothing in the logs to show it happened. The DNS C2 beacon rule was the most exposed, because it waits the shortest time and its alerts are Critical. Affected detections now fire normally. No action is required, but alerts missed before this upgrade are not backfilled.
 
 ## [0.4.0] (2026-07-07)

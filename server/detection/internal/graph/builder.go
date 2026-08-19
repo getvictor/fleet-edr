@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -417,10 +418,15 @@ func (b *Builder) insertReExec(ctx context.Context, w processStore, evt api.Even
 		CodeSigning: p.CodeSigning,
 		SHA256:      p.SHA256,
 		CDHash:      p.CDHash,
-		// Take the exec event's pidversion, never the prior generation's: execve increments the kernel PID generation, so the
-		// re-exec'd image has an identity the closed generation does not share. A stale value here is worse than none, because the
-		// agent refuses a kill whose payload names a generation the pid no longer holds, so nil stays nil rather than inheriting.
-		PIDVersion:       p.PIDVersion,
+		// Prefer the exec event's pidversion over the prior generation's: execve increments the kernel PID generation, so the
+		// re-exec'd image has an identity the closed generation does not share, and persisting the closed one gets a kill on this
+		// image refused as a generation mismatch. When the event reports none, keep the prior generation's value rather than
+		// nulling: the agent's registry derives its own value from this same event stream (procgen only records a generation for
+		// an envelope that carries one), so both sides keep the prior value and stay consistent, and the pin still catches PID
+		// reuse because a recycled pid arrives with a distant generation. Nulling would instead drop the pin entirely, leaving the
+		// UI to send a pid-only kill the agent does not check at all. Same rule as the first-exec-after-fork path, which spells it
+		// COALESCE(?, pidversion) in SQL and mirrors it in the batch session.
+		PIDVersion:       cmp.Or(p.PIDVersion, prior.PIDVersion),
 		ForkTimeNs:       prior.ForkTimeNs, // chain preserves the original fork time
 		ForkIngestedAtNs: prior.ForkIngestedAtNs,
 		ExecTimeNs:       &evt.TimestampNs,
