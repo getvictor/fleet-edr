@@ -164,15 +164,15 @@ func twoBuilders(t *testing.T) (*graph.Builder, *graph.Builder, *sqlx.DB) {
 }
 
 // forkEvt/execEvt/exitEvt/snapExecEvt/heartbeatEvt are terse builders for the differential scenarios. ts doubles as the event id
-// suffix so ids stay unique within a scenario.
+// suffix so ids stay unique within a scenario. forkEvt/execEvt delegate to the pidversion-aware builders in
+// pidversion_generation_test.go with nil, which is the pre-#403 wire shape these scenarios have always used, so the envelope is
+// built in exactly one place.
 func forkEvt(ts int64, child, parent int) api.Event {
-	return api.Event{EventID: "f" + strconv.FormatInt(ts, 10), HostID: "x", TimestampNs: ts, IngestedAtNs: ts + 1, EventType: "fork",
-		Payload: json.RawMessage(fmt.Sprintf(`{"child_pid":%d,"parent_pid":%d}`, child, parent))}
+	return forkEvtVer(ts, child, parent, nil)
 }
 
 func execEvt(ts int64, pid, ppid int, path string) api.Event {
-	return api.Event{EventID: "e" + strconv.FormatInt(ts, 10), HostID: "x", TimestampNs: ts, IngestedAtNs: ts + 1, EventType: "exec",
-		Payload: json.RawMessage(fmt.Sprintf(`{"pid":%d,"ppid":%d,"path":%q,"uid":501,"gid":20}`, pid, ppid, path))}
+	return execEvtVer(ts, pid, ppid, path, nil)
 }
 
 func exitEvt(ts int64, pid, code int) api.Event {

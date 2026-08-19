@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -270,8 +271,10 @@ type execPayload struct {
 	// tolerates absence: non-HR rows + pre-cdhash agents simply leave the field nil and the persisted column stays NULL.
 	CDHash *string `json:"cdhash"`
 	// PIDVersion is the exec'd process's kernel PID generation (audit_token_to_pidversion), when the agent provided it. Stored on
-	// the process record so flows correlate by exact identity. A re-exec keeps the same generation, so this matches the value the
-	// fork stored. Nil for agents that predate this field (issue #403).
+	// the process record so flows correlate by exact identity. The extension reads it from the exec TARGET's audit token, and
+	// execve increments the generation, so this never matches what the fork stored for the same pid: it is the identity of the
+	// image now running, which is also what the agent's kill-time registry holds. Nil for agents that predate this field
+	// (issue #403).
 	PIDVersion *uint32 `json:"pidversion"`
 	// Snapshot is true for synthetic exec events emitted by the ESF startup baseline pass (issue #11). The graph builder uses this
 	// to avoid clobbering a richer live-event row with a sparse synthetic one when the snapshot pass and an early-startup live exec
@@ -415,9 +418,15 @@ func (b *Builder) insertReExec(ctx context.Context, w processStore, evt api.Even
 		CodeSigning: p.CodeSigning,
 		SHA256:      p.SHA256,
 		CDHash:      p.CDHash,
-		// A re-exec (execve without an intervening fork) keeps the same kernel generation, so the chain shares one pidversion.
-		// Prefer the prior row's value (the established identity); fall back to the event's when the prior row predates capture.
-		PIDVersion:       pickPIDVersion(prior.PIDVersion, p.PIDVersion),
+		// Prefer the exec event's pidversion over the prior generation's: execve increments the kernel PID generation, so the
+		// re-exec'd image has an identity the closed generation does not share, and persisting the closed one gets a kill on this
+		// image refused as a generation mismatch. When the event reports none, keep the prior generation's value rather than
+		// nulling: the agent's registry derives its own value from this same event stream (procgen only records a generation for
+		// an envelope that carries one), so both sides keep the prior value and stay consistent, and the pin still catches PID
+		// reuse because a recycled pid arrives with a distant generation. Nulling would instead drop the pin entirely, leaving the
+		// UI to send a pid-only kill the agent does not check at all. Same rule as the first-exec-after-fork path, which spells it
+		// COALESCE(?, pidversion) in SQL and mirrors it in the batch session.
+		PIDVersion:       cmp.Or(p.PIDVersion, prior.PIDVersion),
 		ForkTimeNs:       prior.ForkTimeNs, // chain preserves the original fork time
 		ForkIngestedAtNs: prior.ForkIngestedAtNs,
 		ExecTimeNs:       &evt.TimestampNs,
@@ -442,16 +451,6 @@ func (b *Builder) insertReExec(ctx context.Context, w processStore, evt api.Even
 // same pid, but staying defensive: if prior has it and the event doesn't, use prior.
 func pickPPID(prior, fromEvent int) int {
 	if prior != 0 {
-		return prior
-	}
-	return fromEvent
-}
-
-// pickPIDVersion prefers the prior generation's pidversion for a re-exec: execve does not change the kernel PID generation, so a
-// same-PID re-exec chain shares one pidversion. Falls back to the exec event's value when the prior row predates pidversion
-// capture (a fork ingested before this field existed). Both nil yields nil, which leaves the row's pidversion unset.
-func pickPIDVersion(prior, fromEvent *uint32) *uint32 {
-	if prior != nil {
 		return prior
 	}
 	return fromEvent
