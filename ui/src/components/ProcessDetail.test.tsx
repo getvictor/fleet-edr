@@ -366,4 +366,39 @@ describe("ProcessDetail generation addressing", () => {
       expect(api.getProcessDetail).toHaveBeenCalledWith("h1", 1234, 20 * NS, undefined);
     });
   });
+
+  // spec:server-rest-api/per-process-detail-with-re-exec-chain/a-capped-flow-read-reports-that-it-truncated
+  it("says so when the server capped the flow list, so absence is not read as nothing happened", async () => {
+    vi.mocked(api.getProcessDetail).mockResolvedValueOnce({
+      process: makeNode({ pidversion: 151026 }),
+      network_connections: [],
+      dns_queries: [],
+      flows_truncated: true,
+    });
+    render(<ProcessDetail hostId="h1" node={makeNode({ pidversion: 151026, exec_time_ns: 20 * NS })} onClose={vi.fn()} />);
+    expect(await screen.findByText(/Showing the first/)).toBeInTheDocument();
+  });
+
+  // Selecting a sibling generation of the SAME pid changes only the pidversion: host, pid, and the chain's shared fork-derived
+  // instant are all identical. If pidversion were missing from the effect's dependencies the panel would keep showing the first
+  // generation's flows while claiming to show the second, which is the mis-attribution #716 is about, wearing a different hat.
+  it("refetches when only the pidversion changes, so switching generations switches the flows", async () => {
+    const { rerender } = render(
+      <ProcessDetail hostId="h1" node={makeNode({ pidversion: 151026, exec_time_ns: 20 * NS })} onClose={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(api.getProcessDetail).toHaveBeenCalledWith("h1", 1234, 20 * NS, 151026);
+    });
+
+    // rerender bypasses the local render helper's wrapper, so the Router context has to be re-supplied here.
+    rerender(
+      <MemoryRouter>
+        <ProcessDetail hostId="h1" node={makeNode({ pidversion: 151027, exec_time_ns: 20 * NS })} onClose={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(api.getProcessDetail).toHaveBeenCalledWith("h1", 1234, 20 * NS, 151027);
+    });
+    expect(api.getProcessDetail).toHaveBeenCalledTimes(2);
+  });
 });

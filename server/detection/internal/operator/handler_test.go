@@ -493,11 +493,9 @@ func TestHandleProcessDetail(t *testing.T) {
 				srv := newOperatorServer(t, svc, allowAllAuthZ{})
 				resp := doGet(t, srv, "/api/hosts/host-a/processes/1234?pidversion="+raw)
 				defer resp.Body.Close()
-				if raw == "" {
-					// An empty value is indistinguishable from an absent param on the wire, so it means "resolve by as-of".
-					assert.Equal(t, http.StatusOK, resp.StatusCode)
-					return
-				}
+				// An empty value is rejected like any other unparseable one. It is NOT the same request as an absent param:
+				// url.Values distinguishes the two, and answering an addressed request with the as-of read can return a
+				// different generation than the caller named.
 				require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 				assert.Equal(t, errInvalidPIDVersion, readErrorEnvelope(t, resp))
 			})

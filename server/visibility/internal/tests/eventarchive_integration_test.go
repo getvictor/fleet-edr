@@ -659,7 +659,7 @@ func readGenerationFlows(
 	var got []visibilityapi.Event
 	require.Eventually(t, func() bool {
 		var err error
-		got, err = arch.NetworkEventsForGeneration(context.Background(), filter)
+		got, _, err = arch.NetworkEventsForGeneration(context.Background(), filter)
 		return err == nil && len(got) == wantN
 	}, 5*time.Second, 100*time.Millisecond, "expected %d flows for pid %d generation %v", wantN, filter.PID, filter.PIDVersion)
 	return got
@@ -701,7 +701,7 @@ func TestEventArchive_GenerationFlowsSurviveIngestLag(t *testing.T) {
 	wide := httpserver.TimeRange{FromNs: base - second, ToNs: base + 3600*second}
 
 	owner := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
-		HostID: host, PID: pid, PIDVersion: ownerGen, Bound: wide, IngestWindow: ownerWindow,
+		HostID: host, PID: pid, PIDVersion: ownerGen, Bound: wide, IngestWindow: ownerWindow, Life: wide,
 	}, 2)
 	ownerIDs := []string{owner[0].EventID, owner[1].EventID}
 	assert.ElementsMatch(t, []string{"nc-legacy", "nc-owner"},
@@ -710,7 +710,7 @@ func TestEventArchive_GenerationFlowsSurviveIngestLag(t *testing.T) {
 	// The sibling must NOT claim the owner's flow. Its window is open-ended (it has not exited), which is precisely how the old
 	// pid-keyed read mis-attributed the flow to it.
 	sibling := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
-		HostID: host, PID: pid, PIDVersion: siblingGen, Bound: wide, IngestWindow: wide,
+		HostID: host, PID: pid, PIDVersion: siblingGen, Bound: wide, IngestWindow: wide, Life: wide,
 	}, 2)
 	siblingIDs := []string{sibling[0].EventID, sibling[1].EventID}
 	assert.ElementsMatch(t, []string{"nc-legacy", "nc-sibling"},
@@ -719,6 +719,7 @@ func TestEventArchive_GenerationFlowsSurviveIngestLag(t *testing.T) {
 }
 
 // spec:server-rest-api/per-process-detail-with-re-exec-chain/a-flow-without-a-kernel-generation-is-attributed-by-the-lifetime-window
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-generation-that-carries-no-kernel-generation-claims-only-flows-that-carry-none
 //
 // The legacy arm, including the JSONHas-guard case: pidversion 0 is a REAL kernel generation, so a flow carrying 0 must be judged by
 // identity (and so must not appear under a different generation) rather than treated as carrying no pidversion.
@@ -742,22 +743,109 @@ func TestEventArchive_GenerationFlowsLegacyArm(t *testing.T) {
 	wide := httpserver.TimeRange{FromNs: base - second, ToNs: base + 3600*second}
 	tight := httpserver.TimeRange{FromNs: base, ToNs: base + 10*second}
 
-	t.Run("a row with no pidversion judges every flow by the window", func(t *testing.T) {
+	t.Run("a row with no pidversion claims only flows that also carry none", func(t *testing.T) {
 		got := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
-			HostID: host, PID: pid, PIDVersion: nil, Bound: wide, IngestWindow: tight,
-		}, 2)
-		ids := []string{got[0].EventID, got[1].EventID}
-		assert.ElementsMatch(t, []string{"legacy-in", "zero-gen"}, ids,
-			"a legacy ROW has no identity to match on, so the window admits modern and legacy flows alike, and excludes the far-out one")
+			HostID: host, PID: pid, PIDVersion: nil, Bound: wide, IngestWindow: tight, Life: wide,
+		}, 1)
+		ids := []string{got[0].EventID}
+		assert.ElementsMatch(t, []string{"legacy-in"}, ids,
+			"a legacy ROW cannot name a generation, so it must not claim a flow that names one; the window admits only the legacy flow")
+		assert.NotContains(t, ids, "zero-gen",
+			"zero-gen carries pidversion 0, so it belongs to generation 0 and a row with no generation must not take it on timing")
+		assert.NotContains(t, ids, "legacy-out", "the legacy arm still respects the window")
 	})
 
 	t.Run("pidversion 0 is a real generation, not an absent one", func(t *testing.T) {
 		got := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
-			HostID: host, PID: pid, PIDVersion: genPtr(0), Bound: wide, IngestWindow: tight,
+			HostID: host, PID: pid, PIDVersion: genPtr(0), Bound: wide, IngestWindow: tight, Life: wide,
 		}, 2)
 		ids := []string{got[0].EventID, got[1].EventID}
 		assert.ElementsMatch(t, []string{"legacy-in", "zero-gen"}, ids,
 			"generation 0 matches the flow carrying 0 by identity, plus the no-pidversion flow inside the window")
 		assert.NotContains(t, ids, "legacy-out", "the legacy arm still respects the window")
 	})
+}
+
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-repeated-generation-is-disambiguated-by-event-time
+//
+// Identity is not guaranteed unique: rows written before #715 repeated one pidversion across the generations of a re-exec chain, so
+// (pid, pidversion) alone would serve each generation the other's flows. Life bounds the identity arm on EVENT time, which is the only
+// timestamp that can separate them: a flow's event time falls inside the life of the process that made it, whereas its INGEST time
+// routinely lands after that process exited, which is the whole of #716.
+func TestEventArchive_GenerationFlowsDisambiguateRepeatedIdentity(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+
+	const (
+		host = "h-716-repeated"
+		pid  = 8080
+	)
+	shared := genPtr(777) // one pidversion, two generations: the pre-#715 shape
+	base := time.Now().UnixNano()
+	second := int64(time.Second)
+
+	require.NoError(t, arch.Insert(ctx, []visibilityapi.Event{
+		flowEvent("nc-first", host, base+2*second, base+2*second, pid, shared),
+		flowEvent("nc-second", host, base+40*second, base+40*second, pid, shared),
+	}))
+
+	wide := httpserver.TimeRange{FromNs: base - second, ToNs: base + 3600*second}
+	// The two lives are 30s apart, well outside the caller's 5s clock-skew pad, so each contains exactly one flow's event time.
+	firstLife := httpserver.TimeRange{FromNs: base, ToNs: base + 10*second}
+	secondLife := httpserver.TimeRange{FromNs: base + 30*second, ToNs: base + 3600*second}
+
+	first := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
+		HostID: host, PID: pid, PIDVersion: shared, Bound: wide, IngestWindow: wide, Life: firstLife,
+	}, 1)
+	assert.Equal(t, "nc-first", first[0].EventID, "the earlier generation sees only the flow made during its life")
+
+	later := readGenerationFlows(t, arch, visibilityapi.ProcessFlowFilter{
+		HostID: host, PID: pid, PIDVersion: shared, Bound: wide, IngestWindow: wide, Life: secondLife,
+	}, 1)
+	assert.Equal(t, "nc-second", later[0].EventID, "the later generation sees only its own, despite sharing the identity")
+}
+
+// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-capped-flow-read-reports-that-it-truncated
+//
+// The identity arm is deliberately not time-narrowed, so a long-lived process on a noisy host can match far more flows than a panel
+// renders. The read is capped and SAYS so: a silently shortened list would let an absent flow read as a flow that never happened.
+func TestEventArchive_GenerationFlowsReportTruncation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	arch := openTestArchive(t)
+
+	const (
+		host = "h-716-cap"
+		pid  = 9090
+	)
+	gen := genPtr(555)
+	base := time.Now().UnixNano()
+	second := int64(time.Second)
+	events := make([]visibilityapi.Event, 0, 5)
+	for i := range 5 {
+		at := base + int64(i)*second
+		events = append(events, flowEvent(fmt.Sprintf("nc-cap-%d", i), host, at, at, pid, gen))
+	}
+	require.NoError(t, arch.Insert(ctx, events))
+
+	wide := httpserver.TimeRange{FromNs: base - second, ToNs: base + 3600*second}
+	filter := visibilityapi.ProcessFlowFilter{
+		HostID: host, PID: pid, PIDVersion: gen, Bound: wide, IngestWindow: wide, Life: wide, Limit: 2,
+	}
+
+	var got []visibilityapi.Event
+	var truncated bool
+	require.Eventually(t, func() bool {
+		var err error
+		got, truncated, err = arch.NetworkEventsForGeneration(ctx, filter)
+		return err == nil && len(got) == 2
+	}, 5*time.Second, 100*time.Millisecond, "expected the read to return exactly the 2-row cap")
+	assert.True(t, truncated, "five matching flows against a cap of two must report truncation, not a quiet prefix")
+
+	filter.Limit = 10
+	all, allTruncated, err := arch.NetworkEventsForGeneration(ctx, filter)
+	require.NoError(t, err)
+	assert.Len(t, all, 5, "a cap above the match count returns every row")
+	assert.False(t, allTruncated, "and reports no truncation")
 }

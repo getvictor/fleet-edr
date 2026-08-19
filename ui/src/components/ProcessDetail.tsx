@@ -395,6 +395,16 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
         </div>
       )}
 
+      {detail?.flows_truncated && (
+        /* The server caps this read, so say when the cap bound. Without it a partial list is indistinguishable from a complete one,
+           and an analyst would read absence as evidence the process made no further connections (issue #423's rule, applied to the
+           flow lists). */
+        <p className="process-detail__truncated">
+          Showing the first {detail.network_connections.length + detail.dns_queries.length} network events for this
+          process. Narrow the time range or use search to see the rest.
+        </p>
+      )}
+
       {detail && (
         <NetworkConnections
           connections={detail.network_connections}

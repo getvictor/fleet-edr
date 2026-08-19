@@ -622,7 +622,7 @@ func (s *Store) GetNetworkEventsForProcess(ctx context.Context, hostID string, p
 // GetNetworkEventsForGeneration delegates the generation-scoped flow read (issue #716) to the visibility EventArchive, the same
 // post-cutover delegation GetNetworkEventsForProcess uses. The process-detail view calls this instead of the pid-keyed read so a flow
 // attaches to the generation that owns it rather than to whichever sibling generation's ingest window happens to contain it.
-func (s *Store) GetNetworkEventsForGeneration(ctx context.Context, filter api.ProcessFlowFilter) ([]api.Event, error) {
+func (s *Store) GetNetworkEventsForGeneration(ctx context.Context, filter api.ProcessFlowFilter) ([]api.Event, bool, error) {
 	return s.archive.NetworkEventsForGeneration(ctx, filter)
 }
 

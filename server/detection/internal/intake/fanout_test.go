@@ -33,8 +33,8 @@ func (f *fakeEventArchive) Insert(_ context.Context, events []api.Event) error {
 func (f *fakeEventArchive) NetworkEventsForProcess(context.Context, string, int, httpserver.TimeRange) ([]api.Event, error) {
 	return nil, nil
 }
-func (f *fakeEventArchive) NetworkEventsForGeneration(context.Context, api.ProcessFlowFilter) ([]api.Event, error) {
-	return nil, nil
+func (f *fakeEventArchive) NetworkEventsForGeneration(context.Context, api.ProcessFlowFilter) ([]api.Event, bool, error) {
+	return nil, false, nil
 }
 func (f *fakeEventArchive) EventsByTypeForHost(context.Context, string, string, httpserver.TimeRange) ([]api.Event, error) {
 	return nil, nil

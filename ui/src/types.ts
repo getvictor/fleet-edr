@@ -210,6 +210,10 @@ export interface ProcessDetail {
   // between (e.g. shell exec-optimization chains). Empty for the common
   // single-exec case. See server/store/process.go GetExecChain.
   re_exec_chain?: Process[];
+  // True when the server's row cap dropped flows, so the two lists above are a prefix of what this generation produced rather than
+  // all of it. Reported by the server because the client never learns the cap; an absent flow must not read as one that never
+  // happened. Optional so a response from an older server parses.
+  flows_truncated?: boolean;
 }
 
 // TreeResponse is the response from GET /api/hosts/{host_id}/tree: the forest plus the metadata that lets the page say what it is

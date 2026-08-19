@@ -2,9 +2,11 @@ package graph
 
 import (
 	"context"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
@@ -72,6 +74,43 @@ func (q *Query) BuildTree(
 	}
 	res.Roots = aggregateSiblingsPinned(forest, pinnedID)
 	return res, nil
+}
+
+// flowClockSkewPadNs pads the generation's event-time life before it bounds the identity arm. A flow's event time is stamped by the
+// network extension while the process's fork, exec, and exit times come from Endpoint Security, and the two clocks drift (issue #7).
+// 5s matches processLookupSkewPadNs, the pad detection's own flow correlation already uses for the same drift.
+const flowClockSkewPadNs = int64(5 * 1_000_000_000)
+
+// generationLife renders the generation's EVENT-time life for the identity arm, padded for clock skew. It exists because identity is
+// not guaranteed unique: rows written before #715 repeated one pidversion across the generations of a re-exec chain, so without a time
+// bound each generation would serve every other generation's flows.
+//
+// The lower edge is the exec instant when the generation has one, since a re-exec generation cannot have made a flow before the image
+// that made it was loaded, and the fork otherwise. A generation still running has no upper edge.
+//
+// This disambiguates generations separated by more than the pad, which is the case worth fixing. Two generations of a legacy repeated
+// pidversion that are microseconds apart still overlap once padded, and a flow inside that overlap can appear on both. That residue is
+// inherent: for those rows the wire carried nothing that distinguishes the generations, so no rule over their timestamps can. It is
+// still strictly better than the unbounded identity match, where every generation served the whole pid's history.
+func generationLife(proc *api.Process) api.TimeRange {
+	start := proc.ForkTimeNs
+	if proc.ExecTimeNs != nil {
+		start = *proc.ExecTimeNs
+	}
+	life := api.TimeRange{FromNs: max(start-flowClockSkewPadNs, 0), ToNs: math.MaxInt64}
+	if proc.ExitTimeNs != nil {
+		life.ToNs = *proc.ExitTimeNs + flowClockSkewPadNs
+	}
+	return life
+}
+
+// flowScanBound renders the wide ingest bound that prunes the flow scan. The ceiling is the query time, NOT the process's own start
+// plus a span: a process older than that span would match its flows by identity and then have every one of them pruned by a ceiling
+// that expired before they were ingested, which silently re-breaks issue #716 for any long-lived daemon or heartbeat-kept snapshot
+// record. Nothing can be ingested after now, so now is the honest ceiling, and the row cap rather than the window keeps the read
+// bounded. Extracted so the choice is directly testable: a bound derived from process age looks harmless until the process is old.
+func flowScanBound(fromNs, nowNs int64) api.TimeRange {
+	return api.TimeRange{FromNs: fromNs, ToNs: nowNs}
 }
 
 // pidVersionOf widens a process row's kernel pid generation to the int64 the archive filter takes, preserving absence. A row whose
@@ -166,14 +205,19 @@ func (q *Query) GetProcessDetail(
 	}
 
 	// Bound is deliberately wide: it prunes the scan, it does not attribute. The identity arm must not be constrained by the lifetime
-	// window (that is the #716 defect), so the only ceiling an identity match sees is this one, anchored the same way the still-running
-	// case already anchors its 30-day bound.
-	flows, err := q.store.GetNetworkEventsForGeneration(ctx, api.ProcessFlowFilter{
+	// window (that is the #716 defect), so the only ceiling an identity match sees is this one.
+	//
+	// The ceiling is the query time, NOT the process's fork plus a span. Anchoring it on fork age silently re-broke the fix for any
+	// process older than that span: a daemon running longer than 30 days, or a heartbeat-kept snapshot row, would match its flows by
+	// identity and then have every one of them pruned by a ceiling that expired before they were ingested. Nothing can be ingested
+	// after now, so now is the honest ceiling, and the row cap rather than the window is what keeps the read bounded.
+	flows, truncated, err := q.store.GetNetworkEventsForGeneration(ctx, api.ProcessFlowFilter{
 		HostID:       hostID,
 		PID:          pid,
 		PIDVersion:   pidVersionOf(proc),
-		Bound:        api.TimeRange{FromNs: fromNs, ToNs: forkAnchorNs + thirtyDayBoundNs},
+		Bound:        flowScanBound(fromNs, time.Now().UnixNano()),
 		IngestWindow: tr,
+		Life:         generationLife(proc),
 	})
 	if err != nil {
 		return nil, err
@@ -188,6 +232,7 @@ func (q *Query) GetProcessDetail(
 		NetworkConnections: filterByType(flows, "network_connect"),
 		DNSQueries:         filterByType(flows, "dns_query"),
 		ReExecChain:        chain,
+		FlowsTruncated:     truncated,
 	}
 	return detail, nil
 }

@@ -31,7 +31,11 @@ type EventArchive interface {
 
 	// NetworkEventsForGeneration returns the network_connect and dns_query events belonging to ONE process generation, ordered by
 	// timestamp. See ProcessFlowFilter for how a flow is attributed to a generation.
-	NetworkEventsForGeneration(ctx context.Context, filter ProcessFlowFilter) ([]Event, error)
+	//
+	// The bool reports that the row cap dropped rows. Unlike EventsByTypeForHost this truncates rather than erroring: the caller is an
+	// operator panel reading what a process DID, so a partial list plus an honest "there are more" beats blanking the view, whereas a
+	// rule reasoning about what is ABSENT cannot tell a missing event from a dropped one and must get the error instead.
+	NetworkEventsForGeneration(ctx context.Context, filter ProcessFlowFilter) ([]Event, bool, error)
 
 	// EventsByTypeForHost returns one host's events of a single type whose EVENT time falls inside tr, oldest first. Narrow by
 	// construction: (host_id, event_type, timestamp_ns) is the archive's sorting-key prefix, so the read is a primary-key range
@@ -121,11 +125,22 @@ type ProcessGeneration struct {
 //   - Legacy: the flow's payload carries NO pidversion (a pre-#403 agent, or a flow whose audit token was unavailable), and its
 //     ingest time falls inside IngestWindow. Identity cannot speak for these, so the window remains the only available evidence.
 //
-// PIDVersion nil means the PROCESS row predates pidversion capture. Identity is then unavailable on this side too, so every candidate
-// flow is judged by IngestWindow alone, which is the pre-#716 behavior.
+// PIDVersion nil means the PROCESS row predates pidversion capture. Identity is unavailable on this side too, so ONLY the legacy arm
+// applies: a candidate must itself carry no pidversion. A flow that carries one belongs to some generation of this pid, and a row that
+// cannot name a generation must not claim it on timing alone. Doing so is the #716 mis-attribution class surviving on the legacy side.
+//
+// Life bounds the identity arm on EVENT time. Identity is not guaranteed unique: rows written before #715 repeated one pidversion
+// across the generations of a re-exec chain, so (pid, pidversion) can match two generations and each would otherwise show the other's
+// flows. Event time is the right discriminator and ingest time is not: a flow's event time always falls inside the life of the process
+// that made it, whereas its ingest time routinely lands after that process exited, which is the whole of #716. Callers pad Life for
+// the network-extension versus Endpoint Security clock difference (issue #7).
 //
 // Bound applies to every candidate row in both arms. It exists to keep the scan pruned rather than to decide attribution, so it is
-// wide where IngestWindow is tight; an implementation MUST NOT narrow attribution with it.
+// wide where IngestWindow is tight; an implementation MUST NOT narrow attribution with it. In particular it MUST NOT be derived from
+// the process's own age: a daemon older than the retention window would then be unable to show any flow at all.
+//
+// Limit caps the returned rows. Flows are agent-supplied and a long-lived process on a noisy host can hold far more than a panel can
+// render, so the read is bounded and reports whether the cap dropped rows rather than silently shortening.
 type ProcessFlowFilter struct {
 	HostID string
 	PID    int
@@ -135,6 +150,10 @@ type ProcessFlowFilter struct {
 	Bound httpserver.TimeRange
 	// IngestWindow is the tight ingest window that attributes flows the identity arm cannot speak for.
 	IngestWindow httpserver.TimeRange
+	// Life is the generation's event-time window, padded for clock skew, used to disambiguate a repeated identity.
+	Life httpserver.TimeRange
+	// Limit caps the rows returned. Non-positive means the implementation's own default cap.
+	Limit int
 }
 
 // EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class

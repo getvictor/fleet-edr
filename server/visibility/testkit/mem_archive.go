@@ -112,10 +112,11 @@ func (m *MemArchive) NetworkEventsForProcess(_ context.Context, hostID string, p
 }
 
 // NetworkEventsForGeneration mirrors the ClickHouse read: the network_connect and dns_query events belonging to ONE generation,
-// ordered by timestamp_ns (issue #716). Two arms, partitioned on whether the flow's payload carries a pidversion: identity matches
-// regardless of ingest time, and the window judges only flows identity cannot speak for. A nil filter.PIDVersion means the process row
-// itself carries none, so every candidate is judged by the window alone.
-func (m *MemArchive) NetworkEventsForGeneration(_ context.Context, filter api.ProcessFlowFilter) ([]api.Event, error) {
+// ordered by timestamp_ns then event_id (issue #716), capped like the real read and reporting whether the cap dropped rows. Two arms,
+// partitioned on whether the flow's payload carries a pidversion: identity matches regardless of ingest time but must fall inside the
+// generation's life, and the window judges only flows identity cannot speak for. A nil filter.PIDVersion means the process row itself
+// carries none, so only the legacy arm applies. See flowBelongsToGeneration.
+func (m *MemArchive) NetworkEventsForGeneration(_ context.Context, filter api.ProcessFlowFilter) ([]api.Event, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []api.Event
@@ -138,9 +139,25 @@ func (m *MemArchive) NetworkEventsForGeneration(_ context.Context, filter api.Pr
 		}
 		out = append(out, e)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].TimestampNs < out[j].TimestampNs })
-	return out, nil
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].TimestampNs != out[j].TimestampNs {
+			return out[i].TimestampNs < out[j].TimestampNs
+		}
+		return out[i].EventID < out[j].EventID
+	})
+	rowCap := filter.Limit
+	if rowCap <= 0 {
+		rowCap = GenerationFlowRowCap
+	}
+	if len(out) > rowCap {
+		return out[:rowCap], true, nil
+	}
+	return out, false, nil
 }
+
+// GenerationFlowRowCap mirrors the ClickHouse store's default cap for NetworkEventsForGeneration. Exported so a test can seed past it
+// without hardcoding a number that would drift from production's.
+const GenerationFlowRowCap = 500
 
 // EventsByTypeForHost mirrors the ClickHouse read: one host's events of a single type inside the EVENT-time range, oldest first,
 // with event_id breaking timestamp ties. The tiebreaker is part of mirroring: a fake that orders ties differently from the real
@@ -380,24 +397,28 @@ func payloadMatchesChain(payload json.RawMessage, chain []api.ProcessGeneration)
 // flowBelongsToGeneration mirrors the store's two-arm attribution for NetworkEventsForGeneration. The arms partition on whether the
 // flow carries a pidversion, so a flow is never judged by both:
 //
-//   - Identity: the flow's (pid, pidversion) equals the generation's. Ingest time is irrelevant, which is the #716 fix.
+//   - Identity: the flow's (pid, pidversion) equals the generation's AND its EVENT time falls inside the generation's life. Ingest
+//     time is irrelevant, which is the #716 fix; the life bound disambiguates a pidversion that pre-#715 rows repeated across the
+//     generations of one chain, where identity alone would show each generation the other's flows.
 //   - Legacy: the flow carries NO pidversion, so identity cannot speak for it and its ingest time must fall inside the window.
 //
-// A nil filter.PIDVersion means the process ROW carries no pidversion, so identity is unavailable on that side too and every
-// candidate is judged by the window alone (the pre-#716 behavior, retained so a legacy row still shows modern flows).
+// A nil filter.PIDVersion means the process ROW carries no pidversion, so identity is unavailable on that side too and ONLY the legacy
+// arm applies. A flow carrying a pidversion belongs to some generation of this pid, and a row that cannot name its own generation must
+// not claim it on timing alone: that is the #716 mis-attribution class surviving on the legacy side.
 func flowBelongsToGeneration(e api.Event, filter api.ProcessFlowFilter) bool {
 	inWindow := e.IngestedAtNs >= filter.IngestWindow.FromNs && e.IngestedAtNs <= filter.IngestWindow.ToNs
+	_, flowVer := payloadGeneration(e.Payload)
 	if filter.PIDVersion == nil {
-		return inWindow
+		return flowVer == nil && inWindow
 	}
 	gen := api.ProcessGeneration{PID: int64(filter.PID), PIDVersion: *filter.PIDVersion}
+	inLife := e.TimestampNs >= filter.Life.FromNs && e.TimestampNs <= filter.Life.ToNs
 	if payloadMatchesChain(e.Payload, []api.ProcessGeneration{gen}) {
-		return true
+		return inLife
 	}
 	// A flow carrying a DIFFERENT pidversion belongs to a sibling generation and must not be rescued by timing; only one carrying
 	// none falls through to the window.
-	_, ver := payloadGeneration(e.Payload)
-	return ver == nil && inWindow
+	return flowVer == nil && inWindow
 }
 
 // payloadGeneration parses the (pid, pidversion) pair from an event payload, with a nil version for a payload that omits the field.

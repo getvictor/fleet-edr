@@ -22,3 +22,11 @@
 - [x] 3.2 Thread it to `GetProcessDetail` and resolve by `GetProcessByPIDVersion` when set, keeping the as-of read byte-identical when absent.
 - [x] 3.3 Pass the node's `pidversion` from the UI panel, omitting the param when the node carries none, and add it to the fetch effect's dependencies so switching generations refetches.
 - [x] 3.4 Pin that a named generation of a re-exec chain is reachable while the as-of read alone still resolves the newest, and that an unknown `pidversion` is a 404 rather than a substitution.
+
+## Review follow-ups (PR 718)
+
+- [x] 5.1 Keep the payload guard when the process record carries no generation, so a legacy record cannot claim a flow that names a generation. Flip the integration expectation that pinned the opposite.
+- [x] 5.2 Bound the scan from the query time rather than the record's own start, so a long-lived process can still show recent flows.
+- [x] 5.3 Cap the flow read and report truncation, in the API and in the panel.
+- [x] 5.4 Bound identity matches by the generation's padded event-time life, so a repeated generation value does not serve one generation another's flows.
+- [x] 5.5 Reject a present-but-empty `pidversion` rather than treating it as absent.

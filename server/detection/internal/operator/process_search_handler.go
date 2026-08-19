@@ -138,12 +138,20 @@ func (h *Handler) parseProcessSearchRequest(ctx context.Context, w http.Response
 // "resolve by as-of instead". Present but unparseable, negative, or wider than a uint32 -> (nil, false) so the caller returns 400: a
 // typo must not quietly resolve a different generation than the one asked for, which is the whole point of addressing by identity.
 // The result is a pointer because a present zero is a real kernel generation and has to survive as a value, not collapse into absence.
+//
+// A present-but-empty `?pidversion=` is rejected, not treated as absent. url.Values distinguishes a present key from a missing one, and
+// the two requests mean different things: absent asks for the as-of read, while empty is a client that meant to name a generation and
+// sent nothing. Silently taking the as-of path there can answer with a DIFFERENT generation than the caller was addressing, which is
+// exactly the confusion identity addressing exists to remove.
 func parsePIDVersionParam(q url.Values) (*uint32, bool) {
-	raw := q.Get("pidversion")
-	if raw == "" {
+	raw, present := q["pidversion"]
+	if !present {
 		return nil, true
 	}
-	v, err := strconv.ParseUint(raw, 10, 32)
+	if len(raw) == 0 || raw[0] == "" {
+		return nil, false
+	}
+	v, err := strconv.ParseUint(raw[0], 10, 32)
 	if err != nil {
 		return nil, false
 	}

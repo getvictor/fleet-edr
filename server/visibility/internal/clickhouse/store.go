@@ -132,40 +132,75 @@ func generationIdentitySQL(gens []api.ProcessGeneration) (string, []any) {
 	return "(JSONHas(payload, 'pidversion') AND (pid, JSONExtractInt(payload, 'pidversion')) IN (" + strings.Join(pairs, ", ") + "))", args
 }
 
+// Predicate fragments shared by the flow reads. Named because they repeat across the three reads below and Sonar go:S1192 counts the
+// repetition; naming them also keeps the ingest-time bound and the event-time bound from being confused at a glance.
+const (
+	hostPredicate       = "host_id = ?"
+	flowTypesPredicate  = "event_type IN ('network_connect', 'dns_query')"
+	pidPredicate        = "pid = ?"
+	ingestFromPredicate = "ingested_at_ns >= ?"
+	ingestToPredicate   = "ingested_at_ns <= ?"
+	eventFromPredicate  = "timestamp_ns >= ?"
+	eventToPredicate    = "timestamp_ns <= ?"
+	noPIDVersionInFlow  = "NOT JSONHas(payload, 'pidversion')"
+)
+
+// generationFlowRowCap bounds NetworkEventsForGeneration. Flows are agent-supplied and the identity arm is deliberately not
+// time-narrowed, so a long-lived process on a noisy host can match far more rows than a detail panel renders. One row beyond the cap
+// is fetched to detect the overflow, the same idiom EventsByTypeForHost uses; unlike that read this one truncates and says so.
+const generationFlowRowCap = 500
+
 // NetworkEventsForGeneration returns the network_connect and dns_query events belonging to one process generation, ordered by
-// timestamp (issue #716). The attribution rule lives on api.ProcessFlowFilter; this renders it as SQL.
+// timestamp (issue #716). The attribution rule lives on api.ProcessFlowFilter; this renders it as SQL. The bool reports that the row
+// cap dropped rows.
 //
-// The identity arm reuses generationIdentitySQL, the same predicate the alert-chain timeline scope uses. The legacy arm is its
-// complement (NOT JSONHas) intersected with the tight ingest window, so the two arms partition the candidate rows: a flow carrying a
-// pidversion is judged by identity ONLY, never rescued by the window, which is what stops a sibling generation's flow from appearing
-// here. filter.Bound applies to both arms and only prunes.
-func (s *Store) NetworkEventsForGeneration(ctx context.Context, filter api.ProcessFlowFilter) ([]api.Event, error) {
-	where := []string{"host_id = ?", "event_type IN ('network_connect', 'dns_query')", "pid = ?", "ingested_at_ns >= ?", "ingested_at_ns <= ?"}
+// The identity arm reuses generationIdentitySQL, the same predicate the alert-chain timeline scope uses, intersected with the
+// generation's EVENT-time life so a pidversion that pre-#715 rows repeated across a chain still resolves to one generation. The legacy
+// arm is its complement (NOT JSONHas) intersected with the tight ingest window. The arms partition the candidate rows: a flow carrying
+// a pidversion is judged by identity ONLY, never rescued by the window, which is what stops a sibling generation's flow appearing here.
+//
+// When the process row carries no pidversion only the legacy arm applies. A flow that carries a pidversion belongs to some generation
+// of this pid, and a row that cannot name its own generation must not claim it on timing alone.
+func (s *Store) NetworkEventsForGeneration(ctx context.Context, filter api.ProcessFlowFilter) ([]api.Event, bool, error) {
+	where := []string{hostPredicate, flowTypesPredicate, pidPredicate, ingestFromPredicate, ingestToPredicate}
 	args := []any{filter.HostID, filter.PID, filter.Bound.FromNs, filter.Bound.ToNs}
 
-	legacyArm := "(NOT JSONHas(payload, 'pidversion') AND ingested_at_ns >= ? AND ingested_at_ns <= ?)"
+	legacyArm := "(" + noPIDVersionInFlow + " AND " + ingestFromPredicate + " AND " + ingestToPredicate + ")"
 	legacyArgs := []any{filter.IngestWindow.FromNs, filter.IngestWindow.ToNs}
 	if filter.PIDVersion == nil {
-		// The process row carries no pidversion, so identity is unavailable on this side and every candidate is judged by the window
-		// alone. Dropping the NOT JSONHas guard is the point: a legacy ROW must still show modern flows, which do carry a pidversion.
-		where = append(where, "ingested_at_ns >= ?", "ingested_at_ns <= ?")
+		where = append(where, legacyArm)
 		args = append(args, legacyArgs...)
 	} else {
-		identityArm, identityArgs := generationIdentitySQL([]api.ProcessGeneration{{PID: int64(filter.PID), PIDVersion: *filter.PIDVersion}})
+		identitySQL, identityArgs := generationIdentitySQL([]api.ProcessGeneration{{PID: int64(filter.PID), PIDVersion: *filter.PIDVersion}})
+		identityArm := "(" + identitySQL + " AND " + eventFromPredicate + " AND " + eventToPredicate + ")"
+		identityArgs = append(identityArgs, filter.Life.FromNs, filter.Life.ToNs)
 		where = append(where, "("+identityArm+" OR "+legacyArm+")")
 		args = append(args, identityArgs...)
 		args = append(args, legacyArgs...)
 	}
 
+	rowCap := filter.Limit
+	if rowCap <= 0 {
+		rowCap = generationFlowRowCap
+	}
+	args = append(args, rowCap+1)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM events FINAL
 		WHERE `+strings.Join(where, " AND ")+`
-		ORDER BY timestamp_ns`, args...)
+		ORDER BY timestamp_ns, event_id
+		LIMIT ?`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("clickhouse network events for generation: %w", err)
+		return nil, false, fmt.Errorf("clickhouse network events for generation: %w", err)
 	}
-	return scanEvents(rows)
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(events) > rowCap {
+		return events[:rowCap], true, nil
+	}
+	return events, false, nil
 }
 
 // EventsByTypeForHost returns one host's events of a single type within the event-time range tr, oldest first. FINAL collapses
@@ -305,15 +340,15 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 		args = append(args, filter.Value)
 	}
 	if filter.HostID != "" {
-		where = append(where, "host_id = ?")
+		where = append(where, hostPredicate)
 		args = append(args, filter.HostID)
 	}
 	if filter.FromNs > 0 {
-		where = append(where, "ingested_at_ns >= ?")
+		where = append(where, ingestFromPredicate)
 		args = append(args, filter.FromNs)
 	}
 	if filter.ToNs > 0 {
-		where = append(where, "ingested_at_ns <= ?")
+		where = append(where, ingestToPredicate)
 		args = append(args, filter.ToNs)
 	}
 	whereSQL := strings.Join(where, " AND ")
@@ -334,7 +369,7 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 	if len(types) == 0 {
 		return api.EventSearchResult{}, nil
 	}
-	where := []string{"host_id = ?"}
+	where := []string{hostPredicate}
 	args := []any{filter.HostID}
 	for _, t := range types {
 		args = append(args, t)

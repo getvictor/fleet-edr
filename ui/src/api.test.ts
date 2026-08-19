@@ -89,27 +89,34 @@ describe("getProcessTree pin parameter (issue #416)", () => {
 });
 
 describe("getProcessDetail pidversion parameter (issue #716)", () => {
+  // Asserted through searchParams rather than substring matching: `toContain("pidversion=151026")` also passes on
+  // `pidversion=1510260`, and a wrong generation is exactly the bug this parameter exists to prevent.
+  const paramsOf = (fetchMock: ReturnType<typeof stubFetch>): URLSearchParams => {
+    const [target] = fetchMock.mock.calls[0] as [URL];
+    return target.searchParams;
+  };
+
   it("omits pidversion when not supplied, leaving the server on its as-of read", async () => {
     const fetchMock = stubFetch({ process: {}, network_connections: [], dns_queries: [] });
     await getProcessDetail("host-a", 1234, 5000);
     const [target] = fetchMock.mock.calls[0] as [URL];
-    const url = target.toString();
-    expect(url).toContain("/hosts/host-a/processes/1234?at=5000");
-    expect(url).not.toContain("pidversion");
+    expect(target.pathname).toContain("/hosts/host-a/processes/1234");
+    expect([...paramsOf(fetchMock).entries()]).toEqual([["at", "5000"]]);
   });
 
   it("appends pidversion so the named generation is the one returned", async () => {
     const fetchMock = stubFetch({ process: {}, network_connections: [], dns_queries: [] });
     await getProcessDetail("host-a", 1234, 5000, 151026);
-    const [target] = fetchMock.mock.calls[0] as [URL];
-    expect(target.toString()).toContain("pidversion=151026");
+    expect([...paramsOf(fetchMock).entries()]).toEqual([
+      ["at", "5000"],
+      ["pidversion", "151026"],
+    ]);
   });
 
   it("sends generation zero as a value, since it is a real kernel generation", async () => {
     const fetchMock = stubFetch({ process: {}, network_connections: [], dns_queries: [] });
     await getProcessDetail("host-a", 1234, 5000, 0);
-    const [target] = fetchMock.mock.calls[0] as [URL];
-    expect(target.toString()).toContain("pidversion=0");
+    expect(paramsOf(fetchMock).get("pidversion")).toBe("0");
   });
 });
 
