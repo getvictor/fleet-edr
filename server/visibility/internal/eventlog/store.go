@@ -187,6 +187,13 @@ func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.
 	// The trade has a cost worth naming: a batch whose Ack fails now holds its host until the lease expires, where before the host's
 	// later events would have flowed past it. The redelivery re-folds an already-materialized batch, which the at-least-once contract
 	// already requires consumers to absorb, so the outcome is a bounded pause rather than lost or duplicated work.
+	//
+	// This floor is read in its own statement, one before the claim, which looks like a race: a row could become in-flight behind the
+	// bound between the two reads. The only writer of processed = 2 is the claim's own UPDATE at the end of this function, so the only
+	// actor that could open that window is a second claimer for THIS host, and the caller holds that host's advisory lock across both
+	// statements. The window is therefore closed a layer up rather than here, which is also why the two reads share one transaction.
+	// The exception is the documented no-coordinator path: with no lock to hold, two replicas can claim one host and this bound is
+	// then advisory only, which is exactly the ordering guarantee that path already disclaims.
 	var inFlight sql.NullInt64
 	if err := tx.GetContext(ctx, &inFlight, `
 		SELECT MIN(timestamp_ns)
@@ -194,17 +201,21 @@ func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.
 		WHERE host_id = ? AND processed = 2 AND claimed_at_ns >= ?`, hostID, cutoff); err != nil {
 		return nil, fmt.Errorf("claim in-flight floor: %w", err)
 	}
-	// No in-flight row leaves the whole stream claimable, expressed as a ceiling nothing can reach so the predicate stays one shape.
+	// The bound is inclusive (timestamp_ns <= floor) so that "no in-flight row" can be expressed as math.MaxInt64 without stranding an
+	// event stamped exactly there. An exclusive bound against that sentinel would leave such a row permanently unclaimable, and since
+	// it never drains, its host would stay in the candidate list forever and burn a claim cycle every pass. Nothing legitimate stamps
+	// MaxInt64, but the queue takes its timestamps from agent payloads, so a buggy or hostile one must not be able to wedge a host.
+	// With a real in-flight row the floor is one tick below it, which is the same "strictly older is safe to fold" rule.
 	inFlightFloor := int64(math.MaxInt64)
 	if inFlight.Valid {
-		inFlightFloor = inFlight.Int64
+		inFlightFloor = inFlight.Int64 - 1
 	}
 
 	var events []api.Event
 	err = tx.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM event_queue
-		WHERE host_id = ? AND (processed = 0 OR (processed = 2 AND claimed_at_ns < ?)) AND timestamp_ns < ?
+		WHERE host_id = ? AND (processed = 0 OR (processed = 2 AND claimed_at_ns < ?)) AND timestamp_ns <= ?
 		ORDER BY timestamp_ns
 		LIMIT ?
 		FOR UPDATE SKIP LOCKED`, hostID, cutoff, inFlightFloor, limit)
