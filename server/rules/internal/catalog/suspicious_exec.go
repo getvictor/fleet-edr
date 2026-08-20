@@ -505,20 +505,7 @@ func (r *SuspiciousExec) findShellWithNonShellAncestor(
 	if err != nil {
 		return nil, nil, fmt.Errorf("get pid %d: %w", startPID, err)
 	}
-	for steps := 0; current != nil && steps < maxSuspiciousAncestorWalkSteps; steps++ {
-		shell, parent, advance, err := r.examineCandidate(ctx, s, hostID, current, asOfNs)
-		if err != nil {
-			return nil, nil, err
-		}
-		if shell != nil {
-			return shell, parent, nil
-		}
-		if advance == nil {
-			return nil, nil, nil
-		}
-		current = advance
-	}
-	return nil, nil, nil
+	return r.findShellFromResolvedProcess(ctx, s, hostID, current, asOfNs)
 }
 
 // examineCandidate is the per-step decision for findShellWithNonShellAncestor.
@@ -543,9 +530,9 @@ func (r *SuspiciousExec) examineCandidate(
 		if current.PPID <= 1 {
 			return nil, nil, nil, nil
 		}
-		next, err := lookupProcessSkewTolerant(ctx, s, hostID, current.PPID, asOfNs)
+		next, err := r.lookupParentOf(ctx, s, hostID, current)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
+			return nil, nil, nil, err
 		}
 		return nil, nil, next, nil
 	}
@@ -554,9 +541,9 @@ func (r *SuspiciousExec) examineCandidate(
 	if current.PPID <= 1 {
 		return current, nil, nil, nil
 	}
-	candidate, err := lookupProcessSkewTolerant(ctx, s, hostID, current.PPID, asOfNs)
+	candidate, err := r.lookupParentOf(ctx, s, hostID, current)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
+		return nil, nil, nil, err
 	}
 	if candidate == nil {
 		return nil, nil, nil, nil
@@ -576,16 +563,46 @@ func (r *SuspiciousExec) lookupAncestor(
 	if pid <= 1 {
 		return nil, nil
 	}
-	p, err := lookupProcessSkewTolerant(ctx, s, hostID, pid, asOfNs)
+	p, err := s.GetProcessByPID(ctx, hostID, pid, asOfNs)
 	if err != nil {
 		return nil, fmt.Errorf("get pid %d: %w", pid, err)
 	}
 	return p, nil
 }
 
-// shellWithinWindow reports whether the trigger event's timestamp falls within the 30-second window after the shell's exec. Anchored
-// on the shell's exec_time_ns when set (preferred: that's the kernel's actual exec moment) and falls back to fork_time_ns otherwise
+// lookupParentOf resolves the generation that held child's PPID when CHILD FORKED, which is the only instant at which that question
+// has an answer. Resolving a parent edge at an unrelated instant, such as the timestamp of a network flow made much later by a
+// descendant, asks "who holds this PID now", and PIDs are reused.
+//
+// This is deliberately NOT skew-padded, and the pad would be actively harmful here. A parent may legitimately have exited before its
+// descendant connected, so a miss at the child's fork time is not evidence of a late stamp, and widening the bound forward would let a
+// generation that forked AFTER the child answer as its parent, fabricating an ancestor chain out of a recycled PID. The store
+// documents the same rule for the inherited-path lookup (issue #714).
+//
+// The pad is not needed either, because both timestamps come from the same event stream: a child's fork and its parent's fork are both
+// stamped by the agent's process-event path, so they run late together and their ORDER survives. The skew this rule has to absorb is
+// between that stream and the network flow that triggers it, which is why the tolerance belongs at the trigger comparison rather than
+// on the edges of the ancestry.
+func (r *SuspiciousExec) lookupParentOf(
+	ctx context.Context, s api.GraphReader, hostID string, child *api.Process,
+) (*api.Process, error) {
+	if child.PPID <= 1 {
+		return nil, nil
+	}
+	p, err := s.GetProcessByPID(ctx, hostID, child.PPID, child.ForkTimeNs)
+	if err != nil {
+		return nil, fmt.Errorf("get ppid %d: %w", child.PPID, err)
+	}
+	return p, nil
+}
+
+// shellWithinWindow reports whether the trigger event's timestamp falls inside the rule's window around the shell's exec. Anchored on
+// the shell's exec_time_ns when set (preferred: that's the kernel's actual exec moment) and falls back to fork_time_ns otherwise
 // (defensive: should always be set for a fully-materialised process).
+//
+// The window is deliberately asymmetric. It runs suspiciousExecWindowNs FORWARD from the shell, which is the real limit on how long
+// after a shell the rule still attributes activity to it, and agentStampSkewPadNs BACKWARD, which is not a limit but an allowance for
+// the shell's own stamp arriving late (see agentStampSkewPadNs).
 func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 	anchor := shell.ForkTimeNs
 	if shell.ExecTimeNs != nil {

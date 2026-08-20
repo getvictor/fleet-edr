@@ -1186,27 +1186,31 @@ func TestSuspiciousExecToleratesAProcessStampedAfterItsOwnFlow(t *testing.T) {
 
 // The tolerance must not become an unbounded window. A shell whose exec really is long after the trigger, past the pad, is not a late
 // stamp and must not be attributed.
-// spec:server-detection-rules-engine/rules-tolerate-a-process-stamped-after-an-event-that-followed-it/a-shell-far-beyond-the-pad-is-still-rejected
+//
+// The connecting process is deliberately recorded AROUND the flow rather than 60s after it. An earlier version of this test put both
+// far in the future, and it passed for the wrong reason: the flow process could not be resolved at all, so evaluation returned before
+// the window was ever consulted and the test pinned nothing.
 func TestSuspiciousExecStillRejectsAShellFarAfterTheTrigger(t *testing.T) {
 	t.Parallel()
 
 	const base = int64(1_000_000_000_000)
-	const flowAt = base + 1_000_000_000
-	// 60s past the flow is an order of magnitude beyond any plausible handler latency.
-	const bashExecAt = flowAt + 60_000_000_000
+	const flowAt = base + 10_000_000_000
+	const bashExecAt = flowAt + 60_000_000_000 // an order of magnitude past any plausible handler latency
 
 	events := []api.Event{
 		{EventID: "fork-py", HostID: "h8", TimestampNs: base, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
 		{EventID: "exec-py", HostID: "h8", TimestampNs: base + 100, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
-		{EventID: "fork-bash", HostID: "h8", TimestampNs: bashExecAt - 10_000_000, EventType: "fork",
+		// The shell exists well before the flow, so the ancestry resolves; only its EXEC is far in the future.
+		{EventID: "fork-bash", HostID: "h8", TimestampNs: flowAt - 1_000_000_000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
 		{EventID: "exec-bash", HostID: "h8", TimestampNs: bashExecAt, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
-		{EventID: "fork-curl", HostID: "h8", TimestampNs: bashExecAt + 2_000_000, EventType: "fork",
+		// The connecting process is resolvable at the flow's instant, so the walk reaches the window check.
+		{EventID: "fork-curl", HostID: "h8", TimestampNs: flowAt - 500_000_000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
-		{EventID: "exec-curl", HostID: "h8", TimestampNs: bashExecAt + 5_000_000, EventType: "exec",
+		{EventID: "exec-curl", HostID: "h8", TimestampNs: flowAt - 400_000_000, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
 		{EventID: "net-curl", HostID: "h8", TimestampNs: flowAt, EventType: "network_connect",
 			Payload: json.RawMessage(
@@ -1219,7 +1223,60 @@ func TestSuspiciousExecStillRejectsAShellFarAfterTheTrigger(t *testing.T) {
 	require.NoError(t, s.InsertEvents(ctx, events))
 	materialize(t, s, events)
 
+	// Guard against the vacuous pass: the connecting process must actually resolve, or this proves nothing about the window.
+	conn, err := s.GraphReader().GetProcessByPID(ctx, "h8", 200, flowAt)
+	require.NoError(t, err)
+	require.NotNil(t, conn, "the flow's process must resolve, otherwise the window check is never reached")
+
 	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	assert.Empty(t, findings, "60s past the trigger is not stamp skew, so the shell must not be attributed")
+}
+
+// A parent edge must be resolved at the CHILD's fork time. Resolving it at the flow's timestamp, and especially at that timestamp
+// widened by a forward pad, asks "who holds this PID now": if the parent exited and its PID was reused, the answer is a generation
+// that forked AFTER the child, which cannot be its parent. That fabricates an ancestor chain out of an unrelated process.
+// spec:server-detection-rules-engine/rules-tolerate-a-process-stamped-after-an-event-that-followed-it/a-child-is-not-attributed-to-a-generation-that-recycled-its-parent-s-pid
+func TestSuspiciousExecDoesNotAttributeAChildToARecycledParentPID(t *testing.T) {
+	t.Parallel()
+
+	const base = int64(1_000_000_000_000)
+	events := []api.Event{
+		{EventID: "fork-py", HostID: "h9", TimestampNs: base, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-py", HostID: "h9", TimestampNs: base + 100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		// The real parent: /bin/bash at pid 100, which exits shortly after forking the child.
+		{EventID: "fork-bash", HostID: "h9", TimestampNs: base + 1_000_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		{EventID: "exec-bash", HostID: "h9", TimestampNs: base + 1_100_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "fork-curl", HostID: "h9", TimestampNs: base + 1_500_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+		{EventID: "exec-curl", HostID: "h9", TimestampNs: base + 1_600_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "exit-bash", HostID: "h9", TimestampNs: base + 2_000_000_000, EventType: "exit",
+			Payload: json.RawMessage(`{"pid":100,"exit_code":0}`)},
+		// PID 100 is reused by an unrelated shell, AFTER the child forked. It is inside the flow's window and would be picked by a
+		// lookup bounded on the flow's instant.
+		{EventID: "fork-zsh", HostID: "h9", TimestampNs: base + 3_000_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		{EventID: "exec-zsh", HostID: "h9", TimestampNs: base + 3_100_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/zsh","args":["zsh"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "h9", TimestampNs: base + 4_000_000_000, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":200,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+
+	s := openCatalogStore(t)
+	ctx := t.Context()
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Description, "/bin/bash", "the child's real parent is the generation alive when it forked")
+	assert.NotContains(t, findings[0].Description, "/bin/zsh", "the generation that recycled the PID after the fork is not its parent")
 }
