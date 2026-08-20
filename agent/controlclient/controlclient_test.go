@@ -30,10 +30,20 @@ type fakeGateway struct {
 	push          []*control.Command
 	failFirst     bool
 	authFailFirst bool
+	// heartbeatEvery, when set, makes this gateway behave like the real one and send a heartbeat on a cadence. Left zero the stream
+	// goes silent after its pushes, which is what a stream the server has forgotten looks like from the agent's side.
+	heartbeatEvery time.Duration
 
 	mu       sync.Mutex
 	attempts int
 	outcomes []*control.Outcome
+}
+
+// attemptCount reports how many times a client has opened a stream against this gateway, which is how a test observes a reconnect.
+func (g *fakeGateway) attemptCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.attempts
 }
 
 func (g *fakeGateway) Connect(stream control.ControlChannel_ConnectServer) error {
@@ -51,6 +61,19 @@ func (g *fakeGateway) Connect(stream control.ControlChannel_ConnectServer) error
 		if err := stream.Send(&control.ServerFrame{Frame: &control.ServerFrame_Command{Command: cmd}}); err != nil {
 			return err
 		}
+	}
+	if g.heartbeatEvery > 0 {
+		go func() {
+			ticker := time.NewTicker(g.heartbeatEvery)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := stream.Send(&control.ServerFrame{
+					Frame: &control.ServerFrame_Heartbeat{Heartbeat: &control.Heartbeat{}},
+				}); err != nil {
+					return
+				}
+			}
+		}()
 	}
 	for {
 		frame, err := stream.Recv()
@@ -94,6 +117,15 @@ func (r *recordingSender) count() int {
 // predicate and an auth-failure counter so tests can observe re-enrollment without standing up a real token provider.
 func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (isConnected func() bool, authFails func() int) {
 	t.Helper()
+	// Zero leaves the production default, which is minutes: long enough that no existing test trips the watchdog.
+	return startClientWithSilence(t, fake, sender, 0)
+}
+
+// startClientWithSilence is startClient with an explicit silence deadline, for the tests that are about the watchdog itself.
+func startClientWithSilence(
+	t *testing.T, fake *fakeGateway, sender *recordingSender, silence time.Duration,
+) (isConnected func() bool, authFails func() int) {
+	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
 	control.RegisterControlChannelServer(srv, fake)
@@ -130,8 +162,9 @@ func startClient(t *testing.T, fake *fakeGateway, sender *recordingSender) (isCo
 			connected = v
 			mu.Unlock()
 		},
-		InitialBackoff: 10 * time.Millisecond,
-		MaxBackoff:     50 * time.Millisecond,
+		InitialBackoff:  10 * time.Millisecond,
+		MaxBackoff:      50 * time.Millisecond,
+		SilenceDeadline: silence,
 	})
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -379,4 +412,34 @@ func TestControlClientReconnectsOnSendFailure(t *testing.T) {
 
 	// A reconnect (connects >= 2) proves the send failure tore the stream down rather than wedging it.
 	require.Eventually(t, func() bool { return stub.connectCount() >= 2 }, 2*time.Second, 5*time.Millisecond)
+}
+
+// The wedge from issue #711 seen from the agent's side: a stream the server no longer serves. The transport stays up, so the gRPC
+// keepalive keeps passing, and the agent waits in Recv forever while believing it is connected. Only silence on the stream itself
+// distinguishes this from a quiet fleet, which is why the gateway heartbeats and the agent measures the gap.
+//
+// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/a-connection-the-server-no-longer-serves-is-torn-down
+func TestSilentStreamIsTornDownAndReconnected(t *testing.T) {
+	t.Parallel()
+	// No pushes and no heartbeat: the gateway accepts the stream and then says nothing, exactly like one the server has forgotten.
+	fake := &fakeGateway{}
+	startClientWithSilence(t, fake, &recordingSender{}, 150*time.Millisecond)
+
+	require.Eventually(t, func() bool { return fake.attemptCount() >= 2 }, 5*time.Second, 20*time.Millisecond,
+		"a stream that delivers nothing at all past the deadline must be torn down and reconnected, not waited on")
+}
+
+// The counter-case, and the reason the deadline is measured against ANY frame rather than against command traffic: an idle fleet is
+// normal, and a heartbeat is what separates idle from forgotten. Without this the watchdog would just be a periodic disconnect.
+// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/an-idle-connection-still-carries-proof-that-the-server-holds-it
+func TestAHeartbeatingStreamIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	fake := &fakeGateway{heartbeatEvery: 20 * time.Millisecond}
+	isConnected, _ := startClientWithSilence(t, fake, &recordingSender{}, 150*time.Millisecond)
+
+	require.Eventually(t, isConnected, 2*time.Second, 10*time.Millisecond)
+	// Well past several deadlines: an idle but heartbeating stream must not be reconnected.
+	time.Sleep(600 * time.Millisecond)
+	assert.Equal(t, 1, fake.attemptCount(), "a stream carrying heartbeats is alive even with no commands on it")
+	assert.True(t, isConnected())
 }

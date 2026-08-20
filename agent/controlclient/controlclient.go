@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math/rand/v2"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -23,6 +24,15 @@ import (
 const (
 	defaultInitialBackoff = 1 * time.Second
 	defaultMaxBackoff     = 30 * time.Second
+
+	// defaultSilenceDeadline is how long the stream may deliver nothing at all before the agent stops believing in it. The gateway
+	// heartbeats every 30s, so three missed heartbeats plus slack reads as "this stream is no longer being served" rather than as a
+	// quiet fleet. Set generously on purpose: a false teardown costs one reconnect, while too long a deadline is the wedge itself.
+	defaultSilenceDeadline = 2 * time.Minute
+
+	// silenceCheckDivisor sets how often the watchdog looks, as a fraction of the deadline, so the worst-case overshoot past the
+	// deadline is one quarter of it rather than a whole extra deadline.
+	silenceCheckDivisor = 4
 )
 
 // Config holds the control client's dependencies.
@@ -50,6 +60,9 @@ type Config struct {
 	// OnConnectedChange reports stream up (true) / down (false) so the commander can suspend / resume polling. Nil is allowed.
 	OnConnectedChange func(bool)
 	Logger            *slog.Logger
+	// SilenceDeadline overrides how long the stream may deliver nothing before the agent tears it down and reconnects; zero uses the
+	// default. See defaultSilenceDeadline for why the agent cannot rely on the transport keepalive for this.
+	SilenceDeadline time.Duration
 	// InitialBackoff / MaxBackoff override the reconnect backoff bounds; zero uses the defaults.
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
@@ -62,6 +75,8 @@ type Client struct {
 	logger         *slog.Logger
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+	// silenceDeadline is how long the stream may carry no frames before the agent treats it as dead. See defaultSilenceDeadline.
+	silenceDeadline time.Duration
 }
 
 // New builds a control Client. Panics if Client is nil (a programming error: there is nothing to stream over).
@@ -87,15 +102,20 @@ func New(cfg Config) *Client {
 		// receiver.NewLoop. Replacing it with the 30s default would silently slow reconnects far past what the caller asked for.
 		maxB = initial
 	}
+	silence := cfg.SilenceDeadline
+	if silence <= 0 {
+		silence = defaultSilenceDeadline
+	}
 	executor := commander.NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
 	executor.SetGeneration(cfg.Generation)
 	executor.SetInFlight(cfg.InFlight)
 	return &Client{
-		cfg:            cfg,
-		executor:       executor,
-		logger:         logger,
-		initialBackoff: initial,
-		maxBackoff:     maxB,
+		cfg:             cfg,
+		executor:        executor,
+		logger:          logger,
+		initialBackoff:  initial,
+		maxBackoff:      maxB,
+		silenceDeadline: silence,
 	}
 }
 
@@ -130,7 +150,11 @@ func (c *Client) Run(ctx context.Context) error {
 // runStream opens one stream and pumps it until it ends. The bool reports whether the stream actually connected (so Run can reset the
 // backoff); the error is the disconnect cause.
 func (c *Client) runStream(ctx context.Context) (bool, error) {
-	stream, err := c.cfg.Client.Connect(c.streamContext(ctx))
+	// The stream gets its own cancellable context so the silence watchdog can tear it down. Cancelling is what unblocks Recv; there is
+	// no per-receive deadline on a gRPC stream.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := c.cfg.Client.Connect(c.streamContext(streamCtx))
 	if err != nil {
 		c.notifyAuthFailure(ctx, err)
 		return false, err
@@ -138,7 +162,34 @@ func (c *Client) runStream(ctx context.Context) (bool, error) {
 	c.setConnected(true)
 	defer c.setConnected(false)
 	c.logger.InfoContext(ctx, "control channel connected", "host_id_present", c.cfg.HostID != "")
-	return true, c.pumpStream(ctx, stream)
+	return true, c.pumpStream(streamCtx, stream, cancel)
+}
+
+// watchSilence tears the stream down when nothing has arrived on it for silenceDeadline.
+//
+// The server sends a heartbeat on a cadence, so silence past that deadline means this stream is no longer being served, whatever the
+// agent believes. It has to be measured here rather than inferred from the transport: the gateway runs over the shared HTTPS listener
+// where net/http answers HTTP/2 keepalive PINGs itself, so the ping keeps passing on a stream the server has forgotten and the agent
+// waits in Recv forever (issue #711).
+//
+// Cancelling makes Recv return, which ends pumpStream, clears connected, and drives a reconnect through the existing backoff.
+func (c *Client) watchSilence(ctx context.Context, lastFrame *atomic.Int64, cancel context.CancelFunc) {
+	ticker := time.NewTicker(c.silenceDeadline / silenceCheckDivisor)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			since := time.Since(time.Unix(0, lastFrame.Load()))
+			if since >= c.silenceDeadline {
+				c.logger.WarnContext(ctx, "control channel silent past its deadline; reconnecting",
+					"silent_for", since.String(), "deadline", c.silenceDeadline.String())
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 // streamContext attaches the current host token as a bearer credential to ctx for the stream, or returns ctx unchanged when no token
@@ -165,13 +216,19 @@ func (c *Client) notifyAuthFailure(ctx context.Context, err error) {
 
 // pumpStream reads frames until the stream ends, dispatching each pushed command. It returns the disconnect cause; by the time it runs
 // the stream has already connected, so the caller reports connected=true regardless of how it ends.
-func (c *Client) pumpStream(ctx context.Context, stream control.ControlChannel_ConnectClient) error {
+func (c *Client) pumpStream(ctx context.Context, stream control.ControlChannel_ConnectClient, cancel context.CancelFunc) error {
+	var lastFrame atomic.Int64
+	lastFrame.Store(time.Now().UnixNano())
+	go c.watchSilence(ctx, &lastFrame, cancel)
 	for {
 		frame, err := stream.Recv()
 		if err != nil {
 			c.notifyAuthFailure(ctx, err)
 			return err
 		}
+		// ANY frame resets the clock, heartbeat or command: what the watchdog measures is whether this stream is still being served,
+		// not whether there is work.
+		lastFrame.Store(time.Now().UnixNano())
 		if cmd := frame.GetCommand(); cmd != nil {
 			if err := c.handleCommand(ctx, stream, cmd); err != nil {
 				// A send failure means the stream is one-way broken (we can still Recv but can no longer report outcomes). Tear it

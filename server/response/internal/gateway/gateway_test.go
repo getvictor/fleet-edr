@@ -106,6 +106,22 @@ func (v *fakeVerifier) VerifyToken(_ context.Context, token string) (string, err
 
 // newTestGateway starts a Gateway over an in-memory bufconn listener and returns a client-side dialer. Intervals are tightened so the
 // watch and revocation re-check fire fast under test.
+// recvCommand reads until a command frame arrives, skipping heartbeats. Heartbeats are ordinary traffic on this stream now (they are
+// what tells an agent the server still holds its connection, issue #711), so a test that wants the next COMMAND has to say so rather
+// than assume the next frame is one.
+func recvCommand(t *testing.T, stream control.ControlChannel_ConnectClient) (*control.Command, error) {
+	t.Helper()
+	for {
+		frame, err := stream.Recv()
+		if err != nil {
+			return nil, err
+		}
+		if cmd := frame.GetCommand(); cmd != nil {
+			return cmd, nil
+		}
+	}
+}
+
 func newTestGateway(t *testing.T, src CommandSource, verifier TokenVerifier) (*Gateway, func(ctx context.Context, token string) control.ControlChannelClient) {
 	t.Helper()
 	g := New(Deps{Source: src, Verifier: verifier})
@@ -339,6 +355,45 @@ func TestGateway(t *testing.T) {
 		require.Eventually(t, func() bool { return g.reg.len() == 0 }, 2*time.Second, 10*time.Millisecond)
 	})
 
+	// The agent cannot otherwise tell a quiet fleet from a stream this replica has forgotten: the gateway runs over the shared HTTPS
+	// listener where net/http answers HTTP/2 keepalive PINGs itself, so the ping keeps passing on a connection that no longer exists
+	// here. The heartbeat's arrival IS the proof, so it has to actually be sent (issue #711).
+	//
+	// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/an-idle-connection-still-carries-proof-that-the-server-holds-it
+	t.Run("an idle connection still receives heartbeats", func(t *testing.T) {
+		t.Parallel()
+		src := newFakeSource()
+		ver := newFakeVerifier()
+		ver.add("tok-hb", "host-hb")
+		_, dial := newTestGateway(t, src, ver)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// Nothing pending, so any frame that arrives can only be a heartbeat.
+		stream, err := dial(ctx, "tok-hb").Connect(connectCtx("tok-hb"))
+		require.NoError(t, err)
+
+		// Bounded rather than a bare Recv: with no heartbeat there is nothing to receive, and an unbounded read turns a missing
+		// heartbeat into a hung suite instead of a failed assertion.
+		type recvResult struct {
+			frame *control.ServerFrame
+			err   error
+		}
+		got := make(chan recvResult, 1)
+		go func() {
+			f, rerr := stream.Recv()
+			got <- recvResult{f, rerr}
+		}()
+		select {
+		case res := <-got:
+			require.NoError(t, res.err)
+			assert.NotNil(t, res.frame.GetHeartbeat(), "an idle stream must still carry proof that the server holds it")
+			assert.Nil(t, res.frame.GetCommand())
+		case <-time.After(2 * time.Second):
+			t.Fatal("no heartbeat arrived on an idle connection")
+		}
+	})
+
 	// spec:agent-control-channel/a-revoked-or-expired-token-terminates-the-connection/revoking-a-token-closes-the-connection
 	t.Run("revoked token tears down the connection", func(t *testing.T) {
 		t.Parallel()
@@ -354,10 +409,10 @@ func TestGateway(t *testing.T) {
 		require.NoError(t, err)
 		// First receive establishes the connection (the interceptor verified the still-valid token). Only then revoke, so the teardown
 		// comes from the maintenance re-check (Unavailable), not from the connect-time interceptor (Unauthenticated).
-		_, err = stream.Recv()
+		_, err = recvCommand(t, stream)
 		require.NoError(t, err)
 		ver.revoke("tok-a")
-		_, err = stream.Recv()
+		_, err = recvCommand(t, stream)
 		require.Error(t, err)
 		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})

@@ -333,6 +333,16 @@ func (g *Gateway) maintain(ctx context.Context, c *conn) {
 			return
 		case <-liveness.C:
 			g.bumpLastSeen(ctx, c.hostID)
+			// Tell the agent this stream is still registered for delivery. Nothing else does: the gateway runs over the shared HTTPS
+			// listener where net/http answers HTTP/2 keepalive PINGs itself, so a passing ping proves the transport is alive and not
+			// that this connection still exists here. Without a frame arriving on a cadence, an agent holding a stream this replica
+			// has forgotten cannot tell the difference, and it stops asking for work (issue #711).
+			//
+			// Dropped when the buffer is full, deliberately. A full buffer means frames are already flowing to this agent, which is
+			// the very thing the heartbeat exists to demonstrate, and a heartbeat must never displace a command.
+			if !c.push(&control.ServerFrame{Frame: &control.ServerFrame_Heartbeat{Heartbeat: &control.Heartbeat{}}}) {
+				g.logger.DebugContext(ctx, "control gateway heartbeat skipped: send buffer full", attrkeys.HostID, c.hostID)
+			}
 		case <-revcheck.C:
 			if _, err := g.verifier.VerifyToken(ctx, c.token); err != nil {
 				if ctx.Err() != nil {

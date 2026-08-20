@@ -28,8 +28,20 @@ service ControlChannel {
 message ServerFrame {
   oneof frame {
     Command command = 1;
+    Heartbeat heartbeat = 2;
   }
 }
+
+// Heartbeat is the gateway telling the agent that this stream is still
+// registered for delivery. It carries no payload: its arrival IS the signal.
+//
+// It exists because nothing else proves that. The gateway runs over the shared
+// HTTPS listener, where net/http answers HTTP/2 keepalive PINGs itself, so a
+// passing ping shows the transport is alive and not that the server still
+// holds this stream. An agent could therefore wait forever on a stream the
+// server had forgotten, and because the command poll deferred to that belief
+// the host went silently command-deaf (issue #711).
+message Heartbeat {}
 
 // AgentFrame is one message sent from the agent up to the gateway. Today the
 // agent only reports command outcomes; the oneof leaves room for future kinds.
