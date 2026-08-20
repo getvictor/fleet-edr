@@ -300,13 +300,13 @@ func TestInheritedPathWhenTwoGenerationsShareAForkTimestamp(t *testing.T) {
 	const host, parentPID = "equal-stamp", 500
 	const forkAt int64 = 100
 
-	older := uint32(7)
-	newer := uint32(9)
 	// Both generations claim fork time 100. The older one re-execs LATE (at 900); the newer one exec'd early (at 200) and is the
 	// generation actually holding the PID afterwards.
+	older, newer := uint32(7), uint32(9)
+	lateExec, earlyExec := int64(900), int64(200)
 	for _, p := range []api.Process{
-		{HostID: host, PID: parentPID, PPID: 1, Path: firstImage, ForkTimeNs: forkAt, ExecTimeNs: ptrTo(int64(900)), PIDVersion: &older},
-		{HostID: host, PID: parentPID, PPID: 1, Path: secondImage, ForkTimeNs: forkAt, ExecTimeNs: ptrTo(int64(200)), PIDVersion: &newer},
+		{HostID: host, PID: parentPID, PPID: 1, Path: firstImage, ForkTimeNs: forkAt, ExecTimeNs: &lateExec, PIDVersion: &older},
+		{HostID: host, PID: parentPID, PPID: 1, Path: secondImage, ForkTimeNs: forkAt, ExecTimeNs: &earlyExec, PIDVersion: &newer},
 	} {
 		_, err := store.InsertProcess(ctx, p)
 		require.NoError(t, err)
@@ -324,6 +324,3 @@ func TestInheritedPathWhenTwoGenerationsShareAForkTimestamp(t *testing.T) {
 	require.Equal(t, firstImage, late,
 		"equal fork stamps are not separable here, so the latest image application wins; issue #724 makes pidversion the key")
 }
-
-// ptrTo is a local helper for the optional timestamp fields on api.Process.
-func ptrTo[T any](v T) *T { return &v }

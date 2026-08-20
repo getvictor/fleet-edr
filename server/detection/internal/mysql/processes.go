@@ -431,23 +431,26 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 // that re-exec'd at 200 was told its parent was already running the 200 image. Measured on the same rows, 446 of them resolve to a
 // different image under this ordering than under the fork bound alone, and that is the whole of the re-exec misattribution.
 //
-// So the ordering resolves the generation first (fork_time_ns DESC), then the image within it. Rows whose exec landed at or before the
-// instant sort first, and among those the LATEST exec wins, which is the image actually in force. When no image in the chain had been
-// applied yet, the child forked inside its parent's own fork-to-exec window (562 rows on the same data) and the trailing
-// exec_time_ns ASC key takes the chain's EARLIEST image, rather than dropping the generation and attributing the child to an older
-// one.
+// So the ordering resolves the generation first (fork_time_ns DESC), then the image within it: rows whose exec landed at or before the
+// instant sort first, and among those the latest exec wins, being the image actually in force. When no image in the chain had been
+// applied yet, the child's stamp fell inside its parent's own fork-to-exec window, and the trailing exec_time_ns ASC key takes the
+// chain's EARLIEST image instead of dropping the generation and attributing the child to an older one. That window is reachable
+// because fork and exec are stamped independently at handler time, so their errors are independent and a child's fork can carry a
+// stamp below its parent's exec even when it truly followed it (562 rows on the same data). The pre-exec image itself is
+// unrecoverable, since the first exec after a fork updates that row in place, so the chain's first image is the closest evidence that
+// survives. Bounding on the image start alone, COALESCE(exec_time_ns, fork_time_ns) <= ?, reads more simply and gets this wrong: it
+// skips a generation whose exec is still in the future and answers with an older one.
 //
-// The ordering compares timestamps and never subtracts them. Expressing "nearest to the instant" as ABS(exec_time_ns minus the instant) is
-// the shorter way to say it and does not survive the accepted input domain: intake rejects only a zero timestamp, so a payload may
-// carry any other int64, and ABS() over a fork at a negative instant against an exec near the maximum overflows. MySQL does not
-// silently wrap it either, it raises ERROR 1690 out of range, which would fail this query for every fork on that host and stop the
-// forest being built at all rather than merely mis-order one image. Same lesson as the claim bound in issue #717: timestamps arrive
-// from the agent, so no arithmetic on them is safe, and ordering that only ever compares them cannot be defeated by their values. That fallback corrects nothing by itself; it exists so the image ordering does not introduce a regression, which is what
-// bounding on the image start alone (COALESCE(exec_time_ns, fork_time_ns) <= ?) does: it skips a generation whose exec is still in the
-// future and answers with an older one. That window is real rather than theoretical: fork and exec are stamped independently at handler time, so their errors are
-// independent and a child's fork can carry a stamp below its parent's exec even when it truly followed it. The pre-exec image itself
-// is unrecoverable, since the first exec after a fork updates that row in place, so the chain's first image is the closest evidence
-// that survives.
+// The ordering compares timestamps and never subtracts them. Expressing "nearest the instant" as an absolute difference is shorter and
+// does not survive the accepted input domain: intake rejects only a zero timestamp, so a payload may carry any other int64, and the
+// difference between a fork at a negative instant and an exec near the maximum overflows. MySQL does not even wrap it, it raises
+// ERROR 1690 out of range, which would fail this query for every fork on that host and stop the forest being built rather than
+// merely mis-order one image. Same lesson as the claim bound in issue #717: timestamps arrive from the agent, so no arithmetic on
+// them is safe, and an ordering that only ever compares them cannot be defeated by their values.
+//
+// One ambiguity is left standing. Two generations can share a fork timestamp, because CloseStaleProcess closes only rows stamped
+// strictly earlier, and this ordering then ranks their images together (21 rows on the same data). Issue #724 makes pidversion the
+// generation key, which is the only discriminator that does not fall back on ingest order.
 //
 // This deliberately does NOT also require the parent to be recorded as still alive, and that asymmetry with GetProcessByPID is the
 // point rather than an oversight. A parent IS alive at its child's fork, by construction: nothing forks from a dead process. So an

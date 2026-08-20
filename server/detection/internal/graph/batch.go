@@ -192,10 +192,10 @@ func imageApplied(r *procRow, atTimeNs int64) bool {
 // imageStart is when r's path became the PID's image: its exec, or its fork for a row that never exec'd and so still carries the path
 // it inherited. Used as the ordering key within one generation.
 //
-// This compares timestamps rather than measuring a distance between them. An earlier revision ranked by ABS(exec_time_ns minus the instant),
-// which reads as "nearest the instant" and overflows on the accepted input domain: intake rejects only a zero timestamp, so a fork at
-// a negative instant against an exec near the maximum wraps the difference and outranks a genuinely nearer image (and in SQL raises
-// MySQL ERROR 1690 rather than wrapping). Timestamps come from the agent, so no arithmetic on them is safe.
+// This compares timestamps rather than measuring a distance between them. An earlier revision ranked by the absolute difference from
+// the instant, which reads as "nearest" and overflows on the accepted input domain: intake rejects only a zero timestamp, so a fork
+// at a negative instant against an exec near the maximum wraps the difference and outranks a genuinely nearer image (and in SQL
+// raises MySQL ERROR 1690 rather than wrapping). Timestamps come from the agent, so no arithmetic on them is safe.
 func imageStart(r *procRow) int64 {
 	if r.proc.ExecTimeNs == nil {
 		return r.proc.ForkTimeNs
