@@ -376,17 +376,17 @@ func (r *SuspiciousExec) evalNetwork(
 	// interactive login shell above, which then fails the window because its own exec is minutes or hours old. Gating the chain on
 	// shell == nil alone would therefore never reach it, which is how issue #713 stayed open behind a walk that looked like it had
 	// searched.
-	usable := func(sh, pa *api.Process) bool {
-		return sh != nil && r.shouldFire(seenShell, sh, pa, evt.TimestampNs, evt.HostID)
-	}
-	if !usable(shell, parent) {
+	if shell == nil || !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		shell, parent, err = r.findShellOnExecChain(ctx, s, evt.HostID, conn, evt.TimestampNs)
 		if err != nil {
 			return nil, 0, err
 		}
-		if !usable(shell, parent) {
-			return nil, 0, nil
-		}
+	}
+	// One gate for both paths, deliberately unconditional. It reads as a repeat of the condition above and is not: whichever arm
+	// supplied the shell, this is the single point where the rule decides to fire, so neither arm can grow a way past the window,
+	// the parent exclusions, or the per-batch dedup.
+	if shell == nil || !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
+		return nil, 0, nil
 	}
 	parentPath := "(unknown)"
 	if parent != nil {

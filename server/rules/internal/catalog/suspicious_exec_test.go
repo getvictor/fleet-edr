@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -979,4 +981,91 @@ func TestSuspiciousExecDetectsShellThatExecsPayloadInPlace(t *testing.T) {
 			assert.Contains(t, findings[0].EventIDs, "net-payload")
 		})
 	}
+}
+
+// Shell-to-shell layering is not the boundary this rule fires on, and that holds for a shell found on the exec chain exactly as it
+// does for one found in the PPID chain: an interactive shell that forks a shell which then execs the payload in place is a user
+// running a command, not a non-shell process reaching for one.
+func TestSuspiciousExecSkipsShellToShellOnTheExecChain(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	// login → zsh (interactive, PID 20) → bash (PID 100) → bash execs curl at its own PID → outbound.
+	events := []api.Event{
+		{EventID: "fork-login", HostID: "h2", TimestampNs: 500, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":10,"parent_pid":1}`)},
+		{EventID: "exec-login", HostID: "h2", TimestampNs: 550, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":10,"ppid":1,"path":"/usr/bin/login","args":["login"],"uid":0,"gid":0}`)},
+		{EventID: "fork-zsh", HostID: "h2", TimestampNs: 600, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":20,"parent_pid":10}`)},
+		{EventID: "exec-zsh", HostID: "h2", TimestampNs: 650, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":20,"ppid":10,"path":"/bin/zsh","args":["-zsh"],"uid":501,"gid":20}`)},
+		{EventID: "fork-bash", HostID: "h2", TimestampNs: 1_000_000_001_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":20}`)},
+		{EventID: "exec-bash", HostID: "h2", TimestampNs: 1_000_000_001_100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":20,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "exec-curl", HostID: "h2", TimestampNs: 1_000_000_002_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":20,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "h2", TimestampNs: 1_000_000_002_500, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":100,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, findings, "the shell on the chain is parented by another shell, so this is layering rather than the rule's shape")
+}
+
+// A flow whose process has not been materialised yields nothing rather than an error: unlike dns_c2_beacon, this rule does not treat
+// the miss as retryable, and the arm must not fire on a chain it cannot anchor to a connecting process.
+func TestSuspiciousExecNetworkArmSkipsUnmaterialisedFlowProcess(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	events := []api.Event{
+		{EventID: "net-orphan", HostID: "h3", TimestampNs: 1_000_000_002_500, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":4242,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, findings)
+}
+
+// A store failure while walking the exec chain must surface rather than read as "no shell here", which would turn a transient
+// database error into a silent detection miss of exactly the payload class the chain walk exists to catch.
+func TestSuspiciousExecNetworkArmPropagatesExecChainError(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	wantErr := errors.New("exec chain unavailable")
+
+	events := []api.Event{
+		{EventID: "net-curl", HostID: "h4", TimestampNs: 1_000_000_002_500, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":100,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+	gr := &execChainErrReader{stubBlockGraphReader: &stubBlockGraphReader{exists: true, procID: 7}, chainErr: wantErr}
+	_, err := (&SuspiciousExec{}).Evaluate(ctx, events, gr)
+	require.ErrorIs(t, err, wantErr)
+}
+
+// execChainErrReader resolves processes normally but fails the exec-chain walk, which is the one dependency the network arm's second
+// stage adds. It embeds the package's existing stub rather than restating the whole GraphReader surface.
+type execChainErrReader struct {
+	*stubBlockGraphReader
+	chainErr error
+}
+
+func (r *execChainErrReader) GetExecChain(_ context.Context, _ api.Process) ([]api.Process, error) {
+	return nil, r.chainErr
 }
