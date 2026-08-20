@@ -1280,3 +1280,72 @@ func TestSuspiciousExecDoesNotAttributeAChildToARecycledParentPID(t *testing.T) 
 	assert.Contains(t, findings[0].Description, "/bin/bash", "the child's real parent is the generation alive when it forked")
 	assert.NotContains(t, findings[0].Description, "/bin/zsh", "the generation that recycled the PID after the fork is not its parent")
 }
+
+// A shell parented at launchd has no parent record to resolve, and that is a match rather than incomplete ancestry: launchd is
+// structurally non-shell. The distinction matters because the walk otherwise defers when a parent cannot be resolved, and conflating
+// "no parent exists" with "parent not materialised yet" would silence every launchd-parented shell.
+func TestSuspiciousExecFiresForAShellParentedAtLaunchd(t *testing.T) {
+	t.Parallel()
+
+	const base = int64(1_000_000_000_000)
+	events := []api.Event{
+		{EventID: "fork-bash", HostID: "hl", TimestampNs: base, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "exec-bash", HostID: "hl", TimestampNs: base + 100_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":1,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "fork-curl", HostID: "hl", TimestampNs: base + 200_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+		{EventID: "exec-curl", HostID: "hl", TimestampNs: base + 300_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "hl", TimestampNs: base + 400_000_000, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":200,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+
+	s := openCatalogStore(t)
+	ctx := t.Context()
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "a launchd-parented shell is a match, not incomplete ancestry")
+	assert.Contains(t, findings[0].Description, "(unknown)", "there is no parent process to name")
+	assert.Contains(t, findings[0].Description, "/bin/bash")
+}
+
+// A store failure while resolving a parent edge must surface rather than read as "this process has no parent", which the walk would
+// treat as the end of the ancestry and report nothing at all: a transient database error would become a silent detection miss.
+func TestSuspiciousExecPropagatesAParentLookupError(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	wantErr := errors.New("parent lookup unavailable")
+
+	events := []api.Event{
+		{EventID: "net-curl", HostID: "hp", TimestampNs: 1_000_000_000_000, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":200,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+	// Resolves the connecting process, then fails on its parent, so the error can only come from the parent edge.
+	gr := &parentErrReader{stubBlockGraphReader: &stubBlockGraphReader{exists: true, procID: 5}, failPID: 100, err: wantErr}
+	_, err := (&SuspiciousExec{}).Evaluate(ctx, events, gr)
+	require.ErrorIs(t, err, wantErr)
+}
+
+// parentErrReader resolves the connecting process normally and fails only for failPID, so a test can isolate the parent edge from the
+// flow lookup that precedes it.
+type parentErrReader struct {
+	*stubBlockGraphReader
+	failPID int
+	err     error
+}
+
+func (r *parentErrReader) GetProcessByPID(ctx context.Context, hostID string, pid int, atNs int64) (*api.Process, error) {
+	if pid == r.failPID {
+		return nil, r.err
+	}
+	// The connecting process claims failPID as its parent, so the walk reaches the failing edge.
+	return &api.Process{ID: 5, HostID: hostID, PID: pid, PPID: r.failPID, Path: "/usr/bin/curl", ForkTimeNs: atNs - 1}, nil
+}
