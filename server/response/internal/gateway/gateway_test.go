@@ -523,3 +523,41 @@ func TestGatewayWatchIntervalIsCompiledConstant(t *testing.T) {
 	assert.Equal(t, defaultWatchInterval, g.watchInterval, "the command-watch interval is compiled, not an operator knob")
 	assert.Equal(t, time.Second, g.watchInterval, "the compiled watch interval is one second")
 }
+
+// A heartbeat must never displace a queued command, and must never block the connection's maintenance loop.
+//
+// The send buffer is bounded, so the interesting case is what happens when it is full. Dropping the heartbeat is correct there and not
+// merely convenient: a full buffer already proves frames are flowing to this agent, which is the very thing a heartbeat exists to
+// demonstrate, while a heartbeat that displaced a command would trade a diagnostic for a response action (issue #711).
+func TestHeartbeatIsDroppedRatherThanDisplacingAQueuedCommand(t *testing.T) {
+	t.Parallel()
+	g := New(Deps{Source: newFakeSource(), Verifier: newFakeVerifier()})
+	g.livenessInterval = time.Millisecond
+
+	c := newConn("host-full", "tok", func() {})
+	// Fill the outbound queue with commands, so any heartbeat has nowhere to go.
+	for i := range sendBuffer {
+		require.True(t, c.push(&control.ServerFrame{
+			Frame: &control.ServerFrame_Command{Command: &control.Command{Id: int64(i + 1), HostId: "host-full"}},
+		}), "the buffer should accept exactly sendBuffer frames")
+	}
+	require.Len(t, c.send, sendBuffer)
+
+	// maintain must return on context cancellation rather than blocking on the full queue.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); g.maintain(ctx, c) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("maintain blocked on a full send buffer instead of dropping the heartbeat")
+	}
+
+	// Every queued frame is still a command: no heartbeat evicted one, and none was appended.
+	require.Len(t, c.send, sendBuffer)
+	for range sendBuffer {
+		frame := <-c.send
+		require.NotNil(t, frame.GetCommand(), "a queued command must not have been displaced by a heartbeat")
+	}
+}
