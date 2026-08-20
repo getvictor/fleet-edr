@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -201,24 +200,27 @@ func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.
 		WHERE host_id = ? AND processed = 2 AND claimed_at_ns >= ?`, hostID, cutoff); err != nil {
 		return nil, fmt.Errorf("claim in-flight floor: %w", err)
 	}
-	// The bound is inclusive (timestamp_ns <= floor) so that "no in-flight row" can be expressed as math.MaxInt64 without stranding an
-	// event stamped exactly there. An exclusive bound against that sentinel would leave such a row permanently unclaimable, and since
-	// it never drains, its host would stay in the candidate list forever and burn a claim cycle every pass. Nothing legitimate stamps
-	// MaxInt64, but the queue takes its timestamps from agent payloads, so a buggy or hostile one must not be able to wedge a host.
-	// With a real in-flight row the floor is one tick below it, which is the same "strictly older is safe to fold" rule.
-	inFlightFloor := int64(math.MaxInt64)
+	// Carry the bound as a flag plus a value rather than folding "nothing in flight" into a sentinel timestamp. Two sentinel attempts
+	// each produced an edge on agent-supplied timestamps: an exclusive bound against math.MaxInt64 stranded a row stamped exactly
+	// there, and shifting the floor a tick below the in-flight row underflowed to MaxInt64 for a row stamped math.MinInt64, which
+	// silently removed the bound altogether and reopened the gap this exists to close. There is no arithmetic and no reserved
+	// timestamp value here, so no input can defeat the predicate: hasFloor 0 leaves the stream unbounded, and hasFloor 1 keeps the
+	// rule exactly as stated above, strictly older than the oldest in-flight event.
+	hasFloor := 0
+	inFlightFloor := int64(0)
 	if inFlight.Valid {
-		inFlightFloor = inFlight.Int64 - 1
+		hasFloor = 1
+		inFlightFloor = inFlight.Int64
 	}
 
 	var events []api.Event
 	err = tx.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM event_queue
-		WHERE host_id = ? AND (processed = 0 OR (processed = 2 AND claimed_at_ns < ?)) AND timestamp_ns <= ?
+		WHERE host_id = ? AND (processed = 0 OR (processed = 2 AND claimed_at_ns < ?)) AND (? = 0 OR timestamp_ns < ?)
 		ORDER BY timestamp_ns
 		LIMIT ?
-		FOR UPDATE SKIP LOCKED`, hostID, cutoff, inFlightFloor, limit)
+		FOR UPDATE SKIP LOCKED`, hostID, cutoff, hasFloor, inFlightFloor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim select: %w", err)
 	}
