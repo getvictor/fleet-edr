@@ -19,6 +19,20 @@ import (
 // Mirrored as commanderPollInterval in agent/cmd/fleet-edr-agent.
 const defaultPollInterval = 5 * time.Second
 
+// defaultFloorInterval is how long the commander will defer to the control channel before polling anyway.
+//
+// The poll used to be skipped outright while the agent believed its stream was up, which made command delivery depend on that belief
+// being true. It can be false indefinitely: the agent marks itself connected as soon as Connect() returns and only clears it when the
+// receive loop returns, so an agent holding a stream the server has forgotten waits in Recv() forever and never asks for work again.
+// Nothing breaks the tie, because the gRPC keepalive runs on the shared HTTPS listener where net/http answers the PINGs itself, which
+// proves the HTTP/2 link is alive rather than that the stream is registered for delivery. Observed on a host reporting healthy with
+// events flowing: a kill_process sat pending for over an hour (issue #711).
+//
+// So the poll is a floor rather than a fallback. Deferring is now bounded: whatever the agent believes, it asks for pending work at
+// least this often, which turns a permanent wedge into a bounded delay. Two minutes is slow enough that the steady state is still
+// stream-driven, and the cost of a redundant poll is one request that the server answers with an empty pending list.
+const defaultFloorInterval = 2 * time.Minute
+
 // ApplicationControlSender forwards a raw application-control snapshot JSON payload to the ESF extension over XPC. The commander stays
 // decoupled from the concrete receiver so tests can supply a recording double. Nil is allowed (set_application_control commands are
 // then reported as `failed` with a clear reason), matching the pre-step-1 commander shape.
@@ -38,10 +52,13 @@ type Config struct {
 	// ApplicationControlSender is the XPC bridge to the ESF extension. Used by the set_application_control command handler; nil means
 	// "commander cannot apply snapshot updates" and the handler will report the command failed with a clear reason.
 	ApplicationControlSender ApplicationControlSender
-	// StreamConnected, when set, lets the commander defer to the persistent control channel: while it returns true the poll is skipped
-	// (the gateway pushes commands in real time), and the poll resumes the moment the stream drops. Nil means "always poll" (the control
-	// channel is disabled), which is the degraded floor.
+	// StreamConnected, when set, lets the commander defer to the persistent control channel while it returns true, because the gateway
+	// pushes commands in real time and polling would race it. The deferral is bounded by FloorInterval: a stream the agent believes in
+	// but the server has forgotten would otherwise silence commands forever. Nil means "always poll" (the control channel is disabled).
 	StreamConnected func() bool
+	// FloorInterval bounds how long StreamConnected may suppress the poll. Zero uses defaultFloorInterval. It exists so a wedged stream
+	// degrades to slow polling instead of silence; see defaultFloorInterval for how the wedge happens.
+	FloorInterval time.Duration
 	// Ledger is the durable dedup store shared with the control client so a command executed on the push path is not re-executed by the
 	// poll path after a stream drop (issue #558). Nil disables dedup (the poll path then relies only on the server's pending filter).
 	Ledger Ledger
@@ -56,6 +73,8 @@ type Commander struct {
 	client   *http.Client
 	executor *Executor
 	logger   *slog.Logger
+	// lastPoll is when the commander last actually asked the server for pending work. Only Run's goroutine touches it.
+	lastPoll time.Time
 }
 
 // New creates a Commander. The client should already be wrapped with otelhttp.NewTransport if
@@ -63,6 +82,9 @@ type Commander struct {
 func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	if cfg.Interval == 0 {
 		cfg.Interval = defaultPollInterval
+	}
+	if cfg.FloorInterval == 0 {
+		cfg.FloorInterval = defaultFloorInterval
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -72,7 +94,10 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	}
 	executor := NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
 	executor.SetGeneration(cfg.Generation)
+	// Start the floor clock now rather than at the zero time, so a fresh commander defers to a live stream like any other and the
+	// contract stays exactly "defer for at most FloorInterval" instead of "always poll once at startup, then defer".
 	return &Commander{
+		lastPoll: time.Now(),
 		cfg:      cfg,
 		client:   client,
 		executor: executor,
@@ -101,11 +126,14 @@ func (c *Commander) Run(ctx context.Context) error {
 }
 
 func (c *Commander) pollAndDispatch(ctx context.Context) {
-	// Defer to the persistent control channel while it is connected: it pushes commands in real time, so polling would only race it and
-	// produce invalid-transition noise on already-acked commands. The poll is the degraded floor, used while the stream is down.
-	if c.cfg.StreamConnected != nil && c.cfg.StreamConnected() {
+	// Defer to the persistent control channel while it is connected, because it pushes commands in real time and polling would race
+	// it. Deferring is bounded: the agent's belief that its stream works is exactly what cannot be trusted here, so once FloorInterval
+	// has passed the poll runs regardless. A redundant poll is cheap and safe, since the server answers with only pending commands and
+	// the shared ledger already stops a command delivered by the stream from being executed twice (issue #558).
+	if c.cfg.StreamConnected != nil && c.cfg.StreamConnected() && time.Since(c.lastPoll) < c.cfg.FloorInterval {
 		return
 	}
+	c.lastPoll = time.Now()
 	commands, err := c.fetchPending(ctx)
 	if err != nil {
 		c.logger.WarnContext(ctx, "commander fetch pending", "err", err)
