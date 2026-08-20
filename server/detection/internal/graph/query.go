@@ -2,9 +2,11 @@ package graph
 
 import (
 	"context"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/mysql"
@@ -74,11 +76,78 @@ func (q *Query) BuildTree(
 	return res, nil
 }
 
+// flowClockSkewPadNs pads the generation's event-time life before it bounds the identity arm. A flow's event time is stamped by the
+// network extension while the process's fork, exec, and exit times come from Endpoint Security, and the two clocks drift (issue #7).
+// 5s matches processLookupSkewPadNs, the pad detection's own flow correlation already uses for the same drift.
+const flowClockSkewPadNs = int64(5 * 1_000_000_000)
+
+// generationLife renders the generation's EVENT-time life for the identity arm, padded for clock skew. It exists because identity is
+// not guaranteed unique: rows written before #715 repeated one pidversion across the generations of a re-exec chain, so without a time
+// bound each generation would serve every other generation's flows.
+//
+// The lower edge is the exec instant when the generation has one, since a re-exec generation cannot have made a flow before the image
+// that made it was loaded, and the fork otherwise. A generation still running has no upper edge.
+//
+// This disambiguates generations separated by more than the pad, which is the case worth fixing. Two generations of a legacy repeated
+// pidversion that are microseconds apart still overlap once padded, and a flow inside that overlap can appear on both. That residue is
+// inherent: for those rows the wire carried nothing that distinguishes the generations, so no rule over their timestamps can. It is
+// still strictly better than the unbounded identity match, where every generation served the whole pid's history.
+func generationLife(proc *api.Process) api.TimeRange {
+	start := proc.ForkTimeNs
+	if proc.ExecTimeNs != nil {
+		start = *proc.ExecTimeNs
+	}
+	life := api.TimeRange{FromNs: max(start-flowClockSkewPadNs, 0), ToNs: math.MaxInt64}
+	if proc.ExitTimeNs != nil {
+		life.ToNs = *proc.ExitTimeNs + flowClockSkewPadNs
+	}
+	return life
+}
+
+// flowScanBound renders the wide ingest bound that prunes the flow scan. The ceiling is the query time, NOT the process's own start
+// plus a span: a process older than that span would match its flows by identity and then have every one of them pruned by a ceiling
+// that expired before they were ingested, which silently re-breaks issue #716 for any long-lived daemon or heartbeat-kept snapshot
+// record. Nothing can be ingested after now, so now is the honest ceiling, and the row cap rather than the window keeps the read
+// bounded. Extracted so the choice is directly testable: a bound derived from process age looks harmless until the process is old.
+func flowScanBound(fromNs, nowNs int64) api.TimeRange {
+	return api.TimeRange{FromNs: fromNs, ToNs: nowNs}
+}
+
+// pidVersionOf widens a process row's kernel pid generation to the int64 the archive filter takes, preserving absence. A row whose
+// pidversion is nil predates the field (or lost its audit token), and the nil must survive the conversion: collapsing it to 0 would
+// claim generation 0, a real kernel generation, and silently match the wrong flows.
+func pidVersionOf(proc *api.Process) *int64 {
+	if proc.PIDVersion == nil {
+		return nil
+	}
+	v := int64(*proc.PIDVersion)
+	return &v
+}
+
+// resolveGeneration picks the process generation a detail read is about. A caller that names pidVersion gets that exact generation;
+// a nil pidVersion keeps the historical as-of read, which is what the process tree and the timeline rely on.
+//
+// Naming the generation is the only way to reach any but the newest member of a re-exec chain (issue #716). insertReExec preserves
+// the chain's original fork_time_ns deliberately, so every generation of one chain shares it, and GetProcessByPID's
+// (fork_time_ns DESC, id DESC) ordering therefore resolves to the highest id no matter what as-of instant the caller passes. That
+// left an exited generation unaddressable even when an alert had fired on it: the panel fetched a sibling and, now that flows are
+// attributed by identity, correctly reported none. GetProcessByPIDVersion filters on (host, pid, pidversion) and uses atNs only to
+// order, so it returns the named generation when the identity is unique and falls back to the running-at-atNs one when a
+// pre-#715 row repeated a pidversion across generations.
+func (q *Query) resolveGeneration(ctx context.Context, hostID string, pid int, atTimeNs int64, pidVersion *uint32) (*api.Process, error) {
+	if pidVersion != nil {
+		return q.store.GetProcessByPIDVersion(ctx, hostID, pid, *pidVersion, atTimeNs)
+	}
+	return q.store.GetProcessByPID(ctx, hostID, pid, atTimeNs)
+}
+
 // GetProcessDetail returns a process with its network connections, DNS queries, and re-exec chain. Method name matches the
 // detection/api.Service.GetProcessDetail entry point so the eventual service layer (detection/internal/service) can delegate without
-// an adapter or rename.
-func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.ProcessDetail, error) {
-	proc, err := q.store.GetProcessByPID(ctx, hostID, pid, atTimeNs)
+// an adapter or rename. pidVersion is optional and names one generation of pid; see resolveGeneration.
+func (q *Query) GetProcessDetail(
+	ctx context.Context, hostID string, pid int, atTimeNs int64, pidVersion *uint32,
+) (*api.ProcessDetail, error) {
+	proc, err := q.resolveGeneration(ctx, hostID, pid, atTimeNs, pidVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -89,9 +158,21 @@ func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, at
 	// Build an ingest-time window from the process lifetime. We used to bound by the ES kernel-stamped fork_time_ns with a 5-second pad
 	// to compensate for ES/NE clock drift (NE-emitted network_connect events routinely arrived 50-100 ms before the ES-emitted fork for
 	// the same pid). With issue #7 the events table carries a server-stamped ingested_at_ns, and processes carry fork_ingested_at_ns; we
-	// correlate on those instead so the clock is single-authority and monotonic per server. A small 1s pad remains to absorb intra-batch
-	// ordering slop.
+	// correlate on those instead so the clock is single-authority and monotonic per server.
+	//
+	// This window is no longer how a flow is attributed when identity is available. Issue #716: the flow and its process's exit travel
+	// up the agent uploader in SEPARATE batches, so a short-lived process's flow routinely ingests after the exit (measured 3.5s past
+	// the flow's own stamp, 2.0s past the old window's upper bound), and the panel showed "No network activity" for the very connection
+	// an alert had fired on. A flow carrying a pidversion is now matched by (pid, pidversion) identity with no window at all, the same
+	// way detection's own resolveFlowProcess resolves it. The window survives only for flows that carry no pidversion, where identity
+	// cannot speak and it is the only available evidence.
 	const intraBatchPadNs = int64(1 * 1_000_000_000)
+	// exitedFlowLagPadNs replaces the 1s pad on the upper bound for an exited process. 1s was sized for intra-batch ordering slop
+	// within ONE upload; the real gap is between two uploads, so it must cover an agent flush cycle plus its retry backoff rather than
+	// a reorder. 60s is well past the 3.5s measured in #716 while staying far below the 30-day open-ended bound. Widening this DOES
+	// raise the chance of attributing a legacy flow to the wrong generation of a reused pid, but only for flows carrying no
+	// pidversion: every flow from a current agent is now decided by identity before this window is consulted.
+	const exitedFlowLagPadNs = int64(60 * 1_000_000_000)
 	const thirtyDayBoundNs = int64(30 * 86400 * 1_000_000_000)
 	var (
 		forkAnchorNs int64
@@ -117,13 +198,27 @@ func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, at
 		tr.ToNs = forkAnchorNs + thirtyDayBoundNs
 	case proc.ExitIngestedAtNs != nil:
 		// Both sides anchored on server-stamped ingest time.
-		tr.ToNs = *proc.ExitIngestedAtNs + intraBatchPadNs
+		tr.ToNs = *proc.ExitIngestedAtNs + exitedFlowLagPadNs
 	default:
 		// Process still running: use a 30-day bound anchored on ingest.
 		tr.ToNs = forkAnchorNs + thirtyDayBoundNs
 	}
 
-	netEvents, err := q.store.GetNetworkEventsForProcess(ctx, hostID, pid, tr)
+	// Bound is deliberately wide: it prunes the scan, it does not attribute. The identity arm must not be constrained by the lifetime
+	// window (that is the #716 defect), so the only ceiling an identity match sees is this one.
+	//
+	// The ceiling is the query time, NOT the process's fork plus a span. Anchoring it on fork age silently re-broke the fix for any
+	// process older than that span: a daemon running longer than 30 days, or a heartbeat-kept snapshot row, would match its flows by
+	// identity and then have every one of them pruned by a ceiling that expired before they were ingested. Nothing can be ingested
+	// after now, so now is the honest ceiling, and the row cap rather than the window is what keeps the read bounded.
+	flows, truncated, err := q.store.GetNetworkEventsForGeneration(ctx, api.ProcessFlowFilter{
+		HostID:       hostID,
+		PID:          pid,
+		PIDVersion:   pidVersionOf(proc),
+		Bound:        flowScanBound(fromNs, time.Now().UnixNano()),
+		IngestWindow: tr,
+		Life:         generationLife(proc),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -134,9 +229,10 @@ func (q *Query) GetProcessDetail(ctx context.Context, hostID string, pid int, at
 
 	detail := &api.ProcessDetail{
 		Process:            *proc,
-		NetworkConnections: filterByType(netEvents, "network_connect"),
-		DNSQueries:         filterByType(netEvents, "dns_query"),
+		NetworkConnections: filterByType(flows, "network_connect"),
+		DNSQueries:         filterByType(flows, "dns_query"),
 		ReExecChain:        chain,
+		FlowsTruncated:     truncated,
 	}
 	return detail, nil
 }

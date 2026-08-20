@@ -22,9 +22,20 @@ type EventArchive interface {
 	Insert(ctx context.Context, events []Event) error
 
 	// NetworkEventsForProcess returns the network_connect and dns_query events attributed to (hostID, pid) within tr, ordered by
-	// timestamp. Cross-stream correlation rules and the process-detail view consume it to join a process's DNS resolutions with its
-	// outbound connections.
+	// timestamp. Cross-stream correlation rules consume it to join a process's DNS resolutions with its outbound connections, keyed on
+	// pid alone because they re-correlate the results in memory.
+	//
+	// The process-detail view uses NetworkEventsForGeneration instead: a view that names ONE generation must not answer with a
+	// sibling generation's flows.
 	NetworkEventsForProcess(ctx context.Context, hostID string, pid int, tr httpserver.TimeRange) ([]Event, error)
+
+	// NetworkEventsForGeneration returns the network_connect and dns_query events belonging to ONE process generation, ordered by
+	// timestamp. See ProcessFlowFilter for how a flow is attributed to a generation.
+	//
+	// The bool reports that the row cap dropped rows. Unlike EventsByTypeForHost this truncates rather than erroring: the caller is an
+	// operator panel reading what a process DID, so a partial list plus an honest "there are more" beats blanking the view, whereas a
+	// rule reasoning about what is ABSENT cannot tell a missing event from a dropped one and must get the error instead.
+	NetworkEventsForGeneration(ctx context.Context, filter ProcessFlowFilter) ([]Event, bool, error)
 
 	// EventsByTypeForHost returns one host's events of a single type whose EVENT time falls inside tr, oldest first. Narrow by
 	// construction: (host_id, event_type, timestamp_ns) is the archive's sorting-key prefix, so the read is a primary-key range
@@ -102,6 +113,47 @@ type HostTimelineFilter struct {
 type ProcessGeneration struct {
 	PID        int64
 	PIDVersion int64
+}
+
+// ProcessFlowFilter selects the network_connect and dns_query events belonging to ONE process generation, for the process-detail view
+// (issue #716). A flow is attributed to the generation when EITHER of two arms matches:
+//
+//   - Identity: the flow's payload carries a pidversion and (pid, pidversion) equals this generation's. This arm is deliberately NOT
+//     bounded by IngestWindow. The pair is unique across PID reuse, so no window is needed to disambiguate, and requiring one is the
+//     #716 defect: a flow and its process's exit travel up the agent uploader in separate batches, so a short-lived process's flow
+//     routinely ingests seconds AFTER the exit and falls outside any tight window.
+//   - Legacy: the flow's payload carries NO pidversion (a pre-#403 agent, or a flow whose audit token was unavailable), and its
+//     ingest time falls inside IngestWindow. Identity cannot speak for these, so the window remains the only available evidence.
+//
+// PIDVersion nil means the PROCESS row predates pidversion capture. Identity is unavailable on this side too, so ONLY the legacy arm
+// applies: a candidate must itself carry no pidversion. A flow that carries one belongs to some generation of this pid, and a row that
+// cannot name a generation must not claim it on timing alone. Doing so is the #716 mis-attribution class surviving on the legacy side.
+//
+// Life bounds the identity arm on EVENT time. Identity is not guaranteed unique: rows written before #715 repeated one pidversion
+// across the generations of a re-exec chain, so (pid, pidversion) can match two generations and each would otherwise show the other's
+// flows. Event time is the right discriminator and ingest time is not: a flow's event time always falls inside the life of the process
+// that made it, whereas its ingest time routinely lands after that process exited, which is the whole of #716. Callers pad Life for
+// the network-extension versus Endpoint Security clock difference (issue #7).
+//
+// Bound applies to every candidate row in both arms. It exists to keep the scan pruned rather than to decide attribution, so it is
+// wide where IngestWindow is tight; an implementation MUST NOT narrow attribution with it. In particular it MUST NOT be derived from
+// the process's own age: a daemon older than the retention window would then be unable to show any flow at all.
+//
+// Limit caps the returned rows. Flows are agent-supplied and a long-lived process on a noisy host can hold far more than a panel can
+// render, so the read is bounded and reports whether the cap dropped rows rather than silently shortening.
+type ProcessFlowFilter struct {
+	HostID string
+	PID    int
+	// PIDVersion is the generation's kernel pid generation, nil when the process row carries none.
+	PIDVersion *int64
+	// Bound is the wide ingest bound applied to every candidate row, for scan pruning only.
+	Bound httpserver.TimeRange
+	// IngestWindow is the tight ingest window that attributes flows the identity arm cannot speak for.
+	IngestWindow httpserver.TimeRange
+	// Life is the generation's event-time window, padded for clock skew, used to disambiguate a repeated identity.
+	Life httpserver.TimeRange
+	// Limit caps the rows returned. Non-positive means the implementation's own default cap.
+	Limit int
 }
 
 // EventSearchFilter selects events for the fleet-wide connection/DNS search (issue #582). EventType picks the artifact class

@@ -25,7 +25,7 @@ import (
 type fakeService struct {
 	listHosts         func(ctx context.Context) ([]api.HostSummary, error)
 	buildTree         func(ctx context.Context, hostID string, tr api.TimeRange, limit int, flatten bool, pinnedID int64) (api.ProcessTreeResult, error)
-	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error)
+	getProcessDetail  func(ctx context.Context, hostID string, pid int, atNs int64, pidVersion *uint32) (*api.ProcessDetail, error)
 	listAlerts        func(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error)
 	getAlert          func(ctx context.Context, id int64) (api.Alert, []string, error)
 	getAlertEvidence  func(ctx context.Context, id int64) ([]api.Event, error)
@@ -54,11 +54,13 @@ func (f fakeService) BuildTree(ctx context.Context, hostID string, tr api.TimeRa
 	return f.buildTree(ctx, hostID, tr, limit, flatten, pinnedID)
 }
 
-func (f fakeService) GetProcessDetail(ctx context.Context, hostID string, pid int, atNs int64) (*api.ProcessDetail, error) {
+func (f fakeService) GetProcessDetail(
+	ctx context.Context, hostID string, pid int, atNs int64, pidVersion *uint32,
+) (*api.ProcessDetail, error) {
 	if f.getProcessDetail == nil {
 		panic("fakeService.GetProcessDetail not set")
 	}
-	return f.getProcessDetail(ctx, hostID, pid, atNs)
+	return f.getProcessDetail(ctx, hostID, pid, atNs, pidVersion)
 }
 
 func (f fakeService) ListAlerts(ctx context.Context, filter api.AlertFilter) ([]api.Alert, error) {
@@ -410,7 +412,7 @@ func TestHandleProcessDetail(t *testing.T) {
 
 	t.Run("svc error returns 500", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{getProcessDetail: func(context.Context, string, int, int64) (*api.ProcessDetail, error) {
+		svc := fakeService{getProcessDetail: func(context.Context, string, int, int64, *uint32) (*api.ProcessDetail, error) {
 			return nil, errors.New("graph error")
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
@@ -422,13 +424,94 @@ func TestHandleProcessDetail(t *testing.T) {
 
 	t.Run("happy path returns the detail object", func(t *testing.T) {
 		t.Parallel()
-		svc := fakeService{getProcessDetail: func(context.Context, string, int, int64) (*api.ProcessDetail, error) {
+		svc := fakeService{getProcessDetail: func(context.Context, string, int, int64, *uint32) (*api.ProcessDetail, error) {
 			return &api.ProcessDetail{Process: api.Process{HostID: "host-a", PID: 1234}}, nil
 		}}
 		srv := newOperatorServer(t, svc, allowAllAuthZ{})
 		resp := doGet(t, srv, "/api/hosts/host-a/processes/1234")
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-named-generation-of-a-re-exec-chain-is-addressable
+	t.Run("pidversion is threaded to the service when supplied", func(t *testing.T) {
+		t.Parallel()
+		var got *uint32
+		var called bool
+		svc := fakeService{getProcessDetail: func(_ context.Context, _ string, _ int, _ int64, pv *uint32) (*api.ProcessDetail, error) {
+			got, called = pv, true
+			return &api.ProcessDetail{Process: api.Process{HostID: "host-a", PID: 1234}}, nil
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/hosts/host-a/processes/1234?pidversion=151026")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.True(t, called)
+		require.NotNil(t, got, "a supplied pidversion must reach the service, not be dropped")
+		assert.Equal(t, uint32(151026), *got)
+	})
+
+	t.Run("pidversion zero reaches the service as a value, not as absence", func(t *testing.T) {
+		t.Parallel()
+		var got *uint32
+		svc := fakeService{getProcessDetail: func(_ context.Context, _ string, _ int, _ int64, pv *uint32) (*api.ProcessDetail, error) {
+			got = pv
+			return &api.ProcessDetail{Process: api.Process{HostID: "host-a", PID: 1234}}, nil
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/hosts/host-a/processes/1234?pidversion=0")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.NotNil(t, got, "generation 0 is a real kernel generation and must not collapse to absence")
+		assert.Equal(t, uint32(0), *got)
+	})
+
+	t.Run("omitting pidversion leaves it nil so the as-of read is unchanged", func(t *testing.T) {
+		t.Parallel()
+		sentinel := uint32(7)
+		got := &sentinel
+		svc := fakeService{getProcessDetail: func(_ context.Context, _ string, _ int, _ int64, pv *uint32) (*api.ProcessDetail, error) {
+			got = pv
+			return &api.ProcessDetail{Process: api.Process{HostID: "host-a", PID: 1234}}, nil
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/hosts/host-a/processes/1234?at=42")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Nil(t, got, "no pidversion param means resolve by as-of, exactly as before")
+	})
+
+	// spec:server-rest-api/per-process-detail-with-re-exec-chain/a-pidversion-naming-no-generation-is-not-silently-substituted
+	t.Run("malformed pidversion is rejected rather than ignored", func(t *testing.T) {
+		t.Parallel()
+		for _, raw := range []string{"abc", "-1", "4294967296", "1.5", ""} {
+			t.Run("value="+raw, func(t *testing.T) {
+				t.Parallel()
+				svc := fakeService{getProcessDetail: func(context.Context, string, int, int64, *uint32) (*api.ProcessDetail, error) {
+					return &api.ProcessDetail{Process: api.Process{HostID: "host-a", PID: 1234}}, nil
+				}}
+				srv := newOperatorServer(t, svc, allowAllAuthZ{})
+				resp := doGet(t, srv, "/api/hosts/host-a/processes/1234?pidversion="+raw)
+				defer resp.Body.Close()
+				// An empty value is rejected like any other unparseable one. It is NOT the same request as an absent param:
+				// url.Values distinguishes the two, and answering an addressed request with the as-of read can return a
+				// different generation than the caller named.
+				require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+				assert.Equal(t, errInvalidPIDVersion, readErrorEnvelope(t, resp))
+			})
+		}
+	})
+
+	t.Run("a pidversion naming no generation is a 404", func(t *testing.T) {
+		t.Parallel()
+		svc := fakeService{getProcessDetail: func(context.Context, string, int, int64, *uint32) (*api.ProcessDetail, error) {
+			return nil, nil // the query layer found no generation with that identity
+		}}
+		srv := newOperatorServer(t, svc, allowAllAuthZ{})
+		resp := doGet(t, srv, "/api/hosts/host-a/processes/1234?pidversion=999999")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusNotFound, resp.StatusCode)
+		assert.Equal(t, errNotFound, readErrorEnvelope(t, resp))
 	})
 }
 

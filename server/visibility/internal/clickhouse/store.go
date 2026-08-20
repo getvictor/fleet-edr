@@ -112,6 +112,97 @@ func (s *Store) NetworkEventsForProcess(ctx context.Context, hostID string, pid 
 	return scanEvents(rows)
 }
 
+// generationIdentitySQL renders the predicate that keeps only events belonging to one of the given process generations, matched by
+// (pid, pidversion), and returns it with its positional args. Shared by the alert-chain timeline scope and the process-detail flow
+// read (issue #716) so the two cannot drift on the matching rule.
+//
+// pid is materialized (prunes granules); pidversion lives in the payload, extracted per row over that pruned set. The pair is unique
+// across PID reuse, so a later process that reused the pid is excluded, and it is robust to ingest timing (unlike a window, which
+// collapses to near-zero for a short-lived process whose fork and exit land in one batch). The JSONHas guard is required because
+// JSONExtractInt returns 0 for a missing field: pidversion 0 is a real kernel generation, so without the guard a scope for (pid, 0)
+// would sweep in legacy events that never carried pidversion. A tuple IN lets ClickHouse hash-match in one pass instead of walking an
+// OR chain per row.
+func generationIdentitySQL(gens []api.ProcessGeneration) (string, []any) {
+	pairs := make([]string, len(gens))
+	args := make([]any, 0, len(gens)*2)
+	for i, g := range gens {
+		pairs[i] = "(?, ?)"
+		args = append(args, g.PID, g.PIDVersion)
+	}
+	return "(JSONHas(payload, 'pidversion') AND (pid, JSONExtractInt(payload, 'pidversion')) IN (" + strings.Join(pairs, ", ") + "))", args
+}
+
+// Predicate fragments shared by the flow reads. Named because they repeat across the three reads below and Sonar go:S1192 counts the
+// repetition; naming them also keeps the ingest-time bound and the event-time bound from being confused at a glance.
+const (
+	hostPredicate       = "host_id = ?"
+	flowTypesPredicate  = "event_type IN ('network_connect', 'dns_query')"
+	pidPredicate        = "pid = ?"
+	ingestFromPredicate = "ingested_at_ns >= ?"
+	ingestToPredicate   = "ingested_at_ns <= ?"
+	eventFromPredicate  = "timestamp_ns >= ?"
+	eventToPredicate    = "timestamp_ns <= ?"
+	noPIDVersionInFlow  = "NOT JSONHas(payload, 'pidversion')"
+)
+
+// generationFlowRowCap bounds NetworkEventsForGeneration. Flows are agent-supplied and the identity arm is deliberately not
+// time-narrowed, so a long-lived process on a noisy host can match far more rows than a detail panel renders. One row beyond the cap
+// is fetched to detect the overflow, the same idiom EventsByTypeForHost uses; unlike that read this one truncates and says so.
+const generationFlowRowCap = 500
+
+// NetworkEventsForGeneration returns the network_connect and dns_query events belonging to one process generation, ordered by
+// timestamp (issue #716). The attribution rule lives on api.ProcessFlowFilter; this renders it as SQL. The bool reports that the row
+// cap dropped rows.
+//
+// The identity arm reuses generationIdentitySQL, the same predicate the alert-chain timeline scope uses, intersected with the
+// generation's EVENT-time life so a pidversion that pre-#715 rows repeated across a chain still resolves to one generation. The legacy
+// arm is its complement (NOT JSONHas) intersected with the tight ingest window. The arms partition the candidate rows: a flow carrying
+// a pidversion is judged by identity ONLY, never rescued by the window, which is what stops a sibling generation's flow appearing here.
+//
+// When the process row carries no pidversion only the legacy arm applies. A flow that carries a pidversion belongs to some generation
+// of this pid, and a row that cannot name its own generation must not claim it on timing alone.
+func (s *Store) NetworkEventsForGeneration(ctx context.Context, filter api.ProcessFlowFilter) ([]api.Event, bool, error) {
+	where := []string{hostPredicate, flowTypesPredicate, pidPredicate, ingestFromPredicate, ingestToPredicate}
+	args := []any{filter.HostID, filter.PID, filter.Bound.FromNs, filter.Bound.ToNs}
+
+	legacyArm := "(" + noPIDVersionInFlow + " AND " + ingestFromPredicate + " AND " + ingestToPredicate + ")"
+	legacyArgs := []any{filter.IngestWindow.FromNs, filter.IngestWindow.ToNs}
+	if filter.PIDVersion == nil {
+		where = append(where, legacyArm)
+		args = append(args, legacyArgs...)
+	} else {
+		identitySQL, identityArgs := generationIdentitySQL([]api.ProcessGeneration{{PID: int64(filter.PID), PIDVersion: *filter.PIDVersion}})
+		identityArm := "(" + identitySQL + " AND " + eventFromPredicate + " AND " + eventToPredicate + ")"
+		identityArgs = append(identityArgs, filter.Life.FromNs, filter.Life.ToNs)
+		where = append(where, "("+identityArm+" OR "+legacyArm+")")
+		args = append(args, identityArgs...)
+		args = append(args, legacyArgs...)
+	}
+
+	rowCap := filter.Limit
+	if rowCap <= 0 {
+		rowCap = generationFlowRowCap
+	}
+	args = append(args, rowCap+1)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
+		FROM events FINAL
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY timestamp_ns, event_id
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("clickhouse network events for generation: %w", err)
+	}
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(events) > rowCap {
+		return events[:rowCap], true, nil
+	}
+	return events, false, nil
+}
+
 // EventsByTypeForHost returns one host's events of a single type within the event-time range tr, oldest first. FINAL collapses
 // ReplacingMergeTree duplicates. The WHERE clause is the table's sorting-key prefix (host_id, event_type, timestamp_ns), so this is
 // a primary-key range scan.
@@ -249,15 +340,15 @@ func (s *Store) SearchEvents(ctx context.Context, filter api.EventSearchFilter, 
 		args = append(args, filter.Value)
 	}
 	if filter.HostID != "" {
-		where = append(where, "host_id = ?")
+		where = append(where, hostPredicate)
 		args = append(args, filter.HostID)
 	}
 	if filter.FromNs > 0 {
-		where = append(where, "ingested_at_ns >= ?")
+		where = append(where, ingestFromPredicate)
 		args = append(args, filter.FromNs)
 	}
 	if filter.ToNs > 0 {
-		where = append(where, "ingested_at_ns <= ?")
+		where = append(where, ingestToPredicate)
 		args = append(args, filter.ToNs)
 	}
 	whereSQL := strings.Join(where, " AND ")
@@ -278,7 +369,7 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 	if len(types) == 0 {
 		return api.EventSearchResult{}, nil
 	}
-	where := []string{"host_id = ?"}
+	where := []string{hostPredicate}
 	args := []any{filter.HostID}
 	for _, t := range types {
 		args = append(args, t)
@@ -299,19 +390,10 @@ func (s *Store) HostTimeline(ctx context.Context, filter api.HostTimelineFilter,
 		args = append(args, filter.Text)
 	}
 	if len(filter.Chain) > 0 {
-		// Alert-chain scope: keep only events belonging to one of the chain's process generations, matched by (pid, pidversion). pid is
-		// materialized (prunes granules); pidversion lives in the payload, extracted per row over that pruned set. The pair is unique
-		// across PID reuse, so a later process that reused a chain pid is excluded, and it is robust to ingest timing (unlike a window,
-		// which collapses to near-zero for a short-lived process whose fork and exit land in one batch). The JSONHas guard is required
-		// because JSONExtractInt returns 0 for a missing field: pidversion 0 is a real kernel generation, so without the guard a scope
-		// for (pid, 0) would sweep in legacy events that never carried pidversion. A tuple IN lets ClickHouse hash-match in one pass
-		// instead of walking an OR chain per row.
-		gens := make([]string, len(filter.Chain))
-		for i, g := range filter.Chain {
-			gens[i] = "(?, ?)"
-			args = append(args, g.PID, g.PIDVersion)
-		}
-		where = append(where, "(JSONHas(payload, 'pidversion') AND (pid, JSONExtractInt(payload, 'pidversion')) IN ("+strings.Join(gens, ", ")+"))")
+		// Alert-chain scope: keep only events belonging to one of the chain's process generations, matched by (pid, pidversion).
+		clause, genArgs := generationIdentitySQL(filter.Chain)
+		where = append(where, clause)
+		args = append(args, genArgs...)
 	}
 	// The host timeline is scoped to one host (host_id is the ORDER BY prefix), so its count is cheap and always reported.
 	return s.pageEventsByKeyset(ctx, strings.Join(where, " AND "), args, cursor, limit, true)

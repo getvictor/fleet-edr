@@ -25,6 +25,7 @@ const (
 	errHostIDRequired     = "host_id_required"
 	errBadWindow          = "bad_window"
 	errInvalidPID         = "invalid_pid"
+	errInvalidPIDVersion  = "invalid_pidversion"
 	errInvalidAlertID     = "invalid_alert_id"
 	errInvalidStatus      = "invalid_status"
 	errInvalidStatusTrans = "invalid_status_transition"
@@ -195,8 +196,13 @@ func (h *Handler) handleProcessDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	atTime := httpserver.ParseInt64Param(r, "at", time.Now().UnixNano())
+	pidVersion, ok := parsePIDVersionParam(r.URL.Query())
+	if !ok {
+		h.writeError(ctx, w, http.StatusBadRequest, errInvalidPIDVersion)
+		return
+	}
 
-	detail, err := h.svc.GetProcessDetail(ctx, hostID, pid, atTime)
+	detail, err := h.svc.GetProcessDetail(ctx, hostID, pid, atTime, pidVersion)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "get process detail", "host_id", hostID, "pid", pid, "err", err)
 		h.writeError(ctx, w, http.StatusInternalServerError, errInternal)

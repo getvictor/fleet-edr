@@ -1926,7 +1926,7 @@ func TestGraph_HandlesExitEvent(t *testing.T) {
 	// Query at the exit time exactly: GetProcessByPID's predicate is (exit_time_ns IS NULL OR exit_time_ns >= ?), so the row is reachable
 	// at its exit time and earlier, then drops out.
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h", 777, now+2)
+		p, err := d.Service().GetProcessDetail(ctx, "h", 777, now+2, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -1960,20 +1960,20 @@ func TestGraph_ExecPayloadCDHashRoundTrips(t *testing.T) {
 	// 1001 Eventually-pass against the 1002 row commit would return nil for nonHR even though both are inflight (issue
 	// caught in the PR #197 CI run where 1001 landed first and 1002 was still queued when the test asserted).
 	require.Eventually(t, func() bool {
-		hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
+		hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1, nil)
 		if err != nil || hr == nil || hr.Process.CDHash == nil || *hr.Process.CDHash != cdhash {
 			return false
 		}
-		nonHR, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1002, now+2)
+		nonHR, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1002, now+2, nil)
 		return err == nil && nonHR != nil
 	}, 5*time.Second, 50*time.Millisecond, "both HR + non-HR exec rows must materialise before the shape assertions")
 
-	hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1)
+	hr, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1001, now+1, nil)
 	require.NoError(t, err)
 	require.NotNil(t, hr.Process.CDHash)
 	assert.Equal(t, cdhash, *hr.Process.CDHash)
 
-	nonHR, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1002, now+2)
+	nonHR, err := d.Service().GetProcessDetail(ctx, "h-cdh", 1002, now+2, nil)
 	require.NoError(t, err)
 	require.NotNil(t, nonHR, "GetProcessDetail must return the non-HR row even when cdhash is absent")
 	assert.Nil(t, nonHR.Process.CDHash, "non-HR exec without cdhash must persist NULL")
@@ -2003,11 +2003,11 @@ func TestGraph_ExecPayloadCDHashOnForkThenExec(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-fork-cdh", 2001, now+2)
+		p, err := d.Service().GetProcessDetail(ctx, "h-fork-cdh", 2001, now+2, nil)
 		return err == nil && p != nil && p.Process.CDHash != nil && *p.Process.CDHash == cdhash
 	}, 5*time.Second, 50*time.Millisecond, "fork+exec must persist cdhash via UpdateProcessExec")
 
-	p, err := d.Service().GetProcessDetail(ctx, "h-fork-cdh", 2001, now+2)
+	p, err := d.Service().GetProcessDetail(ctx, "h-fork-cdh", 2001, now+2, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	require.NotNil(t, p.Process.CDHash)
@@ -2038,11 +2038,11 @@ func TestGraph_ExecPayloadCDHashOnReExec(t *testing.T) {
 	// After the re-exec, the live row at now+3 must have cdhashB (the new generation), not cdhashA (the prior generation
 	// which insertReExec closed by stamping exit_time_ns).
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-reexec-cdh", 3001, now+3)
+		p, err := d.Service().GetProcessDetail(ctx, "h-reexec-cdh", 3001, now+3, nil)
 		return err == nil && p != nil && p.Process.CDHash != nil && *p.Process.CDHash == cdhashB && p.Process.Path == "/tmp/payload"
 	}, 5*time.Second, 50*time.Millisecond, "re-exec must record the NEW generation's cdhash on the new row")
 
-	live, err := d.Service().GetProcessDetail(ctx, "h-reexec-cdh", 3001, now+3)
+	live, err := d.Service().GetProcessDetail(ctx, "h-reexec-cdh", 3001, now+3, nil)
 	require.NoError(t, err)
 	require.NotNil(t, live)
 	require.NotNil(t, live.Process.CDHash)
@@ -2065,7 +2065,7 @@ func TestGraph_ExecWithoutFork(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-orphan", 555, now+1)
+		p, err := d.Service().GetProcessDetail(ctx, "h-orphan", 555, now+1, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2098,7 +2098,7 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 
 	// Wait for the async processor to materialise the live snapshot row (last_seen_ns seeded at fork time).
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-snap-heartbeat", 4242, forkTime+1)
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-heartbeat", 4242, forkTime+1, nil)
 		return err == nil && p != nil && p.Process.IsSnapshot && p.Process.LastSeenNs != nil && *p.Process.LastSeenNs == forkTime
 	}, 5*time.Second, 50*time.Millisecond, "snapshot row must materialise before the heartbeat arrives")
 
@@ -2108,7 +2108,7 @@ func TestGraph_SnapshotHeartbeatBumpsLastSeen(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-snap-heartbeat", 4242, heartbeatTime+1)
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-heartbeat", 4242, heartbeatTime+1, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2147,7 +2147,7 @@ func TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs(t *testing.T) {
 	// Wait for all snapshot rows to materialise.
 	require.Eventually(t, func() bool {
 		for _, pid := range pids {
-			p, err := d.Service().GetProcessDetail(ctx, host, pid, forkTime+10)
+			p, err := d.Service().GetProcessDetail(ctx, host, pid, forkTime+10, nil)
 			if err != nil || p == nil || !p.Process.IsSnapshot {
 				return false
 			}
@@ -2168,7 +2168,7 @@ func TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		for _, pid := range pids {
-			p, err := d.Service().GetProcessDetail(ctx, host, pid, hbTime+1)
+			p, err := d.Service().GetProcessDetail(ctx, host, pid, hbTime+1, nil)
 			if err != nil || p == nil || p.Process.LastSeenNs == nil || *p.Process.LastSeenNs != hbTime {
 				return false
 			}
@@ -2177,7 +2177,7 @@ func TestGraph_SnapshotHeartbeatBatchBumpsMultiplePIDs(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "the batched CASE update must bump every live snapshot PID")
 
 	// The unknown-PID heartbeat created no process row, and no heartbeat reached the durable archive.
-	unknown, err := d.Service().GetProcessDetail(ctx, host, 9999, hbTime+1)
+	unknown, err := d.Service().GetProcessDetail(ctx, host, 9999, hbTime+1, nil)
 	require.NoError(t, err)
 	assert.Nil(t, unknown, "a heartbeat for an unknown PID must not create a row")
 	assert.Zero(t, archive.CountByType("snapshot_heartbeat"), "heartbeats must not be persisted to the archive")
@@ -2206,7 +2206,7 @@ func TestGraph_SnapshotInsertSeedsLastSeen(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-snap-seed", 5555, now+1)
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-seed", 5555, now+1, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2239,7 +2239,7 @@ func TestGraph_PendingExitConsumedBySnapshotExec(t *testing.T) {
 		// back to exit_time, so the row's lifetime is zero. GetProcessByPID requires
 		// fork_time_ns <= atTimeNs AND exit_time_ns >= atTimeNs, both satisfied at exactly
 		// the exit timestamp.
-		p, err := d.Service().GetProcessDetail(ctx, "h-pending-exit", 9876, now)
+		p, err := d.Service().GetProcessDetail(ctx, "h-pending-exit", 9876, now, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2283,7 +2283,7 @@ func TestGraph_SnapshotDoesNotClobberLiveRow(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-snap-dedup", 7777, now+5)
+		p, err := d.Service().GetProcessDetail(ctx, "h-snap-dedup", 7777, now+5, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2330,7 +2330,7 @@ func TestGraph_SamePIDReExec(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-reexec", 100, now+5)
+		p, err := d.Service().GetProcessDetail(ctx, "h-reexec", 100, now+5, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2367,7 +2367,7 @@ func TestGraph_OutOfOrderBatchProcessing(t *testing.T) {
 	// still matches the exited row. Reading after the exit timestamp would return nil because the row is no longer
 	// "alive at atTime."
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-order", 4040, now+2)
+		p, err := d.Service().GetProcessDetail(ctx, "h-order", 4040, now+2, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2398,11 +2398,11 @@ func TestGraph_ForkAloneCreatesRecord(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1)
+		p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1, nil)
 		return err == nil && p != nil && p.Process.ForkTimeNs == forkTime
 	}, 5*time.Second, 50*time.Millisecond, "fork must materialise a row at the fork timestamp")
 
-	p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1)
+	p, err := d.Service().GetProcessDetail(ctx, "h-fork-only", 7777, forkTime+1, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	assert.Equal(t, 1, p.Process.PPID, "parent_pid from the fork event lands on the row")
@@ -2441,13 +2441,13 @@ func TestGraph_PIDReuseCreatesNewGeneration(t *testing.T) {
 
 	// Read AFTER the new fork lands: GetProcessByPID returns the new generation (parent=999).
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t3+1)
+		p, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t3+1, nil)
 		return err == nil && p != nil && p.Process.PPID == 999 && p.Process.ForkTimeNs == t3
 	}, 5*time.Second, 50*time.Millisecond, "new generation must be visible at t3")
 
 	// Read INSIDE the old generation's lifetime (t2): returns the old row, which the new fork should have closed.
 	// The close stamps exit_time_ns at the new fork's timestamp so the row's lifetime is bounded.
-	oldGen, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t2)
+	oldGen, err := d.Service().GetProcessDetail(ctx, "h-reuse", 8080, t2, nil)
 	require.NoError(t, err)
 	require.NotNil(t, oldGen)
 	assert.Equal(t, 1, oldGen.Process.PPID, "old generation has parent=1")
@@ -2487,7 +2487,7 @@ func TestGraph_NetworkAndDNSLinkedAtEventTime(t *testing.T) {
 	// Read AT exit time (inclusive); reading after would return nil because GetProcessByPID's WHERE clause is
 	// "(exit_time_ns IS NULL OR exit_time_ns >= ?)".
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4)
+		p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4, nil)
 		if err != nil || p == nil {
 			return false
 		}
@@ -2496,7 +2496,7 @@ func TestGraph_NetworkAndDNSLinkedAtEventTime(t *testing.T) {
 			len(p.DNSQueries) >= 1
 	}, 5*time.Second, 50*time.Millisecond, "network + dns events must surface on the process detail")
 
-	p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4)
+	p, err := d.Service().GetProcessDetail(ctx, "h-netdns", 6060, now+4, nil)
 	require.NoError(t, err)
 	require.NotNil(t, p)
 	require.Len(t, p.NetworkConnections, 1, "exactly the one network_connect event inside the lifetime")
@@ -2589,12 +2589,12 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 				if err != nil || n != 0 {
 					return false
 				}
-				p, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+				p, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime, nil)
 				return err == nil && p != nil
 			}, 5*time.Second, 25*time.Millisecond, "initial events must drain and the row must be visible before snapshot")
 
 			// Snapshot the row's pre-heartbeat state.
-			before, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+			before, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime, nil)
 			require.NoError(t, err)
 			require.NotNil(t, before)
 
@@ -2610,7 +2610,7 @@ func TestGraph_SnapshotHeartbeatNoOps(t *testing.T) {
 				return err == nil && n == 0
 			}, 5*time.Second, 25*time.Millisecond, "heartbeat event must reach the processor")
 
-			after, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime)
+			after, err := d.Service().GetProcessDetail(ctx, hostID, 3030, readTime, nil)
 			require.NoError(t, err)
 			require.NotNil(t, after)
 
@@ -3240,7 +3240,7 @@ func mustInsertProcess(t *testing.T, ctx context.Context, d *bootstrap.Detection
 	// Wait for the processor to materialise the row.
 	var procID int64
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, hostID, pid, time.Now().UnixNano())
+		p, err := d.Service().GetProcessDetail(ctx, hostID, pid, time.Now().UnixNano(), nil)
 		if err != nil || p == nil {
 			return false
 		}

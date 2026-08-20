@@ -256,7 +256,7 @@ func postEvents(t *testing.T, stack *Stack, hostToken string, events []detection
 func waitForProcess(t *testing.T, stack *Stack, hostID string, pid int) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		p, err := stack.DetectionService().GetProcessDetail(t.Context(), hostID, pid, time.Now().UnixNano())
+		p, err := stack.DetectionService().GetProcessDetail(t.Context(), hostID, pid, time.Now().UnixNano(), nil)
 		return err == nil && p != nil
 	}, 5*time.Second, 50*time.Millisecond, "processor must materialise the seed process row")
 }

@@ -47,6 +47,10 @@ type HostTimelineFilter = visibilityapi.HostTimelineFilter
 // timeline types use.
 type TelemetryActivity = visibilityapi.TelemetryActivity
 
+// ProcessFlowFilter aliases the visibility per-generation flow-read filter (issue #716), the same re-export pattern above. The
+// attribution rule it carries is documented on the visibility type.
+type ProcessFlowFilter = visibilityapi.ProcessFlowFilter
+
 // Platform constants and helpers are defined in the visibility context (the canonical event owner, ADR-0015) and re-exported here so
 // detection code scopes rules and validates events without importing the visibility package directly, the same re-export pattern the
 // Severity constants use. NormalizePlatform maps an empty (legacy-agent) platform to PlatformDarwin.
@@ -458,6 +462,11 @@ type ProcessDetail struct {
 	// once after fork. The UI renders this as a visual chain (python -> sh -> bash -> current) so analysts see the full exec sequence
 	// instead of just the final path.
 	ReExecChain []Process `json:"re_exec_chain,omitempty"`
+	// FlowsTruncated reports that the row cap dropped flows, so NetworkConnections and DNSQueries together are a prefix of what this
+	// generation actually produced rather than all of it. It covers both lists because one capped read fills them. Stated by the server
+	// for the same reason ProcessTreeResult.Truncated is: a client cannot derive it, since it never learns the cap, and an absent flow
+	// must not read as a flow that did not happen.
+	FlowsTruncated bool `json:"flows_truncated"`
 }
 
 // Errors returned across the api boundary. Callers compare with
