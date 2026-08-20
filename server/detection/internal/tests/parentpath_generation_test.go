@@ -273,3 +273,57 @@ func TestInheritedPathAtEachBoundaryOfTheParentGenerations(t *testing.T) {
 		})
 	}
 }
+
+// Two generations of one PID can carry the SAME fork timestamp, because the PID-reuse sweep closes only rows stamped strictly
+// earlier (CloseStaleProcess uses fork_time_ns < ?), so an equal-stamp generation is left open beside its predecessor. The fork
+// timestamp then cannot separate them, and the image ordering ranks their rows as though they were one re-exec chain.
+//
+// This pins that as a DELIBERATE choice rather than an accident, because it is a real behaviour change: the previous ordering broke
+// the tie by row id, so it returned whichever row was inserted last. Measured on the dev database, 21 fork rows of 154,660 are
+// answered differently, against 21,263 the change corrects.
+//
+// The choice is to rank by the evidence in the events (which image was applied latest at or before the instant) rather than by row
+// id, because row id is ingest order, and ingest order being unreliable is the whole premise of issue #714: a later generation's
+// fork can be materialized first. An answer that depends on it is not more correct, only more arbitrary.
+//
+// It is still an ambiguity rather than a resolution. The principled discriminator is pidversion, the kernel's own generation
+// counter, which 99.6% of rows now carry; of the equal-stamp groups holding differing paths, only 16 have differing pidversions,
+// while 199 share one and so are duplicate rows for a single generation (issue #717 residue, since fixed). Using pidversion as the
+// generation key is issue #724.
+//
+// spec:server-process-graph-builder/fork-creates-a-process-record/a-fork-resolves-the-image-in-force-inside-a-re-exec-chain
+func TestInheritedPathWhenTwoGenerationsShareAForkTimestamp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _ := openProcessStore(t)
+
+	const host, parentPID = "equal-stamp", 500
+	const forkAt int64 = 100
+
+	older := uint32(7)
+	newer := uint32(9)
+	// Both generations claim fork time 100. The older one re-execs LATE (at 900); the newer one exec'd early (at 200) and is the
+	// generation actually holding the PID afterwards.
+	for _, p := range []api.Process{
+		{HostID: host, PID: parentPID, PPID: 1, Path: firstImage, ForkTimeNs: forkAt, ExecTimeNs: ptrTo(int64(900)), PIDVersion: &older},
+		{HostID: host, PID: parentPID, PPID: 1, Path: secondImage, ForkTimeNs: forkAt, ExecTimeNs: ptrTo(int64(200)), PIDVersion: &newer},
+	} {
+		_, err := store.InsertProcess(ctx, p)
+		require.NoError(t, err)
+	}
+
+	// Before either exec landed, neither image was applied, so the fallback takes the chain's earliest: the newer generation's.
+	early, err := store.GetParentPath(ctx, host, parentPID, 150)
+	require.NoError(t, err)
+	require.Equal(t, secondImage, early, "no image applied yet, so the earliest application is the closest evidence")
+
+	// After both, the latest application wins. That is the OLDER generation's re-exec, which is the documented ambiguity: without a
+	// generation key the record's own latest image application is the answer.
+	late, err := store.GetParentPath(ctx, host, parentPID, 1000)
+	require.NoError(t, err)
+	require.Equal(t, firstImage, late,
+		"equal fork stamps are not separable here, so the latest image application wins; issue #724 makes pidversion the key")
+}
+
+// ptrTo is a local helper for the optional timestamp fields on api.Process.
+func ptrTo[T any](v T) *T { return &v }
