@@ -26,8 +26,13 @@
 	    launchd routes the first connection to this Mach service to
 	    spawning the host app, so the notify surface is on-demand
 	    rather than always-resident. The name matches the
-	    blockNotificationServiceName constant baked into both
-	    extension/NotificationClient.swift and edr/BlockNotification.swift.
+	    blockNotificationServiceName constant, defined once in
+	    shared/BlockNotificationContract.swift and compiled into every
+	    target that speaks this contract. Note that the XPC path is not
+	    the transport the demo cut uses: the extension writes to the
+	    file-based fallback (blockNotificationDropDir) instead, so today
+	    this name is asserted by the contract's unit test and logged at
+	    host-app startup rather than dialled.
 	-->
 	<key>MachServices</key>
 	<dict>

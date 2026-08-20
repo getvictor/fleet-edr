@@ -1,10 +1,11 @@
 // BlockNotification tests: the extension and host-app sides of the
-// application_control block-notification channel ship two copies of these constants
-// + the Codable payload struct (see the header comment in BlockNotification.swift
-// for why no shared framework target). These tests pin the canonical strings + the
-// wire shape of BlockNotificationPayload so a stray edit on the extension side
-// cannot silently drift away from the host-app side without a red gate. The host
-// app's matching tests live alongside its own BlockNotification.swift copy.
+// application_control block-notification channel share ONE definition of these
+// constants + the Codable payload struct, in shared/BlockNotificationContract.swift
+// (see that file's header for why a folder-synchronised group rather than a shared
+// framework target). Drift between the two sides is now structurally impossible, so
+// what these tests still buy is the OTHER half: they pin the canonical strings and
+// the literal wire bytes, so renaming a key stays a deliberate, visible contract
+// change instead of a silent one that compiles cleanly on both sides at once.
 
 import Foundation
 @testable import EDRExtensionLogic
@@ -65,10 +66,10 @@ final class BlockNotificationTests: XCTestCase {
         XCTAssertEqual(decoded.policyID, original.policyID)
         XCTAssertEqual(decoded.policyVersion, original.policyVersion)
 
-        // Pin the literal wire bytes so the host-app reader can decode this
-        // exact byte stream without surprise. Each entry below is a key the host-app
-        // BlockNotificationPayload's CodingKeys also names: rename either side and
-        // both these tests + the host-app copy must change.
+        // Pin the literal wire bytes so the host-app reader can decode this exact byte
+        // stream without surprise. Both sides now compile the same CodingKeys, so a
+        // rename can no longer desynchronise them, but it still silently changes what
+        // goes over the wire: these assertions are what makes that visible.
         let json = String(data: encoded, encoding: .utf8) ?? ""
         XCTAssertTrue(json.contains("\"rule_id\":\"app_control:42\""))
         XCTAssertTrue(json.contains("\"rule_type\":\"BINARY\""))
