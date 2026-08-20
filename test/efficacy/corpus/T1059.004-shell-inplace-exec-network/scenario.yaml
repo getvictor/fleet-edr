@@ -1,0 +1,82 @@
+# T1059.004 Unix Shell (+ T1105 Ingress Tool Transfer), in the shape that used to be invisible.
+#
+# A shell invoked as `zsh -c '<cmd>'` replaces its own image with the payload rather than forking
+# it, so the payload runs at the SHELL's pid and nothing in the payload's ancestry is a shell. The
+# network arm resolved its shell ancestor through the ppid chain only, walked straight past the
+# closed shell generation, reached the interactive login shell above, and rejected it on the 30s
+# window. Detection therefore depended on which shell the attacker chose: the identical command
+# under /bin/bash forks and was detected (issue #713).
+#
+# The scenario keeps a long-lived interactive zsh in the chain deliberately: without it the walk
+# would find no shell at all, which is the easy half. The hard half is that it finds the WRONG one.
+name: "T1059.004 shell execs payload in place: python3 -> zsh -c -> outbound"
+host:
+  id: AAAA1059-0004-0000-0000-000000000001
+  hostname: efficacy-t1059-004.local
+  os: macOS 26.0
+timeline:
+  # The interactive login shell, exec'd well outside the rule's 30s window.
+  - at: 0ms
+    type: fork
+    child_pid: 6001
+    parent_pid: 1
+  - at: 10ms
+    type: exec
+    pid: 6001
+    ppid: 1
+    path: /bin/zsh
+    args: ["-zsh"]
+    cwd: /Users/analyst
+    uid: 501
+    gid: 20
+
+  # The non-shell parent that launches the payload, 10 minutes later.
+  - at: 600000ms
+    type: fork
+    child_pid: 6002
+    parent_pid: 6001
+  - at: 600010ms
+    type: exec
+    pid: 6002
+    ppid: 6001
+    path: /usr/bin/python3
+    args: ["python3", "-c", "import subprocess; subprocess.Popen(['/bin/zsh','-c','curl -sm3 https://198.51.100.42/ >/dev/null 2>&1']).wait()"]
+    cwd: /Users/analyst
+    uid: 501
+    gid: 20
+
+  # python3 forks the shell stage.
+  - at: 600050ms
+    type: fork
+    child_pid: 6003
+    parent_pid: 6002
+  - at: 600060ms
+    type: exec
+    pid: 6003
+    ppid: 6002
+    path: /bin/zsh
+    args: ["/bin/zsh", "-c", "curl -sm3 https://198.51.100.42/ >/dev/null 2>&1"]
+    cwd: /Users/analyst
+    uid: 501
+    gid: 20
+
+  # The shell execs curl AT ITS OWN PID. No fork: this is the step that erases the shell from the
+  # ppid chain and closes its generation.
+  - at: 600100ms
+    type: exec
+    pid: 6003
+    ppid: 6002
+    path: /usr/bin/curl
+    args: ["curl", "-sm3", "https://198.51.100.42/"]
+    cwd: /Users/analyst
+    uid: 501
+    gid: 20
+
+  # The outbound connection, the trigger event.
+  - at: 600200ms
+    type: network_connect
+    pid: 6003
+    protocol: tcp
+    direction: outbound
+    remote_address: 198.51.100.42
+    remote_port: 443

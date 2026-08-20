@@ -349,26 +349,38 @@ func (r *SuspiciousExec) evalNetwork(
 	if isLocalResolverDest(c.RemoteAddress, c.RemotePort) {
 		return nil, 0, nil
 	}
-	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, evt.HostID, c.PID, evt.TimestampNs)
-	if err != nil {
-		return nil, 0, err
-	}
-	if shell == nil {
-		return nil, 0, nil
-	}
-	if !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
-		return nil, 0, nil
-	}
 
 	// Resolve the connecting process so the finding links there rather than at the shell. That's what an analyst clicking the
 	// alert wants to land on. Prefer exact (host, pid, pidversion) identity when the flow carried a pidversion so the finding
 	// attributes to the right generation across PID reuse, falling back to the event-time window otherwise (issue #403). The
 	// ancestor walk above still uses the window for shell/parent generations; making parent edges identity-aware is out of scope.
+	//
+	// This runs before the no-shell exit because the re-exec arm below needs the connecting generation to walk from. It costs one
+	// lookup on every outbound flow that has no shell ancestor, where before it cost none. That is the price of seeing a whole
+	// class of payload at all (issue #713), and it is one indexed read against the two to four the ancestor walk above already
+	// does.
 	conn, err := resolveFlowProcess(ctx, s, evt.HostID, c.PID, c.PIDVersion, evt.TimestampNs)
 	if err != nil {
 		return nil, 0, fmt.Errorf("get conn pid %d: %w", c.PID, err)
 	}
 	if conn == nil {
+		return nil, 0, nil
+	}
+	// Fall through to the exec chain when the PPID walk yields nothing this arm can fire on. "Nothing usable" rather than "nothing
+	// found" is the load-bearing part: where a shell exec'd its payload in place, the walk does not come back empty, it comes back
+	// with the wrong shell. The re-exec closed the real shell's generation at this PID, so the walk steps over it and returns the
+	// interactive login shell above, which then fails the window because its own exec is minutes or hours old. Gating the chain on
+	// shell == nil alone would therefore never reach it, which is how issue #713 stayed open behind a walk that looked like it had
+	// searched.
+	// Each arm's candidate is gated before it can produce a finding, so neither can grow a way past the window, the parent
+	// exclusions, or the per-batch dedup. The check is nested rather than repeated once at the end because shouldFire unmarshals the
+	// parent's code-signing record, and this is a per-network_connect path: evaluating it twice for the same shell is measurable
+	// work for an answer that cannot have changed.
+	shell, parent, err := r.networkShell(ctx, s, evt, conn, seenShell)
+	if err != nil {
+		return nil, 0, err
+	}
+	if shell == nil {
 		return nil, 0, nil
 	}
 	parentPath := "(unknown)"
@@ -388,6 +400,88 @@ func (r *SuspiciousExec) evalNetwork(
 		ProcessID:   conn.ID,
 		EventIDs:    eventIDs,
 	}, shell.PID, nil
+}
+
+// networkShell picks the shell this arm will report, or nil when there is none it can fire on. Both places a shell can live are
+// tried in order: the connecting process's PPID chain, then that PID's own exec chain for a shell that replaced itself with the
+// payload (issue #713).
+//
+// Every candidate passes shouldFire before it is returned, so neither source can grow a way past the window, the parent exclusions,
+// or the per-batch dedup, and each candidate is evaluated exactly once. shouldFire unmarshals the parent's code-signing record, so on
+// a per-network_connect path that matters. Returning the decision rather than making it at the call site is also what lets the caller
+// nil-check once, which keeps the nil-safety analysis provable.
+func (r *SuspiciousExec) networkShell(
+	ctx context.Context, s api.GraphReader, evt api.Event, conn *api.Process, seenShell map[int]struct{},
+) (*api.Process, *api.Process, error) {
+	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, evt.HostID, conn.PID, evt.TimestampNs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if shell != nil && r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
+		return shell, parent, nil
+	}
+	shell, parent, err = r.findShellOnExecChain(ctx, s, evt.HostID, conn, evt.TimestampNs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if shell != nil && r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
+		return shell, parent, nil
+	}
+	return nil, nil, nil
+}
+
+// findShellOnExecChain looks for the shell on the connecting PID's own exec chain, which is where it lives when the shell exec'd its
+// payload in place rather than forking it. It is the network arm's counterpart to evalExecArm2, and its absence was issue #713.
+//
+// A same-PID re-exec closes the prior generation (insertReExec stamps its exit at the re-exec instant), and GetProcessByPID brackets
+// on that exit, so at the flow's timestamp the shell generation is simply not visible by PID. The PPID walk therefore steps straight
+// past it to whatever is above, usually the interactive login shell, whose own exec is minutes or hours old and so fails the window.
+// The rule then reported nothing, and which shell the attacker picked decided whether the payload was seen at all: measured on macOS
+// 26.6.1, zsh replaces itself with the payload while bash and sh fork it, so `zsh -c 'curl ...'` was invisible and the identical bash
+// form was detected.
+//
+// The chain is nil for a PID that never re-exec'd, which is nearly all of them, so this costs a field check on the hot path and
+// only walks where a chain exists.
+func (r *SuspiciousExec) findShellOnExecChain(
+	ctx context.Context, s api.GraphReader, hostID string, conn *api.Process, asOfNs int64,
+) (*api.Process, *api.Process, error) {
+	chain, err := s.GetExecChain(ctx, *conn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("walk exec chain pid %d: %w", conn.PID, err)
+	}
+	// A PID that never re-exec'd has no chain, which is nearly all of them, so this is the hot path and it exits here.
+	if len(chain) == 0 {
+		return nil, nil, nil
+	}
+	// Newest generation first. GetExecChain returns the chain OLDEST-first (it recurses backwards through previous_exec_id and
+	// orders by descending depth), and the shell that ran this payload is the one closest to it, not the first one this PID ever
+	// held. Walking forward would hand back the stalest shell in the chain, and for `zsh -c 'bash -c "curl ..."'`, where both
+	// shells exec in place at one PID, that is the one most likely to fail the window and drop the alert.
+	for i := len(chain) - 1; i >= 0; i-- {
+		prior := &chain[i]
+		if !shellPaths[prior.Path] {
+			continue
+		}
+		priorParent, err := r.lookupAncestor(ctx, s, hostID, prior.PPID, asOfNs)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Ancestry incomplete: the shell claims a parent that is not in the graph yet, so defer rather than fire. Firing here would
+		// report a finding whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was
+		// never resolved, so the alert would slip past a rule the operator had deliberately configured. The PPID walk defers on the
+		// same condition and for the same reason. A shell parented at launchd (PPID <= 1) is a genuine no-parent case, not a
+		// missing record, and still counts.
+		if priorParent == nil && prior.PPID > 1 {
+			return nil, nil, nil
+		}
+		// A shell whose own parent is a shell is shell-to-shell layering, not the boundary this rule fires on; keep walking the
+		// chain for one whose parent is not a shell, exactly as the exec arm does.
+		if priorParent != nil && shellPaths[priorParent.Path] {
+			continue
+		}
+		return prior, priorParent, nil
+	}
+	return nil, nil, nil
 }
 
 // findShellWithNonShellAncestor walks the PPID chain inclusively starting at

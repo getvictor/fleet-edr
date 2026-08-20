@@ -49,6 +49,8 @@ Detects two related chain shapes that share a single attribution chain:
 
 The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
 
+Both arms find the shell whether it forked the payload or replaced itself with it. A shell invoked as `zsh -c '<cmd>'` commonly execs the payload at its own PID rather than forking, which leaves no shell in the payload's parent chain; the rule looks at that PID's own exec history as well, so the shell is still attributed. This matters because the shells behave differently on macOS: `zsh` replaces itself, while `bash` and `sh` fork, so an identical command would otherwise be detected under one shell and missed under another.
+
 30 seconds is the temporal cap between the shell exec and the trigger event.
 
 ### Known false-positive sources
@@ -62,6 +64,7 @@ The rule fires on the LAST link of the chain (the temp-exec or the network_conne
 - 30s window is hard-coded; long-tail post-shell activity is missed by design.
 - A parent-path-glob exclusion silences BOTH arms of the rule for that parent.
 - An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.
+- The 30-second window applies to the shell that ran the payload, including one found on a PID's exec history, so a payload run from a long-idle interactive shell is still out of scope.
 
 ## persistence_launchagent
 
