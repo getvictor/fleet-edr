@@ -15,7 +15,7 @@ import (
 // is what lets the differential property test assert the two produce identical process forests.
 type processStore interface {
 	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error)
-	GetParentPath(ctx context.Context, hostID string, pid int) (string, error)
+	GetParentPath(ctx context.Context, hostID string, pid int, atTimeNs int64) (string, error)
 	EventAlreadyApplied(ctx context.Context, hostID string, pid int, eventID string) (bool, error)
 	InsertProcess(ctx context.Context, p api.Process) (int64, error)
 	UpdateProcessExec(ctx context.Context, u mysql.ProcessExecUpdate) error
@@ -82,9 +82,15 @@ func rankGreater(a, b *procRow) bool {
 	return a.seq > b.seq
 }
 
-// GetProcessByPID returns the row whose (host, pid) brackets atTimeNs, mirroring the store query: fork_time_ns <= atTimeNs AND
-// (exit_time_ns IS NULL OR exit_time_ns >= atTimeNs), most recent by (fork_time_ns, id). Returns a copy so handlers cannot mutate
+// GetProcessByPID returns the row whose (host, pid) lifetime brackets atTimeNs, mirroring the store query: fork_time_ns <= atTimeNs
+// AND (exit_time_ns IS NULL OR exit_time_ns >= atTimeNs), most recent by (fork_time_ns, id). Returns a copy so handlers cannot mutate
 // the overlay through the returned pointer.
+//
+// The aliveness half of that bracket is deliberately NOT shared with GetParentPath below, even though both answer "which generation
+// held this pid" for an instant. The instants differ in what backs them: this one arrives from an unrelated event (a network flow's
+// timestamp), so a generation recorded as already exited genuinely must not match, while GetParentPath's instant is a fork whose
+// parent was alive by construction. Collapsing the two back into one predicate reinstates a measured 4:1 regression; see the store's
+// GetParentPath docstring for the numbers.
 func (s *batchSession) GetProcessByPID(_ context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
 	var best *procRow
 	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
@@ -124,11 +130,20 @@ func matchesEventID(field *string, eventID string) bool {
 	return field != nil && *field == eventID
 }
 
-// GetParentPath returns the path of the most-recent (by fork_time_ns, id) row for (host, pid), or "" when none, mirroring the store
-// query (no exit-time filter).
-func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int) (string, error) {
+// GetParentPath returns the path of the newest generation of (host, pid) that had forked by atTimeNs, the child's fork time, or "" when
+// none had forked yet. It mirrors the store query, fork bound included; an overlay that dropped the bound would silently reintroduce
+// issue #714 for every batch larger than one event, since the batched path is the production one.
+//
+// It applies no aliveness test, which is the one place this overlay's two pid-plus-instant reads legitimately differ. A parent is
+// alive at its child's fork by construction, so an exit timestamp can only disqualify the sole candidate on data that handler-time
+// stamping and synthesized pid-reuse closes make unreliable. Do not "fix" the inconsistency with GetProcessByPID above by adding the
+// exit test here; the store's GetParentPath docstring carries the measurement that rejected it.
+func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int, atTimeNs int64) (string, error) {
 	var best *procRow
 	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
+		if r.proc.ForkTimeNs > atTimeNs {
+			continue
+		}
 		if best == nil || rankGreater(r, best) {
 			best = r
 		}

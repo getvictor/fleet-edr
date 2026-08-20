@@ -237,8 +237,10 @@ func (b *Builder) handleFork(ctx context.Context, w processStore, evt api.Event)
 		return err
 	}
 
-	// Inherit parent's path for the new process (fork-without-exec case).
-	parentPath, err := w.GetParentPath(ctx, evt.HostID, p.ParentPID)
+	// Inherit parent's path for the new process (fork-without-exec case). Resolved at the fork's own timestamp, not at "now": the
+	// parent pid may already have been recycled by a later generation whose fork was materialized first, and inheriting that
+	// generation's image attributes the child to a binary its parent never ran (issue #714).
+	parentPath, err := w.GetParentPath(ctx, evt.HostID, p.ParentPID, evt.TimestampNs)
 	if err != nil {
 		b.logger.WarnContext(ctx, "failed to get parent path", "host_id", evt.HostID, "parent_pid", p.ParentPID, "err", err)
 	}

@@ -415,15 +415,32 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 	return err
 }
 
-// GetParentPath returns the path of the most recent process with the given PID that is still alive (or was alive most recently).
-// Used for fork-without-exec to inherit the parent's path.
-func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int) (string, error) {
+// GetParentPath returns the path of the newest generation of the given PID that had forked by atTimeNs, for a fork-without-exec child
+// to inherit as its own path. atTimeNs is the child's fork timestamp. Empty only when no generation of that PID had forked yet.
+//
+// The fork bound carries the one physical constraint there is: a generation that started AFTER the child forked cannot be the child's
+// parent. Without it the query answered with whichever generation holds the PID at query time, so a fork materialized after its
+// parent's PID had been recycled inherited the RECYCLING generation's image. That reordering is routine rather than exotic: the
+// extension stamps events at handler time, and concurrent claim batches (issue #535) deliver a later batch's fork before an earlier
+// one's, so the parent's successor can be materialized first. Measured over the dev database's 154,660 never-exec'd rows, 21,084 of
+// them (13.6%) name a binary from a generation that had not yet forked when the child did (issue #714).
+//
+// This deliberately does NOT also require the parent to be recorded as still alive, and that asymmetry with GetProcessByPID is the
+// point rather than an oversight. A parent IS alive at its child's fork, by construction: nothing forks from a dead process. So an
+// aliveness test can never correct an answer here, it can only discard the only candidate on the strength of an exit timestamp, and
+// those timestamps are exactly the unreliable data. The extension stamps at handler time (issue #710, measured 701ms late) and
+// CloseStaleProcess SYNTHESIZES an exit at the recycling fork's timestamp, so "the parent exited before its own child forked" means
+// the record is wrong, not that the parent is disqualified. Adding `(exit_time_ns IS NULL OR exit_time_ns >= ?)` was measured on the
+// same rows: it blanked the inherited path on 29,880 rows while fixing 3,413 fewer than the fork bound alone, so it is a 4:1 net loss
+// and is not to be reinstated here. GetProcessByPID resolves an arbitrary instant that arrives from an unrelated event (a network
+// flow), has no such guarantee, and therefore does need both bounds.
+func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTimeNs int64) (string, error) {
 	var path string
 	err := s.db.GetContext(ctx, &path, `
 		SELECT path FROM processes
-		WHERE host_id = ? AND pid = ?
+		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns DESC, id DESC LIMIT 1`,
-		hostID, pid,
+		hostID, pid, atTimeNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
