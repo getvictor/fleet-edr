@@ -122,24 +122,36 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 //
 // Cancelling requires the SAME authority as issuing that command type, not merely read access. Preventing a response action is itself
 // a response decision: a reader who could cancel could neuter incident response on a host they can only observe.
-func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
+// resolveCommand parses the {id} path value and loads that command, writing the standard failure responses itself and reporting
+// ok=false when it has. Shared by the read and cancel routes: both need the command in hand BEFORE they can authorize, because the
+// chokepoint gates on the command's own host rather than on anything the caller supplied.
+func (h *Handler) resolveCommand(w http.ResponseWriter, r *http.Request, logMsg string) (api.Command, bool) {
 	ctx := r.Context()
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_command_id")
-		return
+		return api.Command{}, false
 	}
-	// Fetch first so the chokepoint gates on the command's own host and type rather than on anything the caller supplied.
 	cmd, err := h.svc.Get(ctx, id)
 	switch {
 	case errors.Is(err, api.ErrCommandNotFound):
 		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
-		return
+		return api.Command{}, false
 	case err != nil:
-		h.logger.ErrorContext(ctx, "get command for cancel", "id", id, "err", err)
+		h.logger.ErrorContext(ctx, logMsg, "id", id, "err", err)
 		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return api.Command{}, false
+	}
+	return cmd, true
+}
+
+func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	cmd, ok := h.resolveCommand(w, r, "get command for cancel")
+	if !ok {
 		return
 	}
+	id := cmd.ID
 	action, ok := commandTypeToAction(cmd.CommandType)
 	if !ok {
 		writeErr(ctx, h.logger, w, http.StatusBadRequest, "unsupported_command_type")
@@ -151,7 +163,7 @@ func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
 
 	// HostID is the command's own, read back above: UpdateStatus enforces host ownership so a caller cannot move a command by id
 	// alone, and the operator path has to satisfy the same check the agent path does.
-	err = h.svc.UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: cmd.HostID, Status: api.StatusCancelled})
+	err := h.svc.UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: cmd.HostID, Status: api.StatusCancelled})
 	switch {
 	case errors.Is(err, api.ErrInvalidStatusTransition):
 		// The agent already has it, or it already finished. Reporting success here would tell the operator nothing ran on the host
@@ -215,22 +227,11 @@ func (h *Handler) recordCommandAudit(r *http.Request, hostID, commandType string
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_command_id")
-		return
-	}
-	// Fetch first so the chokepoint can gate on the command's host_id. Reading by id alone leaks "command N exists" but no payload,
-	// and matches what GET /api/commands/{id} did before this PR. The chokepoint then enforces host.read against the resolved host so
-	// future host-scoped roles can deny without special-casing the commands → host relationship at the policy layer.
-	cmd, err := h.svc.Get(ctx, id)
-	switch {
-	case errors.Is(err, api.ErrCommandNotFound):
-		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
-		return
-	case err != nil:
-		h.logger.ErrorContext(ctx, "get command", "id", id, "err", err)
-		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+	// Resolved before authorizing so the chokepoint can gate on the command's host_id. Reading by id alone leaks "command N exists"
+	// but no payload. The chokepoint then enforces host.read against the resolved host, so future host-scoped roles can deny without
+	// special-casing the commands to host relationship at the policy layer.
+	cmd, ok := h.resolveCommand(w, r, "get command")
+	if !ok {
 		return
 	}
 	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionHostRead,
