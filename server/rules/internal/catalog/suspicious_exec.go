@@ -349,10 +349,6 @@ func (r *SuspiciousExec) evalNetwork(
 	if isLocalResolverDest(c.RemoteAddress, c.RemotePort) {
 		return nil, 0, nil
 	}
-	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, evt.HostID, c.PID, evt.TimestampNs)
-	if err != nil {
-		return nil, 0, err
-	}
 
 	// Resolve the connecting process so the finding links there rather than at the shell. That's what an analyst clicking the
 	// alert wants to land on. Prefer exact (host, pid, pidversion) identity when the flow carried a pidversion so the finding
@@ -380,22 +376,11 @@ func (r *SuspiciousExec) evalNetwork(
 	// exclusions, or the per-batch dedup. The check is nested rather than repeated once at the end because shouldFire unmarshals the
 	// parent's code-signing record, and this is a per-network_connect path: evaluating it twice for the same shell is measurable
 	// work for an answer that cannot have changed.
-	if shell == nil || !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
-		shell, parent, err = r.findShellOnExecChain(ctx, s, evt.HostID, conn, evt.TimestampNs)
-		if err != nil {
-			return nil, 0, err
-		}
+	shell, parent, err := r.networkShell(ctx, s, evt, conn, seenShell)
+	if err != nil {
+		return nil, 0, err
 	}
-	// One gate for both arms. Whichever supplied the shell, this is the single point where the rule decides to fire, so neither can
-	// grow a way past the window, the parent exclusions, or the per-batch dedup.
-	//
-	// It does mean shouldFire runs twice for a shell the PPID walk already accepted. Nesting the second check inside the branch
-	// above removes that, and nilaway then reports a possible nil dereference on shell.Path below: it cannot prove the shell is
-	// non-nil through a nil-check that guards an assignment inside a branch, in either the reassignment or the separate-variable
-	// form. The duplicated call is the cheaper concession, because it lands only where the PPID walk found a shell it would fire
-	// on, which is a flow that is about to raise an alert, not the common flow that has no shell ancestor at all. Those take the
-	// branch and evaluate exactly one candidate.
-	if shell == nil || !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
+	if shell == nil {
 		return nil, 0, nil
 	}
 	parentPath := "(unknown)"
@@ -415,6 +400,34 @@ func (r *SuspiciousExec) evalNetwork(
 		ProcessID:   conn.ID,
 		EventIDs:    eventIDs,
 	}, shell.PID, nil
+}
+
+// networkShell picks the shell this arm will report, or nil when there is none it can fire on. Both places a shell can live are
+// tried in order: the connecting process's PPID chain, then that PID's own exec chain for a shell that replaced itself with the
+// payload (issue #713).
+//
+// Every candidate passes shouldFire before it is returned, so neither source can grow a way past the window, the parent exclusions,
+// or the per-batch dedup, and each candidate is evaluated exactly once. shouldFire unmarshals the parent's code-signing record, so on
+// a per-network_connect path that matters. Returning the decision rather than making it at the call site is also what lets the caller
+// nil-check once, which keeps the nil-safety analysis provable.
+func (r *SuspiciousExec) networkShell(
+	ctx context.Context, s api.GraphReader, evt api.Event, conn *api.Process, seenShell map[int]struct{},
+) (*api.Process, *api.Process, error) {
+	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, evt.HostID, conn.PID, evt.TimestampNs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if shell != nil && r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
+		return shell, parent, nil
+	}
+	shell, parent, err = r.findShellOnExecChain(ctx, s, evt.HostID, conn, evt.TimestampNs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if shell != nil && r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
+		return shell, parent, nil
+	}
+	return nil, nil, nil
 }
 
 // findShellOnExecChain looks for the shell on the connecting PID's own exec chain, which is where it lives when the shell exec'd its
