@@ -752,18 +752,30 @@ func TestPollDefersToTheStreamButOnlyForTheFloorInterval(t *testing.T) {
 	}
 }
 
-// A command stranded by the wedge has to actually reach the executor once the floor expires, not merely cause a request.
-func TestPollFloorDeliversACommandStrandedByABelievedStream(t *testing.T) {
+// A command stranded by the wedge has to actually reach the EXECUTOR once the floor expires, not merely cause a request. Driving
+// pollAndDispatch rather than fetchPending is the point: the floor lives in pollAndDispatch, so a test that calls fetchPending proves
+// only that the server would answer, which it always would.
+func TestPollFloorDispatchesACommandStrandedByABelievedStream(t *testing.T) {
 	t.Parallel()
 
+	var mu sync.Mutex
+	var statuses []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode([]Command{
-				{ID: 7, HostID: "host-a", CommandType: "kill_process", Payload: json.RawMessage(`{"pid":999999}`), Status: "pending"},
-			})
+			_ = json.NewEncoder(w).Encode([]Command{{
+				ID: 7, HostID: "host-a", CommandType: "set_application_control",
+				Payload: json.RawMessage(`{"policy_id":7,"policy_version":1,"rules":[]}`), Status: "pending",
+			}})
 			return
 		}
+		var body struct {
+			Status string `json:"status"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		statuses = append(statuses, body.Status)
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -776,8 +788,10 @@ func TestPollFloorDeliversACommandStrandedByABelievedStream(t *testing.T) {
 	}, nil, nil)
 	cmdr.lastPoll = time.Now().Add(-2 * time.Minute)
 
-	commands, err := cmdr.fetchPending(t.Context())
-	require.NoError(t, err)
-	require.Len(t, commands, 1, "the floor poll reaches a server that still holds the stranded command")
-	assert.Equal(t, int64(7), commands[0].ID)
+	cmdr.pollAndDispatch(t.Context())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, statuses, "the stranded command must reach the executor, which reports as it goes")
+	assert.Equal(t, "acked", statuses[0], "the command is acked rather than left pending forever")
 }

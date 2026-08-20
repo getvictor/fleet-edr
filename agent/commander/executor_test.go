@@ -18,6 +18,8 @@ type fakeLedger struct {
 	mu       sync.Mutex
 	m        map[int64]ledgerRow
 	claimErr error // when set, Claim returns this error (models a ledger write failure)
+	// won counts claims actually granted per id, so a concurrency test can assert the side effect was claimed exactly once.
+	won map[int64]int
 }
 
 type ledgerRow struct {
@@ -25,7 +27,24 @@ type ledgerRow struct {
 	result json.RawMessage
 }
 
-func newFakeLedger() *fakeLedger { return &fakeLedger{m: make(map[int64]ledgerRow)} }
+func newFakeLedger() *fakeLedger {
+	return &fakeLedger{m: make(map[int64]ledgerRow), won: make(map[int64]int)}
+}
+
+// claims reports how many times id was granted a fresh claim.
+func (f *fakeLedger) claims(id int64) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.won[id]
+}
+
+// seed plants a claim as though a previous process had written it and died, with no terminal outcome recorded.
+func (f *fakeLedger) seed(id int64, status string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.m[id] = ledgerRow{status: status}
+	return nil
+}
 
 func (f *fakeLedger) Claim(_ context.Context, id int64, claimStatus string) (bool, string, json.RawMessage, error) {
 	f.mu.Lock()
@@ -37,6 +56,7 @@ func (f *fakeLedger) Claim(_ context.Context, id int64, claimStatus string) (boo
 		return false, r.status, r.result, nil
 	}
 	f.m[id] = ledgerRow{status: claimStatus}
+	f.won[id]++
 	return true, claimStatus, nil, nil
 }
 

@@ -66,8 +66,12 @@ type Executor struct {
 	// gen is the live pid -> pidversion map used to pin a kill to the operator-selected process generation (issue #627). Nil disables the
 	// check (the kill then falls back to pid-only, today's behavior), which is why it is optional and set via SetGeneration rather than a
 	// constructor argument: only the production agent wires it, tests and the degraded path leave it nil.
-	gen    *procgen.Registry
-	logger *slog.Logger
+	gen *procgen.Registry
+	// inFlight is the process-wide set of command IDs currently executing, shared with the other transport so the two cannot both run
+	// one command. Nil disables the check (single-transport callers and most tests); see InFlight for why liveness is tracked here
+	// rather than in the durable ledger.
+	inFlight *InFlight
+	logger   *slog.Logger
 }
 
 // NewExecutor builds an Executor. sender may be nil (set_application_control then reports failed with a clear reason); ledger may be nil
@@ -77,6 +81,12 @@ func NewExecutor(sender ApplicationControlSender, ledger Ledger, logger *slog.Lo
 		logger = slog.Default()
 	}
 	return &Executor{sender: sender, ledger: ledger, kill: defaultKill, logger: logger}
+}
+
+// SetInFlight wires the shared in-flight tracker. Optional and set after construction for the same reason as SetGeneration: only the
+// production agent runs two transports, so tests and single-transport paths leave it nil.
+func (e *Executor) SetInFlight(f *InFlight) {
+	e.inFlight = f
 }
 
 // SetGeneration installs the live process-generation registry used to pin kill_process to the operator-selected generation (issue #627).
@@ -98,6 +108,14 @@ func (e *Executor) SetGeneration(gen *procgen.Registry) {
 //
 // A nil Ledger disables dedup (tests / a degraded path): it acks, runs, and reports with no claim.
 func (e *Executor) Execute(ctx context.Context, cmd Command, report ReportFunc) {
+	// Another transport in this process may already be executing this command, because the poll is a bounded floor rather than
+	// suspended for as long as the stream is believed up (issue #711). Drop the duplicate: the holder will ack and report. Without
+	// this the loser reaches the ledger, sees the winner's live "executing" claim, and reads it as a crashed prior attempt.
+	if !e.inFlight.Begin(cmd.ID) {
+		e.logger.DebugContext(ctx, "command already executing on the other transport", "cmd_id", cmd.ID)
+		return
+	}
+	defer e.inFlight.End(cmd.ID)
 	if e.ledger != nil {
 		won, status, result, err := e.ledger.Claim(ctx, cmd.ID, statusExecuting)
 		if err != nil {
@@ -123,9 +141,13 @@ func (e *Executor) replaySeen(ctx context.Context, cmd Command, report ReportFun
 		return
 	}
 	// A bare "executing" claim with no terminal outcome means a prior attempt was interrupted (a crash between the side effect and
-	// recording its result). The no-concurrency invariant (the poll is suspended while the control stream is connected, and each
-	// transport processes commands sequentially) rules out a live concurrent claim, so this is always a crashed prior attempt:
-	// terminalize it so the server stops re-delivering, and never re-run the side effect.
+	// recording its result). Reaching here proves the attempt is not live: a command already executing in THIS process is dropped by
+	// the in-flight check at the top of Execute, and a claim left by a crash cannot be in that map because the map died with the
+	// process that wrote the claim. So this is always an interrupted attempt: terminalize it so the server stops re-delivering, and
+	// never re-run the side effect.
+	//
+	// This used to rest on the poll being suspended for as long as the control stream was believed up. That is no longer true, and
+	// was never safe to rest on, because the belief itself is what fails when the stream wedges (issue #711).
 	res := marshalResult("not retried: a prior execution attempt did not complete")
 	e.mark(ctx, cmd.ID, StatusFailed, res)
 	e.reportOrLog(ctx, cmd.ID, report, StatusFailed, res)

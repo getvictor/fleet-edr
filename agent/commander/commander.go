@@ -65,6 +65,10 @@ type Config struct {
 	// Generation is the live pid -> pidversion registry (issue #627), shared with the control client so both transports run the same
 	// kill_process generation check. Nil disables the check (kill falls back to pid-only).
 	Generation *procgen.Registry
+	// InFlight is the process-wide executing-command set, shared with the control client. Required once the poll is a bounded floor
+	// rather than suspended while the stream is up, because the two transports can then deliver one command at the same time
+	// (issue #711). Nil disables the check, which is correct only when this is the sole transport.
+	InFlight *InFlight
 }
 
 // Commander polls the server for pending commands and dispatches them.
@@ -94,6 +98,7 @@ func New(cfg Config, client *http.Client, logger *slog.Logger) *Commander {
 	}
 	executor := NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
 	executor.SetGeneration(cfg.Generation)
+	executor.SetInFlight(cfg.InFlight)
 	// Start the floor clock now rather than at the zero time, so a fresh commander defers to a live stream like any other and the
 	// contract stays exactly "defer for at most FloorInterval" instead of "always poll once at startup, then defer".
 	return &Commander{

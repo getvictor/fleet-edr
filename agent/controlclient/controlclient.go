@@ -44,6 +44,9 @@ type Config struct {
 	// Generation is the live pid -> pidversion registry (issue #627), shared with the poll path so both transports run the same
 	// kill_process generation check. Nil disables the check (kill falls back to pid-only).
 	Generation *procgen.Registry
+	// InFlight is the process-wide executing-command set, shared with the commander so the push path and the bounded-floor poll path
+	// cannot both execute one command (issue #711).
+	InFlight *commander.InFlight
 	// OnConnectedChange reports stream up (true) / down (false) so the commander can suspend / resume polling. Nil is allowed.
 	OnConnectedChange func(bool)
 	Logger            *slog.Logger
@@ -86,6 +89,7 @@ func New(cfg Config) *Client {
 	}
 	executor := commander.NewExecutor(cfg.ApplicationControlSender, cfg.Ledger, logger)
 	executor.SetGeneration(cfg.Generation)
+	executor.SetInFlight(cfg.InFlight)
 	return &Client{
 		cfg:            cfg,
 		executor:       executor,
