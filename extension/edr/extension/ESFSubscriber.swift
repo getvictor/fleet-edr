@@ -298,7 +298,8 @@ final class ESFSubscriber: Sendable {
             logger.warning("AUTH_EXEC ALLOW (undecided) reason=\(reason.rawValue, privacy: .public)")
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
             emitUndecidedEvent(
-                target: context.target, fileStat: context.fileStat, verdict: "allow", reason: reason, snapshot: context.snapshot
+                target: context.target, fileStat: context.fileStat, verdict: "allow", reason: reason, snapshot: context.snapshot,
+                kernelTimeNs: kernelEventTimeNs(context.message.pointee.time)
             )
         case .deny(let rule, let matchedIdentifier):
             // matchedIdentifier is .private to honor the "no PII in log statements" coding guideline. For BINARY/CDHASH/
@@ -311,7 +312,8 @@ final class ESFSubscriber: Sendable {
             )
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
             emitBlockEvent(
-                target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot
+                target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot,
+                kernelTimeNs: kernelEventTimeNs(context.message.pointee.time)
             )
             emitBlockNotification(
                 target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot
@@ -320,7 +322,8 @@ final class ESFSubscriber: Sendable {
             logger.warning("AUTH_EXEC DENIED (undecided) reason=\(reason.rawValue, privacy: .public)")
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
             emitUndecidedEvent(
-                target: context.target, fileStat: context.fileStat, verdict: "deny", reason: reason, snapshot: context.snapshot
+                target: context.target, fileStat: context.fileStat, verdict: "deny", reason: reason, snapshot: context.snapshot,
+                kernelTimeNs: kernelEventTimeNs(context.message.pointee.time)
             )
         }
     }
@@ -371,7 +374,7 @@ final class ESFSubscriber: Sendable {
             pidVersion: pidVersion
         )
 
-        if let data = serializer.serialize(eventType: "exec", payload: payload) {
+        if let data = serializer.serialize(eventType: "exec", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("exec pid=\(pid) path=\(path)")
             onEvent?(data)
         }
@@ -385,7 +388,7 @@ final class ESFSubscriber: Sendable {
 
         let payload = ForkPayload(childPid: childPid, parentPid: parentPid, pidVersion: childPidVersion)
 
-        if let data = serializer.serialize(eventType: "fork", payload: payload) {
+        if let data = serializer.serialize(eventType: "fork", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("fork parent=\(parentPid) child=\(childPid)")
             onEvent?(data)
         }
@@ -397,7 +400,7 @@ final class ESFSubscriber: Sendable {
 
         let payload = ExitPayload(pid: pid, exitCode: Int(exitCode))
 
-        if let data = serializer.serialize(eventType: "exit", payload: payload) {
+        if let data = serializer.serialize(eventType: "exit", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("exit pid=\(pid) code=\(exitCode)")
             onEvent?(data)
         }

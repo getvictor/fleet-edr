@@ -82,7 +82,8 @@ extension ESFSubscriber {
         target: es_process_t,
         rule: ApplicationControlRule,
         matchedIdentifier: String,
-        snapshot: ApplicationControlSnapshot
+        snapshot: ApplicationControlSnapshot,
+        kernelTimeNs: UInt64
     ) {
         let pid = audit_token_to_pid(target.audit_token)
         let path = esTokenString(target.executable.pointee.path)
@@ -98,7 +99,7 @@ extension ESFSubscriber {
             policyID: snapshot.policyID,
             policyVersion: snapshot.policyVersion
         )
-        if let data = serializer.serialize(eventType: "application_control_block", payload: payload) {
+        if let data = serializer.serialize(eventType: "application_control_block", payload: payload, kernelTimeNs: kernelTimeNs) {
             onEvent?(data)
         }
     }
@@ -112,7 +113,8 @@ extension ESFSubscriber {
         fileStat: stat,
         verdict: String,
         reason: UndecidedReason,
-        snapshot: ApplicationControlSnapshot
+        snapshot: ApplicationControlSnapshot,
+        kernelTimeNs: UInt64
     ) {
         let pid = audit_token_to_pid(target.audit_token)
         let path = esTokenString(target.executable.pointee.path)
@@ -125,7 +127,7 @@ extension ESFSubscriber {
             policyID: snapshot.policyID,
             policyVersion: snapshot.policyVersion
         )
-        if let data = serializer.serialize(eventType: "application_control_undecided", payload: payload) {
+        if let data = serializer.serialize(eventType: "application_control_undecided", payload: payload, kernelTimeNs: kernelTimeNs) {
             onEvent?(data)
         }
     }

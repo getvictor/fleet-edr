@@ -307,11 +307,23 @@ final class EventSerializer: Sendable {
         self.hostID = Self.getHardwareUUID() ?? "unknown"
     }
 
-    func serialize<P: Codable & Sendable>(eventType: String, payload: P) -> Data? {
+    /// serialize wraps a payload in the wire envelope.
+    ///
+    /// kernelTimeNs is the instant the KERNEL observed the event, taken from `es_message_t.time`, and every caller that has an ES
+    /// message must pass it. Stamping here instead, with the wall clock at serialize time, records when this handler finished, and
+    /// those are not close together under load: an exec is stamped after the handler's synchronous sha256 and code-signing
+    /// extraction, measured at 701ms after the true exec on a busy host. That is not a cosmetic error. The server correlates a
+    /// network flow to the process that made it by timestamp, so a late exec stamp can place a process AFTER the flow it produced,
+    /// and the rule then finds no process and reports nothing at all (issue #710). It also makes every time-correlated detection
+    /// load-dependent, missing fast scripted chains while catching slow interactive ones, which is backwards.
+    ///
+    /// Callers with no ES message behind them (the application-control resync, the boot-time process snapshot) pass nil and keep the
+    /// serialize-time clock, which is the honest answer there: those events describe a state read now, not a kernel event.
+    func serialize<P: Codable & Sendable>(eventType: String, payload: P, kernelTimeNs: UInt64? = nil) -> Data? {
         let envelope = EventEnvelope(
             eventID: UUID().uuidString,
             hostID: hostID,
-            timestampNs: UInt64(clock_gettime_nsec_np(CLOCK_REALTIME)),
+            timestampNs: kernelTimeNs ?? UInt64(clock_gettime_nsec_np(CLOCK_REALTIME)),
             eventType: eventType,
             platform: EventPlatform.macOS,
             payload: payload
@@ -341,4 +353,13 @@ final class EventSerializer: Sendable {
         )
         return uuidCF?.takeRetainedValue() as? String
     }
+}
+
+/// kernelEventTimeNs converts an `es_message_t.time` timespec into the nanosecond wall-clock stamp the wire envelope carries.
+///
+/// ES reports the event time as a timespec on the same CLOCK_REALTIME base the serializer would otherwise sample, so the two are
+/// directly comparable and no timebase conversion is involved. The difference between them is handler latency, not clock drift,
+/// which is why reading this field is the whole fix for issue #710.
+func kernelEventTimeNs(_ time: timespec) -> UInt64 {
+    UInt64(time.tv_sec) * 1_000_000_000 + UInt64(time.tv_nsec)
 }
