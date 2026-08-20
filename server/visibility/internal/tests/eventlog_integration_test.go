@@ -70,14 +70,14 @@ func TestEventLog_AppendClaimAckNack(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), pending, "both appended events are pending")
 
-	claimed, err := log.Claim(ctx, 10)
+	claimed, err := log.ClaimForHost(ctx, "h1", 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 2)
 	assert.Equal(t, []string{"e1", "e2"}, ids(claimed))
 	assert.Equal(t, int64(101), claimed[0].IngestedAtNs, "ingested_at_ns round-trips from the stored row")
 
 	// A re-claim returns nothing: the rows are in-flight (processed = 2), not re-offered.
-	again, err := log.Claim(ctx, 10)
+	again, err := log.ClaimForHost(ctx, "h1", 10)
 	require.NoError(t, err)
 	assert.Empty(t, again)
 
@@ -90,7 +90,7 @@ func TestEventLog_AppendClaimAckNack(t *testing.T) {
 	assert.Equal(t, int64(1), pending, "acked event leaves the pending count; nacked event remains")
 
 	// The nacked event is claimable again; the acked one is not.
-	reclaimed, err := log.Claim(ctx, 10)
+	reclaimed, err := log.ClaimForHost(ctx, "h1", 10)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"e2"}, ids(reclaimed))
 }
@@ -109,7 +109,7 @@ func TestEventLog_PlatformRoundTrip(t *testing.T) {
 		{EventID: "leg", HostID: "h1", TimestampNs: 300, IngestedAtNs: 301, EventType: "exec", Payload: json.RawMessage(`{"pid":3}`)},
 	}))
 
-	claimed, err := log.Claim(ctx, 10)
+	claimed, err := log.ClaimForHost(ctx, "h1", 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 3)
 	byID := make(map[string]string, len(claimed))
@@ -135,12 +135,15 @@ func TestEventLog_IdempotentAppend(t *testing.T) {
 	assert.Equal(t, int64(1), pending, "the duplicate event_id is not enqueued twice")
 }
 
-func TestEventLog_ClaimOrderingAndDisjoint(t *testing.T) {
+// A claim never spans hosts (issue #717), and within a host it is timestamp-ordered so the graph builder sees a pid's fork before its
+// exec. PendingHosts orders by each host's oldest claimable event, which is what keeps a host with a long-waiting backlog from being
+// starved by a busier one.
+func TestEventLog_ClaimIsHostScopedAndOrdered(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	log := newEventLog(t)
 
-	// Interleave two hosts; the claim orders host-major then timestamp, and successive claims are disjoint.
+	// hostB's rows are appended first but hostA holds the oldest event, so hostA must be offered first.
 	require.NoError(t, log.Append(ctx, []visibilityapi.Event{
 		ev("b2", "hostB", 400, "exec"),
 		ev("a1", "hostA", 100, "exec"),
@@ -148,13 +151,22 @@ func TestEventLog_ClaimOrderingAndDisjoint(t *testing.T) {
 		ev("a2", "hostA", 300, "exec"),
 	}))
 
-	first, err := log.Claim(ctx, 2)
+	hosts, err := log.PendingHosts(ctx, 10)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"a1", "a2"}, ids(first), "ordered by (host_id, timestamp_ns)")
+	assert.Equal(t, []string{"hostA", "hostB"}, hosts, "hosts are offered oldest-claimable-event first")
 
-	second, err := log.Claim(ctx, 2)
+	first, err := log.ClaimForHost(ctx, "hostA", 10)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"b1", "b2"}, ids(second), "second claim is disjoint from the first")
+	assert.Equal(t, []string{"a1", "a2"}, ids(first), "one host's events, in timestamp order, and no other host's")
+
+	second, err := log.ClaimForHost(ctx, "hostB", 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b1", "b2"}, ids(second), "a claim for another host is disjoint from the first")
+
+	// With hostA fully in flight, only hostB's rows could still be claimable, and they are in flight too.
+	drained, err := log.PendingHosts(ctx, 10)
+	require.NoError(t, err)
+	assert.Empty(t, drained, "a host whose rows are all in flight is not offered again until its claim expires")
 }
 
 func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
@@ -164,12 +176,12 @@ func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
 
 	require.NoError(t, log.Append(ctx, []visibilityapi.Event{ev("e1", "h1", 100, "exec")}))
 
-	claimed, err := log.Claim(ctx, 10)
+	claimed, err := log.ClaimForHost(ctx, "h1", 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1, "the event is claimed and now in-flight")
 
 	// A fresh claim does not re-offer the in-flight event (its lease has not expired).
-	again, err := log.Claim(ctx, 10)
+	again, err := log.ClaimForHost(ctx, "h1", 10)
 	require.NoError(t, err)
 	assert.Empty(t, again, "an unexpired in-flight claim is not re-offered")
 
@@ -178,9 +190,9 @@ func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
 	require.NoError(t, err)
 
 	// The stale claim is now re-offered, so a crashed worker's events are not lost (at-least-once).
-	reclaimed, err := log.Claim(ctx, 10)
+	reclaimed, err := log.ClaimForHost(ctx, "h1", 10)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"e1"}, ids(reclaimed), "an expired claim is re-delivered on a later Claim")
+	assert.Equal(t, []string{"e1"}, ids(reclaimed), "an expired claim is re-delivered on a later claim")
 }
 
 // spec:server-event-ingestion/horizontally-scalable-ingestion-service/two-ingestion-replicas-run-against-the-same-backing-stores
@@ -240,7 +252,7 @@ func TestEventLog_PruneProcessedRemovesOnlyAcked(t *testing.T) {
 	}))
 
 	// Claim acked+inflight, ack only "acked", leave "inflight" claimed (processed = 2), "waiting" untouched (processed = 0).
-	claimed, err := log.Claim(ctx, 2)
+	claimed, err := log.ClaimForHost(ctx, "h1", 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{"acked", "inflight"}, ids(claimed))
 	require.NoError(t, log.Ack(ctx, []string{"acked"}))
@@ -275,7 +287,7 @@ func TestEventLog_PruneProcessedBatches(t *testing.T) {
 		batch[i] = ev(allIDs[i], "h1", int64(i+1), "exec")
 	}
 	require.NoError(t, log.Append(ctx, batch))
-	claimed, err := log.Claim(ctx, n)
+	claimed, err := log.ClaimForHost(ctx, "h1", n)
 	require.NoError(t, err)
 	require.Len(t, claimed, n)
 	require.NoError(t, log.Ack(ctx, allIDs))
@@ -340,30 +352,54 @@ type claimRun struct {
 	ackErrs   atomic.Int64
 }
 
-// drain claims and acks batches until an empty claim shows the queue is drained, recording every claimed event and any error. One
-// worker observes an empty claim only once no claimable (processed = 0 or lease-expired) rows remain, so returning on empty drains
-// the whole queue without a spin.
+// drain claims and acks batches until no host has claimable work, recording every claimed event and any error. It walks
+// PendingHosts then ClaimForHost, the same two-step the processor uses, so this stays a faithful load test of the claim path.
+// PendingHosts excludes rows another worker holds under an unexpired lease, so an empty result means the queue is drained rather
+// than momentarily contended, and returning on it cannot spin.
 func (r *claimRun) drain(ctx context.Context) {
 	defer r.wg.Done()
 	for {
-		batchEvents, err := r.log.Claim(ctx, r.batch)
+		hosts, err := r.log.PendingHosts(ctx, hostCandidatesPerDrain)
 		if err != nil {
 			r.claimErrs.Add(1)
 			return
 		}
-		if len(batchEvents) == 0 {
-			return // no claimable rows left: every event has already been claimed by some worker
+		if len(hosts) == 0 {
+			return // nothing claimable anywhere: every event has already been claimed by some worker
 		}
-		r.mu.Lock()
-		for _, e := range batchEvents {
-			r.claimed[e.EventID]++
-		}
-		r.mu.Unlock()
-		if err := r.log.Ack(ctx, ids(batchEvents)); err != nil {
-			r.ackErrs.Add(1)
+		for _, host := range hosts {
+			if !r.claimHost(ctx, host) {
+				return
+			}
 		}
 	}
 }
+
+// claimHost claims and acks one host's batch, reporting whether the drain should continue. An empty claim is normal: another worker
+// took that host between the discovery read and here.
+func (r *claimRun) claimHost(ctx context.Context, host string) bool {
+	batchEvents, err := r.log.ClaimForHost(ctx, host, r.batch)
+	if err != nil {
+		r.claimErrs.Add(1)
+		return false
+	}
+	if len(batchEvents) == 0 {
+		return true
+	}
+	r.mu.Lock()
+	for _, e := range batchEvents {
+		r.claimed[e.EventID]++
+	}
+	r.mu.Unlock()
+	if err := r.log.Ack(ctx, ids(batchEvents)); err != nil {
+		r.ackErrs.Add(1)
+	}
+	return true
+}
+
+// hostCandidatesPerDrain is how many hosts one drain iteration considers, wide enough that eight concurrent workers spread over the
+// thirty seeded hosts instead of queueing on the oldest one.
+const hostCandidatesPerDrain = 8
 
 func TestEventLog_EmptyOps(t *testing.T) {
 	t.Parallel()
@@ -374,9 +410,17 @@ func TestEventLog_EmptyOps(t *testing.T) {
 	require.NoError(t, log.Ack(ctx, nil))
 	require.NoError(t, log.Nack(ctx, nil))
 
-	claimed, err := log.Claim(ctx, 0)
+	claimed, err := log.ClaimForHost(ctx, "h1", 0)
 	require.NoError(t, err)
 	assert.Empty(t, claimed)
+
+	noHost, err := log.ClaimForHost(ctx, "", 10)
+	require.NoError(t, err)
+	assert.Empty(t, noHost, "an empty host id claims nothing rather than claiming across hosts")
+
+	hosts, err := log.PendingHosts(ctx, 0)
+	require.NoError(t, err)
+	assert.Empty(t, hosts)
 
 	pending, err := log.CountPending(ctx)
 	require.NoError(t, err)

@@ -24,8 +24,15 @@ const (
 	DefaultProcessBatch = 500
 	// DefaultProcessConcurrency is the number of in-process detection-processor workers a replica runs (issue #535). The processor is
 	// I/O-round-trip bound, not compute bound, so a single goroutine leaves a saturated replica at ~25% CPU; running several workers
-	// that each claim disjoint batches via SELECT ... FOR UPDATE SKIP LOCKED (ADR-0011) turns the idle CPU into parallel DB progress.
-	// 4 is a conservative default sized for a small pilot replica; it is a fixed constant, not an env knob (server-configuration spec).
+	// turns the idle CPU into parallel DB progress. Workers parallelise ACROSS hosts and serialise WITHIN one, because the graph
+	// builder resolves each exec against already-flushed rows, so two workers on one host's stream duplicate generations and break
+	// re-exec linkage (issue #717). 4 is a conservative default sized for a small pilot replica; it is a fixed constant, not an env
+	// knob (server-configuration spec).
+	//
+	// Raising this requires MySQL pool headroom of TWO connections per worker: one pinned by the host advisory lock for the claim
+	// plus fold plus flush window, and one for the claim and flush statements themselves. bootstrap's dbMaxOpenConns (25) covers the
+	// 8 that 4 workers need with room to spare; the processor clamps itself and logs when the budget cannot serve the request, so an
+	// undersized pool runs fewer workers rather than deadlocking every worker on a connection it will never get.
 	DefaultProcessConcurrency = 4
 	// defaultEnrollRatePerMin is the per-IP enrollment rate cap.
 	defaultEnrollRatePerMin = 30

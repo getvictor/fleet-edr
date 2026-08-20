@@ -1,6 +1,10 @@
 // Package eventlog is the MySQL implementation of the visibility context's EventLog: the durable work queue that decouples ingestion
 // from detection processing (ADR-0015). It backs the `event_queue` table and preserves the multi-replica, lock-free, per-host-ordered
 // claim of ADR-0011 (FOR UPDATE SKIP LOCKED), mirroring the proven claim the detection event store used before the store split.
+//
+// Since issue #717 a claim is scoped to one host (PendingHosts picks the host, ClaimForHost takes its oldest events). The queue still
+// does not make a host exclusive to one claimer; the detection processor layers a per-host advisory lock on top, and the host-scoped
+// claim is what keeps one lock's critical section to one host's work.
 package eventlog
 
 import (
@@ -95,24 +99,55 @@ func appendArgs(chunk []api.Event) ([]string, []any, error) {
 	return placeholders, args, nil
 }
 
-// Claim atomically claims up to limit events for this worker, ordered per host by timestamp, without blocking concurrent claimers
+// PendingHosts returns up to limit hosts with claimable work, longest-waiting first. It is a plain read: no locks, no claim, so two
+// callers can see the same host and must not assume exclusivity from it. Ordering by each host's oldest claimable event is what keeps
+// a busy host from starving a quiet one whose backlog is older.
+//
+// The claimable predicate matches Claim's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. The grouping runs
+// over the (processed, host_id, timestamp_ns) claim index, so the per-host minimum is an index read rather than a table scan.
+func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	cutoff := time.Now().UnixNano() - claimLeaseNs
+	var hosts []string
+	err := s.db.SelectContext(ctx, &hosts, `
+		SELECT host_id
+		FROM event_queue
+		WHERE processed = 0 OR (processed = 2 AND claimed_at_ns < ?)
+		GROUP BY host_id
+		ORDER BY MIN(timestamp_ns)
+		LIMIT ?`, cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("pending hosts: %w", err)
+	}
+	return hosts, nil
+}
+
+// ClaimForHost atomically claims up to limit events for hostID, ordered by timestamp, without blocking concurrent claimers
 // (FOR UPDATE SKIP LOCKED, ADR-0011). It offers both never-claimed rows (processed = 0) and rows whose prior claim has expired past
-// claimLeaseNs (processed = 2 with a stale claimed_at_ns), so a worker that crashed between Claim and Ack has its events re-delivered.
-// Claimed rows are stamped processed = 2 with a fresh claimed_at_ns in the same transaction.
+// claimLeaseNs (processed = 2 with a stale claimed_at_ns), so a worker that crashed between a claim and Ack has its events
+// re-delivered. Claimed rows are stamped processed = 2 with a fresh claimed_at_ns in the same transaction.
+//
+// The claim is scoped to one host (issue #717). Before #717 it spanned hosts ordered by (host_id, timestamp_ns), which kept each
+// host's events in order WITHIN a batch but let SKIP LOCKED hand two concurrent claimers an interleaved split of one host's stream:
+// the graph builder then folded a pid's exec before its fork was flushed and duplicated the row. Scoping to a host does not fix that
+// by itself, it makes the fix possible: the processor takes a per-host advisory lock around claim-fold-flush, which only bounds one
+// host's work if the claim cannot reach across hosts.
 //
 // Concurrent claimers (across replicas, and since #535 across multiple in-process workers per replica) can deadlock on the
 // event_queue claim (MySQL 1213): a single-box 500-host run logged ~1.6 claim deadlocks/sec. The claim transaction runs at READ
 // COMMITTED so the SKIP LOCKED scan takes no next-key/gap locks on the (processed, host_id, timestamp_ns) index, removing the
 // contention at its source, and the whole transaction is wrapped in the same bounded deadlock retry the append and prune paths use
 // so any residual 1213 is cleared transparently rather than surfacing to the processor loop (issue #544).
-func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
-	if limit <= 0 {
+func (s *Store) ClaimForHost(ctx context.Context, hostID string, limit int) ([]api.Event, error) {
+	if limit <= 0 || hostID == "" {
 		return nil, nil
 	}
 	var events []api.Event
 	err := sqlhelpers.WithDeadlockRetry(ctx, deadlockMaxAttempts, deadlockBackoffStep, func() error {
 		var claimErr error
-		events, claimErr = s.claimOnce(ctx, limit)
+		events, claimErr = s.claimOnce(ctx, hostID, limit)
 		return claimErr
 	})
 	if err != nil {
@@ -121,9 +156,9 @@ func (s *Store) Claim(ctx context.Context, limit int) ([]api.Event, error) {
 	return events, nil
 }
 
-// claimOnce runs one claim transaction. Extracted so Claim can wrap it in a deadlock retry. READ COMMITTED is deliberate (see Claim):
-// the SKIP LOCKED scan must not take gap locks, or concurrent claimers deadlock on the claim UPDATE.
-func (s *Store) claimOnce(ctx context.Context, limit int) ([]api.Event, error) {
+// claimOnce runs one claim transaction for one host. Extracted so ClaimForHost can wrap it in a deadlock retry. READ COMMITTED is
+// deliberate (see ClaimForHost): the SKIP LOCKED scan must not take gap locks, or concurrent claimers deadlock on the claim UPDATE.
+func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.Event, error) {
 	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, fmt.Errorf("begin tx for claim: %w", err)
@@ -135,10 +170,10 @@ func (s *Store) claimOnce(ctx context.Context, limit int) ([]api.Event, error) {
 	err = tx.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM event_queue
-		WHERE processed = 0 OR (processed = 2 AND claimed_at_ns < ?)
-		ORDER BY host_id, timestamp_ns
+		WHERE host_id = ? AND (processed = 0 OR (processed = 2 AND claimed_at_ns < ?))
+		ORDER BY timestamp_ns
 		LIMIT ?
-		FOR UPDATE SKIP LOCKED`, cutoff, limit)
+		FOR UPDATE SKIP LOCKED`, hostID, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim select: %w", err)
 	}

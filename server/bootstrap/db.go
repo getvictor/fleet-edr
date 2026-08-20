@@ -13,11 +13,13 @@ import (
 )
 
 const (
-	// dbMaxOpenConns caps the process-wide MySQL pool. The detection processor now runs several in-process workers that each claim
-	// and flush a batch on a pooled connection (issue #535); without a ceiling, that concurrency multiplied across the replica fleet
-	// could exhaust MySQL's max_connections (default 151). 25 leaves headroom for the worker fleet plus request-path queries on one
-	// replica while staying well under the server limit for a small multi-replica deployment. It is a fixed constant, not an env knob
-	// (server-configuration spec).
+	// dbMaxOpenConns caps the process-wide MySQL pool. The detection processor runs several in-process workers that each hold TWO
+	// pooled connections while working: one pinned by the per-host advisory lock that serialises a host's stream (issue #717) and one
+	// for the claim and flush statements. Without a ceiling, that concurrency multiplied across the replica fleet could exhaust
+	// MySQL's max_connections (default 151). 25 leaves headroom for the worker fleet (8 for the default 4 workers) plus request-path
+	// queries on one replica while staying well under the server limit for a small multi-replica deployment. It is a fixed constant,
+	// not an env knob (server-configuration spec). Shrinking it below twice DefaultProcessConcurrency makes the processor clamp its
+	// worker count rather than stall, but it is the pool that should grow with the workers, not the other way round.
 	dbMaxOpenConns = 25
 	// dbMaxIdleConns keeps a warm subset of the pool open between statements so the steady-state worker + request load reuses
 	// connections instead of dialing per statement. Kept below the open ceiling so idle replicas release connections back to MySQL.

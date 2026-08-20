@@ -2,11 +2,14 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/fleetdm/edr/server/coordination/leader"
 	"github.com/fleetdm/edr/server/detection/api"
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
@@ -24,6 +27,23 @@ type batchEvaluator interface {
 	Evaluate(ctx context.Context, events []visibilityapi.Event) error
 }
 
+// hostClaimLockPrefix namespaces the per-host advisory locks the processor serializes on, keeping them clear of the leader-election
+// lock names the same coordinator hands out for retention and the process-TTL sweep.
+const hostClaimLockPrefix = "edr:evq:host:"
+
+// mysqlLockNameMax is MySQL's hard limit on a GET_LOCK name. Exceeding it is an error, not a truncation, so a long host id would make
+// every claim attempt for that host fail and strand its backlog. host_id is VARCHAR(255) in event_queue, so the limit is reachable
+// from the schema even though enrollment issues 36-character UUIDs today.
+const mysqlLockNameMax = 64
+
+// hostCandidateFactor scales how many candidate hosts a worker asks for per cycle, relative to the worker count. Asking for several
+// per worker is what keeps the fleet spread out: workers wake on the same tick, and each rotates its scan to a different offset, so a
+// window a few times wider than the worker count leaves every worker a host of its own to try before any two collide.
+const hostCandidateFactor = 4
+
+// minHostCandidates floors the candidate window so a single-worker processor still looks past one blocked host.
+const minHostCandidates = 4
+
 // Processor claims events from the visibility EventLog work queue and runs them through the graph builder, then evaluates detection
 // rules over the same batch. Decouples event ingestion from graph materialization so the write path (intake) runs independently of the
 // processing path. Post-cutover (ADR-0015) the queue is the only work source; the durable archive is read-only correlation storage.
@@ -31,46 +51,118 @@ type Processor struct {
 	eventLog    visibilityapi.EventLog
 	builder     batchBuilder
 	detection   batchEvaluator
+	coordinator leader.Coordinator
 	metrics     api.MetricsRecorder
 	logger      *slog.Logger
 	interval    time.Duration
 	batch       int
 	concurrency int
+	clamp       *concurrencyClamp
 }
 
-// NewProcessor creates a Processor that claims from the given EventLog with the given poll interval and batch size. concurrency is
-// the number of in-process workers that claim disjoint batches via SKIP LOCKED (issue #535); a value <= 1 runs a single worker, the
-// historical behaviour. The workers share this Processor's builder and engine, both of which are safe under concurrent batches (the
-// graph builder serialises its cross-batch exit buffer, and rule evaluation is read-then-dedup-insert).
+// ProcessorOptions configures a Processor. It is a struct rather than positional parameters because the coordinator took the
+// constructor past the seven-argument ceiling, and it matches the sibling pipeline constructors (ProcessTTLOptions, RetentionOptions,
+// QueuePruneOptions).
+type ProcessorOptions struct {
+	// Logger defaults to slog.Default() when nil.
+	Logger *slog.Logger
+	// Interval is the poll cadence for each worker loop.
+	Interval time.Duration
+	// Batch caps the events one claim takes. Clamped to at least 1.
+	Batch int
+	// Concurrency is the number of in-process worker loops (issue #535). Each serializes on a different host, so the effective
+	// parallelism is bounded by the number of hosts with pending work, not by this value alone. Ignored (forced to 1) when
+	// Coordinator is nil, since without a lock there is nothing to keep two workers off one host.
+	Concurrency int
+	// Coordinator provides the per-host advisory lock that serializes one host's stream onto one worker at a time (issue #717).
+	// Optional: with no coordinator the processor runs a single worker, which upholds the same ordering guarantee trivially.
+	Coordinator leader.Coordinator
+	// ConnBudget is the MySQL pool's MaxOpenConns, used to clamp Concurrency so the workers cannot deadlock on the pool. A worker
+	// under the per-host lock holds TWO connections at once: the one GET_LOCK pins for the critical section, plus the one the claim
+	// and flush run on. With ConnBudget below twice Concurrency, workers can take every connection as a lock connection and then
+	// block forever waiting for a claim connection, which presents as a silent stall rather than an error. Zero means unknown and
+	// skips the clamp.
+	ConnBudget int
+}
+
+// connsPerWorker is how many pooled connections one worker occupies inside its critical section: the GET_LOCK connection the
+// coordinator pins, plus the connection the claim and flush use.
+const connsPerWorker = 2
+
+// concurrencyClamp records that the effective worker count came out below the configured one, and why. The constructor decides it but
+// cannot log it: it has no context, and fabricating a background one there is what contextcheck (rightly) rejects. Run emits it once
+// at startup instead, so an operator whose configured concurrency was not honored sees the reason in the logs.
+type concurrencyClamp struct {
+	reason string
+	attrs  []any
+}
+
+// NewProcessor creates a Processor that claims from the given EventLog. Workers claim per host and serialize on that host, so a
+// host's events always reach the graph builder in causal order (issue #717) while different hosts still process in parallel. The
+// workers share this Processor's builder and engine, both of which are safe under concurrent batches for DIFFERENT hosts (the graph
+// builder serialises its cross-batch exit buffer, and rule evaluation is read-then-dedup-insert).
 func NewProcessor(
 	eventLog visibilityapi.EventLog,
 	builder batchBuilder,
 	det batchEvaluator,
-	logger *slog.Logger,
-	interval time.Duration,
-	batchSize int,
-	concurrency int,
+	opts ProcessorOptions,
 ) *Processor {
+	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if concurrency < 1 {
+	concurrency := max(opts.Concurrency, 1)
+	// Without a coordinator two workers could claim the same host and fold its stream out of order, which is exactly the defect
+	// #717 fixes. One worker gives the same guarantee without a lock, so degrade to that rather than run unsafely.
+	var clamp *concurrencyClamp
+	if opts.Coordinator == nil && concurrency > 1 {
+		clamp = &concurrencyClamp{
+			reason: "detection processor has no coordinator; running a single worker to keep per-host event order",
+			attrs:  []any{"requested_concurrency", concurrency, "effective_concurrency", 1},
+		}
 		concurrency = 1
+	}
+	// Clamp to what the pool can actually serve concurrently. Exceeding it does not degrade gracefully: every worker can hold a lock
+	// connection while waiting for a claim connection that no one will release, so the processor stops dead with nothing logged.
+	// Fewer workers is always recoverable; a deadlocked pipeline is not.
+	if opts.Coordinator != nil && opts.ConnBudget > 0 {
+		if affordable := max(opts.ConnBudget/connsPerWorker, 1); concurrency > affordable {
+			clamp = &concurrencyClamp{
+				reason: "detection processor concurrency clamped to the connection budget",
+				attrs: []any{
+					"requested_concurrency", concurrency, "effective_concurrency", affordable,
+					"max_open_conns", opts.ConnBudget, "conns_per_worker", connsPerWorker,
+				},
+			}
+			concurrency = affordable
+		}
 	}
 	// A non-positive batch size would make the drain loop (`for processOnce(ctx) >= p.batch`) spin: an empty claim returns 0 and
 	// 0 >= 0 stays true forever. Clamp to at least 1 so an empty queue always breaks the drain and yields back to the ticker.
-	if batchSize < 1 {
-		batchSize = 1
-	}
+	batchSize := max(opts.Batch, 1)
 	return &Processor{
 		eventLog:    eventLog,
 		builder:     builder,
 		detection:   det,
+		coordinator: opts.Coordinator,
 		logger:      logger,
-		interval:    interval,
+		interval:    opts.Interval,
 		batch:       batchSize,
 		concurrency: concurrency,
+		clamp:       clamp,
 	}
+}
+
+// hostClaimLockName is the advisory-lock name for one host's claim. It uses the raw host id so a held lock is legible in
+// performance_schema.metadata_locks during an incident, falling back to a hash only when the composed name would exceed MySQL's
+// 64-character limit (which GET_LOCK rejects outright rather than truncating).
+func hostClaimLockName(hostID string) string {
+	name := hostClaimLockPrefix + hostID
+	if len(name) <= mysqlLockNameMax {
+		return name
+	}
+	sum := sha256.Sum256([]byte(hostID))
+	return (hostClaimLockPrefix + hex.EncodeToString(sum[:]))[:mysqlLockNameMax]
 }
 
 // SetMetrics installs the OTel recorder the processor counts materialization-miss retries on (issue #631). Called by
@@ -81,10 +173,13 @@ func (p *Processor) SetMetrics(m api.MetricsRecorder) { p.metrics = m }
 // Run fans out p.concurrency worker loops and blocks until ctx is cancelled and every worker returns. Each worker claims its own
 // disjoint batches, so the processor scales across the replica's cores the same way it scales across replicas (server-availability spec).
 func (p *Processor) Run(ctx context.Context) error {
+	if p.clamp != nil {
+		p.logger.WarnContext(ctx, p.clamp.reason, p.clamp.attrs...)
+	}
 	var wg sync.WaitGroup
-	for range p.concurrency {
+	for i := range p.concurrency {
 		wg.Go(func() {
-			p.runWorker(ctx)
+			p.runWorker(ctx, i)
 		})
 	}
 	wg.Wait()
@@ -93,8 +188,9 @@ func (p *Processor) Run(ctx context.Context) error {
 
 // runWorker is one claim loop. On each tick it drains: while a cycle returns a full batch there is likely more backlog, so it claims
 // again immediately rather than waiting a full interval, which lets the worker fleet work a backlog down quickly. A non-full cycle
-// (empty, or a nacked failure) yields back to the ticker so a persistently failing batch cannot hot-spin.
-func (p *Processor) runWorker(ctx context.Context) {
+// (empty, or a nacked failure) yields back to the ticker so a persistently failing batch cannot hot-spin. workerIndex rotates this
+// worker's scan over the candidate hosts so simultaneous ticks do not all contend for the same host's lock.
+func (p *Processor) runWorker(ctx context.Context, workerIndex int) {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
@@ -103,7 +199,7 @@ func (p *Processor) runWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for p.processOnce(ctx) >= p.batch {
+			for p.processOnce(ctx, workerIndex) >= p.batch {
 				if ctx.Err() != nil {
 					return
 				}
@@ -114,19 +210,88 @@ func (p *Processor) runWorker(ctx context.Context) {
 
 // ProcessOnce runs a single processing cycle. Exported for testing.
 func (p *Processor) ProcessOnce(ctx context.Context) {
-	p.processOnce(ctx)
+	p.processOnce(ctx, 0)
 }
 
-// processOnce claims and processes one batch, returning the number of events claimed (0 on an empty queue, a claim error, or a
-// builder/detection failure that nacked the batch). The count lets runWorker decide whether to keep draining.
-func (p *Processor) processOnce(ctx context.Context) int {
-	events, err := p.eventLog.Claim(ctx, p.batch)
+// processOnce picks a host with pending work and processes one batch of it, returning the number of events claimed (0 on an empty
+// queue, a claim error, a host whose lock is held by another worker, or a builder/detection failure that nacked the batch). The count
+// lets runWorker decide whether to keep draining.
+//
+// It walks the candidate hosts rather than committing to the first: a host whose lock is already held by another worker yields
+// nothing, and moving on is what keeps the fleet busy instead of queueing behind one host. Returning 0 when every candidate is taken
+// falls back to the ticker rather than spinning.
+func (p *Processor) processOnce(ctx context.Context, workerIndex int) int {
+	hosts, err := p.eventLog.PendingHosts(ctx, p.hostCandidates())
 	if err != nil {
-		p.logger.ErrorContext(ctx, "claim events", "err", err)
+		p.logger.ErrorContext(ctx, "list pending hosts", "err", err)
 		return 0
 	}
-	if len(events) == 0 {
+	if len(hosts) == 0 {
 		return 0
+	}
+	for offset := range hosts {
+		if ctx.Err() != nil {
+			return 0
+		}
+		host := hosts[(workerIndex+offset)%len(hosts)]
+		claimed, ran := p.processHost(ctx, host)
+		if ran {
+			return claimed
+		}
+	}
+	return 0
+}
+
+// hostCandidates is how many hosts one cycle considers: wide enough that concurrent workers rotate onto different hosts, floored so a
+// single worker still looks past a host another replica is holding.
+func (p *Processor) hostCandidates() int {
+	return max(p.concurrency*hostCandidateFactor, minHostCandidates)
+}
+
+// processHost claims and processes one batch for host, under that host's advisory lock. It reports the events claimed and whether this
+// worker actually ran (false means another worker or replica holds the host, so the caller should try a different one).
+//
+// The lock spans claim, fold, and flush, and nothing else. That is the window in which a second claimer would break the graph
+// builder's per-host ordering assumption: it resolves each exec against the rows already flushed, so an unflushed fork is
+// indistinguishable from a missing one. Detection is deliberately outside the lock, both because it only reads the graph and because
+// DoOnceIfLeader has no keep-alive: a long critical section risks MySQL closing the idle lock connection and silently releasing.
+func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
+	var (
+		events      []visibilityapi.Event
+		buildFailed bool
+	)
+	claimAndBuild := func(lockedCtx context.Context) error {
+		claimed, err := p.eventLog.ClaimForHost(lockedCtx, host, p.batch)
+		if err != nil {
+			p.logger.ErrorContext(lockedCtx, "claim events", "host_id", host, "err", err)
+			return nil
+		}
+		if len(claimed) == 0 {
+			return nil
+		}
+		events = claimed
+		if err := p.builder.ProcessBatch(lockedCtx, claimed); err != nil {
+			p.logger.WarnContext(lockedCtx, "graph builder failure, will retry batch", "err", err)
+			buildFailed = true
+		}
+		return nil
+	}
+
+	if p.coordinator == nil {
+		// Single-worker mode (NewProcessor forces it when no coordinator is wired): ordering holds without a lock.
+		_ = claimAndBuild(ctx)
+	} else {
+		ran, err := p.coordinator.DoOnceIfLeader(ctx, hostClaimLockName(host), claimAndBuild)
+		if err != nil {
+			p.logger.ErrorContext(ctx, "acquire host claim lock", "host_id", host, "err", err)
+			return 0, false
+		}
+		if !ran {
+			return 0, false
+		}
+	}
+	if len(events) == 0 {
+		return 0, true
 	}
 
 	eventIDs := make([]string, len(events))
@@ -134,14 +299,19 @@ func (p *Processor) processOnce(ctx context.Context) int {
 		eventIDs[i] = e.EventID
 	}
 
-	if err := p.builder.ProcessBatch(ctx, events); err != nil {
-		p.logger.WarnContext(ctx, "graph builder failure, will retry batch", "err", err)
+	if buildFailed {
 		if nackErr := p.eventLog.Nack(ctx, eventIDs); nackErr != nil {
 			p.logger.ErrorContext(ctx, "nack events after builder failure", "err", nackErr)
 		}
-		return 0 // nacked: stop draining so a persistently failing batch cannot hot-spin
+		return 0, true // nacked: stop draining so a persistently failing batch cannot hot-spin
 	}
 
+	return p.evaluateAndAck(ctx, events, eventIDs), true
+}
+
+// evaluateAndAck runs detection over an already-materialized batch and acknowledges it, returning the events processed or 0 if the
+// batch was nacked or the ack failed. Split from processHost so the locked region above stays readable as claim-fold-flush.
+func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.Event, eventIDs []string) int {
 	// Run detection rules after processes are materialized.
 	if p.detection != nil {
 		if err := p.detection.Evaluate(ctx, events); err != nil {

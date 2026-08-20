@@ -17,15 +17,31 @@ import (
 )
 
 // scriptedEventLog is an EventLog fake that hands ProcessOnce a fixed batch and records which IDs were acked vs nacked. Only the
-// methods the processor's single-cycle path touches (Claim, Ack, Nack) do anything; the rest are inert.
+// methods the processor's single-cycle path touches (PendingHosts, ClaimForHost, Ack, Nack) do anything; the rest are inert.
+// PendingHosts reports the batch's own host so the processor's host-scoped cycle reaches ClaimForHost, and ClaimForHost serves the
+// batch once so a drain loop terminates instead of re-serving the same events forever.
 type scriptedEventLog struct {
-	batch  []visibilityapi.Event
-	acked  []string
-	nacked []string
+	batch    []visibilityapi.Event
+	acked    []string
+	nacked   []string
+	claimed  bool
+	claimReq []string // hosts ClaimForHost was asked for, in order
 }
 
 func (s *scriptedEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
-func (s *scriptedEventLog) Claim(context.Context, int) ([]visibilityapi.Event, error) {
+func (s *scriptedEventLog) PendingHosts(context.Context, int) ([]string, error) {
+	if len(s.batch) == 0 || s.claimed {
+		return nil, nil
+	}
+	return []string{s.batch[0].HostID}, nil
+}
+
+func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int) ([]visibilityapi.Event, error) {
+	s.claimReq = append(s.claimReq, hostID)
+	if s.claimed {
+		return nil, nil
+	}
+	s.claimed = true
 	return s.batch, nil
 }
 func (s *scriptedEventLog) Ack(_ context.Context, ids []string) error {
@@ -96,7 +112,7 @@ func TestProcessor_DetectionRetryClassification(t *testing.T) {
 		rec := &capturingRecorder{}
 		// A wrapped sentinel mirrors how the engine returns it (fmt.Errorf("rule %s: %w", ...)).
 		eval := stubEvaluator{err: fmt.Errorf("rule dns_c2_beacon: %w", rulesapi.ErrProcessNotYetMaterialized)}
-		p := NewProcessor(log, stubBuilder{}, eval, slog.New(handler), 0, 1, 1)
+		p := NewProcessor(log, stubBuilder{}, eval, ProcessorOptions{Logger: slog.New(handler), Interval: 0, Batch: 1, Concurrency: 1})
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())
@@ -117,7 +133,7 @@ func TestProcessor_DetectionRetryClassification(t *testing.T) {
 		handler := &capturingLogHandler{}
 		rec := &capturingRecorder{}
 		eval := stubEvaluator{err: errors.New("persist detection alert: db down")}
-		p := NewProcessor(log, stubBuilder{}, eval, slog.New(handler), 0, 1, 1)
+		p := NewProcessor(log, stubBuilder{}, eval, ProcessorOptions{Logger: slog.New(handler), Interval: 0, Batch: 1, Concurrency: 1})
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())
@@ -133,7 +149,7 @@ func TestProcessor_DetectionRetryClassification(t *testing.T) {
 		t.Parallel()
 		log := &scriptedEventLog{batch: oneEventBatch()}
 		eval := stubEvaluator{err: fmt.Errorf("rule x: %w", rulesapi.ErrProcessNotYetMaterialized)}
-		p := NewProcessor(log, stubBuilder{}, eval, slog.New(&capturingLogHandler{}), 0, 1, 1)
+		p := NewProcessor(log, stubBuilder{}, eval, ProcessorOptions{Logger: slog.New(&capturingLogHandler{}), Interval: 0, Batch: 1, Concurrency: 1})
 		// No SetMetrics: the retry path must not dereference a nil recorder.
 		assert.NotPanics(t, func() { p.ProcessOnce(context.Background()) })
 		assert.Equal(t, []string{"evt-1"}, log.nacked)
@@ -150,7 +166,7 @@ func TestProcessor_BuilderFailureAndHappyPath(t *testing.T) {
 		log := &scriptedEventLog{batch: oneEventBatch()}
 		handler := &capturingLogHandler{}
 		rec := &capturingRecorder{}
-		p := NewProcessor(log, stubBuilder{err: errors.New("graph write failed")}, stubEvaluator{}, slog.New(handler), 0, 1, 1)
+		p := NewProcessor(log, stubBuilder{err: errors.New("graph write failed")}, stubEvaluator{}, ProcessorOptions{Logger: slog.New(handler), Interval: 0, Batch: 1, Concurrency: 1})
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())
@@ -166,7 +182,7 @@ func TestProcessor_BuilderFailureAndHappyPath(t *testing.T) {
 		t.Parallel()
 		log := &scriptedEventLog{batch: oneEventBatch()}
 		rec := &capturingRecorder{}
-		p := NewProcessor(log, stubBuilder{}, stubEvaluator{}, slog.New(&capturingLogHandler{}), 0, 1, 1)
+		p := NewProcessor(log, stubBuilder{}, stubEvaluator{}, ProcessorOptions{Logger: slog.New(&capturingLogHandler{}), Interval: 0, Batch: 1, Concurrency: 1})
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())
