@@ -376,15 +376,25 @@ func (r *SuspiciousExec) evalNetwork(
 	// interactive login shell above, which then fails the window because its own exec is minutes or hours old. Gating the chain on
 	// shell == nil alone would therefore never reach it, which is how issue #713 stayed open behind a walk that looked like it had
 	// searched.
+	// Each arm's candidate is gated before it can produce a finding, so neither can grow a way past the window, the parent
+	// exclusions, or the per-batch dedup. The check is nested rather than repeated once at the end because shouldFire unmarshals the
+	// parent's code-signing record, and this is a per-network_connect path: evaluating it twice for the same shell is measurable
+	// work for an answer that cannot have changed.
 	if shell == nil || !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		shell, parent, err = r.findShellOnExecChain(ctx, s, evt.HostID, conn, evt.TimestampNs)
 		if err != nil {
 			return nil, 0, err
 		}
 	}
-	// One gate for both paths, deliberately unconditional. It reads as a repeat of the condition above and is not: whichever arm
-	// supplied the shell, this is the single point where the rule decides to fire, so neither arm can grow a way past the window,
-	// the parent exclusions, or the per-batch dedup.
+	// One gate for both arms. Whichever supplied the shell, this is the single point where the rule decides to fire, so neither can
+	// grow a way past the window, the parent exclusions, or the per-batch dedup.
+	//
+	// It does mean shouldFire runs twice for a shell the PPID walk already accepted. Nesting the second check inside the branch
+	// above removes that, and nilaway then reports a possible nil dereference on shell.Path below: it cannot prove the shell is
+	// non-nil through a nil-check that guards an assignment inside a branch, in either the reassignment or the separate-variable
+	// form. The duplicated call is the cheaper concession, because it lands only where the PPID walk found a shell it would fire
+	// on, which is a flow that is about to raise an alert, not the common flow that has no shell ancestor at all. Those take the
+	// branch and evaluate exactly one candidate.
 	if shell == nil || !r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		return nil, 0, nil
 	}
@@ -417,8 +427,8 @@ func (r *SuspiciousExec) evalNetwork(
 // 26.6.1, zsh replaces itself with the payload while bash and sh fork it, so `zsh -c 'curl ...'` was invisible and the identical bash
 // form was detected.
 //
-// The chain is ordered newest-first and is nil for a PID that never re-exec'd, which is nearly all of them, so this costs a field
-// check on the hot path and only walks where a chain exists.
+// The chain is nil for a PID that never re-exec'd, which is nearly all of them, so this costs a field check on the hot path and
+// only walks where a chain exists.
 func (r *SuspiciousExec) findShellOnExecChain(
 	ctx context.Context, s api.GraphReader, hostID string, conn *api.Process, asOfNs int64,
 ) (*api.Process, *api.Process, error) {
@@ -426,7 +436,15 @@ func (r *SuspiciousExec) findShellOnExecChain(
 	if err != nil {
 		return nil, nil, fmt.Errorf("walk exec chain pid %d: %w", conn.PID, err)
 	}
-	for i := range chain {
+	// A PID that never re-exec'd has no chain, which is nearly all of them, so this is the hot path and it exits here.
+	if len(chain) == 0 {
+		return nil, nil, nil
+	}
+	// Newest generation first. GetExecChain returns the chain OLDEST-first (it recurses backwards through previous_exec_id and
+	// orders by descending depth), and the shell that ran this payload is the one closest to it, not the first one this PID ever
+	// held. Walking forward would hand back the stalest shell in the chain, and for `zsh -c 'bash -c "curl ..."'`, where both
+	// shells exec in place at one PID, that is the one most likely to fail the window and drop the alert.
+	for i := len(chain) - 1; i >= 0; i-- {
 		prior := &chain[i]
 		if !shellPaths[prior.Path] {
 			continue
@@ -435,7 +453,15 @@ func (r *SuspiciousExec) findShellOnExecChain(
 		if err != nil {
 			return nil, nil, err
 		}
-		// A shell whose own parent is a shell is shell-to-shell layering, not the boundary this rule fires on; keep climbing the
+		// Ancestry incomplete: the shell claims a parent that is not in the graph yet, so defer rather than fire. Firing here would
+		// report a finding whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was
+		// never resolved, so the alert would slip past a rule the operator had deliberately configured. The PPID walk defers on the
+		// same condition and for the same reason. A shell parented at launchd (PPID <= 1) is a genuine no-parent case, not a
+		// missing record, and still counts.
+		if priorParent == nil && prior.PPID > 1 {
+			return nil, nil, nil
+		}
+		// A shell whose own parent is a shell is shell-to-shell layering, not the boundary this rule fires on; keep walking the
 		// chain for one whose parent is not a shell, exactly as the exec arm does.
 		if priorParent != nil && shellPaths[priorParent.Path] {
 			continue

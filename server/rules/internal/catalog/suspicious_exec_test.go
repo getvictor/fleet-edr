@@ -883,7 +883,7 @@ func TestSuspiciousExecDetectsShellThatExecsPayloadInPlace(t *testing.T) {
 		{EventID: "fork-py", HostID: "h", TimestampNs: 1_000_000_000_000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":20}`)},
 		{EventID: "exec-py", HostID: "h", TimestampNs: pyExec, EventType: "exec",
-			Payload: json.RawMessage(`{"pid":50,"ppid":50,"path":"/usr/bin/python3","args":["python3","-c","..."],"uid":501,"gid":20}`)},
+			Payload: json.RawMessage(`{"pid":50,"ppid":20,"path":"/usr/bin/python3","args":["python3","-c","..."],"uid":501,"gid":20}`)},
 		{EventID: "fork-stage", HostID: "h", TimestampNs: 1_000_000_001_000, EventType: "fork",
 			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
 	}
@@ -1068,4 +1068,71 @@ type execChainErrReader struct {
 
 func (r *execChainErrReader) GetExecChain(_ context.Context, _ api.Process) ([]api.Process, error) {
 	return nil, r.chainErr
+}
+
+// `zsh -c 'bash -c "curl ..."'` puts TWO shells on one PID's exec chain, both having exec'd in place. The shell that ran the payload
+// is the newest one, and GetExecChain returns the chain oldest-first, so walking it forward hands back the stalest shell. Here the
+// outer zsh is outside the window and the inner bash is inside it, so getting the direction wrong does not merely misattribute the
+// finding, it drops the alert.
+func TestSuspiciousExecPrefersTheNewestShellOnTheExecChain(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	const flowAt = int64(1_000_000_000_000)
+	events := []api.Event{
+		{EventID: "fork-py", HostID: "h5", TimestampNs: flowAt - 60_000_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-py", HostID: "h5", TimestampNs: flowAt - 59_000_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "fork-stage", HostID: "h5", TimestampNs: flowAt - 45_000_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		// The outer shell, 40s before the flow, so outside the 30s window.
+		{EventID: "exec-zsh", HostID: "h5", TimestampNs: flowAt - 40_000_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/zsh","args":["zsh","-c","bash -c curl"],"uid":501,"gid":20}`)},
+		// The inner shell replaces it in place, 10s before the flow, so inside the window.
+		{EventID: "exec-bash", HostID: "h5", TimestampNs: flowAt - 10_000_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "exec-curl", HostID: "h5", TimestampNs: flowAt - 1_000_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "h5", TimestampNs: flowAt, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":100,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "the newest shell on the chain is inside the window, so the alert must be raised")
+	assert.Contains(t, findings[0].Description, "/bin/bash", "the shell that ran the payload is the newest on the chain, not the first")
+}
+
+// A shell on the chain whose own parent is not in the graph yet is incomplete ancestry, and the rule defers rather than firing. The
+// finding would otherwise name an "(unknown)" parent, and an operator's parent exclusion cannot suppress a parent that was never
+// resolved, so a rule they had deliberately configured would be bypassed. The PPID walk defers on the same condition.
+func TestSuspiciousExecDefersWhenTheChainShellsParentIsMissing(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	const flowAt = int64(1_000_000_000_000)
+	// PID 100 execs bash with no fork and a parent that never appears in the graph, then replaces itself with curl.
+	events := []api.Event{
+		{EventID: "exec-bash", HostID: "h6", TimestampNs: flowAt - 10_000_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "exec-curl", HostID: "h6", TimestampNs: flowAt - 1_000_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "h6", TimestampNs: flowAt, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":100,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, findings, "ancestry is incomplete, so the rule defers rather than firing on an unresolvable parent")
 }
