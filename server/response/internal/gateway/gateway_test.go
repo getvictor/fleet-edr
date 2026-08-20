@@ -106,6 +106,22 @@ func (v *fakeVerifier) VerifyToken(_ context.Context, token string) (string, err
 
 // newTestGateway starts a Gateway over an in-memory bufconn listener and returns a client-side dialer. Intervals are tightened so the
 // watch and revocation re-check fire fast under test.
+// recvCommand reads until a command frame arrives, skipping heartbeats. Heartbeats are ordinary traffic on this stream now (they are
+// what tells an agent the server still holds its connection, issue #711), so a test that wants the next COMMAND has to say so rather
+// than assume the next frame is one.
+func recvCommand(t *testing.T, stream control.ControlChannel_ConnectClient) (*control.Command, error) {
+	t.Helper()
+	for {
+		frame, err := stream.Recv()
+		if err != nil {
+			return nil, err
+		}
+		if cmd := frame.GetCommand(); cmd != nil {
+			return cmd, nil
+		}
+	}
+}
+
 func newTestGateway(t *testing.T, src CommandSource, verifier TokenVerifier) (*Gateway, func(ctx context.Context, token string) control.ControlChannelClient) {
 	t.Helper()
 	g := New(Deps{Source: src, Verifier: verifier})
@@ -339,6 +355,45 @@ func TestGateway(t *testing.T) {
 		require.Eventually(t, func() bool { return g.reg.len() == 0 }, 2*time.Second, 10*time.Millisecond)
 	})
 
+	// The agent cannot otherwise tell a quiet fleet from a stream this replica has forgotten: the gateway runs over the shared HTTPS
+	// listener where net/http answers HTTP/2 keepalive PINGs itself, so the ping keeps passing on a connection that no longer exists
+	// here. The heartbeat's arrival IS the proof, so it has to actually be sent (issue #711).
+	//
+	// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/an-idle-connection-still-carries-proof-that-the-server-holds-it
+	t.Run("an idle connection still receives heartbeats", func(t *testing.T) {
+		t.Parallel()
+		src := newFakeSource()
+		ver := newFakeVerifier()
+		ver.add("tok-hb", "host-hb")
+		_, dial := newTestGateway(t, src, ver)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// Nothing pending, so any frame that arrives can only be a heartbeat.
+		stream, err := dial(ctx, "tok-hb").Connect(connectCtx("tok-hb"))
+		require.NoError(t, err)
+
+		// Bounded rather than a bare Recv: with no heartbeat there is nothing to receive, and an unbounded read turns a missing
+		// heartbeat into a hung suite instead of a failed assertion.
+		type recvResult struct {
+			frame *control.ServerFrame
+			err   error
+		}
+		got := make(chan recvResult, 1)
+		go func() {
+			f, rerr := stream.Recv()
+			got <- recvResult{f, rerr}
+		}()
+		select {
+		case res := <-got:
+			require.NoError(t, res.err)
+			assert.NotNil(t, res.frame.GetHeartbeat(), "an idle stream must still carry proof that the server holds it")
+			assert.Nil(t, res.frame.GetCommand())
+		case <-time.After(2 * time.Second):
+			t.Fatal("no heartbeat arrived on an idle connection")
+		}
+	})
+
 	// spec:agent-control-channel/a-revoked-or-expired-token-terminates-the-connection/revoking-a-token-closes-the-connection
 	t.Run("revoked token tears down the connection", func(t *testing.T) {
 		t.Parallel()
@@ -354,10 +409,10 @@ func TestGateway(t *testing.T) {
 		require.NoError(t, err)
 		// First receive establishes the connection (the interceptor verified the still-valid token). Only then revoke, so the teardown
 		// comes from the maintenance re-check (Unavailable), not from the connect-time interceptor (Unauthenticated).
-		_, err = stream.Recv()
+		_, err = recvCommand(t, stream)
 		require.NoError(t, err)
 		ver.revoke("tok-a")
-		_, err = stream.Recv()
+		_, err = recvCommand(t, stream)
 		require.Error(t, err)
 		assert.Equal(t, codes.Unavailable, status.Code(err))
 	})
@@ -467,4 +522,81 @@ func TestGatewayWatchIntervalIsCompiledConstant(t *testing.T) {
 
 	assert.Equal(t, defaultWatchInterval, g.watchInterval, "the command-watch interval is compiled, not an operator knob")
 	assert.Equal(t, time.Second, g.watchInterval, "the compiled watch interval is one second")
+}
+
+// A heartbeat must never displace a queued command, and must never block the connection's maintenance loop.
+//
+// The send buffer is bounded, so the interesting case is what happens when it is full. Dropping the heartbeat is correct there and not
+// merely convenient: a full buffer already proves frames are flowing to this agent, which is the very thing a heartbeat exists to
+// demonstrate, while a heartbeat that displaced a command would trade a diagnostic for a response action (issue #711).
+func TestHeartbeatIsDroppedRatherThanDisplacingAQueuedCommand(t *testing.T) {
+	t.Parallel()
+	g := New(Deps{Source: newFakeSource(), Verifier: newFakeVerifier()})
+	g.livenessInterval = time.Millisecond
+
+	c := newConn("host-full", "tok", func() {})
+	// Fill the outbound queue with commands, so any heartbeat has nowhere to go.
+	for i := range sendBuffer {
+		require.True(t, c.push(&control.ServerFrame{
+			Frame: &control.ServerFrame_Command{Command: &control.Command{Id: int64(i + 1), HostId: "host-full"}},
+		}), "the buffer should accept exactly sendBuffer frames")
+	}
+	require.Len(t, c.send, sendBuffer)
+
+	// maintain must return on context cancellation rather than blocking on the full queue.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); g.maintain(ctx, c) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("maintain blocked on a full send buffer instead of dropping the heartbeat")
+	}
+
+	// Every queued frame is still a command: no heartbeat evicted one, and none was appended.
+	require.Len(t, c.send, sendBuffer)
+	for range sendBuffer {
+		frame := <-c.send
+		require.NotNil(t, frame.GetCommand(), "a queued command must not have been displaced by a heartbeat")
+	}
+}
+
+// A stalled database must not stop heartbeats. The last-seen write shares this loop, and now that an agent tears its stream down on
+// silence, a blocked write would stop heartbeats for every connected host and turn a database incident into a fleet-wide reconnect
+// storm against the server that is already struggling.
+// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/a-stalled-datastore-does-not-stop-heartbeats
+func TestHeartbeatSurvivesAStalledLastSeenWrite(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	g := New(Deps{
+		Source:   newFakeSource(),
+		Verifier: newFakeVerifier(),
+		// Models a database that has stopped answering: the write blocks until its context is cancelled.
+		Heartbeat: func(ctx context.Context, _ string, _ time.Time) error {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return ctx.Err()
+		},
+	})
+	g.livenessInterval = 10 * time.Millisecond
+
+	c := newConn("host-stalled", "tok", func() {})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go g.maintain(ctx, c)
+
+	// PROMPTLY, not eventually. The window has to be shorter than the stall, or a heartbeat that only escapes once the stalled write
+	// is finally cancelled still satisfies the test, which is how an earlier version of this passed against the very ordering it was
+	// written to reject.
+	select {
+	case frame := <-c.send:
+		assert.NotNil(t, frame.GetHeartbeat(), "the heartbeat is sent before the database write, so a stalled write cannot suppress it")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("no heartbeat within several cadences while the last-seen write was stalled")
+	}
 }

@@ -36,6 +36,7 @@ type ServerFrame struct {
 	// Types that are valid to be assigned to Frame:
 	//
 	//	*ServerFrame_Command
+	//	*ServerFrame_Heartbeat
 	Frame         isServerFrame_Frame `protobuf_oneof:"frame"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -87,6 +88,15 @@ func (x *ServerFrame) GetCommand() *Command {
 	return nil
 }
 
+func (x *ServerFrame) GetHeartbeat() *Heartbeat {
+	if x != nil {
+		if x, ok := x.Frame.(*ServerFrame_Heartbeat); ok {
+			return x.Heartbeat
+		}
+	}
+	return nil
+}
+
 type isServerFrame_Frame interface {
 	isServerFrame_Frame()
 }
@@ -95,7 +105,58 @@ type ServerFrame_Command struct {
 	Command *Command `protobuf:"bytes,1,opt,name=command,proto3,oneof"`
 }
 
+type ServerFrame_Heartbeat struct {
+	Heartbeat *Heartbeat `protobuf:"bytes,2,opt,name=heartbeat,proto3,oneof"`
+}
+
 func (*ServerFrame_Command) isServerFrame_Frame() {}
+
+func (*ServerFrame_Heartbeat) isServerFrame_Frame() {}
+
+// Heartbeat is the gateway telling the agent that this stream is still
+// registered for delivery. It carries no payload: its arrival IS the signal.
+//
+// It exists because nothing else proves that. The gateway runs over the shared
+// HTTPS listener, where net/http answers HTTP/2 keepalive PINGs itself, so a
+// passing ping shows the transport is alive and not that the server still
+// holds this stream. An agent could therefore wait forever on a stream the
+// server had forgotten, and because the command poll deferred to that belief
+// the host went silently command-deaf (issue #711).
+type Heartbeat struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Heartbeat) Reset() {
+	*x = Heartbeat{}
+	mi := &file_internal_control_control_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Heartbeat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Heartbeat) ProtoMessage() {}
+
+func (x *Heartbeat) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_control_control_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
+func (*Heartbeat) Descriptor() ([]byte, []int) {
+	return file_internal_control_control_proto_rawDescGZIP(), []int{1}
+}
 
 // AgentFrame is one message sent from the agent up to the gateway. Today the
 // agent only reports command outcomes; the oneof leaves room for future kinds.
@@ -111,7 +172,7 @@ type AgentFrame struct {
 
 func (x *AgentFrame) Reset() {
 	*x = AgentFrame{}
-	mi := &file_internal_control_control_proto_msgTypes[1]
+	mi := &file_internal_control_control_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -123,7 +184,7 @@ func (x *AgentFrame) String() string {
 func (*AgentFrame) ProtoMessage() {}
 
 func (x *AgentFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_control_control_proto_msgTypes[1]
+	mi := &file_internal_control_control_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -136,7 +197,7 @@ func (x *AgentFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentFrame.ProtoReflect.Descriptor instead.
 func (*AgentFrame) Descriptor() ([]byte, []int) {
-	return file_internal_control_control_proto_rawDescGZIP(), []int{1}
+	return file_internal_control_control_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AgentFrame) GetFrame() isAgentFrame_Frame {
@@ -182,7 +243,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_internal_control_control_proto_msgTypes[2]
+	mi := &file_internal_control_control_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -194,7 +255,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_control_control_proto_msgTypes[2]
+	mi := &file_internal_control_control_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -207,7 +268,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_internal_control_control_proto_rawDescGZIP(), []int{2}
+	return file_internal_control_control_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Command) GetId() int64 {
@@ -254,7 +315,7 @@ type Outcome struct {
 
 func (x *Outcome) Reset() {
 	*x = Outcome{}
-	mi := &file_internal_control_control_proto_msgTypes[3]
+	mi := &file_internal_control_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -266,7 +327,7 @@ func (x *Outcome) String() string {
 func (*Outcome) ProtoMessage() {}
 
 func (x *Outcome) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_control_control_proto_msgTypes[3]
+	mi := &file_internal_control_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -279,7 +340,7 @@ func (x *Outcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Outcome.ProtoReflect.Descriptor instead.
 func (*Outcome) Descriptor() ([]byte, []int) {
-	return file_internal_control_control_proto_rawDescGZIP(), []int{3}
+	return file_internal_control_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Outcome) GetId() int64 {
@@ -307,10 +368,12 @@ var File_internal_control_control_proto protoreflect.FileDescriptor
 
 const file_internal_control_control_proto_rawDesc = "" +
 	"\n" +
-	"\x1einternal/control/control.proto\x12\x13fleetedr.control.v1\"P\n" +
+	"\x1einternal/control/control.proto\x12\x13fleetedr.control.v1\"\x90\x01\n" +
 	"\vServerFrame\x128\n" +
-	"\acommand\x18\x01 \x01(\v2\x1c.fleetedr.control.v1.CommandH\x00R\acommandB\a\n" +
-	"\x05frame\"O\n" +
+	"\acommand\x18\x01 \x01(\v2\x1c.fleetedr.control.v1.CommandH\x00R\acommand\x12>\n" +
+	"\theartbeat\x18\x02 \x01(\v2\x1e.fleetedr.control.v1.HeartbeatH\x00R\theartbeatB\a\n" +
+	"\x05frame\"\v\n" +
+	"\tHeartbeat\"O\n" +
 	"\n" +
 	"AgentFrame\x128\n" +
 	"\aoutcome\x18\x01 \x01(\v2\x1c.fleetedr.control.v1.OutcomeH\x00R\aoutcomeB\a\n" +
@@ -339,23 +402,25 @@ func file_internal_control_control_proto_rawDescGZIP() []byte {
 	return file_internal_control_control_proto_rawDescData
 }
 
-var file_internal_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_internal_control_control_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_internal_control_control_proto_goTypes = []any{
 	(*ServerFrame)(nil), // 0: fleetedr.control.v1.ServerFrame
-	(*AgentFrame)(nil),  // 1: fleetedr.control.v1.AgentFrame
-	(*Command)(nil),     // 2: fleetedr.control.v1.Command
-	(*Outcome)(nil),     // 3: fleetedr.control.v1.Outcome
+	(*Heartbeat)(nil),   // 1: fleetedr.control.v1.Heartbeat
+	(*AgentFrame)(nil),  // 2: fleetedr.control.v1.AgentFrame
+	(*Command)(nil),     // 3: fleetedr.control.v1.Command
+	(*Outcome)(nil),     // 4: fleetedr.control.v1.Outcome
 }
 var file_internal_control_control_proto_depIdxs = []int32{
-	2, // 0: fleetedr.control.v1.ServerFrame.command:type_name -> fleetedr.control.v1.Command
-	3, // 1: fleetedr.control.v1.AgentFrame.outcome:type_name -> fleetedr.control.v1.Outcome
-	1, // 2: fleetedr.control.v1.ControlChannel.Connect:input_type -> fleetedr.control.v1.AgentFrame
-	0, // 3: fleetedr.control.v1.ControlChannel.Connect:output_type -> fleetedr.control.v1.ServerFrame
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3, // 0: fleetedr.control.v1.ServerFrame.command:type_name -> fleetedr.control.v1.Command
+	1, // 1: fleetedr.control.v1.ServerFrame.heartbeat:type_name -> fleetedr.control.v1.Heartbeat
+	4, // 2: fleetedr.control.v1.AgentFrame.outcome:type_name -> fleetedr.control.v1.Outcome
+	2, // 3: fleetedr.control.v1.ControlChannel.Connect:input_type -> fleetedr.control.v1.AgentFrame
+	0, // 4: fleetedr.control.v1.ControlChannel.Connect:output_type -> fleetedr.control.v1.ServerFrame
+	4, // [4:5] is the sub-list for method output_type
+	3, // [3:4] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_internal_control_control_proto_init() }
@@ -365,8 +430,9 @@ func file_internal_control_control_proto_init() {
 	}
 	file_internal_control_control_proto_msgTypes[0].OneofWrappers = []any{
 		(*ServerFrame_Command)(nil),
+		(*ServerFrame_Heartbeat)(nil),
 	}
-	file_internal_control_control_proto_msgTypes[1].OneofWrappers = []any{
+	file_internal_control_control_proto_msgTypes[2].OneofWrappers = []any{
 		(*AgentFrame_Outcome)(nil),
 	}
 	type x struct{}
@@ -375,7 +441,7 @@ func file_internal_control_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_control_control_proto_rawDesc), len(file_internal_control_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

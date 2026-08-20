@@ -37,8 +37,11 @@ import (
 // Fixed operational intervals, compiled constants rather than operator knobs (server-configuration spec): the cross-replica command
 // watch, the connection-presence last-seen bump, and the per-connection token revocation re-check.
 const (
-	defaultWatchInterval      = 1 * time.Second
-	defaultLivenessInterval   = 30 * time.Second
+	defaultWatchInterval    = 1 * time.Second
+	defaultLivenessInterval = 30 * time.Second
+	// lastSeenWriteTimeout bounds the per-tick last-seen write so a slow database cannot hold the connection's maintenance loop, and
+	// therefore cannot stop that host's heartbeats. Well under the agent's silence deadline by design.
+	lastSeenWriteTimeout      = 5 * time.Second
 	defaultRevocationInterval = 5 * time.Second
 
 	// notifyBuffer bounds the fast-path signal queue. A full buffer is harmless: the 1s watch is the backstop, so a dropped notify just
@@ -332,6 +335,22 @@ func (g *Gateway) maintain(ctx context.Context, c *conn) {
 		case <-ctx.Done():
 			return
 		case <-liveness.C:
+			// Heartbeat FIRST, and never behind the database. Now that an agent tears its stream down when frames stop arriving, a
+			// stalled bumpLastSeen would hold this loop, stop heartbeats for every connected host, and turn a database incident into
+			// a fleet-wide reconnect storm against the very server that is already struggling. The heartbeat asserts that this
+			// replica still holds the connection, which is true whether or not the database is answering, so it must not depend on
+			// one.
+			//
+			// Tell the agent this stream is still registered for delivery. Nothing else does: the gateway runs over the shared HTTPS
+			// listener where net/http answers HTTP/2 keepalive PINGs itself, so a passing ping proves the transport is alive and not
+			// that this connection still exists here. Without a frame arriving on a cadence, an agent holding a stream this replica
+			// has forgotten cannot tell the difference, and it stops asking for work (issue #711).
+			//
+			// Dropped when the buffer is full, deliberately. A full buffer means frames are already flowing to this agent, which is
+			// the very thing the heartbeat exists to demonstrate, and a heartbeat must never displace a command.
+			if !c.push(&control.ServerFrame{Frame: &control.ServerFrame_Heartbeat{Heartbeat: &control.Heartbeat{}}}) {
+				g.logger.DebugContext(ctx, "control gateway heartbeat skipped: send buffer full", attrkeys.HostID, c.hostID)
+			}
 			g.bumpLastSeen(ctx, c.hostID)
 		case <-revcheck.C:
 			if _, err := g.verifier.VerifyToken(ctx, c.token); err != nil {
@@ -351,6 +370,11 @@ func (g *Gateway) bumpLastSeen(ctx context.Context, hostID string) {
 	if g.heartbeat == nil {
 		return
 	}
+	// Bounded, because this is a database write on a stream context that lives as long as the connection does. Left unbounded, one
+	// stalled write holds the maintenance loop for that whole lifetime, which now also means no heartbeats for this host. The bound is
+	// far below the agent's silence deadline, so even a database that stalls on every tick cannot push a host into reconnecting.
+	ctx, cancel := context.WithTimeout(ctx, lastSeenWriteTimeout)
+	defer cancel()
 	if err := g.heartbeat(ctx, hostID, time.Now()); err != nil {
 		g.logger.WarnContext(ctx, "control gateway heartbeat", attrkeys.HostID, hostID, "err", err)
 	}
