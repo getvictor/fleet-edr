@@ -85,6 +85,7 @@ func requireInheritedPath(ctx context.Context, t *testing.T, b *graph.Builder, s
 // spec:server-process-graph-builder/fork-creates-a-process-record/a-parent-whose-exit-was-never-observed-still-supplies-the-path
 // spec:server-process-graph-builder/fork-creates-a-process-record/a-parent-recorded-as-exited-before-its-child-forked-still-resolves
 // spec:server-process-graph-builder/fork-creates-a-process-record/no-generation-of-the-parent-pid-had-forked-yet
+// spec:server-process-graph-builder/fork-creates-a-process-record/a-fork-resolves-the-image-in-force-inside-a-re-exec-chain
 func TestForkInheritsPathOfTheParentGenerationThatHadForkedByThen(t *testing.T) {
 	t.Parallel()
 
@@ -152,6 +153,37 @@ func TestForkInheritsPathOfTheParentGenerationThatHadForkedByThen(t *testing.T) 
 				{forkEvt(100, parentPID, 1), execEvt(101, parentPID, 1, firstImage), exitEvt(160, parentPID, 0)},
 			},
 			forkAt: 250,
+			want:   firstImage,
+		},
+		{
+			// A re-exec chain shares one fork time across both images, so the generation bound admits both and the row order alone
+			// would hand back whatever the pid ran LAST. This child forked while the parent was still on firstImage.
+			name: "child forked before the parent re-exec'd inherits the image in force then",
+			seed: [][]api.Event{
+				{forkEvt(100, parentPID, 1), execEvt(101, parentPID, 1, firstImage)},
+				{execEvt(200, parentPID, 1, secondImage)},
+			},
+			forkAt: 150,
+			want:   firstImage,
+		},
+		{
+			name: "child forked after the parent re-exec'd inherits the new image",
+			seed: [][]api.Event{
+				{forkEvt(100, parentPID, 1), execEvt(101, parentPID, 1, firstImage)},
+				{execEvt(200, parentPID, 1, secondImage)},
+			},
+			forkAt: 250,
+			want:   secondImage,
+		},
+		{
+			// The child's stamp falls inside its parent's own fork-to-exec window, which happens because fork and exec are stamped
+			// independently at handler time. The generation is right and must not be dropped for an older one, so the chain's first
+			// image is the answer: the pre-exec image was overwritten in place by that very exec and cannot be recovered.
+			name: "child forked inside the parent's fork-to-exec window falls back to the chain's first image",
+			seed: [][]api.Event{
+				{forkEvt(100, parentPID, 1), execEvt(200, parentPID, 1, firstImage)},
+			},
+			forkAt: 150,
 			want:   firstImage,
 		},
 		{

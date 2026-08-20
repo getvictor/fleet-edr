@@ -144,7 +144,7 @@ func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int, 
 		if r.proc.ForkTimeNs > atTimeNs {
 			continue
 		}
-		if best == nil || rankGreater(r, best) {
+		if best == nil || imageRankGreater(r, best, atTimeNs) {
 			best = r
 		}
 	}
@@ -152,6 +152,47 @@ func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int, 
 		return "", nil
 	}
 	return best.proc.Path, nil
+}
+
+// imageRankGreater reports whether a is the better answer than b for "what was this PID running at atTimeNs", mirroring the store's
+// ORDER BY fork_time_ns DESC, (exec applied by then) DESC, ABS(exec_time_ns - atTimeNs) ASC, id DESC.
+//
+// It cannot reuse rankGreater, which orders by fork time and then by row sequence. Every image in a re-exec chain carries the SAME
+// fork time (insertReExec preserves it), so sequence order there means "whatever the PID ran last" rather than "what it was running
+// then", and picking that hands a child an image its parent had not yet exec'd. The generation still decides first; the image is
+// resolved inside it.
+func imageRankGreater(a, b *procRow, atTimeNs int64) bool {
+	if a.proc.ForkTimeNs != b.proc.ForkTimeNs {
+		return a.proc.ForkTimeNs > b.proc.ForkTimeNs
+	}
+	aApplied, bApplied := imageApplied(a, atTimeNs), imageApplied(b, atTimeNs)
+	if aApplied != bApplied {
+		return aApplied
+	}
+	aDist, bDist := imageDistance(a, atTimeNs), imageDistance(b, atTimeNs)
+	if aDist != bDist {
+		return aDist < bDist
+	}
+	return a.seq > b.seq
+}
+
+// imageApplied reports whether r's image was in place at atTimeNs. A row with no exec carries the path it inherited at fork, which is
+// in place from the fork onward, so it counts as applied.
+func imageApplied(r *procRow, atTimeNs int64) bool {
+	return r.proc.ExecTimeNs == nil || *r.proc.ExecTimeNs <= atTimeNs
+}
+
+// imageDistance is how far r's exec sits from atTimeNs, the tie-break within one generation. Among applied images the nearest is the
+// latest one in force; among unapplied images (only reachable when the chain had applied none yet) the nearest is the chain's first,
+// which is the closest surviving evidence of what the parent was running.
+func imageDistance(r *procRow, atTimeNs int64) int64 {
+	if r.proc.ExecTimeNs == nil {
+		return 0
+	}
+	if d := *r.proc.ExecTimeNs - atTimeNs; d >= 0 {
+		return d
+	}
+	return atTimeNs - *r.proc.ExecTimeNs
 }
 
 // mostRecentLive returns the most-recent non-exited row for (host, pid), the target of the single-row exec UPDATE. nil when every row
