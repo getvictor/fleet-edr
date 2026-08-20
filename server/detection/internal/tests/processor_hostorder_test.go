@@ -19,6 +19,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,11 +50,13 @@ func newQueueRig(t *testing.T) *queueRig {
 	t.Helper()
 	db := full.Open(t)
 	// A worker inside its per-host critical section holds TWO connections: the one GET_LOCK pins and the one its claim and flush run
-	// on. The suite's default 4-connection pool would therefore make the processor clamp a 4-worker fleet down to 2, which is not the
-	// configuration these tests mean to exercise, and would park the gated test on its own assertion queries. Twelve is well inside
-	// the suite's headroom and matches production, where MaxOpenConns is far above twice the worker count.
-	db.SetMaxOpenConns(12)
-	db.SetMaxIdleConns(12)
+	// on, and the processor only sizes a worker fleet to a SHARE of the pool because production shares it with the request path. The
+	// suite's default 4-connection pool would therefore clamp a 4-worker fleet down to one, which is not the configuration these tests
+	// mean to exercise, and would park the gated test on its own assertion queries. Sixteen is the smallest budget that leaves four
+	// workers intact, is well inside the suite's headroom (max-connections=500), and matches the production shape where MaxOpenConns
+	// sits far above the fleet's needs.
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(16)
 	vis, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db})
 	require.NoError(t, err)
 	require.NoError(t, vis.ApplySchema(t.Context()), "apply visibility schema")
@@ -104,7 +107,7 @@ func orderSensitiveTemplate(base int64, childPIDs ...int) []api.Event {
 func drainQueue(t *testing.T, rig *queueRig, workers int, batch int, coordinator leader.Coordinator) {
 	t.Helper()
 	ctx := t.Context()
-	proc := pipeline.NewProcessor(rig.eventLog, rig.builder, nil, pipeline.ProcessorOptions{
+	proc, err := pipeline.NewProcessor(rig.eventLog, rig.builder, nil, pipeline.ProcessorOptions{
 		Logger:      discardLogger(),
 		Interval:    2 * time.Millisecond,
 		Batch:       batch,
@@ -112,6 +115,7 @@ func drainQueue(t *testing.T, rig *queueRig, workers int, batch int, coordinator
 		Coordinator: coordinator,
 		ConnBudget:  rig.db.Stats().MaxOpenConnections,
 	})
+	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -203,19 +207,25 @@ func TestProcessor_ConcurrentWorkersLinkReExecChains(t *testing.T) {
 
 // gatedBuilder blocks the first batch it sees for gateHost until release is closed, so a test can hold one host's lock open and watch
 // whether other hosts keep moving.
+//
+// Every worker in the fleet calls ProcessBatch concurrently, so the gate needs its own synchronization: the per-host lock serializes
+// the gated host's batches against each other but says nothing about the free host's batches running at the same time. sync.Once
+// carries the "already gated" state instead of a plain bool, and the host is compared BEFORE the gate is touched so a free-host batch
+// never reads state a gated-host batch is writing.
 type gatedBuilder struct {
 	inner    *graph.Builder
 	gateHost string
 	entered  chan struct{}
 	release  chan struct{}
-	tripped  bool
+	gate     sync.Once
 }
 
 func (g *gatedBuilder) ProcessBatch(ctx context.Context, events []visibilityapi.Event) error {
-	if !g.tripped && len(events) > 0 && events[0].HostID == g.gateHost {
-		g.tripped = true
-		close(g.entered)
-		<-g.release
+	if len(events) > 0 && events[0].HostID == g.gateHost {
+		g.gate.Do(func() {
+			close(g.entered)
+			<-g.release
+		})
 	}
 	return g.inner.ProcessBatch(ctx, events)
 }
@@ -233,11 +243,14 @@ func TestProcessor_HeldHostLockDoesNotStallOtherHosts(t *testing.T) {
 
 	blocked := fmt.Sprintf("gate-blocked-%s", t.Name())
 	free := fmt.Sprintf("gate-free-%s", t.Name())
+	// Only the blocked host is queued up front. Queueing the free host too would let it finish BEFORE a worker ever entered the gate,
+	// and the progress assertion below would then pass without a lock ever being held: it would be satisfied by work that happened
+	// while nothing was blocked. Appending it after the gate trips makes the assertion unambiguous, because the free host's work did
+	// not exist until a worker was already parked inside the blocked host's critical section.
 	require.NoError(t, rig.eventLog.Append(ctx, orderSensitiveEvents(blocked, base, 601, 602)))
-	require.NoError(t, rig.eventLog.Append(ctx, orderSensitiveEvents(free, base, 601, 602)))
 
 	gated := &gatedBuilder{inner: rig.builder, gateHost: blocked, entered: make(chan struct{}), release: make(chan struct{})}
-	proc := pipeline.NewProcessor(rig.eventLog, gated, nil, pipeline.ProcessorOptions{
+	proc, err := pipeline.NewProcessor(rig.eventLog, gated, nil, pipeline.ProcessorOptions{
 		Logger:      discardLogger(),
 		Interval:    2 * time.Millisecond,
 		Batch:       1,
@@ -245,6 +258,7 @@ func TestProcessor_HeldHostLockDoesNotStallOtherHosts(t *testing.T) {
 		Coordinator: leader.NewMySQL(rig.db, discardLogger()),
 		ConnBudget:  rig.db.Stats().MaxOpenConnections,
 	})
+	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -265,6 +279,10 @@ func TestProcessor_HeldHostLockDoesNotStallOtherHosts(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatalf("no worker entered the gated host's batch")
 	}
+
+	// A worker is now parked inside the blocked host's critical section, holding that host's lock. Everything the free host does from
+	// here happens while that lock is held.
+	require.NoError(t, rig.eventLog.Append(ctx, orderSensitiveEvents(free, base, 601, 602)))
 
 	// The blocked host is parked mid-flush. The free host must still drain to completion.
 	freeCount := func() int {

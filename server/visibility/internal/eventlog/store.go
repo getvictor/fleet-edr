@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ const (
 	appendChunkRows = 500
 
 	// claimLeaseNs is the visibility timeout on a claim. A worker that claims events (processed = 2) but crashes before Ack/Nack leaves
-	// them in-flight; once their claim is older than the lease, a later Claim re-offers them, honoring the EventLog at-least-once
+	// them in-flight; once their claim is older than the lease, a later ClaimForHost re-offers them, honoring the EventLog at-least-once
 	// contract. Set well above the longest expected per-batch processing time so a live worker is never double-served.
 	claimLeaseNs = int64(5 * time.Minute)
 
@@ -103,8 +104,12 @@ func appendArgs(chunk []api.Event) ([]string, []any, error) {
 // callers can see the same host and must not assume exclusivity from it. Ordering by each host's oldest claimable event is what keeps
 // a busy host from starving a quiet one whose backlog is older.
 //
-// The claimable predicate matches Claim's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. The grouping runs
-// over the (processed, host_id, timestamp_ns) claim index, so the per-host minimum is an index read rather than a table scan.
+// The claimable predicate matches ClaimForHost's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. The OR
+// across the two claim states defeats the (processed, host_id, timestamp_ns) index, so this is a full scan plus a temporary-table
+// aggregate whose cost grows with backlog depth: measured on MySQL 8.4, 66ms over a 200k-row queue across 200 hosts. The cross-host
+// claim it replaced scanned the same way (54ms on the same rows), so the scan predates the per-host split rather than arriving with
+// it. Making it an index read needs a (processed, timestamp_ns) index plus a UNION of the two arms, one per claim state, which is a
+// schema migration and its own change.
 func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -166,14 +171,43 @@ func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.
 	defer tx.Rollback() //nolint:errcheck
 
 	cutoff := time.Now().UnixNano() - claimLeaseNs
+
+	// Never hand out an event that sits behind an in-flight one. A row another claimer still holds (processed = 2, lease unexpired)
+	// does not match the claimable predicate below, so without this bound it is a HOLE the rest of the host's stream pours through:
+	// a worker that claimed a fork and died before flushing leaves that fork in flight, its advisory lock released with its
+	// connection, and the next claimer would take the following exec and fold it as an exec with no fork. The builder cannot tell
+	// that apart from a genuinely fork-less exec, which is the duplicate generation issue #717 exists to remove. The same hole opens
+	// for a few instructions on the failure path, between a builder-failed batch releasing the lock and its Nack landing.
+	//
+	// So the claim stops at the oldest in-flight event: everything strictly older is safe to fold (it cannot leapfrog anything), and
+	// everything at or after it waits. Waiting costs at most one claim lease, after which the abandoned rows become claimable again
+	// and are re-offered in timestamp order. That bounded delay is the right trade against folding a host's stream out of order, and
+	// it is why the fix is not "shorten the lease": a live claimer's rows must never be stolen, only an expired claim's.
+	//
+	// The trade has a cost worth naming: a batch whose Ack fails now holds its host until the lease expires, where before the host's
+	// later events would have flowed past it. The redelivery re-folds an already-materialized batch, which the at-least-once contract
+	// already requires consumers to absorb, so the outcome is a bounded pause rather than lost or duplicated work.
+	var inFlight sql.NullInt64
+	if err := tx.GetContext(ctx, &inFlight, `
+		SELECT MIN(timestamp_ns)
+		FROM event_queue
+		WHERE host_id = ? AND processed = 2 AND claimed_at_ns >= ?`, hostID, cutoff); err != nil {
+		return nil, fmt.Errorf("claim in-flight floor: %w", err)
+	}
+	// No in-flight row leaves the whole stream claimable, expressed as a ceiling nothing can reach so the predicate stays one shape.
+	inFlightFloor := int64(math.MaxInt64)
+	if inFlight.Valid {
+		inFlightFloor = inFlight.Int64
+	}
+
 	var events []api.Event
 	err = tx.SelectContext(ctx, &events, `
 		SELECT event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload
 		FROM event_queue
-		WHERE host_id = ? AND (processed = 0 OR (processed = 2 AND claimed_at_ns < ?))
+		WHERE host_id = ? AND (processed = 0 OR (processed = 2 AND claimed_at_ns < ?)) AND timestamp_ns < ?
 		ORDER BY timestamp_ns
 		LIMIT ?
-		FOR UPDATE SKIP LOCKED`, hostID, cutoff, limit)
+		FOR UPDATE SKIP LOCKED`, hostID, cutoff, inFlightFloor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim select: %w", err)
 	}
@@ -214,8 +248,8 @@ func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
 	return nil
 }
 
-// Nack returns claimed events to the not-yet-processed state for an immediate later Claim, clearing the claim timestamp. Scoped to
-// processed = 2 so it only reverts in-flight rows and never resurrects an already-acknowledged event.
+// Nack returns claimed events to the not-yet-processed state for an immediate later ClaimForHost, clearing the claim timestamp. It is
+// scoped to processed = 2 so it only reverts in-flight rows and never resurrects an already-acknowledged event.
 func (s *Store) Nack(ctx context.Context, eventIDs []string) error {
 	if len(eventIDs) == 0 {
 		return nil

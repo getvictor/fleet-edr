@@ -69,16 +69,18 @@ func TestProcessor_IntraReplicaConcurrencyDrainsCompletely(t *testing.T) {
 	// Eight workers, batch 50: the 1000 events fan out across many disjoint per-host claims. Forty hosts against eight workers is
 	// also the throughput half of issue #717: serializing each host must not serialize the fleet, so the drain below still has to
 	// complete well inside its deadline with every worker busy on a different host.
-	proc := pipeline.NewProcessor(eventLog, builder, nil, pipeline.ProcessorOptions{
+	proc, err := pipeline.NewProcessor(eventLog, builder, nil, pipeline.ProcessorOptions{
 		Logger:      discardLogger(),
 		Interval:    5 * time.Millisecond,
 		Batch:       50,
 		Concurrency: 8,
 		Coordinator: leader.NewMySQL(db, discardLogger()),
-		// The per-test pool is capped at 4 connections and a locked worker holds two, so the processor clamps 8 workers down to
-		// what the pool can serve. Passing the real budget is what turns that from a silent stall into a logged clamp.
+		// The per-test pool is capped at 4 connections and a locked worker holds two, so the processor sizes 8 workers down to the
+		// share the pool can serve. Passing the real budget is what turns that from a silent stall into a logged reduction, and the
+		// drain below then proves the reduced fleet still finishes: a fleet sized to the pool is the point, not a fleet of eight.
 		ConnBudget: db.Stats().MaxOpenConnections,
 	})
+	require.NoError(t, err)
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {

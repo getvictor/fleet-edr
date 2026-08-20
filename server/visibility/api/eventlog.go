@@ -33,6 +33,13 @@ type EventLog interface {
 	// ClaimForHost atomically claims up to limit claimable events for hostID, ordered by timestamp, without blocking concurrent
 	// claimers. The claimed events are hidden from other claimers until Ack or Nack. Returns an empty slice when that host has
 	// nothing claimable, which is normal: PendingHosts is a hint and another claimer may have taken the host's backlog first.
+	//
+	// A claim SHALL NOT reach past an event that is still in flight: if another claimer holds an unexpired claim on one of this
+	// host's events, only events strictly older than the oldest such event are offered, and an empty slice is returned when none
+	// are. Without that bound an in-flight event is a hole in the stream rather than a stop sign, because in-flight events do not
+	// match the claimable predicate: a claimer that died between claiming a fork and flushing it would let the next claimer take
+	// the following exec and fold it as an exec with no fork. Callers therefore get at-most-one-gap-free prefix per host and may
+	// see nothing for a host until an abandoned claim's lease expires, which is bounded and preferable to out-of-order folding.
 	ClaimForHost(ctx context.Context, hostID string, limit int) ([]Event, error)
 
 	// Ack marks the claimed events (identified by EventID) fully processed: they are excluded from future claims but stay in the queue
@@ -40,7 +47,7 @@ type EventLog interface {
 	// takes IDs rather than whole events: the caller need not retain the (potentially large) payloads until ack.
 	Ack(ctx context.Context, eventIDs []string) error
 
-	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later Claim (retry after a
+	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost (retry after a
 	// processing failure).
 	Nack(ctx context.Context, eventIDs []string) error
 

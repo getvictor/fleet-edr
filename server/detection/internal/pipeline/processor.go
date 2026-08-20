@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -74,20 +75,36 @@ type ProcessorOptions struct {
 	// parallelism is bounded by the number of hosts with pending work, not by this value alone. Ignored (forced to 1) when
 	// Coordinator is nil, since without a lock there is nothing to keep two workers off one host.
 	Concurrency int
-	// Coordinator provides the per-host advisory lock that serializes one host's stream onto one worker at a time (issue #717).
-	// Optional: with no coordinator the processor runs a single worker, which upholds the same ordering guarantee trivially.
+	// Coordinator provides the per-host advisory lock that serializes one host's stream onto one worker at a time (issue #717). It
+	// is the ONLY mechanism here that serializes a host across replicas, because the lock lives in MySQL.
+	//
+	// Optional, but a deployment that omits it is only safe as a single replica. With no coordinator the processor falls back to one
+	// worker, which bounds a host to one claimer WITHIN this process; it cannot stop a second replica from claiming the same host
+	// and folding its stream concurrently, which recreates the duplicate generations and missing re-exec links of issue #717. Run
+	// multi-replica with a coordinator.
 	Coordinator leader.Coordinator
-	// ConnBudget is the MySQL pool's MaxOpenConns, used to clamp Concurrency so the workers cannot deadlock on the pool. A worker
+	// ConnBudget is the MySQL pool's MaxOpenConns, used to size Concurrency so the workers cannot deadlock on the pool. A worker
 	// under the per-host lock holds TWO connections at once: the one GET_LOCK pins for the critical section, plus the one the claim
 	// and flush run on. With ConnBudget below twice Concurrency, workers can take every connection as a lock connection and then
-	// block forever waiting for a claim connection, which presents as a silent stall rather than an error. Zero means unknown and
-	// skips the clamp.
+	// block forever waiting for a claim connection, which presents as a silent stall rather than an error.
+	//
+	// The budget is the WHOLE pool, shared with the request path and the background sweeps, so workers are held to a share of it
+	// (workerPoolShareDivisor) rather than all of it. A budget too small for even one worker is a configuration error NewProcessor
+	// refuses, because clamping to one worker there would produce exactly the stall the sizing exists to prevent. Zero means unknown
+	// and skips both the sizing and the refusal.
 	ConnBudget int
 }
 
 // connsPerWorker is how many pooled connections one worker occupies inside its critical section: the GET_LOCK connection the
 // coordinator pins, plus the connection the claim and flush use.
 const connsPerWorker = 2
+
+// workerPoolShareDivisor keeps the worker fleet from sizing itself to the whole pool. ConnBudget is the process-wide MaxOpenConns,
+// shared with the ingest handlers, the retention and TTL sweeps, the queue prune and every request-path query, so sizing workers at
+// ConnBudget/connsPerWorker would let them hold nearly every connection inside their critical sections and starve the rest of the
+// server. Halving that leaves most of the pool for everyone else. It does not bind at the shipped defaults (a 25-connection pool
+// affords 6 workers against a configured 4); it is what keeps a future concurrency increase from quietly consuming the pool.
+const workerPoolShareDivisor = 2
 
 // concurrencyClamp records that the effective worker count came out below the configured one, and why. The constructor decides it but
 // cannot log it: it has no context, and fabricating a background one there is what contextcheck (rightly) rejects. Run emits it once
@@ -101,37 +118,52 @@ type concurrencyClamp struct {
 // host's events always reach the graph builder in causal order (issue #717) while different hosts still process in parallel. The
 // workers share this Processor's builder and engine, both of which are safe under concurrent batches for DIFFERENT hosts (the graph
 // builder serialises its cross-batch exit buffer, and rule evaluation is read-then-dedup-insert).
+// It returns an error for a configuration it cannot run rather than starting a pipeline that cannot make progress: see the connection
+// budget check below.
 func NewProcessor(
 	eventLog visibilityapi.EventLog,
 	builder batchBuilder,
 	det batchEvaluator,
 	opts ProcessorOptions,
-) *Processor {
+) (*Processor, error) {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 	concurrency := max(opts.Concurrency, 1)
-	// Without a coordinator two workers could claim the same host and fold its stream out of order, which is exactly the defect
-	// #717 fixes. One worker gives the same guarantee without a lock, so degrade to that rather than run unsafely.
+	// Without a coordinator two workers in THIS process could claim the same host and fold its stream out of order, which is the
+	// defect #717 fixes, so fall back to one worker. That bound is intra-replica only: nothing here stops another replica's worker
+	// from claiming the same host, so the warning says so rather than implying the guarantee still holds fleet-wide.
 	var clamp *concurrencyClamp
 	if opts.Coordinator == nil && concurrency > 1 {
 		clamp = &concurrencyClamp{
-			reason: "detection processor has no coordinator; running a single worker to keep per-host event order",
-			attrs:  []any{"requested_concurrency", concurrency, "effective_concurrency", 1},
+			reason: "detection processor has no coordinator; running a single worker, which orders one host's events only within " +
+				"this replica: run with a coordinator in any multi-replica deployment",
+			attrs: []any{"requested_concurrency", concurrency, "effective_concurrency", 1},
 		}
 		concurrency = 1
 	}
-	// Clamp to what the pool can actually serve concurrently. Exceeding it does not degrade gracefully: every worker can hold a lock
+	// Size the fleet to what the pool can actually serve. Exceeding it does not degrade gracefully: every worker can hold a lock
 	// connection while waiting for a claim connection that no one will release, so the processor stops dead with nothing logged.
-	// Fewer workers is always recoverable; a deadlocked pipeline is not.
+	//
+	// Clamping cannot rescue a budget too small for even one worker. A single worker still needs connsPerWorker connections, so a
+	// pool below that deadlocks the one worker the clamp would leave: it pins the only connection for GET_LOCK and then waits
+	// forever for a claim connection. That is the exact stall the clamp exists to avoid, so refuse the configuration instead. A
+	// deployment that will not boot states its problem; one that boots and silently never processes an event does not.
 	if opts.Coordinator != nil && opts.ConnBudget > 0 {
-		if affordable := max(opts.ConnBudget/connsPerWorker, 1); concurrency > affordable {
+		if opts.ConnBudget < connsPerWorker {
+			return nil, fmt.Errorf(
+				"detection processor: MySQL pool of %d connection(s) cannot serve one worker; the per-host claim lock needs %d "+
+					"connections per worker (one pinned by GET_LOCK, one for the claim and flush), so raise the pool to at least %d",
+				opts.ConnBudget, connsPerWorker, connsPerWorker*workerPoolShareDivisor)
+		}
+		if affordable := max(opts.ConnBudget/(connsPerWorker*workerPoolShareDivisor), 1); concurrency > affordable {
 			clamp = &concurrencyClamp{
 				reason: "detection processor concurrency clamped to the connection budget",
 				attrs: []any{
 					"requested_concurrency", concurrency, "effective_concurrency", affordable,
 					"max_open_conns", opts.ConnBudget, "conns_per_worker", connsPerWorker,
+					"pool_share_divisor", workerPoolShareDivisor,
 				},
 			}
 			concurrency = affordable
@@ -150,7 +182,7 @@ func NewProcessor(
 		batch:       batchSize,
 		concurrency: concurrency,
 		clamp:       clamp,
-	}
+	}, nil
 }
 
 // hostClaimLockName is the advisory-lock name for one host's claim. It uses the raw host id so a held lock is legible in
@@ -235,9 +267,13 @@ func (p *Processor) processOnce(ctx context.Context, workerIndex int) int {
 		}
 		host := hosts[(workerIndex+offset)%len(hosts)]
 		claimed, ran := p.processHost(ctx, host)
-		if ran {
+		if ran && claimed > 0 {
 			return claimed
 		}
+		// Holding the lock but claiming nothing is not a reason to stop for this tick. PendingHosts is a hint: the host's backlog
+		// may have been drained by another worker between the two calls, or the claim may be waiting behind an event still in
+		// flight (an abandoned claim whose lease has not expired). Either way this host has no work for us right now and the next
+		// candidate might, so keep walking rather than idling until the next tick.
 	}
 	return 0
 }
@@ -273,12 +309,20 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 		if err := p.builder.ProcessBatch(lockedCtx, claimed); err != nil {
 			p.logger.WarnContext(lockedCtx, "graph builder failure, will retry batch", "err", err)
 			buildFailed = true
+			// Requeue inside the lock, not after it. A failed batch's rows stay in flight until the Nack lands, and releasing the
+			// host first would let the next claimer take this host's LATER events and fold them ahead of these, so the retry would
+			// arrive behind generations it precedes. The claim's in-flight bound makes that window harmless even if this Nack
+			// fails, but closing the window is cheaper than relying on the bound to cover it.
+			if nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed)); nackErr != nil {
+				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
+			}
 		}
 		return nil
 	}
 
 	if p.coordinator == nil {
-		// Single-worker mode (NewProcessor forces it when no coordinator is wired): ordering holds without a lock.
+		// Single-worker mode (NewProcessor forces it when no coordinator is wired). One worker keeps this host's events in order
+		// within this replica; it does not stop another replica from claiming the same host (see ProcessorOptions.Coordinator).
 		_ = claimAndBuild(ctx)
 	} else {
 		ran, err := p.coordinator.DoOnceIfLeader(ctx, hostClaimLockName(host), claimAndBuild)
@@ -293,20 +337,22 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 	if len(events) == 0 {
 		return 0, true
 	}
-
-	eventIDs := make([]string, len(events))
-	for i, e := range events {
-		eventIDs[i] = e.EventID
-	}
-
 	if buildFailed {
-		if nackErr := p.eventLog.Nack(ctx, eventIDs); nackErr != nil {
-			p.logger.ErrorContext(ctx, "nack events after builder failure", "err", nackErr)
-		}
-		return 0, true // nacked: stop draining so a persistently failing batch cannot hot-spin
+		// Already requeued inside the lock. Stop draining so a persistently failing batch cannot hot-spin.
+		return 0, true
 	}
 
-	return p.evaluateAndAck(ctx, events, eventIDs), true
+	return p.evaluateAndAck(ctx, events, eventIDsOf(events)), true
+}
+
+// eventIDsOf projects a claimed batch to the identities Ack and Nack take, so neither the locked region nor the post-lock path has to
+// keep a parallel slice in step with events.
+func eventIDsOf(events []visibilityapi.Event) []string {
+	ids := make([]string, len(events))
+	for i, e := range events {
+		ids[i] = e.EventID
+	}
+	return ids
 }
 
 // evaluateAndAck runs detection over an already-materialized batch and acknowledges it, returning the events processed or 0 if the

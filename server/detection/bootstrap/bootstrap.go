@@ -202,7 +202,7 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 	d.operatorH.SetEventSearch(store)
 	d.operatorH.SetHostTimeline(store)
 
-	processor := pipeline.NewProcessor(
+	processor, err := pipeline.NewProcessor(
 		deps.EventLog,
 		graph.NewBuilder(store, logger),
 		d.engine,
@@ -216,10 +216,14 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 			// leader, so every replica still processes, just never the same host at the same moment.
 			Coordinator: deps.Coordinator,
 			// A locked worker holds two pooled connections at once, so the pool size caps how many workers can run without
-			// deadlocking on it. Passing the real cap lets the processor clamp itself rather than stall.
+			// deadlocking on it. Passing the real cap lets the processor size itself, and refuse a pool too small for one worker
+			// rather than boot a pipeline that would stall on its first claim.
 			ConnBudget: connBudget(deps.DB),
 		},
 	)
+	if err != nil {
+		return fmt.Errorf("detection bootstrap: %w", err)
+	}
 	processTTL := pipeline.NewProcessTTL(store, pipeline.ProcessTTLOptions{
 		MaxAge:   deps.StaleProcessTTL,
 		Interval: deps.StaleProcessInterval,

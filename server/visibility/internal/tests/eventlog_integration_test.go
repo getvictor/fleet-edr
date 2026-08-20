@@ -135,6 +135,8 @@ func TestEventLog_IdempotentAppend(t *testing.T) {
 	assert.Equal(t, int64(1), pending, "the duplicate event_id is not enqueued twice")
 }
 
+// spec:server-availability/the-processor-scales-across-replicas-via-skip-locked/a-claim-never-spans-hosts
+//
 // A claim never spans hosts (issue #717), and within a host it is timestamp-ordered so the graph builder sees a pid's fork before its
 // exec. PendingHosts orders by each host's oldest claimable event, which is what keeps a host with a long-waiting backlog from being
 // starved by a busier one.
@@ -169,6 +171,73 @@ func TestEventLog_ClaimIsHostScopedAndOrdered(t *testing.T) {
 	assert.Empty(t, drained, "a host whose rows are all in flight is not offered again until its claim expires")
 }
 
+// spec:server-availability/the-processor-scales-across-replicas-via-skip-locked/a-claim-stops-at-a-host-s-oldest-in-flight-event
+//
+// An in-flight row does not match the claimable predicate, so without an explicit floor it is a HOLE in the host's stream rather than
+// a stop sign: a claimer that died between claiming a fork and flushing it would let the next claimer take the following exec and fold
+// it as an exec with no fork, which is exactly the #717 defect that scoping the claim to one host is meant to close. The claim must
+// therefore refuse to reach past the host's oldest unexpired in-flight event, and must not reclaim it either: another worker may still
+// be alive and mid-flush, so the only safe outcome is to leave that host alone until the lease expires.
+func TestEventLog_ClaimStopsAtOldestInFlightEvent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log, db := newEventLogWithDB(t)
+
+	require.NoError(t, log.Append(ctx, []visibilityapi.Event{
+		ev("gap-fork", "h-gap", 100, "fork"),
+		ev("gap-exec", "h-gap", 200, "exec"),
+		ev("gap-exit", "h-gap", 300, "exit"),
+	}))
+
+	// One claimer takes only the oldest event, then stops responding: the fork is in flight and its exec is still queued.
+	inFlight, err := log.ClaimForHost(ctx, "h-gap", 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gap-fork"}, ids(inFlight), "the oldest event is claimed first")
+
+	// The host still LOOKS pending, because its later events have never been claimed. That is the trap: the hint is honest and the
+	// claim is what has to hold the line.
+	hosts, err := log.PendingHosts(ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-gap"}, hosts, "a host with never-claimed events behind an in-flight one is still offered as a hint")
+
+	behind, err := log.ClaimForHost(ctx, "h-gap", 10)
+	require.NoError(t, err)
+	assert.Empty(t, behind,
+		"events behind an unexpired in-flight event must not be claimed: folding gap-exec without gap-fork is the #717 defect")
+
+	// Simulate the holder having died: backdate its claim past the lease. Nothing reclaimed it while the lease was live.
+	_, err = db.ExecContext(ctx, "UPDATE event_queue SET claimed_at_ns = 1 WHERE event_id = ?", "gap-fork")
+	require.NoError(t, err)
+
+	released, err := log.ClaimForHost(ctx, "h-gap", 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gap-fork", "gap-exec", "gap-exit"}, ids(released),
+		"once the abandoned lease expires the whole stream is offered again from the oldest, in timestamp order")
+}
+
+// The floor is the host's OWN oldest in-flight event, so one host stalled behind a dead claimer must not stall any other host: that
+// would turn a bounded per-host wait into a fleet-wide one.
+func TestEventLog_InFlightFloorIsPerHost(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := newEventLog(t)
+
+	require.NoError(t, log.Append(ctx, []visibilityapi.Event{
+		ev("stuck-fork", "h-stuck", 100, "fork"),
+		ev("stuck-exec", "h-stuck", 200, "exec"),
+		ev("other-fork", "h-other", 150, "fork"),
+	}))
+
+	stuck, err := log.ClaimForHost(ctx, "h-stuck", 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"stuck-fork"}, ids(stuck))
+
+	// h-other's event is NEWER than the in-flight one on h-stuck. A floor computed across hosts would swallow it.
+	other, err := log.ClaimForHost(ctx, "h-other", 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"other-fork"}, ids(other), "another host's events are unaffected by this host's in-flight floor")
+}
+
 func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -185,7 +254,7 @@ func TestEventLog_ReclaimsStaleClaim(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, again, "an unexpired in-flight claim is not re-offered")
 
-	// Simulate a worker that crashed between Claim and Ack: backdate the claim past the lease.
+	// Simulate a worker that crashed between ClaimForHost and Ack: backdate the claim past the lease.
 	_, err = db.ExecContext(ctx, "UPDATE event_queue SET claimed_at_ns = 1 WHERE event_id = ?", "e1")
 	require.NoError(t, err)
 
@@ -251,7 +320,7 @@ func TestEventLog_PruneProcessedRemovesOnlyAcked(t *testing.T) {
 		ev("waiting", "h1", 300, "exec"),
 	}))
 
-	// Claim acked+inflight, ack only "acked", leave "inflight" claimed (processed = 2), "waiting" untouched (processed = 0).
+	// ClaimForHost acked+inflight, ack only "acked", leave "inflight" claimed (processed = 2), "waiting" untouched (processed = 0).
 	claimed, err := log.ClaimForHost(ctx, "h1", 2)
 	require.NoError(t, err)
 	require.Equal(t, []string{"acked", "inflight"}, ids(claimed))
