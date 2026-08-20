@@ -8,6 +8,8 @@ The agent SHALL keep the connection alive with periodic liveness probes and SHAL
 
 A liveness probe passing MUST NOT be treated as proof that commands can be delivered. The probe is answered by the transport layer beneath the stream, which establishes that the network path is alive and not that the stream is still registered for delivery, so the two MUST NOT be conflated.
 
+The heartbeat MUST NOT depend on any datastore. Once agents tear a stream down on silence, a stalled write on the path that produces the heartbeat would stop heartbeats for every connected host at once and turn a datastore incident into a fleet-wide reconnect storm against the same server. Any datastore work sharing that path SHALL be bounded well below the agent's silence deadline.
+
 The server SHALL therefore send the agent a frame on a bounded cadence for as long as it holds the connection, carrying no payload: its arrival is the signal. The agent SHALL treat the absence of ANY frame for longer than a bounded deadline as proof that the connection is no longer being served, and SHALL tear it down and reconnect. The deadline MUST be measured against any frame rather than against command traffic, because an idle fleet is normal and a heartbeat is the only thing that distinguishes idle from forgotten.
 
 #### Scenario: A half-open connection is detected and re-established
@@ -29,3 +31,9 @@ The server SHALL therefore send the agent a frame on a bounded cadence for as lo
 - **GIVEN** an agent holding a connection the server has forgotten, whose underlying transport remains healthy
 - **WHEN** no frame of any kind arrives for longer than the agent's deadline
 - **THEN** the agent tears the connection down and reconnects, rather than waiting on it indefinitely
+
+#### Scenario: A stalled datastore does not stop heartbeats
+
+- **GIVEN** a connected host and a datastore that has stopped answering the periodic host-liveness write
+- **WHEN** the heartbeat cadence elapses
+- **THEN** the agent still receives its heartbeat promptly, and the connection is not torn down

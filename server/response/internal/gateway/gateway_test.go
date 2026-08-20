@@ -561,3 +561,42 @@ func TestHeartbeatIsDroppedRatherThanDisplacingAQueuedCommand(t *testing.T) {
 		require.NotNil(t, frame.GetCommand(), "a queued command must not have been displaced by a heartbeat")
 	}
 }
+
+// A stalled database must not stop heartbeats. The last-seen write shares this loop, and now that an agent tears its stream down on
+// silence, a blocked write would stop heartbeats for every connected host and turn a database incident into a fleet-wide reconnect
+// storm against the server that is already struggling.
+// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/a-stalled-datastore-does-not-stop-heartbeats
+func TestHeartbeatSurvivesAStalledLastSeenWrite(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	g := New(Deps{
+		Source:   newFakeSource(),
+		Verifier: newFakeVerifier(),
+		// Models a database that has stopped answering: the write blocks until its context is cancelled.
+		Heartbeat: func(ctx context.Context, _ string, _ time.Time) error {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return ctx.Err()
+		},
+	})
+	g.livenessInterval = 10 * time.Millisecond
+
+	c := newConn("host-stalled", "tok", func() {})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go g.maintain(ctx, c)
+
+	// PROMPTLY, not eventually. The window has to be shorter than the stall, or a heartbeat that only escapes once the stalled write
+	// is finally cancelled still satisfies the test, which is how an earlier version of this passed against the very ordering it was
+	// written to reject.
+	select {
+	case frame := <-c.send:
+		assert.NotNil(t, frame.GetHeartbeat(), "the heartbeat is sent before the database write, so a stalled write cannot suppress it")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("no heartbeat within several cadences while the last-seen write was stalled")
+	}
+}
