@@ -264,7 +264,10 @@ func run() error {
 		streamConnected:  &streamConnected,
 		ledger:           commandLedger,
 		generation:       genRegistry,
-		logger:           logger,
+		// One tracker for both transports, which is the whole point: it is what stops the floor poll and the push path executing the
+		// same command at once now that the poll no longer waits on the stream indefinitely (issue #711).
+		inFlight: commander.NewInFlight(),
+		logger:   logger,
 	}
 	startCommander(ctx, hostID, cfg.ServerURL, agentTransport, cmdDeps)
 	if err := startControlClient(ctx, cfg, hostID, cmdDeps); err != nil {
@@ -405,7 +408,10 @@ type commandDeps struct {
 	// generation is the live pid -> pidversion registry (issue #627), fed by the ESF receive path and shared by both command transports so
 	// a kill_process command is refused when its target PID has since been reused / re-exec'd.
 	generation *procgen.Registry
-	logger     *slog.Logger
+	// inFlight is the process-wide executing-command set shared by both transports. It exists because the poll is a bounded floor
+	// rather than suspended while the stream is believed up, so push and poll can deliver one command at the same time (issue #711).
+	inFlight *commander.InFlight
+	logger   *slog.Logger
 }
 
 // startCommander spins up the command-poll loop when we have a host_id. With no host_id the agent keeps running (events still upload)
@@ -422,12 +428,15 @@ func startCommander(ctx context.Context, hostID, serverURL string, transport htt
 		HostID:                   hostID,
 		Interval:                 commanderPollInterval,
 		ApplicationControlSender: deps.appControlSender,
-		// Defer to the control channel while it is connected (the gateway pushes commands in real time); the poll is the fallback floor.
+		// Defer to the control channel while it is connected (the gateway pushes commands in real time), but only for a bounded
+		// interval: an agent holding a stream the server has forgotten would otherwise never ask for work again (issue #711).
 		StreamConnected: deps.streamConnected.Load,
 		// Shared durable dedup so the poll path does not re-execute a command the control client already ran (issue #558).
 		Ledger: deps.ledger,
 		// Shared live generation map so a kill_process is pinned to the operator-selected process generation (issue #627).
 		Generation: deps.generation,
+		// Shared executing-command set so the floor poll and the push path cannot both run one command (issue #711).
+		InFlight: deps.inFlight,
 	}, &http.Client{Transport: transport, Timeout: 10 * time.Second}, deps.logger)
 	go func() {
 		if err := cmdr.Run(ctx); err != nil && ctx.Err() == nil {
@@ -475,6 +484,7 @@ func startControlClient(ctx context.Context, cfg *config.Config, hostID string, 
 		ApplicationControlSender: deps.appControlSender,
 		Ledger:                   deps.ledger,
 		Generation:               deps.generation,
+		InFlight:                 deps.inFlight,
 		OnConnectedChange:        deps.streamConnected.Store,
 		Logger:                   logger,
 	})

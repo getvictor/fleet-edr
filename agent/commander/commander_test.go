@@ -685,3 +685,113 @@ func TestKillProcessSuccessful(t *testing.T) {
 	require.NoError(t, json.Unmarshal(updates[1].Result, &result))
 	assert.Equal(t, pid, result["killed_pid"], "completed result must carry killed_pid identifying the reaped process")
 }
+
+// The wedge from issue #711: an agent holds a stream the server has forgotten, so StreamConnected() answers true forever while no
+// command can arrive. The poll must therefore be a floor rather than a fallback, because the belief it was gated on is exactly the
+// thing that fails. These pin that deferring is bounded, and that it still happens at all.
+// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/a-connection-the-server-has-forgotten-does-not-silence-commands
+// spec:agent-control-channel/the-connection-detects-and-recovers-from-silent-failure/a-healthy-connection-still-owns-delivery
+func TestPollDefersToTheStreamButOnlyForTheFloorInterval(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		connected     bool
+		sinceLastPoll time.Duration
+		floor         time.Duration
+		wantPolled    bool
+	}{
+		{
+			// The steady state: the stream is live and recently polled, so the push path owns delivery and the poll stays out of it.
+			name:          "a live stream inside the floor suppresses the poll",
+			connected:     true,
+			sinceLastPoll: time.Second,
+			floor:         time.Minute,
+			wantPolled:    false,
+		},
+		{
+			// The wedge. The agent still believes the stream is up, and that belief must stop being sufficient.
+			name:          "a stream the agent believes in stops suppressing the poll past the floor",
+			connected:     true,
+			sinceLastPoll: 2 * time.Minute,
+			floor:         time.Minute,
+			wantPolled:    true,
+		},
+		{
+			name:          "a known-down stream polls immediately",
+			connected:     false,
+			sinceLastPoll: 0,
+			floor:         time.Minute,
+			wantPolled:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var polled atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				polled.Store(true)
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode([]Command{})
+			}))
+			defer srv.Close()
+
+			cmdr := New(Config{
+				ServerURL:       srv.URL,
+				HostID:          "host-a",
+				FloorInterval:   tc.floor,
+				StreamConnected: func() bool { return tc.connected },
+			}, nil, nil)
+			cmdr.lastPoll = time.Now().Add(-tc.sinceLastPoll)
+
+			cmdr.pollAndDispatch(t.Context())
+
+			assert.Equal(t, tc.wantPolled, polled.Load())
+		})
+	}
+}
+
+// A command stranded by the wedge has to actually reach the EXECUTOR once the floor expires, not merely cause a request. Driving
+// pollAndDispatch rather than fetchPending is the point: the floor lives in pollAndDispatch, so a test that calls fetchPending proves
+// only that the server would answer, which it always would.
+func TestPollFloorDispatchesACommandStrandedByABelievedStream(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var statuses []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]Command{{
+				ID: 7, HostID: "host-a", CommandType: "set_application_control",
+				Payload: json.RawMessage(`{"policy_id":7,"policy_version":1,"rules":[]}`), Status: "pending",
+			}})
+			return
+		}
+		var body struct {
+			Status string `json:"status"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		statuses = append(statuses, body.Status)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cmdr := New(Config{
+		ServerURL:       srv.URL,
+		HostID:          "host-a",
+		FloorInterval:   time.Minute,
+		StreamConnected: func() bool { return true }, // the agent believes throughout, as in the incident
+	}, nil, nil)
+	cmdr.lastPoll = time.Now().Add(-2 * time.Minute)
+
+	cmdr.pollAndDispatch(t.Context())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, statuses, "the stranded command must reach the executor, which reports as it goes")
+	assert.Equal(t, "acked", statuses[0], "the command is acked rather than left pending forever")
+}
