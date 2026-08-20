@@ -12,6 +12,14 @@ import (
 	"github.com/fleetdm/edr/server/response/internal/mysql"
 )
 
+// PendingCommandTTL is how long a command may wait for delivery before it is aged out instead of being handed to an agent.
+//
+// A command can sit pending indefinitely when a host is offline or is holding a control stream the server has forgotten (issue #711).
+// That is not merely stale: kill_process addresses a pid, pids are reused, and a kill delivered long after it was issued can terminate
+// an unrelated process. An hour is far beyond any legitimate delivery delay (the push path is sub-second and the poll floor is
+// minutes) while staying long enough that a host rebooting or briefly offline still gets its command.
+const PendingCommandTTL = time.Hour
+
 // Service implements api.Service. It composes the mysql.Store with an optional Heartbeat closure. Status-transition validation lives
 // here (so the matrix is testable without a DB).
 type Service struct {
@@ -114,6 +122,18 @@ func (s *Service) Get(ctx context.Context, id int64) (api.Command, error) {
 // ListForHost returns the host's commands and (best-effort) bumps the host's last-seen-ns via the Heartbeat closure. A heartbeat error
 // is logged at WARN and ignored; the agent already got its commands and the next poll re-tries.
 func (s *Service) ListForHost(ctx context.Context, hostID string, status api.Status) ([]api.Command, error) {
+	// Age out anything past the delivery window before answering, so a stale command is never handed to an agent. A kill_process
+	// addresses a pid and pids are reused, so delivering one issued long ago can terminate an unrelated process (issue #711). Scoped
+	// to this host, and only on the pending read, which is the delivery path: an operator listing history still sees every command.
+	if status == api.StatusPending {
+		if n, err := s.store.ExpirePendingOlderThan(ctx, hostID, time.Now().Add(-PendingCommandTTL)); err != nil {
+			// Not fatal: failing to age out is worse than not answering, so log and fall through to the read, which simply may still
+			// include a stale command this once.
+			s.logger.WarnContext(ctx, "expire stale commands", "host_id", hostID, "err", err)
+		} else if n > 0 {
+			s.logger.InfoContext(ctx, "aged out commands never delivered", "host_id", hostID, "count", n)
+		}
+	}
 	if s.heartbeat != nil {
 		if err := s.heartbeat(ctx, hostID, time.Now()); err != nil {
 			s.logger.WarnContext(ctx, "response heartbeat",
@@ -141,7 +161,7 @@ func (s *Service) ListPendingForHosts(ctx context.Context, hostIDs []string) ([]
 // current status before persisting; collapses both "wrong host" and "unknown id" to api.ErrCommandNotFound at the boundary.
 func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest) error {
 	if !validTargetStatus(req.Status) {
-		return fmt.Errorf("%w: status must be acked, completed, or failed (got %q)",
+		return fmt.Errorf("%w: status must be acked, completed, failed, cancelled, or expired (got %q)",
 			api.ErrInvalidStatusTransition, req.Status)
 	}
 
@@ -173,7 +193,7 @@ func (s *Service) CountPending(ctx context.Context) (int, error) {
 // because the agent must transition forward.
 func validTargetStatus(s api.Status) bool {
 	switch s { //nolint:exhaustive // pending is intentionally rejected; default falls through to false.
-	case api.StatusAcked, api.StatusCompleted, api.StatusFailed:
+	case api.StatusAcked, api.StatusCompleted, api.StatusFailed, api.StatusCancelled, api.StatusExpired:
 		return true
 	}
 	return false
@@ -183,16 +203,32 @@ func validTargetStatus(s api.Status) bool {
 //
 //	pending -> acked              (agent picked it up)
 //	pending -> failed             (agent immediately rejected)
+//	pending -> cancelled          (operator withdrew it before any agent saw it)
+//	pending -> expired            (aged out before any agent picked it up)
+//	cancelled -> acked            (it had already been delivered; the record corrects to what ran)
+//	expired   -> acked            (same, for one aged out while in flight)
 //	acked   -> completed          (agent applied successfully)
 //	acked   -> failed             (agent applied with errors)
 //
-// Every other transition is illegal: terminal states (completed,
-// failed) are immutable; transitioning back to pending is never
-// permitted.
+// Every other transition is illegal: terminal states (completed, failed,
+// cancelled) are immutable; transitioning back to pending is never
+// permitted, except that a late ack may reopen a cancelled or expired
+// command (see below). Notably acked -> cancelled and acked -> expired
+// are NOT permitted: once an agent
+// has the command it may already have applied the side effect, so
+// recording it as cancelled would misreport what happened on the host.
 func canTransition(from, to api.Status) bool {
 	switch from { //nolint:exhaustive // completed/failed are terminal; default returns false.
 	case api.StatusPending:
-		return to == api.StatusAcked || to == api.StatusFailed
+		return to == api.StatusAcked || to == api.StatusFailed || to == api.StatusCancelled || to == api.StatusExpired
+	case api.StatusCancelled, api.StatusExpired:
+		// Withdrawal races delivery. The gateway pushes a command while its row is still pending, and the agent starts the side
+		// effect and acks asynchronously, so a cancel can land in the window before that ack is persisted. Leaving these terminal
+		// would then record "nothing ran" for a command that DID run, which is the precise misreport this whole feature exists to
+		// prevent, so a late ack is allowed to correct the record. Cancelling is therefore a request that wins only if the agent had
+		// not already taken the command, not a guarantee that it never runs. Only acked is reachable: the agent always acks before
+		// its terminal report, so the rest of the lifecycle stays as it was.
+		return to == api.StatusAcked
 	case api.StatusAcked:
 		return to == api.StatusCompleted || to == api.StatusFailed
 	}

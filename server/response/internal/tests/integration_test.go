@@ -13,6 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/fleetdm/edr/server/response/internal/service"
+	"github.com/jmoiron/sqlx"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +90,16 @@ func newResponse(t *testing.T, hb *recordingHeartbeat) *bootstrap.Response {
 	require.NoError(t, err)
 	require.NoError(t, r.ApplySchema(t.Context()))
 	return r
+}
+
+// newResponseAndDB is newResponse plus the handle to the same database, for tests that have to age a row rather than wait for it.
+func newResponseAndDB(t *testing.T) (*bootstrap.Response, *sqlx.DB) {
+	t.Helper()
+	s := full.Open(t)
+	r, err := bootstrap.New(bootstrap.Deps{DB: s, AuthZ: allowAllAuthZ{}})
+	require.NoError(t, err)
+	require.NoError(t, r.ApplySchema(t.Context()))
+	return r, s
 }
 
 // TestInsert_HappyPath inserts a command and confirms it round-trips
@@ -698,4 +710,147 @@ func TestGatewayLossReconnectNoCommandLoss_RealMySQL(t *testing.T) {
 	require.NotNil(t, final.AckedAt)
 	require.NotNil(t, final.CompletedAt)
 	assert.JSONEq(t, `{"killed_pid":42}`, string(final.Result))
+}
+
+// A command withdrawn before any agent picked it up reaches a terminal state distinct from failed, and stops being delivered.
+//
+// Without this an operator could only wait: a host may be offline, or holding a control stream the server has forgotten (issue #711),
+// and a kill_process addresses a pid. Delivered long after it was issued it can land on a recycled pid and terminate an unrelated
+// process, so being unable to withdraw one is a safety problem rather than a tidiness problem.
+// spec:agent-control-channel/a-queued-command-can-be-withdrawn-and-ages-out-rather-than-being-delivered-late/an-operator-withdraws-a-command-no-agent-has-taken
+func TestCancel_WithdrawsAPendingCommandAndStopsDelivery(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	id, err := r.Service().Insert(ctx, "host-cancel", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-cancel", Status: api.StatusCancelled}))
+
+	cmd, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusCancelled, cmd.Status, "cancelled is its own state: nothing ran on the host")
+
+	pending, err := r.Service().ListForHost(ctx, "host-cancel", api.StatusPending)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "a cancelled command is no longer offered for delivery")
+}
+
+// Once an agent has acked a command it may already have applied the side effect, so recording it as cancelled would tell the operator
+// nothing ran when something may well have.
+// spec:agent-control-channel/a-queued-command-can-be-withdrawn-and-ages-out-rather-than-being-delivered-late/withdrawal-is-refused-once-the-agent-has-the-command
+func TestCancel_RefusedOnceTheAgentHasIt(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	id, err := r.Service().Insert(ctx, "host-acked", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-acked", Status: api.StatusAcked}))
+
+	err = r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-acked", Status: api.StatusCancelled})
+	require.ErrorIs(t, err, api.ErrInvalidStatusTransition)
+
+	cmd, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusAcked, cmd.Status, "the agent still owns it")
+}
+
+// A command that waited past the delivery window is aged out rather than handed to an agent late, and the ageing happens on the
+// delivery read itself so it needs no sweep loop and no leader election.
+// spec:agent-control-channel/a-queued-command-can-be-withdrawn-and-ages-out-rather-than-being-delivered-late/a-command-that-waited-too-long-is-aged-out-instead-of-delivered
+func TestPendingCommandsAreAgedOutRatherThanDeliveredLate(t *testing.T) {
+	t.Parallel()
+	r, db := newResponseAndDB(t)
+	ctx := t.Context()
+
+	stale, err := r.Service().Insert(ctx, "host-ttl", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+	fresh, err := r.Service().Insert(ctx, "host-ttl", "kill_process", json.RawMessage(`{"pid":5678}`))
+	require.NoError(t, err)
+
+	// Backdate the first past the window. Rewriting created_at is the only way to age a row without sleeping for an hour.
+	_, err = db.ExecContext(ctx,
+		"UPDATE commands SET created_at = NOW(6)-INTERVAL ? SECOND WHERE id = ?",
+		int((service.PendingCommandTTL + time.Minute).Seconds()), stale)
+	require.NoError(t, err)
+
+	pending, err := r.Service().ListForHost(ctx, "host-ttl", api.StatusPending)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "only the command still inside the window is deliverable")
+	assert.Equal(t, fresh, pending[0].ID)
+
+	aged, err := r.Service().Get(ctx, stale)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusExpired, aged.Status, "the operator can see WHY it never ran, not just that it is gone")
+}
+
+// Ageing out must not touch a command an agent already owns: it may have applied the side effect, and the record has to keep saying so.
+// spec:agent-control-channel/a-queued-command-can-be-withdrawn-and-ages-out-rather-than-being-delivered-late/ageing-out-does-not-disturb-a-command-the-agent-already-owns
+func TestAgeingOutLeavesAnAckedCommandAlone(t *testing.T) {
+	t.Parallel()
+	r, db := newResponseAndDB(t)
+	ctx := t.Context()
+
+	id, err := r.Service().Insert(ctx, "host-ttl-acked", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-ttl-acked", Status: api.StatusAcked}))
+	_, err = db.ExecContext(ctx,
+		"UPDATE commands SET created_at = NOW(6)-INTERVAL ? SECOND WHERE id = ?",
+		int((service.PendingCommandTTL + time.Minute).Seconds()), id)
+	require.NoError(t, err)
+
+	_, err = r.Service().ListForHost(ctx, "host-ttl-acked", api.StatusPending)
+	require.NoError(t, err)
+
+	cmd, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusAcked, cmd.Status, "an acked command is owned by the agent and is not aged out")
+}
+
+// Withdrawal races delivery, and the record has to follow reality rather than the operator's intent.
+//
+// The gateway pushes a command while its row is still pending, and the agent starts the side effect and acks asynchronously, so a
+// cancel can land in the window before that ack is persisted. If cancelled were terminal the late ack would be rejected and the
+// record would say nothing ran for a command that DID run, which is the exact misreport this feature exists to prevent.
+//
+// spec:agent-control-channel/a-queued-command-can-be-withdrawn-and-ages-out-rather-than-being-delivered-late/a-late-acknowledgement-corrects-a-withdrawn-command
+func TestALateAckCorrectsACommandCancelledAfterItWasAlreadyDelivered(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	id, err := r.Service().Insert(ctx, "host-race", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+
+	// The operator withdraws it, not knowing the gateway has already pushed it and the agent is running it.
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race", Status: api.StatusCancelled}))
+
+	// The agent's ack arrives late. It must be accepted, because it is evidence the command was taken.
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race", Status: api.StatusAcked}))
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race", Status: api.StatusCompleted}))
+
+	cmd, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusCompleted, cmd.Status,
+		"the record reports what actually happened on the host, not what the operator asked for")
+}
+
+// The same correction applies to a command aged out while it was already in flight.
+func TestALateAckCorrectsACommandExpiredWhileInFlight(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	id, err := r.Service().Insert(ctx, "host-race-ttl", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race-ttl", Status: api.StatusExpired}))
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race-ttl", Status: api.StatusAcked}))
+
+	cmd, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusAcked, cmd.Status)
+	assert.Nil(t, cmd.CompletedAt,
+		"reopening clears the completion stamp left by the expiry, or the row reads as both in flight and finished")
 }

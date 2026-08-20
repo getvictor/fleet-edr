@@ -219,10 +219,16 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 	)
 	switch status { //nolint:exhaustive // pending is intentionally rejected as a target: caller can only move FORWARD.
 	case api.StatusAcked:
+		// completed_at is cleared, not just left alone. An ack can arrive for a command already recorded as cancelled or expired,
+		// which stamped completed_at when it stopped being live, and reopening it without clearing that would leave a row saying the
+		// agent has the command AND that it finished. For the ordinary pending -> acked case the column is already NULL, so this is
+		// a no-op there.
 		res, err = s.db.ExecContext(ctx,
-			"UPDATE commands SET status = ?, acked_at = NOW(6) WHERE id = ? AND host_id = ? AND status = ?",
+			"UPDATE commands SET status = ?, acked_at = NOW(6), completed_at = NULL, result = NULL WHERE id = ? AND host_id = ? AND status = ?",
 			string(status), id, hostID, string(expectedFrom))
-	case api.StatusCompleted, api.StatusFailed:
+	case api.StatusCompleted, api.StatusFailed, api.StatusCancelled, api.StatusExpired:
+		// cancelled and expired are terminal like completed and failed, and stamp completed_at for the same reason: it is the moment
+		// the command stopped being live. They differ only in that no agent ran them, which the status itself records.
 		res, err = s.db.ExecContext(ctx,
 			"UPDATE commands SET status = ?, completed_at = NOW(6), result = ? WHERE id = ? AND host_id = ? AND status = ?",
 			string(status), result, id, hostID, string(expectedFrom))
@@ -250,6 +256,34 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 		return api.ErrInvalidStatusTransition
 	}
 	return nil
+}
+
+// ExpirePendingOlderThan ages out every command still pending past the delivery window, reporting how many it moved.
+//
+// It is scoped to pending on purpose. A command an agent has already acked is owned by that agent and may have applied its side
+// effect, so aging it out would misreport what ran on the host.
+//
+// An empty hostID sweeps every host; a non-empty one scopes the sweep to that host, which is what the per-poll delivery path wants so
+// one host's poll does not scan the whole fleet's backlog.
+//
+// One statement, and idempotent: a second caller matches nothing because the rows are no longer pending, so concurrent replicas racing
+// on it is not a problem and no leader election is required.
+func (s *Store) ExpirePendingOlderThan(ctx context.Context, hostID string, cutoff time.Time) (int64, error) {
+	query := `UPDATE commands SET status = ?, completed_at = NOW(6) WHERE status = ? AND created_at < ?`
+	args := []any{api.StatusExpired, api.StatusPending, cutoff}
+	if hostID != "" {
+		query += " AND host_id = ?"
+		args = append(args, hostID)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("expire pending commands: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("expire pending commands rows: %w", err)
+	}
+	return n, nil
 }
 
 // CountPending returns the number of rows with status='pending'.
