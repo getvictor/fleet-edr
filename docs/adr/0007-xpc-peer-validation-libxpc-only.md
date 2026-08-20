@@ -107,5 +107,5 @@ When the agent's production signing-identifier story is locked down, narrow the 
 - `extension/edr/Tests/EDRExtensionLogicTests/XPCServerLogicTests.swift`
   - the four `peer-code-signing-validation/*` tests that assert the requirement strings include the Apple anchor + team ID and that the production string excludes the cdhash clause.
 - ADR-0002 "macOS Apple Silicon MVP only" (the macOS 13+ target this ADR depends on).
-- Apple Developer documentation: [`xpc_connection_set_peer_code_signing_requirement`](https://developer.apple.com/documentation/xpc/xpc_connection_set_peer_code_signing_requirement) (the modern API this ADR picks).
+- Apple Developer documentation: [`xpc_connection_set_peer_code_signing_requirement`](<https://developer.apple.com/documentation/xpc/xpc_connection_set_peer_code_signing_requirement(_:_:)>) (the modern API this ADR picks).
 - Apple Developer documentation: [Code Signing Requirement Language](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/RequirementLang/RequirementLang.html) (the DSL the requirement strings are written in).

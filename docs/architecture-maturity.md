@@ -71,7 +71,7 @@ The list of trust-only invariants. Each is small enough that review catches viol
 
 - **No Anti-Corruption Layer (ACL) packages.** Cross-context value types are simple. ACL packages translate type-shapes between contexts when they diverge; today rules.api re-exports detection.api types directly (and re-export is documented as an explicit alias). When a future change requires rules to model `Event` differently than detection (e.g. adding a `RuleHints` field that detection doesn't care about), the right move is an ACL package (`server/rules/internal/eventacl/`) that converts between shapes.
 - **No event-driven cross-context communication (Kafka / NATS / Watermill).** All cross-context calls today are direct interface invocations. This is fine and faster for a single-process monolith; switching to events would be an architectural choice driven by multi-process scale-out, not by isolation needs.
-- **No database-per-context.** All five contexts share one MySQL instance, partitioned by table ownership. Fleet, GitLab, GitHub-the-monolith all do the same; database-per-service is a microservices decision.
+- **No database-per-context.** All seven contexts share one MySQL instance, partitioned by table ownership. Fleet, GitLab, GitHub-the-monolith all do the same; database-per-service is a microservices decision. The one deliberate exception is `visibility`, which owns a ClickHouse store alongside its MySQL tables (ADR-0015). That split was driven by the query shape of the event archive, not by context isolation, which is why it does not generalise into a per-context rule.
 
 ## Graduation criteria
 

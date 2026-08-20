@@ -33,9 +33,11 @@
 #                           SIP-on + Gatekeeper-on, which only edr-qa
 #                           provides. Running against edr-dev contaminates
 #                           the snapshot for release validation.
-#   EDR_ADMIN_EMAIL         Optional; passed through to scripts/qa/* wrappers
-#                           that still display it in their summary output.
-#                           Not used by this driver itself.
+#   EDR_ADMIN_EMAIL         Ignored. No consumer reads it: not this driver,
+#                           and not the scripts/qa/*.sh wrappers, which
+#                           contain no ADMIN references at all. Kept named
+#                           here only so an operator who exported it from an
+#                           older runbook knows it does nothing.
 #
 # Exit codes:
 #   0  All scenario assertions passed.

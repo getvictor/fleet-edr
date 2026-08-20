@@ -16,10 +16,11 @@ The full chain works end-to-end on a SIP-enabled / Gatekeeper-enabled macOS host
 The driver picks this scenario up via its directory name:
 
     EDR_SERVER_URL=https://edr.local:8088 \
-    EDR_ADMIN_EMAIL=admin@fleet-edr.local \
-    EDR_ADMIN_PASSWORD=<paste-from-boot-log> \
+    EDR_SESSION_COOKIE=<paste from devtools> \
     VM_SSH_TARGET=victor@192.168.64.7 \
       scripts/uat/system-test.sh attack-runbook
+
+`EDR_SESSION_COOKIE` is required and the driver exits 1 without it; see [the driver README's auth-flow section](../../README.md) for how to mint one.
 
 Add `--skip-install` to skip the PKG install + extension-activation wait when iterating against an already-enrolled VM. Add `--dry-run` to walk the orchestration shape without actually SSH-ing or curl-ing.
 
