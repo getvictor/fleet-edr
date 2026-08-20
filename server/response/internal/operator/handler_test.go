@@ -370,7 +370,7 @@ func TestHandleCancel(t *testing.T) {
 			h.RegisterRoutes(mux)
 
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, tc.path, nil))
+			mux.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.path, nil))
 
 			assert.Equal(t, tc.wantStatus, rec.Code)
 			if tc.wantBody != "" {
