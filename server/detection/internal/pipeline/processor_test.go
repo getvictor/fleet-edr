@@ -17,15 +17,31 @@ import (
 )
 
 // scriptedEventLog is an EventLog fake that hands ProcessOnce a fixed batch and records which IDs were acked vs nacked. Only the
-// methods the processor's single-cycle path touches (Claim, Ack, Nack) do anything; the rest are inert.
+// methods the processor's single-cycle path touches (PendingHosts, ClaimForHost, Ack, Nack) do anything; the rest are inert.
+// PendingHosts reports the batch's own host so the processor's host-scoped cycle reaches ClaimForHost, and ClaimForHost serves the
+// batch once so a drain loop terminates instead of re-serving the same events forever.
 type scriptedEventLog struct {
-	batch  []visibilityapi.Event
-	acked  []string
-	nacked []string
+	batch    []visibilityapi.Event
+	acked    []string
+	nacked   []string
+	claimed  bool
+	claimReq []string // hosts ClaimForHost was asked for, in order
 }
 
 func (s *scriptedEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
-func (s *scriptedEventLog) Claim(context.Context, int) ([]visibilityapi.Event, error) {
+func (s *scriptedEventLog) PendingHosts(context.Context, int) ([]string, error) {
+	if len(s.batch) == 0 || s.claimed {
+		return nil, nil
+	}
+	return []string{s.batch[0].HostID}, nil
+}
+
+func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int) ([]visibilityapi.Event, error) {
+	s.claimReq = append(s.claimReq, hostID)
+	if s.claimed {
+		return nil, nil
+	}
+	s.claimed = true
 	return s.batch, nil
 }
 func (s *scriptedEventLog) Ack(_ context.Context, ids []string) error {
@@ -76,6 +92,23 @@ func (h *capturingLogHandler) levelOf(substr string) (slog.Level, bool) {
 	return 0, false
 }
 
+// singleCycleOpts is the shared wiring of the single-cycle tests below: one worker, batch of one, and no interval, so ProcessOnce
+// drives exactly one claim/fold/evaluate cycle and each case asserts on what that cycle logged and counted. A handler per case keeps
+// the captured records isolated under t.Parallel.
+func singleCycleOpts(h slog.Handler) ProcessorOptions {
+	return ProcessorOptions{Logger: slog.New(h), Interval: 0, Batch: 1, Concurrency: 1}
+}
+
+// newTestProcessor builds a processor for the single-cycle tests below and fails fast if construction refuses the options. Every
+// case here wires a one-worker, no-coordinator processor, so the constructor error is never the property under test: folding it into a
+// helper keeps each case's ProcessorOptions literal on one readable line.
+func newTestProcessor(t *testing.T, log visibilityapi.EventLog, b batchBuilder, det batchEvaluator, opts ProcessorOptions) *Processor {
+	t.Helper()
+	p, err := NewProcessor(log, b, det, opts)
+	require.NoError(t, err)
+	return p
+}
+
 func oneEventBatch() []visibilityapi.Event {
 	return []visibilityapi.Event{{EventID: "evt-1", HostID: "host-a", EventType: "network_connect"}}
 }
@@ -96,7 +129,7 @@ func TestProcessor_DetectionRetryClassification(t *testing.T) {
 		rec := &capturingRecorder{}
 		// A wrapped sentinel mirrors how the engine returns it (fmt.Errorf("rule %s: %w", ...)).
 		eval := stubEvaluator{err: fmt.Errorf("rule dns_c2_beacon: %w", rulesapi.ErrProcessNotYetMaterialized)}
-		p := NewProcessor(log, stubBuilder{}, eval, slog.New(handler), 0, 1, 1)
+		p := newTestProcessor(t, log, stubBuilder{}, eval, singleCycleOpts(handler))
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())
@@ -117,7 +150,7 @@ func TestProcessor_DetectionRetryClassification(t *testing.T) {
 		handler := &capturingLogHandler{}
 		rec := &capturingRecorder{}
 		eval := stubEvaluator{err: errors.New("persist detection alert: db down")}
-		p := NewProcessor(log, stubBuilder{}, eval, slog.New(handler), 0, 1, 1)
+		p := newTestProcessor(t, log, stubBuilder{}, eval, singleCycleOpts(handler))
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())
@@ -133,7 +166,7 @@ func TestProcessor_DetectionRetryClassification(t *testing.T) {
 		t.Parallel()
 		log := &scriptedEventLog{batch: oneEventBatch()}
 		eval := stubEvaluator{err: fmt.Errorf("rule x: %w", rulesapi.ErrProcessNotYetMaterialized)}
-		p := NewProcessor(log, stubBuilder{}, eval, slog.New(&capturingLogHandler{}), 0, 1, 1)
+		p := newTestProcessor(t, log, stubBuilder{}, eval, singleCycleOpts(&capturingLogHandler{}))
 		// No SetMetrics: the retry path must not dereference a nil recorder.
 		assert.NotPanics(t, func() { p.ProcessOnce(context.Background()) })
 		assert.Equal(t, []string{"evt-1"}, log.nacked)
@@ -150,7 +183,7 @@ func TestProcessor_BuilderFailureAndHappyPath(t *testing.T) {
 		log := &scriptedEventLog{batch: oneEventBatch()}
 		handler := &capturingLogHandler{}
 		rec := &capturingRecorder{}
-		p := NewProcessor(log, stubBuilder{err: errors.New("graph write failed")}, stubEvaluator{}, slog.New(handler), 0, 1, 1)
+		p := newTestProcessor(t, log, stubBuilder{err: errors.New("graph write failed")}, stubEvaluator{}, singleCycleOpts(handler))
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())
@@ -166,7 +199,7 @@ func TestProcessor_BuilderFailureAndHappyPath(t *testing.T) {
 		t.Parallel()
 		log := &scriptedEventLog{batch: oneEventBatch()}
 		rec := &capturingRecorder{}
-		p := NewProcessor(log, stubBuilder{}, stubEvaluator{}, slog.New(&capturingLogHandler{}), 0, 1, 1)
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{}, singleCycleOpts(&capturingLogHandler{}))
 		p.SetMetrics(rec)
 
 		p.ProcessOnce(context.Background())

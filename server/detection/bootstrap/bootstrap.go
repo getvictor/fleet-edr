@@ -202,15 +202,28 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 	d.operatorH.SetEventSearch(store)
 	d.operatorH.SetHostTimeline(store)
 
-	processor := pipeline.NewProcessor(
+	processor, err := pipeline.NewProcessor(
 		deps.EventLog,
 		graph.NewBuilder(store, logger),
 		d.engine,
-		logger,
-		deps.ProcessInterval,
-		deps.ProcessBatch,
-		deps.ProcessConcurrency,
+		pipeline.ProcessorOptions{
+			Logger:      logger,
+			Interval:    deps.ProcessInterval,
+			Batch:       deps.ProcessBatch,
+			Concurrency: deps.ProcessConcurrency,
+			// The coordinator's per-host advisory lock keeps one host's stream on one worker at a time (issue #717). It is the
+			// same coordinator that gates the single-replica sweeps below; here it serializes per host rather than electing a
+			// leader, so every replica still processes, just never the same host at the same moment.
+			Coordinator: deps.Coordinator,
+			// A locked worker holds two pooled connections at once, so the pool size caps how many workers can run without
+			// deadlocking on it. Passing the real cap lets the processor size itself, and refuse a pool too small for one worker
+			// rather than boot a pipeline that would stall on its first claim.
+			ConnBudget: connBudget(deps.DB),
+		},
 	)
+	if err != nil {
+		return fmt.Errorf("detection bootstrap: %w", err)
+	}
 	processTTL := pipeline.NewProcessTTL(store, pipeline.ProcessTTLOptions{
 		MaxAge:   deps.StaleProcessTTL,
 		Interval: deps.StaleProcessInterval,
@@ -377,4 +390,13 @@ func (d *Detection) RegisterAuthedRoutes(mux httpserver.Router) {
 		return
 	}
 	d.operatorH.RegisterRoutes(mux)
+}
+
+// connBudget reports the MySQL pool's MaxOpenConns for the processor's concurrency clamp, or 0 when there is no handle to ask (the
+// intake-only modes and tests that wire no DB), which skips the clamp.
+func connBudget(db *sqlx.DB) int {
+	if db == nil {
+		return 0
+	}
+	return db.Stats().MaxOpenConnections
 }
