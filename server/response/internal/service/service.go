@@ -205,19 +205,30 @@ func validTargetStatus(s api.Status) bool {
 //	pending -> failed             (agent immediately rejected)
 //	pending -> cancelled          (operator withdrew it before any agent saw it)
 //	pending -> expired            (aged out before any agent picked it up)
+//	cancelled -> acked            (it had already been delivered; the record corrects to what ran)
+//	expired   -> acked            (same, for one aged out while in flight)
 //	acked   -> completed          (agent applied successfully)
 //	acked   -> failed             (agent applied with errors)
 //
 // Every other transition is illegal: terminal states (completed, failed,
 // cancelled) are immutable; transitioning back to pending is never
-// permitted. Notably acked -> cancelled and acked -> expired are NOT
-// permitted: once an agent
+// permitted, except that a late ack may reopen a cancelled or expired
+// command (see below). Notably acked -> cancelled and acked -> expired
+// are NOT permitted: once an agent
 // has the command it may already have applied the side effect, so
 // recording it as cancelled would misreport what happened on the host.
 func canTransition(from, to api.Status) bool {
 	switch from { //nolint:exhaustive // completed/failed are terminal; default returns false.
 	case api.StatusPending:
 		return to == api.StatusAcked || to == api.StatusFailed || to == api.StatusCancelled || to == api.StatusExpired
+	case api.StatusCancelled, api.StatusExpired:
+		// Withdrawal races delivery. The gateway pushes a command while its row is still pending, and the agent starts the side
+		// effect and acks asynchronously, so a cancel can land in the window before that ack is persisted. Leaving these terminal
+		// would then record "nothing ran" for a command that DID run, which is the precise misreport this whole feature exists to
+		// prevent, so a late ack is allowed to correct the record. Cancelling is therefore a request that wins only if the agent had
+		// not already taken the command, not a guarantee that it never runs. Only acked is reachable: the agent always acks before
+		// its terminal report, so the rest of the lifecycle stays as it was.
+		return to == api.StatusAcked
 	case api.StatusAcked:
 		return to == api.StatusCompleted || to == api.StatusFailed
 	}

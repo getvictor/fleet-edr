@@ -808,3 +808,47 @@ func TestAgeingOutLeavesAnAckedCommandAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, api.StatusAcked, cmd.Status, "an acked command is owned by the agent and is not aged out")
 }
+
+// Withdrawal races delivery, and the record has to follow reality rather than the operator's intent.
+//
+// The gateway pushes a command while its row is still pending, and the agent starts the side effect and acks asynchronously, so a
+// cancel can land in the window before that ack is persisted. If cancelled were terminal the late ack would be rejected and the
+// record would say nothing ran for a command that DID run, which is the exact misreport this feature exists to prevent.
+//
+// spec:agent-control-channel/a-queued-command-can-be-withdrawn-and-ages-out-rather-than-being-delivered-late/a-late-acknowledgement-corrects-a-withdrawn-command
+func TestALateAckCorrectsACommandCancelledAfterItWasAlreadyDelivered(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	id, err := r.Service().Insert(ctx, "host-race", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+
+	// The operator withdraws it, not knowing the gateway has already pushed it and the agent is running it.
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race", Status: api.StatusCancelled}))
+
+	// The agent's ack arrives late. It must be accepted, because it is evidence the command was taken.
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race", Status: api.StatusAcked}))
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race", Status: api.StatusCompleted}))
+
+	cmd, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusCompleted, cmd.Status,
+		"the record reports what actually happened on the host, not what the operator asked for")
+}
+
+// The same correction applies to a command aged out while it was already in flight.
+func TestALateAckCorrectsACommandExpiredWhileInFlight(t *testing.T) {
+	t.Parallel()
+	r := newResponse(t, nil)
+	ctx := t.Context()
+
+	id, err := r.Service().Insert(ctx, "host-race-ttl", "kill_process", json.RawMessage(`{"pid":1234}`))
+	require.NoError(t, err)
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race-ttl", Status: api.StatusExpired}))
+	require.NoError(t, r.Service().UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: "host-race-ttl", Status: api.StatusAcked}))
+
+	cmd, err := r.Service().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, api.StatusAcked, cmd.Status)
+}
