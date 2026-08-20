@@ -1136,3 +1136,90 @@ func TestSuspiciousExecDefersWhenTheChainShellsParentIsMissing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, findings, "ancestry is incomplete, so the rule defers rather than firing on an unresolvable parent")
 }
+
+// The reported #710 failure, reproduced at the timestamps that were actually measured: the flow lands 700ms BEFORE the recorded exec
+// of the shell that opened it, because the agent stamped the exec when its handler finished rather than when the kernel reported it.
+//
+// Two separate things then drop the finding, and both have to give. The ancestor lookups bracket on fork_time_ns <= the flow's
+// instant, so a late-stamped shell resolves to no row at all; and shellWithinWindow's lower bound asks the trigger to come after the
+// shell, which a late stamp inverts. A trigger cannot causally precede the shell that produced it, so a small negative delta is a
+// late stamp rather than evidence of no relationship.
+// spec:server-detection-rules-engine/rules-tolerate-a-process-stamped-after-an-event-that-followed-it/a-shell-is-recorded-as-exec-ing-after-the-connection-it-opened
+func TestSuspiciousExecToleratesAProcessStampedAfterItsOwnFlow(t *testing.T) {
+	t.Parallel()
+
+	const base = int64(1_000_000_000_000)
+	const flowAt = base + 1_000_000_000 // the network extension's stamp, which is the accurate one
+	// Everything from Endpoint Security lands late, which is what the handler-time stamping produced.
+	const bashForkAt = base + 1_690_000_000
+	const bashExecAt = base + 1_700_000_000 // 700ms AFTER the flow it produced, the measured delta
+
+	events := []api.Event{
+		{EventID: "fork-py", HostID: "h7", TimestampNs: base, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-py", HostID: "h7", TimestampNs: base + 100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "fork-bash", HostID: "h7", TimestampNs: bashForkAt, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		{EventID: "exec-bash", HostID: "h7", TimestampNs: bashExecAt, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "fork-curl", HostID: "h7", TimestampNs: bashExecAt + 2_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+		{EventID: "exec-curl", HostID: "h7", TimestampNs: bashExecAt + 5_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "h7", TimestampNs: flowAt, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":200,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+
+	s := openCatalogStore(t)
+	ctx := t.Context()
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "a shell stamped after its own child's connection must still be attributed")
+	assert.Contains(t, findings[0].Description, "/bin/bash")
+}
+
+// The tolerance must not become an unbounded window. A shell whose exec really is long after the trigger, past the pad, is not a late
+// stamp and must not be attributed.
+// spec:server-detection-rules-engine/rules-tolerate-a-process-stamped-after-an-event-that-followed-it/a-shell-far-beyond-the-pad-is-still-rejected
+func TestSuspiciousExecStillRejectsAShellFarAfterTheTrigger(t *testing.T) {
+	t.Parallel()
+
+	const base = int64(1_000_000_000_000)
+	const flowAt = base + 1_000_000_000
+	// 60s past the flow is an order of magnitude beyond any plausible handler latency.
+	const bashExecAt = flowAt + 60_000_000_000
+
+	events := []api.Event{
+		{EventID: "fork-py", HostID: "h8", TimestampNs: base, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "exec-py", HostID: "h8", TimestampNs: base + 100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "fork-bash", HostID: "h8", TimestampNs: bashExecAt - 10_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		{EventID: "exec-bash", HostID: "h8", TimestampNs: bashExecAt, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "fork-curl", HostID: "h8", TimestampNs: bashExecAt + 2_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+		{EventID: "exec-curl", HostID: "h8", TimestampNs: bashExecAt + 5_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "h8", TimestampNs: flowAt, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":200,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+
+	s := openCatalogStore(t)
+	ctx := t.Context()
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, findings, "60s past the trigger is not stamp skew, so the shell must not be attributed")
+}

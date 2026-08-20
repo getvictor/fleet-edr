@@ -413,7 +413,7 @@ func (r *SuspiciousExec) evalNetwork(
 func (r *SuspiciousExec) networkShell(
 	ctx context.Context, s api.GraphReader, evt api.Event, conn *api.Process, seenShell map[int]struct{},
 ) (*api.Process, *api.Process, error) {
-	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, evt.HostID, conn.PID, evt.TimestampNs)
+	shell, parent, err := r.findShellFromResolvedProcess(ctx, s, evt.HostID, conn, evt.TimestampNs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -543,7 +543,7 @@ func (r *SuspiciousExec) examineCandidate(
 		if current.PPID <= 1 {
 			return nil, nil, nil, nil
 		}
-		next, err := s.GetProcessByPID(ctx, hostID, current.PPID, asOfNs)
+		next, err := lookupProcessSkewTolerant(ctx, s, hostID, current.PPID, asOfNs)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
 		}
@@ -554,7 +554,7 @@ func (r *SuspiciousExec) examineCandidate(
 	if current.PPID <= 1 {
 		return current, nil, nil, nil
 	}
-	candidate, err := s.GetProcessByPID(ctx, hostID, current.PPID, asOfNs)
+	candidate, err := lookupProcessSkewTolerant(ctx, s, hostID, current.PPID, asOfNs)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("get ppid %d: %w", current.PPID, err)
 	}
@@ -576,7 +576,7 @@ func (r *SuspiciousExec) lookupAncestor(
 	if pid <= 1 {
 		return nil, nil
 	}
-	p, err := s.GetProcessByPID(ctx, hostID, pid, asOfNs)
+	p, err := lookupProcessSkewTolerant(ctx, s, hostID, pid, asOfNs)
 	if err != nil {
 		return nil, fmt.Errorf("get pid %d: %w", pid, err)
 	}
@@ -591,7 +591,41 @@ func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 	if shell.ExecTimeNs != nil {
 		anchor = *shell.ExecTimeNs
 	}
-	return triggerTS >= anchor && triggerTS <= anchor+suspiciousExecWindowNs
+	// The lower bound is padded because a trigger CANNOT causally precede the shell that produced it, so a small negative delta is
+	// evidence of a late stamp rather than of no relationship. An agent that stamps at handler time rather than kernel time records
+	// an exec after its own child's network connection, measured at 701ms on a busy host (issue #710), and an unpadded lower bound
+	// reads that as "the trigger came first" and drops the finding. The upper bound is not padded: that direction is a real
+	// temporal limit on how long after a shell the rule still attributes activity to it.
+	return triggerTS >= anchor-agentStampSkewPadNs && triggerTS <= anchor+suspiciousExecWindowNs
+}
+
+// findShellFromResolvedProcess walks up from a connecting process that has ALREADY been resolved, rather than resolving its PID again
+// at the raw event timestamp. Two things follow from that.
+//
+// The first hop no longer re-resolves what the caller just resolved, and it starts from the generation the caller identified, which
+// for a flow carrying a pidversion is an exact identity match rather than a time-window guess.
+//
+// The ancestors above it are still resolved by time, and those lookups tolerate the same stamp skew. A parent whose exec is recorded
+// after its own child's network connection brackets to no row at the raw timestamp, which ends the walk at the very first step and
+// reports nothing (issue #710).
+func (r *SuspiciousExec) findShellFromResolvedProcess(
+	ctx context.Context, s api.GraphReader, hostID string, start *api.Process, asOfNs int64,
+) (*api.Process, *api.Process, error) {
+	current := start
+	for steps := 0; current != nil && steps < maxSuspiciousAncestorWalkSteps; steps++ {
+		shell, parent, advance, err := r.examineCandidate(ctx, s, hostID, current, asOfNs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if shell != nil {
+			return shell, parent, nil
+		}
+		if advance == nil {
+			return nil, nil, nil
+		}
+		current = advance
+	}
+	return nil, nil, nil
 }
 
 // makeExecFinding builds the temp-path finding shared by arm 1 and arm 2. In the arm-2 re-exec case tempProc and shell share a PID;

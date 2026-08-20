@@ -95,11 +95,19 @@ const (
 	// network-extension clock. A beacon resolves and connects within sub-second; 30s is a generous ceiling.
 	dnsBeaconWindowNs = int64(30_000_000_000)
 
-	// processLookupSkewPadNs is the forward pad used to retry the process lookup when the exact-time lookup misses.
-	// network_connect carries the network-extension clock while the process row carries the Endpoint Security clock; the
-	// two drift (issue #7), so a connect timestamp can land just before the ES fork/exec timestamp and bracket to no row.
-	// Retrying a few seconds forward absorbs that skew. The exact lookup is tried first, so the pad only affects the miss.
-	processLookupSkewPadNs = int64(5_000_000_000)
+	// agentStampSkewPadNs is how far the rules tolerate a process row being stamped LATER than an event that must have followed it.
+	//
+	// The long-standing explanation for this, that the network extension and Endpoint Security carry different clocks which drift
+	// (issue #7), is wrong: both sample CLOCK_REALTIME on one host. The real cause is handler latency. An agent that stamps at
+	// serialize time rather than from the kernel's event time records an exec after the handler's synchronous hash and code-signing
+	// work, measured at 701ms late on a busy host, while the network extension's short path stays accurate. So a connection can
+	// carry a timestamp EARLIER than the exec of the very process that opened it, and a lookup bracketed on the exact instant finds
+	// no row (issue #710).
+	//
+	// Fixed at the source by stamping ESF events with the kernel's event time, but the pad stays: hosts run older agents until they
+	// upgrade, and some handler latency always remains. Every use tries the exact instant FIRST, so a recycled pid still resolves to
+	// the right generation in the common case and the pad only widens a lookup that already missed.
+	agentStampSkewPadNs = int64(5_000_000_000)
 
 	// ingestLookupPadNs pads the ingested-time bound on the network/DNS query so batch/ingest jitter between the
 	// dns_query and the connection (both network-extension events, ingested within seconds) can't fall outside the range.
@@ -243,9 +251,9 @@ func resolveFlowProcess(
 }
 
 // lookupProcessSkewTolerant resolves the process for (hostID, pid) at the connection's timestamp, retrying a short interval forward if
-// the exact-time lookup misses. The connection carries the network-extension clock while the process row carries the Endpoint Security
-// clock; the two drift (issue #7), so a connect timestamp can land just before the ES fork/exec timestamp and bracket to no row. The
-// exact lookup is tried first (so a reused pid resolves to the right generation in the common case); the forward retry only runs on a miss.
+// the exact-time lookup misses. A process row can be stamped later than a connection that must have followed it, because the agent
+// stamped it when its handler finished rather than when the kernel reported it (see agentStampSkewPadNs). The exact lookup is tried
+// first, so a reused pid resolves to the right generation in the common case; the forward retry only runs on a miss.
 func lookupProcessSkewTolerant(ctx context.Context, s api.GraphReader, hostID string, pid int, atNs int64) (*api.Process, error) {
 	proc, err := s.GetProcessByPID(ctx, hostID, pid, atNs)
 	if err != nil {
@@ -254,7 +262,7 @@ func lookupProcessSkewTolerant(ctx context.Context, s api.GraphReader, hostID st
 	if proc != nil {
 		return proc, nil
 	}
-	return s.GetProcessByPID(ctx, hostID, pid, atNs+processLookupSkewPadNs)
+	return s.GetProcessByPID(ctx, hostID, pid, atNs+agentStampSkewPadNs)
 }
 
 // ingestedLookupRange returns the ingested-time range for the pid's network/DNS query. When the connection's ingest time is known it

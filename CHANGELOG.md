@@ -13,7 +13,8 @@ Notable changes to Fleet EDR, newest first. This project follows [Semantic Versi
 
 ### Fixed
 
-- **Detections that correlate a network connection to the process behind it no longer miss fast activity on busy hosts.** Process events were timestamped when the agent finished handling them rather than when the system reported them, which on a loaded host ran up to 0.7 seconds late. A connection could then appear to happen before the process that made it, and the detection would find nothing and stay silent. The effect grew with host load, so quick scripted activity was missed while slower activity was caught. Requires the upgraded agent on the host to take effect, and past activity is not re-evaluated.
+- **Detections that tie a network connection to the process behind it no longer miss fast activity on busy hosts.** Process events were timestamped when the agent finished handling them rather than when the system reported them, which under load ran up to 0.7 seconds late. A connection could then appear to happen before the process that made it, and the detection would find nothing and stay silent, so quick scripted activity was missed while slower activity was caught. Two changes fix it: agents now timestamp from the system's own event time, and the server tolerates a small amount of this skew so hosts still running an older agent also stop missing these detections. Past activity is not re-evaluated.
+
 
 - **`Suspicious exec chain` now catches payloads run through `zsh -c`, which it previously missed entirely.** Whether the alert fired depended on which shell ran the command: on macOS `zsh` replaces itself with the payload while `bash` and `sh` start it as a child, and the rule could only follow the second shape. An identical download-and-run command was therefore detected under one shell and invisible under another. No action is required, and activity from before this upgrade is not re-evaluated.
 
