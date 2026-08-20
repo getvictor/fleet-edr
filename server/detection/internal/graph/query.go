@@ -76,9 +76,13 @@ func (q *Query) BuildTree(
 	return res, nil
 }
 
-// flowClockSkewPadNs pads the generation's event-time life before it bounds the identity arm. A flow's event time is stamped by the
-// network extension while the process's fork, exec, and exit times come from Endpoint Security, and the two clocks drift (issue #7).
-// 5s matches processLookupSkewPadNs, the pad detection's own flow correlation already uses for the same drift.
+// flowClockSkewPadNs pads the generation's event-time life before it bounds the identity arm, absorbing the case where a process row
+// is stamped LATER than a flow that must have followed it.
+//
+// Not clock drift, which is how this was described before and how issue #7 framed it: the network extension and Endpoint Security both
+// sample CLOCK_REALTIME on one host. It is handler latency. An agent stamping at serialize time rather than from the kernel's event
+// time records an exec after its handler's hash and code-signing work, measured at 701ms on a busy host, while the network
+// extension's short path stays accurate (issue #710). 5s matches the pad the detection rules apply for the same reason.
 const flowClockSkewPadNs = int64(5 * 1_000_000_000)
 
 // generationLife renders the generation's EVENT-time life for the identity arm, padded for clock skew. It exists because identity is
