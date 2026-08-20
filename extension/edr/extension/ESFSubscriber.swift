@@ -273,7 +273,11 @@ final class ESFSubscriber: Sendable {
     /// AuthDispatchContext bundles the fields dispatchAuthDecision needs into a single argument so the function stays under
     /// SwiftLint's function_parameter_count limit. Fields are wire-side (es_process_t / stat) and live here rather than in
     /// AuthExecDecider.swift because they pull in EndpointSecurity types the SwiftPM test target deliberately excludes.
-    private struct AuthDispatchContext {
+    ///
+    /// Not private: the audit-event emitters in ESFSubscriber+AuthExec.swift take this whole context rather than unpacking six
+    /// separate arguments out of it, which is what kept them under the same parameter-count limit when they gained the kernel
+    /// event time.
+    struct AuthDispatchContext {
         let message: UnsafePointer<es_message_t>
         let target: es_process_t
         let fileStat: stat
@@ -297,9 +301,7 @@ final class ESFSubscriber: Sendable {
         case .allowWithUndecidedAudit(let reason):
             logger.warning("AUTH_EXEC ALLOW (undecided) reason=\(reason.rawValue, privacy: .public)")
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_ALLOW, cacheResult)
-            emitUndecidedEvent(
-                target: context.target, fileStat: context.fileStat, verdict: "allow", reason: reason, snapshot: context.snapshot
-            )
+            emitUndecidedEvent(context: context, verdict: "allow", reason: reason)
         case .deny(let rule, let matchedIdentifier):
             // matchedIdentifier is .private to honor the "no PII in log statements" coding guideline. For BINARY/CDHASH/
             // CERTIFICATE this is a hex digest (not PII, but uniform privacy keeps the log policy simple); for PATH (added
@@ -310,18 +312,14 @@ final class ESFSubscriber: Sendable {
                 "AUTH_EXEC DENIED type=\(rule.ruleType, privacy: .public) id=\(matchedIdentifier, privacy: .private)"
             )
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
-            emitBlockEvent(
-                target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot
-            )
+            emitBlockEvent(context: context, rule: rule, matchedIdentifier: matchedIdentifier)
             emitBlockNotification(
                 target: context.target, rule: rule, matchedIdentifier: matchedIdentifier, snapshot: context.snapshot
             )
         case .denyWithUndecidedAudit(let reason):
             logger.warning("AUTH_EXEC DENIED (undecided) reason=\(reason.rawValue, privacy: .public)")
             es_respond_auth_result(client, context.message, ES_AUTH_RESULT_DENY, false)
-            emitUndecidedEvent(
-                target: context.target, fileStat: context.fileStat, verdict: "deny", reason: reason, snapshot: context.snapshot
-            )
+            emitUndecidedEvent(context: context, verdict: "deny", reason: reason)
         }
     }
 
@@ -371,7 +369,7 @@ final class ESFSubscriber: Sendable {
             pidVersion: pidVersion
         )
 
-        if let data = serializer.serialize(eventType: "exec", payload: payload) {
+        if let data = serializer.serialize(eventType: "exec", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("exec pid=\(pid) path=\(path)")
             onEvent?(data)
         }
@@ -385,7 +383,7 @@ final class ESFSubscriber: Sendable {
 
         let payload = ForkPayload(childPid: childPid, parentPid: parentPid, pidVersion: childPidVersion)
 
-        if let data = serializer.serialize(eventType: "fork", payload: payload) {
+        if let data = serializer.serialize(eventType: "fork", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("fork parent=\(parentPid) child=\(childPid)")
             onEvent?(data)
         }
@@ -397,7 +395,7 @@ final class ESFSubscriber: Sendable {
 
         let payload = ExitPayload(pid: pid, exitCode: Int(exitCode))
 
-        if let data = serializer.serialize(eventType: "exit", payload: payload) {
+        if let data = serializer.serialize(eventType: "exit", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("exit pid=\(pid) code=\(exitCode)")
             onEvent?(data)
         }

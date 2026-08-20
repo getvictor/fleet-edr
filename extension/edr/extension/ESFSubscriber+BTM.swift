@@ -68,7 +68,7 @@ extension ESFSubscriber {
             instigatorCodeSigning: instigatorCodeSigning
         )
 
-        if let data = serializer.serialize(eventType: "btm_launch_item_add", payload: payload) {
+        if let data = serializer.serialize(eventType: "btm_launch_item_add", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             logger.debug("btm_launch_item_add type=\(itemType) item=\(itemPath)")
             onEvent?(data)
         }

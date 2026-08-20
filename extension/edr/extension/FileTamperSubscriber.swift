@@ -95,7 +95,7 @@ final class FileTamperSubscriber: Sendable {
         // content-modifying events on sensitive paths, and the server's sudoers_tamper rule gates on the access-mode bits.
         // Reusing the `open` event type keeps the wire format + the rule unchanged.
         let payload = OpenPayload(pid: pid, path: path, flags: Int(O_WRONLY | O_CREAT | O_TRUNC))
-        if let data = serializer.serialize(eventType: "open", payload: payload) {
+        if let data = serializer.serialize(eventType: "open", payload: payload, kernelTimeNs: kernelEventTimeNs(msg.time)) {
             // path is .private: exec/file paths can carry usernames or project tokens, and the "no PII in logs" guideline
             // applies on this hot path. The full path still flows to the server in the event payload for the rule.
             logger.debug("file-tamper type=\(msg.event_type.rawValue, privacy: .public) pid=\(pid, privacy: .public) path=\(path, privacy: .private)")
