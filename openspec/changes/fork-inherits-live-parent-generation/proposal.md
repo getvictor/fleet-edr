@@ -42,5 +42,5 @@ The asymmetry is recorded in a comment at both call sites, because it reads as a
 ## Non-goals
 
 - No migration or backfill. Rows already written with a wrong inherited path stay as they are; the fix applies to forks materialized from here on. Backfilling would mean re-deriving each fork's parent generation from history, which is a separate change with its own correctness argument.
-- The duplicate and orphan generations visible in the issue #714 report are the per-host claim affinity defect (issue #717) and were fixed separately.
+- The duplicate and orphan generations visible in the issue #714 report are the per-host claim affinity defect (issue #717), fixed in PR #719. That was confirmed by reproduction before issue #714 was rescoped: at concurrency 4 one host's stream was split across workers and the builder folded an exec before its fork was flushed, and the same events at concurrency 1 produced correctly linked rows.
 - The ESF handler-time stamping that produces the reordering is issue #710 and is untouched here. This change makes the forest correct under reordering rather than removing the reordering.
