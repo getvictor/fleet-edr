@@ -103,12 +103,22 @@ func appendArgs(chunk []api.Event) ([]string, []any, error) {
 // callers can see the same host and must not assume exclusivity from it. Ordering by each host's oldest claimable event is what keeps
 // a busy host from starving a quiet one whose backlog is older.
 //
+// The predicate matches ClaimForHost's in full, including that claim's in-flight floor, so a host appears here only if a claim would
+// actually hand something back. Matching only the claimable-row half is not good enough, and the gap is not academic: a host stalled
+// behind an unexpired in-flight event still owns never-claimed rows, so it reads as pending while every claim against it returns
+// empty. Such a host would take a slot in the processor's finite candidate window, and the longest-waiting order works against us
+// because its oldest claimable row sits just behind the in-flight one and therefore sorts to the FRONT, where it stays for the whole
+// claim lease. One stranded batch per worker per replica is what a rolling restart leaves behind, which is enough to fill the window
+// at fleet sizes we already run, and a window full of hosts that can only answer empty is a fleet-wide pause built out of pauses that
+// were each supposed to be per-host and bounded.
+//
 // The claimable predicate matches ClaimForHost's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. The OR
 // across the two claim states defeats the (processed, host_id, timestamp_ns) index, so this is a full scan plus a temporary-table
-// aggregate whose cost grows with backlog depth: measured on MySQL 8.4, 66ms over a 200k-row queue across 200 hosts. The cross-host
-// claim it replaced scanned the same way (54ms on the same rows), so the scan predates the per-host split rather than arriving with
-// it. Making it an index read needs a (processed, timestamp_ns) index plus a UNION of the two arms, one per claim state, which is a
-// schema migration and its own change.
+// aggregate whose cost grows with backlog depth. Measured as a pair on MySQL 8.4 over one 200k-row queue across 200 hosts, 20 of them
+// holding an unexpired in-flight row: 42ms for the claimable-row scan alone against 49ms with the floor join, so reading the honest
+// predicate costs about 17% here and stays the same shape of query. The cross-host claim this replaced scanned the same way, so the
+// scan predates the per-host split rather than arriving with it. Making it an index read needs a (processed, timestamp_ns) index plus
+// a UNION of the two arms, one per claim state, which is a schema migration and its own change.
 func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -116,12 +126,19 @@ func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 	cutoff := time.Now().UnixNano() - claimLeaseNs
 	var hosts []string
 	err := s.db.SelectContext(ctx, &hosts, `
-		SELECT host_id
-		FROM event_queue
-		WHERE processed = 0 OR (processed = 2 AND claimed_at_ns < ?)
-		GROUP BY host_id
-		ORDER BY MIN(timestamp_ns)
-		LIMIT ?`, cutoff, limit)
+		SELECT q.host_id
+		FROM event_queue q
+		LEFT JOIN (
+			SELECT host_id, MIN(timestamp_ns) AS floor_ns
+			FROM event_queue
+			WHERE processed = 2 AND claimed_at_ns >= ?
+			GROUP BY host_id
+		) f ON f.host_id = q.host_id
+		WHERE (q.processed = 0 OR (q.processed = 2 AND q.claimed_at_ns < ?))
+			AND (f.floor_ns IS NULL OR q.timestamp_ns < f.floor_ns)
+		GROUP BY q.host_id
+		ORDER BY MIN(q.timestamp_ns)
+		LIMIT ?`, cutoff, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("pending hosts: %w", err)
 	}

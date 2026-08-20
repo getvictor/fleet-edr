@@ -91,3 +91,11 @@ When no advisory-lock coordinator is available the system SHALL run a single wor
 - **WHEN** that host is claimed again while the claim is unexpired
 - **THEN** nothing is offered for it, because no event is strictly older, and the bound is not removed by arithmetic on that value
 
+
+#### Scenario: A blocked host does not occupy a candidate slot
+
+- **GIVEN** a host whose only unclaimed events sit behind an unexpired in-flight event, so every claim for it returns empty
+- **AND** another host with events a claim would return
+- **WHEN** the processor asks for candidate hosts and the blocked host would sort first as the longest-waiting
+- **THEN** the blocked host is not offered as a candidate, and the host with claimable work is
+- **AND** a candidate window filled with such hosts cannot hide the rest of the fleet for the length of a claim lease

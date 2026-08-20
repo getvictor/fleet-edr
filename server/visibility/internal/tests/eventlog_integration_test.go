@@ -236,11 +236,11 @@ func TestEventLog_ClaimStopsAtOldestInFlightEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"gap-fork"}, ids(inFlight), "the oldest event is claimed first")
 
-	// The host still LOOKS pending, because its later events have never been claimed. That is the trap: the hint is honest and the
-	// claim is what has to hold the line.
+	// The host still owns never-claimed rows, so a hint that asked only "is anything unclaimed" would offer it. It must not: every
+	// claim against it returns empty until the lease expires, and a candidate slot spent on it is a slot no host with work can use.
 	hosts, err := log.PendingHosts(ctx, 10)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"h-gap"}, hosts, "a host with never-claimed events behind an in-flight one is still offered as a hint")
+	assert.Empty(t, hosts, "a host whose only unclaimed events sit behind an in-flight one has no claimable work and is not a candidate")
 
 	behind, err := log.ClaimForHost(ctx, "h-gap", 10)
 	require.NoError(t, err)
@@ -536,4 +536,67 @@ func TestEventLog_EmptyOps(t *testing.T) {
 	pending, err := log.CountPending(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), pending)
+}
+
+// A host blocked behind an unexpired in-flight event has no claimable work, so offering it as a candidate spends a slot in the
+// processor's candidate window on a host that must return empty. The window is finite (16 at the default concurrency) and the
+// ordering works against us: a blocked host's oldest CLAIMABLE row sits just behind the in-flight one, so it sorts to the front and
+// stays there for the whole claim lease. Enough blocked hosts and the window fills with them, turning a bounded per-host pause into
+// a fleet-wide one for up to a lease. The hint must therefore apply the same in-flight floor the claim does.
+//
+// spec:server-availability/the-processor-scales-across-replicas-via-skip-locked/a-blocked-host-does-not-occupy-a-candidate-slot
+func TestEventLog_PendingHostsSkipsHostsWithNoClaimableWork(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a blocked host must not take the slot of a host with work", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		log := newEventLog(t)
+
+		// The blocked host's events are OLDER, so it wins the longest-waiting ordering and takes the single slot on offer.
+		require.NoError(t, log.Append(ctx, []visibilityapi.Event{
+			ev("blocked-fork", "h-blocked", 100, "fork"),
+			ev("blocked-exec", "h-blocked", 200, "exec"),
+			ev("ready-fork", "h-ready", 900, "fork"),
+		}))
+
+		held, err := log.ClaimForHost(ctx, "h-blocked", 1)
+		require.NoError(t, err)
+		require.Equal(t, []string{"blocked-fork"}, ids(held), "the oldest event goes in flight and stays there")
+
+		hosts, err := log.PendingHosts(ctx, 1)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"h-ready"}, hosts,
+			"h-blocked can only return empty until its lease expires, so the one slot must go to the host that has work")
+	})
+
+	t.Run("a fleet of blocked hosts must not hide every host with work", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		log := newEventLog(t)
+
+		// A rolling restart strands one in-flight batch per worker per replica. At the default 4 workers a 4-replica deploy strands
+		// 16 hosts, exactly the candidate window, so every slot can be blocked at once while the rest of the fleet waits.
+		const blocked = 16
+		batch := make([]visibilityapi.Event, 0, blocked*2+1)
+		for i := range blocked {
+			host := fmt.Sprintf("h-stranded-%d", i)
+			batch = append(batch,
+				ev(fmt.Sprintf("stranded-fork-%d", i), host, int64(100+i), "fork"),
+				ev(fmt.Sprintf("stranded-exec-%d", i), host, int64(1000+i), "exec"))
+		}
+		batch = append(batch, ev("live-fork", "h-live", 5000, "fork"))
+		require.NoError(t, log.Append(ctx, batch))
+
+		for i := range blocked {
+			held, err := log.ClaimForHost(ctx, fmt.Sprintf("h-stranded-%d", i), 1)
+			require.NoError(t, err)
+			require.Len(t, held, 1, "each stranded host holds one event in flight")
+		}
+
+		hosts, err := log.PendingHosts(ctx, blocked)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"h-live"}, hosts,
+			"with every candidate slot claimable by a blocked host, the only host that can be served must still be visible")
+	})
 }

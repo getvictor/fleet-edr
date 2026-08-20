@@ -270,10 +270,11 @@ func (p *Processor) processOnce(ctx context.Context, workerIndex int) int {
 		if ran && claimed > 0 {
 			return claimed
 		}
-		// Holding the lock but claiming nothing is not a reason to stop for this tick. PendingHosts is a hint: the host's backlog
-		// may have been drained by another worker between the two calls, or the claim may be waiting behind an event still in
-		// flight (an abandoned claim whose lease has not expired). Either way this host has no work for us right now and the next
-		// candidate might, so keep walking rather than idling until the next tick.
+		// Holding the lock but claiming nothing is not a reason to stop for this tick. PendingHosts is a hint, and a hint is a
+		// snapshot: the host's backlog may have been drained by another worker between the two calls, or an event may have gone in
+		// flight since, putting the rest of that host's stream behind a claim bound. The hint already excludes hosts blocked that
+		// way when it is taken, so this is now the narrow race rather than the standing case it was, but either way this host has
+		// no work for us right now and the next candidate might, so keep walking rather than idling until the next tick.
 	}
 	return 0
 }
