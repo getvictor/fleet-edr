@@ -155,7 +155,8 @@ func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int, 
 }
 
 // imageRankGreater reports whether a is the better answer than b for "what was this PID running at atTimeNs", mirroring the store's
-// ORDER BY fork_time_ns DESC, (exec applied by then) DESC, ABS(exec_time_ns - atTimeNs) ASC, id DESC.
+// ordering: the generation decides first, then whether the image had been applied by the instant, then which applied image sits
+// nearest it, and the row sequence only breaks a remaining tie.
 //
 // It cannot reuse rankGreater, which orders by fork time and then by row sequence. Every image in a re-exec chain carries the SAME
 // fork time (insertReExec preserves it), so sequence order there means "whatever the PID ran last" rather than "what it was running

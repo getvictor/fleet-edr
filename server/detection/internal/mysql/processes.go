@@ -458,7 +458,7 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTim
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns DESC,
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
-		         ABS(exec_time_ns - ?) ASC,
+		         ABS(exec_time_ns-?) ASC,
 		         id DESC
 		LIMIT 1`,
 		hostID, pid, atTimeNs, atTimeNs, atTimeNs,
