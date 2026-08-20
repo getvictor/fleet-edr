@@ -269,3 +269,119 @@ func TestHandleGet(t *testing.T) {
 		})
 	}
 }
+
+// denyAuthZ refuses every decision, so a test can prove the route is gated rather than merely that it works when permitted.
+type denyAuthZ struct{}
+
+func (denyAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: false, Reason: "denied"}, nil
+}
+
+// The cancel route is the operator's only way to withdraw a command no agent has taken (issue #711). Its authorization decision lives
+// here and nowhere else, so it is tested here: cancelling requires the authority to ISSUE that command type, because preventing a
+// response action is itself a response decision.
+func TestHandleCancel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		path       string
+		deny       bool
+		getCmd     api.Command
+		getErr     error
+		updateErr  error
+		wantStatus int
+		wantBody   string
+		wantUpdate bool
+	}{
+		{
+			name:       "invalid command id",
+			path:       "/api/commands/abc/cancel",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "invalid_command_id",
+		},
+		{
+			name:       "unknown command",
+			path:       "/api/commands/99999/cancel",
+			getErr:     api.ErrCommandNotFound,
+			wantStatus: http.StatusNotFound,
+			wantBody:   "not_found",
+		},
+		{
+			name:       "backend error reading the command",
+			path:       "/api/commands/1/cancel",
+			getErr:     errors.New("db down"),
+			wantStatus: http.StatusInternalServerError,
+			wantBody:   "internal",
+		},
+		{
+			// The command's type decides which action is required, so a type with no action mapping cannot be authorized at all.
+			name:       "unmapped command type",
+			path:       "/api/commands/7/cancel",
+			getCmd:     api.Command{ID: 7, HostID: "host-a", CommandType: "not_a_real_type", Status: api.StatusPending},
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "unsupported_command_type",
+		},
+		{
+			// The security property: read access to a host must not be enough to disable response on it.
+			name:       "denied without the authority to issue that command type",
+			path:       "/api/commands/7/cancel",
+			deny:       true,
+			getCmd:     api.Command{ID: 7, HostID: "host-a", CommandType: "kill_process", Status: api.StatusPending},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			// The agent already has it and may have applied the side effect, so reporting a successful cancel would be a lie.
+			name:       "already taken by the agent",
+			path:       "/api/commands/7/cancel",
+			getCmd:     api.Command{ID: 7, HostID: "host-a", CommandType: "kill_process", Status: api.StatusAcked},
+			updateErr:  api.ErrInvalidStatusTransition,
+			wantStatus: http.StatusConflict,
+			wantBody:   "not_cancellable",
+			wantUpdate: true,
+		},
+		{
+			name:       "withdrawn",
+			path:       "/api/commands/7/cancel",
+			getCmd:     api.Command{ID: 7, HostID: "host-a", CommandType: "kill_process", Status: api.StatusPending},
+			wantStatus: http.StatusOK,
+			wantBody:   "cancelled",
+			wantUpdate: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var gotReq api.UpdateStatusRequest
+			var updated bool
+			svc := fakeService{
+				get: func(context.Context, int64) (api.Command, error) { return tc.getCmd, tc.getErr },
+				updateStatus: func(_ context.Context, req api.UpdateStatusRequest) error {
+					updated = true
+					gotReq = req
+					return tc.updateErr
+				},
+			}
+			var authz identityapi.AuthZ = allowAllAuthZ{}
+			if tc.deny {
+				authz = denyAuthZ{}
+			}
+			h := New(svc, authz, nil)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, tc.path, nil))
+
+			assert.Equal(t, tc.wantStatus, rec.Code)
+			if tc.wantBody != "" {
+				assert.Contains(t, rec.Body.String(), tc.wantBody)
+			}
+			assert.Equal(t, tc.wantUpdate, updated, "the status write happens only after the command resolves and authorization passes")
+			if tc.wantUpdate {
+				assert.Equal(t, api.StatusCancelled, gotReq.Status)
+				assert.Equal(t, tc.getCmd.HostID, gotReq.HostID,
+					"the command's own host must be passed, because UpdateStatus enforces ownership")
+			}
+		})
+	}
+}
