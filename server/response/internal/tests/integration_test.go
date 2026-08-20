@@ -851,4 +851,6 @@ func TestALateAckCorrectsACommandExpiredWhileInFlight(t *testing.T) {
 	cmd, err := r.Service().Get(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, api.StatusAcked, cmd.Status)
+	assert.Nil(t, cmd.CompletedAt,
+		"reopening clears the completion stamp left by the expiry, or the row reads as both in flight and finished")
 }

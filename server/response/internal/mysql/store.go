@@ -219,8 +219,12 @@ func (s *Store) UpdateStatus(ctx context.Context, id int64, hostID string, expec
 	)
 	switch status { //nolint:exhaustive // pending is intentionally rejected as a target: caller can only move FORWARD.
 	case api.StatusAcked:
+		// completed_at is cleared, not just left alone. An ack can arrive for a command already recorded as cancelled or expired,
+		// which stamped completed_at when it stopped being live, and reopening it without clearing that would leave a row saying the
+		// agent has the command AND that it finished. For the ordinary pending -> acked case the column is already NULL, so this is
+		// a no-op there.
 		res, err = s.db.ExecContext(ctx,
-			"UPDATE commands SET status = ?, acked_at = NOW(6) WHERE id = ? AND host_id = ? AND status = ?",
+			"UPDATE commands SET status = ?, acked_at = NOW(6), completed_at = NULL, result = NULL WHERE id = ? AND host_id = ? AND status = ?",
 			string(status), id, hostID, string(expectedFrom))
 	case api.StatusCompleted, api.StatusFailed, api.StatusCancelled, api.StatusExpired:
 		// cancelled and expired are terminal like completed and failed, and stamp completed_at for the same reason: it is the moment
