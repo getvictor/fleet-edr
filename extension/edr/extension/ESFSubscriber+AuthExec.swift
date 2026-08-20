@@ -79,12 +79,12 @@ extension ESFSubscriber {
     /// unblocked; the JSON encode + XPC handoff happen off the callback's
     /// deadline.
     func emitBlockEvent(
-        target: es_process_t,
+        context: AuthDispatchContext,
         rule: ApplicationControlRule,
-        matchedIdentifier: String,
-        snapshot: ApplicationControlSnapshot,
-        kernelTimeNs: UInt64
+        matchedIdentifier: String
     ) {
+        let target = context.target
+        let snapshot = context.snapshot
         let pid = audit_token_to_pid(target.audit_token)
         let path = esTokenString(target.executable.pointee.path)
         let payload = ApplicationControlBlockPayload(
@@ -99,6 +99,7 @@ extension ESFSubscriber {
             policyID: snapshot.policyID,
             policyVersion: snapshot.policyVersion
         )
+        let kernelTimeNs = kernelEventTimeNs(context.message.pointee.time)
         if let data = serializer.serialize(eventType: "application_control_block", payload: payload, kernelTimeNs: kernelTimeNs) {
             onEvent?(data)
         }
@@ -109,13 +110,13 @@ extension ESFSubscriber {
     /// respond cost does not eat into the deadline. The verdict argument carries "allow" (audit-only posture) or "deny"
     /// (fail-closed posture); fail-open does NOT call this helper (no event by design, see FallbackPosture.failOpen).
     func emitUndecidedEvent(
-        target: es_process_t,
-        fileStat: stat,
+        context: AuthDispatchContext,
         verdict: String,
-        reason: UndecidedReason,
-        snapshot: ApplicationControlSnapshot,
-        kernelTimeNs: UInt64
+        reason: UndecidedReason
     ) {
+        let target = context.target
+        let fileStat = context.fileStat
+        let snapshot = context.snapshot
         let pid = audit_token_to_pid(target.audit_token)
         let path = esTokenString(target.executable.pointee.path)
         let payload = ApplicationControlUndecidedPayload(
@@ -127,7 +128,10 @@ extension ESFSubscriber {
             policyID: snapshot.policyID,
             policyVersion: snapshot.policyVersion
         )
-        if let data = serializer.serialize(eventType: "application_control_undecided", payload: payload, kernelTimeNs: kernelTimeNs) {
+        let kernelTimeNs = kernelEventTimeNs(context.message.pointee.time)
+        if let data = serializer.serialize(
+            eventType: "application_control_undecided", payload: payload, kernelTimeNs: kernelTimeNs
+        ) {
             onEvent?(data)
         }
     }

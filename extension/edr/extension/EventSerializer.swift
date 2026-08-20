@@ -361,5 +361,8 @@ final class EventSerializer: Sendable {
 /// directly comparable and no timebase conversion is involved. The difference between them is handler latency, not clock drift,
 /// which is why reading this field is the whole fix for issue #710.
 func kernelEventTimeNs(_ time: timespec) -> UInt64 {
-    UInt64(time.tv_sec) * 1_000_000_000 + UInt64(time.tv_nsec)
+    UInt64(time.tv_sec) * nanosecondsPerSecond + UInt64(time.tv_nsec)
 }
+
+/// nanosecondsPerSecond converts the seconds half of a timespec into the envelope's nanosecond units.
+private let nanosecondsPerSecond: UInt64 = 1_000_000_000
