@@ -53,11 +53,12 @@ func New(svc api.Service, authz identityapi.AuthZ, logger *slog.Logger) *Handler
 // set, command issuance still works but no audit row is written.
 func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 
-// RegisterRoutes wires the two operator routes on the given mux.
+// RegisterRoutes wires the operator routes on the given mux.
 // Caller wraps in identity.Session + identity.CSRF before mounting.
 func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("POST /api/commands", h.handleCreate)
 	mux.HandleFunc("GET /api/commands/{id}", h.handleGet)
+	mux.HandleFunc("POST /api/commands/{id}/cancel", h.handleCancel)
 }
 
 type createRequest struct {
@@ -110,6 +111,76 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	h.recordCommandAudit(r, body.HostID, body.CommandType, id)
 	writeJSON(ctx, h.logger, w, http.StatusCreated, map[string]int64{"id": id})
+}
+
+// handleCancel withdraws a command that no agent has picked up yet.
+//
+// Without this a command can only be waited on. A host may be offline, or holding a control stream the server has forgotten
+// (issue #711), and the command then sits pending indefinitely with no operator path to withdraw it. That is not merely untidy: a
+// kill_process addresses a pid, and one delivered long after it was issued can land on a recycled pid and terminate an unrelated
+// process, so being unable to withdraw it is a safety problem rather than a convenience one.
+//
+// Cancelling requires the SAME authority as issuing that command type, not merely read access. Preventing a response action is itself
+// a response decision: a reader who could cancel could neuter incident response on a host they can only observe.
+func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "invalid_command_id")
+		return
+	}
+	// Fetch first so the chokepoint gates on the command's own host and type rather than on anything the caller supplied.
+	cmd, err := h.svc.Get(ctx, id)
+	switch {
+	case errors.Is(err, api.ErrCommandNotFound):
+		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
+		return
+	case err != nil:
+		h.logger.ErrorContext(ctx, "get command for cancel", "id", id, "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+	action, ok := commandTypeToAction(cmd.CommandType)
+	if !ok {
+		writeErr(ctx, h.logger, w, http.StatusBadRequest, "unsupported_command_type")
+		return
+	}
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, action, identityapi.Resource{Type: "host", ID: cmd.HostID}) {
+		return
+	}
+
+	// HostID is the command's own, read back above: UpdateStatus enforces host ownership so a caller cannot move a command by id
+	// alone, and the operator path has to satisfy the same check the agent path does.
+	err = h.svc.UpdateStatus(ctx, api.UpdateStatusRequest{ID: id, HostID: cmd.HostID, Status: api.StatusCancelled})
+	switch {
+	case errors.Is(err, api.ErrInvalidStatusTransition):
+		// The agent already has it, or it already finished. Reporting success here would tell the operator nothing ran on the host
+		// when something may well have.
+		writeErr(ctx, h.logger, w, http.StatusConflict, "not_cancellable")
+		return
+	case errors.Is(err, api.ErrCommandNotFound):
+		writeErr(ctx, h.logger, w, http.StatusNotFound, "not_found")
+		return
+	case err != nil:
+		h.logger.ErrorContext(ctx, "cancel command", "id", id, "err", err)
+		writeErr(ctx, h.logger, w, http.StatusInternalServerError, "internal")
+		return
+	}
+
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String(attrkeys.AdminAction, "command_cancel"),
+		attribute.String(attrkeys.HostID, cmd.HostID),
+		attribute.String("edr.command.type", cmd.CommandType),
+		attribute.Int64("edr.command.id", id),
+	)
+	h.logger.InfoContext(ctx, "admin command cancelled",
+		attrkeys.AdminAction, "command_cancel",
+		attrkeys.HostID, cmd.HostID,
+		"edr.command.type", cmd.CommandType,
+		"edr.command.id", id,
+	)
+	h.recordCommandAudit(r, cmd.HostID, cmd.CommandType, id)
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]string{"status": string(api.StatusCancelled)})
 }
 
 // recordCommandAudit emits one audit row for the just-committed command issuance. target = the host receiving the command; payload

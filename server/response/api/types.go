@@ -35,6 +35,14 @@ const (
 	StatusAcked     Status = "acked"
 	StatusCompleted Status = "completed"
 	StatusFailed    Status = "failed"
+	// StatusCancelled is a command withdrawn before any agent picked it up. Distinct from StatusFailed, which means an agent tried and
+	// could not: an operator auditing a host has to be able to tell "nothing ran" from "something ran and went wrong". Reachable only
+	// from StatusPending, because once a command is acked the agent may already have applied the side effect.
+	StatusCancelled Status = "cancelled"
+	// StatusExpired is a command that waited past its delivery window and was aged out rather than handed to an agent late. A
+	// kill_process addresses a pid, and pids are reused, so delivering a stale one can terminate an unrelated process. Like
+	// StatusCancelled it is reachable only from StatusPending.
+	StatusExpired Status = "expired"
 )
 
 // CommandTypeKillProcess is the well-known type the agent's commander dispatches to its kill-process handler. Other command types
