@@ -432,10 +432,17 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 // different image under this ordering than under the fork bound alone, and that is the whole of the re-exec misattribution.
 //
 // So the ordering resolves the generation first (fork_time_ns DESC), then the image within it. Rows whose exec landed at or before the
-// instant sort first, and among those ABS() takes the one closest to it, which is the latest image actually applied. When no image in
-// the chain had been applied yet, the child forked inside its parent's own fork-to-exec window (562 rows on the same data) and the
-// same ABS() ordering falls through to the chain's EARLIEST image, rather than dropping the generation and attributing the child to an
-// older one. That fallback corrects nothing by itself; it exists so the image ordering does not introduce a regression, which is what
+// instant sort first, and among those the LATEST exec wins, which is the image actually in force. When no image in the chain had been
+// applied yet, the child forked inside its parent's own fork-to-exec window (562 rows on the same data) and the trailing
+// exec_time_ns ASC key takes the chain's EARLIEST image, rather than dropping the generation and attributing the child to an older
+// one.
+//
+// The ordering compares timestamps and never subtracts them. Expressing "nearest to the instant" as ABS(exec_time_ns minus the instant) is
+// the shorter way to say it and does not survive the accepted input domain: intake rejects only a zero timestamp, so a payload may
+// carry any other int64, and ABS() over a fork at a negative instant against an exec near the maximum overflows. MySQL does not
+// silently wrap it either, it raises ERROR 1690 out of range, which would fail this query for every fork on that host and stop the
+// forest being built at all rather than merely mis-order one image. Same lesson as the claim bound in issue #717: timestamps arrive
+// from the agent, so no arithmetic on them is safe, and ordering that only ever compares them cannot be defeated by their values. That fallback corrects nothing by itself; it exists so the image ordering does not introduce a regression, which is what
 // bounding on the image start alone (COALESCE(exec_time_ns, fork_time_ns) <= ?) does: it skips a generation whose exec is still in the
 // future and answers with an older one. That window is real rather than theoretical: fork and exec are stamped independently at handler time, so their errors are
 // independent and a child's fork can carry a stamp below its parent's exec even when it truly followed it. The pre-exec image itself
@@ -458,7 +465,8 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTim
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		ORDER BY fork_time_ns DESC,
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
-		         ABS(exec_time_ns-?) ASC,
+		         CASE WHEN exec_time_ns IS NULL OR exec_time_ns <= ? THEN COALESCE(exec_time_ns, fork_time_ns) END DESC,
+		         exec_time_ns ASC,
 		         id DESC
 		LIMIT 1`,
 		hostID, pid, atTimeNs, atTimeNs, atTimeNs,

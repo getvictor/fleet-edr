@@ -20,6 +20,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -86,6 +87,7 @@ func requireInheritedPath(ctx context.Context, t *testing.T, b *graph.Builder, s
 // spec:server-process-graph-builder/fork-creates-a-process-record/a-parent-recorded-as-exited-before-its-child-forked-still-resolves
 // spec:server-process-graph-builder/fork-creates-a-process-record/no-generation-of-the-parent-pid-had-forked-yet
 // spec:server-process-graph-builder/fork-creates-a-process-record/a-fork-resolves-the-image-in-force-inside-a-re-exec-chain
+// spec:server-process-graph-builder/fork-creates-a-process-record/an-extreme-timestamp-pair-cannot-defeat-the-image-ordering
 func TestForkInheritsPathOfTheParentGenerationThatHadForkedByThen(t *testing.T) {
 	t.Parallel()
 
@@ -184,6 +186,19 @@ func TestForkInheritsPathOfTheParentGenerationThatHadForkedByThen(t *testing.T) 
 				{forkEvt(100, parentPID, 1), execEvt(200, parentPID, 1, firstImage)},
 			},
 			forkAt: 150,
+			want:   firstImage,
+		},
+		{
+			// Intake rejects only a zero timestamp, so every other int64 reaches this resolution and the ordering has to hold across
+			// the whole domain. A generation forked at a negative instant, whose later image execs near the maximum, is the pair that
+			// defeats any ordering expressed as a difference: it overflows, and in SQL it raises MySQL ERROR 1690 rather than wrapping,
+			// which would fail the lookup for every fork on the host instead of mis-ranking one image.
+			name: "an extreme timestamp pair cannot defeat the image ordering",
+			seed: [][]api.Event{
+				{forkEvt(-100, parentPID, 1), execEvt(-50, parentPID, 1, firstImage)},
+				{execEvt(math.MaxInt64, parentPID, 1, secondImage)},
+			},
+			forkAt: -1,
 			want:   firstImage,
 		},
 		{

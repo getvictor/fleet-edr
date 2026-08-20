@@ -170,9 +170,15 @@ func imageRankGreater(a, b *procRow, atTimeNs int64) bool {
 	if aApplied != bApplied {
 		return aApplied
 	}
-	aDist, bDist := imageDistance(a, atTimeNs), imageDistance(b, atTimeNs)
-	if aDist != bDist {
-		return aDist < bDist
+	aStart, bStart := imageStart(a), imageStart(b)
+	if aStart != bStart {
+		if aApplied {
+			// Both images were in force at some point by the instant, so the later one is the one that was in force AT it.
+			return aStart > bStart
+		}
+		// Neither had been applied yet, so the child forked inside the generation's own fork-to-exec window and the chain's
+		// earliest image is the closest surviving evidence of what its parent was running.
+		return aStart < bStart
 	}
 	return a.seq > b.seq
 }
@@ -183,17 +189,18 @@ func imageApplied(r *procRow, atTimeNs int64) bool {
 	return r.proc.ExecTimeNs == nil || *r.proc.ExecTimeNs <= atTimeNs
 }
 
-// imageDistance is how far r's exec sits from atTimeNs, the tie-break within one generation. Among applied images the nearest is the
-// latest one in force; among unapplied images (only reachable when the chain had applied none yet) the nearest is the chain's first,
-// which is the closest surviving evidence of what the parent was running.
-func imageDistance(r *procRow, atTimeNs int64) int64 {
+// imageStart is when r's path became the PID's image: its exec, or its fork for a row that never exec'd and so still carries the path
+// it inherited. Used as the ordering key within one generation.
+//
+// This compares timestamps rather than measuring a distance between them. An earlier revision ranked by ABS(exec_time_ns minus the instant),
+// which reads as "nearest the instant" and overflows on the accepted input domain: intake rejects only a zero timestamp, so a fork at
+// a negative instant against an exec near the maximum wraps the difference and outranks a genuinely nearer image (and in SQL raises
+// MySQL ERROR 1690 rather than wrapping). Timestamps come from the agent, so no arithmetic on them is safe.
+func imageStart(r *procRow) int64 {
 	if r.proc.ExecTimeNs == nil {
-		return 0
+		return r.proc.ForkTimeNs
 	}
-	if d := *r.proc.ExecTimeNs - atTimeNs; d >= 0 {
-		return d
-	}
-	return atTimeNs - *r.proc.ExecTimeNs
+	return *r.proc.ExecTimeNs
 }
 
 // mostRecentLive returns the most-recent non-exited row for (host, pid), the target of the single-row exec UPDATE. nil when every row
