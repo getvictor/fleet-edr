@@ -41,8 +41,11 @@ type HostPID struct {
 // LoadProcessesForKeys returns every process row for the given (host_id, pid) pairs, ordered oldest-first by (fork_time_ns, id).
 // The graph builder's batch path preloads the full candidate set in one round-trip and then resolves every per-event read
 // (GetProcessByPID, GetParentPath) against the in-memory overlay instead of issuing a SELECT per event. All rows for each key are
-// returned (no exit-time filter) so the overlay can reproduce GetParentPath, which orders by fork time regardless of exit. The
-// per-(host_id, pid) row count is bounded by the retention prune, so this stays small in steady state.
+// returned, including already-exited ones, because every overlay read is bracketed against the READING EVENT's timestamp rather
+// than against now, and a batch routinely carries events older than the newest persisted generation of a pid: a generation that has
+// since exited is still the right answer for an event stamped inside its lifetime, and for a fork's inherited path it stays a
+// candidate whatever its exit says. The per-(host_id, pid) row count is bounded by the retention prune, so this stays small in
+// steady state.
 func (s *Store) LoadProcessesForKeys(ctx context.Context, keys []HostPID) ([]api.Process, error) {
 	if len(keys) == 0 {
 		return nil, nil

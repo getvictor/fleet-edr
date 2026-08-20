@@ -15,7 +15,7 @@ import (
 // is what lets the differential property test assert the two produce identical process forests.
 type processStore interface {
 	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error)
-	GetParentPath(ctx context.Context, hostID string, pid int) (string, error)
+	GetParentPath(ctx context.Context, hostID string, pid int, atTimeNs int64) (string, error)
 	EventAlreadyApplied(ctx context.Context, hostID string, pid int, eventID string) (bool, error)
 	InsertProcess(ctx context.Context, p api.Process) (int64, error)
 	UpdateProcessExec(ctx context.Context, u mysql.ProcessExecUpdate) error
@@ -82,9 +82,15 @@ func rankGreater(a, b *procRow) bool {
 	return a.seq > b.seq
 }
 
-// GetProcessByPID returns the row whose (host, pid) brackets atTimeNs, mirroring the store query: fork_time_ns <= atTimeNs AND
-// (exit_time_ns IS NULL OR exit_time_ns >= atTimeNs), most recent by (fork_time_ns, id). Returns a copy so handlers cannot mutate
+// GetProcessByPID returns the row whose (host, pid) lifetime brackets atTimeNs, mirroring the store query: fork_time_ns <= atTimeNs
+// AND (exit_time_ns IS NULL OR exit_time_ns >= atTimeNs), most recent by (fork_time_ns, id). Returns a copy so handlers cannot mutate
 // the overlay through the returned pointer.
+//
+// The aliveness half of that bracket is deliberately NOT shared with GetParentPath below, even though both answer "which generation
+// held this pid" for an instant. The instants differ in what backs them: this one arrives from an unrelated event (a network flow's
+// timestamp), so a generation recorded as already exited genuinely must not match, while GetParentPath's instant is a fork whose
+// parent was alive by construction. Collapsing the two back into one predicate reinstates a measured 4:1 regression; see the store's
+// GetParentPath docstring for the numbers.
 func (s *batchSession) GetProcessByPID(_ context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
 	var best *procRow
 	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
@@ -124,12 +130,21 @@ func matchesEventID(field *string, eventID string) bool {
 	return field != nil && *field == eventID
 }
 
-// GetParentPath returns the path of the most-recent (by fork_time_ns, id) row for (host, pid), or "" when none, mirroring the store
-// query (no exit-time filter).
-func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int) (string, error) {
+// GetParentPath returns the path of the newest generation of (host, pid) that had forked by atTimeNs, the child's fork time, or "" when
+// none had forked yet. It mirrors the store query, fork bound included; an overlay that dropped the bound would silently reintroduce
+// issue #714 for every batch larger than one event, since the batched path is the production one.
+//
+// It applies no aliveness test, which is the one place this overlay's two pid-plus-instant reads legitimately differ. A parent is
+// alive at its child's fork by construction, so an exit timestamp can only disqualify the sole candidate on data that handler-time
+// stamping and synthesized pid-reuse closes make unreliable. Do not "fix" the inconsistency with GetProcessByPID above by adding the
+// exit test here; the store's GetParentPath docstring carries the measurement that rejected it.
+func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int, atTimeNs int64) (string, error) {
 	var best *procRow
 	for _, r := range s.byKey[mysql.HostPID{HostID: hostID, PID: pid}] {
-		if best == nil || rankGreater(r, best) {
+		if r.proc.ForkTimeNs > atTimeNs {
+			continue
+		}
+		if best == nil || imageRankGreater(r, best, atTimeNs) {
 			best = r
 		}
 	}
@@ -137,6 +152,55 @@ func (s *batchSession) GetParentPath(_ context.Context, hostID string, pid int) 
 		return "", nil
 	}
 	return best.proc.Path, nil
+}
+
+// imageRankGreater reports whether a is the better answer than b for "what was this PID running at atTimeNs", mirroring the store's
+// ordering: the generation decides first, then whether the image had been applied by the instant, then which applied image sits
+// nearest it, and the row sequence only breaks a remaining tie.
+//
+// It cannot reuse rankGreater, which orders by fork time and then by row sequence. Every image in a re-exec chain carries the SAME
+// fork time (insertReExec preserves it), so sequence order there means "whatever the PID ran last" rather than "what it was running
+// then", and picking that hands a child an image its parent had not yet exec'd. The generation still decides first; the image is
+// resolved inside it.
+func imageRankGreater(a, b *procRow, atTimeNs int64) bool {
+	if a.proc.ForkTimeNs != b.proc.ForkTimeNs {
+		return a.proc.ForkTimeNs > b.proc.ForkTimeNs
+	}
+	aApplied, bApplied := imageApplied(a, atTimeNs), imageApplied(b, atTimeNs)
+	if aApplied != bApplied {
+		return aApplied
+	}
+	aStart, bStart := imageStart(a), imageStart(b)
+	if aStart != bStart {
+		if aApplied {
+			// Both images were in force at some point by the instant, so the later one is the one that was in force AT it.
+			return aStart > bStart
+		}
+		// Neither had been applied yet, so the child forked inside the generation's own fork-to-exec window and the chain's
+		// earliest image is the closest surviving evidence of what its parent was running.
+		return aStart < bStart
+	}
+	return a.seq > b.seq
+}
+
+// imageApplied reports whether r's image was in place at atTimeNs. A row with no exec carries the path it inherited at fork, which is
+// in place from the fork onward, so it counts as applied.
+func imageApplied(r *procRow, atTimeNs int64) bool {
+	return r.proc.ExecTimeNs == nil || *r.proc.ExecTimeNs <= atTimeNs
+}
+
+// imageStart is when r's path became the PID's image: its exec, or its fork for a row that never exec'd and so still carries the path
+// it inherited. Used as the ordering key within one generation.
+//
+// This compares timestamps rather than measuring a distance between them. An earlier revision ranked by the absolute difference from
+// the instant, which reads as "nearest" and overflows on the accepted input domain: intake rejects only a zero timestamp, so a fork
+// at a negative instant against an exec near the maximum wraps the difference and outranks a genuinely nearer image (and in SQL
+// raises MySQL ERROR 1690 rather than wrapping). Timestamps come from the agent, so no arithmetic on them is safe.
+func imageStart(r *procRow) int64 {
+	if r.proc.ExecTimeNs == nil {
+		return r.proc.ForkTimeNs
+	}
+	return *r.proc.ExecTimeNs
 }
 
 // mostRecentLive returns the most-recent non-exited row for (host, pid), the target of the single-row exec UPDATE. nil when every row

@@ -28,9 +28,6 @@ import (
 
 	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/internal/graph"
-	"github.com/fleetdm/edr/server/detection/internal/mysql"
-	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
-	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 // normRow is a process row normalised for forest comparison: the absolute auto-increment id and host_id are dropped, and the
@@ -157,9 +154,7 @@ func requireBatchInvariant(t *testing.T, db *sqlx.DB, bRef, bBatch *graph.Builde
 
 func twoBuilders(t *testing.T) (*graph.Builder, *graph.Builder, *sqlx.DB) {
 	t.Helper()
-	db := full.Open(t)
-	store, err := mysql.New(db, detectiontestkit.NewMemArchive(), nil)
-	require.NoError(t, err)
+	store, db := openProcessStore(t)
 	return graph.NewBuilder(store, discardLogger()), graph.NewBuilder(store, discardLogger()), db
 }
 
