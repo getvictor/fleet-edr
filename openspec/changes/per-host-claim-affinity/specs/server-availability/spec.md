@@ -10,7 +10,7 @@ A claim SHALL be scoped to a single host, returning that host's claimable events
 
 The serialized region SHALL cover claiming, folding, and flushing, and SHALL NOT extend over rule evaluation, which only reads the materialized graph. A batch whose folding failed SHALL be returned to the queue before the host's serialization is released, so the next claimer cannot take that host's later events and fold them ahead of the events being retried.
 
-A claim SHALL NOT reach past an event that another claimer still holds. An in-flight event is invisible to the claimable predicate rather than blocking it, so without this bound a claimer that died between claiming a `fork` and flushing it would leave a hole the following `exec` pours through, reintroducing the exec-with-no-fork fold that scoping the claim to one host exists to prevent. When a host has an unexpired in-flight event, the system SHALL offer only that host's events strictly older than the oldest in-flight one, and SHALL offer nothing for that host when none are older. A host may therefore have no claimable work until an abandoned claim's lease expires, which is bounded by the lease and is preferable to folding its stream out of order. Claimers SHALL NOT reclaim another claimer's unexpired in-flight events.
+A claim SHALL NOT reach past an event that another claimer still holds. An in-flight event is invisible to the claimable predicate rather than blocking it, so without this bound a claimer that died between claiming a `fork` and flushing it would leave a hole the following `exec` pours through, reintroducing the exec-with-no-fork fold that scoping the claim to one host exists to prevent. When a host has an unexpired in-flight event, the system SHALL offer only that host's events strictly older than the oldest in-flight one, and SHALL offer nothing for that host when none are older. A host may therefore have no claimable work until an abandoned claim's lease expires, which is bounded by the lease and is preferable to folding its stream out of order. Claimers SHALL NOT reclaim another claimer's unexpired in-flight events. Queue timestamps originate in agent payloads, so the bound SHALL hold for any timestamp value an agent can send: no timestamp SHALL be reserved as a sentinel, since a reserved value either strands an event stamped with it or, through arithmetic on it, silently removes the bound.
 
 Because a claimer inside that region occupies two database connections at once, the connection the advisory lock pins and the connection its claim and flush use, the system SHALL size its worker count to the connection pool so that the workers cannot exhaust it: exceeding the pool does not degrade throughput gracefully but stalls the pipeline with every worker holding a lock connection while waiting for a claim connection. The pool is process-wide and shared with the request path and the background sweeps, so the workers SHALL be sized to a share of it rather than to all of it. A pool too small to serve even one worker SHALL be refused at startup, naming the pool size the deployment needs, because a single worker there would pin the only connection for its lock and then wait forever for a claim connection: that is the stall the sizing exists to prevent, and a deployment that refuses to boot states its problem where one that boots and silently processes nothing does not.
 
@@ -82,3 +82,12 @@ When no advisory-lock coordinator is available the system SHALL run a single wor
 - **WHEN** a claimer claims for that host
 - **THEN** it receives no events for that host rather than the later ones
 - **AND** once the abandoned claim's lease expires, that host's events are offered again in timestamp order starting from the oldest
+#### Scenario: A claim bound cannot be defeated by an extreme timestamp
+
+- **GIVEN** a queued event whose timestamp is the maximum representable value
+- **WHEN** its host is claimed
+- **THEN** that event is offered like any other, rather than being permanently unclaimable
+- **GIVEN** instead a host whose oldest in-flight event carries the minimum representable timestamp
+- **WHEN** that host is claimed again while the claim is unexpired
+- **THEN** nothing is offered for it, because no event is strictly older, and the bound is not removed by arithmetic on that value
+

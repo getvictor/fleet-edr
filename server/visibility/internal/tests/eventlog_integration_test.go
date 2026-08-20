@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -178,6 +179,47 @@ func TestEventLog_ClaimIsHostScopedAndOrdered(t *testing.T) {
 // it as an exec with no fork, which is exactly the #717 defect that scoping the claim to one host is meant to close. The claim must
 // therefore refuse to reach past the host's oldest unexpired in-flight event, and must not reclaim it either: another worker may still
 // be alive and mid-flush, so the only safe outcome is to leave that host alone until the lease expires.
+// spec:server-availability/the-processor-scales-across-replicas-via-skip-locked/a-claim-bound-cannot-be-defeated-by-an-extreme-timestamp
+//
+// The "nothing in flight" case was first encoded as a sentinel timestamp, and that encoding produced two edges in a row on
+// agent-supplied values: an exclusive bound against math.MaxInt64 stranded a row stamped exactly there (unclaimable forever, and its
+// host stayed in the candidate list burning a cycle every pass), and shifting the floor a tick below the in-flight row underflowed for
+// math.MinInt64, wrapping to MaxInt64 and removing the bound altogether. Queue timestamps come from agent payloads, so neither is
+// merely theoretical. These pin both ends now that the bound carries a flag instead of a sentinel.
+func TestEventLog_ClaimBoundSurvivesExtremeTimestamps(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("an event stamped MaxInt64 is still claimable", func(t *testing.T) {
+		t.Parallel()
+		log, _ := newEventLogWithDB(t)
+		require.NoError(t, log.Append(ctx, []visibilityapi.Event{ev("max-ts", "h-max", math.MaxInt64, "exec")}))
+
+		claimed, err := log.ClaimForHost(ctx, "h-max", 10)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"max-ts"}, ids(claimed),
+			"a sentinel-valued timestamp must not be unclaimable: it would never drain and would keep its host in the hint forever")
+	})
+
+	t.Run("an in-flight event stamped MinInt64 still bounds the claim", func(t *testing.T) {
+		t.Parallel()
+		log, _ := newEventLogWithDB(t)
+		require.NoError(t, log.Append(ctx, []visibilityapi.Event{
+			ev("min-fork", "h-min", math.MinInt64, "fork"),
+			ev("min-exec", "h-min", 500, "exec"),
+		}))
+
+		inFlight, err := log.ClaimForHost(ctx, "h-min", 1)
+		require.NoError(t, err)
+		require.Equal(t, []string{"min-fork"}, ids(inFlight), "the oldest event is claimed first")
+
+		behind, err := log.ClaimForHost(ctx, "h-min", 10)
+		require.NoError(t, err)
+		assert.Empty(t, behind,
+			"an extreme in-flight timestamp must not underflow the floor into removing the bound: min-exec would leapfrog min-fork")
+	})
+}
+
 func TestEventLog_ClaimStopsAtOldestInFlightEvent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
