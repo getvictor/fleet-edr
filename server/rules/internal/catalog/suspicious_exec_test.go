@@ -847,3 +847,136 @@ func TestSuspiciousExec_LocalResolverDNSDeNoising(t *testing.T) {
 		require.Len(t, findings, 1, "an unparseable remote address must not be de-noised")
 	})
 }
+
+// A shell that execs its payload IN PLACE leaves no shell in the connecting process's ancestry: the re-exec closed the shell's
+// generation at that same PID, so the PPID walk steps over it and returns the interactive login shell above, which fails the window.
+// The network arm therefore has to consult the PID's own exec chain, exactly as the exec arm does (issue #713).
+//
+// Which shell the attacker picked decided whether the payload was seen at all. Measured on macOS 26.6.1, zsh replaces itself with the
+// payload while bash and sh fork it, so the zsh form of an identical command was invisible and the bash form was detected.
+// spec:server-detection-rules-engine/network-arm-resolves-a-shell-that-exec-d-its-payload-in-place/a-shell-execs-its-payload-in-place-and-the-payload-connects-out
+// spec:server-detection-rules-engine/network-arm-resolves-a-shell-that-exec-d-its-payload-in-place/the-shell-on-the-exec-chain-is-outside-the-window
+// spec:server-detection-rules-engine/network-arm-resolves-a-shell-that-exec-d-its-payload-in-place/a-re-exec-with-no-shell-on-the-chain-does-not-fire
+func TestSuspiciousExecDetectsShellThatExecsPayloadInPlace(t *testing.T) {
+	t.Parallel()
+
+	// An interactive login shell exec'd long before the run, so it is the nearest shell in the PPID chain and is far outside the
+	// window. It is what the walk used to return, and what made the miss look like "no shell found".
+	const (
+		loginZshExec = int64(650)
+		pyExec       = int64(1_000_000_000_100)
+		shellExec    = int64(1_000_000_001_100)
+		payloadExec  = int64(1_000_000_002_000)
+		flowAt       = int64(1_000_000_002_500)
+	)
+	base := []api.Event{
+		{EventID: "fork-login", HostID: "h", TimestampNs: 500, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":10,"parent_pid":1}`)},
+		{EventID: "exec-login", HostID: "h", TimestampNs: 550, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":10,"ppid":1,"path":"/usr/bin/login","args":["login"],"uid":0,"gid":0}`)},
+		{EventID: "fork-zsh", HostID: "h", TimestampNs: 600, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":20,"parent_pid":10}`)},
+		{EventID: "exec-zsh", HostID: "h", TimestampNs: loginZshExec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":20,"ppid":10,"path":"/bin/zsh","args":["-zsh"],"uid":501,"gid":20}`)},
+		{EventID: "fork-py", HostID: "h", TimestampNs: 1_000_000_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":20}`)},
+		{EventID: "exec-py", HostID: "h", TimestampNs: pyExec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":50,"path":"/usr/bin/python3","args":["python3","-c","..."],"uid":501,"gid":20}`)},
+		{EventID: "fork-stage", HostID: "h", TimestampNs: 1_000_000_001_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+	}
+
+	execEvt := func(id string, ts int64, pid, ppid int, path string) api.Event {
+		return api.Event{EventID: id, HostID: "h", TimestampNs: ts, EventType: "exec",
+			Payload: json.RawMessage(fmt.Sprintf(`{"pid":%d,"ppid":%d,"path":%q,"args":[%q],"uid":501,"gid":20}`, pid, ppid, path, path))}
+	}
+	flowEvt := func(ts int64, pid int) api.Event {
+		return api.Event{EventID: "net-payload", HostID: "h", TimestampNs: ts, EventType: "network_connect",
+			Payload: json.RawMessage(fmt.Sprintf(
+				`{"pid":%d,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",`+
+					`"remote_address":"198.51.100.42","remote_port":443}`, pid))}
+	}
+
+	cases := []struct {
+		name      string
+		stage     []api.Event
+		flow      api.Event
+		wantShell string // empty means no finding
+	}{
+		{
+			// The reported miss. zsh execs curl at its own PID, so nothing in curl's ancestry is a shell.
+			name: "zsh execs the payload in place",
+			stage: []api.Event{
+				execEvt("exec-shell", shellExec, 100, 50, "/bin/zsh"),
+				execEvt("exec-payload", payloadExec, 100, 50, "/usr/bin/curl"),
+			},
+			flow:      flowEvt(flowAt, 100),
+			wantShell: "/bin/zsh",
+		},
+		{
+			name: "bash execs the payload in place",
+			stage: []api.Event{
+				execEvt("exec-shell", shellExec, 100, 50, "/bin/bash"),
+				execEvt("exec-payload", payloadExec, 100, 50, "/usr/bin/curl"),
+			},
+			flow:      flowEvt(flowAt, 100),
+			wantShell: "/bin/bash",
+		},
+		{
+			// The shape that already worked, kept alongside so a regression in either is visible in one run.
+			name: "shell forks the payload",
+			stage: []api.Event{
+				execEvt("exec-shell", shellExec, 100, 50, "/bin/bash"),
+				{EventID: "fork-payload", HostID: "h", TimestampNs: payloadExec - 100, EventType: "fork",
+					Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+				execEvt("exec-payload", payloadExec, 200, 100, "/usr/bin/curl"),
+			},
+			flow:      flowEvt(flowAt, 200),
+			wantShell: "/bin/bash",
+		},
+		{
+			// The chain is consulted, but the shell on it is stale, so the window still governs. Without this the new arm would be
+			// a way around the 30-second bound rather than a way to see through a re-exec.
+			name: "the shell on the chain is outside the window",
+			stage: []api.Event{
+				execEvt("exec-shell", shellExec, 100, 50, "/bin/zsh"),
+				execEvt("exec-payload", payloadExec, 100, 50, "/usr/bin/curl"),
+			},
+			flow:      flowEvt(shellExec+40_000_000_000, 100),
+			wantShell: "",
+		},
+		{
+			// A re-exec with no shell anywhere on the chain must stay silent: the arm looks for a shell, not for any re-exec.
+			name: "a non-shell re-execs into another non-shell",
+			stage: []api.Event{
+				execEvt("exec-shell", shellExec, 100, 50, "/usr/bin/perl"),
+				execEvt("exec-payload", payloadExec, 100, 50, "/usr/bin/curl"),
+			},
+			flow:      flowEvt(flowAt, 100),
+			wantShell: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCatalogStore(t)
+			ctx := t.Context()
+			events := append(append([]api.Event{}, base...), tc.stage...)
+			events = append(events, tc.flow)
+			require.NoError(t, s.InsertEvents(ctx, events))
+			materialize(t, s, events)
+
+			findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+			require.NoError(t, err)
+			if tc.wantShell == "" {
+				require.Empty(t, findings)
+				return
+			}
+			require.Len(t, findings, 1)
+			assert.Contains(t, findings[0].Description, tc.wantShell, "the finding names the shell that ran the payload")
+			assert.Contains(t, findings[0].Description, "198.51.100.42:443")
+			assert.Contains(t, findings[0].EventIDs, "net-payload")
+		})
+	}
+}
