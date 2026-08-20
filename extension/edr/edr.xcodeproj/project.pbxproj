@@ -187,6 +187,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				57B10CCD2F43BBBF007F4B27 /* edr */,
+				5EFA5EFA5EFA5EFA5EFA5EFA /* shared */,
 			);
 			name = edr;
 			packageProductDependencies = (

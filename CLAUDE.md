@@ -1,9 +1,20 @@
 ## Testing
 
-The repo enforces a SonarCloud "Coverage on New Code ≥ 80%" gate per PR
-(configured in the SonarCloud UI); that is the authoritative coverage bar.
-Codecov runs in parallel but is held non-gating at 70% (`codecov.yml`,
-`informational: true`) so it does not gate-out PRs Sonar already accepts.
+Two coverage gates block a PR, and they are not the same gate. SonarCloud's
+"Coverage on New Code >= 80%" (configured in the SonarCloud UI) is the
+authoritative bar. Codecov's PATCH gate is also enforcing, at 70%
+(`codecov.yml`, `if_ci_failed: error`), including the per-flag
+`codecov/patch/server` and `codecov/patch/ui` variants; it is held below
+Sonar's bar so it does not gate-out PRs Sonar already accepts, not because
+it is advisory. Only Codecov's PROJECT rollup is non-gating
+(`informational: true`), because its numbers proved unreliable on this repo
+(#227). So "codecov is red" needs reading twice: a red `codecov/project` is
+informational, a red `codecov/patch` blocks the merge and means the new
+lines genuinely need tests.
+
+Measure patch coverage the way CI does, with `-tags=integration`
+(`task test:go:server:coverage`). Without the tag the integration-only paths
+report 0% locally and the number is not the one the gate will see.
 Tests live in three layers:
 
 1. **Per-package unit tests**: co-located with the code, default tag.
