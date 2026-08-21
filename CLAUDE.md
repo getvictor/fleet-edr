@@ -1,16 +1,28 @@
 ## Testing
 
-Two coverage gates block a PR, and they are not the same gate. SonarCloud's
-"Coverage on New Code >= 80%" (configured in the SonarCloud UI) is the
-authoritative bar. Codecov's PATCH gate is also enforcing, at 70%
-(`codecov.yml`, `if_ci_failed: error`), including the per-flag
-`codecov/patch/server` and `codecov/patch/ui` variants; it is held below
-Sonar's bar so it does not gate-out PRs Sonar already accepts, not because
-it is advisory. Only Codecov's PROJECT rollup is non-gating
-(`informational: true`), because its numbers proved unreliable on this repo
-(#227). So "codecov is red" needs reading twice: a red `codecov/project` is
-informational, a red `codecov/patch` blocks the merge and means the new
-lines genuinely need tests.
+Exactly ONE coverage condition can block a merge: SonarCloud's "Coverage on
+New Code >= 80%" (configured in the SonarCloud UI). That is because
+`SonarCloud scan` is one of the 15 checks the `main-protection` ruleset
+lists as required, and GitHub blocks a merge only on checks in that list
+(`.github/rulesets/main.json`, mirrored live; there is no catch-all
+"all checks must pass" option and the ruleset has no bypass actors).
+
+Codecov is a real signal but not a merge gate, and the two halves differ:
+
+- `codecov/patch` (and the per-flag `codecov/patch/server` etc.) is
+  configured ENFORCING in `codecov.yml`: `target: 70%`, `threshold: 0%`,
+  `if_ci_failed: error`, and deliberately NOT `informational`. So it does go
+  RED below 70%. It is simply not in the required-check list, so red does
+  not block the merge.
+- `codecov/project` and every per-flag project rollup ARE
+  `informational: true` (#227, its numbers proved unreliable here), so they
+  report success regardless.
+
+Read a red Codecov accordingly: `codecov/project` red is noise, and
+`codecov/patch` red is worth fixing on its merits (new lines lack tests, and
+Sonar's 80% bar is stricter and WILL block), but neither is the thing
+holding the merge button. Do not describe the patch gate as blocking, and do
+not dismiss it as advisory either.
 
 Measure patch coverage the way CI does, with `-tags=integration`
 (`task test:go:server:coverage`). Without the tag the integration-only paths
