@@ -50,7 +50,7 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 ### Per-context integration (L1)
 
 - Per-context tests live in `server/<context>/internal/tests/`, `package tests`.
-- They use real MySQL via `testdb/full.Open(t)`, which spins an isolated per-test database with all five context schemas pre-applied.
+- They use real MySQL via `testdb/full.Open(t)`, which spins an isolated per-test database with all seven context schemas pre-applied.
 - Every new public service method on a bounded context must add at least one case here.
 
 ### Cross-context integration (L2)

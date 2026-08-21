@@ -66,18 +66,20 @@ final class BlockNotificationTests: XCTestCase {
         XCTAssertEqual(decoded.policyID, original.policyID)
         XCTAssertEqual(decoded.policyVersion, original.policyVersion)
 
-        // Pin the literal wire bytes so the host-app reader can decode this exact byte
-        // stream without surprise. Both sides now compile the same CodingKeys, so a
-        // rename can no longer desynchronise them, but it still silently changes what
-        // goes over the wire: these assertions are what makes that visible.
-        let json = String(data: encoded, encoding: .utf8) ?? ""
-        XCTAssertTrue(json.contains("\"rule_id\":\"app_control:42\""))
-        XCTAssertTrue(json.contains("\"rule_type\":\"BINARY\""))
-        XCTAssertTrue(json.contains("\"custom_msg\":\"Blocked by policy\""))
-        XCTAssertTrue(json.contains("\"custom_url\":\"https:\\/\\/example.test\\/info\""))
-        XCTAssertTrue(json.contains("\"binary_path\":\"\\/bin\\/blocked\""))
-        XCTAssertTrue(json.contains("\"policy_id\":7"))
-        XCTAssertTrue(json.contains("\"policy_version\":12"))
+        // Pin the COMPLETE wire bytes, not a set of substrings. Both sides now compile the same CodingKeys, so a rename can no longer
+        // desynchronise them, but it still silently changes what goes over the wire. Equality against the whole encoding is what makes
+        // that visible, and unlike substring checks it also fails when a field is ADDED, which is the case a reader has to cope with.
+        // `.sortedKeys` above makes the encoding deterministic, so this is a stable literal rather than a dictionary-order coin flip.
+        let json = String(data: encoded, encoding: .utf8)
+        let expectedJSON = "{\"binary_path\":\"\\/bin\\/blocked\","
+            + "\"custom_msg\":\"Blocked by policy\","
+            + "\"custom_url\":\"https:\\/\\/example.test\\/info\","
+            + "\"identifier\":\"\(String(repeating: "f", count: 64))\","
+            + "\"policy_id\":7,"
+            + "\"policy_version\":12,"
+            + "\"rule_id\":\"app_control:42\","
+            + "\"rule_type\":\"BINARY\"}"
+        XCTAssertEqual(json, expectedJSON)
     }
 
     func testPayloadOmitsNilOptionalsOnEncode() throws {

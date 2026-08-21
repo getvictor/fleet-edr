@@ -139,10 +139,10 @@ To measure that, pass `--backlog-dsn` (the server's MySQL DSN) in `direct` mode.
 }
 ```
 
-Set `--pass-max-server-backlog=N` to gate on it: the run fails if the sampled depth ever exceeds `N`, catching a processor-throughput regression distinct from the ingest p99 gate. The default 0 leaves the gate disabled (report-only) until an operator has captured a baseline worth gating on. This is opt-in and off by default: the per-PR smoke and the default baseline run never open a DB connection. It is the server-side counterpart to the agent-side `--pass-max-queue-depth` (headless) gate. Example baseline-with-backlog run, which is the shape that produced the committed `post-535-500host.json` (see [`baselines/README.md`](baselines/README.md) for the exact flags that file was captured with, and for why its `pass` is false):
+Set `--pass-max-server-backlog=N` to gate on it: the run fails if the sampled depth ever exceeds `N`, catching a processor-throughput regression distinct from the ingest p99 gate. The default 0 leaves the gate disabled (report-only) until an operator has captured a baseline worth gating on. This is opt-in and off by default: the per-PR smoke and the default baseline run never open a DB connection. It is the server-side counterpart to the agent-side `--pass-max-queue-depth` (headless) gate. The command below is the exact one that produced the committed `post-535-500host.json`, so running it reproduces that baseline (see [`baselines/README.md`](baselines/README.md) for what the numbers mean and why its `pass` is false despite the run being healthy):
 
 ```bash
-task uat:scale -- --hosts=500 --duration=30m --insecure-tls=true \
+EDR_ENROLL_SECRET=dev-enroll-secret task uat:scale -- --hosts=500 --duration=5m --insecure-tls=true --pass-p99=5s \
     --backlog-dsn='root:@tcp(127.0.0.1:33306)/edr?parseTime=true' \
     --pass-max-server-backlog=5000 \
     --output=test/scale/baselines/post-535-500host.json

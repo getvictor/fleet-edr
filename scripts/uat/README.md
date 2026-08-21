@@ -62,7 +62,7 @@ Required environment:
     EDR_SESSION_COOKIE=<paste from devtools>  # see "Auth flow" below
     VM_SSH_TARGET=victor@192.168.64.7         # edr-qa, SIP on. NOT edr-dev.
 
-`VM_SSH_TARGET` has a default (`victor@192.168.64.7`); the other two are hard-required and the driver exits 1 without them. Nothing else is read.
+`VM_SSH_TARGET` has a default (`victor@192.168.64.7`). The other two are required for a real run and the driver exits 1 without them, but `--dry-run` skips that validation entirely, so a dry run needs only a loadable scenario name. Nothing else is read.
 
 Older revisions of this runbook also listed `EDR_ADMIN_EMAIL` and `EDR_ADMIN_PASSWORD` as optional pass-throughs to the `scripts/qa/*.sh` wrappers. No consumer for either exists anywhere in the tree, so exporting them does nothing. Do not paste an admin password into your shell for this: the driver authenticates with `EDR_SESSION_COOKIE` and nothing else.
 
