@@ -18,13 +18,21 @@ import (
 // different name can override via Options fields once those are added (kept narrow for v2; expose if the cross-check needs
 // per-deployment knobs).
 const (
-	// signozMetricHTTPServerDuration is the OTel-standard histogram metric for HTTP server request duration. SigNoz
-	// auto-indexes it as a Histogram type when the EDR server is wired via go.opentelemetry.io/contrib/instrumentation/.../otelhttp.
-	signozMetricHTTPServerDuration = "http.server.duration"
+	// signozMetricHTTPServerDuration is the stable-semconv histogram for HTTP server request duration, reported in SECONDS.
+	//
+	// It must NOT be the older `http.server.duration` (milliseconds). Both names exist in our SigNoz because other services on the
+	// shared instance still emit the old one, so querying it succeeds and returns somebody else's numbers rather than failing
+	// (issue #734). Verified against the live instance: `http.server.request.duration` is emitted by `fleet-edr-server`, and
+	// `http.server.duration` is not.
+	signozMetricHTTPServerDuration = "http.server.request.duration"
 
-	// signozServiceName matches OTEL_SERVICE_NAME the server emits its spans under. The EDR dev pipeline runs as service.name="fleet"
-	// per the observability bootstrap; production deployments override via env.
-	signozServiceName = "fleet"
+	// signozServiceName is the service.name the EDR server emits under: `serviceName` in server/cmd/fleet-edr-server/main.go, a
+	// hardcoded constant rather than an env override.
+	//
+	// It must NOT be "fleet". That is the MDM Fleet server, a DIFFERENT PRODUCT that shares this SigNoz instance, and it does emit
+	// `http.server.duration`. The pre-#734 pairing of "fleet" + `http.server.duration` was therefore a perfectly valid query that
+	// silently returned the other product's HTTP latency and recorded it as this run's server-side p99.
+	signozServiceName = "fleet-edr-server"
 
 	// signozHTTPTimeout caps the cross-check HTTP call. A SigNoz query against the run's 30-min window typically returns in
 	// well under 1s; the 10s ceiling here is generous so a stop-the-world GC pause inside SigNoz doesn't propagate as a soft
@@ -115,10 +123,9 @@ type signozQueryResponse struct {
 }
 
 // querySigNozServerP99 issues a v4 builder query against the SigNoz at baseURL and returns the maximum p99 value observed
-// across the response time series for [start, end]. Returns the duration AS RECEIVED from SigNoz, which natively reports
-// HTTP server duration in MILLISECONDS for OTel-instrumented services, so the runner converts to time.Duration via
-// time.Millisecond. If the response carries no values, returns 0 + a soft error so the caller can record SigNozQueryError
-// without aborting the run.
+// across the response time series for [start, end]. SigNoz reports this metric in its native unit, SECONDS, so the runner
+// scales by time.Second. If the response carries no values, returns 0 + a soft error so the caller can record
+// SigNozQueryError without aborting the run.
 func querySigNozServerP99(ctx context.Context, baseURL string, start, end time.Time) (time.Duration, error) {
 	reqBody := signozQueryRequest{
 		Start: start.UnixMilli(),
@@ -190,13 +197,15 @@ func querySigNozServerP99(ctx context.Context, baseURL string, start, end time.T
 	if !ok {
 		return 0, errors.New("signoz response has no series values")
 	}
-	// SigNoz reports OTel http.server.duration in milliseconds for the EDR server's instrumentation. Multiply the float
-	// AGAINST float64(time.Millisecond) before the time.Duration cast so fractional milliseconds (e.g. 12.34 ms) survive
-	// the conversion. The previous `time.Duration(maxValue) * time.Millisecond` shape truncated to 12 ms before
-	// scaling (Gemini + CodeRabbit #277). If a different SigNoz install reports seconds (older Prometheus-style
-	// histograms), the operator's cross-check will look off by 1000x; the soft-error contract means the report still
-	// lands without flipping Pass.
-	return time.Duration(maxValue * float64(time.Millisecond)), nil
+	// `http.server.request.duration` is declared in SECONDS (the stable HTTP semconv unit; the superseded
+	// `http.server.duration` was milliseconds). Measured on the live instance to be sure rather than trusting the unit
+	// metadata alone: p50 is 0.00879 and p99 is 1.083, which reads as 8.79ms / 1.08s. Under a milliseconds reading the p50
+	// would be 8.79 MICROseconds for a request that touches MySQL, which is not physically possible.
+	//
+	// Multiply the float AGAINST float64(time.Second) before the time.Duration cast so sub-second values survive; the
+	// `time.Duration(maxValue) * time.Second` shape would truncate 0.008 to 0 (the same precision trap as Gemini +
+	// CodeRabbit #277, which caught it when this was milliseconds).
+	return time.Duration(maxValue * float64(time.Second)), nil
 }
 
 // extractMaxValue walks every series x value in the response and returns the largest p99 value observed. SigNoz returns one

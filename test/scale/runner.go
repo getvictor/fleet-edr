@@ -144,7 +144,7 @@ type Options struct {
 
 	// SigNozURL is the optional base URL of a SigNoz query API (e.g. "http://localhost:8080"). When non-empty, the
 	// post-run aggregation issues one query for the metric named by signozMetricHTTPServerDuration (currently
-	// "http.server.duration") p99 over the run's time window and records it in Report.ServerLatencyP99 +
+	// "http.server.request.duration") p99 over the run's time window and records it in Report.ServerLatencyP99 +
 	// Report.ClientServerDeltaP99. A failed SigNoz query is a soft error: it surfaces in the report's SigNozQueryError
 	// field but does not flip the Pass gate, since the cross-check is an operator-facing diagnostic, not a contract.
 	SigNozURL string
