@@ -16,7 +16,7 @@ The detection surface is the product. Treat detection content as code: versioned
 - [x] Code-signing capture on every `exec` event (team identifier, signing flags, hash)
 - [x] SHA-256 hashing of executed binaries
 - [x] Network-attribution events (PID -> connection) via `NEFilterDataProvider`
-- [ ] Application Control subsystem (named policies, allow/block by path / SHA-256 / CDHash / TeamID / SigningID / certificate, Detect-vs-Protect, host-group scoping). The `add-application-control` OpenSpec change removed the legacy singleton blocklist.
+- [~] Application Control subsystem. Shipped: named policies, host-group scoping, and matching on all six dimensions (path / SHA-256 / CDHash / TeamID / SigningID / certificate), each with a keyed index in the extension's `ApplicationControlStore`. Outstanding: Detect-vs-Protect. The `Enforcement` column exists and accepts `DETECT`, but every rule runs as `PROTECT`; the log-the-would-be-decision semantic arrives with the Lockdown change.
 - [x] Response action: command queue (kill, set_application_control) with ack/complete lifecycle
 - [~] **MITRE ATT&CK mapping** on every rule. The `Rule` interface in `server/rules/api/types.go` requires a `Techniques()` method returning the ATT&CK technique IDs the rule maps to; each catalog rule under `server/rules/internal/catalog/` implements it, and the engine threads the IDs onto every alert so they survive the rule lifecycle. Surfaced in the UI (`AttackCoverage.tsx`, `RuleDetail.tsx`) and exposed as an ATT&CK Navigator JSON export (the `handleATTACKCoverage` handler in `server/rules/internal/operator/handler.go`, which delegates to `BuildNavigatorLayer` / `NavigatorTechnique` in `server/rules/api/navigator.go`). **Demoted to `[~]`**: ATT&CK v19 (April 2026) split Defense Evasion into the new Stealth and Defense Impairment tactics and revoked ~13 technique IDs into new parents (e.g. "Clear Windows Event Logs" → T1685/005). Current rule mappings have not yet been re-validated against v19; track as a follow-up task.
 - [ ] **ATT&CK Detection Strategies / Analytics** alignment (v18+ taxonomy). v18 (Oct 2025) retired traditional Detections + Data Sources in favour of Detection Strategies and Analytics per technique; rules should surface the strategy ID alongside the technique so coverage gaps map to MITRE's published analytics, not just techniques
@@ -27,7 +27,7 @@ The detection surface is the product. Treat detection content as code: versioned
 - [ ] **File quarantine** with cryptographic chain of custody (move to vault, hash before and after, signed manifest)
 - [ ] **Network isolation** action (deny all but management traffic to a single host)
 - [ ] **Memory acquisition** for forensics on demand
-- [ ] **DNS query monitoring** (the [`dns-monitoring.md`](dns-monitoring.md) doc exists but the data plane is not yet wired through ESF / NE)
+- [x] **DNS query monitoring**. The network extension's `DNSProxyProvider` is the host's resolver and emits `dns_query` events; they land in the ClickHouse archive alongside `network_connect`, feed the process-detail network panel, and are what the `dns_c2_beacon` rule correlates a resolve against the connection that follows it. Runbook: [`dns-monitoring.md`](dns-monitoring.md).
 - [ ] **USB / removable-media device events**
 - [ ] **File integrity monitoring** (FIM) for sensitive paths
 - [ ] **Persistence-mechanism coverage**: LaunchAgents (have), LaunchDaemons, login items, cron, sudoers, kernel extensions, browser extensions

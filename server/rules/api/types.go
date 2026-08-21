@@ -194,15 +194,16 @@ const DefaultHostGroupName = "all-hosts"
 const HostGroupCriteriaTypeAll = "all"
 
 // RuleType is the wire-shape identifier of an application-control rule's matching dimension. The schema's `rule_type` ENUM mirrors
-// this set. In the demo cut only BINARY is enforced; the other five values exist on the type so the column accepts them when their
-// validators come online.
+// this set, and the extension's ApplicationControlStore populates and matches a keyed index for every one of them, so all six are
+// enforced. (An earlier revision of this comment said only BINARY was; that stopped being true once the CERTIFICATE / PATH and
+// SIGNINGID / TEAMID deciders landed.)
 type RuleType string
 
 const (
 	// RuleTypeCDHash matches against the signed Code Directory hash. 40 lowercase hex characters; only honored for hardened-runtime
 	// processes per the spec.
 	RuleTypeCDHash RuleType = "CDHASH"
-	// RuleTypeBinary matches against the SHA-256 of the executable file. 64 lowercase hex characters. The only type the demo cut enforces.
+	// RuleTypeBinary matches against the SHA-256 of the executable file. 64 lowercase hex characters.
 	RuleTypeBinary RuleType = "BINARY"
 	// RuleTypeSigningID matches against `<TeamID>:<bundle.id>` or
 	// `platform:<bundle.id>` for Apple platform binaries.

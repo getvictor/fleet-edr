@@ -46,7 +46,8 @@ type Service interface {
 	// can reject cross-host updates with ErrCommandNotFound. Returns ErrInvalidStatusTransition for illegal transitions.
 	UpdateStatus(ctx context.Context, req UpdateStatusRequest) error
 
-	// CountPending returns the count of pending commands across every host. Used by the OTel metrics gauge so SOC dashboards can alert on
-	// stuck-poll fleets.
+	// CountPending returns the count of pending commands across every host. It has NO production caller: it was intended as an OTel
+	// gauge for stuck-poll fleets and was never wired to one. See the Service() doc comment in the bootstrap package for the full
+	// story and the two ways out (wire it, or drop it from this interface).
 	CountPending(ctx context.Context) (int, error)
 }

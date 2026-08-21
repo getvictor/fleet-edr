@@ -50,13 +50,13 @@ A run at any layer implies all lower layers have already passed; CI gates enforc
 ### Per-context integration (L1)
 
 - Per-context tests live in `server/<context>/internal/tests/`, `package tests`.
-- They use real MySQL via `testdb/full.Open(t)`, which spins an isolated per-test database with all five context schemas pre-applied.
+- They use real MySQL via `testdb/full.Open(t)`, which spins an isolated per-test database with all seven context schemas pre-applied.
 - Every new public service method on a bounded context must add at least one case here.
 
 ### Cross-context integration (L2)
 
 - `test/integration/`, `package integration`.
-- Composes all five bounded contexts the way `cmd/fleet-edr-server/main.go` does, exposed over a `httptest` server.
+- Composes six of the seven bounded contexts the way `server/cmd/fleet-edr-server/main.go` does, exposed over a `httptest` server. `observability` is the one left out, so its two `/api/settings/tracing` routes have no L2 coverage and rely on their per-context tests.
 - Used for journeys that cross context boundaries (enroll -> ingest -> detect -> respond -> command ack).
 
 ### Headless agent + server (L3)

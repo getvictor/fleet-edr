@@ -49,18 +49,18 @@ let package = Package(
                 "edr.xcodeproj",
                 "Tests",
                 // The host-app target's executable-and-AppKit files. main.swift has top-level executable
-                // code (legal only in an entry-point file, illegal in a library target); BlockAlert /
-                // NotificationListener / BlockNotification pull in AppKit-only UI surfaces (NSAlert,
-                // NSApplication) that belong in the production host-app bundle, not in the EDRExtensionLogic
-                // library whose role is to expose pure-logic types for XCTest. SwiftPM CAN link AppKit on a
-                // .macOS target: the exclusion is library-hygiene (no UI deps, no top-level code), not a
-                // SwiftPM linker limitation. edr/ExtensionManagerLogic.swift IS in the source list below
-                // (pure-logic types only, no top-level code) so host-app-extension-manager spec scenarios
-                // are unit-testable.
+                // code (legal only in an entry-point file, illegal in a library target); BlockAlert and
+                // NotificationListener pull in AppKit-only UI surfaces (NSAlert, NSApplication) that belong in
+                // the production host-app bundle, not in the EDRExtensionLogic library whose role is to expose
+                // pure-logic types for XCTest. SwiftPM CAN link AppKit on a .macOS target: the exclusion is
+                // library-hygiene (no UI deps, no top-level code), not a SwiftPM linker limitation. The wire
+                // contract those two share with the extension is pure Foundation and lives in
+                // shared/BlockNotificationContract.swift, which IS in the source list below, as is
+                // edr/ExtensionManagerLogic.swift (pure-logic types only, no top-level code) so
+                // host-app-extension-manager spec scenarios are unit-testable.
                 "edr/main.swift",
                 "edr/BlockAlert.swift",
                 "edr/NotificationListener.swift",
-                "edr/BlockNotification.swift",
                 "edr/Info.plist",
                 "edr/edr.entitlements",
                 "extension/Info.plist",
@@ -93,7 +93,7 @@ let package = Package(
                 "edr/ExtensionManagerLogic.swift",
                 "extension/ApplicationControlStore.swift",
                 "extension/AuthExecDecider.swift",
-                "extension/BlockNotification.swift",
+                "shared/BlockNotificationContract.swift",
                 "extension/EventSerializer.swift",
                 "extension/FileHashCache.swift",
                 "extension/SigningInfoFallback.swift",

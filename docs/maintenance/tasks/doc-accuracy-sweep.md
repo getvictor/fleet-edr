@@ -23,6 +23,22 @@ Every committed Markdown file outside `ai/`, `tmp/`, `node_modules/`, and `.git/
 - Adding new content. If a doc is missing a section, file an issue and stop.
 - Phase / branch references: those go to the [`stale-implementation-references`](stale-implementation-references.md) sweep.
 
+## Known false positives
+
+Every run so far has re-chased these. Skip them unless something else looks wrong:
+
+- **Markdown link labels.** `[`api/openapi.yaml`](docs/api/openapi.yaml)` is correct: the backticked label is display text, only the target has to resolve.
+- **Unchecked `[ ]` checklist items.** `docs/best-practices.md` legitimately names files that do not exist yet (`docs/slos.md`, `.devcontainer/devcontainer.json`); that is the point of the checkbox.
+- **"Future:" and preserved-branch references.** `.github/workflows/system-test.yml` is named as work tracked in #220, not as a file that exists.
+- **Env vars absent from code may be PROHIBITIONS.** `EDR_SESSION_SIGNING_KEY` appears in the canonical identity spec precisely because the server SHALL NOT read it. `EDR_HOST_TOKEN_GRACE` appears as a historical example of a dead knob.
+- **Historical text.** ADRs, this log, and `openspec/changes/archive/**` correctly record paths and counts as they were. ADR-0004 and ADR-0005 say "five bounded contexts" because that was the decision; the live count is seven.
+- **Relative shorthand** where the sentence already names the directory (`policy/data/roles.json`, `fixtures/auth.ts`).
+
+Two method notes, both learned by getting them wrong:
+
+- **Scan code fences, not just backticks.** The two worst findings of the 2026-08-20 run (`baseline.json`, `baseline-500.json`) were inside ` ```bash ` blocks, invisible to a backtick-only regex, and they were the ones a contributor would copy-paste.
+- **A URL regex must include parentheses.** Apple moved its docs to Swift-signature URLs (`es_mute_path(_:_:_:)`); a charset without `(` and `)` truncates them and reports a 404 that is not there.
+
 ## Steps
 
 1. List all markdown files in scope: `git ls-files '*.md' | grep -v ai/ | grep -v tmp/`.

@@ -1,9 +1,32 @@
 ## Testing
 
-The repo enforces a SonarCloud "Coverage on New Code ≥ 80%" gate per PR
-(configured in the SonarCloud UI); that is the authoritative coverage bar.
-Codecov runs in parallel but is held non-gating at 70% (`codecov.yml`,
-`informational: true`) so it does not gate-out PRs Sonar already accepts.
+Exactly ONE coverage condition can block a merge: SonarCloud's "Coverage on
+New Code >= 80%" (configured in the SonarCloud UI). That is because
+`SonarCloud scan` is one of the 15 checks the `main-protection` ruleset
+lists as required, and GitHub blocks a merge only on checks in that list
+(`.github/rulesets/main.json`, mirrored live; there is no catch-all
+"all checks must pass" option and the ruleset has no bypass actors).
+
+Codecov is a real signal but not a merge gate, and the two halves differ:
+
+- `codecov/patch` (and the per-flag `codecov/patch/server` etc.) is
+  configured ENFORCING in `codecov.yml`: `target: 70%`, `threshold: 0%`,
+  `if_ci_failed: error`, and deliberately NOT `informational`. So it does go
+  RED below 70%. It is simply not in the required-check list, so red does
+  not block the merge.
+- `codecov/project` and every per-flag project rollup ARE
+  `informational: true` (#227, its numbers proved unreliable here), so they
+  report success regardless.
+
+Read a red Codecov accordingly: `codecov/project` red is noise, and
+`codecov/patch` red is worth fixing on its merits (new lines lack tests, and
+Sonar's 80% bar is stricter and WILL block), but neither is the thing
+holding the merge button. Do not describe the patch gate as blocking, and do
+not dismiss it as advisory either.
+
+Measure patch coverage the way CI does, with `-tags=integration`
+(`task test:go:server:coverage`). Without the tag the integration-only paths
+report 0% locally and the number is not the one the gate will see.
 Tests live in three layers:
 
 1. **Per-package unit tests**: co-located with the code, default tag.

@@ -39,7 +39,7 @@ export EDR_ENROLL_SECRET=...   # paste from your secret source
 task uat:scale -- --hosts=10 --duration=30s --insecure-tls=true     # smoke
 task uat:scale -- --insecure-tls=true                               # 100 hosts x 5 min
 task uat:scale -- --duration=30m --insecure-tls=true \
-    --output=test/scale/baselines/baseline.json                     # full 30 min baseline
+    --output=test/scale/baselines/baseline-direct.json              # full 30 min baseline
 ```
 
 The driver inherits `EDR_ENROLL_SECRET` from the environment so the same value the server reads at boot drives the test agents. If the secret is missing the driver exits 1 with a clear error.
@@ -71,7 +71,7 @@ Per-host scenarios show the YAML file path so a regression localised to one scen
 
 ## Baseline files
 
-`test/scale/baselines/baseline.json` is the canonical baseline a contributor captures on a representative developer machine. The plan's pass-criteria-tightening loop is: capture baseline -> compare against last commit -> file a follow-up when the p99 drifts > 10% upward. The baseline is hand-committed; the driver does not auto-update it.
+The canonical baselines a contributor captures on a representative developer machine are named per load shape, `test/scale/baselines/baseline-direct.json` and `baseline-headless.json`, because the two modes measure different things and cannot be compared against each other. [`baselines/README.md`](baselines/README.md) holds the exact regenerate command for each, plus the pass criteria and the committed `post-535-500host.json` result. The plan's pass-criteria-tightening loop is: capture baseline -> compare against last commit -> file a follow-up when the p99 drifts > 10% upward. Baselines are hand-committed; the driver does not auto-update them, and `per_host` is stripped before committing because it changes every run.
 
 ## Modes (#232 closure)
 
@@ -139,13 +139,13 @@ To measure that, pass `--backlog-dsn` (the server's MySQL DSN) in `direct` mode.
 }
 ```
 
-Set `--pass-max-server-backlog=N` to gate on it: the run fails if the sampled depth ever exceeds `N`, catching a processor-throughput regression distinct from the ingest p99 gate. The default 0 leaves the gate disabled (report-only) until an operator has captured a baseline worth gating on. This is opt-in and off by default: the per-PR smoke and the default baseline run never open a DB connection. It is the server-side counterpart to the agent-side `--pass-max-queue-depth` (headless) gate. Example baseline-with-backlog run:
+Set `--pass-max-server-backlog=N` to gate on it: the run fails if the sampled depth ever exceeds `N`, catching a processor-throughput regression distinct from the ingest p99 gate. The default 0 leaves the gate disabled (report-only) until an operator has captured a baseline worth gating on. This is opt-in and off by default: the per-PR smoke and the default baseline run never open a DB connection. It is the server-side counterpart to the agent-side `--pass-max-queue-depth` (headless) gate. The command below is the exact one that produced the committed `post-535-500host.json`, so running it reproduces that baseline (see [`baselines/README.md`](baselines/README.md) for what the numbers mean and why its `pass` is false despite the run being healthy):
 
 ```bash
-task uat:scale -- --hosts=500 --duration=30m --insecure-tls=true \
+EDR_ENROLL_SECRET=dev-enroll-secret task uat:scale -- --hosts=500 --duration=5m --insecure-tls=true --pass-p99=5s \
     --backlog-dsn='root:@tcp(127.0.0.1:33306)/edr?parseTime=true' \
     --pass-max-server-backlog=5000 \
-    --output=test/scale/baselines/baseline-500.json
+    --output=test/scale/baselines/post-535-500host.json
 ```
 
 ## What this layer does NOT do

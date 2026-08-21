@@ -21,7 +21,7 @@ This task is for the design wrong-turns those miss: wrong-layer logic, premature
 
 ## Scope
 
-`server/` (all five contexts), `agent/`, `internal/`, `api/` packages. The Swift extension (`extension/`, `shared/`) is in scope for the layering and god-object checks but not the Go-specific heuristics.
+`server/` (all seven contexts), `agent/`, `internal/`, `api/` packages. The Swift extension (`extension/`, `shared/`) is in scope for the layering and god-object checks but not the Go-specific heuristics.
 
 ## Anti-pattern catalog
 

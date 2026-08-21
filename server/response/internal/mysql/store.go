@@ -286,8 +286,8 @@ func (s *Store) ExpirePendingOlderThan(ctx context.Context, hostID string, cutof
 	return n, nil
 }
 
-// CountPending returns the number of rows with status='pending'.
-// Used by the OTel metrics gauge.
+// CountPending returns the number of rows with status='pending'. Reached only through api.Service.CountPending, which has no
+// production caller today; see that method's comment.
 func (s *Store) CountPending(ctx context.Context) (int, error) {
 	var n int
 	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM commands WHERE status = 'pending'`); err != nil {
