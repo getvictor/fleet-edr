@@ -3831,6 +3831,78 @@ func TestHostHealth_DerivesWedgedProviderFromTelemetry(t *testing.T) {
 // enrichment, and losing the event archive must not take the operator's host pages down with it.
 //
 // spec:server-host-status/the-server-derives-health-conditions-its-endpoints-cannot-report/an-unreadable-archive-degrades-rather-than-failing-the-request
+// spec:server-host-status/a-host-that-is-not-taking-commands-is-reported-as-such/commands-that-aged-out-undelivered-raise-a-condition
+//
+// TestHostHealth_ReportsUndeliverableCommands wires the reader end to end: the response context supplies a per-host count, detection
+// turns it into a condition, and the rollup carries it (issue #732).
+//
+// The rollup assertion is the one that matters. The incident this comes from had a host reporting overall_status healthy while an
+// operator's kill_process sat undelivered for 75 minutes, so a condition that appeared only in the component list, leaving the
+// header green, would not have helped.
+func TestHostHealth_ReportsUndeliverableCommands(t *testing.T) {
+	t.Parallel()
+	d, _ := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "UNDELIVERABLE-UUID-01"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+	_, err := d.Store().DB().ExecContext(ctx, `
+		INSERT INTO host_health (host_id, overall_status, components, reported_at_ns)
+		VALUES (?, ?, ?, ?)`, host, "healthy", `[{"type":"network_extension","status":"healthy","last_transition_ns":90}]`, 100)
+	require.NoError(t, err)
+
+	const lastExpiredNs = int64(1_700_000_000_000_000_000)
+	d.SetUndeliverableCommands(func(_ context.Context, hostIDs []string) (map[string]api.Undeliverable, error) {
+		assert.Contains(t, hostIDs, host, "the host under test must be asked about")
+		return map[string]api.Undeliverable{host: {ExpiredCount: 2, LastExpiredAtNs: lastExpiredNs}}, nil
+	})
+
+	detail, err := d.Store().HostHealth(ctx, host)
+	require.NoError(t, err)
+	require.Len(t, detail.DerivedComponents, 1)
+	assert.Equal(t, "command_delivery", detail.DerivedComponents[0].Type)
+	assert.Equal(t, "degraded", detail.DerivedComponents[0].Status)
+	assert.Contains(t, detail.DerivedComponents[0].Message, "2 commands aged out undelivered")
+	assert.Equal(t, lastExpiredNs, detail.DerivedComponents[0].LastTransitionNs,
+		"an expiry is an observed event, so unlike the telemetry conditions this one has an instant to report")
+	assert.Equal(t, "degraded", detail.OverallStatus,
+		"a host reporting itself healthy while not taking commands must not still roll up as healthy")
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err)
+	var found bool
+	for _, h := range hosts {
+		if h.HostID == host {
+			found = true
+			assert.Equal(t, "degraded", h.OverallStatus, "the list badge and the host page must agree about the same host")
+		}
+	}
+	assert.True(t, found)
+}
+
+// TestHostHealth_UndeliverableReadFailureDoesNotFailThePage pins that a supplementary condition failing is not an outage. The
+// operator reaching for this page is already diagnosing something; refusing to render it because one count could not be taken would
+// turn a missing warning into a dead end.
+func TestHostHealth_UndeliverableReadFailureDoesNotFailThePage(t *testing.T) {
+	t.Parallel()
+	d, _ := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	const host = "UNDELIVERABLE-UUID-02"
+	require.NoError(t, d.Service().RecordHostSeen(ctx, host, time.Now()))
+	d.SetUndeliverableCommands(func(context.Context, []string) (map[string]api.Undeliverable, error) {
+		return nil, errors.New("commands table unreachable")
+	})
+
+	detail, err := d.Store().HostHealth(ctx, host)
+	require.NoError(t, err, "a failed supplementary read must not fail the health detail")
+	assert.Empty(t, detail.DerivedComponents)
+
+	hosts, err := d.Service().ListHosts(ctx)
+	require.NoError(t, err, "nor the hosts list")
+	assert.NotEmpty(t, hosts)
+}
+
 func TestHostHealth_DerivedSignalToleratesAnArchiveOutage(t *testing.T) {
 	t.Parallel()
 	d, archive := newDetectionWithArchive(t, detectionOpts{mode: bootstrap.ModeFull})
