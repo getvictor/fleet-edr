@@ -41,16 +41,44 @@ func (f *fakeRemediator) callCount() int {
 	return len(f.calls)
 }
 
-// waitForCall blocks until one enable lands, failing the test rather than hanging forever if it does not.
-func (f *fakeRemediator) waitForCall(t *testing.T) string {
+// waitForCall blocks until one enable has landed AND the controller has finished accounting for it, failing the test rather than
+// hanging forever if it does not.
+//
+// Both halves are needed, and waiting only for the first was issue #740. The fake signals from INSIDE Enable, before it returns,
+// while the controller does its bookkeeping in remediate() AFTER that call returns: under one lock hold it clears `remediating`
+// and sets the next `eligibleAt`. A test that advances the clock and observes in that window hits one of two gates in plan(),
+// `st.remediating || now.Before(st.eligibleAt)`, and launches nothing:
+//
+//   - `remediating` is still true, because the goroutine has not reached its bookkeeping yet; or
+//   - `eligibleAt` is computed from the ALREADY-ADVANCED clock, so the next attempt is not yet due.
+//
+// Both present identically, as "attempt N should launch" against a nil return, which is why the failure moved between subtests and
+// attempt numbers. It reproduced at 10 in 300 under -race and never in 300 without: the race detector's scheduling is what widens
+// the window, so it failed on CI and effectively never locally.
+//
+// Waiting on `remediating` alone is sufficient for both: the two writes happen under the same lock hold, so observing it cleared
+// while holding c.mu means eligibleAt is set as well. Taking the controller rather than only the fake is the point of the
+// signature: the state a caller must wait for belongs to the controller, and there is no correct way to wait for it from the
+// remediator alone.
+func (f *fakeRemediator) waitForCall(t *testing.T, c *Controller) string {
 	t.Helper()
+	var provider string
 	select {
-	case p := <-f.done:
-		return p
+	case provider = <-f.done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for a remediation")
 		return ""
 	}
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		st := c.state[provider]
+		// A cleared entry is settled too: the provider was reported running while the attempt was in flight, so remediate
+		// returned without resurrecting it.
+		return st == nil || !st.remediating
+	}, 2*time.Second, 50*time.Microsecond,
+		"the controller never finished recording the %s attempt, so the next observation would race its bookkeeping", provider)
+	return provider
 }
 
 // fakeHealth captures the escalation the controller publishes when it gives up.
@@ -124,7 +152,7 @@ func TestStoppedProviderIsRemediatedAfterTheGraceWindow(t *testing.T) {
 
 	clock.advance(2 * time.Second)
 	assert.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
-	assert.Equal(t, "content_filter", rem.waitForCall(t))
+	assert.Equal(t, "content_filter", rem.waitForCall(t, c))
 }
 
 // spec:agent-status-reporting/the-agent-restores-stopped-capture-providers/a-provider-that-recovers-on-its-own-is-left-alone
@@ -174,7 +202,7 @@ func TestRepeatedFailuresStopRetryingAndEscalate(t *testing.T) {
 	for attempt := 1; attempt <= 3; attempt++ {
 		clock.advance(2 * time.Minute)
 		require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter), "attempt %d should launch", attempt)
-		rem.waitForCall(t)
+		rem.waitForCall(t, c)
 	}
 	require.Eventually(t, func() bool { return hs.count() >= 1 }, 2*time.Second, 10*time.Millisecond,
 		"exhausting the budget must escalate so the operator sees automation gave up")
@@ -207,7 +235,7 @@ func TestSuccessfulRemediationRestoresTheBudget(t *testing.T) {
 	for range 3 {
 		clock.advance(2 * time.Minute)
 		require.NotEmpty(t, c.Observe(ctx, stoppedFilter))
-		rem.waitForCall(t)
+		rem.waitForCall(t, c)
 	}
 	require.Eventually(t, func() bool { return hs.count() == 1 }, 2*time.Second, 10*time.Millisecond)
 	clock.advance(10 * time.Minute)
@@ -222,7 +250,7 @@ func TestSuccessfulRemediationRestoresTheBudget(t *testing.T) {
 	c.Observe(ctx, stoppedFilter)
 	clock.advance(2 * time.Minute)
 	assert.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
-	rem.waitForCall(t)
+	rem.waitForCall(t, c)
 	assert.Equal(t, 4, rem.callCount())
 }
 
@@ -241,7 +269,7 @@ func TestEnablesThatSucceedButNeverRestoreTheProviderAreAlsoBounded(t *testing.T
 	for attempt := 1; attempt <= 3; attempt++ {
 		clock.advance(2 * time.Minute)
 		require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter), "attempt %d should launch", attempt)
-		rem.waitForCall(t)
+		rem.waitForCall(t, c)
 	}
 	require.Eventually(t, func() bool { return hs.count() >= 1 }, 2*time.Second, 10*time.Millisecond)
 	// The diagnosis must distinguish this from "the enable kept failing": here the command worked every time and the
@@ -333,7 +361,7 @@ func TestFlappingBetweenStoppedAndAbsentDoesNotRefreshTheBudget(t *testing.T) {
 	for range 10 {
 		clock.advance(2 * time.Minute)
 		if launched := c.Observe(ctx, stoppedFilter); len(launched) > 0 {
-			rem.waitForCall(t)
+			rem.waitForCall(t, c)
 		}
 		clock.advance(2 * time.Minute)
 		c.Observe(ctx, absent) // ambiguous: must be treated as "no new information"
@@ -352,7 +380,7 @@ func TestAffirmativeRunningReportRestoresTheBudget(t *testing.T) {
 	for range 3 {
 		clock.advance(2 * time.Minute)
 		require.NotEmpty(t, c.Observe(ctx, stoppedFilter))
-		rem.waitForCall(t)
+		rem.waitForCall(t, c)
 	}
 	clock.advance(10 * time.Minute)
 	require.Empty(t, c.Observe(ctx, stoppedFilter), "budget spent")
@@ -374,7 +402,7 @@ func TestAttemptsAreSpacedByBackoffAloneNotBackoffPlusGrace(t *testing.T) {
 	c.Observe(ctx, stoppedFilter)
 	clock.advance(31 * time.Second) // past the grace window
 	require.NotEmpty(t, c.Observe(ctx, stoppedFilter), "first attempt after grace")
-	rem.waitForCall(t)
+	rem.waitForCall(t, c)
 
 	// Attempt 2 is eligible one backoff later (1s * attempt 1), NOT one backoff plus another full grace window.
 	clock.advance(2 * time.Second)
@@ -432,7 +460,7 @@ func exhaustBudget(t *testing.T, c *Controller, clock *testClock, rem *fakeRemed
 	for attempt := 1; attempt <= 3; attempt++ {
 		clock.advance(2 * time.Minute)
 		require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter), "attempt %d should launch", attempt)
-		rem.waitForCall(t)
+		rem.waitForCall(t, c)
 	}
 }
 
@@ -517,7 +545,7 @@ func TestNoEscalationWhenTheProviderComesBack(t *testing.T) {
 	c.Observe(ctx, stoppedFilter)
 	clock.advance(2 * time.Minute)
 	require.Equal(t, []string{"content_filter"}, c.Observe(ctx, stoppedFilter))
-	rem.waitForCall(t)
+	rem.waitForCall(t, c)
 
 	// The extension's next report shows it running, which is the only authority on recovery.
 	clock.advance(2 * time.Minute)
