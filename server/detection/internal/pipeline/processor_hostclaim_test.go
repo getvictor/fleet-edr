@@ -3,9 +3,12 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,31 +93,38 @@ func TestNewProcessor_ConcurrencyBounds(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name        string
-		concurrency int
-		connBudget  int
-		coordinator leader.Coordinator
-		want        int
+		name          string
+		concurrency   int
+		connBudget    int
+		reservedConns int
+		coordinator   leader.Coordinator
+		want          int
 	}{
-		{"non-positive concurrency floors to one worker", 0, 25, stubCoordinator{}, 1},
-		{"the shipped default pool leaves the default worker count alone", 4, 25, stubCoordinator{}, 4},
-		{"budget exactly the worker share leaves it alone", 4, 16, stubCoordinator{}, 4},
-		{"tight budget clamps to the share the pool can serve", 8, 16, stubCoordinator{}, 4},
-		{"a budget serving one worker's share clamps to one", 8, 4, stubCoordinator{}, 1},
-		{"a budget below a full share still leaves one worker", 8, 3, stubCoordinator{}, 1},
-		{"unknown budget skips the sizing", 8, 0, stubCoordinator{}, 8},
-		{"no coordinator forces a single worker", 8, 25, nil, 1},
-		{"a lockless single worker needs no pool share", 8, 2, nil, 1},
+		{"non-positive concurrency floors to one worker", 0, 25, 0, stubCoordinator{}, 1},
+		{"the shipped default pool leaves the default worker count alone", 4, 25, 0, stubCoordinator{}, 4},
+		// The production shape, and the case this must never regress: reserving the leader loops out of the real pool still has
+		// to leave the configured fleet intact, or the fix for issue #722 would quietly shrink every deployment.
+		{"spec:server-availability/worker-sizing-counts-only-connections-that-can-actually-be-obtained/reserving-the-long-lived-holders-does-not-shrink-a-healthy-deployment", 4, 25, LeaderGatedConns(true, true), stubCoordinator{}, 4},
+		{"budget exactly the worker share leaves it alone", 4, 16, 0, stubCoordinator{}, 4},
+		{"tight budget clamps to the share the pool can serve", 8, 16, 0, stubCoordinator{}, 4},
+		{"a budget serving one worker's share clamps to one", 8, 4, 0, stubCoordinator{}, 1},
+		// The reservation is subtracted BEFORE sizing: 16 looks like 4 workers, but 8 of it is already pinned for the whole
+		// process lifetime and is never coming back.
+		{"reserved connections are not available to workers", 8, 16, 8, stubCoordinator{}, 2},
+		{"unknown budget skips the sizing", 8, 0, 0, stubCoordinator{}, 8},
+		{"no coordinator forces a single worker", 8, 25, 0, nil, 1},
+		{"a lockless single worker needs no pool share", 8, 2, 0, nil, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			proc, err := NewProcessor(&scriptedEventLog{}, nil, nil, ProcessorOptions{
-				Logger:      discardLogger(),
-				Batch:       10,
-				Concurrency: tc.concurrency,
-				Coordinator: tc.coordinator,
-				ConnBudget:  tc.connBudget,
+				Logger:        discardLogger(),
+				Batch:         10,
+				Concurrency:   tc.concurrency,
+				Coordinator:   tc.coordinator,
+				ConnBudget:    tc.connBudget,
+				ReservedConns: tc.reservedConns,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, proc.concurrency)
@@ -139,29 +149,145 @@ func TestNewProcessor_RefusesPoolBelowOneWorker(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name       string
-		connBudget int
+		name          string
+		connBudget    int
+		reservedConns int
 	}{
-		{"a single-connection pool cannot hold a lock and claim at once", 1},
-		{"a pool one short of a worker's needs is still a stall", connsPerWorker - 1},
+		{"a single-connection pool cannot hold a lock and claim at once", 1, 0},
+		{"a pool one short of a worker's needs is still a stall", connsPerWorker - 1, 0},
+		// These two used to be ADMITTED by a guard whose own error message called them insufficient: it refused below
+		// connsPerWorker (2) while telling the operator to raise the pool to 4, then clamped 2 and 3 to a worker that could not
+		// make progress. A guard must not accept a value its message rejects (issue #722).
+		{"spec:server-availability/worker-sizing-counts-only-connections-that-can-actually-be-obtained/a-budget-the-guard-s-own-advice-rejects-is-refused-rather-than-reduced", connsPerWorker, 0},
+		{"one short of a full worker share is refused too", minConnsForOneWorker - 1, 0},
+		// Room for the leader loops but not for a worker afterwards. Before the reservation existed this looked like a healthy
+		// pool and produced a fleet that would stall on its first claim.
+		{"spec:server-availability/worker-sizing-counts-only-connections-that-can-actually-be-obtained/a-pool-with-room-for-the-sweeps-but-not-for-a-worker-is-refused", LeaderGatedConns(true, true) + 1, LeaderGatedConns(true, true)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			proc, err := NewProcessor(&scriptedEventLog{}, nil, nil, ProcessorOptions{
-				Logger:      discardLogger(),
-				Batch:       10,
-				Concurrency: 4,
-				Coordinator: stubCoordinator{},
-				ConnBudget:  tc.connBudget,
+				Logger:        discardLogger(),
+				Batch:         10,
+				Concurrency:   4,
+				Coordinator:   stubCoordinator{},
+				ConnBudget:    tc.connBudget,
+				ReservedConns: tc.reservedConns,
 			})
 			require.Error(t, err, "a pool that cannot serve one worker must not produce a processor")
 			assert.Nil(t, proc)
-			// The operator's next action is to raise the pool, so the error has to carry the number to raise it to.
+			// The operator's next action is to raise the pool, so the error has to carry the number to raise it to, and that
+			// number has to be the one the guard actually enforces. The two disagreeing is what let 2 and 3 through.
 			assert.Contains(t, err.Error(), "raise the pool to at least",
 				"the refusal must tell the operator what to change, not just that something is wrong")
+			assert.Contains(t, err.Error(), fmt.Sprintf("at least %d", tc.reservedConns+minConnsForOneWorker),
+				"the advertised threshold must be the one enforced, reservation included")
 		})
 	}
+}
+
+// TestLeaderGatedConnsMatchesWhatRunStarts pins the connection reservation against the loops Run ACTUALLY starts, by watching the
+// coordinator rather than by comparing one hand-maintained list to another.
+//
+// The first version of this test compared LeaderGatedConns to a literal slice of the three lock names, which Copilot correctly
+// pointed out cannot catch the drift it claims to: adding a fourth gated loop while leaving both the constant and that slice
+// untouched passes it. Observing the coordinator is the difference, because a fourth loop calls RunIfLeader and is counted here
+// whether or not anyone remembered to update a list.
+//
+// The reservation matters because a running gated loop holds its lock, and therefore a pooled connection, for the process lifetime.
+// Under-count it and the processor sizes its fleet against connections that never come back (issue #722).
+func TestLeaderGatedConnsMatchesWhatRunStarts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name              string
+		processTTLEnabled bool
+		retentionEnabled  bool
+	}{
+		{"all sweeps enabled", true, true},
+		{"process-ttl disabled", false, true},
+		{"retention disabled", true, false},
+		{"only queue-prune", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			coord := &recordingCoordinator{}
+			// Built as struct literals rather than through the constructors: this test is in-package, and the constructors
+			// validate stores it has no use for. What Run cares about is only that the pointers are non-nil.
+			r := NewRunner(RunnerOptions{
+				ProcessTTL:  &ProcessTTLRunner{maxAge: enabledDuration(tc.processTTLEnabled)},
+				Retention:   &RetentionRunner{retentionDays: boolToDays(tc.retentionEnabled)},
+				QueuePrune:  &QueuePruneRunner{},
+				Coordinator: coord,
+			})
+
+			// Run returns once every loop has; a cancelled context stops them all promptly.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			require.NoError(t, r.Run(ctx))
+
+			// Every gated loop Run started took a distinct lock, whether or not its sweep was enabled: the gating happens outside
+			// the runner, so the count of GATED loops is always the full set. What LeaderGatedConns reports is narrower, the ones
+			// that HOLD their lock, so the assertion is that it never over-counts what Run started.
+			started := coord.lockCount()
+			reserved := LeaderGatedConns(tc.processTTLEnabled, tc.retentionEnabled)
+			assert.LessOrEqual(t, reserved, started,
+				"the reservation must never exceed the loops that exist, or it would refuse pools that are adequate")
+			assert.Equal(t, leaderGatedLoops, started,
+				"Run starts one gated loop per lock name; a new one added without updating leaderGatedLoops fails here")
+		})
+	}
+}
+
+// recordingCoordinator counts the distinct locks RunIfLeader was asked for, which is how the test above observes Run's real gated
+// call sites instead of a list someone has to remember to update.
+type recordingCoordinator struct {
+	mu    sync.Mutex
+	locks map[string]struct{}
+}
+
+// RunIfLeader records the lock and deliberately does NOT run fn. The question this test asks is which locks Run takes, not what the
+// sweeps do once they hold one, and running them would drag their stores and tickers into a test about connection accounting.
+func (c *recordingCoordinator) RunIfLeader(_ context.Context, lockName string, _ func(context.Context) error) error {
+	c.mu.Lock()
+	if c.locks == nil {
+		c.locks = map[string]struct{}{}
+	}
+	c.locks[lockName] = struct{}{}
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *recordingCoordinator) lockCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.locks)
+}
+
+func (*recordingCoordinator) DoOnceIfLeader(context.Context, string, func(context.Context) error) (bool, error) {
+	return false, nil
+}
+func (*recordingCoordinator) WithLock(context.Context, string, func(context.Context) error) error {
+	return nil
+}
+func (*recordingCoordinator) Lock(context.Context, string) (func(), error) {
+	return func() {}, nil
+}
+
+func enabledDuration(on bool) time.Duration {
+	if on {
+		return time.Hour
+	}
+	return 0
+}
+
+func boolToDays(on bool) int {
+	if on {
+		return 30
+	}
+	return 0
 }
 
 // A non-positive batch would spin the drain loop, since an empty claim returns 0 and 0 >= 0 never breaks.

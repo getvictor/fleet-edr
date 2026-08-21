@@ -219,6 +219,11 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 			// deadlocking on it. Passing the real cap lets the processor size itself, and refuse a pool too small for one worker
 			// rather than boot a pipeline that would stall on its first claim.
 			ConnBudget: connBudget(deps.DB),
+			// The leader-gated sweeps wired into the Runner below each pin a pooled connection for the whole process lifetime, so
+			// they are not available to workers however large the pool looks. Reserve them here, where we know they are being
+			// started, rather than letting the processor guess (issue #722). No coordinator means no leader loops and nothing to
+			// reserve.
+			ReservedConns: reservedLeaderConns(deps),
 		},
 	)
 	if err != nil {
@@ -390,6 +395,21 @@ func (d *Detection) RegisterAuthedRoutes(mux httpserver.Router) {
 		return
 	}
 	d.operatorH.RegisterRoutes(mux)
+}
+
+// connBudget reports the MySQL pool's MaxOpenConns for the processor's concurrency clamp, or 0 when there is no handle to ask (the
+// intake-only modes and tests that wire no DB), which skips the clamp.
+// reservedLeaderConns is how many pooled connections the leader-gated sweeps hold for the lifetime of the process, so the processor
+// can size its worker fleet against what is actually obtainable (issue #722).
+//
+// It counts only the sweeps that are ENABLED. A disabled one returns from its Loop immediately, so the coordinator releases its lock
+// connection straight away and re-takes it on the next poll rather than holding it; counting it would make the sizing pessimistic
+// and could refuse a pool that is adequate. Without a coordinator there are no leader loops at all and nothing to reserve.
+func reservedLeaderConns(deps Deps) int {
+	if deps.Coordinator == nil {
+		return 0
+	}
+	return pipeline.LeaderGatedConns(deps.StaleProcessTTL > 0, deps.RetentionDays > 0)
 }
 
 // connBudget reports the MySQL pool's MaxOpenConns for the processor's concurrency clamp, or 0 when there is no handle to ask (the
