@@ -8,7 +8,7 @@ Dead code (unused exports, orphan packages, dead UI components, abandoned migrat
 
 ## Scope
 
-- Go: unused exports across `server/`, `agent/`, `internal/`. Use `staticcheck -checks=U1000` or `go-deadcode`.
+- Go: unused exports across `server/`, `agent/`, `internal/`. Use `staticcheck -checks=U1000` (pinned to `@2026.1`, see the step below) or `go-deadcode`.
 - TypeScript: dead components, dead exports, orphan files in `ui/src/`. Use `ts-prune` or `knip`.
 - Swift: rarely used but worth a pass for orphan files in `extension/edr/`.
 - SQL: migrations that reference columns / tables nobody reads any more.
@@ -21,8 +21,9 @@ Dead code (unused exports, orphan packages, dead UI components, abandoned migrat
 1. Run the appropriate dead-code tools per language:
 
    ```bash
-   go install honnef.co/go/tools/cmd/staticcheck@latest
-   staticcheck -checks=U1000 ./server/... ./agent/... ./internal/...
+   # Pin the version. A staticcheck older than 2026.1 (v0.4.7 is a common leftover on PATH) SEGFAULTS on Go 1.26
+   # rather than failing cleanly, so the sweep reports nothing and looks clean. Prefer `go run` over a PATH binary.
+   go run honnef.co/go/tools/cmd/staticcheck@2026.1 -checks=U1000 ./server/... ./agent/... ./internal/...
 
    cd ui && npx ts-prune
    # or: npx knip
@@ -42,10 +43,12 @@ One PR per language ecosystem (don't bundle Go + TS + Swift; review effort diffe
 ```text
 Run the dead-code sweep defined in docs/maintenance/tasks/dead-code-sweep.md.
 
-Step 1 - Go: install staticcheck if missing, run `staticcheck -checks=U1000 ./server/... ./agent/...
-./internal/...`. For each unused symbol, confirm with `grep -r '<Symbol>' --include='*.go'`. If
-genuinely unused, delete; if used via reflection / handler registration / linkname, keep with a
-one-line comment explaining how.
+Step 1 - Go: run `go run honnef.co/go/tools/cmd/staticcheck@2026.1 -checks=U1000 ./server/...
+./agent/... ./internal/...`. Use the pinned `go run` form, NOT a `staticcheck` binary from PATH: an
+older one (v0.4.7 is a common leftover) segfaults on Go 1.26 instead of failing cleanly, so the sweep
+reports nothing and looks clean. For each unused symbol, confirm with `grep -r '<Symbol>'
+--include='*.go'`. If genuinely unused, delete; if used via reflection / handler registration /
+linkname, keep with a one-line comment explaining how.
 
 Step 2 - TS: `cd ui && npx ts-prune`. Same triage.
 

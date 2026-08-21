@@ -41,6 +41,8 @@ Each ADR is immutable after it lands. When a decision changes, write a _new_ ADR
 | [0016](0016-event-delivery-substrate.md) | Event delivery: database-backed work queue now, streaming substrate at scale | Accepted |
 | [0017](0017-unified-principal-model.md) | Unified principal model: one typed actor identity for users and service accounts | Accepted |
 | [0018](0018-windows-platform-strategy.md) | Windows platform strategy: phased Windows agent, platform-agnostic contract, driverless first | Accepted |
+| [0019](0019-tls-13-only.md) | TLS 1.3 only, with no TLS 1.2 opt-out | Accepted |
+| [0020](0020-agent-updates-ride-the-deployment-channel.md) | Agent updates ride the deployment channel, for now (in-product auto-update deferred, #88) | Accepted |
 
 ## Tooling
 

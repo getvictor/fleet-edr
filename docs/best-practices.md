@@ -277,7 +277,7 @@ The observability stack is unusually strong here for an early-stage project; thi
 - [x] **Multi-arch container image** for the server (linux/amd64, linux/arm64) signed by cosign. Built and pushed by the `docker-server` job in `release.yml` to `ghcr.io/getvictor/fleet-edr-server:{tag,latest}`; cosign keyless signature + SBOM attestation pushed alongside on every tag
 - [ ] **Helm chart** + Kustomize overlays for k8s deployments
 - [-] **systemd unit** + RPM / DEB for self-hosted Linux deployments: **will not do** for the macOS-only MVP. The agent is Apple-Silicon only per ADR-0002 and there is no Linux endpoint surface yet, so shipping a Linux init-system + distro packaging surface for a server-only deploy duplicates what the existing Docker Compose stack already covers. Reconsider when a Linux agent lands (§2)
-- [-] **In-product auto-update channel** (Sparkle / custom signed-manifest fetcher): **will not do**. Enterprise endpoint software updates flow through the customer's MDM channel (Fleet, Jamf, Kandji, Intune); in-product self-update bypasses change management and gets flagged as a finding by some buyers. Sparkle is a consumer-app pattern
+- [~] **In-product auto-update channel**: **deferred for the pilot phase, not declined** (ADR-0020, tracked by [#88](https://github.com/getvictor/fleet-edr/issues/88)). Agent upgrades ride the customer's MDM channel (Fleet, Jamf, Kandji, Intune) today. A Sparkle-style appcast fetcher genuinely is a will-not-do (a consumer pattern that bypasses operator policy), but that is not what the major EDRs ship: CrowdStrike, SentinelOne and Defender all auto-update sensors under operator-set policy with version pinning and staged rollout, and buyers ask about it. What makes the gap survivable for now is that our detection runs server-side, so a stale agent is not stale detection. ADR-0020 records the revisit triggers
 - [ ] **Conventional Commits** + `semantic-release` for automated CHANGELOG + versioning. Side benefit: clean commit history is far easier for AI assistants to mine for context
 - [ ] **`CHANGELOG.md`** following Keep a Changelog format
 - [ ] **DORA metrics** dashboard (deployment frequency, lead time for changes, change-failure rate, MTTR) committed to the repo as queries / dashboards-as-code
@@ -398,7 +398,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | API design                     | 5       | 16    | 31% |
 | Frontend                       | 6       | 14    | 43% |
 | Data layer                     | 9       | 17    | 53% |
-| Build / release / packaging    | 5       | 10    | 50% |
+| Build / release / packaging    | 5.5     | 11    | 50% |
 | Community signals              | 14      | 24    | 58% |
 | Compliance + privacy           | 1       | 14    | 7%  |
 | macOS platform hygiene         | 5       | 12    | 42% |
