@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -106,19 +107,47 @@ func (v *fakeVerifier) VerifyToken(_ context.Context, token string) (string, err
 
 // newTestGateway starts a Gateway over an in-memory bufconn listener and returns a client-side dialer. Intervals are tightened so the
 // watch and revocation re-check fire fast under test.
+// recvCommandTimeout bounds how long recvCommand will skip frames before giving up. It has to exist because the skipping is
+// unbounded in the other direction: heartbeats arrive every livenessInterval (20ms here) forever, so a regression that stops command
+// delivery while the stream stays healthy would spin this loop until the package's 10-minute test timeout and report a hang rather
+// than the assertion that actually failed. 5s is far above the 20ms watch interval, so a healthy delivery never approaches it.
+const recvCommandTimeout = 5 * time.Second
+
 // recvCommand reads until a command frame arrives, skipping heartbeats. Heartbeats are ordinary traffic on this stream now (they are
 // what tells an agent the server still holds its connection, issue #711), so a test that wants the next COMMAND has to say so rather
 // than assume the next frame is one.
+//
+// The deadline lives here rather than at each call site on purpose. Bounding the callers' stream contexts would work too, but it is
+// the kind of thing the next test to be written forgets, and the failure it protects against is a hang, which is the most expensive
+// kind of test failure to diagnose. Callers cannot opt out of it by accident.
+//
+// The reader goroutine is deliberately left running on timeout: Recv has no cancellation of its own, and the stream is torn down at
+// test cleanup, so the goroutine ends with it. Leaking it for the remainder of a failing test is cheaper than the alternative.
 func recvCommand(t *testing.T, stream control.ControlChannel_ConnectClient) (*control.Command, error) {
 	t.Helper()
-	for {
-		frame, err := stream.Recv()
-		if err != nil {
-			return nil, err
+	type received struct {
+		cmd *control.Command
+		err error
+	}
+	got := make(chan received, 1)
+	go func() {
+		for {
+			frame, err := stream.Recv()
+			if err != nil {
+				got <- received{nil, err}
+				return
+			}
+			if cmd := frame.GetCommand(); cmd != nil {
+				got <- received{cmd, nil}
+				return
+			}
 		}
-		if cmd := frame.GetCommand(); cmd != nil {
-			return cmd, nil
-		}
+	}()
+	select {
+	case r := <-got:
+		return r.cmd, r.err
+	case <-time.After(recvCommandTimeout):
+		return nil, fmt.Errorf("no command frame within %s (heartbeats alone do not end the wait)", recvCommandTimeout)
 	}
 }
 
