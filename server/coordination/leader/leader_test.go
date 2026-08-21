@@ -463,3 +463,73 @@ func TestLockSurvivesAnIdleConnectionClose(t *testing.T) {
 		require.ErrorIs(t, err, sentinel, "the callback's diagnosis is more specific than ErrLockLost and must win")
 	})
 }
+
+// TestLockGrantsExclusionAndReleases covers the bare Lock form, which had no test at all before issue #721 added a keep-alive to it.
+//
+// It is the one lock form that cannot abort its caller when the lock is lost, because there is no callback context to cancel, so
+// what it can be held to is narrower: it must actually exclude, its release must actually free the lock, and the keep-alive it now
+// runs must not interfere with either.
+func TestLockGrantsExclusionAndReleases(t *testing.T) {
+	t.Parallel()
+	dbA, dbB := replicaDBs(t)
+	// Keep-alive well inside the test's own lifetime, so the ping fires while the lock is held rather than after it is released.
+	coordA := leader.NewMySQL(dbA, slog.Default(), leader.WithKeepAliveInterval(10*time.Millisecond))
+	coordB := leader.NewMySQL(dbB, slog.Default(), leader.WithKeepAliveInterval(10*time.Millisecond))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	lockName := uniqueLockName()
+
+	release, err := coordA.Lock(ctx, lockName)
+	require.NoError(t, err)
+
+	// Held long enough for several keep-alive ticks, so a keep-alive that broke the lock (by relinquishing on a healthy
+	// connection, say) would show up as the second replica getting in.
+	time.Sleep(100 * time.Millisecond)
+
+	secondAcquired := make(chan struct{})
+	go func() {
+		r, lerr := coordB.Lock(ctx, lockName)
+		if lerr == nil {
+			r()
+			close(secondAcquired)
+		}
+	}()
+	select {
+	case <-secondAcquired:
+		t.Fatal("a second replica acquired a lock the first still holds")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+
+	select {
+	case <-secondAcquired:
+	case <-time.After(10 * time.Second):
+		t.Fatal("release did not free the lock; the second replica never acquired it")
+	}
+}
+
+// TestLockReleaseIsIdempotentUnderCancelledContext pins that a lock taken on a context that is later cancelled still frees on
+// release. The boot sequence is the caller here, and a shutdown racing the migration lock must not leave it held for the next
+// replica to block on: release runs on a cancellation-stripped context precisely so this holds.
+func TestLockReleaseIsIdempotentUnderCancelledContext(t *testing.T) {
+	t.Parallel()
+	db, _ := replicaDBs(t)
+	coord := leader.NewMySQL(db, slog.Default(), leader.WithKeepAliveInterval(10*time.Millisecond))
+	lockName := uniqueLockName()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	release, err := coord.Lock(ctx, lockName)
+	require.NoError(t, err)
+
+	cancel() // the shutdown arrives while the lock is held
+	release()
+
+	// The lock must be free: a fresh acquire on an uncancelled context succeeds immediately.
+	freshCtx, freshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer freshCancel()
+	again, err := coord.Lock(freshCtx, lockName)
+	require.NoError(t, err, "a lock released after its context was cancelled must still be free")
+	again()
+}
