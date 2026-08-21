@@ -17,8 +17,10 @@ package leader
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -33,6 +35,12 @@ const defaultPollInterval = 15 * time.Second
 // pings the lock connection would sit idle for the whole run and MySQL would eventually close it as idle (wait_timeout), silently
 // releasing the lock and admitting a second leader. A minute is well under MySQL's 8h default and most tightened values.
 const defaultKeepAliveInterval = 1 * time.Minute
+
+// ErrLockLost reports that the advisory lock was released while the callback was still running, because the keep-alive ping failed
+// and so the connection holding the lock was already gone. The callback's context is cancelled when this happens, but a callback
+// that ignores cancellation and returns nil would otherwise look like a success that ran under mutual exclusion when it did not.
+// Callers that care about exclusivity (a migration, a claim-fold-flush section) SHOULD treat it as a failure and retry.
+var ErrLockLost = errors.New("advisory lock lost while the callback was running")
 
 // lockWaitSeconds is the GET_LOCK timeout. 0 means non-blocking: GET_LOCK returns immediately (1 if free, 0 if held by another
 // session). The scheduler retries every poll interval, so blocking inside GET_LOCK would only duplicate that wait.
@@ -61,7 +69,8 @@ type Coordinator interface {
 	// and then releases. It returns (true, fnErr) when this replica ran fn, or (false, nil) when another replica currently holds
 	// the lock. Unlike RunIfLeader it never waits or retries: a replica that loses the race simply reports false. It is for
 	// boot-time one-shots, like printing the break-glass redemption banner exactly once across a concurrent cluster boot, where
-	// blocking to become leader would hang startup.
+	// blocking to become leader would hang startup. The lock connection is kept alive while fn runs (issue #721); if the lock is
+	// lost anyway, fn's context is cancelled and the returned error is ErrLockLost.
 	DoOnceIfLeader(ctx context.Context, lockName string, fn func(context.Context) error) (bool, error)
 
 	// WithLock runs fn while holding lockName, blocking until the lock is acquired or ctx is cancelled. Unlike RunIfLeader (which
@@ -70,15 +79,17 @@ type Coordinator interface {
 	// already-applied corpus a no-op) but no two replicas may run goose Up against the same database concurrently. Returns ctx's
 	// error if cancelled before the lock is acquired, otherwise fn's error.
 	//
-	// WithLock is for SHORT critical sections. Unlike RunIfLeader it does NOT ping the lock connection, so fn must finish well
-	// within MySQL's wait_timeout; otherwise the idle lock connection could be closed and the lock silently released mid-fn. The
-	// boot-time schema apply (milliseconds to a few seconds) fits comfortably; long-lived single-replica loops use RunIfLeader.
+	// The lock connection is kept alive for as long as fn runs, so fn is not bounded by MySQL's wait_timeout (issue #721). If the
+	// lock is nonetheless lost, fn's context is cancelled and WithLock returns ErrLockLost rather than reporting a success that
+	// did not actually run under mutual exclusion.
 	WithLock(ctx context.Context, lockName string, fn func(context.Context) error) error
 
 	// Lock is the non-closure form of WithLock: it acquires lockName (blocking until held or ctx is cancelled) and returns a release
 	// func the caller MUST invoke (typically deferred) to free the lock. It exists for critical sections that cannot be expressed as
 	// a single closure: notably the boot sequence, which assigns several bounded-context handles that must outlive the locked
-	// region. Same short-critical-section constraint as WithLock (no keep-alive). Returns ctx's error if cancelled before acquire.
+	// region. The lock connection is kept alive while held, but unlike WithLock this form cannot abort the caller if the lock is
+	// lost (there is no callback context to cancel), so prefer WithLock when the section fits in a closure. Returns ctx's error if
+	// cancelled before acquire.
 	Lock(ctx context.Context, lockName string) (release func(), err error)
 }
 
@@ -157,29 +168,49 @@ func (c *mysqlCoordinator) RunIfLeader(ctx context.Context, lockName string, fn 
 	}
 }
 
-// runAsLeader runs fn while this replica holds the lock. fn runs under a lease context derived from ctx; a keep-alive goroutine
-// pings the lock connection so MySQL's wait_timeout cannot silently close it, and if a ping fails (the connection dropped) it
-// cancels the lease so fn (a long-running loop) stops promptly rather than acting as leader after the lock is gone. The lock is
-// released on return (deferred, so a panic in fn still frees it); the keep-alive is stopped and joined before release so it never
-// touches the connection concurrently with RELEASE_LOCK / Close.
+// runAsLeader runs fn while this replica holds the lock, discarding the lease-loss signal. RunIfLeader is the only caller that wants
+// that: it already infers the same thing from ctx.Err() and re-acquires, so surfacing it as an error would change its contract.
 func (c *mysqlCoordinator) runAsLeader(ctx context.Context, lockName string, conn *sql.Conn, fn func(context.Context) error) error {
+	_, err := c.runWithKeepAlive(ctx, lockName, conn, fn)
+	return err
+}
+
+// runWithKeepAlive runs fn while this replica holds the lock, and reports whether the lock was lost while fn ran.
+//
+// fn runs under a lease context derived from ctx. A keep-alive goroutine pings the lock connection every keepAliveInterval, so
+// MySQL's wait_timeout cannot close it as idle and silently free the lock underneath fn (issue #721): during fn the lock connection
+// is idle by construction, because fn does its work on a different pooled connection. If a ping fails the connection, and therefore
+// the lock, is already gone, so the lease is cancelled and fn stops promptly rather than continuing to act as though it were still
+// holding it.
+//
+// The lock is released on return (deferred, so a panic in fn still frees it), and the keep-alive is stopped and joined before
+// release so it never touches the connection concurrently with RELEASE_LOCK / Close.
+func (c *mysqlCoordinator) runWithKeepAlive(
+	ctx context.Context, lockName string, conn *sql.Conn, fn func(context.Context) error,
+) (lostLock bool, err error) {
 	leaseCtx, cancelLease := context.WithCancel(ctx)
+	var lost atomic.Bool
 	keepAliveDone := make(chan struct{})
 	go func() {
 		defer close(keepAliveDone)
-		c.keepAlive(leaseCtx, cancelLease, lockName, conn)
+		c.keepAlive(leaseCtx, cancelLease, lockName, conn, &lost)
 	}()
 	defer func() {
 		cancelLease()
 		<-keepAliveDone // wait for the keep-alive to stop using conn before releasing it
 		c.release(context.WithoutCancel(ctx), lockName, conn)
 	}()
-	return fn(leaseCtx)
+	// fn must run BEFORE lost is read: `return lost.Load(), fn(...)` reads the flag first and always reports false, because Go
+	// evaluates return operands left to right.
+	fnErr := fn(leaseCtx)
+	return lost.Load(), fnErr
 }
 
-// keepAlive pings the lock connection every keepAliveInterval so MySQL does not close it as idle while the leader callback runs. A
-// failed ping means the connection (and thus the lock) is gone, so it relinquishes the lease and returns.
-func (c *mysqlCoordinator) keepAlive(ctx context.Context, relinquish context.CancelFunc, lockName string, conn *sql.Conn) {
+// keepAlive pings the lock connection every keepAliveInterval so MySQL does not close it as idle while the callback runs. A failed
+// ping means the connection (and thus the lock) is gone, so it records the loss, relinquishes the lease, and returns.
+func (c *mysqlCoordinator) keepAlive(
+	ctx context.Context, relinquish context.CancelFunc, lockName string, conn *sql.Conn, lost *atomic.Bool,
+) {
 	ticker := time.NewTicker(c.keepAliveInterval)
 	defer ticker.Stop()
 	for {
@@ -188,7 +219,8 @@ func (c *mysqlCoordinator) keepAlive(ctx context.Context, relinquish context.Can
 			return
 		case <-ticker.C:
 			if err := conn.PingContext(ctx); err != nil {
-				c.logger.WarnContext(ctx, "leader lock keep-alive failed; relinquishing leadership", "lock", lockName, "err", err)
+				c.logger.WarnContext(ctx, "lock keep-alive failed; relinquishing", "lock", lockName, "err", err)
+				lost.Store(true)
 				relinquish()
 				return
 			}
@@ -204,28 +236,51 @@ func (c *mysqlCoordinator) DoOnceIfLeader(ctx context.Context, lockName string, 
 	if !acquired {
 		return false, nil
 	}
-	defer c.release(context.WithoutCancel(ctx), lockName, conn)
-	return true, fn(ctx)
+	lost, fnErr := c.runWithKeepAlive(ctx, lockName, conn, fn)
+	if fnErr == nil && lost {
+		return true, ErrLockLost
+	}
+	return true, fnErr
 }
 
 func (c *mysqlCoordinator) WithLock(ctx context.Context, lockName string, fn func(context.Context) error) error {
-	release, err := c.Lock(ctx, lockName)
+	conn, err := c.acquireBlocking(ctx, lockName)
 	if err != nil {
 		return err
 	}
-	defer release()
-	return fn(ctx)
+	lost, fnErr := c.runWithKeepAlive(ctx, lockName, conn, fn)
+	if fnErr == nil && lost {
+		return ErrLockLost
+	}
+	return fnErr
 }
 
 // Lock acquires lockName, blocking until it is held or ctx is cancelled, and returns a release func the caller MUST invoke to free
 // it. release runs RELEASE_LOCK on a cancellation-stripped, timeout-bounded context (so a graceful shutdown still frees the lock)
 // and returns the dedicated connection to the pool.
+//
+// A keep-alive pings the lock connection for as long as the lock is held, so an idle-timeout close cannot silently free it (issue
+// #721). Unlike WithLock this form cannot ABORT the caller when the lock is lost, because there is no callback whose context could
+// be cancelled: the caller holds a bare release func. Losing it is logged at WARN and nothing else. That is the reason to prefer
+// WithLock wherever the critical section fits in a closure, and it is why this form exists only for the boot sequence, whose
+// assignments must outlive the locked region.
 func (c *mysqlCoordinator) Lock(ctx context.Context, lockName string) (func(), error) {
 	conn, err := c.acquireBlocking(ctx, lockName)
 	if err != nil {
 		return nil, err
 	}
-	return func() { c.release(context.WithoutCancel(ctx), lockName, conn) }, nil
+	keepAliveCtx, stopKeepAlive := context.WithCancel(ctx)
+	keepAliveDone := make(chan struct{})
+	var lost atomic.Bool
+	go func() {
+		defer close(keepAliveDone)
+		c.keepAlive(keepAliveCtx, stopKeepAlive, lockName, conn, &lost)
+	}()
+	return func() {
+		stopKeepAlive()
+		<-keepAliveDone // the keep-alive must stop touching conn before RELEASE_LOCK / Close
+		c.release(context.WithoutCancel(ctx), lockName, conn)
+	}, nil
 }
 
 // acquireBlocking grabs a dedicated connection and blocks on GET_LOCK until the lock is held or ctx is cancelled. The caller MUST

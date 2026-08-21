@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -224,4 +225,45 @@ func TestHostCandidatesWindow(t *testing.T) {
 			assert.Equal(t, tc.want, proc.hostCandidates())
 		})
 	}
+}
+
+// lostLockCoordinator reports that it acquired the host lock, ran the callback, and then discovered the lock had gone: the shape
+// leader.DoOnceIfLeader returns after issue #721 when the connection holding the lock dies mid-callback.
+type lostLockCoordinator struct {
+	stubCoordinator
+	ran atomic.Bool
+}
+
+func (c *lostLockCoordinator) DoOnceIfLeader(ctx context.Context, _ string, fn func(context.Context) error) (bool, error) {
+	c.ran.Store(true)
+	// The callback DOES run, which is the whole difficulty: work may have been partially done before the lock went.
+	if err := fn(ctx); err != nil {
+		return true, err
+	}
+	return true, leader.ErrLockLost
+}
+
+// TestProcessHostTreatsALostLockAsNotRun pins how the processor handles a host whose claim lock went while it was working
+// (issue #721's ErrLockLost, reaching the processor through the per-host claim added in #717).
+//
+// Reporting "did not run" is right even though the callback did run: nothing is acknowledged until a batch completes, so the events
+// stay in flight and are redelivered when the claim lease expires. What must not happen is the worker treating it as a completed
+// batch and draining on, which would leave a host's events folded by two claimers.
+func TestProcessHostTreatsALostLockAsNotRun(t *testing.T) {
+	t.Parallel()
+	coord := &lostLockCoordinator{}
+	proc, err := NewProcessor(&scriptedEventLog{}, nil, nil, ProcessorOptions{
+		Logger:      discardLogger(),
+		Batch:       10,
+		Concurrency: 1,
+		Coordinator: coord,
+		ConnBudget:  25,
+	})
+	require.NoError(t, err)
+
+	claimed, ran := proc.processHost(context.Background(), "host-a")
+
+	assert.True(t, coord.ran.Load(), "the coordinator did hand the callback the lock before losing it")
+	assert.False(t, ran, "a lost lock must not read as a completed batch; the worker has to move to another host")
+	assert.Zero(t, claimed, "and it must not report progress it cannot vouch for")
 }

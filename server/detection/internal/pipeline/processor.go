@@ -290,8 +290,9 @@ func (p *Processor) hostCandidates() int {
 //
 // The lock spans claim, fold, and flush, and nothing else. That is the window in which a second claimer would break the graph
 // builder's per-host ordering assumption: it resolves each exec against the rows already flushed, so an unflushed fork is
-// indistinguishable from a missing one. Detection is deliberately outside the lock, both because it only reads the graph and because
-// DoOnceIfLeader has no keep-alive: a long critical section risks MySQL closing the idle lock connection and silently releasing.
+// indistinguishable from a missing one. Detection is deliberately outside the lock because it only reads the graph, so there is no
+// reason to hold a fleet-visible lock across it. The keep-alive added in #721 means a longer section would no longer risk a silent
+// release, but a short one is still the right shape.
 func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 	var (
 		events      []visibilityapi.Event
@@ -328,7 +329,14 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 	} else {
 		ran, err := p.coordinator.DoOnceIfLeader(ctx, hostClaimLockName(host), claimAndBuild)
 		if err != nil {
-			p.logger.ErrorContext(ctx, "acquire host claim lock", "host_id", host, "err", err)
+			// ErrLockLost is distinct from failing to acquire: the section DID start and may have folded part of a batch before
+			// the lock went. Nothing is acked until the batch completes, so those events stay in flight and are redelivered when
+			// the claim lease expires. Moving to another host is right either way; the two just need different names in the log.
+			msg := "acquire host claim lock"
+			if errors.Is(err, leader.ErrLockLost) {
+				msg = "lost host claim lock mid-batch; events stay in flight for redelivery"
+			}
+			p.logger.ErrorContext(ctx, msg, "host_id", host, "err", err)
 			return 0, false
 		}
 		if !ran {

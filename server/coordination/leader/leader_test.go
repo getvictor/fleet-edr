@@ -374,3 +374,162 @@ func TestWithLock(t *testing.T) {
 		require.False(t, fnRan.Load(), "fn must not run when the lock could not be acquired")
 	})
 }
+
+// TestLockSurvivesAnIdleConnectionClose is the regression test for issue #721: the one-shot and scoped lock forms held the lock on a
+// connection that sat IDLE for the whole callback, because the callback does its work on a different pooled connection. Nothing kept
+// that connection warm, so MySQL closing it (wait_timeout, a proxy, an operator KILL) released the lock silently and let a second
+// caller into a section that is supposed to be exclusive.
+//
+// The old failure was invisible by construction: the callback ran to completion and reported success, having lost its exclusivity
+// partway through. So the test asserts the reporting, not just the survival. It kills exactly the connection holding the lock,
+// resolved through IS_USED_LOCK rather than by killing anything broader, which is precisely the event wait_timeout would produce.
+//
+//nolint:tparallel // The subtests must NOT be parallel; see the comment on the pool budget below.
+func TestLockSurvivesAnIdleConnectionClose(t *testing.T) {
+	t.Parallel()
+	db, _ := replicaDBs(t)
+	// A keep-alive far shorter than the test's own deadline, so the ping lands inside the callback rather than after it.
+	coord := leader.NewMySQL(db, slog.Default(), leader.WithKeepAliveInterval(10*time.Millisecond))
+
+	killLockHolder := func(t *testing.T, ctx context.Context, lockName string) { //nolint:revive // ctx after t reads better here
+		t.Helper()
+		var holder sql.NullInt64
+		require.NoError(t, db.GetContext(ctx, &holder, "SELECT IS_USED_LOCK(?)", lockName))
+		require.True(t, holder.Valid, "the lock must be held for this test to be killing the right connection")
+		// KILL takes no placeholders, and holder.Int64 is an int64 the server itself just returned, so there is nothing to inject.
+		// It is asynchronous and racing the keep-alive's own ping, so the error is advisory: the assertions are on the reported
+		// outcome, not on this statement.
+		_, _ = db.ExecContext(ctx, fmt.Sprintf("KILL %d", holder.Int64)) //nolint:gosec // int64 from the server, not user input
+	}
+
+	// The subtests deliberately do NOT run in parallel with each other. replicaDBs caps the pool at 3 connections, and each subtest
+	// pins one for the whole callback (the lock connection) and then needs a second inside it (the IS_USED_LOCK lookup and the KILL).
+	// Four in parallel exhaust the pool and every callback blocks forever waiting for a connection that only another callback can
+	// free, which is the same shape as issue #722 and cost 10 minutes of wall clock to diagnose the first time.
+	t.Run("spec:server-availability/an-advisory-lock-is-held-for-as-long-as-its-holder-runs/a-lock-lost-mid-callback-is-reported-not-absorbed", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		lockName := uniqueLockName()
+
+		ran, err := coord.DoOnceIfLeader(ctx, lockName, func(fnCtx context.Context) error {
+			killLockHolder(t, ctx, lockName)
+			<-fnCtx.Done() // the keep-alive notices the dead connection and cancels the lease
+			return nil
+		})
+
+		assert.True(t, ran, "this replica did win the lock, so it did run")
+		require.ErrorIs(t, err, leader.ErrLockLost,
+			"returning nil here is the bug: the callback ran, but not under the exclusion it asked for")
+	})
+
+	t.Run("WithLock reports a lock it lost mid-callback", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		lockName := uniqueLockName()
+
+		err := coord.WithLock(ctx, lockName, func(fnCtx context.Context) error {
+			killLockHolder(t, ctx, lockName)
+			<-fnCtx.Done()
+			return nil
+		})
+
+		require.ErrorIs(t, err, leader.ErrLockLost)
+	})
+
+	t.Run("spec:server-availability/an-advisory-lock-is-held-for-as-long-as-its-holder-runs/a-lock-outlives-the-closing-of-its-idle-connection", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Long enough for several keep-alive ticks, so a keep-alive that wrongly reported loss on a HEALTHY connection would be
+		// caught here rather than only on the kill path above.
+		err := coord.WithLock(ctx, uniqueLockName(), func(context.Context) error {
+			time.Sleep(100 * time.Millisecond)
+			return nil
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("spec:server-availability/an-advisory-lock-is-held-for-as-long-as-its-holder-runs/the-callback-s-own-failure-is-not-masked-by-the-lock-loss", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		lockName := uniqueLockName()
+		sentinel := errors.New("callback failed on its own terms")
+
+		err := coord.WithLock(ctx, lockName, func(fnCtx context.Context) error {
+			killLockHolder(t, ctx, lockName)
+			<-fnCtx.Done()
+			return sentinel
+		})
+		require.ErrorIs(t, err, sentinel, "the callback's diagnosis is more specific than ErrLockLost and must win")
+	})
+}
+
+// TestLockGrantsExclusionAndReleases covers the bare Lock form, which had no test at all before issue #721 added a keep-alive to it.
+//
+// It is the one lock form that cannot abort its caller when the lock is lost, because there is no callback context to cancel, so
+// what it can be held to is narrower: it must actually exclude, its release must actually free the lock, and the keep-alive it now
+// runs must not interfere with either.
+func TestLockGrantsExclusionAndReleases(t *testing.T) {
+	t.Parallel()
+	dbA, dbB := replicaDBs(t)
+	// Keep-alive well inside the test's own lifetime, so the ping fires while the lock is held rather than after it is released.
+	coordA := leader.NewMySQL(dbA, slog.Default(), leader.WithKeepAliveInterval(10*time.Millisecond))
+	coordB := leader.NewMySQL(dbB, slog.Default(), leader.WithKeepAliveInterval(10*time.Millisecond))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	lockName := uniqueLockName()
+
+	release, err := coordA.Lock(ctx, lockName)
+	require.NoError(t, err)
+
+	// Held long enough for several keep-alive ticks, so a keep-alive that broke the lock (by relinquishing on a healthy
+	// connection, say) would show up as the second replica getting in.
+	time.Sleep(100 * time.Millisecond)
+
+	secondAcquired := make(chan struct{})
+	go func() {
+		r, lerr := coordB.Lock(ctx, lockName)
+		if lerr == nil {
+			r()
+			close(secondAcquired)
+		}
+	}()
+	select {
+	case <-secondAcquired:
+		t.Fatal("a second replica acquired a lock the first still holds")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+
+	select {
+	case <-secondAcquired:
+	case <-time.After(10 * time.Second):
+		t.Fatal("release did not free the lock; the second replica never acquired it")
+	}
+}
+
+// TestLockReleaseIsIdempotentUnderCancelledContext pins that a lock taken on a context that is later cancelled still frees on
+// release. The boot sequence is the caller here, and a shutdown racing the migration lock must not leave it held for the next
+// replica to block on: release runs on a cancellation-stripped context precisely so this holds.
+func TestLockReleaseIsIdempotentUnderCancelledContext(t *testing.T) {
+	t.Parallel()
+	db, _ := replicaDBs(t)
+	coord := leader.NewMySQL(db, slog.Default(), leader.WithKeepAliveInterval(10*time.Millisecond))
+	lockName := uniqueLockName()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	release, err := coord.Lock(ctx, lockName)
+	require.NoError(t, err)
+
+	cancel() // the shutdown arrives while the lock is held
+	release()
+
+	// The lock must be free: a fresh acquire on an uncancelled context succeeds immediately.
+	freshCtx, freshCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer freshCancel()
+	again, err := coord.Lock(freshCtx, lockName)
+	require.NoError(t, err, "a lock released after its context was cancelled must still be free")
+	again()
+}
