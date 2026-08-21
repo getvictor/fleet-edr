@@ -26,8 +26,15 @@ const (
 	// `http.server.duration` is not.
 	signozMetricHTTPServerDuration = "http.server.request.duration"
 
-	// signozServiceName is the service.name the EDR server emits under: `serviceName` in server/cmd/fleet-edr-server/main.go, a
-	// hardcoded constant rather than an env override.
+	// signozServiceName is the service.name the EDR server emits under BY DEFAULT: `serviceName` in
+	// server/cmd/fleet-edr-server/main.go.
+	//
+	// It is a default, not a fixed identity. `observability.OptionsFromEnv` clears the binary's value when `OTEL_SERVICE_NAME` is
+	// set, deferring to the SDK's `resource.WithFromEnv()`, so an operator who sets that variable publishes under their own name and
+	// this cross-check will not follow them. The consequence is now benign rather than silent: the metric below is one only the EDR
+	// server emits, so a mismatched name returns no series, and querySigNozServerP99's soft-error contract surfaces that as
+	// SigNozQueryError on the report instead of a wrong number. Wire this to a flag if a deployment that renames the service needs
+	// the cross-check (the Options-field note at the top of this block).
 	//
 	// It must NOT be "fleet". That is the MDM Fleet server, a DIFFERENT PRODUCT that shares this SigNoz instance, and it does emit
 	// `http.server.duration`. The pre-#734 pairing of "fleet" + `http.server.duration` was therefore a perfectly valid query that
