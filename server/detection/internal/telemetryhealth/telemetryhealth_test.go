@@ -283,3 +283,84 @@ func TestSilenceWindowIsMeasured(t *testing.T) {
 	assert.Less(t, telemetryhealth.SilenceWindow, 12*time.Hour,
 		"and stay short enough that a wedge is not invisible for most of a day")
 }
+
+// spec:server-host-status/a-host-that-is-not-taking-commands-is-reported-as-such/commands-that-aged-out-undelivered-raise-a-condition
+//
+// TestDeriveCommandDelivery covers the visibility half of issue #711 (filed as #732): an operator who issues a command had no
+// signal short of reading the command row that the host was not taking it. The original incident had a kill_process pending for 75
+// minutes against a host reporting healthy with 49.6M events flowing.
+//
+// The cases below are mostly about what must NOT raise a condition, because that is what decides whether the signal is usable at
+// all: a fleet has offline hosts at any moment, and a condition that fired on their queued commands would be noise on every page.
+func TestDeriveCommandDelivery(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name            string
+		expiredCount    int
+		lastExpiredAtNs int64
+		wantCondition   bool
+		wantMessage     string
+	}{
+		{
+			// spec:server-host-status/a-host-that-is-not-taking-commands-is-reported-as-such/commands-still-awaiting-delivery-raise-nothing
+			name:          "no expiries is not a condition",
+			expiredCount:  0,
+			wantCondition: false,
+		},
+		{
+			// Defensive rather than reachable: a count cannot go negative through the query that feeds this. It is here so the
+			// guard is a documented "> 0" rather than something a future caller has to infer.
+			name:          "a negative count cannot manufacture a condition",
+			expiredCount:  -1,
+			wantCondition: false,
+		},
+		{
+			name:            "one expiry is enough, and reads as singular",
+			expiredCount:    1,
+			lastExpiredAtNs: 1_700_000_000_000_000_000,
+			wantCondition:   true,
+			wantMessage:     "1 command aged out undelivered rather than reaching this host; it is not taking commands",
+		},
+		{
+			name:            "several expiries read as plural",
+			expiredCount:    3,
+			lastExpiredAtNs: 1_700_000_000_000_000_000,
+			wantCondition:   true,
+			wantMessage:     "3 commands aged out undelivered rather than reaching this host; it is not taking commands",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := telemetryhealth.DeriveCommandDelivery(tc.expiredCount, tc.lastExpiredAtNs)
+			if !tc.wantCondition {
+				assert.Empty(t, got)
+				return
+			}
+			require.Len(t, got, 1)
+			assert.Equal(t, telemetryhealth.ComponentCommandDelivery, got[0].Type)
+			assert.Equal(t, telemetryhealth.ReasonCommandsExpired, got[0].Reason)
+			// Degraded, not unhealthy: the expiries are certain but "the HOST is at fault" is an inference, and a machine
+			// powered off for two days accumulates them without anything being wrong with it.
+			assert.Equal(t, string(endpointapi.HealthDegraded), got[0].Status)
+			assert.Equal(t, tc.wantMessage, got[0].Message)
+			// Unlike the telemetry conditions, this one HAS an observed instant, so it must carry it rather than zero.
+			assert.Equal(t, tc.lastExpiredAtNs, got[0].LastTransitionNs,
+				"an expiry is an observed event with a recorded time; the reader needs it to say how fresh the evidence is")
+		})
+	}
+}
+
+// TestRollupCountsCommandDelivery pins that the new condition reaches the host's overall status, not just the component list. A
+// condition an operator has to expand a panel to see would not have helped in the incident that motivated it, where the header said
+// healthy.
+func TestRollupCountsCommandDelivery(t *testing.T) {
+	t.Parallel()
+	derived := telemetryhealth.DeriveCommandDelivery(2, 1_700_000_000_000_000_000)
+	require.Len(t, derived, 1)
+
+	assert.Equal(t, string(endpointapi.HealthDegraded),
+		telemetryhealth.Rollup(string(endpointapi.HealthHealthy), derived),
+		"a host reporting itself healthy while not taking commands must not still read as healthy")
+}

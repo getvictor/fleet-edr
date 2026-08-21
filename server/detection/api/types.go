@@ -176,6 +176,18 @@ type HostHealth struct {
 	DerivedComponents []DerivedComponent `db:"-" json:"derived_components"`
 }
 
+// Undeliverable is what the host-health derivation needs to know about one host's undelivered commands (issue #732).
+//
+// It is detection's own type rather than the response context's, because commands belong to that context and detection importing
+// its api would add a cross-context edge for two integers. The response context already inverts the dependency the same way for its
+// Heartbeat, so cmd/main adapts both.
+type Undeliverable struct {
+	// ExpiredCount is how many of the host's commands aged out undelivered inside the response context's window.
+	ExpiredCount int
+	// LastExpiredAtNs is when the most recent one aged out, so the condition can say how fresh the evidence is.
+	LastExpiredAtNs int64
+}
+
 // DerivedComponent is one condition the server concluded about a host from telemetry, rather than one the agent reported.
 //
 // It mirrors the endpoint context's ComponentHealth wire shape field for field, so the console can render the reported and the

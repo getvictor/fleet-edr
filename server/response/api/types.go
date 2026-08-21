@@ -45,6 +45,26 @@ const (
 	StatusExpired Status = "expired"
 )
 
+// UndeliverableWindow is how far back the undeliverable-command count looks.
+//
+// 24 hours because this answers an operator's "is this host taking commands", which is a question about the host's recent
+// behaviour rather than its whole history. A count with no window would keep reporting a host that was wedged last month and has
+// been fine since, and a much shorter one would drop the signal before the operator who issued the command came back to look.
+const UndeliverableWindow = 24 * time.Hour
+
+// Undeliverable is what one host's command history says about whether it is taking commands, for the health derivation in #732.
+//
+// ExpiredCount is the honest signal and the only one here: a command reaches StatusExpired only by waiting out its whole delivery
+// window without any agent claiming it (see PendingCommandTTL), so a host accumulating them is a host that is not taking commands.
+// Pending commands are deliberately NOT counted: a command queued a second ago against a laptop that is merely asleep is the normal
+// case, and counting it would report every offline host as faulty.
+type Undeliverable struct {
+	// ExpiredCount is how many of this host's commands aged out undelivered inside UndeliverableWindow.
+	ExpiredCount int `db:"expired_count"`
+	// LastExpiredAtNs is when the most recent one aged out, so the reader can say how fresh the evidence is.
+	LastExpiredAtNs int64 `db:"last_expired_at_ns"`
+}
+
 // CommandTypeKillProcess is the well-known type the agent's commander dispatches to its kill-process handler. Other command types
 // live in their owning contexts (notably rules/api.CommandTypeSetBlocklist). Operator POST /api/commands accepts any non-empty string
 // today; future hardening can tighten this to a typed enum.

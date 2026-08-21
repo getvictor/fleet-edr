@@ -9,8 +9,13 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/internal/secretseal"
+	"github.com/fleetdm/edr/server/detection/api"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 )
+
+// UndeliverableByHost reports, per host, the commands that aged out undelivered inside the response context's window. Hosts with
+// none are absent from the map. Detection declares the port; the response context supplies it (issue #732).
+type UndeliverableByHost func(ctx context.Context, hostIDs []string) (map[string]api.Undeliverable, error)
 
 // Store is the persistence handle for the detection bounded context. Holds the shared *sqlx.DB pool that cmd/main opens once via
 // server/bootstrap.OpenDB and shares across every context, plus the visibility EventArchive the detection read paths delegate event
@@ -25,6 +30,15 @@ type Store struct {
 	// require it to be set; nil means the deployment did not configure a root secret and destination writes are rejected.
 	webhookSealer *secretseal.Sealer
 
+	// undeliverable reports which hosts have commands that aged out without ever reaching them (issue #732), for the host-health
+	// derivation. Set-once construction-phase config (SetUndeliverable, wired by detection/bootstrap); nil disables the condition,
+	// which is the correct behaviour for a deployment with no response context wired.
+	//
+	// It is a closure over a plain map rather than an imported response/api reader, deliberately. Commands are the response
+	// context's, and detection importing that context's api would add a cross-context edge for one integer per host. The response
+	// context already uses this same inversion in the other direction for its Heartbeat, so cmd/main wires both.
+	undeliverable UndeliverableByHost
+
 	// webhookConsoleBaseURL is the deployment external URL used to derive the console deep link in delivery payloads. Set-once
 	// construction-phase config; an empty value yields a relative link in the payload.
 	webhookConsoleBaseURL string
@@ -38,6 +52,9 @@ type Store struct {
 // SetNowForTest overrides the store's clock. Test-only, and named so: derived host health is a statement about a window ending
 // "now", so a test that cannot move now can only assert it by sleeping.
 func (s *Store) SetNowForTest(now func() time.Time) { s.now = now }
+
+// SetUndeliverable wires the command-deliverability reader. Construction-phase only, like the other setters here.
+func (s *Store) SetUndeliverable(fn UndeliverableByHost) { s.undeliverable = fn }
 
 // SetWebhookSealer wires the sealer used to encrypt webhook signing secrets at rest. Like SetMetrics it is set-once during
 // construction, before any request or loop reads it, so it is not guarded for concurrent mutation.
@@ -54,6 +71,7 @@ func (s *Store) SetWebhookConsoleBaseURL(u string) { s.webhookConsoleBaseURL = u
 // slog.Default().
 //
 // Closing the db handle is cmd/main's responsibility, not Store's.
+
 func New(db *sqlx.DB, archive visibilityapi.EventArchive, logger *slog.Logger) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("detection mysql.New: db handle must not be nil")

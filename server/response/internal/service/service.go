@@ -184,9 +184,10 @@ func (s *Service) UpdateStatus(ctx context.Context, req api.UpdateStatusRequest)
 	return s.store.UpdateStatus(ctx, req.ID, req.HostID, current.Status, req.Status, req.Result)
 }
 
-// CountPending delegates straight to the store.
-func (s *Service) CountPending(ctx context.Context) (int, error) {
-	return s.store.CountPending(ctx)
+// UndeliverableByHost reports which of hostIDs have commands that aged out undelivered recently (issue #732). The window boundary is
+// computed here rather than in the store, so the policy (api.UndeliverableWindow) sits with the service that owns it.
+func (s *Service) UndeliverableByHost(ctx context.Context, hostIDs []string) (map[string]api.Undeliverable, error) {
+	return s.store.UndeliverableByHost(ctx, hostIDs, time.Now().Add(-api.UndeliverableWindow))
 }
 
 // validTargetStatus reports whether the agent-supplied status is a legal target for an UpdateStatus call. pending is rejected here

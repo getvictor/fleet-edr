@@ -423,19 +423,40 @@ func TestOperatorRoutes_PostAndGet(t *testing.T) {
 	})
 }
 
-// TestCountPending counts only pending rows (not acked / completed).
-func TestCountPending(t *testing.T) {
+// TestUndeliverableByHost reports only hosts whose commands actually aged out undelivered (issue #732).
+//
+// The distinction it pins is the one that decides whether this signal is usable: a PENDING command against a host that is merely
+// asleep is the ordinary case, and a health signal that counted it would mark every offline laptop as faulty. Only a command that
+// waited out its whole delivery window is evidence the host is not taking commands.
+func TestUndeliverableByHost(t *testing.T) {
 	t.Parallel()
 	r := newResponse(t, nil)
 	ctx := t.Context()
 
+	ids := make([]int64, 0, 3)
 	for range 3 {
-		_, err := r.Service().Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
+		id, err := r.Service().Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
 		require.NoError(t, err)
+		ids = append(ids, id)
 	}
-	count, err := r.Service().CountPending(ctx)
+	_, err := r.Service().Insert(ctx, "host-quiet", "kill_process", json.RawMessage(`{}`))
 	require.NoError(t, err)
-	assert.Equal(t, 3, count)
+
+	// Nothing has aged out yet, so nothing is reported even though four commands are outstanding.
+	got, err := r.Service().UndeliverableByHost(ctx, []string{"host-a", "host-quiet"})
+	require.NoError(t, err)
+	assert.Empty(t, got, "pending is not undeliverable; an asleep host must not read as faulty")
+
+	for _, id := range ids {
+		require.NoError(t, r.Service().UpdateStatus(ctx,
+			api.UpdateStatusRequest{ID: id, HostID: "host-a", Status: api.StatusExpired}))
+	}
+
+	got, err = r.Service().UndeliverableByHost(ctx, []string{"host-a", "host-quiet"})
+	require.NoError(t, err)
+	require.Contains(t, got, "host-a")
+	assert.Equal(t, 3, got["host-a"].ExpiredCount)
+	assert.NotContains(t, got, "host-quiet", "a host with nothing expired is absent, not present with a zero")
 }
 
 // TestBootstrap_MissingDB surfaces the required-field error.

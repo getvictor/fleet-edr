@@ -286,12 +286,43 @@ func (s *Store) ExpirePendingOlderThan(ctx context.Context, hostID string, cutof
 	return n, nil
 }
 
-// CountPending returns the number of rows with status='pending'. Reached only through api.Service.CountPending, which has no
-// production caller today; see that method's comment.
-func (s *Store) CountPending(ctx context.Context) (int, error) {
-	var n int
-	if err := s.db.GetContext(ctx, &n, `SELECT COUNT(*) FROM commands WHERE status = 'pending'`); err != nil {
-		return 0, fmt.Errorf("count pending commands: %w", err)
+// UndeliverableByHost counts, per host, the commands that aged out undelivered inside api.UndeliverableWindow (issue #732).
+//
+// Only status='expired' is counted, and that is the whole point of the query rather than a simplification. A command reaches that
+// status only by waiting out its entire delivery window with no agent claiming it, so each one is direct evidence that the host was
+// not taking commands. Counting pending rows too would report every asleep laptop as faulty, since a command queued a moment ago
+// against an offline host is the ordinary case.
+//
+// The window boundary arrives as `since` rather than being read from a clock here, matching ExpirePendingOlderThan: the store stays
+// clock-free and the caller that owns the policy owns the instant.
+//
+// It reads (host_id, status) off idx_commands_host_status and is bounded by the caller's host list, so it costs an index range per
+// host asked about rather than a scan. Hosts with no expired commands are absent from the result: the caller is looking for
+// findings, and returning a zero for every healthy host would make it filter them back out.
+func (s *Store) UndeliverableByHost(ctx context.Context, hostIDs []string, since time.Time) (map[string]api.Undeliverable, error) {
+	if len(hostIDs) == 0 {
+		return nil, nil
 	}
-	return n, nil
+	query, args, err := sqlx.In(`
+		SELECT host_id,
+		       COUNT(*) AS expired_count,
+		       CAST(UNIX_TIMESTAMP(MAX(completed_at)) * 1000000000 AS SIGNED) AS last_expired_at_ns
+		FROM commands
+		WHERE host_id IN (?) AND status = ? AND completed_at >= ?
+		GROUP BY host_id`, hostIDs, api.StatusExpired, since)
+	if err != nil {
+		return nil, fmt.Errorf("build undeliverable query: %w", err)
+	}
+	var rows []struct {
+		HostID string `db:"host_id"`
+		api.Undeliverable
+	}
+	if err := s.db.SelectContext(ctx, &rows, s.db.Rebind(query), args...); err != nil {
+		return nil, fmt.Errorf("count undeliverable commands: %w", err)
+	}
+	out := make(map[string]api.Undeliverable, len(rows))
+	for _, r := range rows {
+		out[r.HostID] = r.Undeliverable
+	}
+	return out, nil
 }

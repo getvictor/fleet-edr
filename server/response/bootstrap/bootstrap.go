@@ -102,10 +102,10 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 // Service exposes the public api.Service for cross-context callers. endpoint consumes Service.Insert and rules consumes
 // Service.InsertBatch as method values satisfying their command-inserter closure types.
 //
-// Service.CountPending has NO production caller today. cmd/main's serverGaugeSource adapts endpoint's CountActive and detection's
-// CountOfflineHosts only, and the processor-backlog gauge is fed by the visibility context's own CountPending, which is a different
-// method on a different interface. Keeping it on api.Service is why `unused` cannot see it. Either wire it to a pending-commands
-// gauge (issue #732 wants exactly this signal for undeliverable commands) or drop it from the interface.
+// cmd/main also takes Service.UndeliverableByHost as a method value and hands it to the detection context, which turns it into the
+// host-health condition that tells an operator a host is not accepting commands (issue #732). That closed out the CountPending this
+// interface used to carry: a fleet-wide pending total, written for an OTel gauge it was never wired to, and unable to answer the
+// per-host question anyway. It was removed rather than wired.
 func (r *Response) Service() api.Service { return r.svc }
 
 // BuildControlGateway constructs the agent control-channel gateway for this context and wires the fast-path notifier so a command

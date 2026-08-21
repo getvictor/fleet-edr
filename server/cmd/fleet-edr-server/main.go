@@ -468,6 +468,25 @@ func openResponse(
 		logger.ErrorContext(ctx, "response schema", "err", err)
 		return nil, err
 	}
+	// The two contexts hand each other a function in opposite directions, and this is the second half: response already took
+	// detection's RecordHostSeen as its Heartbeat above, and detection now takes response's undeliverable-command count for the
+	// host-health condition that tells an operator a host is not accepting commands (issue #732).
+	//
+	// Neither context imports the other; both ports are declared where they are consumed and adapted here, which is the only place
+	// that knows both. The adapter is this closure: it exists to translate response's type into detection's, so that neither
+	// context's published surface mentions the other's.
+	detectionCtx.SetUndeliverableCommands(
+		func(ctx context.Context, hostIDs []string) (map[string]detectionapi.Undeliverable, error) {
+			counts, err := responseCtx.Service().UndeliverableByHost(ctx, hostIDs)
+			if err != nil {
+				return nil, err
+			}
+			out := make(map[string]detectionapi.Undeliverable, len(counts))
+			for hostID, u := range counts {
+				out[hostID] = detectionapi.Undeliverable{ExpiredCount: u.ExpiredCount, LastExpiredAtNs: u.LastExpiredAtNs}
+			}
+			return out, nil
+		})
 	return responseCtx, nil
 }
 
