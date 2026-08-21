@@ -25,7 +25,6 @@ type fakeService struct {
 	get          func(ctx context.Context, id int64) (api.Command, error)
 	listForHost  func(ctx context.Context, hostID string, status api.Status) ([]api.Command, error)
 	updateStatus func(ctx context.Context, req api.UpdateStatusRequest) error
-	countPending func(ctx context.Context) (int, error)
 }
 
 func (f fakeService) Insert(ctx context.Context, hostID, commandType string, payload []byte) (int64, error) {
@@ -60,11 +59,10 @@ func (f fakeService) UpdateStatus(ctx context.Context, req api.UpdateStatusReque
 	return f.updateStatus(ctx, req)
 }
 
-func (f fakeService) CountPending(ctx context.Context) (int, error) {
-	if f.countPending == nil {
-		panic("fakeService.CountPending not set")
-	}
-	return f.countPending(ctx)
+func (f fakeService) UndeliverableByHost(context.Context, []string) (map[string]api.Undeliverable, error) {
+	// The agent handler never asks about undeliverable commands; that read serves the operator-facing host health (issue #732).
+	// Panicking rather than returning nil keeps it that way: if a future change routes it through here, the test says so.
+	panic("fakeService.UndeliverableByHost must not be called from the agent handler")
 }
 
 // withHostID pins host_id on the request context the way the real

@@ -109,6 +109,58 @@ var derivedComponents = []derivedComponent{
 // but a flow stream it does use has delivered nothing while process telemetry continued.
 const ReasonNoFlowTelemetry = "no_flow_telemetry"
 
+// ComponentCommandDelivery is the derived component naming whether a host is taking the commands issued to it, and
+// ReasonCommandsExpired is its machine reason (issue #732).
+const (
+	ComponentCommandDelivery = "command_delivery"
+	ReasonCommandsExpired    = "commands_expired_undelivered"
+)
+
+// DeriveCommandDelivery reports a condition when a host has commands that aged out without ever reaching it.
+//
+// The trigger is deliberately narrow. A command reaches the expired state only by waiting out its entire delivery window with no
+// agent claiming it, so each one is direct evidence the host was not taking commands. Pending commands are not evidence and are not
+// counted anywhere in this path: a command queued a moment ago against a laptop that is asleep is the ordinary case, and a health
+// signal that counted it would mark most of a normal fleet as faulty.
+//
+// This is the visibility half of issue #711, whose correctness half is done. The original incident had a kill_process pending for 75
+// minutes against a host reporting overall_status healthy with 49.6M events flowing, and the operator had to read the agent log to
+// discover the click had done nothing. Every underlying fault there is now fixed, so this cannot report a permanent failure any
+// more; what it removes is the diagnosis cost of the transient one.
+//
+// Degraded rather than unhealthy, matching the telemetry conditions above: the commands did expire, which is certain, but the
+// reading that the HOST is at fault is an inference. A host powered off for two days accumulates expired commands without anything
+// being wrong with it, and the honest presentation of that is a condition an operator investigates rather than an assertion of
+// breakage.
+//
+// LastTransitionNs carries the most recent expiry, unlike the telemetry conditions which have no instant to offer. That expiry is an
+// observed event with a recorded time, so the reader can say how fresh the evidence is instead of rendering nothing.
+func DeriveCommandDelivery(expiredCount int, lastExpiredAtNs int64) []api.DerivedComponent {
+	if expiredCount <= 0 {
+		return nil
+	}
+	return []api.DerivedComponent{{
+		Type:             ComponentCommandDelivery,
+		Status:           string(endpointapi.HealthDegraded),
+		Reason:           ReasonCommandsExpired,
+		Message:          commandDeliveryMessage(expiredCount),
+		LastTransitionNs: lastExpiredAtNs,
+	}}
+}
+
+// commandDeliveryMessage states what an operator has to act on: that commands were issued and none of them arrived.
+//
+// It does not name the window the count was taken over, even though that would read better, because the window is the response
+// context's policy and this package cannot see it without taking a dependency on that context for one duration. LastTransitionNs
+// carries the most recent expiry instead, which answers the same question ("how fresh is this?") from evidence rather than policy.
+func commandDeliveryMessage(expiredCount int) string {
+	noun := "commands"
+	if expiredCount == 1 {
+		noun = "command"
+	}
+	return fmt.Sprintf("%d %s aged out undelivered rather than reaching this host; it is not taking commands", expiredCount, noun)
+}
+
 // Claims is what a host asserted about its own capture providers, read from the components it posted (issue #702).
 //
 // Only providers claiming to be CAPTURING are kept. Every other case is silence rather than a claim, and silence is not

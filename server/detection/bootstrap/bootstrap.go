@@ -262,6 +262,20 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 	return nil
 }
 
+// SetUndeliverableCommands wires the reader that tells host health which hosts have commands aging out undelivered (issue #732).
+//
+// It is a post-construction setter rather than a Deps field because of construction order: cmd/main builds detection BEFORE
+// response (response needs detection's RecordHostSeen for its Heartbeat), so the response service does not exist yet when this
+// context is assembled. The two contexts therefore hand each other a function in opposite directions, and cmd/main, the only place
+// that knows both, does the adapting. Leaving it unset disables the condition, which is correct for a deployment with no response
+// context.
+func (d *Detection) SetUndeliverableCommands(fn func(ctx context.Context, hostIDs []string) (map[string]api.Undeliverable, error)) {
+	if d.store == nil || fn == nil {
+		return
+	}
+	d.store.SetUndeliverable(mysql.UndeliverableByHost(fn))
+}
+
 // ApplySchema runs the CREATE TABLE statements detection owns. Idempotent.
 func (d *Detection) ApplySchema(ctx context.Context) error {
 	return ApplySchema(ctx, d.db)

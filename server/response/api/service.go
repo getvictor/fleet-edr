@@ -12,8 +12,9 @@ import "context"
 //     via a method-value closure;
 //   - rules/internal/appcontrol: InsertBatch at app-control policy
 //     fan-out time, via a method-value closure;
-//   - cmd/main metrics adapter: CountPending for the
-//     PendingCommands gauge.
+//   - cmd/main: UndeliverableByHost, handed to the detection context
+//     so host health can report a host that is not taking commands
+//     (issue #732).
 //
 // Endpoint consumes the single-row Insert and rules consumes the
 // batched InsertBatch as method values satisfying their closure
@@ -46,8 +47,13 @@ type Service interface {
 	// can reject cross-host updates with ErrCommandNotFound. Returns ErrInvalidStatusTransition for illegal transitions.
 	UpdateStatus(ctx context.Context, req UpdateStatusRequest) error
 
-	// CountPending returns the count of pending commands across every host. It has NO production caller: it was intended as an OTel
-	// gauge for stuck-poll fleets and was never wired to one. See the Service() doc comment in the bootstrap package for the full
-	// story and the two ways out (wire it, or drop it from this interface).
-	CountPending(ctx context.Context) (int, error)
+	// UndeliverableByHost reports, for each of hostIDs, how many of that host's commands aged out undelivered inside
+	// api.UndeliverableWindow. Hosts with none are absent from the map rather than present with a zero, so a caller can range over
+	// findings instead of filtering them.
+	//
+	// It exists for the host-health derivation in issue #732: an operator who issues a command has no signal short of reading the
+	// command row that a host is not taking them. It replaces a CountPending that returned a fleet-wide total, was never wired to
+	// the OTel gauge it was written for, and could not have answered this question anyway, since "is THIS host taking commands" is
+	// not recoverable from a total.
+	UndeliverableByHost(ctx context.Context, hostIDs []string) (map[string]Undeliverable, error)
 }

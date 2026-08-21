@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -18,9 +20,17 @@ import (
 // package so the testdb -> response/bootstrap -> response/internal/mysql cycle doesn't bite when this file is in `package mysql`.
 func newTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
+	s, _ := newTestStoreWithDB(t)
+	return s
+}
+
+// newTestStoreWithDB also hands back the handle, for the one test that has to backdate a column the store deliberately has no setter
+// for (completed_at, which ExpirePendingOlderThan always stamps as now).
+func newTestStoreWithDB(t *testing.T) (*mysql.Store, *sqlx.DB) {
+	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, testkit.ApplySchema(t.Context(), db))
-	return mysql.NewStore(db)
+	return mysql.NewStore(db), db
 }
 
 func TestInsertAndGet(t *testing.T) {
@@ -182,38 +192,54 @@ func TestUpdateStatusRaceLost(t *testing.T) {
 	assert.Equal(t, api.StatusAcked, got.Status)
 }
 
-func TestCountPending(t *testing.T) {
+func TestUndeliverableByHost(t *testing.T) {
 	t.Parallel()
-	s := newTestStore(t)
+	s, db := newTestStoreWithDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
-	count, err := s.CountPending(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 0, count)
-
-	for range 3 {
-		_, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
+	expire := func(hostID string, at time.Time) {
+		t.Helper()
+		id, err := s.Insert(ctx, hostID, "kill_process", json.RawMessage(`{}`))
+		require.NoError(t, err)
+		// Age it out the way the service does, then backdate completed_at so the window boundary can be exercised.
+		_, err = s.ExpirePendingOlderThan(ctx, hostID, now.Add(time.Hour))
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `UPDATE commands SET completed_at = ? WHERE id = ?`, at, id)
 		require.NoError(t, err)
 	}
-	count, err = s.CountPending(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 3, count)
 
-	// Acked / completed don't count.
-	id, err := s.Insert(ctx, "host-a", "kill_process", json.RawMessage(`{}`))
+	// host-a: two inside the window. host-b: one, but older than the window. host-c: only a live pending command.
+	expire("host-a", now.Add(-time.Hour))
+	expire("host-a", now.Add(-2*time.Hour))
+	expire("host-b", now.Add(-48*time.Hour))
+	_, err := s.Insert(ctx, "host-c", "kill_process", json.RawMessage(`{}`))
 	require.NoError(t, err)
-	require.NoError(t, s.UpdateStatus(ctx, id, "host-a", api.StatusPending, api.StatusAcked, nil))
-	count, err = s.CountPending(ctx)
+
+	got, err := s.UndeliverableByHost(ctx, []string{"host-a", "host-b", "host-c"}, now.Add(-api.UndeliverableWindow))
 	require.NoError(t, err)
-	assert.Equal(t, 3, count)
+
+	require.Contains(t, got, "host-a")
+	assert.Equal(t, 2, got["host-a"].ExpiredCount)
+	assert.Positive(t, got["host-a"].LastExpiredAtNs, "the reader needs to know how fresh the evidence is")
+
+	assert.NotContains(t, got, "host-b", "an expiry older than the window is not evidence about the host now")
+	assert.NotContains(t, got, "host-c",
+		"a pending command against an asleep host is the ordinary case; counting it would report every offline host as faulty")
 }
 
-// TestInsertBatch covers the application-control fan-out's enqueue path: one command row per host_id in a chunked multi-row
-// INSERT. The batch crosses the 256-row chunk boundary so the chunk loop itself is exercised, and every host must receive the
-// same command_type + payload the fan-out passes once.
-func TestInsertBatch(t *testing.T) {
+func TestUndeliverableByHost_NoHostsAsksNothing(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
+
+	got, err := s.UndeliverableByHost(t.Context(), nil, time.Now().Add(-api.UndeliverableWindow))
+	require.NoError(t, err)
+	assert.Empty(t, got, "an empty host list must short-circuit rather than build an IN () that no driver accepts")
+}
+
+func TestInsertBatch(t *testing.T) {
+	t.Parallel()
+	s, db := newTestStoreWithDB(t)
 	ctx := t.Context()
 
 	// 600 hosts forces three chunks (256 + 256 + 88) so the chunk boundary is crossed, not just the single-statement path.
@@ -228,9 +254,11 @@ func TestInsertBatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, hostCount, inserted, "every host in the batch must land")
 
-	count, err := s.CountPending(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, hostCount, count, "every batched row is enqueued pending")
+	// Every batched row must be enqueued pending. Counted straight off the table rather than through a store method: the
+	// fleet-wide CountPending this used to call had no production caller and was removed with issue #732.
+	var pending int
+	require.NoError(t, db.GetContext(ctx, &pending, `SELECT COUNT(*) FROM commands WHERE status = ?`, api.StatusPending))
+	assert.Equal(t, hostCount, pending, "every batched row is enqueued pending")
 
 	// Spot-check the first + last host (across the chunk boundary): same command_type, pending status, and a payload that
 	// semantically matches the input. The commands.payload column is MySQL JSON, which normalizes key order + whitespace on

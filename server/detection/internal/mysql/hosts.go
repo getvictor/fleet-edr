@@ -55,8 +55,19 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 		}
 	}
 	activity := s.telemetryActivity(ctx, hostIDs)
+	// Command deliverability is asked about EVERY host, not just the telemetry candidates: it does not depend on a capturing
+	// claim, so the filter above would hide exactly the hosts worth reporting (one that claims nothing and takes nothing).
+	allHostIDs := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		allHostIDs = append(allHostIDs, h.HostID)
+	}
+	commands := s.commandDelivery(ctx, allHostIDs)
 	for i, h := range hosts {
-		derived := telemetryhealth.Derive(claims[h.HostID], activity[h.HostID])
+		// Built fresh rather than appended onto commands[h.HostID]: that slice belongs to the map and appending to it would let
+		// one host's rollup write into another's backing array once capacity allowed.
+		derived := make([]api.DerivedComponent, 0, len(commands[h.HostID])+2)
+		derived = append(derived, commands[h.HostID]...)
+		derived = append(derived, telemetryhealth.Derive(claims[h.HostID], activity[h.HostID])...)
 		hosts[i].OverallStatus = telemetryhealth.Rollup(h.OverallStatus, derived)
 	}
 	return hosts, nil
@@ -67,10 +78,39 @@ func (s *Store) ListHosts(ctx context.Context) ([]api.HostSummary, error) {
 // The guard is the point: without it, every host page load of an already-unhealthy host would spend an archive query to compute a
 // result that is discarded, which is the single-host mirror of the filter ListHosts applies to its page.
 func (s *Store) derivedFor(ctx context.Context, hostID string, claims telemetryhealth.Claims) []api.DerivedComponent {
+	derived := s.commandDelivery(ctx, []string{hostID})[hostID]
 	if !claims.Any() {
+		// No capturing claim means no telemetry condition is reachable, but command deliverability does not depend on one: a host
+		// that claims nothing can still be failing to take commands, and that is precisely a host worth reporting.
+		return derived
+	}
+	out := make([]api.DerivedComponent, 0, len(derived)+2)
+	out = append(out, derived...)
+	return append(out, telemetryhealth.Derive(claims, s.telemetryActivity(ctx, []string{hostID})[hostID])...)
+}
+
+// commandDelivery asks the response context which of these hosts have commands that aged out undelivered, and turns each into a
+// derived condition (issue #732). Returns nothing when no reader is wired, which is the correct answer for a deployment without a
+// response context rather than a reason to fail a host page.
+//
+// A read failure is logged and dropped rather than propagated. This is one condition on a health panel; failing the whole host list
+// because a supplementary count could not be taken would turn a missing warning into an outage.
+func (s *Store) commandDelivery(ctx context.Context, hostIDs []string) map[string][]api.DerivedComponent {
+	if s.undeliverable == nil || len(hostIDs) == 0 {
 		return nil
 	}
-	return telemetryhealth.Derive(claims, s.telemetryActivity(ctx, []string{hostID})[hostID])
+	counts, err := s.undeliverable(ctx, hostIDs)
+	if err != nil {
+		s.logger.WarnContext(ctx, "read undeliverable commands for host health", "err", err)
+		return nil
+	}
+	out := make(map[string][]api.DerivedComponent, len(counts))
+	for hostID, u := range counts {
+		if dc := telemetryhealth.DeriveCommandDelivery(u.ExpiredCount, u.LastExpiredAtNs); dc != nil {
+			out[hostID] = dc
+		}
+	}
+	return out
 }
 
 // telemetryActivityHostCap bounds how many hosts one derived-health read asks the archive about.
