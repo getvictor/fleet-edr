@@ -260,9 +260,8 @@ func TestGateway(t *testing.T) {
 		stream, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
 		require.NoError(t, err)
 
-		frame, err := stream.Recv()
+		cmd, err := recvCommand(t, stream)
 		require.NoError(t, err)
-		cmd := frame.GetCommand()
 		require.NotNil(t, cmd)
 		assert.Equal(t, int64(7), cmd.GetId())
 		assert.Equal(t, "kill_process", cmd.GetCommandType())
@@ -334,9 +333,9 @@ func TestGateway(t *testing.T) {
 		// The second connection is live: a command queued for the host is delivered on it.
 		src.addPending(api.Command{ID: 9, HostID: "host-a", CommandType: "kill_process", Payload: []byte(`{"pid":1}`)})
 		g.Notify("host-a")
-		frame, err := second.Recv()
+		cmd, err := recvCommand(t, second)
 		require.NoError(t, err)
-		assert.Equal(t, int64(9), frame.GetCommand().GetId())
+		assert.Equal(t, int64(9), cmd.GetId())
 	})
 
 	t.Run("client disconnect deregisters the connection", func(t *testing.T) {
@@ -444,9 +443,8 @@ func TestGateway(t *testing.T) {
 		// the stream only because the watch ticker calls ListPendingForHosts for the connected host and pushes it.
 		src.addPending(api.Command{ID: 11, HostID: "host-a", CommandType: "isolate_host", Payload: []byte(`{"mode":"full"}`)})
 
-		frame, err := stream.Recv()
+		cmd, err := recvCommand(t, stream)
 		require.NoError(t, err, "watch sweep delivers a cross-replica command within the watch interval")
-		cmd := frame.GetCommand()
 		require.NotNil(t, cmd)
 		assert.Equal(t, int64(11), cmd.GetId())
 		assert.Equal(t, "isolate_host", cmd.GetCommandType())
@@ -491,9 +489,9 @@ func TestGatewayServeAndStop(t *testing.T) {
 	stream, err := control.NewControlChannelClient(cc).Connect(streamCtx)
 	require.NoError(t, err)
 	// Server -> client: the pushed command arrives over the bidi stream.
-	frame, err := stream.Recv()
+	cmd, err := recvCommand(t, stream)
 	require.NoError(t, err)
-	assert.Equal(t, int64(5), frame.GetCommand().GetId())
+	assert.Equal(t, int64(5), cmd.GetId())
 	// Client -> server: report an outcome on the same stream, exercising the other direction of the full-duplex stream over ServeHTTP.
 	require.NoError(t, stream.Send(&control.AgentFrame{Frame: &control.AgentFrame_Outcome{
 		Outcome: &control.Outcome{Id: 5, Status: "completed"},
