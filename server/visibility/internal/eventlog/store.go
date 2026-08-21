@@ -38,6 +38,18 @@ const (
 	// contract. Set well above the longest expected per-batch processing time so a live worker is never double-served.
 	claimLeaseNs = int64(5 * time.Minute)
 
+	// PendingHostsScanWindow is how many of the oldest rows each arm of the candidate-host hint reads. It is what makes that hint's
+	// cost independent of backlog depth (issue #720): without it the scan grows with the queue and is slowest when the pipeline is
+	// furthest behind.
+	//
+	// 2000 is ~2 orders of magnitude above the candidate count the processor asks for (hostCandidates(), a few tens), so under any
+	// host distribution short of one host owning thousands of consecutive oldest events the window holds far more distinct hosts than
+	// the caller can use. It is a fixed compiled constant rather than an operator knob, like the worker count it serves
+	// (server-availability spec): it trades hint completeness for a bounded scan, and there is no deployment-specific right answer
+	// an operator could supply. Exported only so the integration test can size its fixture from it rather than hardcoding a number
+	// that would silently stop exercising the bound if this changed; `internal/` keeps it inside the visibility context regardless.
+	PendingHostsScanWindow = 2000
+
 	insertPrefix = `INSERT IGNORE INTO event_queue (event_id, host_id, timestamp_ns, ingested_at_ns, event_type, platform, payload) VALUES `
 )
 
@@ -112,13 +124,22 @@ func appendArgs(chunk []api.Event) ([]string, []any, error) {
 // at fleet sizes we already run, and a window full of hosts that can only answer empty is a fleet-wide pause built out of pauses that
 // were each supposed to be per-host and bounded.
 //
-// The claimable predicate matches ClaimForHost's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. The OR
-// across the two claim states defeats the (processed, host_id, timestamp_ns) index, so this is a full scan plus a temporary-table
-// aggregate whose cost grows with backlog depth. Measured as a pair on MySQL 8.4 over one 200k-row queue across 200 hosts, 20 of them
-// holding an unexpired in-flight row: 42ms for the claimable-row scan alone against 49ms with the floor join, so reading the honest
-// predicate costs about 17% here and stays the same shape of query. The cross-host claim this replaced scanned the same way, so the
-// scan predates the per-host split rather than arriving with it. Making it an index read needs a (processed, timestamp_ns) index plus
-// a UNION of the two arms, one per claim state, which is a schema migration and its own change.
+// The claimable predicate matches ClaimForHost's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. Written as
+// one OR across the two claim states it defeats every index, because no index is ordered by timestamp across states, so it degraded
+// into a full scan plus a temp-table aggregate whose cost grew with backlog depth: worst exactly when the pipeline is behind (issue
+// #720). Splitting it into one arm per claim state, each an index range read in timestamp order, is what makes it cheap.
+//
+// Each arm reads only its pendingHostsScanWindow oldest rows, which is what bounds the cost independently of how deep the queue is.
+// That makes this an APPROXIMATE hint: a host whose oldest claimable event falls outside the window is not offered this cycle. That
+// is a safe approximation and not the starvation failure above, for a reason worth stating because the two look similar. The window
+// is ordered by timestamp, so the globally oldest claimable event is always inside it; a host is skipped only when the window is full
+// of events strictly older than anything it has, and draining those is precisely the right priority. Progress is therefore
+// guaranteed, and the effect under extreme skew is that fewer than limit hosts are offered for a cycle, not that any host is held
+// back. Missing an eligible host costs an idle worker for one 500ms cycle. Offering a BLOCKED one, which the floor join still
+// prevents, costs the whole fleet a claim lease.
+//
+// Measured on MySQL 8.4 over a 200k-row queue across 200 hosts with 2k in-flight and 2k expired claims: 67.6ms before, 3.3ms after,
+// returning an identical host list.
 func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -126,19 +147,34 @@ func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 	cutoff := time.Now().UnixNano() - claimLeaseNs
 	var hosts []string
 	err := s.db.SelectContext(ctx, &hosts, `
-		SELECT q.host_id
-		FROM event_queue q
+		SELECT c.host_id
+		FROM (
+			(
+				SELECT host_id, timestamp_ns
+				FROM event_queue
+				WHERE processed = 0
+				ORDER BY timestamp_ns
+				LIMIT ?
+			)
+			UNION ALL
+			(
+				SELECT host_id, timestamp_ns
+				FROM event_queue
+				WHERE processed = 2 AND claimed_at_ns < ?
+				ORDER BY timestamp_ns
+				LIMIT ?
+			)
+		) c
 		LEFT JOIN (
 			SELECT host_id, MIN(timestamp_ns) AS floor_ns
 			FROM event_queue
 			WHERE processed = 2 AND claimed_at_ns >= ?
 			GROUP BY host_id
-		) f ON f.host_id = q.host_id
-		WHERE (q.processed = 0 OR (q.processed = 2 AND q.claimed_at_ns < ?))
-			AND (f.floor_ns IS NULL OR q.timestamp_ns < f.floor_ns)
-		GROUP BY q.host_id
-		ORDER BY MIN(q.timestamp_ns)
-		LIMIT ?`, cutoff, cutoff, limit)
+		) f ON f.host_id = c.host_id
+		WHERE f.floor_ns IS NULL OR c.timestamp_ns < f.floor_ns
+		GROUP BY c.host_id
+		ORDER BY MIN(c.timestamp_ns)
+		LIMIT ?`, PendingHostsScanWindow, cutoff, PendingHostsScanWindow, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("pending hosts: %w", err)
 	}
