@@ -20,7 +20,6 @@ import (
 	"github.com/fleetdm/edr/server/testdb"
 	visibilityapi "github.com/fleetdm/edr/server/visibility/api"
 	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
-	"github.com/fleetdm/edr/server/visibility/internal/eventlog"
 	visibilitytestkit "github.com/fleetdm/edr/server/visibility/testkit"
 )
 
@@ -616,62 +615,38 @@ func TestEventLog_PendingHostsIndexExists(t *testing.T) {
 	assert.Positive(t, n, "migration 00003 must have created idx_event_queue_pending")
 }
 
-// TestEventLog_PendingHostsWindowIsOldestFirst pins both halves of the bounded-window trade the hint makes (issue #720), because the
-// safe half and the dangerous half look alike from the outside and only the ordering separates them.
+// TestEventLog_PendingHostsBlockedHostWithDeepBacklogDoesNotHideTheFleet is the regression test for a fix that was wrong, kept
+// because the wrong version is the tempting one.
 //
-// The window caps how many of the oldest rows the hint reads, so it can miss an eligible host. That is tolerable ONLY because the
-// window is ordered by timestamp: the globally oldest claimable event is always inside it, so a host is skipped only when the window
-// is full of strictly older work, which is the work that should run first anyway. Progress is therefore never blocked, it is only
-// prioritized. If the ordering were ever lost, the first subtest would still pass while the fleet quietly starved.
-func TestEventLog_PendingHostsWindowIsOldestFirst(t *testing.T) {
+// While speeding up the hint (issue #720) I tried reading only the oldest N rows per claim state, which measured 20x faster. It is
+// broken: the row limit applies BEFORE the in-flight floor is subtracted, so one host with an unexpired in-flight event and N rows
+// queued behind it fills the whole window with rows the floor then removes, and the query returns nothing at all while other hosts
+// have claimable work. That is the fleet-wide stall #719 exists to prevent.
+//
+// The existing #719 tests could not catch it: they use a handful of rows per host, so any plausible window swallows them whole. This
+// one puts a deep backlog behind the blocked host specifically so a windowed implementation fails here.
+func TestEventLog_PendingHostsBlockedHostWithDeepBacklogDoesNotHideTheFleet(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
+	log := newEventLog(t)
 
-	t.Run("spec:server-availability/the-candidate-host-hint-costs-the-same-whatever-the-backlog/the-oldest-host-is-offered-however-deep-the-queue-is", func(t *testing.T) {
-		t.Parallel()
-		ctx := context.Background()
-		log := newEventLog(t)
+	// Comfortably more than any window a future optimization would plausibly pick, and all of it OLDER than h-ready's single event
+	// so it sorts first and takes the window.
+	const deepBacklog = 2500
+	batch := make([]visibilityapi.Event, 0, deepBacklog+2)
+	batch = append(batch, ev("blocked-oldest", "h-blocked", 100, "fork"))
+	for i := range deepBacklog {
+		batch = append(batch, ev(fmt.Sprintf("blocked-%d", i), "h-blocked", int64(101+i), "exec"))
+	}
+	batch = append(batch, ev("ready-fork", "h-ready", 9_000_000, "fork"))
+	require.NoError(t, log.Append(ctx, batch))
 
-		// One busy host owns more than a full window of events, and one quiet host owns a single OLDER event.
-		batch := make([]visibilityapi.Event, 0, eventlog.PendingHostsScanWindow+2)
-		batch = append(batch, ev("quiet-fork", "h-quiet", 1, "fork"))
-		for i := range eventlog.PendingHostsScanWindow + 1 {
-			batch = append(batch, ev(fmt.Sprintf("busy-%d", i), "h-busy", int64(1000+i), "fork"))
-		}
-		require.NoError(t, log.Append(ctx, batch))
+	held, err := log.ClaimForHost(ctx, "h-blocked", 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"blocked-oldest"}, ids(held), "the oldest event goes in flight and blocks everything behind it")
 
-		hosts, err := log.PendingHosts(ctx, 10)
-		require.NoError(t, err)
-		assert.Contains(t, hosts, "h-quiet",
-			"the oldest claimable event in the queue must always be inside the window, whatever else is queued")
-		assert.Equal(t, "h-quiet", hosts[0], "and it must still sort first, so the longest-waiting host is served first")
-	})
-
-	t.Run("spec:server-availability/the-candidate-host-hint-costs-the-same-whatever-the-backlog/a-host-beyond-the-window-is-deferred-rather-than-lost", func(t *testing.T) {
-		t.Parallel()
-		ctx := context.Background()
-		log := newEventLog(t)
-
-		// The busy host owns a full window of the OLDEST events, so the newer host falls outside it. This is the approximation:
-		// it is a deferral, and the assertion exists so that changing the window size is a deliberate, visible decision.
-		batch := make([]visibilityapi.Event, 0, eventlog.PendingHostsScanWindow+2)
-		for i := range eventlog.PendingHostsScanWindow + 1 {
-			batch = append(batch, ev(fmt.Sprintf("busy-%d", i), "h-busy", int64(1000+i), "fork"))
-		}
-		batch = append(batch, ev("late-fork", "h-late", 9_000_000, "fork"))
-		require.NoError(t, log.Append(ctx, batch))
-
-		hosts, err := log.PendingHosts(ctx, 10)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"h-busy"}, hosts,
-			"h-late's only event is newer than a full window of h-busy's, so it waits for that older work to drain")
-
-		// Draining the older work must bring it back: the deferral is bounded by the queue, not sticky.
-		claimed, err := log.ClaimForHost(ctx, "h-busy", eventlog.PendingHostsScanWindow+1)
-		require.NoError(t, err)
-		require.NoError(t, log.Ack(ctx, ids(claimed)))
-
-		hosts, err = log.PendingHosts(ctx, 10)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"h-late"}, hosts, "once the older backlog is acked, the deferred host is offered")
-	})
+	hosts, err := log.PendingHosts(ctx, 16)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-ready"}, hosts,
+		"h-blocked has 2500 queued rows that no claim can return; they must not crowd out the one host that can be served")
 }

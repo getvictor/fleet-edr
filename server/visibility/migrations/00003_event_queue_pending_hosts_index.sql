@@ -8,12 +8,12 @@
 -- depth, so it is worst exactly when the pipeline is behind. At the 500ms poll interval with 4 workers that is roughly 8 such scans a
 -- second.
 --
--- (processed, timestamp_ns, claimed_at_ns, host_id) serves all three reads the rewritten hint makes, and is covering for each:
---   * the never-claimed arm      -> range on processed = 0, already in timestamp order, no sort
---   * the claim-expired arm      -> range on processed = 2, claimed_at_ns filtered in-index while scanning in timestamp order
+-- (processed, timestamp_ns, claimed_at_ns, host_id) serves the rewritten hint's three reads, each on a single `processed` value:
+--   * the never-claimed arm        -> range on processed = 0, per-host MIN taken from the index
+--   * the claim-expired arm        -> range on processed = 2, claimed_at_ns filtered in-index
 --   * the per-host in-flight floor -> range on processed = 2, grouped by host_id from the index
--- Measured with this index: 3.3ms, a 20x improvement, and better than the two separate indexes an earlier candidate used
--- ((processed, timestamp_ns) plus (processed, claimed_at_ns, host_id, timestamp_ns)) at 5.3ms.
+-- Measured with it: 29.8ms against 67.6ms shipped. Splitting the OR into two arms is most of that (67.6 to 37) and this index the
+-- rest (37 to 29.8).
 --
 -- ONE index rather than two is deliberate. event_queue is the ingest hot path and every index is maintained on insert, so the write
 -- cost of the fix should stay at one B-tree. It does not replace idx_event_queue_claim, which is still what the per-host claim itself
