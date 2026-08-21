@@ -36,7 +36,9 @@ func TestKeepAliveRelinquishesOnPingFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	var relinquished atomic.Bool
-	c.keepAlive(ctx, func() { relinquished.Store(true) }, "test-lock", conn)
+	var relinquished, lost atomic.Bool
+	c.keepAlive(ctx, func() { relinquished.Store(true) }, "test-lock", conn, &lost)
 	require.True(t, relinquished.Load(), "keepAlive must relinquish the lease when the connection ping fails")
+	require.True(t, lost.Load(),
+		"and must record the loss, which is what lets the one-shot and scoped forms report ErrLockLost (issue #721)")
 }
