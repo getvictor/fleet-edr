@@ -10,6 +10,8 @@ Counting a permanently pinned connection as available is not a rounding error, i
 
 The reserved count SHALL be supplied by whatever wires those long-lived holders, not assumed by the component doing the sizing, so that adding or removing a sweep cannot leave the sizing silently wrong.
 
+Only holders that are actually running SHALL be counted. A sweep that is switched off returns immediately when it is given the lock, so its connection is taken and released in brief bursts rather than held; counting it would make the sizing pessimistic and could refuse a pool that is in fact adequate, which is the opposite of the failure this exists to prevent.
+
 Where the remaining budget cannot serve even one worker, the system SHALL refuse to start rather than reduce the fleet, and the threshold it enforces SHALL be the threshold its error reports, including the reservation. A guard that admits a value its own message calls insufficient is worse than no guard: it produces a running deployment whose configuration was already diagnosed as unusable. Once the refusal is honest, the system SHALL NOT floor the computed worker count to a minimum of one, because the refusal already guarantees one is affordable and a floor could only ever manufacture a worker the pool cannot serve.
 
 #### Scenario: A pool with room for the sweeps but not for a worker is refused
