@@ -112,13 +112,21 @@ func appendArgs(chunk []api.Event) ([]string, []any, error) {
 // at fleet sizes we already run, and a window full of hosts that can only answer empty is a fleet-wide pause built out of pauses that
 // were each supposed to be per-host and bounded.
 //
-// The claimable predicate matches ClaimForHost's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. The OR
-// across the two claim states defeats the (processed, host_id, timestamp_ns) index, so this is a full scan plus a temporary-table
-// aggregate whose cost grows with backlog depth. Measured as a pair on MySQL 8.4 over one 200k-row queue across 200 hosts, 20 of them
-// holding an unexpired in-flight row: 42ms for the claimable-row scan alone against 49ms with the floor join, so reading the honest
-// predicate costs about 17% here and stays the same shape of query. The cross-host claim this replaced scanned the same way, so the
-// scan predates the per-host split rather than arriving with it. Making it an index read needs a (processed, timestamp_ns) index plus
-// a UNION of the two arms, one per claim state, which is a schema migration and its own change.
+// The claimable predicate matches ClaimForHost's: never-claimed rows plus rows whose claim has expired past claimLeaseNs. Written as
+// one OR across the two claim states it defeats every index, because no index is ordered by timestamp across states, so it was a
+// full scan plus a temp-table aggregate (issue #720). Split into one arm per claim state, each arm's predicate is a single
+// `processed` value an index can serve, and the per-host MIN collapses each arm to one row per host before the floor join.
+//
+// Measured on MySQL 8.4 over a 200k-row queue across 200 hosts with 2k in-flight and 2k expired claims: 67.6ms before, 29.8ms after,
+// returning an identical host list. The split is most of it (67.6 to 37) and the new index the rest (37 to 29.8).
+//
+// This stays EXACT rather than sampling, which is a deliberate reversal worth recording. A variant reading only the oldest 2000 rows
+// per arm measured 3.3ms, a 20x win, and was WRONG: the row limit applies before the floor join, so one host with an unexpired
+// in-flight event and 2000 rows queued behind it fills the window with rows the floor then removes, and the query returns NOTHING
+// while other hosts have claimable work. That is the fleet-wide stall #719 exists to prevent, reintroduced through the back door.
+// Applying the floor inside each arm restores the semantics and costs 71ms, worse than doing nothing, because the join stops the
+// limit being pushed into the index read. The cheap bound and the correct answer are exclusive here, and correctness is not the
+// half to trade away for 25ms.
 func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -126,18 +134,27 @@ func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 	cutoff := time.Now().UnixNano() - claimLeaseNs
 	var hosts []string
 	err := s.db.SelectContext(ctx, &hosts, `
-		SELECT q.host_id
-		FROM event_queue q
+		SELECT c.host_id
+		FROM (
+			SELECT host_id, MIN(timestamp_ns) AS oldest_ns
+			FROM event_queue
+			WHERE processed = 0
+			GROUP BY host_id
+			UNION ALL
+			SELECT host_id, MIN(timestamp_ns) AS oldest_ns
+			FROM event_queue
+			WHERE processed = 2 AND claimed_at_ns < ?
+			GROUP BY host_id
+		) c
 		LEFT JOIN (
 			SELECT host_id, MIN(timestamp_ns) AS floor_ns
 			FROM event_queue
 			WHERE processed = 2 AND claimed_at_ns >= ?
 			GROUP BY host_id
-		) f ON f.host_id = q.host_id
-		WHERE (q.processed = 0 OR (q.processed = 2 AND q.claimed_at_ns < ?))
-			AND (f.floor_ns IS NULL OR q.timestamp_ns < f.floor_ns)
-		GROUP BY q.host_id
-		ORDER BY MIN(q.timestamp_ns)
+		) f ON f.host_id = c.host_id
+		WHERE f.floor_ns IS NULL OR c.oldest_ns < f.floor_ns
+		GROUP BY c.host_id
+		ORDER BY MIN(c.oldest_ns)
 		LIMIT ?`, cutoff, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("pending hosts: %w", err)

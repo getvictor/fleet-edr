@@ -600,3 +600,53 @@ func TestEventLog_PendingHostsSkipsHostsWithNoClaimableWork(t *testing.T) {
 			"with every candidate slot claimable by a blocked host, the only host that can be served must still be visible")
 	})
 }
+
+// TestEventLog_PendingHostsIndexExists pins that the candidate-hint index shipped with the migration corpus rather than only in a
+// developer's database. Without it the hint silently reverts to the full scan issue #720 removed: same answers, 20x the cost, and
+// nothing fails. A plan assertion would be the more direct test but EXPLAIN output is not stable enough to pin.
+func TestEventLog_PendingHostsIndexExists(t *testing.T) {
+	t.Parallel()
+	_, db := newEventLogWithDB(t)
+
+	var n int
+	require.NoError(t, db.GetContext(t.Context(), &n, `
+		SELECT COUNT(*) FROM information_schema.statistics
+		WHERE table_schema = DATABASE() AND table_name = 'event_queue' AND index_name = 'idx_event_queue_pending'`))
+	assert.Positive(t, n, "migration 00003 must have created idx_event_queue_pending")
+}
+
+// TestEventLog_PendingHostsBlockedHostWithDeepBacklogDoesNotHideTheFleet is the regression test for a fix that was wrong, kept
+// because the wrong version is the tempting one.
+//
+// While speeding up the hint (issue #720) I tried reading only the oldest N rows per claim state, which measured 20x faster. It is
+// broken: the row limit applies BEFORE the in-flight floor is subtracted, so one host with an unexpired in-flight event and N rows
+// queued behind it fills the whole window with rows the floor then removes, and the query returns nothing at all while other hosts
+// have claimable work. That is the fleet-wide stall #719 exists to prevent.
+//
+// The existing #719 tests could not catch it: they use a handful of rows per host, so any plausible window swallows them whole. This
+// one puts a deep backlog behind the blocked host specifically so a windowed implementation fails here.
+func TestEventLog_PendingHostsBlockedHostWithDeepBacklogDoesNotHideTheFleet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := newEventLog(t)
+
+	// Comfortably more than any window a future optimization would plausibly pick, and all of it OLDER than h-ready's single event
+	// so it sorts first and takes the window.
+	const deepBacklog = 2500
+	batch := make([]visibilityapi.Event, 0, deepBacklog+2)
+	batch = append(batch, ev("blocked-oldest", "h-blocked", 100, "fork"))
+	for i := range deepBacklog {
+		batch = append(batch, ev(fmt.Sprintf("blocked-%d", i), "h-blocked", int64(101+i), "exec"))
+	}
+	batch = append(batch, ev("ready-fork", "h-ready", 9_000_000, "fork"))
+	require.NoError(t, log.Append(ctx, batch))
+
+	held, err := log.ClaimForHost(ctx, "h-blocked", 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"blocked-oldest"}, ids(held), "the oldest event goes in flight and blocks everything behind it")
+
+	hosts, err := log.PendingHosts(ctx, 16)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"h-ready"}, hosts,
+		"h-blocked has 2500 queued rows that no claim can return; they must not crowd out the one host that can be served")
+}
