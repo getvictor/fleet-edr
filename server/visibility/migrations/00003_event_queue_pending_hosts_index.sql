@@ -10,8 +10,14 @@
 --
 -- (processed, timestamp_ns, claimed_at_ns, host_id) serves the rewritten hint's three reads, each on a single `processed` value:
 --   * the never-claimed arm        -> range on processed = 0, per-host MIN taken from the index
---   * the claim-expired arm        -> range on processed = 2, claimed_at_ns filtered in-index
---   * the per-host in-flight floor -> range on processed = 2, grouped by host_id from the index
+--   * the claim-expired arm        -> range on processed = 2, then claimed_at_ns evaluated from index data
+--   * the per-host in-flight floor -> range on processed = 2, then claimed_at_ns evaluated from index data
+--
+-- Worth being precise about the second and third, because the loose phrasing invites a wrong conclusion in future performance work
+-- (Qodo caught it on review). `processed` is the only column pruning the range: claimed_at_ns sits after timestamp_ns in the key, so
+-- with timestamp_ns unconstrained it cannot narrow the scan. What the index buys those two arms is that claimed_at_ns and host_id
+-- are both present, so the predicate and the grouping are answered without touching the table. They still walk every processed = 2
+-- entry, which is fine because that set is bounded by in-flight plus recently-expired claims rather than by the backlog.
 -- Measured with it: 29.8ms against 67.6ms shipped. Splitting the OR into two arms is most of that (67.6 to 37) and this index the
 -- rest (37 to 29.8).
 --
