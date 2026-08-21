@@ -180,6 +180,20 @@ func imageRankGreater(a, b *procRow, atTimeNs int64) bool {
 		// earliest image is the closest surviving evidence of what its parent was running.
 		return aStart < bStart
 	}
+	// Two generations sharing a fork stamp that the image ordering could not separate: two fork-only rows. pidversion is the
+	// kernel's own generation counter, so it decides on kernel evidence instead of on ingest order, which is what seq is and which
+	// issue #714 established is unreliable. This mirrors the store's ORDER BY, and it sorts HERE for the same reason: pidversion
+	// ascends across a re-exec chain, so deciding on it any earlier would pick the newest image regardless of the fork instant and
+	// undo issue #723 (issue #724).
+	if av, bv := a.proc.PIDVersion, b.proc.PIDVersion; av != nil || bv != nil {
+		if (av != nil) != (bv != nil) {
+			// A row carrying kernel evidence outranks one that carries none; 3,189 of 755,465 rows have no pidversion.
+			return av != nil
+		}
+		if *av != *bv {
+			return *av > *bv
+		}
+	}
 	return a.seq > b.seq
 }
 
