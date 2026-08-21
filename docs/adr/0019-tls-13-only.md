@@ -6,7 +6,11 @@
 
 ## Context
 
-Every network boundary this product owns is a boundary between components we also own or specify: the agent (our Go binary), the browser UI (evergreen Chrome / Safari / Firefox / Edge), and service-account API clients written against our OpenAPI document. There is no third-party integrator dialling us with a fixed old TLS stack, no embedded appliance, and no long-tail of unknown clients, because the product is macOS 13+ only (with Windows 11 24H2+ planned per ADR-0018) and both those platforms ship TLS 1.3 in their system stacks.
+Every network boundary this product owns is a boundary between components we own or specify: the agent (our Go binary, macOS 13+ today and Windows 11 24H2+ per ADR-0018, both of which ship TLS 1.3 in their system stacks), the browser UI (evergreen Chrome / Safari / Firefox / Edge), and API clients generated against our OpenAPI document.
+
+That last category is not empty, and it is the one that carries the risk. `docs/api.md` explicitly supports third-party integrators polling `GET /api/alerts`, because outbound webhook / SIEM push does not ship until v1.1. Those clients run on runtimes we do not control, so the honest framing is not "no such client exists" but "TLS 1.3 is a stated requirement for supported API clients". Any runtime new enough to be a sensible choice for a SIEM integration in 2026 has it; the requirement is a real constraint we are choosing to impose rather than an absence we are observing.
+
+What we do NOT have is the population that normally forces a 1.2 floor: no embedded appliance, no shipped-and-frozen third-party agent, no long tail of unknown clients we cannot ask to upgrade.
 
 The usual reason a server keeps a TLS 1.2 floor is compatibility with clients it cannot upgrade. We do not have that population. The usual cost of keeping one is not theoretical either: TLS 1.2 brings a cipher-suite selection surface (which suites, in which order, with which curves), and every one of those is a configuration knob that can be set wrong, must be reviewed, and shows up in scanner output. TLS 1.3 removes the question by negotiating from a fixed list that Go does not expose for override.
 
@@ -20,7 +24,7 @@ The single sanctioned way to terminate anything older is `EDR_TLS_TERMINATED_BY_
 
 ## Consequences
 
-**Easier.** There is no cipher-suite policy to maintain, review, or explain to an auditor, and no downgrade path to test. The threat model's tampering row reduces to one sentence. A scanner finding about weak TLS 1.2 suites cannot apply to us, because there is no TLS 1.2.
+**Easier.** There is no cipher-suite policy to maintain, review, or explain to an auditor, and no downgrade path to test. The threat model's tampering row reduces to one sentence. A scanner finding about weak TLS 1.2 suites cannot apply to the product's own listener, because it has no TLS 1.2 surface. Note the scope: in proxy-terminated deployments (below) TLS lives on an operator-managed proxy, and that proxy's version and cipher policy is the operator's to configure and to answer a scanner about.
 
 **Harder, and this is the real cost.** Any future client that cannot do TLS 1.3 cannot talk to us at all, and the failure is an opaque handshake error rather than a negotiated downgrade. Concretely, that would bite a customer fronting us with an old load balancer, a corporate TLS-inspection middlebox pinned to 1.2 (common in exactly the enterprises this product targets), or a partner integration written in an old runtime. The escape hatch for all three is `EDR_TLS_TERMINATED_BY_PROXY`, which is a real answer but a worse one: it moves the trust boundary to a component we do not ship and cannot verify.
 

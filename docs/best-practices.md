@@ -398,7 +398,7 @@ A self-graded rubric so the README badge can be honest. `Total` excludes items m
 | API design                     | 5       | 16    | 31% |
 | Frontend                       | 6       | 14    | 43% |
 | Data layer                     | 9       | 17    | 53% |
-| Build / release / packaging    | 5       | 10    | 50% |
+| Build / release / packaging    | 5.5     | 11    | 50% |
 | Community signals              | 14      | 24    | 58% |
 | Compliance + privacy           | 1       | 14    | 7%  |
 | macOS platform hygiene         | 5       | 12    | 42% |
