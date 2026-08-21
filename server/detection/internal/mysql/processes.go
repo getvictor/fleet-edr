@@ -448,9 +448,25 @@ func (s *Store) CloseStaleProcess(ctx context.Context, hostID string, pid int, c
 // merely mis-order one image. Same lesson as the claim bound in issue #717: timestamps arrive from the agent, so no arithmetic on
 // them is safe, and an ordering that only ever compares them cannot be defeated by their values.
 //
-// One ambiguity is left standing. Two generations can share a fork timestamp, because CloseStaleProcess closes only rows stamped
-// strictly earlier, and this ordering then ranks their images together (21 rows on the same data). Issue #724 makes pidversion the
-// generation key, which is the only discriminator that does not fall back on ingest order.
+// Two generations can share a fork timestamp, because CloseStaleProcess closes only rows stamped strictly earlier and the extension
+// stamps at handler time, so exact collisions are not prevented upstream either. pidversion breaks that tie (issue #724): it is the
+// kernel's own generation counter, so the newer generation wins on kernel evidence rather than on ingest order. Ranking by row id
+// instead, which is what this did before, resolves the tie by ingest order, and ingest order being unreliable is the whole premise
+// of issue #714: a later generation's fork is routinely materialized first.
+//
+// WHERE it sorts is load-bearing. pidversion increments on exec as well as fork (measured; it is why issue #715 persists the exec's
+// own pidversion on a re-exec row), so a re-exec chain has ASCENDING pidversions. Placed before the applied-image filter, pidversion
+// DESC would select the newest image in the chain regardless of the fork instant and undo issue #723. Placed here, after the image
+// ordering has already resolved things within a chain, it agrees with that ordering and only decides between generations that the
+// image ordering cannot separate: two fork-only rows sharing a stamp, which is exactly the collision.
+//
+// `pidversion IS NOT NULL DESC` first because the column is nullable and 3,189 of 755,465 rows on the dev database carry no value
+// (a flow with no usable audit token). Without it MySQL's NULL ordering would decide the fallback implicitly; with it, a row
+// carrying kernel evidence outranks one that carries none, which is the intended reading rather than a side effect of collation.
+//
+// Measured on the dev database: 225 equal-stamp groups, of which only 16 have differing pidversions and are therefore genuine
+// collisions. The other 199 share one pidversion, meaning they are duplicate rows for a single generation, which is the issue #717
+// defect fixed in #719 rather than something an ordering can repair.
 //
 // This deliberately does NOT also require the parent to be recorded as still alive, and that asymmetry with GetProcessByPID is the
 // point rather than an oversight. A parent IS alive at its child's fork, by construction: nothing forks from a dead process. So an
@@ -470,6 +486,8 @@ func (s *Store) GetParentPath(ctx context.Context, hostID string, pid int, atTim
 		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
 		         CASE WHEN exec_time_ns IS NULL OR exec_time_ns <= ? THEN COALESCE(exec_time_ns, fork_time_ns) END DESC,
 		         exec_time_ns ASC,
+		         pidversion IS NOT NULL DESC,
+		         pidversion DESC,
 		         id DESC
 		LIMIT 1`,
 		hostID, pid, atTimeNs, atTimeNs, atTimeNs,

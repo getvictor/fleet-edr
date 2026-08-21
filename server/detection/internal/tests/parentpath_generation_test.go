@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -317,10 +318,80 @@ func TestInheritedPathWhenTwoGenerationsShareAForkTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, secondImage, early, "no image applied yet, so the earliest application is the closest evidence")
 
-	// After both, the latest application wins. That is the OLDER generation's re-exec, which is the documented ambiguity: without a
-	// generation key the record's own latest image application is the answer.
+	// After both, the latest application still wins, and pidversion deliberately does NOT override it even though the loser here
+	// carries the higher one. Issue #724 proposed inverting this assertion; it cannot be inverted without undoing issue #723.
+	//
+	// pidversion increments on exec, not only on fork, so a re-exec chain carries ASCENDING pidversions. Ranking by it before the
+	// image ordering would therefore pick the newest image in a chain regardless of the fork instant, which is precisely the
+	// re-exec bug #723 fixed. It can only sort after the image ordering has resolved things within a chain, which means it decides
+	// only where that ordering cannot: two rows sharing a stamp with no applied image to separate them (the subtest below).
+	//
+	// This fixture is also physically contradictory, which is why it is a poor case for pidversion to arbitrate: if the pidversion
+	// 9 generation really superseded the pidversion 7 one, the 7 generation cannot then exec at 900, after 9 exec'd at 200.
 	late, err := store.GetParentPath(ctx, host, parentPID, 1000)
 	require.NoError(t, err)
 	require.Equal(t, firstImage, late,
-		"equal fork stamps are not separable here, so the latest image application wins; issue #724 makes pidversion the key")
+		"the latest applied image wins; pidversion sorts after it so that issue #723's re-exec ordering is preserved")
+}
+
+// spec:server-process-graph-builder/inherited-parent-path-resolves-the-generation-that-forked-the-child/two-generations-sharing-a-fork-timestamp-are-separated-by-kernel-generation
+//
+// TestForkOnlyGenerationsSharingAStampAreSeparatedByPIDVersion covers the collision pidversion actually resolves (issue #724).
+//
+// Two fork-only rows sharing a stamp cannot be separated by the image ordering: neither has exec'd, so the applied-image filter and
+// the nearest-image ordering both tie, and before this the answer fell through to row id, which is ingest order. Ingest order being
+// unreliable is the entire premise of issue #714, so that was an arbitrary answer rather than a resolution. pidversion is the
+// kernel's own generation counter, so it decides on evidence from the event instead.
+func TestForkOnlyGenerationsSharingAStampAreSeparatedByPIDVersion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _ := openProcessStore(t)
+
+	const host, parentPID = "equal-stamp-forkonly", 501
+	const forkAt int64 = 100
+	older, newer := uint32(7), uint32(9)
+
+	// Insert the NEWER generation first so row id runs opposite to kernel generation. Under the old id-descending tie-break the
+	// older generation would win purely because it was materialized second, which is the arbitrariness this removes.
+	for _, p := range []api.Process{
+		{HostID: host, PID: parentPID, PPID: 1, Path: secondImage, ForkTimeNs: forkAt, PIDVersion: &newer},
+		{HostID: host, PID: parentPID, PPID: 1, Path: firstImage, ForkTimeNs: forkAt, PIDVersion: &older},
+	} {
+		_, err := store.InsertProcess(ctx, p)
+		require.NoError(t, err)
+	}
+
+	got, err := store.GetParentPath(ctx, host, parentPID, 150)
+	require.NoError(t, err)
+	assert.Equal(t, secondImage, got,
+		"the higher kernel generation is the one holding the PID, whatever order the rows were ingested in")
+}
+
+// spec:server-process-graph-builder/inherited-parent-path-resolves-the-generation-that-forked-the-child/a-generation-carrying-kernel-evidence-outranks-one-without
+//
+// TestGenerationWithPIDVersionOutranksOneWithout covers the mixed case. The column is nullable and 3,189 of 755,465 rows on the dev
+// database carry no pidversion (a flow with no usable audit token), so a chain can mix present and absent values and the ordering
+// needs a defined answer rather than whatever NULL collation happens to do.
+func TestGenerationWithPIDVersionOutranksOneWithout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _ := openProcessStore(t)
+
+	const host, parentPID = "equal-stamp-mixed", 502
+	const forkAt int64 = 100
+	known := uint32(4)
+
+	// The row WITHOUT a pidversion is inserted second, so it would win the old id-descending tie-break.
+	for _, p := range []api.Process{
+		{HostID: host, PID: parentPID, PPID: 1, Path: secondImage, ForkTimeNs: forkAt, PIDVersion: &known},
+		{HostID: host, PID: parentPID, PPID: 1, Path: firstImage, ForkTimeNs: forkAt},
+	} {
+		_, err := store.InsertProcess(ctx, p)
+		require.NoError(t, err)
+	}
+
+	got, err := store.GetParentPath(ctx, host, parentPID, 150)
+	require.NoError(t, err)
+	assert.Equal(t, secondImage, got,
+		"a row carrying kernel evidence outranks one carrying none, rather than the answer depending on NULL ordering")
 }
