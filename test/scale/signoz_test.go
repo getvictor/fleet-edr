@@ -86,7 +86,7 @@ func TestQuerySigNozServerP99_HappyPath(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		// 12.34 ms is the SigNoz-reported p99 in milliseconds; querySigNozServerP99 converts to time.Duration.
+		// 12.34 is the SigNoz-reported p99 in SECONDS, this metric's declared unit; querySigNozServerP99 converts it.
 		_, _ = w.Write(signozResponse("12.34"))
 	}))
 	defer srv.Close()
@@ -95,10 +95,10 @@ func TestQuerySigNozServerP99_HappyPath(t *testing.T) {
 	end := time.Now()
 	p99, err := querySigNozServerP99(context.Background(), srv.URL, start, end)
 	require.NoError(t, err)
-	// 12.34 ms preserves precision through the conversion because querySigNozServerP99 multiplies by
-	// float64(time.Millisecond) BEFORE the time.Duration cast (Gemini + CodeRabbit #277). 12.34 * 1e6 ns/ms = 12_340_000 ns
-	// = 12.34 ms exactly.
-	assert.Equal(t, 12340*time.Microsecond, p99)
+	// The fixture value 12.34 is in SECONDS, the unit `http.server.request.duration` declares (issue #734). Precision
+	// survives because querySigNozServerP99 multiplies by float64(time.Second) BEFORE the time.Duration cast (Gemini +
+	// CodeRabbit #277 caught the truncating shape back when this metric was milliseconds).
+	assert.Equal(t, 12340*time.Millisecond, p99)
 }
 
 // TestQuerySigNozServerP99_NonOK pins the soft-error contract: a non-200 response from SigNoz returns an error containing
@@ -145,5 +145,40 @@ func TestQuerySigNozServerP99_MaxAcrossSeries(t *testing.T) {
 
 	p99, err := querySigNozServerP99(context.Background(), srv.URL, time.Now().Add(-time.Minute), time.Now())
 	require.NoError(t, err)
-	assert.Equal(t, 20*time.Millisecond, p99, "max(5, 20, 10) == 20; NaN entries are skipped")
+	assert.Equal(t, 20*time.Second, p99, "max(5, 20, 10) == 20 seconds; NaN entries are skipped")
+}
+
+// TestSigNozQueryTargetsTheEDRServer pins the two identifiers by LITERAL VALUE, which is the whole point of this test
+// existing separately from TestQuerySigNozServerP99_HappyPath: that test compares the emitted query against the same
+// constants the query is built from, so it passes no matter what those constants say. Only a literal catches issue #734.
+//
+// The bug it guards is not "the query breaks". It is that the wrong pairing STILL WORKS. Our SigNoz is shared, the MDM
+// Fleet server publishes as service.name="fleet", and it emits the superseded millisecond-unit `http.server.duration`
+// that the EDR server does not emit at all. So the old pairing returned a healthy-looking number measured from another
+// product and recorded it as this run's server-side p99. A silent wrong answer beats a loud failure only for whoever
+// wrote the bug.
+func TestSigNozQueryTargetsTheEDRServer(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "fleet-edr-server", signozServiceName,
+		"must match `serviceName` in server/cmd/fleet-edr-server/main.go; \"fleet\" is the MDM Fleet server, a different product")
+	assert.Equal(t, "http.server.request.duration", signozMetricHTTPServerDuration,
+		"stable-semconv name, reported in seconds; the superseded `http.server.duration` is milliseconds and is emitted "+
+			"by other services on the shared instance, so querying it succeeds with the wrong data instead of failing")
+}
+
+// TestQuerySigNozServerP99_SubSecondPrecisionSurvives pins the conversion against the truncation trap. A realistic EDR p50
+// is ~0.00879 seconds (8.79ms, measured on the live instance). Casting to time.Duration before scaling would floor that
+// to 0 and silently report a zero-latency server, so the multiply has to happen in float space.
+func TestQuerySigNozServerP99_SubSecondPrecisionSurvives(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(signozResponse("0.00879"))
+	}))
+	defer srv.Close()
+
+	p99, err := querySigNozServerP99(context.Background(), srv.URL, time.Now().Add(-time.Minute), time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, 8790*time.Microsecond, p99, "0.00879s is 8.79ms, not 0")
 }

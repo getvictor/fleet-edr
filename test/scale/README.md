@@ -112,7 +112,7 @@ Set `--pass-max-queue-depth=N` to gate on max queue depth (any host crossing N f
 
 ## SigNoz cross-check (optional)
 
-Pass `--signoz-url=http://localhost:8080` to enrich the report with the SigNoz-reported server-side p99 over the run's time window. The runner issues one v4 builder query against `http.server.duration` filtered by `service.name="fleet"` (the EDR dev pipeline's OTel service name) and records:
+Pass `--signoz-url=http://localhost:8080` to enrich the report with the SigNoz-reported server-side p99 over the run's time window. The runner issues one v4 builder query against `http.server.request.duration` (declared in SECONDS) filtered by `service.name="fleet-edr-server"`, and records:
 
 ```json
 {
