@@ -18,6 +18,17 @@ const (
 	lockQueuePrune = "edr_queue_prune"
 )
 
+// LeaderGatedLoops is how many RunIfLeader loops Run starts when a coordinator is wired, one per lock name above.
+//
+// It is exported because it is a claim on the connection pool, not just a count of goroutines: each loop pins a pooled connection
+// for its whole lifetime (the coordinator holds the lock on a dedicated connection, and now keeps it alive). Any component sizing
+// itself against the pool has to subtract this first, or it will size itself to connections that are never coming back. The
+// processor does exactly that through ProcessorOptions.ReservedConns (issue #722).
+//
+// It lives here, next to the lock names, so the number cannot drift from the loops it counts; TestLeaderGatedLoopsMatchesLockNames
+// pins that.
+const LeaderGatedLoops = 3
+
 // Runner composes the background goroutines that the detection context
 // owns: processor (event materialisation + rule evaluation), processttl
 // (stale-process janitor), retention (process-record purge), and

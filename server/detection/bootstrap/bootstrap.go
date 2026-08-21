@@ -219,6 +219,11 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 			// deadlocking on it. Passing the real cap lets the processor size itself, and refuse a pool too small for one worker
 			// rather than boot a pipeline that would stall on its first claim.
 			ConnBudget: connBudget(deps.DB),
+			// The leader-gated sweeps wired into the Runner below each pin a pooled connection for the whole process lifetime, so
+			// they are not available to workers however large the pool looks. Reserve them here, where we know they are being
+			// started, rather than letting the processor guess (issue #722). No coordinator means no leader loops and nothing to
+			// reserve.
+			ReservedConns: reservedLeaderConns(deps.Coordinator),
 		},
 	)
 	if err != nil {
@@ -394,6 +399,16 @@ func (d *Detection) RegisterAuthedRoutes(mux httpserver.Router) {
 
 // connBudget reports the MySQL pool's MaxOpenConns for the processor's concurrency clamp, or 0 when there is no handle to ask (the
 // intake-only modes and tests that wire no DB), which skips the clamp.
+// reservedLeaderConns is how many pooled connections the leader-gated sweeps hold for the lifetime of the process. Setup wires all
+// of them unconditionally, so the only question is whether a coordinator exists to gate them: without one they run ungated on this
+// replica and take no lock connection.
+func reservedLeaderConns(coord leader.Coordinator) int {
+	if coord == nil {
+		return 0
+	}
+	return pipeline.LeaderGatedLoops
+}
+
 func connBudget(db *sqlx.DB) int {
 	if db == nil {
 		return 0

@@ -93,6 +93,13 @@ type ProcessorOptions struct {
 	// refuses, because clamping to one worker there would produce exactly the stall the sizing exists to prevent. Zero means unknown
 	// and skips both the sizing and the refusal.
 	ConnBudget int
+	// ReservedConns is how many pooled connections are already spoken for by something else that holds them for its whole
+	// lifetime, and so are not available to workers however large the pool looks. Today that is the coordinator's leader-gated
+	// loops (LeaderGatedLoops), each of which pins one connection for its lock from boot to shutdown.
+	//
+	// It is injected rather than assumed because this package should not encode how many background sweeps its caller starts:
+	// the bootstrap that wires those loops is the only thing that knows. Zero means nothing is reserved (issue #722).
+	ReservedConns int
 }
 
 // connsPerWorker is how many pooled connections one worker occupies inside its critical section: the GET_LOCK connection the
@@ -105,6 +112,15 @@ const connsPerWorker = 2
 // server. Halving that leaves most of the pool for everyone else. It does not bind at the shipped defaults (a 25-connection pool
 // affords 6 workers against a configured 4); it is what keeps a future concurrency increase from quietly consuming the pool.
 const workerPoolShareDivisor = 2
+
+// minConnsForOneWorker is the smallest usable budget: below it there is no worker count that can run, so the configuration is
+// refused rather than clamped. It is connsPerWorker scaled by the share divisor, which is the same arithmetic the affordability
+// calculation uses, so the guard and its error message quote one number instead of two that disagree.
+//
+// They used to disagree: the guard refused below connsPerWorker (2) while its message told the operator to raise the pool to 4, so
+// budgets of 2 and 3 passed a check whose own advice rejected them and were then clamped to a worker that could not make progress
+// (issue #722).
+const minConnsForOneWorker = connsPerWorker * workerPoolShareDivisor
 
 // concurrencyClamp records that the effective worker count came out below the configured one, and why. The constructor decides it but
 // cannot log it: it has no context, and fabricating a background one there is what contextcheck (rightly) rejects. Run emits it once
@@ -151,18 +167,25 @@ func NewProcessor(
 	// forever for a claim connection. That is the exact stall the clamp exists to avoid, so refuse the configuration instead. A
 	// deployment that will not boot states its problem; one that boots and silently never processes an event does not.
 	if opts.Coordinator != nil && opts.ConnBudget > 0 {
-		if opts.ConnBudget < connsPerWorker {
+		// Subtract what is already pinned before sizing anything. Connections held by the leader-gated loops are never returned
+		// while the process runs, so counting them as available sizes the fleet against connections that do not exist.
+		available := opts.ConnBudget - opts.ReservedConns
+		if available < minConnsForOneWorker {
 			return nil, fmt.Errorf(
-				"detection processor: MySQL pool of %d connection(s) cannot serve one worker; the per-host claim lock needs %d "+
-					"connections per worker (one pinned by GET_LOCK, one for the claim and flush), so raise the pool to at least %d",
-				opts.ConnBudget, connsPerWorker, connsPerWorker*workerPoolShareDivisor)
+				"detection processor: MySQL pool of %d connection(s) leaves %d after %d reserved for the leader-gated loops, which "+
+					"cannot serve one worker; the per-host claim lock needs %d connections per worker (one pinned by GET_LOCK, one "+
+					"for the claim and flush) and workers take at most half the pool, so raise the pool to at least %d",
+				opts.ConnBudget, available, opts.ReservedConns, connsPerWorker, opts.ReservedConns+minConnsForOneWorker)
 		}
-		if affordable := max(opts.ConnBudget/(connsPerWorker*workerPoolShareDivisor), 1); concurrency > affordable {
+		// No max(..., 1) floor: the refusal above guarantees at least one worker is affordable, so a floor here could only ever
+		// manufacture a worker the pool cannot serve, which is the stall this whole check exists to prevent.
+		if affordable := available / minConnsForOneWorker; concurrency > affordable {
 			clamp = &concurrencyClamp{
 				reason: "detection processor concurrency clamped to the connection budget",
 				attrs: []any{
 					"requested_concurrency", concurrency, "effective_concurrency", affordable,
-					"max_open_conns", opts.ConnBudget, "conns_per_worker", connsPerWorker,
+					"max_open_conns", opts.ConnBudget, "reserved_conns", opts.ReservedConns,
+					"available_conns", available, "conns_per_worker", connsPerWorker,
 					"pool_share_divisor", workerPoolShareDivisor,
 				},
 			}

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -90,31 +91,38 @@ func TestNewProcessor_ConcurrencyBounds(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name        string
-		concurrency int
-		connBudget  int
-		coordinator leader.Coordinator
-		want        int
+		name          string
+		concurrency   int
+		connBudget    int
+		reservedConns int
+		coordinator   leader.Coordinator
+		want          int
 	}{
-		{"non-positive concurrency floors to one worker", 0, 25, stubCoordinator{}, 1},
-		{"the shipped default pool leaves the default worker count alone", 4, 25, stubCoordinator{}, 4},
-		{"budget exactly the worker share leaves it alone", 4, 16, stubCoordinator{}, 4},
-		{"tight budget clamps to the share the pool can serve", 8, 16, stubCoordinator{}, 4},
-		{"a budget serving one worker's share clamps to one", 8, 4, stubCoordinator{}, 1},
-		{"a budget below a full share still leaves one worker", 8, 3, stubCoordinator{}, 1},
-		{"unknown budget skips the sizing", 8, 0, stubCoordinator{}, 8},
-		{"no coordinator forces a single worker", 8, 25, nil, 1},
-		{"a lockless single worker needs no pool share", 8, 2, nil, 1},
+		{"non-positive concurrency floors to one worker", 0, 25, 0, stubCoordinator{}, 1},
+		{"the shipped default pool leaves the default worker count alone", 4, 25, 0, stubCoordinator{}, 4},
+		// The production shape, and the case this must never regress: reserving the leader loops out of the real pool still has
+		// to leave the configured fleet intact, or the fix for issue #722 would quietly shrink every deployment.
+		{"spec:server-availability/worker-sizing-counts-only-connections-that-can-actually-be-obtained/reserving-the-long-lived-holders-does-not-shrink-a-healthy-deployment", 4, 25, LeaderGatedLoops, stubCoordinator{}, 4},
+		{"budget exactly the worker share leaves it alone", 4, 16, 0, stubCoordinator{}, 4},
+		{"tight budget clamps to the share the pool can serve", 8, 16, 0, stubCoordinator{}, 4},
+		{"a budget serving one worker's share clamps to one", 8, 4, 0, stubCoordinator{}, 1},
+		// The reservation is subtracted BEFORE sizing: 16 looks like 4 workers, but 8 of it is already pinned for the whole
+		// process lifetime and is never coming back.
+		{"reserved connections are not available to workers", 8, 16, 8, stubCoordinator{}, 2},
+		{"unknown budget skips the sizing", 8, 0, 0, stubCoordinator{}, 8},
+		{"no coordinator forces a single worker", 8, 25, 0, nil, 1},
+		{"a lockless single worker needs no pool share", 8, 2, 0, nil, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			proc, err := NewProcessor(&scriptedEventLog{}, nil, nil, ProcessorOptions{
-				Logger:      discardLogger(),
-				Batch:       10,
-				Concurrency: tc.concurrency,
-				Coordinator: tc.coordinator,
-				ConnBudget:  tc.connBudget,
+				Logger:        discardLogger(),
+				Batch:         10,
+				Concurrency:   tc.concurrency,
+				Coordinator:   tc.coordinator,
+				ConnBudget:    tc.connBudget,
+				ReservedConns: tc.reservedConns,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, proc.concurrency)
@@ -139,29 +147,53 @@ func TestNewProcessor_RefusesPoolBelowOneWorker(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name       string
-		connBudget int
+		name          string
+		connBudget    int
+		reservedConns int
 	}{
-		{"a single-connection pool cannot hold a lock and claim at once", 1},
-		{"a pool one short of a worker's needs is still a stall", connsPerWorker - 1},
+		{"a single-connection pool cannot hold a lock and claim at once", 1, 0},
+		{"a pool one short of a worker's needs is still a stall", connsPerWorker - 1, 0},
+		// These two used to be ADMITTED by a guard whose own error message called them insufficient: it refused below
+		// connsPerWorker (2) while telling the operator to raise the pool to 4, then clamped 2 and 3 to a worker that could not
+		// make progress. A guard must not accept a value its message rejects (issue #722).
+		{"spec:server-availability/worker-sizing-counts-only-connections-that-can-actually-be-obtained/a-budget-the-guard-s-own-advice-rejects-is-refused-rather-than-reduced", connsPerWorker, 0},
+		{"one short of a full worker share is refused too", minConnsForOneWorker - 1, 0},
+		// Room for the leader loops but not for a worker afterwards. Before the reservation existed this looked like a healthy
+		// pool and produced a fleet that would stall on its first claim.
+		{"spec:server-availability/worker-sizing-counts-only-connections-that-can-actually-be-obtained/a-pool-with-room-for-the-sweeps-but-not-for-a-worker-is-refused", LeaderGatedLoops + 1, LeaderGatedLoops},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			proc, err := NewProcessor(&scriptedEventLog{}, nil, nil, ProcessorOptions{
-				Logger:      discardLogger(),
-				Batch:       10,
-				Concurrency: 4,
-				Coordinator: stubCoordinator{},
-				ConnBudget:  tc.connBudget,
+				Logger:        discardLogger(),
+				Batch:         10,
+				Concurrency:   4,
+				Coordinator:   stubCoordinator{},
+				ConnBudget:    tc.connBudget,
+				ReservedConns: tc.reservedConns,
 			})
 			require.Error(t, err, "a pool that cannot serve one worker must not produce a processor")
 			assert.Nil(t, proc)
-			// The operator's next action is to raise the pool, so the error has to carry the number to raise it to.
+			// The operator's next action is to raise the pool, so the error has to carry the number to raise it to, and that
+			// number has to be the one the guard actually enforces. The two disagreeing is what let 2 and 3 through.
 			assert.Contains(t, err.Error(), "raise the pool to at least",
 				"the refusal must tell the operator what to change, not just that something is wrong")
+			assert.Contains(t, err.Error(), fmt.Sprintf("at least %d", tc.reservedConns+minConnsForOneWorker),
+				"the advertised threshold must be the one enforced, reservation included")
 		})
 	}
+}
+
+// TestLeaderGatedLoopsMatchesLockNames pins the exported connection reservation to the loops it counts. The processor subtracts
+// LeaderGatedLoops from the pool before sizing its fleet, so if a fourth leader-gated sweep were added without bumping it, the
+// processor would size itself against a connection that is permanently pinned and could stall on its first claim (issue #722). The
+// count is in a different file from the Run that starts the loops, which is exactly the drift this catches.
+func TestLeaderGatedLoopsMatchesLockNames(t *testing.T) {
+	t.Parallel()
+	locks := []string{lockProcessTTL, lockRetention, lockQueuePrune}
+	assert.Len(t, locks, LeaderGatedLoops,
+		"every leader-gated lock pins a pooled connection, so the reservation must count all of them")
 }
 
 // A non-positive batch would spin the drain loop, since an empty claim returns 0 and 0 >= 0 never breaks.
