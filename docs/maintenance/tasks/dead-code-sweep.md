@@ -8,7 +8,7 @@ Dead code (unused exports, orphan packages, dead UI components, abandoned migrat
 
 ## Scope
 
-- Go: unused exports across `server/`, `agent/`, `internal/`. Use `staticcheck -checks=U1000` or `go-deadcode`.
+- Go: unused exports across `server/`, `agent/`, `internal/`. Use `staticcheck -checks=U1000` (pinned to `@2026.1`, see the step below) or `go-deadcode`.
 - TypeScript: dead components, dead exports, orphan files in `ui/src/`. Use `ts-prune` or `knip`.
 - Swift: rarely used but worth a pass for orphan files in `extension/edr/`.
 - SQL: migrations that reference columns / tables nobody reads any more.
@@ -21,7 +21,9 @@ Dead code (unused exports, orphan packages, dead UI components, abandoned migrat
 1. Run the appropriate dead-code tools per language:
 
    ```bash
-   go install honnef.co/go/tools/cmd/staticcheck@latest
+   # Pin the version. A staticcheck older than 2026.1 (v0.4.7 is a common leftover on PATH) SEGFAULTS on Go 1.26
+   # rather than failing cleanly, so the sweep reports nothing and looks clean. Prefer `go run` over a PATH binary.
+   go run honnef.co/go/tools/cmd/staticcheck@2026.1 -checks=U1000 ./server/... ./agent/... ./internal/...
    staticcheck -checks=U1000 ./server/... ./agent/... ./internal/...
 
    cd ui && npx ts-prune
