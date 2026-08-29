@@ -51,8 +51,12 @@ type paramSpec struct {
 //
 // Keying on the ALGORITHM rather than the rule is what makes two rules registered against one algorithm unable to disagree about
 // what is overridable. It also makes a param name mean one thing per algorithm and lets the same name mean something else in
-// another, which is correct and must not be reconciled: `window` is the network-extension-clock correlation bound in
-// dns_resolve_then_connect and the ancestor-walk bound in ancestor_walk_path_prefix. They are both 30s by coincidence.
+// another, which is correct and must not be reconciled: `window` is the ancestor-walk bound in ancestor_walk_path_prefix and the
+// descendant-walk bound in descendant_within_window. They are both 30s by coincidence, and collapsing them into one value would
+// couple two algorithms that have no reason to move together.
+//
+// dns_resolve_then_connect is absent because dns_c2_beacon was outside this step's scope; its window and DGA thresholds are still
+// Go constants. Moving them needs integer and float parameter kinds, which nothing else uses yet.
 //
 // A name absent from this map is rejected at load. Dead config that no code consults is worse than a missing key, because it
 // invites an operator to believe they have tuned something.
@@ -114,6 +118,11 @@ func (p *Params) Raw() *yaml.Node {
 // lookup is a literal in rule code checked against the schema at load, so a miss is a programming error and not a runtime
 // condition an operator can cause.
 func (p *Params) StringSet(name string) map[string]bool {
+	// A nil receiver means the rule id is absent from the pack. paramsFor never returns nil, so this is reachable only by indexing
+	// the pack map directly, which tests do; panicking beats a nil dereference, and it is what nilaway asks for.
+	if p == nil {
+		panic(fmt.Sprintf("catalog: no params loaded for the rule holding string-list param %q", name))
+	}
 	list, ok := p.lists[name]
 	if !ok {
 		panic(fmt.Sprintf("catalog: rule %s has no string-list param %q", p.ruleID, name))
@@ -127,6 +136,11 @@ func (p *Params) StringSet(name string) map[string]bool {
 
 // StringList returns a param as an ordered slice, for the matches that care about order (prefix scans).
 func (p *Params) StringList(name string) []string {
+	// A nil receiver means the rule id is absent from the pack. paramsFor never returns nil, so this is reachable only by indexing
+	// the pack map directly, which tests do; panicking beats a nil dereference, and it is what nilaway asks for.
+	if p == nil {
+		panic(fmt.Sprintf("catalog: no params loaded for the rule holding string-list param %q", name))
+	}
 	list, ok := p.lists[name]
 	if !ok {
 		panic(fmt.Sprintf("catalog: rule %s has no string-list param %q", p.ruleID, name))
@@ -136,6 +150,11 @@ func (p *Params) StringList(name string) []string {
 
 // Duration returns a duration param.
 func (p *Params) Duration(name string) time.Duration {
+	// A nil receiver means the rule id is absent from the pack. paramsFor never returns nil, so this is reachable only by indexing
+	// the pack map directly, which tests do; panicking beats a nil dereference, and it is what nilaway asks for.
+	if p == nil {
+		panic(fmt.Sprintf("catalog: no params loaded for the rule holding duration param %q", name))
+	}
 	d, ok := p.durs[name]
 	if !ok {
 		panic(fmt.Sprintf("catalog: rule %s has no duration param %q", p.ruleID, name))
@@ -224,6 +243,16 @@ func sharedSet(name string) map[string]bool {
 	return out
 }
 
+// MustLoadPack forces the embedded pack and shared lists to load, panicking if either is malformed.
+//
+// Called from New so a malformed pack fails at start-up. Without it the lazy accessors are first touched during evaluation, so a
+// bad value would let the server boot and then panic on the first detection: the exact "fails at first fire rather than at boot"
+// behaviour the validation exists to prevent.
+func MustLoadPack() {
+	pack()
+	sharedLists()
+}
+
 // loadPack parses every rule file in fsys and validates each params block against its algorithm's schema.
 //
 // Validation is at LOAD, so a bad value fails at boot with a message naming the rule rather than at first fire, hours later, on
@@ -256,6 +285,9 @@ func loadPack(fsys fs.FS) (map[string]*Params, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
+		if _, dup := out[f.Engine.RuleID]; dup {
+			return nil, fmt.Errorf("%s: duplicate rule_id %q; the later file would silently replace the earlier rule's params", name, f.Engine.RuleID)
+		}
 		out[f.Engine.RuleID] = p
 	}
 	return out, nil
@@ -264,6 +296,9 @@ func loadPack(fsys fs.FS) (map[string]*Params, error) {
 // bindParams parses one rule's params against its algorithm's schema.
 func bindParams(ruleID, algorithm string, node *yaml.Node) (*Params, error) {
 	schema, known := algorithmParams[algorithm]
+	if node != nil && node.Kind != 0 && node.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("rule %s: params must be a mapping", ruleID)
+	}
 	if node == nil || node.Kind == 0 || len(node.Content) == 0 {
 		// A rule with no params is fine: most detections are a fixed predicate with nothing to tune. It is only an error for the
 		// algorithm to declare params the file then omits, which is checked below against an empty set.
@@ -286,6 +321,9 @@ func bindParams(ruleID, algorithm string, node *yaml.Node) (*Params, error) {
 	// A YAML mapping node alternates key, value across Content.
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key, val := node.Content[i].Value, node.Content[i+1]
+		if seen[key] {
+			return nil, fmt.Errorf("rule %s sets param %q twice; the later value would silently win", ruleID, key)
+		}
 		spec, ok := schema[key]
 		if !ok {
 			return nil, fmt.Errorf("rule %s sets param %q, which algorithm %s never reads", ruleID, key, algorithm)

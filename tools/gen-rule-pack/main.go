@@ -18,7 +18,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 )
@@ -56,39 +55,12 @@ func generate(outDir string) (int, error) {
 			return 0, fmt.Errorf("write %s: %w", path, err)
 		}
 	}
-	if err := prune(outDir, pack); err != nil {
+	removed, err := rulesbootstrap.PrunePack(outDir, pack)
+	if err != nil {
 		return 0, err
 	}
-	return len(pack), nil
-}
-
-// prune removes rule files for rules that are no longer registered.
-//
-// Without it, deleting or renaming a detection leaves its file behind, the drift check fails on the extra file, and the failure
-// message tells the developer to run the very command that will not remove it. Only `.yml` files are considered, so the
-// directory's README survives.
-func prune(outDir string, pack map[string][]byte) error {
-	entries, err := os.ReadDir(outDir)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", outDir, err)
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yml") {
-			continue
-		}
-		// The shared-list definitions live in the pack but are authored, not generated. Without this the first regeneration
-		// after they were added deleted them, which is how this guard came to exist.
-		if e.Name() == rulesbootstrap.PackSharedListsFile {
-			continue
-		}
-		if _, registered := pack[strings.TrimSuffix(e.Name(), ".yml")]; registered {
-			continue
-		}
-		path := filepath.Join(outDir, e.Name())
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("remove obsolete %s: %w", path, err)
-		}
+	for _, path := range removed {
 		log.Printf("removed obsolete %s", path)
 	}
-	return nil
+	return len(pack), nil
 }

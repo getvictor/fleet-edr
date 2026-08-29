@@ -657,8 +657,9 @@ paths:
         limitations.
 
         The response body IS the artifact rather than a description of one, so
-        it is served as YAML. It is the same document as the corresponding file
-        in `docs/rules/`, without that file's generated-file header.
+        it is served as YAML. It is the same document as the corresponding
+        file in the rule pack at `server/rules/internal/catalog/pack/`,
+        without that file's generated-file header.
 
         Only detections are exportable. A registered rule that is not a
         detection (a projection of a decision the agent already made, or a

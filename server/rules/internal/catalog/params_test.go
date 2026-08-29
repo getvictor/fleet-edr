@@ -203,3 +203,48 @@ func TestEmbeddedPackMatchesTheRulesThatReadIt(t *testing.T) {
 	assert.Equal(t, int64(30_000_000_000), suspiciousExecWindow())
 	assert.Equal(t, int64(30_000_000_000), osascriptWindow())
 }
+
+// TestLoadPack_RejectsAScalarParamsBlock keeps `params: junk` from reading as "declares no params". Treating a malformed value as
+// an absent one is how dead configuration survives a validator.
+func TestLoadPack_RejectsAScalarParamsBlock(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadPack(fsWith(map[string]string{
+		"pack/suspicious_exec.yml": "title: T\nx-engine:\n  rule_id: suspicious_exec\n  algorithm: ancestor_walk_path_prefix\n  params: junk\n",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be a mapping")
+}
+
+// TestLoadPack_RejectsDuplicates covers the two silent-overwrite paths: a rule id repeated across files, and a parameter repeated
+// within one. Either would start the server with a detection configuration nobody wrote.
+func TestLoadPack_RejectsDuplicates(t *testing.T) {
+	t.Parallel()
+
+	t.Run("duplicate rule id", func(t *testing.T) {
+		t.Parallel()
+		_, err := loadPack(fsWith(map[string]string{
+			"pack/a.yml": ruleFile("suspicious_exec", "ancestor_walk_path_prefix", "    window: 30s\n"),
+			"pack/b.yml": ruleFile("suspicious_exec", "ancestor_walk_path_prefix", "    window: 90s\n"),
+		}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate rule_id")
+	})
+
+	t.Run("duplicate param name", func(t *testing.T) {
+		t.Parallel()
+		_, err := loadPack(fsWith(map[string]string{
+			"pack/suspicious_exec.yml": ruleFile("suspicious_exec", "ancestor_walk_path_prefix",
+				"    window: 30s\n    window: 90s\n"),
+		}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "twice")
+	})
+}
+
+// TestMustLoadPack_LoadsTheEmbeddedPack pins that the eager path works, since it is what makes a malformed file fail at start-up
+// rather than on the first detection.
+func TestMustLoadPack_LoadsTheEmbeddedPack(t *testing.T) {
+	t.Parallel()
+	assert.NotPanics(t, MustLoadPack)
+}

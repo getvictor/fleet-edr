@@ -100,7 +100,7 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 			"Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.",
 		},
 		Limitations: []string{
-			"30s window is hard-coded; long-tail post-shell activity is missed by design.",
+			"The window bounds how long after the shell exec a trigger still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"A parent-path-glob exclusion silences BOTH arms of the rule for that parent.",
 			"An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.",
 		},
@@ -783,8 +783,7 @@ func suspiciousTempPath(p execPayload) (string, bool) {
 }
 
 // suspiciousExecWindow is the shell-to-trigger bound, from the rule's pack file (issue #758). The shell and world-writable-prefix
-// sets stay package-level literals: both are shared with other rules, and see algorithmParams for why a shared list cannot move
-// into per-rule params yet (issue #759).
+// sets this rule also matches against are shared with other rules and so live in pack/lists.yml rather than in this rule's params.
 var suspiciousExecWindow = sync.OnceValue(func() int64 {
 	return paramsFor("suspicious_exec").Duration("window").Nanoseconds()
 })

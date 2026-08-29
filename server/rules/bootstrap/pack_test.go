@@ -130,6 +130,33 @@ func TestServedRuleIsThePackFileWithoutItsHeader(t *testing.T) {
 
 // spec:server-detection-rules-engine/values-shared-between-rules-are-defined-once/regenerating-the-pack-preserves-the-shared-definitions
 //
+// TestPrunePackPreservesTheSharedLists exercises the real filesystem prune, not just the rendered pack.
+//
+// The earlier version of this guard asserted only that ExportPack does not render the shared lists as a rule, which would still
+// have passed with the preservation check deleted. It also lived beside the generator under tools/, which CI does not run. Both
+// gaps are why prune now lives in a package CI executes and why this test drives it against a temp directory.
+func TestPrunePackPreservesTheSharedLists(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	shared := filepath.Join(dir, PackSharedListsFile)
+	stale := filepath.Join(dir, "deleted_rule.yml")
+	readme := filepath.Join(dir, "README.md")
+	for _, f := range []string{shared, stale, readme} {
+		require.NoError(t, os.WriteFile(f, []byte("x"), 0o600))
+	}
+
+	pack, err := ExportPack()
+	require.NoError(t, err)
+	removed, err := PrunePack(dir, pack)
+	require.NoError(t, err)
+
+	assert.FileExists(t, shared, "the authored shared-list file must survive; deleting it is the regression this guards")
+	assert.FileExists(t, readme, "non-YAML files must survive")
+	assert.NoFileExists(t, stale, "a file for an unregistered rule must be removed")
+	assert.Equal(t, []string{stale}, removed)
+}
+
 // TestSharedListsFileIsAuthoredNotGenerated pins the one pack file the generator must leave alone.
 //
 // It exists because regeneration deleted it the first time: prune removes any .yml without a matching registered rule, and the

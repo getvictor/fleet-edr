@@ -230,6 +230,12 @@ func CatalogOnly() api.Lister {
 // catalog's internal package.
 const PackSharedListsFile = catalog.SharedListsFile
 
+// PrunePack removes rule files for rules that are no longer registered, preserving the authored shared-list file. Re-exported
+// so tooling outside server/rules can reach the implementation, which lives where CI actually runs it.
+func PrunePack(dir string, pack map[string][]byte) ([]string, error) {
+	return export.Prune(dir, pack, PackSharedListsFile)
+}
+
 // ExportPack renders every registered detection as a declarative rule file, keyed by rule id (issue #757).
 //
 // Exposed here rather than from the internal export package because tooling (tools/gen-rule-pack) lives outside server/rules and

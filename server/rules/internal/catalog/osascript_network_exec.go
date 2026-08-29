@@ -75,7 +75,7 @@ func (r *OsascriptNetworkExec) Doc() api.Documentation {
 			"Internal automation that bootstraps tooling by scripting `curl … | sh` from osascript: extremely rare in managed fleets.",
 		},
 		Limitations: []string{
-			"30-second descendant window is hard-coded; longer-running chains are missed by design.",
+			"The descendant window bounds how long after the osascript exec a stage-2 still counts; longer-running chains are missed by design. Set in x-engine.params.window.",
 			"Does not cover Python URL fetches or AppleScript built-in URL access: only flags the explicit curl/wget shape.",
 		},
 	}

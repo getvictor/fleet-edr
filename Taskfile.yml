@@ -160,7 +160,7 @@ tasks:
       - go run ./tools/gen-rule-docs
 
   docs:rule-pack:
-    desc: Regenerate docs/rules/*.yml, one declarative rule file per registered detection.
+    desc: Regenerate server/rules/internal/catalog/pack/*.yml, one declarative rule file per registered detection.
     cmds:
       - go run ./tools/gen-rule-pack
 

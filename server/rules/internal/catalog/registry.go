@@ -13,6 +13,11 @@ import "github.com/fleetdm/edr/server/rules/api"
 // detection engine (a globally-disabled rule stays visible in GET /api/rules and simply emits nothing), so the catalog always
 // returns the full set.
 func New(resolver api.ExclusionResolver) []api.Rule {
+	// Force the pack and shared lists to load here, so a malformed file fails at start-up. The rules read their values through
+	// lazily-memoized accessors, which are otherwise first touched during evaluation: without this a bad value would let the
+	// server boot and then panic on the first detection, which is precisely what validating at load exists to prevent.
+	MustLoadPack()
+
 	return []api.Rule{
 		&SuspiciousExec{Exclusions: resolver},
 		&PersistenceLaunchAgent{Exclusions: resolver},
