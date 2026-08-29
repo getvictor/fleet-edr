@@ -111,76 +111,99 @@ var knownModifiers = map[string]bool{
 	"all":        true,
 }
 
+// modifiers is the decoded `|`-separated modifier list from a field key.
+type modifiers struct {
+	wrap      func(string) string // substring transformation into a wildcard pattern, nil if none
+	wrapName  string              // which substring modifier produced wrap, for error messages
+	useRegexp bool
+	all       bool
+}
+
+// parseModifiers decodes and validates the modifier list, rejecting every combination without a defined meaning. Split out from
+// compileFieldTest so each function does one job: this one decides what the modifiers mean, the caller applies them to values.
+func parseModifiers(field string, mods []string) (modifiers, error) {
+	var m modifiers
+	seen := make(map[string]bool, len(mods))
+	for _, name := range mods {
+		if !knownModifiers[name] {
+			return modifiers{}, fmt.Errorf("field %q uses unsupported modifier %q", field, name)
+		}
+		if seen[name] {
+			return modifiers{}, fmt.Errorf("field %q repeats modifier %q", field, name)
+		}
+		seen[name] = true
+
+		switch name {
+		case "all":
+			m.all = true
+		case "re":
+			m.useRegexp = true
+		default:
+			// A substring modifier. Two of them on one field have no composed meaning in Sigma, and last-assignment-wins would
+			// silently pick one: `Field|contains|startswith` and `Field|startswith|contains` would compile to different
+			// matchers, both of them something the author did not write. Checked before this one replaces the recorded name.
+			if m.wrapName != "" {
+				return modifiers{}, fmt.Errorf("field %q combines substring modifiers %q and %q, which has no defined meaning",
+					field, m.wrapName, name)
+			}
+			m.wrap, m.wrapName = substringWrappers[name], name
+		}
+	}
+	if m.useRegexp && m.wrap != nil {
+		return modifiers{}, fmt.Errorf("field %q combines |re with a substring modifier, which has no defined meaning", field)
+	}
+	return m, nil
+}
+
+// substringWrappers turn a modifier into the equivalent wildcard pattern. Sigma's substring modifiers are exactly sugar over
+// wildcards, so expressing them this way leaves one matching primitive to get right instead of four.
+var substringWrappers = map[string]func(string) string{
+	"contains":   func(v string) string { return "*" + v + "*" },
+	"startswith": func(v string) string { return v + "*" },
+	"endswith":   func(v string) string { return "*" + v },
+}
+
 // compileFieldTest builds one matcher from a `Field|mod|mod` key and its value, which YAML gives us as a scalar or a list.
 func compileFieldTest(key string, raw any) (fieldTest, error) {
-	parts := strings.Split(key, "|")
-	ft := fieldTest{field: parts[0]}
-	if ft.field == "" {
+	field, mods, _ := strings.Cut(key, "|")
+	if field == "" {
 		return fieldTest{}, fmt.Errorf("empty field name in %q", key)
 	}
-
-	var wrap func(string) string
-	var wrapName string
-	useRegexp := false
-	seen := map[string]bool{}
-	for _, m := range parts[1:] {
-		if !knownModifiers[m] {
-			return fieldTest{}, fmt.Errorf("field %q uses unsupported modifier %q", ft.field, m)
-		}
-		if seen[m] {
-			return fieldTest{}, fmt.Errorf("field %q repeats modifier %q", ft.field, m)
-		}
-		seen[m] = true
-		// Two substring modifiers on one field have no composed meaning in Sigma, and last-assignment-wins would silently pick
-		// one: `Field|contains|startswith` and `Field|startswith|contains` would compile to different matchers, both of them
-		// something the author did not write. Checked against the modifier already recorded, before this one replaces it.
-		if wrapName != "" && (m == "contains" || m == "startswith" || m == "endswith") {
-			return fieldTest{}, fmt.Errorf("field %q combines substring modifiers %q and %q, which has no defined meaning",
-				ft.field, wrapName, m)
-		}
-		switch m {
-		case "all":
-			ft.all = true
-		case "re":
-			useRegexp = true
-		case "contains":
-			wrap, wrapName = func(v string) string { return "*" + v + "*" }, m
-		case "startswith":
-			wrap, wrapName = func(v string) string { return v + "*" }, m
-		case "endswith":
-			wrap, wrapName = func(v string) string { return "*" + v }, m
-		}
+	var modNames []string
+	if mods != "" {
+		modNames = strings.Split(mods, "|")
 	}
-	if useRegexp && wrap != nil {
-		return fieldTest{}, fmt.Errorf("field %q combines |re with a substring modifier, which has no defined meaning", ft.field)
+	m, err := parseModifiers(field, modNames)
+	if err != nil {
+		return fieldTest{}, err
 	}
+	ft := fieldTest{field: field, all: m.all}
 
 	if raw == nil {
-		if wrap != nil || useRegexp || ft.all {
-			return fieldTest{}, fmt.Errorf("field %q combines a null value with a modifier, which has no defined meaning", ft.field)
+		if m.wrap != nil || m.useRegexp || m.all {
+			return fieldTest{}, fmt.Errorf("field %q combines a null value with a modifier, which has no defined meaning", field)
 		}
 		ft.absent = true
 		return ft, nil
 	}
-
-	if _, isList := raw.([]any); ft.all && !isList {
+	if _, isList := raw.([]any); m.all && !isList {
 		// |all quantifies over the listed values, so it says nothing about a single one. Accepting it would let a rule carry a
 		// modifier that cannot change its meaning, which reads as a constraint the author does not actually have.
-		return fieldTest{}, fmt.Errorf("field %q uses |all on a single value, which quantifies over nothing", ft.field)
+		return fieldTest{}, fmt.Errorf("field %q uses |all on a single value, which quantifies over nothing", field)
 	}
 
 	values, err := scalarList(raw)
 	if err != nil {
-		return fieldTest{}, fmt.Errorf("field %q: %w", ft.field, err)
+		return fieldTest{}, fmt.Errorf("field %q: %w", field, err)
 	}
 	if len(values) == 0 {
 		// An empty list matches nothing under ANY and everything under ALL, so it is always a mistake rather than a shorthand.
-		return fieldTest{}, fmt.Errorf("field %q has no values", ft.field)
+		return fieldTest{}, fmt.Errorf("field %q has no values", field)
 	}
 	for _, v := range values {
-		t, err := compileValue(v, wrap, useRegexp)
+		t, err := compileValue(v, m.wrap, m.useRegexp)
 		if err != nil {
-			return fieldTest{}, fmt.Errorf("field %q: %w", ft.field, err)
+			return fieldTest{}, fmt.Errorf("field %q: %w", field, err)
 		}
 		ft.tests = append(ft.tests, t)
 	}
