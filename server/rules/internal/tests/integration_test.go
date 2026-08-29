@@ -134,8 +134,11 @@ func newRules(t *testing.T) *rulesbootstrap.Rules {
 	return r
 }
 
-// TestCatalog_ListShape locks in registration order + documentation
-// completeness for every shipped rule.
+// TestCatalog_ListShape locks in registration order + documentation completeness for every DETECTION.
+//
+// The catalog surface reports detections only, so the two registered non-detections are deliberately absent here:
+// application_control_block (a projection of the host's own AUTH_EXEC decision) and sensor_recovery_failed (a health signal about
+// our agent). TestContentService_ActiveRules below asserts they are still registered and evaluated.
 func TestCatalog_ListShape(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
@@ -149,10 +152,8 @@ func TestCatalog_ListShape(t *testing.T) {
 		"credential_keychain_dump",
 		"privilege_launchd_plist_write",
 		"sudoers_tamper",
-		"application_control_block",
 		"dns_c2_beacon",
 		"sensor_tamper",
-		"sensor_recovery_failed",
 	}
 	require.Len(t, catalog, len(wantIDs))
 	for i, want := range wantIDs {
@@ -162,17 +163,39 @@ func TestCatalog_ListShape(t *testing.T) {
 	}
 }
 
-// TestContentService_ActiveRules surfaces every shipped rule through the engine-facing interface. The exact roster lives in
-// TestCatalog_ListShape; this test just confirms the count is in lockstep and every rule has a non-empty descriptor.
+// TestContentService_ActiveRules is the integration-level assertion that the catalog split is real: the engine-facing interface
+// carries every registered rule, while the operator-facing catalog carries detections only.
+//
+// This test previously required the two counts to be EQUAL. That equality is exactly what the split removes, so re-pinning it
+// would have hidden the change rather than checked it. What is worth asserting is the relationship: ActiveRules is the catalog
+// plus precisely the non-detections, no more and no fewer. Asserting only the count would pass if a detection went missing and a
+// non-detection appeared, which is the confusion the split exists to prevent.
 func TestContentService_ActiveRules(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
 	rules := r.ContentService().ActiveRules()
-	require.Len(t, rules, len(r.Catalog().List()))
+
+	activeIDs := make([]string, 0, len(rules))
 	for _, rule := range rules {
 		assert.NotEmpty(t, rule.ID())
 		assert.NotEmpty(t, rule.Doc().Title)
+		activeIDs = append(activeIDs, rule.ID())
 	}
+
+	catalogIDs := make(map[string]struct{}, len(r.Catalog().List()))
+	for _, md := range r.Catalog().List() {
+		catalogIDs[md.ID] = struct{}{}
+	}
+
+	var extra []string
+	for _, id := range activeIDs {
+		if _, inCatalog := catalogIDs[id]; !inCatalog {
+			extra = append(extra, id)
+		}
+	}
+	assert.ElementsMatch(t, []string{"application_control_block", "sensor_recovery_failed"}, extra,
+		"the engine must evaluate exactly the catalog plus the registered non-detections")
+	require.Len(t, rules, len(catalogIDs)+len(extra))
 }
 
 // spec:server-admin-surface/per-rule-documentation-endpoint/operator-reads-the-rule-catalog

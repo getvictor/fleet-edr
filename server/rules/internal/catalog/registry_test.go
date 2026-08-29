@@ -92,7 +92,10 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 // surface can never silently diverge from the canonical name again. It also enforces that the canonical name is a clean human-readable
 // label, not the old "<name> (parenthetical implementation detail)" form whose detail belongs in Summary. The finding-title half of the
 // invariant (Finding.Title == DisplayName) is enforced for fixture-replayed rules by server/detection/testkit Replay and by each
-// rule's positive-detection test; application_control_block is the one exemption (per-block computed title + app_control:<n> RuleID).
+// rule's positive-detection test. The one rule it cannot hold for, application_control_block, is exempt because it is a
+// NonDetectionProjection rather than by name: its findings carry the matched app-control rule's id and severity from the payload,
+// so there is no rule-level title for them to equal. TestAll_NonDetectionClassification below pins that set, so the exemption can
+// never be widened by adding a name to a list.
 func TestAll_CanonicalDisplayName(t *testing.T) {
 	t.Parallel()
 	for _, r := range New(nil) {
@@ -124,4 +127,60 @@ func TestAll_ThreadsExclusionResolver(t *testing.T) {
 	assert.Same(t, res, byID["persistence_launchagent"].(*PersistenceLaunchAgent).Exclusions)
 	assert.Same(t, res, byID["privilege_launchd_plist_write"].(*PrivilegeLaunchdPlistWrite).Exclusions)
 	assert.Same(t, res, byID["sudoers_tamper"].(*SudoersTamper).Exclusions)
+}
+
+// Compile-time proof that the two non-detections satisfy the optional interface. A rule that stops implementing it silently
+// rejoins the operator-facing catalog, which is a documentation and ATT&CK-coverage change rather than a build failure, so the
+// assertion is worth stating rather than relying on the runtime test below alone.
+var (
+	_ api.NonDetection = (*ApplicationControlBlock)(nil)
+	_ api.NonDetection = (*SensorRecoveryFailed)(nil)
+)
+
+// TestAll_NonDetectionClassification pins which registered rules are NOT detections, and why. It is the discoverable counterpart
+// to the opt-in api.NonDetection interface: the declaration lives on each rule (next to the reasoning), and this test is the one
+// place that shows the whole classification at a glance.
+//
+// It guards in both directions, which is the point. A new rule that forgets to declare itself is treated as a detection, which is
+// the safe default and needs no test. The failures worth catching are the other two: a detection that accidentally opts out
+// disappears from GET /api/rules, the ATT&CK coverage export and docs/detection-rules.md without any other signal; and a
+// non-detection that loses its declaration silently reappears there, re-inflating the coverage figure read during procurement.
+func TestAll_NonDetectionClassification(t *testing.T) {
+	t.Parallel()
+
+	wantNonDetections := map[string]api.NonDetectionKind{
+		// The AUTH_EXEC walker already decided on the host; this renders that decision as an alert row.
+		"application_control_block": api.NonDetectionProjection,
+		// Reports our own automatic repair giving up. Both documented causes are faults in our software.
+		"sensor_recovery_failed": api.NonDetectionHealth,
+	}
+
+	gotNonDetections := map[string]api.NonDetectionKind{}
+	for _, r := range New(nil) {
+		nd, ok := r.(api.NonDetection)
+		if !ok {
+			assert.True(t, api.IsDetection(r), "%s implements no NonDetection, so it must read as a detection", r.ID())
+			continue
+		}
+		assert.False(t, api.IsDetection(r), "%s declares a non-detection kind, so it must not read as a detection", r.ID())
+		gotNonDetections[r.ID()] = nd.NonDetectionKind()
+	}
+
+	assert.Equal(t, wantNonDetections, gotNonDetections,
+		"the set of non-detections changed; every rule here is absent from /api/rules, /api/attack-coverage and docs/detection-rules.md")
+}
+
+// TestAll_DetectionsClaimTechniques asserts every DETECTION maps to at least one ATT&CK technique, which is what makes the
+// coverage export meaningful. It is scoped to detections deliberately: application_control_block returns an empty set on purpose
+// (a successful block is the absence of adversary activity, not an instance of it), and before the split that correct behaviour
+// had to be special-cased out of any such check.
+func TestAll_DetectionsClaimTechniques(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range New(nil) {
+		if !api.IsDetection(r) {
+			continue
+		}
+		assert.NotEmpty(t, r.Techniques(), "detection %s must map to at least one ATT&CK technique", r.ID())
+	}
 }

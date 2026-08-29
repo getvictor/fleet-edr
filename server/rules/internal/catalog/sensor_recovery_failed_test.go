@@ -35,6 +35,10 @@ func evalRecoveryFailed(t *testing.T, evt api.Event) []api.Finding {
 }
 
 // spec:server-detection-rules-engine/edr-sensor-recovery-failure-detection/automatic-recovery-gives-up-and-raises-a-finding
+// spec:server-detection-rules-engine/non-detections-are-excluded-from-the-operator-facing-catalog/a-non-detection-still-evaluates-and-alerts
+//
+// Being classified a non-detection removes this rule from the operator-facing catalog and nothing else: it still evaluates and
+// still persists the same alert, which is what this test pins.
 func TestSensorRecoveryFailed_RaisesACriticalFinding(t *testing.T) {
 	t.Parallel()
 	findings := evalRecoveryFailed(t, recoveryFailedEvent("e1", "host-a", "content_filter", "enable_failed", 3))

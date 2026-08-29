@@ -104,6 +104,48 @@ type Rule interface {
 	SupportedExclusionMatchTypes() []ExclusionMatchType
 }
 
+// NonDetectionKind names why a registered rule is not a detection. Used only as the return of NonDetection.
+type NonDetectionKind string
+
+const (
+	// NonDetectionProjection is a registered rule that projects a decision the agent already made into the alert stream rather than
+	// detecting anything. It carries no detection logic to inspect and makes no claim about adversary behaviour.
+	NonDetectionProjection NonDetectionKind = "projection"
+	// NonDetectionHealth is a registered rule whose subject is our own agent's operational state rather than activity on the host.
+	// A person still needs to act on it, but it is a statement about the sensor, not about an adversary.
+	NonDetectionHealth NonDetectionKind = "health"
+)
+
+// NonDetection is an OPTIONAL interface a registered rule implements to declare that it is not a detection. It is deliberately
+// opt-in and absent from Rule: a detection is the overwhelmingly common case and must stay the zero-effort default, so a new rule
+// that says nothing is treated as a detection. Only the rare rule that is something else has to say so, in its own file, next to
+// the doc comment that explains why.
+//
+// The distinction is about the CATALOG SURFACE, not about evaluation. A non-detection is registered, evaluated and persisted
+// exactly like any other rule; it is omitted from the operator-facing catalog (GET /api/rules, GET /api/attack-coverage, and the
+// generated docs/detection-rules.md) because those surfaces describe detections an operator can read, tune and reason about.
+// Publishing a rule there that has no detection logic, no tuning surface and no adversary claim misleads on all three counts, and
+// in the ATT&CK case inflates a coverage figure that is read during procurement.
+//
+// Registered non-detections and why:
+//
+//   - application_control_block is a NonDetectionProjection. The blocking decision was made on the host by the AUTH_EXEC walker;
+//     this rule renders it as an alert row. Its findings borrow the matched app-control rule's id and severity from the event
+//     payload rather than carrying its own, which is why it is also the one rule exempt from the Finding.Title == DisplayName
+//     invariant.
+//   - sensor_recovery_failed is a NonDetectionHealth. It reports that our own automatic repair of a stopped capture provider gave
+//     up, and both documented causes are faults in our software rather than adversary action.
+type NonDetection interface {
+	NonDetectionKind() NonDetectionKind
+}
+
+// IsDetection reports whether r is a detection, i.e. whether it belongs on the operator-facing catalog surfaces. A rule that does
+// not implement NonDetection is a detection.
+func IsDetection(r Rule) bool {
+	_, nonDetection := r.(NonDetection)
+	return !nonDetection
+}
+
 // ErrRetryBatch signals that a rule could not decide yet and the batch should be re-evaluated rather than acked. The engine treats
 // an Evaluate error wrapping it as retryable, unlike ordinary rule failures (which are logged and swallowed): it fails the batch so
 // the processor nacks it and re-evaluates. Alert dedup makes the re-run idempotent.

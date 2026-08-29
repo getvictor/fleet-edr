@@ -216,24 +216,10 @@ func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 // CatalogOnly returns just the rule catalog, without wiring the operator routes. Exposed for tooling that doesn't have a DB handle
 // (notably tools/gen-rule-docs which builds the markdown page from rule documentation at compile time). A nil exclusion resolver is
 // passed: tooling renders rule documentation, not live detection, so no configured exclusions apply.
+//
+// It goes through service.Service rather than a local api.Lister so the non-detection filter in Service.List is the ONE place that
+// decides what the catalog surfaces contain. A second implementation here would have to repeat that filter, and the two would drift
+// the first time only one was updated, leaving the generated docs describing a different rule set than GET /api/rules.
 func CatalogOnly() api.Lister {
-	return catalogList(catalog.New(nil))
-}
-
-// catalogList satisfies api.Lister by reading from a captured rule slice. Avoids dragging the service constructor into the
-// gen-rule-docs path.
-type catalogList []api.Rule
-
-func (c catalogList) List() []api.RuleMetadata {
-	out := make([]api.RuleMetadata, 0, len(c))
-	for _, r := range c {
-		out = append(out, api.RuleMetadata{
-			ID:                           r.ID(),
-			Techniques:                   r.Techniques(),
-			Doc:                          r.Doc(),
-			SupportedExclusionMatchTypes: r.SupportedExclusionMatchTypes(),
-			Platforms:                    r.Platforms(),
-		})
-	}
-	return out
+	return service.New(catalog.New(nil), nil)
 }
