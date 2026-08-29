@@ -23,10 +23,8 @@ Hand-edits to this file get overwritten on the next regeneration.
 | [`credential_keychain_dump`](#credential_keychain_dump) | Keychain credential dump | high | T1555.001 |
 | [`privilege_launchd_plist_write`](#privilege_launchd_plist_write) | LaunchDaemon persistence | high | T1543.004 |
 | [`sudoers_tamper`](#sudoers_tamper) | Sudoers tamper | high | T1548.003 |
-| [`application_control_block`](#application_control_block) | Application control block | medium |  |
 | [`dns_c2_beacon`](#dns_c2_beacon) | DNS C2 beacon | high | T1071.004, T1568.002 |
 | [`sensor_tamper`](#sensor_tamper) | EDR sensor disabled | high | T1562.001 |
-| [`sensor_recovery_failed`](#sensor_recovery_failed) | EDR sensor could not be restored | critical | T1562.001 |
 
 ## suspicious_exec
 
@@ -49,8 +47,6 @@ Detects two related chain shapes that share a single attribution chain:
 
 The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
 
-Both arms find the shell whether it forked the payload or replaced itself with it. A shell invoked as `zsh -c '<cmd>'` commonly execs the payload at its own PID rather than forking, which leaves no shell in the payload's parent chain; the rule looks at that PID's own exec history as well, so the shell is still attributed. This matters because the shells behave differently on macOS: `zsh` replaces itself, while `bash` and `sh` fork, so an identical command would otherwise be detected under one shell and missed under another.
-
 30 seconds is the temporal cap between the shell exec and the trigger event.
 
 ### Known false-positive sources
@@ -64,7 +60,6 @@ Both arms find the shell whether it forked the payload or replaced itself with i
 - 30s window is hard-coded; long-tail post-shell activity is missed by design.
 - A parent-path-glob exclusion silences BOTH arms of the rule for that parent.
 - An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.
-- The 30-second window applies to the shell that ran the payload, including one found on a PID's exec history, so a payload run from a long-idle interactive shell is still out of scope.
 
 ## persistence_launchagent
 
@@ -266,21 +261,6 @@ Unlike the persistence rules, this one deliberately does NOT key on Apple-signed
 
 - Atomic-rename writes (write a temp file, rename onto /etc/sudoers) are missed: ESF NOTIFY_OPEN doesn't fire on rename, and the extension does not subscribe to NOTIFY_RENAME today. Tracked as future work.
 
-## application_control_block
-
-**Application control block**  
-Surfaces every AUTH_EXEC denial from the extension as an alert in the unified view.
-
-| | |
-| --- | --- |
-| Rule ID | `application_control_block` |
-| Severity | `medium` |
-| Event types | `application_control_block` |
-
-### Description
-
-The extension's AUTH_EXEC decision walker denies execs that match an admin-defined application-control rule. Every such denial emits an `application_control_block` event that this built-in rule maps to an alert with `source='application_control'`. The alert carries the matched rule's identifier, severity, and operator-supplied custom message. The dedup key (source, host_id, rule_id, subject), where an app-control alert's subject is its process id, means repeated blocks of the same binary by the same rule on the same process collapse into one alert row.
-
 ## dns_c2_beacon
 
 **DNS C2 beacon**  
@@ -341,35 +321,4 @@ A provider an operator has deliberately turned off (the DNS proxy is optional) i
 
 - Reports that capture stopped, not whether it was restored. The repair (or its failure) is carried by the following transition events on the host's timeline rather than by the alert.
 - An attacker who stops a provider and prevents the agent from reporting it at all (killing the agent, or blocking upload) produces no transition event and so no alert. That absence is covered by host health going stale, not by this rule.
-
-## sensor_recovery_failed
-
-**EDR sensor could not be restored**  
-Flags a stopped capture provider that the agent tried and failed to restore, so the host is not capturing until someone intervenes.
-
-| | |
-| --- | --- |
-| Rule ID | `sensor_recovery_failed` |
-| Severity | `critical` |
-| ATT&CK | [`T1562.001`](https://attack.mitre.org/techniques/T1562/001/) |
-| Event types | `sensor_recovery_failed` |
-
-### Description
-
-The agent repairs a stopped capture provider by itself, and usually succeeds within about half a minute. This fires when it does not: every attempt in its budget has been used and the provider is still stopped.
-
-The practical difference from the sensor-disabled alert is what the host is doing now. That alert is raised seconds after capture stops, before anyone can know whether the repair will work, so most of the time it describes a host that has already fixed itself. This alert only exists for hosts that have not: the telemetry that provider carries is not being collected, and will not be until an operator restores it, usually by re-activating the extension on the host.
-
-The reported outcome says which kind of failure it was, because they point at different causes. If the repair command kept failing, suspect the host application or the system configuration daemon. If every repair reported success and the provider stayed stopped, re-enabling is not what the fault needs; that shape has been seen when the extension is running but its sessions are wedged.
-
-A provider an operator has deliberately turned off never reaches this rule: the agent does not try to repair a provider it was told to leave alone.
-
-### Known false-positive sources
-
-- None known. The event is only emitted after the agent has attempted and failed a bounded number of repairs, so there is no benign path that produces it; a host that reaches this state genuinely is not capturing.
-
-### Limitations
-
-- Reports that automatic recovery gave up, not why the provider stopped in the first place. The stop itself, and whether it looked like tampering, is carried by the sensor-disabled alert that precedes it.
-- An attacker who stops a provider AND prevents the agent from reporting at all produces no event and so no alert. That absence is covered by host health going stale, not by this rule.
 

@@ -31,6 +31,15 @@ const applicationControlBlockEventType = "application_control_block"
 
 func (r *ApplicationControlBlock) ID() string { return "application_control_block" }
 
+// NonDetectionKind declares this a projection, not a detection, so it stays off the operator-facing catalog surfaces
+// (GET /api/rules, GET /api/attack-coverage, docs/detection-rules.md). Nothing about registration, evaluation or alert
+// persistence changes. The blocking decision was already made on the host by the AUTH_EXEC walker; this rule renders it as an
+// alert row, which is why its findings carry the matched app-control rule's id and severity from the payload rather than its own,
+// and why Techniques() is empty.
+func (r *ApplicationControlBlock) NonDetectionKind() api.NonDetectionKind {
+	return api.NonDetectionProjection
+}
+
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
 func (r *ApplicationControlBlock) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
 

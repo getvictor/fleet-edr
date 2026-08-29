@@ -30,11 +30,19 @@ func New(rules []api.Rule, logger *slog.Logger) *Service {
 
 // --- api.Lister + api.RuleProvider --------------------------------------------
 
-// List returns RuleMetadata in registration order. Used by the operator endpoints (/api/rules, /api/attack-coverage) and the docs
-// generator.
+// List returns the DETECTIONS' RuleMetadata in registration order. Used by the operator endpoints (/api/rules,
+// /api/attack-coverage) and the docs generator.
+//
+// Registered rules that declare themselves non-detections (api.NonDetection) are omitted. These surfaces describe detections an
+// operator reads, tunes and reasons about, and a rule with no detection logic, no tuning surface and no adversary claim misleads
+// on each count; in the ATT&CK case it also inflates a coverage figure read during procurement. The omission is confined to this
+// method: ActiveRules below still returns every registered rule, so evaluation and alert persistence are unchanged.
 func (s *Service) List() []api.RuleMetadata {
 	out := make([]api.RuleMetadata, 0, len(s.rules))
 	for _, r := range s.rules {
+		if !api.IsDetection(r) {
+			continue
+		}
 		out = append(out, api.RuleMetadata{
 			ID:                           r.ID(),
 			Techniques:                   r.Techniques(),
@@ -46,8 +54,10 @@ func (s *Service) List() []api.RuleMetadata {
 	return out
 }
 
-// ActiveRules returns the in-memory rule set, identical to the
-// constructor input. Hot-reload is a future extension point.
+// ActiveRules returns the in-memory rule set, identical to the constructor input. Hot-reload is a future extension point.
+//
+// This deliberately includes non-detections, unlike List: a projection or a health signal is registered, evaluated and persisted
+// exactly like any other rule, and only its presence on the operator-facing catalog surfaces differs.
 func (s *Service) ActiveRules() []api.Rule {
 	return s.rules
 }

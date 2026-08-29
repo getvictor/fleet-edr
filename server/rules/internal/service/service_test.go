@@ -1,0 +1,111 @@
+package service
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/rules/api"
+)
+
+// stubRule is a minimal api.Rule. Detections use it directly; non-detections embed it and add NonDetectionKind, which is exactly
+// how a real rule opts out.
+type stubRule struct{ id string }
+
+func (r stubRule) ID() string                                             { return r.id }
+func (r stubRule) DisplayName() string                                    { return r.id }
+func (r stubRule) Techniques() []string                                   { return []string{"T1059"} }
+func (r stubRule) Doc() api.Documentation                                 { return api.Documentation{Title: r.id} }
+func (r stubRule) Platforms() []api.Platform                              { return []api.Platform{api.PlatformDarwin} }
+func (r stubRule) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
+func (r stubRule) Evaluate(context.Context, []api.Event, api.GraphReader) ([]api.Finding, error) {
+	return nil, nil
+}
+
+type stubProjection struct{ stubRule }
+
+func (r stubProjection) NonDetectionKind() api.NonDetectionKind { return api.NonDetectionProjection }
+
+type stubHealth struct{ stubRule }
+
+func (r stubHealth) NonDetectionKind() api.NonDetectionKind { return api.NonDetectionHealth }
+
+func ids(md []api.RuleMetadata) []string {
+	out := make([]string, 0, len(md))
+	for _, m := range md {
+		out = append(out, m.ID)
+	}
+	return out
+}
+
+// spec:server-detection-rules-engine/non-detections-are-excluded-from-the-operator-facing-catalog/the-catalog-omits-a-non-detection
+//
+// TestList_OmitsNonDetections is the load-bearing assertion of the catalog split: the operator-facing surfaces
+// (GET /api/rules, GET /api/attack-coverage, the generated docs) describe detections only, while the engine keeps receiving every
+// registered rule. Both halves are asserted together because the value of the split is precisely that they differ; a change that
+// filtered ActiveRules too would stop non-detections firing at all, which is a silent loss of alerting rather than a catalog fix.
+func TestList_OmitsNonDetections(t *testing.T) {
+	t.Parallel()
+
+	rules := []api.Rule{
+		stubRule{id: "detection_first"},
+		stubProjection{stubRule{id: "a_projection"}},
+		stubRule{id: "detection_second"},
+		stubHealth{stubRule{id: "a_health_signal"}},
+	}
+	svc := New(rules, nil)
+
+	assert.Equal(t, []string{"detection_first", "detection_second"}, ids(svc.List()),
+		"List must carry detections only, in registration order")
+
+	active := make([]string, 0, len(svc.ActiveRules()))
+	for _, r := range svc.ActiveRules() {
+		active = append(active, r.ID())
+	}
+	assert.Equal(t, []string{"detection_first", "a_projection", "detection_second", "a_health_signal"}, active,
+		"ActiveRules must still carry every registered rule so evaluation and alert persistence are unchanged")
+}
+
+// spec:server-detection-rules-engine/non-detections-are-excluded-from-the-operator-facing-catalog/a-rule-that-declares-nothing-is-a-detection
+//
+// TestList_AllDetections covers the ordinary case, so the filter cannot regress into dropping rules that never opted out.
+func TestList_AllDetections(t *testing.T) {
+	t.Parallel()
+
+	svc := New([]api.Rule{stubRule{id: "one"}, stubRule{id: "two"}}, nil)
+	assert.Equal(t, []string{"one", "two"}, ids(svc.List()))
+}
+
+// TestList_EmptyCatalogs pins the two degenerate inputs the constructor documents as accepted: no rules at all, and a set that is
+// entirely non-detections. The second is the one worth having, because an empty List from a non-empty rule set is exactly what a
+// misapplied filter produces, and callers render it as "no rules" rather than failing.
+func TestList_EmptyCatalogs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no rules", func(t *testing.T) {
+		t.Parallel()
+		assert.Empty(t, New(nil, nil).List())
+	})
+
+	t.Run("only non-detections", func(t *testing.T) {
+		t.Parallel()
+		svc := New([]api.Rule{stubProjection{stubRule{id: "p"}}, stubHealth{stubRule{id: "h"}}}, nil)
+		assert.Empty(t, svc.List(), "a catalog of only non-detections lists nothing")
+		require.Len(t, svc.ActiveRules(), 2, "but both still evaluate")
+	})
+}
+
+// TestList_CarriesFullMetadata guards the fields the filter loop copies. The filter added a continue to this loop, and a copy that
+// silently dropped a field would surface as missing documentation in the UI rather than as a test failure anywhere else.
+func TestList_CarriesFullMetadata(t *testing.T) {
+	t.Parallel()
+
+	got := New([]api.Rule{stubRule{id: "r"}}, nil).List()
+	require.Len(t, got, 1)
+	assert.Equal(t, "r", got[0].ID)
+	assert.Equal(t, []string{"T1059"}, got[0].Techniques)
+	assert.Equal(t, "r", got[0].Doc.Title)
+	assert.Equal(t, []api.Platform{api.PlatformDarwin}, got[0].Platforms)
+}

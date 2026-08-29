@@ -43,6 +43,14 @@ type SensorRecoveryFailed struct{}
 
 func (r *SensorRecoveryFailed) ID() string { return "sensor_recovery_failed" }
 
+// NonDetectionKind declares this a health signal, not a detection, so it stays off the operator-facing catalog surfaces
+// (GET /api/rules, GET /api/attack-coverage, docs/detection-rules.md). Nothing about registration, evaluation or alert
+// persistence changes. Its subject is our own agent: the repair of a stopped capture provider giving up. Both failure shapes it
+// reports point at our software (the host application or the system configuration daemon failing the repair, or the extension
+// running with wedged sessions), so it establishes nothing about an adversary. A person still has to act on it, which is why it
+// keeps its severity; where that signal belongs is being moved to a host-health surface separately.
+func (r *SensorRecoveryFailed) NonDetectionKind() api.NonDetectionKind { return api.NonDetectionHealth }
+
 // SupportedExclusionMatchTypes returns nil for the same reason sensor_tamper does: there is no benign writer to allowlist,
 // and the one supported way to run without a provider never reaches this rule.
 func (r *SensorRecoveryFailed) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
