@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	outDir := flag.String("out", "docs/rules", "destination directory for the rule pack")
+	outDir := flag.String("out", "server/rules/internal/catalog/pack", "destination directory for the rule pack")
 	flag.Parse()
 
 	written, err := generate(*outDir)
@@ -74,6 +74,11 @@ func prune(outDir string, pack map[string][]byte) error {
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yml") {
+			continue
+		}
+		// The shared-list definitions live in the pack but are authored, not generated. Without this the first regeneration
+		// after they were added deleted them, which is how this guard came to exist.
+		if e.Name() == rulesbootstrap.PackSharedListsFile {
 			continue
 		}
 		if _, registered := pack[strings.TrimSuffix(e.Name(), ".yml")]; registered {

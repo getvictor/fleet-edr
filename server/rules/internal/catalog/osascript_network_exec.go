@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
@@ -80,35 +81,21 @@ func (r *OsascriptNetworkExec) Doc() api.Documentation {
 	}
 }
 
-var osascriptPaths = map[string]bool{
-	"/usr/bin/osascript": true,
-}
+var osascriptPaths = sync.OnceValue(func() map[string]bool { return paramsFor("osascript_network_exec").StringSet("osascript_paths") })
 
-var downloadBinaries = map[string]bool{
-	"/usr/bin/curl":          true,
-	"/usr/bin/wget":          true,
-	"/opt/homebrew/bin/curl": true,
-	"/opt/homebrew/bin/wget": true,
-}
+var downloadBinaries = sync.OnceValue(func() map[string]bool { return paramsFor("osascript_network_exec").StringSet("download_binaries") })
 
 // shebangShellPaths is the set of shells the kernel transparently exec()s when running a `#!/bin/sh`-style script. The exec event's
 // path field is the SHELL path (because that's what the kernel actually called exec on), not the script path; the script path lives in
 // argv[1]. Without this detour the rule would miss the canonical "osascript → sh /tmp/stage2.sh" chain even though the data is right
 // there in the descendant's args.
-var shebangShellPaths = map[string]bool{
-	"/bin/sh":       true,
-	"/bin/bash":     true,
-	"/bin/zsh":      true,
-	"/bin/dash":     true,
-	"/usr/bin/zsh":  true,
-	"/usr/bin/bash": true,
-	"/usr/bin/dash": true,
-}
+// shebangShellPaths is the shared shebang_shells list (pack/lists.yml). Shared rather than a param of this rule because
+// suspicious_exec matches against the same set in suspiciousTempPath (issue #759).
+var shebangShellPaths = sync.OnceValue(func() map[string]bool { return sharedSet("shebang_shells") })
 
 const (
 	// osascriptWindowNs bounds the descendant walk from the osascript exec. Real droppers stage and run within a couple of seconds;
 	// 30s is a generous ceiling that keeps slow networks in-bound without making the rule a sliding-window fish-hook.
-	osascriptWindowNs = int64(30_000_000_000)
 
 	// maxAncestorWalkSteps caps the parent-chain traversal so a runaway process tree (or a malformed event with a self-referential ppid)
 	// can't loop. Real chains go osascript → sh → maybe-one-more → temp-exec, so any depth beyond a handful is suspicious in itself.
@@ -175,14 +162,14 @@ func (r *OsascriptNetworkExec) evalEvent(
 	if osa.ExecTimeNs != nil {
 		osaExecTS = *osa.ExecTimeNs
 	}
-	tr := api.TimeRange{FromNs: osaExecTS, ToNs: osaExecTS + osascriptWindowNs}
+	tr := api.TimeRange{FromNs: osaExecTS, ToNs: osaExecTS + osascriptWindow()}
 	descendants, err := collectDescendants(ctx, s, evt.HostID, osa.PID, tr)
 	if err != nil {
 		return nil, 0, err
 	}
 	var downloader *api.Process
 	for i := range descendants {
-		if downloadBinaries[descendants[i].Path] {
+		if downloadBinaries()[descendants[i].Path] {
 			downloader = &descendants[i]
 			break
 		}
@@ -222,7 +209,7 @@ func (r *OsascriptNetworkExec) findOsascriptAncestor(
 		return nil, fmt.Errorf("get pid %d: %w", startPID, err)
 	}
 	for steps := 0; current != nil && steps < maxAncestorWalkSteps; steps++ {
-		if osascriptPaths[current.Path] {
+		if osascriptPaths()[current.Path] {
 			return current, nil
 		}
 		if current.PPID <= 1 {
@@ -248,7 +235,7 @@ func (r *OsascriptNetworkExec) findOsascriptAncestor(
 // a command string, not a path: running isSuspiciousPath against it
 // false-positives on arbitrary text containing `..`.
 func shebangScriptArg(p osascriptPayload) string {
-	if !shebangShellPaths[p.Path] {
+	if !shebangShellPaths()[p.Path] {
 		return ""
 	}
 	for i := 1; i < len(p.Args); i++ {
@@ -321,3 +308,9 @@ func collectDescendants(ctx context.Context, s api.GraphReader, hostID string, r
 	}
 	return all, nil
 }
+
+// osascriptWindow is the descendant-walk bound, from the rule's pack file (issue #758). Memoized: a duration lookup is cheap but
+// this is a per-exec path, and one resolution keeps the value stable for the process lifetime.
+var osascriptWindow = sync.OnceValue(func() int64 {
+	return paramsFor("osascript_network_exec").Duration("window").Nanoseconds()
+})

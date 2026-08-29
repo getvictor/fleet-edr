@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
@@ -71,16 +72,12 @@ func (r *CredentialKeychainDump) Doc() api.Documentation {
 // securityBinaryPaths is the set of `security` binary locations we'll flag. Canonical-only by design: /usr/bin/security is where the
 // tool lives on every shipping macOS SKU; SIP guarantees it. If a pilot customer surfaces a legitimate alternate path (symlink farm on
 // a locked-down dev VM, for example), extend the map here rather than loosening the match.
-var securityBinaryPaths = map[string]bool{
-	"/usr/bin/security": true,
-}
+var securityBinaryPaths = sync.OnceValue(func() map[string]bool { return paramsFor("credential_keychain_dump").StringSet("security_paths") })
 
 // dumpKeychainArgTokens is the subcommand set we flag. `dump-keychain` is the observed hit; `find-internet-password -w`,
 // `find-generic-password -w`, and `unlock-keychain <path>` are adjacent tools that also exfiltrate credentials but we leave them out
 // to keep the rule high-precision. Add them when a pilot customer asks.
-var dumpKeychainArgTokens = map[string]bool{
-	"dump-keychain": true,
-}
+var dumpKeychainArgTokens = sync.OnceValue(func() map[string]bool { return paramsFor("credential_keychain_dump").StringSet("dump_keychain_args") })
 
 type keychainDumpPayload struct {
 	PID  int      `json:"pid"`
@@ -99,7 +96,7 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			continue
 		}
-		if !securityBinaryPaths[p.Path] {
+		if !securityBinaryPaths()[p.Path] {
 			continue
 		}
 		sub, ok := findDumpKeychainArg(p.Args)
@@ -144,7 +141,7 @@ func findDumpKeychainArg(argv []string) (string, bool) {
 			// Flag, not a subcommand.
 			continue
 		}
-		if dumpKeychainArgTokens[a] {
+		if dumpKeychainArgTokens()[a] {
 			return a, true
 		}
 		// First non-flag token after argv[0] is the subcommand the security tool will act on; if it's not one we flag,

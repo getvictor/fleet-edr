@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
@@ -68,10 +69,7 @@ func (r *PersistenceLaunchAgent) Doc() api.Documentation {
 }
 
 // launchctlPaths covers the common macOS launchctl binary locations.
-var launchctlPaths = map[string]bool{
-	"/bin/launchctl":     true,
-	"/usr/bin/launchctl": true,
-}
+var launchctlPaths = sync.OnceValue(func() map[string]bool { return paramsFor("persistence_launchagent").StringSet("launchctl_paths") })
 
 // launchAgentPath matches arguments that reference a plist under a LaunchAgents directory. We accept both system-wide
 // (/Library/LaunchAgents) and per-user (~ / /Users/<u>/Library) locations: an attacker-planted plist at either is a persistence
@@ -98,7 +96,7 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, nil
 	}
-	if !launchctlPaths[p.Path] {
+	if !launchctlPaths()[p.Path] {
 		return nil, nil
 	}
 	subcommand, plistPath := extractLaunchctlSubcommand(p.Args)

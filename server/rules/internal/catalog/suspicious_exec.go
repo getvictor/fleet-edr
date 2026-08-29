@@ -6,29 +6,18 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// Known shell paths.
-var shellPaths = map[string]bool{
-	"/bin/sh":       true,
-	"/bin/bash":     true,
-	"/bin/zsh":      true,
-	"/bin/dash":     true,
-	"/usr/bin/sh":   true,
-	"/usr/bin/bash": true,
-	"/usr/bin/zsh":  true,
-	"/usr/bin/dash": true,
-}
+// shellPaths is the shared unix_shells list (pack/lists.yml). Shared rather than a param of this rule because shell_from_office
+// matches against the same set; one definition read by both cannot drift (issue #759).
+var shellPaths = sync.OnceValue(func() map[string]bool { return sharedSet("unix_shells") })
 
-// Suspicious path prefixes where legitimate binaries should not execute from.
-var suspiciousPrefixes = []string{
-	"/tmp/",
-	"/var/tmp/",
-	"/private/tmp/",
-	"/dev/shm/",
-}
+// suspiciousPrefixes is the shared world_writable_prefixes list (pack/lists.yml). Read through isSuspiciousPath by three rules
+// (this one, dns_c2_beacon and osascript_network_exec), which is why it is a shared list rather than any rule's param.
+var suspiciousPrefixes = sync.OnceValue(func() []string { return sharedList("world_writable_prefixes") })
 
 // SuspiciousExec detects two related shapes that share a single attribution
 // chain: non-shell-process spawned a shell, and within 30 seconds the shell
@@ -119,9 +108,6 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 }
 
 const (
-	// suspiciousExecWindowNs bounds the temporal distance between the shell exec and the trigger event (temp-exec or network_connect).
-	// Real chains complete in seconds; 30s is a generous ceiling that matches the original forward-direction rule.
-	suspiciousExecWindowNs = int64(30_000_000_000)
 
 	// maxSuspiciousAncestorWalkSteps caps the parent-chain traversal so a pathological process tree (or a malformed event with
 	// self-referential ppid) can't loop. Real chains go non-shell -> shell -> temp, and shell-to-shell layering rarely exceeds two or
@@ -209,7 +195,7 @@ func findShellExecEventID(events []api.Event, hostID string, shellPID int, exclu
 		if p.PID != shellPID {
 			continue
 		}
-		if !shellPaths[p.Path] {
+		if !shellPaths()[p.Path] {
 			continue
 		}
 		return e.EventID
@@ -266,7 +252,7 @@ type execMatchInputs struct {
 
 // evalExecArm1 handles the canonical fork+exec dropper shape: the temp-binary is a SEPARATE process from the shell, so the shell
 // sits at the temp-binary's PPID (or higher, through possible shell-to-shell layering). The walk starts at the temp-exec's own PID;
-// the loop's first check is `shellPaths[..]` which is false for the temp-binary, so it trivially advances to PPID on the next step.
+// the loop's first check is `shellPaths()[..]` which is false for the temp-binary, so it trivially advances to PPID on the next step.
 func (r *SuspiciousExec) evalExecArm1(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
 ) (*api.Finding, int, error) {
@@ -297,14 +283,14 @@ func (r *SuspiciousExec) evalExecArm2(
 	}
 	for i := range chain {
 		prior := &chain[i]
-		if !shellPaths[prior.Path] {
+		if !shellPaths()[prior.Path] {
 			continue
 		}
 		priorParent, err := r.lookupAncestor(ctx, s, in.evt.HostID, prior.PPID, in.evt.TimestampNs)
 		if err != nil {
 			return nil, 0, err
 		}
-		if priorParent != nil && shellPaths[priorParent.Path] {
+		if priorParent != nil && shellPaths()[priorParent.Path] {
 			continue
 		}
 		if !r.shouldFire(in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
@@ -464,7 +450,7 @@ func (r *SuspiciousExec) findShellOnExecChain(
 	// shells exec in place at one PID, that is the one most likely to fail the window and drop the alert.
 	for i := len(chain) - 1; i >= 0; i-- {
 		prior := &chain[i]
-		if !shellPaths[prior.Path] {
+		if !shellPaths()[prior.Path] {
 			continue
 		}
 		priorParent, err := r.lookupAncestor(ctx, s, hostID, prior.PPID, asOfNs)
@@ -481,7 +467,7 @@ func (r *SuspiciousExec) findShellOnExecChain(
 		}
 		// A shell whose own parent is a shell is shell-to-shell layering, not the boundary this rule fires on; keep walking the
 		// chain for one whose parent is not a shell, exactly as the exec arm does.
-		if priorParent != nil && shellPaths[priorParent.Path] {
+		if priorParent != nil && shellPaths()[priorParent.Path] {
 			continue
 		}
 		return prior, priorParent, nil
@@ -530,7 +516,7 @@ func (r *SuspiciousExec) findShellWithNonShellAncestor(
 func (r *SuspiciousExec) examineCandidate(
 	ctx context.Context, s api.GraphReader, hostID string, current *api.Process, asOfNs int64,
 ) (shell, parent, advance *api.Process, err error) {
-	if !shellPaths[current.Path] {
+	if !shellPaths()[current.Path] {
 		// Not a shell. Walk up if there's an ancestor to walk to.
 		if current.PPID <= 1 {
 			return nil, nil, nil, nil
@@ -553,7 +539,7 @@ func (r *SuspiciousExec) examineCandidate(
 	if candidate == nil {
 		return nil, nil, nil, nil
 	}
-	if !shellPaths[candidate.Path] {
+	if !shellPaths()[candidate.Path] {
 		return current, candidate, nil, nil
 	}
 	// Shell-to-shell layering (sudo bash, su -c bash, ...). Keep climbing.
@@ -618,7 +604,7 @@ func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
 	// an exec after its own child's network connection, measured at 701ms on a busy host (issue #710), and an unpadded lower bound
 	// reads that as "the trigger came first" and drops the finding. The upper bound is not padded: that direction is a real
 	// temporal limit on how long after a shell the rule still attributes activity to it.
-	return triggerTS >= anchor-agentStampSkewPadNs && triggerTS <= anchor+suspiciousExecWindowNs
+	return triggerTS >= anchor-agentStampSkewPadNs && triggerTS <= anchor+suspiciousExecWindow()
 }
 
 // findShellFromResolvedProcess walks up from a connecting process that has ALREADY been resolved, rather than resolving its PID again
@@ -743,7 +729,7 @@ func isLocalResolverIP(addr string) bool {
 }
 
 func isSuspiciousPath(path string) bool {
-	for _, prefix := range suspiciousPrefixes {
+	for _, prefix := range suspiciousPrefixes() {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
@@ -775,7 +761,7 @@ func suspiciousTempPath(p execPayload) (string, bool) {
 	if isSuspiciousPath(p.Path) {
 		return p.Path, true
 	}
-	if !shebangShellPaths[p.Path] {
+	if !shebangShellPaths()[p.Path] {
 		return "", false
 	}
 	for i := 1; i < len(p.Args); i++ {
@@ -795,3 +781,10 @@ func suspiciousTempPath(p execPayload) (string, bool) {
 	}
 	return "", false
 }
+
+// suspiciousExecWindow is the shell-to-trigger bound, from the rule's pack file (issue #758). The shell and world-writable-prefix
+// sets stay package-level literals: both are shared with other rules, and see algorithmParams for why a shared list cannot move
+// into per-rule params yet (issue #759).
+var suspiciousExecWindow = sync.OnceValue(func() int64 {
+	return paramsFor("suspicious_exec").Duration("window").Nanoseconds()
+})

@@ -29,6 +29,20 @@ x-engine:
   event_types:
     - exec
   algorithm: descendant_within_window
+  params:
+    # Rule identity, read-only: what counts as osascript.
+    osascript_paths:
+      - /usr/bin/osascript
+    # The downloaders whose invocation under osascript is the dropper shape. The tunable one: a fleet with its own fetch tool
+    # adds it here.
+    download_binaries:
+      - /usr/bin/curl
+      - /usr/bin/wget
+      - /opt/homebrew/bin/curl
+      - /opt/homebrew/bin/wget
+    # Bounds the descendant walk forward from the osascript exec. Real droppers stage and run within a couple of seconds; 30s
+    # keeps slow networks in bounds without turning the rule into a sliding-window fish-hook.
+    window: 30s
   limitations:
     - 30-second descendant window is hard-coded; longer-running chains are missed by design.
     - 'Does not cover Python URL fetches or AppleScript built-in URL access: only flags the explicit curl/wget shape.'

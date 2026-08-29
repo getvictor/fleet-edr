@@ -27,6 +27,11 @@ x-engine:
   event_types:
     - exec
   algorithm: exec_subcommand_and_path_pattern_match
+  params:
+    # The launchctl binaries whose invocation this rule watches. Read-only: this is the rule's identity, not a threshold.
+    launchctl_paths:
+      - /bin/launchctl
+      - /usr/bin/launchctl
   exclusions:
     - path_glob
   limitations:

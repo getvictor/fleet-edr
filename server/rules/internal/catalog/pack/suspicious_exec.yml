@@ -35,6 +35,10 @@ x-engine:
     - exec
     - network_connect
   algorithm: ancestor_walk_path_prefix
+  params:
+    # Maximum time between the shell exec and the trigger event (a temp-path exec or an outbound connect). Real chains complete
+    # in seconds, so 30s is a generous ceiling rather than a tuned threshold.
+    window: 30s
   exclusions:
     - parent_path_glob
     - team_id

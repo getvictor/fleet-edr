@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 )
@@ -59,12 +60,7 @@ func (r *ShellFromOffice) Doc() api.Documentation {
 
 // officeBinaries is the set of macOS Office executable paths that, as a parent, make a shell exec suspicious. We match full paths,
 // not substrings, so a user-named file like `/tmp/Microsoft Word` cannot accidentally silence or spoof a finding.
-var officeBinaries = map[string]bool{
-	"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word":             true,
-	"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel":           true,
-	"/Applications/Microsoft PowerPoint.app/Contents/MacOS/Microsoft PowerPoint": true,
-	"/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook":       true,
-}
+var officeBinaries = sync.OnceValue(func() map[string]bool { return paramsFor("shell_from_office").StringSet("office_binaries") })
 
 type shellFromOfficePayload struct {
 	PID  int    `json:"pid"`
@@ -86,7 +82,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, nil
 	}
-	if !shellPaths[p.Path] {
+	if !shellPaths()[p.Path] {
 		return nil, nil
 	}
 
@@ -96,7 +92,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	}
 	// Parent not yet materialised, or not an Office binary. The processor marks the whole batch processed after Evaluate returns, so a
 	// re-feed does not happen automatically. Missing-parent cases are accepted today; a deferred retry queue is a future improvement.
-	if parent == nil || !officeBinaries[parent.Path] {
+	if parent == nil || !officeBinaries()[parent.Path] {
 		return nil, nil
 	}
 
