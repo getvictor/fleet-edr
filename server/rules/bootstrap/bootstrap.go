@@ -225,6 +225,17 @@ func CatalogOnly() api.Lister {
 	return service.New(catalog.New(nil), nil)
 }
 
+// PackSharedListsFile names the pack file holding shared list definitions. It is authored rather than generated, so the
+// rule-file generator must preserve it; re-exported here because tooling lives outside server/rules and cannot import the
+// catalog's internal package.
+const PackSharedListsFile = catalog.SharedListsFile
+
+// PrunePack removes rule files for rules that are no longer registered, preserving the authored shared-list file. Re-exported
+// so tooling outside server/rules can reach the implementation, which lives where CI actually runs it.
+func PrunePack(dir string, pack map[string][]byte) ([]string, error) {
+	return export.Prune(dir, pack, PackSharedListsFile)
+}
+
 // ExportPack renders every registered detection as a declarative rule file, keyed by rule id (issue #757).
 //
 // Exposed here rather than from the internal export package because tooling (tools/gen-rule-pack) lives outside server/rules and
@@ -232,5 +243,5 @@ func CatalogOnly() api.Lister {
 // CatalogOnly list the docs generator does, which is what guarantees the pack and docs/detection-rules.md describe exactly the
 // same set of rules.
 func ExportPack() (map[string][]byte, error) {
-	return export.Pack(CatalogOnly().List())
+	return export.Pack(CatalogOnly().List(), catalog.ParamsNode)
 }

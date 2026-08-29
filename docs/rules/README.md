@@ -1,31 +1,23 @@
 # Rule pack
 
-One declarative rule file per registered detection, generated from the rule catalog. Refresh with `task docs:rule-pack`; a stale or missing file fails CI, so do not hand-edit these.
+The pack moved. One declarative rule file per registered detection now lives at [`server/rules/internal/catalog/pack/`](../../server/rules/internal/catalog/pack), inside the package that reads it.
 
-Each file is standard Sigma metadata plus a single namespaced `x-engine` key holding what Sigma has no concept of: our stable rule id, the rule kind, its portability, the event types it consumes, the evaluator that decides it, the exclusion dimensions it honours, and its known limitations.
+## Why it moved
 
-## Why every rule says `type: graph` today
+Phase 1 generated these files and nothing read them, so `docs/` was a reasonable home. From Phase 2 the rules read their own parameters out of them at boot, and a `go:embed` pattern cannot contain `..`, so a package under `server/rules/` cannot embed a directory at the repository root.
 
-A rule is `type: sigma` only when its logic lives in the file's `detection:` block and the engine evaluates it from there. Every detection is currently a Go implementation, so neither half holds and each file honestly reports `type: graph` with `portable: none`.
+Keeping the canonical copy here and generating a second one next to the code was the obvious workaround and the wrong one: that is the arrangement in issue #781, where the embedded OpenAPI spec drifted 49 lines from its canonical source because the `go:generate` that syncs them is wired to nothing. One canonical location, owned by the code that reads it, has no such failure mode.
 
-Writing a `detection:` block by hand to look portable would assert behaviour that nothing verifies. Converting the rules whose logic Sigma can genuinely express, and with them the first real `type: sigma` files, is tracked separately.
+## Working with the pack
 
-## What is missing on purpose
+Refresh it with `task docs:rule-pack`. A stale or missing file fails CI, and regeneration removes files for rules that are no longer registered.
 
-**Parameters.** Thresholds and lists are still unexported Go constants. They move into these files when the engine starts reading them from here, rather than being copied out now into a second place that can disagree with the first.
+Everything in a rule file is generated from the rule's Go documentation **except `x-engine.params`**, which the rules read at boot and which is therefore authored by hand. Regeneration re-emits an existing params block verbatim, comments included.
 
-**Non-detections.** The registry also holds a projection of a decision the agent already made and a health signal about our own agent. Neither has detection logic to inspect, a tuning surface, or an adversary claim, so neither gets a file.
+## Where a value lives
 
-## Fields
+What reads a value decides which file holds it.
 
-| Key                                               | Source                                                                     |
-| ------------------------------------------------- | -------------------------------------------------------------------------- |
-| `title`, `description`, `level`, `falsepositives` | The rule's operator-facing documentation                                   |
-| `id`                                              | A UUID derived from the rule id, because Sigma rejects a slug              |
-| `tags`                                            | MITRE ATT&CK techniques, in Sigma's `attack.` vocabulary                   |
-| `logsource`                                       | Platform and the Sigma category of the rule's first event type             |
-| `x-engine.rule_id`                                | The stable snake_case id that alerts and exclusions key on                 |
-| `x-engine.algorithm`                              | The evaluator that decides the rule                                        |
-| `x-engine.event_types`                            | Every event type the rule consumes, not just the one `logsource` can carry |
-| `x-engine.exclusions`                             | The exclusion dimensions the rule consults                                 |
-| `x-engine.limitations`                            | What the rule does not catch                                               |
+A value only one rule matches against is that rule's parameter, under `x-engine.params` in its own file. A value more than one rule matches against lives in `pack/lists.yml`, defined once and read by every consumer; copying it into each rule's file would leave nothing keeping the copies equal, which is weaker than the single definition it replaced. `lists.yml` is authored rather than generated, and regeneration leaves it alone.
+
+Some values stay in Go on purpose. A parameter that bounds **retrieval** rather than the decision (the ingest and clock-skew pads, the ancestor-walk and descendant caps, the DNS port) is not exposed, because widening it changes no finding and narrowing it causes silent false negatives: no setting improves detection, so the knob would be all downside.

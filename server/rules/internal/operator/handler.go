@@ -8,6 +8,7 @@ import (
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/export"
 )
 
@@ -141,7 +142,7 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		if rm.ID != id {
 			continue
 		}
-		body, err := export.Rule(rm)
+		body, err := export.Rule(rm, catalog.ParamsNode(rm.ID))
 		if err != nil {
 			h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
 			writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})

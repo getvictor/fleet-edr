@@ -1,0 +1,51 @@
+# Shared list definitions (issue #759).
+#
+# A list belongs here when MORE THAN ONE rule matches against it. A list only one rule uses is that rule's param, in its own file
+# under x-engine.params. The split follows from what reads the value: a rule's own code reads a param, and code shared across
+# rules reads a shared list.
+#
+# Before this file existed these three were Go variables, and moving them into per-rule params would have copied them into seven
+# rule files with nothing keeping the copies equal. One definition read by every consumer cannot drift.
+#
+# Unlike rule files, this file is NOT generated. Hand-edits survive.
+
+# Shells whose exec, under a non-shell parent, opens a suspicious chain, and whose exec under a Microsoft Office parent is the
+# post-phish shape.
+#
+# Read by: suspicious_exec (ancestor walk, re-exec chain), shell_from_office (child match).
+unix_shells:
+  - /bin/sh
+  - /bin/bash
+  - /bin/zsh
+  - /bin/dash
+  - /usr/bin/sh
+  - /usr/bin/bash
+  - /usr/bin/zsh
+  - /usr/bin/dash
+
+# Shells the kernel transparently exec()s when running a `#!/bin/sh`-style script, so the exec event's path field is the SHELL and
+# the script path is argv[1].
+#
+# NOTE this deliberately omits /usr/bin/sh, which unix_shells above includes. The two sets have differed since before they moved
+# out of Go, and whether that asymmetry is intentional is unconfirmed; it is preserved here rather than quietly reconciled,
+# because silently widening a match set is a behaviour change wearing a refactor's clothes.
+#
+# Read by: osascript_network_exec (shebang stage-2 detection), suspicious_exec (temp-path resolution).
+shebang_shells:
+  - /bin/sh
+  - /bin/bash
+  - /bin/zsh
+  - /bin/dash
+  - /usr/bin/zsh
+  - /usr/bin/bash
+  - /usr/bin/dash
+
+# Directories a legitimate binary should not execute from. Prefix-matched, so each entry ends in a slash.
+#
+# Read by: suspicious_exec (the temp-exec arm), dns_c2_beacon (the suspicion gate that keeps ordinary browser resolve-then-connect
+# traffic from firing), osascript_network_exec (stage-2 staging).
+world_writable_prefixes:
+  - /tmp/
+  - /var/tmp/
+  - /private/tmp/
+  - /dev/shm/

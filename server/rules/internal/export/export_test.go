@@ -45,7 +45,7 @@ func decode(t *testing.T, body []byte) map[string]any {
 func TestRule_ShapeAndMapping(t *testing.T) {
 	t.Parallel()
 
-	body, err := Rule(metadata())
+	body, err := Rule(metadata(), nil)
 	require.NoError(t, err)
 	got := decode(t, body)
 
@@ -77,7 +77,7 @@ func TestRule_ShapeAndMapping(t *testing.T) {
 func TestRule_KeyOrder(t *testing.T) {
 	t.Parallel()
 
-	body, err := Rule(metadata())
+	body, err := Rule(metadata(), nil)
 	require.NoError(t, err)
 
 	var order []string
@@ -137,7 +137,7 @@ func TestRule_UnmappedEventTypeKeepsItsOwnName(t *testing.T) {
 
 	md := metadata()
 	md.Doc.EventTypes = []string{"btm_launch_item_add"}
-	body, err := Rule(md)
+	body, err := Rule(md, nil)
 	require.NoError(t, err)
 
 	logsource, ok := decode(t, body)["logsource"].(map[string]any)
@@ -155,7 +155,7 @@ func TestRule_OmitsEmptyOptionalKeys(t *testing.T) {
 	md.Doc.Limitations = nil
 	md.SupportedExclusionMatchTypes = nil
 	md.Techniques = nil
-	body, err := Rule(md)
+	body, err := Rule(md, nil)
 	require.NoError(t, err)
 
 	got := decode(t, body)
@@ -194,7 +194,7 @@ func TestRule_RejectsUnrenderableMetadata(t *testing.T) {
 			t.Parallel()
 			md := metadata()
 			tc.mut(&md)
-			_, err := Rule(md)
+			_, err := Rule(md, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
 		})
@@ -211,12 +211,12 @@ func TestPack_AllOrNothing(t *testing.T) {
 	bad.ID = "broken_rule"
 	bad.Platforms = nil
 
-	pack, err := Pack([]api.RuleMetadata{good, bad})
+	pack, err := Pack([]api.RuleMetadata{good, bad}, func(string) *yaml.Node { return nil })
 	require.Error(t, err)
 	assert.Nil(t, pack)
 	assert.Contains(t, err.Error(), "broken_rule")
 
-	pack, err = Pack([]api.RuleMetadata{good})
+	pack, err = Pack([]api.RuleMetadata{good}, func(string) *yaml.Node { return nil })
 	require.NoError(t, err)
 	assert.Len(t, pack, 1)
 	assert.Contains(t, pack, "example_rule")
@@ -229,9 +229,9 @@ func TestFile_IsTheDocumentBehindTheHeader(t *testing.T) {
 	t.Parallel()
 
 	md := metadata()
-	doc, err := Rule(md)
+	doc, err := Rule(md, nil)
 	require.NoError(t, err)
-	f, err := File(md)
+	f, err := File(md, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, Header+string(doc), string(f))
@@ -244,8 +244,34 @@ func TestFile_IsTheDocumentBehindTheHeader(t *testing.T) {
 func TestPack_RendersCommittedFileBytes(t *testing.T) {
 	t.Parallel()
 
-	pack, err := Pack([]api.RuleMetadata{metadata()})
+	pack, err := Pack([]api.RuleMetadata{metadata()}, func(string) *yaml.Node { return nil })
 	require.NoError(t, err)
 	require.Contains(t, pack, "example_rule")
 	assert.True(t, strings.HasPrefix(string(pack["example_rule"]), Header))
+}
+
+// TestRule_EmitsParamsVerbatim pins that a params block is re-emitted exactly as authored, comments included. Params are the one
+// part of a rule file the rules READ, so they are the source of truth rather than generated output; re-rendering them from parsed
+// values would drop the comments explaining why each threshold is what it is, which is the most valuable content in the block.
+func TestRule_EmitsParamsVerbatim(t *testing.T) {
+	t.Parallel()
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("window: 30s\n# why this value\nshells:\n  - /bin/sh\n"), &node))
+	require.NotEmpty(t, node.Content)
+
+	body, err := Rule(metadata(), node.Content[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "window: 30s")
+	assert.Contains(t, string(body), "# why this value")
+	assert.Contains(t, string(body), "- /bin/sh")
+}
+
+// TestRule_OmitsAnAbsentParamsBlock keeps a rule with nothing to tune from carrying an empty key that implies otherwise.
+func TestRule_OmitsAnAbsentParamsBlock(t *testing.T) {
+	t.Parallel()
+
+	body, err := Rule(metadata(), nil)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "params:")
 }
