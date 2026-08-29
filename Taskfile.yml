@@ -159,6 +159,11 @@ tasks:
     cmds:
       - go run ./tools/gen-rule-docs
 
+  docs:rule-pack:
+    desc: Regenerate docs/rules/*.yml, one declarative rule file per registered detection.
+    cmds:
+      - go run ./tools/gen-rule-pack
+
   docs:attack-layer:
     desc: Regenerate docs/attack-navigator-layer.json from the registered rule catalogue.
     cmds:

@@ -53,6 +53,10 @@ type SensorTamper struct{}
 
 func (r *SensorTamper) ID() string { return "sensor_tamper" }
 
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Fires when a provider stop is NOT
+// followed by a matching running transition inside the recovery window.
+func (r *SensorTamper) AlgorithmName() string { return "absence_within_window" }
+
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions. There is no per-host tuning to offer, because
 // there is no benign writer to allowlist. The one supported way to run without a provider is to disable it, which is
 // reported as absence and never reaches the rule at all.

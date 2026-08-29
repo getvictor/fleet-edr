@@ -8,6 +8,7 @@ import (
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/export"
 )
 
 // Service is the narrow surface the operator handlers need. Today satisfied by *rules/internal/service.Service. Kept as an interface
@@ -48,6 +49,7 @@ func (h *Handler) SetAudit(rec identityapi.AuditRecorder) { h.audit = rec }
 func (h *Handler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("GET /api/rules", h.handleListRules)
 	mux.HandleFunc("GET /api/attack-coverage", h.handleATTACKCoverage)
+	mux.HandleFunc("GET /api/rules/{id}/export", h.handleExportRule)
 }
 
 // handleListRules returns the structured per-rule documentation for
@@ -119,4 +121,39 @@ func writeJSON(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, 
 // it; the single-field variant lives in httpserver.WriteJSONError for the identity admin surfaces.
 func writeOperatorErr(ctx context.Context, logger *slog.Logger, w http.ResponseWriter, status int, code, message string) {
 	writeJSON(ctx, logger, w, status, map[string]string{"error": code, "message": message})
+}
+
+// handleExportRule returns one registered detection rendered as a declarative rule file (issue #757).
+//
+// Served as YAML rather than JSON because the response IS the artifact: an operator saves it, reads it, and eventually hands it
+// to another tool. Wrapping it in a JSON envelope would make the caller unwrap it before it was useful.
+//
+// A non-detection is not exportable and returns 404, the same answer as a rule id that names nothing. That is deliberate: from
+// the catalog's point of view they are equally absent, and a distinct status would leak the existence of rules the catalog
+// deliberately does not describe (#775).
+func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger, identityapi.ActionAlertRead, identityapi.Resource{Type: "alert"}) {
+		return
+	}
+	id := r.PathValue("id")
+	for _, rm := range h.svc.List() {
+		if rm.ID != id {
+			continue
+		}
+		body, err := export.Rule(rm)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
+			writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+id+`.yml"`)
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write(body); err != nil {
+			h.logger.WarnContext(ctx, "write rule file", "rule", id, "err", err)
+		}
+		return
+	}
+	writeJSON(ctx, h.logger, w, http.StatusNotFound, map[string]any{"error": "rule_not_found"})
 }

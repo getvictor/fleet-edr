@@ -645,6 +645,48 @@ paths:
               schema:
                 $ref: "#/components/schemas/RulesResponse"
 
+  /api/rules/{id}/export:
+    get:
+      tags: [Admin]
+      summary: Export a detection rule as a declarative rule file
+      description: |
+        Returns one registered detection rendered as a declarative rule file:
+        standard Sigma metadata plus a namespaced `x-engine` key carrying our
+        rule id, kind, portability, event types, the evaluator that decides
+        the rule, the exclusion dimensions it honours, and its known
+        limitations.
+
+        The response body IS the artifact rather than a description of one, so
+        it is served as YAML. It is the same document as the corresponding file
+        in `docs/rules/`, without that file's generated-file header.
+
+        Only detections are exportable. A registered rule that is not a
+        detection (a projection of a decision the agent already made, or a
+        health signal about the agent itself) returns 404, the same answer as
+        a rule id that names nothing.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The rule's stable snake_case identifier, as returned by `GET /api/rules`.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The rule file
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "401":
+          description: No authenticated session
+        "404":
+          description: No such detection, or the rule is not a detection
+        "500":
+          description: The rule could not be rendered
+
   /api/v1/detection-config/exclusions:
     get:
       tags: [Detection tuning]

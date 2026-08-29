@@ -16,6 +16,7 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
+	"github.com/fleetdm/edr/server/rules/internal/export"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
@@ -222,4 +223,14 @@ func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 // the first time only one was updated, leaving the generated docs describing a different rule set than GET /api/rules.
 func CatalogOnly() api.Lister {
 	return service.New(catalog.New(nil), nil)
+}
+
+// ExportPack renders every registered detection as a declarative rule file, keyed by rule id (issue #757).
+//
+// Exposed here rather than from the internal export package because tooling (tools/gen-rule-pack) lives outside server/rules and
+// so cannot import it, and because bootstrap is already the seam through which tooling reaches the catalog. It reads the same
+// CatalogOnly list the docs generator does, which is what guarantees the pack and docs/detection-rules.md describe exactly the
+// same set of rules.
+func ExportPack() (map[string][]byte, error) {
+	return export.Pack(CatalogOnly().List())
 }

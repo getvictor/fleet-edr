@@ -184,3 +184,41 @@ func TestAll_DetectionsClaimTechniques(t *testing.T) {
 		assert.NotEmpty(t, r.Techniques(), "detection %s must map to at least one ATT&CK technique", r.ID())
 	}
 }
+
+// TestAll_DetectionsNameTheirAlgorithm pins that every detection declares the evaluator that decides it (issue #757).
+//
+// A Go-implemented rule is only inspectable if its file says which procedure runs it; without that, the exported file documents
+// what the rule is for and stays silent on what it actually does. The check is scoped to detections because a non-detection is
+// not exported at all, and it asserts the name is one of the registered set rather than merely non-empty: a typo would otherwise
+// ship as an algorithm nothing implements, which is exactly the failure that put a fabricated `interval_regularity_and_entropy`
+// into an early draft of the format.
+func TestAll_DetectionsNameTheirAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	known := map[string]struct{}{
+		"ancestor_walk_path_prefix":              {},
+		"descendant_within_window":               {},
+		"dns_resolve_then_connect":               {},
+		"absence_within_window":                  {},
+		"exec_path_and_subcommand_match":         {},
+		"exec_leading_argv_env_match":            {},
+		"exec_subcommand_and_path_pattern_match": {},
+		"parent_lookup_path_match":               {},
+		"file_open_write_intent_match":           {},
+		"btm_item_signing_verdict":               {},
+	}
+
+	seen := map[string]struct{}{}
+	for _, r := range New(nil) {
+		if !api.IsDetection(r) {
+			continue
+		}
+		name := api.AlgorithmNameOf(r)
+		require.NotEmptyf(t, name, "detection %s declares no algorithm, so its exported file cannot say what decides it", r.ID())
+		assert.Containsf(t, known, name, "detection %s names algorithm %q, which is not in the registered set", r.ID(), name)
+		seen[name] = struct{}{}
+	}
+
+	assert.Len(t, seen, len(known),
+		"every registered algorithm name must be claimed by a rule; an unclaimed name is a leftover from a deleted or renamed rule")
+}

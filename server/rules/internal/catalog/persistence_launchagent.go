@@ -24,6 +24,12 @@ type PersistenceLaunchAgent struct {
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
 
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches a launchctl activation
+// subcommand whose plist argument matches a LaunchAgents path pattern.
+func (r *PersistenceLaunchAgent) AlgorithmName() string {
+	return "exec_subcommand_and_path_pattern_match"
+}
+
 // SupportedExclusionMatchTypes lists the match types this rule consults: the LaunchAgent plist writer path glob (issue #520).
 func (r *PersistenceLaunchAgent) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
 	return []api.ExclusionMatchType{api.ExclusionMatchPathGlob}

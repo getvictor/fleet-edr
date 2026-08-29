@@ -24,6 +24,10 @@ type DyldInsert struct{}
 
 func (r *DyldInsert) ID() string { return "dyld_insert" }
 
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches an environment-variable
+// assignment in the leading argv slot, covering both the shell VAR=value form and env(1).
+func (r *DyldInsert) AlgorithmName() string { return "exec_leading_argv_env_match" }
+
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
 func (r *DyldInsert) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
 
