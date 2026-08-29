@@ -14,7 +14,7 @@ The question is whether rule content belongs in the `rules` context or in one of
 
 **Today it belongs in `rules`, and the export code is the proof.** `export` renders `api.RuleMetadata` as YAML. It owns no model, persists nothing, and has no vocabulary of its own; strip `rules` away and it has nothing to describe. It is a second representation of the same aggregate, which is the textbook case for staying inside a context rather than leaving it. Carving a context for it now would mean a new `api/`, `bootstrap/`, and `testkit/`, plus an `arch-go.yml` dependency block, so that `rules` could call out to something that immediately calls back into `rules`.
 
-**Phase 5 changes every one of those facts.** Rule content stops being a projection and becomes an independently-owned aggregate:
+**Phase 5 changes every one of those facts.** Rule content stops being a projection and becomes an independently owned aggregate:
 
 - **It acquires storage.** Rule packs, their versions, and their provenance are durable state that no existing context owns. This is the same trigger [0015](0015-clickhouse-visibility-store.md) used: a subdomain that grows its own store has stopped being a view of someone else's.
 - **It acquires a lifecycle orthogonal to evaluation.** Draft, validate, publish, roll back, re-sync from upstream. None of that is a detection concern, and the engine is indifferent to all of it.
