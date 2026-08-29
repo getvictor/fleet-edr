@@ -52,7 +52,8 @@ type SudoersTamper struct {
 
 func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
 
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches a file open on a target path set where the open flags carry write intent.
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches a file open on a target path
+// set where the open flags carry write intent.
 func (r *SudoersTamper) AlgorithmName() string { return "file_open_write_intent_match" }
 
 // SupportedExclusionMatchTypes lists the match types this rule consults: the sudoers writer path glob (issue #520).

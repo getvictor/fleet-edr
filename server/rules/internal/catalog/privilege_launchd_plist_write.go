@@ -44,8 +44,8 @@ type PrivilegeLaunchdPlistWrite struct {
 
 func (r *PrivilegeLaunchdPlistWrite) ID() string { return "privilege_launchd_plist_write" }
 
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Decides a Background Task Management daemon registration on the code-signing identity of the REGISTERED EXECUTABLE, not on
-// whoever registered it.
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Decides a Background Task Management
+// daemon registration on the code-signing identity of the REGISTERED EXECUTABLE, not on whoever registered it.
 func (r *PrivilegeLaunchdPlistWrite) AlgorithmName() string { return "btm_item_signing_verdict" }
 
 // SupportedExclusionMatchTypes lists the match types this rule consults: the registered executable's signing team ID (issue #520).

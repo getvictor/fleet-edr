@@ -19,7 +19,8 @@ type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }
 
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Resolves the parent process from the graph and matches both parent and child against fixed path sets.
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Resolves the parent process from the
+// graph and matches both parent and child against fixed path sets.
 func (r *ShellFromOffice) AlgorithmName() string { return "parent_lookup_path_match" }
 
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).

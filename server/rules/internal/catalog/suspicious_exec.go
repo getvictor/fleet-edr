@@ -61,8 +61,9 @@ type SuspiciousExec struct {
 
 func (r *SuspiciousExec) ID() string { return "suspicious_exec" }
 
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Walks the ancestor chain for a shell under a non-shell parent, then matches the trigger against world-writable path prefixes,
-// following the re-exec chain so a shell that exec'd its payload in place is still found.
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Walks the ancestor chain for a shell
+// under a non-shell parent, then matches the trigger against world-writable path prefixes, following the re-exec chain so a shell that
+// exec'd its payload in place is still found.
 func (r *SuspiciousExec) AlgorithmName() string { return "ancestor_walk_path_prefix" }
 
 // SupportedExclusionMatchTypes lists the match types parentExcluded consults: the non-shell parent's path glob plus its code-signing

@@ -35,7 +35,8 @@ type DNSC2Beacon struct{}
 
 func (r *DNSC2Beacon) ID() string { return "dns_c2_beacon" }
 
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Joins a process's earlier dns_query to a later outbound connect whose remote address the query resolved, inside a window.
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Joins a process's earlier dns_query to
+// a later outbound connect whose remote address the query resolved, inside a window.
 func (r *DNSC2Beacon) AlgorithmName() string { return "dns_resolve_then_connect" }
 
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
