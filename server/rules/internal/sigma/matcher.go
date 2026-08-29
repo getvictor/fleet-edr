@@ -120,10 +120,23 @@ func compileFieldTest(key string, raw any) (fieldTest, error) {
 	}
 
 	var wrap func(string) string
+	var wrapName string
 	useRegexp := false
+	seen := map[string]bool{}
 	for _, m := range parts[1:] {
 		if !knownModifiers[m] {
 			return fieldTest{}, fmt.Errorf("field %q uses unsupported modifier %q", ft.field, m)
+		}
+		if seen[m] {
+			return fieldTest{}, fmt.Errorf("field %q repeats modifier %q", ft.field, m)
+		}
+		seen[m] = true
+		// Two substring modifiers on one field have no composed meaning in Sigma, and last-assignment-wins would silently pick
+		// one: `Field|contains|startswith` and `Field|startswith|contains` would compile to different matchers, both of them
+		// something the author did not write. Checked against the modifier already recorded, before this one replaces it.
+		if wrapName != "" && (m == "contains" || m == "startswith" || m == "endswith") {
+			return fieldTest{}, fmt.Errorf("field %q combines substring modifiers %q and %q, which has no defined meaning",
+				ft.field, wrapName, m)
 		}
 		switch m {
 		case "all":
@@ -131,11 +144,11 @@ func compileFieldTest(key string, raw any) (fieldTest, error) {
 		case "re":
 			useRegexp = true
 		case "contains":
-			wrap = func(v string) string { return "*" + v + "*" }
+			wrap, wrapName = func(v string) string { return "*" + v + "*" }, m
 		case "startswith":
-			wrap = func(v string) string { return v + "*" }
+			wrap, wrapName = func(v string) string { return v + "*" }, m
 		case "endswith":
-			wrap = func(v string) string { return "*" + v }
+			wrap, wrapName = func(v string) string { return "*" + v }, m
 		}
 	}
 	if useRegexp && wrap != nil {
@@ -148,6 +161,12 @@ func compileFieldTest(key string, raw any) (fieldTest, error) {
 		}
 		ft.absent = true
 		return ft, nil
+	}
+
+	if _, isList := raw.([]any); ft.all && !isList {
+		// |all quantifies over the listed values, so it says nothing about a single one. Accepting it would let a rule carry a
+		// modifier that cannot change its meaning, which reads as a constraint the author does not actually have.
+		return fieldTest{}, fmt.Errorf("field %q uses |all on a single value, which quantifies over nothing", ft.field)
 	}
 
 	values, err := scalarList(raw)

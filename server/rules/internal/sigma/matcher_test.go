@@ -171,3 +171,42 @@ func TestScalarList_RendersNonStrings(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ft.match(mapEvent{"Elevated": {"true"}}))
 }
+
+// TestCompileFieldTest_RejectsModifierCombinations covers the combinations that have no composed meaning in Sigma. Left alone, the
+// last substring modifier silently won, so `Field|contains|startswith` and `Field|startswith|contains` compiled to DIFFERENT
+// matchers, neither of them what the author wrote.
+func TestCompileFieldTest_RejectsModifierCombinations(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		key   string
+		value any
+		want  string
+	}{
+		{"contains then startswith", "CommandLine|contains|startswith", "x", "combines substring modifiers"},
+		{"startswith then contains", "CommandLine|startswith|contains", "x", "combines substring modifiers"},
+		{"endswith then contains", "Image|endswith|contains", "x", "combines substring modifiers"},
+		{"a repeated modifier", "CommandLine|contains|contains", "x", "repeats modifier"},
+		{"all on a single value quantifies over nothing", "Image|all", "x", "quantifies over nothing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := compileFieldTest(tc.key, tc.value)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+// TestCompileFieldTest_AllowsAllWithOneValueModifier confirms the rejection above is narrow: |all legitimately combines with one
+// substring modifier, which is the shape 22 macOS rules use.
+func TestCompileFieldTest_AllowsAllWithOneValueModifier(t *testing.T) {
+	t.Parallel()
+
+	ft, err := compileFieldTest("CommandLine|contains|all", []any{"a", "b"})
+	require.NoError(t, err)
+	assert.True(t, ft.match(mapEvent{"CommandLine": {"a and b"}}))
+	assert.False(t, ft.match(mapEvent{"CommandLine": {"only a"}}))
+}

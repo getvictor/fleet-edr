@@ -77,11 +77,28 @@ func tokenize(s string) []string {
 
 // parser is a recursive-descent parser over the token list. It resolves identifiers and globs against searchNames as it goes, so
 // a condition naming a search that does not exist fails here rather than evaluating to a silent false forever.
+// maxConditionDepth bounds parser recursion. Both `not` and parentheses recurse once per level, so an imported or operator-authored
+// condition nested deeply enough would exhaust the goroutine stack and take the process down inside Compile, where the contract is to
+// return an error. Real conditions nest two or three deep; 64 is far above anything the corpus contains and far below the stack.
+const maxConditionDepth = 64
+
 type parser struct {
 	tokens []string
 	pos    int
+	depth  int
 	names  []string // search names, in declaration order; index into Rule.searches
 }
+
+// enter deepens the recursion by one level, refusing past the bound.
+func (p *parser) enter() error {
+	p.depth++
+	if p.depth > maxConditionDepth {
+		return fmt.Errorf("condition nests deeper than %d levels", maxConditionDepth)
+	}
+	return nil
+}
+
+func (p *parser) leave() { p.depth-- }
 
 func (p *parser) peek() string {
 	if p.pos < len(p.tokens) {
@@ -133,6 +150,10 @@ func (p *parser) parseAnd() (node, error) {
 func (p *parser) parseNot() (node, error) {
 	if strings.EqualFold(p.peek(), "not") {
 		p.next()
+		if err := p.enter(); err != nil {
+			return nil, err
+		}
+		defer p.leave()
 		inner, err := p.parseNot()
 		if err != nil {
 			return nil, err
@@ -148,6 +169,10 @@ func (p *parser) parsePrimary() (node, error) {
 	case tok == "":
 		return nil, errors.New("unexpected end of condition")
 	case tok == "(":
+		if err := p.enter(); err != nil {
+			return nil, err
+		}
+		defer p.leave()
 		inner, err := p.parseCondition()
 		if err != nil {
 			return nil, err
@@ -180,7 +205,10 @@ func (p *parser) parseQuantifier(all bool) (node, error) {
 	}
 	var indices []int
 	for i, name := range p.names {
-		if matchWildcard(name, pattern) {
+		// matchGlobExact, not matchWildcard: Sigma search identifiers are case-sensitive, and a plain reference already resolves
+		// with an exact comparison. Folding case only here would let `1 of SEL_*` sweep in a search named `sel_1`, quietly
+		// widening the condition.
+		if matchGlobExact(name, pattern) {
 			indices = append(indices, i)
 		}
 	}

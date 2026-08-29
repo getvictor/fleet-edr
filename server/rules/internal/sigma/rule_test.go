@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -157,4 +158,66 @@ condition: selection
 `)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Image", "ParentImage", "TargetFilename"}, rule.Fields())
+}
+
+// spec:server-detection-rules-engine/an-unsupported-or-meaningless-rule-construct-is-refused-when-the-rule-is-loaded/a-reserved-detection-key-is-not-treated-as-a-search
+//
+// TestCompile_RejectsReservedDetectionKeys pins that a non-search key inside `detection:` is refused rather than compiled as a
+// search. `timeframe` belongs to the correlation surface this evaluator does not implement; swept in as a search it would also join
+// any `1 of` / `all of` quantifier, so the rule would evaluate a condition nobody wrote.
+func TestCompile_RejectsReservedDetectionKeys(t *testing.T) {
+	t.Parallel()
+
+	_, err := compileYAML(t, `
+selection:
+  Image|endswith: '/curl'
+timeframe: 15m
+condition: selection
+`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported Sigma construct")
+	assert.Contains(t, err.Error(), "timeframe")
+}
+
+// spec:server-detection-rules-engine/an-unsupported-or-meaningless-rule-construct-is-refused-when-the-rule-is-loaded/a-condition-nested-beyond-the-bound-is-refused
+//
+// TestCompile_RejectsDeeplyNestedConditions pins the recursion bound. Both `not` and parentheses recurse once per level, so without
+// a limit a deep enough condition takes the process down inside Compile, whose contract is to return an error.
+func TestCompile_RejectsDeeplyNestedConditions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		condition string
+	}{
+		{"repeated not", strings.Repeat("not ", maxConditionDepth+5) + "selection"},
+		{"nested parentheses", strings.Repeat("(", maxConditionDepth+5) + "selection" + strings.Repeat(")", maxConditionDepth+5)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Compile(map[string]any{
+				"condition": tc.condition,
+				"selection": map[string]any{"Image": "/bin/sh"},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "nests deeper than")
+		})
+	}
+}
+
+// TestCompile_AcceptsOrdinaryNesting confirms the bound is far above anything real: the corpus nests two or three deep.
+func TestCompile_AcceptsOrdinaryNesting(t *testing.T) {
+	t.Parallel()
+
+	// Nested to four levels and NOT a tautology: the whole expression reduces to `selection and not filter`.
+	r, err := Compile(map[string]any{
+		"condition": "not (not (selection and (not filter)))",
+		"selection": map[string]any{"Image": "/bin/sh"},
+		"filter":    map[string]any{"CommandLine": "safe"},
+	})
+	require.NoError(t, err)
+	assert.True(t, r.Matches(mapEvent{"Image": {"/bin/sh"}}), "selection matches and the filter does not")
+	assert.False(t, r.Matches(mapEvent{"Image": {"/bin/sh"}, "CommandLine": {"safe"}}), "the filter suppresses")
+	assert.False(t, r.Matches(mapEvent{"Image": {"/bin/zsh"}}), "selection does not match")
 }

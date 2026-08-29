@@ -3,7 +3,8 @@ package sigma
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 )
 
 // Rule is a compiled Sigma detection: the named searches and the condition that combines them. Compile it once at load; Matches
@@ -11,6 +12,13 @@ import (
 type Rule struct {
 	searches []search
 	cond     node
+}
+
+// reservedDetectionKeys are Sigma keys that appear inside a `detection:` block but are not searches. `timeframe` belongs to the
+// aggregation and correlation surface this evaluator does not implement (zero corpus rules use it), and `condition` is handled
+// separately. Refusing them by name means an unsupported construct fails loudly rather than being compiled as an ordinary search.
+var reservedDetectionKeys = map[string]bool{
+	"timeframe": true,
 }
 
 // Compile turns a decoded Sigma `detection:` block into an evaluable rule.
@@ -37,9 +45,15 @@ func Compile(detection map[string]any) (*Rule, error) {
 		if name == "condition" {
 			continue
 		}
+		if reservedDetectionKeys[name] {
+			// A reserved key is not a search. Collected as one it would be compiled as a field map and, worse, swept into any
+			// `1 of` / `all of` quantifier, so the rule would evaluate a condition nobody wrote instead of being refused for
+			// using a construct this evaluator does not implement.
+			return nil, fmt.Errorf("detection block uses unsupported Sigma construct %q", name)
+		}
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	if len(names) == 0 {
 		return nil, errors.New("detection block defines no searches")
 	}
@@ -83,7 +97,7 @@ func (r *Rule) Fields() []string {
 			}
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -125,11 +139,7 @@ func compileAlternative(name string, m map[string]any) ([]fieldTest, error) {
 	if len(m) == 0 {
 		return nil, fmt.Errorf("search %q has an empty field map", name)
 	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(m))
 
 	out := make([]fieldTest, 0, len(keys))
 	for _, k := range keys {
