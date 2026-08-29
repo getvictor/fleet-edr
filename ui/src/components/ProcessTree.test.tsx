@@ -64,9 +64,27 @@ function renderTree(search: string) {
   );
 }
 
+// Minimal RuleDocEntry for the catalog lookup that decides whether the alert title links anywhere. Only `id` is read by
+// ProcessTreeView; the rest satisfies the type.
+function ruleDoc(id: string): api.RuleDocEntry {
+  return {
+    id,
+    techniques: [],
+    doc: { title: id, summary: "", description: "", severity: "high", event_types: [] },
+    supported_exclusion_match_types: [],
+    platforms: ["darwin"],
+  } as unknown as api.RuleDocEntry;
+}
+
 beforeEach(() => {
   vi.spyOn(api, "getProcessTree").mockResolvedValue(treeResponse(forest));
   vi.spyOn(api, "listAlerts").mockResolvedValue([]);
+  // Every alert fixture in this file names a documented rule, so the default keeps the pre-existing linked behaviour.
+  vi.spyOn(api, "fetchRuleDocs").mockResolvedValue([
+    ruleDoc("privilege_launchd_plist_write"),
+    ruleDoc("suspicious_exec"),
+    ruleDoc("launchd_persistence"),
+  ]);
 });
 
 afterEach(() => {
@@ -541,5 +559,55 @@ describe("ProcessTreeView truncation notice (issue #423)", () => {
 
     expect(await screen.findByText(/fleet-edr-agent \(200\)/)).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});
+
+// The alert title is a link to the rule's documentation, but not every alert's rule_id names a documented rule. An
+// application-control alert carries the matched policy rule (`app_control:<n>`), which has never been in the catalog, and a
+// registered non-detection such as sensor_recovery_failed alerts while being deliberately absent from it. Linking those lands the
+// analyst on RuleDetail's "Unknown rule" empty state, which is worse than no link at all.
+describe("ProcessTreeView alert title link", () => {
+  it("links the title when the catalog documents the rule", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    const link = await screen.findByRole("link", { name: launchDaemonAlert.title });
+    expect(link).toHaveAttribute("href", "/rules/privilege_launchd_plist_write");
+  });
+
+  it("renders the title as plain text for a rule the catalog does not document", async () => {
+    const healthAlert: AlertDetail = {
+      ...launchDaemonAlert,
+      rule_id: "sensor_recovery_failed",
+      title: "EDR sensor could not be restored",
+    };
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(healthAlert);
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText(healthAlert.title)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: healthAlert.title })).not.toBeInTheDocument();
+  });
+
+  it("renders the title as plain text for an application-control rule id", async () => {
+    const blockAlert: AlertDetail = {
+      ...launchDaemonAlert,
+      rule_id: "app_control:7",
+      source: "application_control",
+      title: "Application blocked: blocked-tool",
+    };
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(blockAlert);
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText(blockAlert.title)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: blockAlert.title })).not.toBeInTheDocument();
+  });
+
+  it("does not link while the catalog is still loading or after it fails", async () => {
+    vi.spyOn(api, "fetchRuleDocs").mockRejectedValue(new Error("boom"));
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText(launchDaemonAlert.title)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: launchDaemonAlert.title })).not.toBeInTheDocument();
   });
 });

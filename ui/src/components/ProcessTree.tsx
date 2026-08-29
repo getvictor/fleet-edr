@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback, type RefObject } from "react";
 import { useParams, useSearchParams, useLocation, Link } from "react-router";
 import * as d3 from "d3";
-import { getAlertDetail, getProcessTree, listAlerts } from "../api";
+import { fetchRuleDocs, getAlertDetail, getProcessTree, listAlerts } from "../api";
 import type { AlertDetail, ProcessNode } from "../types";
 import {
   NANOSECONDS_PER_MILLISECOND,
@@ -160,6 +160,18 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
   useEffect(() => {
     try { localStorage.setItem(SHOW_SYSTEM_STORAGE_KEY, String(showSystem)); } catch { /* ignore */ }
   }, [showSystem]);
+
+  // Rule ids the catalog documents, used to decide whether the alert title can link anywhere. Null while loading or on failure,
+  // which the link check treats as "cannot confirm", so a failed fetch degrades to plain text rather than to a broken link.
+  const [documentedRuleIDs, setDocumentedRuleIDs] = useState<Set<string> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRuleDocs()
+      .then((rules) => { if (!cancelled) setDocumentedRuleIDs(new Set(rules.map((r) => r.id))); })
+      .catch(() => { if (!cancelled) setDocumentedRuleIDs(null); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Fetch the alert so we can render a breadcrumb with title/severity/timestamp. Skipped when entryAlert is supplied: the
   // /alerts/:alertId route already fetched it and seeded alertDetail, so the query-param fetch path only runs on the host route and
@@ -518,14 +530,27 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
               without losing the process-tree context. The styling
               suppresses the default anchor underline + colour so the
               breadcrumb still reads as a label until the cursor lands
-              on it. */}
-          <Link
-            to={`/rules/${encodeURIComponent(alertDetail.rule_id)}`}
-            className="alert-breadcrumb__title alert-breadcrumb__title--link"
-            title={`Open documentation for the ${alertDetail.rule_id} rule`}
-          >
-            {alertDetail.title}
-          </Link>
+              on it.
+
+              Linked ONLY when the catalog documents the rule. Not every
+              alert's rule_id names a documented rule: an application-control
+              alert carries the matched policy rule (`app_control:<n>`), which
+              has never been in the catalog, and a non-detection such as
+              sensor_recovery_failed is registered and alerts but is
+              deliberately absent from it. Linking those lands the analyst on
+              "Unknown rule", which is worse than no link, so the title falls
+              back to plain text. */}
+          {documentedRuleIDs?.has(alertDetail.rule_id) ? (
+            <Link
+              to={`/rules/${encodeURIComponent(alertDetail.rule_id)}`}
+              className="alert-breadcrumb__title alert-breadcrumb__title--link"
+              title={`Open documentation for the ${alertDetail.rule_id} rule`}
+            >
+              {alertDetail.title}
+            </Link>
+          ) : (
+            <span className="alert-breadcrumb__title">{alertDetail.title}</span>
+          )}
           <span className="alert-breadcrumb__time">
             {new Date(alertDetail.created_at).toLocaleString()}
           </span>
