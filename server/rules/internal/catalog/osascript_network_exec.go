@@ -36,6 +36,9 @@ type OsascriptNetworkExec struct{}
 
 func (r *OsascriptNetworkExec) ID() string { return "osascript_network_exec" }
 
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Correlates an osascript exec with its descendants inside a time window.
+func (r *OsascriptNetworkExec) AlgorithmName() string { return "descendant_within_window" }
+
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
 func (r *OsascriptNetworkExec) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
 

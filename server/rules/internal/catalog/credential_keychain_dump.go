@@ -30,6 +30,9 @@ type CredentialKeychainDump struct{}
 
 func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump" }
 
+// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches one exec on an exact binary path plus an exact argv subcommand.
+func (r *CredentialKeychainDump) AlgorithmName() string { return "exec_path_and_subcommand_match" }
+
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
 func (r *CredentialKeychainDump) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
 

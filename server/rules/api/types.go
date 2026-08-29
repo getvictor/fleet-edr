@@ -139,6 +139,29 @@ type NonDetection interface {
 	NonDetectionKind() NonDetectionKind
 }
 
+// AlgorithmNamer is an OPTIONAL interface a registered rule implements to name the evaluator that runs it. Optional and absent
+// from Rule for the same reason NonDetection is: it is metadata about the implementation, not something the engine needs to
+// evaluate anything, so requiring it would make every future rule carry a declaration the engine never reads.
+//
+// It exists for the exported rule file. A rule whose logic lives in Go rather than in a declarative detection block is still
+// meant to be inspectable, and "which algorithm decides this" is the part an operator cannot otherwise learn without reading the
+// source. The name is the same one the format reference uses (ancestor_walk_path_prefix, dns_resolve_then_connect, and so on).
+//
+// The -er suffix is deliberate: a single-method interface named for its method is the Go convention (Stringer, Reader), and it
+// keeps this off the same lint that a bare Algorithm/Algorithm() pairing trips.
+type AlgorithmNamer interface {
+	AlgorithmName() string
+}
+
+// AlgorithmNameOf returns r's declared algorithm name, or "" when the rule declares none.
+func AlgorithmNameOf(r Rule) string {
+	namer, ok := r.(AlgorithmNamer)
+	if !ok {
+		return ""
+	}
+	return namer.AlgorithmName()
+}
+
 // IsDetection reports whether r is a detection, i.e. whether it belongs on the operator-facing catalog surfaces. A rule that does
 // not implement NonDetection is a detection.
 func IsDetection(r Rule) bool {
@@ -184,6 +207,9 @@ type RuleMetadata struct {
 	// Platforms mirrors the rule's Platforms() (ADR-0018). Surfaced on GET /api/rules so operators can see which operating systems a
 	// rule applies to.
 	Platforms []Platform
+	// Algorithm mirrors the rule's AlgorithmName() when it declares one, and is empty otherwise. Names the evaluator that decides
+	// the rule, which is what makes a Go-implemented rule inspectable without reading the source. Consumed by the rule-file export.
+	Algorithm string
 }
 
 // Documentation is the structured per-rule descriptor consumed by the

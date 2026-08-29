@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -154,5 +155,57 @@ func TestHandler_ListRules_Platforms(t *testing.T) {
 	for _, r := range body.Rules {
 		assert.NotNilf(t, r.Platforms, "rule %q MUST carry a platforms array, not null", r.ID)
 		assert.Equalf(t, []string{"darwin"}, r.Platforms, "rule %q targets darwin", r.ID)
+	}
+}
+
+// TestHandler_ExportRule serves one detection as its declarative rule file (issue #757). The response IS the artifact, so it is
+// YAML rather than a JSON envelope the caller would have to unwrap before the bytes were useful.
+func TestHandler_ExportRule(t *testing.T) {
+	t.Parallel()
+	svc := service.New(catalog.New(nil), slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/credential_keychain_dump/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "application/yaml; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Contains(t, resp.Header.Get("Content-Disposition"), `filename="credential_keychain_dump.yml"`)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "title: Keychain credential dump")
+	assert.Contains(t, string(body), "rule_id: credential_keychain_dump")
+	assert.Contains(t, string(body), "algorithm: exec_path_and_subcommand_match")
+}
+
+// TestHandler_ExportRule_NotFound covers both absences with one status, deliberately. A non-detection and a rule id that names
+// nothing are equally absent from the catalog, and a distinct status for the former would leak the existence of rules the catalog
+// does not describe (#775).
+func TestHandler_ExportRule_NotFound(t *testing.T) {
+	t.Parallel()
+	svc := service.New(catalog.New(nil), slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	for _, id := range []string{"application_control_block", "sensor_recovery_failed", "no_such_rule"} {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+			require.NoError(t, err)
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		})
 	}
 }
