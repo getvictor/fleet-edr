@@ -2,14 +2,16 @@ package catalog
 
 import (
 	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
+	"go.yaml.in/yaml/v3"
+
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
@@ -31,13 +33,15 @@ import (
 var argvCategories = map[string][]string{
 	"flag":       {"-v", "-q", "-w", "-S", "-p"},
 	"subcommand": {"dump-keychain", "help", "list-keychains", "load", "bootstrap", "print", "unload"},
-	"plist":      {"/Library/LaunchAgents/evil.plist", "/Users/victor/Library/LaunchAgents/x.plist", "/tmp/a.plist"},
-	"assignment": {"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "DYLD_LIBRARY_PATH=/tmp", "A=1", "PATH=/bin"},
-	"empty":      {""},
-	"other":      {"prog", "/usr/bin/true", "gui/501", "/etc/passwd"},
+	// Case variants, so a detection that folds case where the Go matcher does not is caught rather than assumed absent.
+	"casevariant": {"DUMP-KEYCHAIN", "Dump-Keychain", "LOAD", "Bootstrap", "dyld_insert_libraries=/tmp/x", "Dyld_Library_Path=/tmp"},
+	"plist":       {"/Library/LaunchAgents/evil.plist", "/Users/victor/Library/LaunchAgents/x.plist", "/tmp/a.plist"},
+	"assignment":  {"DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "DYLD_LIBRARY_PATH=/tmp", "A=1", "PATH=/bin"},
+	"empty":       {""},
+	"other":       {"prog", "/usr/bin/true", "gui/501", "/etc/passwd"},
 }
 
-var argvCategoryNames = []string{"flag", "subcommand", "plist", "assignment", "empty", "other"}
+var argvCategoryNames = []string{"flag", "subcommand", "plist", "assignment", "empty", "other", "casevariant"}
 
 // drawArgv models a command INVOCATION rather than emitting token soup, and that distinction decides whether this test is worth
 // anything.
@@ -72,7 +76,7 @@ func drawArgv(t *rapid.T) []string {
 	}
 	argv = append(argv, rapid.SampledFrom([]string{"load", "bootstrap", "dump-keychain", "help"}).Draw(t, "verb"))
 	for range rapid.IntRange(1, 3).Draw(t, "operands") {
-		category := rapid.SampledFrom([]string{"plist", "plist", "assignment", "other", "flag", "empty"}).Draw(t, "operandCat")
+		category := rapid.SampledFrom([]string{"plist", "plist", "assignment", "other", "flag", "empty", "casevariant"}).Draw(t, "operandCat")
 		argv = append(argv, rapid.SampledFrom(argvCategories[category]).Draw(t, "operand"))
 	}
 	return argv
@@ -96,39 +100,66 @@ func skipsAnEmptyBeforeItsSubcommand(argv []string) bool {
 	return false
 }
 
-// fieldsOf runs an exec event through the real adapter and returns the computed fields a Sigma rule would see.
-func fieldsOf(t require.TestingT, path string, argv []string) func(string) []string {
+// evalDetection compiles a real Sigma detection block and evaluates it against an exec event, so these properties test the rule PR B
+// will actually ship rather than a Go stand-in for it.
+//
+// This matters more than it sounds. The first version of this test substituted a Go map lookup for the detection, and a map lookup
+// is case-sensitive while an ordinary Sigma value is not. `security DUMP-KEYCHAIN` would have been reported equivalent even though
+// the real rule fires on it and the Go matcher does not. Compiling the detection is the only way the property can see that, which is
+// why the generator below also draws case variants.
+func evalDetection(t require.TestingT, detection, path string, argv []string) bool {
+	var doc map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(detection), &doc))
+	rule, err := sigma.Compile(doc)
+	require.NoError(t, err)
+
 	payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 0, "path": path, "args": argv})
 	require.NoError(t, err)
 	ev, err := sigmabind.NewEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload})
 	require.NoError(t, err)
-	return func(name string) []string {
-		v, _ := ev.Field(name)
-		return v
-	}
+	require.NoError(t, sigmabind.Validate(rule, "exec"), "every field the detection reads must be one we supply")
+	return rule.Matches(ev)
 }
 
-// TestEquivalence_KeychainDump: the Go matcher fires exactly when the computed Subcommand is a flagged one.
+// The detections below are the ones PR B will author into the pack files. Each uses |re where the Go matcher is case-SENSITIVE:
+// a plain Sigma value folds case, and `security DUMP-KEYCHAIN` or `DYLD_INSERT_LIBRARIES=` in another case would then fire where
+// the Go rule does not. |re is applied verbatim by this evaluator, which is what makes it the faithful choice here.
+const (
+	keychainDetection = `
+selection:
+  Subcommand|re: '^dump-keychain$'
+condition: selection
+`
+	launchAgentDetection = `
+selection:
+  Subcommand|re: '^(load|bootstrap)$'
+  CommandArguments|re: '(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$'
+condition: selection
+`
+	dyldDetection = `
+selection:
+  EnvAssignments|re: '^DYLD_(INSERT_LIBRARIES|LIBRARY_PATH)='
+condition: selection
+`
+)
+
+// TestEquivalence_KeychainDump: the Go matcher and the shipped detection agree on every generated invocation.
 func TestEquivalence_KeychainDump(t *testing.T) {
 	t.Parallel()
 
 	rapid.Check(t, func(t *rapid.T) {
 		argv := drawArgv(t)
 		_, goFires := findDumpKeychainArg(argv)
-
-		field := fieldsOf(t, "/usr/bin/security", argv)
-		sigmaFires := slices.ContainsFunc(field("Subcommand"), func(s string) bool { return dumpKeychainArgTokens()[s] })
-
-		require.Equal(t, goFires, sigmaFires, "argv=%q subcommand=%q", argv, field("Subcommand"))
+		sigmaFires := evalDetection(t, keychainDetection, "/usr/bin/security", argv)
+		require.Equal(t, goFires, sigmaFires, "argv=%q", argv)
 	})
 }
 
-// TestEquivalence_LaunchAgent: the Go matcher fires exactly when the computed Subcommand is load or bootstrap AND one of the
-// computed CommandArguments is a LaunchAgent plist path, with one documented exception.
+// TestEquivalence_LaunchAgent: as above, with one documented exception.
 //
 // The exception is asserted rather than excused: where the two differ, the input MUST be the known empty-token shape, and the
-// difference MUST be Go firing where the field-based rule does not. That keeps the carve-out from hiding any other divergence, and
-// pins that the correction only ever removes findings.
+// difference MUST be Go firing where the detection does not. That keeps the carve-out from hiding any other divergence, and pins
+// that the correction only ever removes findings.
 func TestEquivalence_LaunchAgent(t *testing.T) {
 	t.Parallel()
 
@@ -136,10 +167,7 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 		argv := drawArgv(t)
 		sub, plist := extractLaunchctlSubcommand(argv)
 		goFires := (sub == "load" || sub == "bootstrap") && plist != "" && launchAgentPath.MatchString(plist)
-
-		field := fieldsOf(t, "/bin/launchctl", argv)
-		sigmaFires := slices.ContainsFunc(field("Subcommand"), func(s string) bool { return s == "load" || s == "bootstrap" }) &&
-			slices.ContainsFunc(field("CommandArguments"), launchAgentPath.MatchString)
+		sigmaFires := evalDetection(t, launchAgentDetection, "/bin/launchctl", argv)
 
 		if goFires != sigmaFires {
 			require.True(t, skipsAnEmptyBeforeItsSubcommand(argv),
@@ -149,6 +177,19 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 			return
 		}
 		require.Equal(t, goFires, sigmaFires, "argv=%q", argv)
+	})
+}
+
+// TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries.
+func TestEquivalence_DyldInsert(t *testing.T) {
+	t.Parallel()
+
+	rapid.Check(t, func(t *rapid.T) {
+		path := rapid.SampledFrom([]string{"/usr/bin/env", "/opt/homebrew/bin/env", "/bin/sh", "/usr/bin/true"}).Draw(t, "path")
+		argv := drawArgv(t)
+		goFires := matchDyldArg(path, argv) != ""
+		sigmaFires := evalDetection(t, dyldDetection, path, argv)
+		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q", path, argv)
 	})
 }
 
@@ -163,30 +204,27 @@ func TestLaunchAgentEmptySubcommandIsTheOneDeliberateChange(t *testing.T) {
 	require.Equal(t, "load", sub, "the Go matcher skips the empty token and reaches load")
 	require.NotEmpty(t, plist)
 
-	field := fieldsOf(t, "/bin/launchctl", argv)
-	require.Empty(t, field("Subcommand"),
+	require.False(t, evalDetection(t, launchAgentDetection, "/bin/launchctl", argv),
 		"the computed field treats the empty token as the verb, which is what launchctl would do, so the rule declines")
 }
 
-// TestEquivalence_DyldInsert: the Go matcher fires exactly when one of the computed EnvAssignments carries a DYLD prefix.
-func TestEquivalence_DyldInsert(t *testing.T) {
+// TestDetectionsAreCaseSensitiveWhereGoIs pins the reason each detection uses |re. A plain Sigma value folds case, so
+// `Subcommand: dump-keychain` would fire on `security DUMP-KEYCHAIN` while the Go matcher, a map lookup, does not.
+func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 	t.Parallel()
 
-	rapid.Check(t, func(t *rapid.T) {
-		path := rapid.SampledFrom([]string{"/usr/bin/env", "/opt/homebrew/bin/env", "/bin/sh", "/usr/bin/true"}).Draw(t, "path")
-		argv := drawArgv(t)
-		goFires := matchDyldArg(path, argv) != ""
+	_, goFires := findDumpKeychainArg([]string{"security", "DUMP-KEYCHAIN"})
+	require.False(t, goFires, "the Go matcher is a case-sensitive map lookup")
+	require.False(t, evalDetection(t, keychainDetection, "/usr/bin/security", []string{"security", "DUMP-KEYCHAIN"}),
+		"the shipped detection must not fold case either")
 
-		field := fieldsOf(t, path, argv)
-		sigmaFires := slices.ContainsFunc(field("EnvAssignments"), func(a string) bool {
-			for _, prefix := range dyldPrefixes {
-				if len(a) >= len(prefix) && a[:len(prefix)] == prefix {
-					return true
-				}
-			}
-			return false
-		})
+	require.True(t, evalDetection(t, keychainDetection, "/usr/bin/security", []string{"security", "dump-keychain"}),
+		"and it must still fire on the real spelling")
 
-		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q env=%q", path, argv, field("EnvAssignments"))
-	})
+	// The same trap on the other side: Sigma's |startswith folds case, so it would match a lowercased assignment key that
+	// strings.HasPrefix in the Go matcher rejects.
+	require.Empty(t, matchDyldArg("/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
+	require.False(t, evalDetection(t, dyldDetection, "/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
+	require.NotEmpty(t, matchDyldArg("/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
+	require.True(t, evalDetection(t, dyldDetection, "/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
 }

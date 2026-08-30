@@ -94,8 +94,9 @@ func TestCommandArguments(t *testing.T) {
 
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-leading-assignment-is-distinguished-from-a-later-argument
 //
-// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. Both orderings below produce an
-// identical CommandLine, and only one is an injection, which is the reason this field exists at all.
+// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
+// different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
+// only one of them is an injection. That is the reason this field exists.
 func TestEnvAssignments(t *testing.T) {
 	t.Parallel()
 
@@ -140,5 +141,34 @@ func TestComputedFieldsAreAbsentWhenEmpty(t *testing.T) {
 		values, present := e.Field(name)
 		assert.False(t, present, "%s must be absent", name)
 		assert.Nil(t, values)
+	}
+}
+
+// TestEnvAssignments_RejectsNonAssignments pins that merely containing "=" is not enough. `=VALUE` and `2+2=4` are not assignments,
+// and admitting them would let a future rule match on something the shell never assigned.
+//
+// This narrowing is behaviour-neutral for the rule the field serves today: every DYLD_ prefix it looks for carries a valid key, so
+// nothing the Go matcher would have matched is dropped.
+func TestEnvAssignments_RejectsNonAssignments(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		argv []string
+		want []string
+	}{
+		{"a missing key is not an assignment", []string{"=VALUE"}, nil},
+		{"an expression is not an assignment", []string{"2+2=4"}, nil},
+		{"a key may not start with a digit", []string{"1A=x"}, nil},
+		{"a key may not contain a dash", []string{"A-B=x"}, nil},
+		{"underscores and digits are fine after the first character", []string{"_A1_B=x"}, []string{"_A1_B=x"}},
+		{"a real assignment survives", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}, []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}},
+		{"an empty value is still an assignment", []string{"A="}, []string{"A="}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, field(t, execEvent(t, "/usr/bin/true", tc.argv...), "EnvAssignments"))
+		})
 	}
 }

@@ -33,8 +33,9 @@ type Event struct {
 	envAssignments   []string
 }
 
-// execPayload is the subset of an exec event this package reads. Deliberately partial: the taxonomy supplies two fields, so
-// decoding the rest (code signing, hashes, pid generation) would cost allocation per event for values nothing here reads.
+// execPayload is the subset of an exec event this package reads. Deliberately partial: the taxonomy supplies five fields and all of
+// them come from the path and the argument vector, so decoding the rest (code signing, hashes, pid generation) would cost
+// allocation per event for values nothing here reads.
 type execPayload struct {
 	Path string   `json:"path"`
 	Args []string `json:"args"`

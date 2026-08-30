@@ -72,11 +72,18 @@ func commandArguments(argv []string) []string {
 //
 //   - For an `env`-style invocation (the binary is /usr/bin/env or any path ending in /env), it is the run of leading tokens that
 //     contain "=", ending at the first token that does not. `env A=1 B=2 prog C=3` yields A=1 and B=2 but not C=3, which is correct:
-//     C=3 is an argument to prog, not an assignment env performs.
-//   - For anything else it is argv[0] alone, the shell's `VAR=value cmd` form.
+//     C=3 is an argument to prog, not an assignment env performs. An option ahead of the assignments (`env -i A=1 prog`) ends the
+//     run early and the assignment is missed; that is a pre-existing gap in the Go matcher, reproduced here so the equivalence
+//     property stays meaningful, and tracked in issue #792 rather than widened silently.
+//   - For anything else it is argv[0] alone, which is the shell's `VAR=value cmd` form as the dyld_insert rule describes it.
+//     Worth knowing: that branch appears to be unreachable in practice. ESF serialises only es_exec_arg, so the environment a shell
+//     applies is never in argv, and argv[0] is an assignment in 0 of 670,185 real exec events on a dev host. The branch is
+//     reproduced here because this field's contract is to match the Go matcher exactly; issue #791 covers the rule.
 //
-// This is what makes the field worth computing. `DYLD_INSERT_LIBRARIES=x /bin/true` and `/bin/true DYLD_INSERT_LIBRARIES=x` produce
-// the same CommandLine, and only the first is an injection; a rule matching the joined string cannot tell them apart.
+// This is what makes the field worth computing. `DYLD_INSERT_LIBRARIES=x /bin/true` and `/bin/true DYLD_INSERT_LIBRARIES=x` join to
+// DIFFERENT CommandLine strings, since argv is joined in order, but they carry the same assignment text and only the first is an
+// injection. A rule written as `CommandLine|contains: 'DYLD_INSERT_LIBRARIES='` matches both, because a substring match is exactly
+// the operation that discards position.
 //
 // The window is decided by the resolved executable path rather than by argv[0], since argv[0] is whatever the caller chose to pass.
 func envAssignments(path string, argv []string) []string {
@@ -89,9 +96,30 @@ func envAssignments(path string, argv []string) []string {
 		if i > 0 && !strings.Contains(a, "=") {
 			break
 		}
-		if strings.Contains(a, "=") {
+
+		if isAssignment(a) {
 			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// isAssignment reports whether a token is a real KEY=VALUE assignment rather than merely containing "=".
+//
+// A token such as `=VALUE` or `2+2=4` contains "=" and is not an assignment, and admitting it would let a future rule match on
+// something the shell never assigned. This is behaviour-neutral for the rule this field serves today, since every DYLD_ prefix it
+// looks for carries a valid key, so narrowing here cannot drop a token the Go matcher would have matched.
+func isAssignment(token string) bool {
+	key, _, found := strings.Cut(token, "=")
+	if !found || key == "" {
+		return false
+	}
+	for i, r := range key {
+		isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_'
+		isDigitAfterFirst := i > 0 && r >= '0' && r <= '9'
+		if !isLetter && !isDigitAfterFirst {
+			return false
+		}
+	}
+	return true
 }

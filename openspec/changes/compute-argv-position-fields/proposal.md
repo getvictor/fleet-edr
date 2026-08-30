@@ -18,7 +18,7 @@ Three computed fields on exec events, so the positional facts can be matched as 
 
 None of the three names is used by any rule in the 3,141-rule upstream corpus, so nothing imported can collide with them.
 
-`EnvAssignments` is the clearest illustration of why position has to be recovered: `DYLD_INSERT_LIBRARIES=x /bin/true` and `/bin/true DYLD_INSERT_LIBRARIES=x` produce an identical `CommandLine`, and only the first is an injection.
+`EnvAssignments` is the clearest illustration of why position has to be recovered. `DYLD_INSERT_LIBRARIES=x /bin/true` and `/bin/true DYLD_INSERT_LIBRARIES=x` join to different `CommandLine` strings, since argv is joined in order, but they carry the same assignment text and only the first is an injection. A rule written as `CommandLine|contains: 'DYLD_INSERT_LIBRARIES='` matches both, because a substring match is precisely the operation that discards position.
 
 ## Consequence for the issue's expectations
 
