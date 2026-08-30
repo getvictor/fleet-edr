@@ -719,54 +719,57 @@ func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
 	// so this is scoped to the ones we know are boolean rather than to anything that looks like one.
 	booleanFields := map[string]bool{"WriteIntent": true, "MutatingOpen": true}
 
-	// checkFields asserts over one alternative's field map, returning how many boolean fields it saw.
-	checkFields := func(t *testing.T, where string, fields map[string]any) int {
-		t.Helper()
-		seen := 0
-		for field, value := range fields {
-			if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
-				continue
-			}
-			assert.IsType(t, false, value,
-				"%s.%s must be a YAML boolean, not %T: quoting it breaks a type-checking Sigma backend", where, field, value)
-			seen++
-		}
-		return seen
+	type boolCase struct {
+		name  string // pack file, search, and field: the subtest name
+		value any
 	}
 
 	entries, err := packFS.ReadDir("pack")
 	require.NoError(t, err)
 	require.NotEmpty(t, entries)
 
-	// Not parallel: the subtests feed a shared counter, and the assertion that the walk found anything at all has to run after
-	// they have. A parallel subtest returns before its body executes, which would leave the counter at zero.
-	total := 0
-	for _, entry := range entries {
-		t.Run(entry.Name(), func(t *testing.T) {
-			body, err := packFS.ReadFile("pack/" + entry.Name())
-			require.NoError(t, err)
-
-			var file struct {
-				Detection map[string]any `yaml:"detection"`
+	// The table is built synchronously so "did the walk find anything" is answered before any subtest runs. Accumulating it
+	// inside parallel subtests would read zero, because a parallel subtest returns before its body executes.
+	var cases []boolCase
+	collect := func(file, where string, fields map[string]any) {
+		for field, value := range fields {
+			if booleanFields[strings.SplitN(field, "|", 2)[0]] {
+				cases = append(cases, boolCase{name: fmt.Sprintf("%s/%s.%s", file, where, field), value: value})
 			}
-			require.NoError(t, yaml.Unmarshal(body, &file))
+		}
+	}
+	for _, entry := range entries {
+		body, err := packFS.ReadFile("pack/" + entry.Name())
+		require.NoError(t, err)
 
-			for searchName, search := range file.Detection {
-				switch v := search.(type) {
-				case map[string]any:
-					total += checkFields(t, searchName, v)
-				case []any:
-					// OR alternatives. Each entry the compiler accepts is a field map; anything else it refuses at load, so
-					// this test does not need to re-report it.
-					for i, alternative := range v {
-						if fields, ok := alternative.(map[string]any); ok {
-							total += checkFields(t, fmt.Sprintf("%s[%d]", searchName, i), fields)
-						}
+		var file struct {
+			Detection map[string]any `yaml:"detection"`
+		}
+		require.NoError(t, yaml.Unmarshal(body, &file))
+
+		for searchName, search := range file.Detection {
+			switch v := search.(type) {
+			case map[string]any:
+				collect(entry.Name(), searchName, v)
+			case []any:
+				// OR alternatives. Each entry the compiler accepts is a field map; anything else it refuses at load, so this
+				// test does not need to re-report it.
+				for i, alternative := range v {
+					if fields, ok := alternative.(map[string]any); ok {
+						collect(entry.Name(), fmt.Sprintf("%s[%d]", searchName, i), fields)
 					}
 				}
-				// Anything else is the condition string.
 			}
+			// Anything else is the condition string.
+		}
+	}
+	require.NotEmpty(t, cases, "no boolean fields found, so this test would prove nothing")
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.IsType(t, false, tc.value,
+				"%s must be a YAML boolean, not %T: quoting it breaks a type-checking Sigma backend", tc.name, tc.value)
 		})
 	}
-	assert.Positive(t, total, "no boolean fields found, so this test proved nothing")
 }
