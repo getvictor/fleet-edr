@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	"pgregory.net/rapid"
 
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -474,4 +477,330 @@ func TestSharedShellListMatchesTheShippedDetection(t *testing.T) {
 
 	assert.Equal(t, shared, inDetection,
 		"the inlined detection and the shared unix_shells list must describe the same set; they are one set written twice")
+}
+
+// The sudoers_tamper oracle. Frozen literals, not the live regexp or masks.
+var (
+	legacySudoersPath      = regexp.MustCompile(`^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$`)
+	legacySudoersWriteMask = 0x3
+	legacySudoersIntent    = 0x400 | 0x8 | 0x200
+)
+
+// legacySudoersFires is the complete pre-conversion predicate, including the suppression that a single write-intent boolean could
+// not express: the intent mask applies ONLY when the writer is sudo.
+func legacySudoersFires(path string, flags int, subjectPath string) bool {
+	if !legacySudoersPath.MatchString(path) {
+		return false
+	}
+	if flags&legacySudoersWriteMask == 0 {
+		return false
+	}
+	if subjectPath == "/usr/bin/sudo" && flags&legacySudoersIntent == 0 {
+		return false
+	}
+	return true
+}
+
+// TestEquivalence_SudoersTamper compares the shipped detection against the frozen oracle across paths, flag combinations and
+// writers. The flag space is chosen deliberately: read-only, write-without-intent (sudo's flock shape), and write-with-intent are
+// the three cases the rule distinguishes, and the third condition only bites on one writer.
+//
+// Exhaustive rather than sampled. The domain is 8 paths x 7 flag sets x 4 writers = 224 cases, which is smaller than rapid's
+// default 100 draws would reliably cover, so sampling could leave a regression isolated to one tuple passing.
+func TestEquivalence_SudoersTamper(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/etc/sudoers", "/private/etc/sudoers", "/etc/sudoers.d/evil", "/private/etc/sudoers.d/edr-uat",
+		"/etc/sudoers.d/", "/etc/sudoersX", "/etc/passwd", "/etc/sudoers.d/a/b",
+	}
+	flagSets := []int{
+		0x0,                 // O_RDONLY
+		0x1,                 // O_WRONLY, no mutating bits: sudo's flock shape
+		0x2,                 // O_RDWR, no mutating bits
+		0x1 | 0x400,         // O_WRONLY|O_TRUNC
+		0x1 | 0x200 | 0x400, // what the extension actually emits
+		0x8,                 // O_APPEND alone, no write access
+		0x2 | 0x8,           // O_RDWR|O_APPEND
+	}
+	subjects := []string{"/usr/bin/sudo", "/usr/bin/tee", "/bin/cp", ""}
+
+	checked := 0
+	for _, path := range paths {
+		for _, flags := range flagSets {
+			for _, subject := range subjects {
+				writer := subject
+				if writer == "" {
+					writer = "an unresolved writer"
+				}
+				checked++
+				t.Run(fmt.Sprintf("%s flags=%#x by %s", path, flags, writer), func(t *testing.T) {
+					t.Parallel()
+					payload, err := json.Marshal(map[string]any{"pid": 7, "path": path, "flags": flags})
+					require.NoError(t, err)
+					ev, err := sigmabind.NewOpenEventLazy(
+						rulesapi.Event{EventID: "e", EventType: "open", Payload: payload},
+						func() (string, error) { return subject, nil })
+					require.NoError(t, err)
+
+					require.Equal(t, legacySudoersFires(path, flags, subject), sudoersDetection().Matches(ev))
+				})
+			}
+		}
+	}
+	assert.Equal(t, len(paths)*len(flagSets)*len(subjects), checked, "every combination must be exercised")
+}
+
+// TestSudoersFlagChecksAreVestigialForCurrentAgents records what the conversion preserved and why it currently changes nothing.
+//
+// Since #301 (2026-05-31) the only source of `open` events is FileTamperSubscriber, which re-emits NOTIFY_CREATE and NOTIFY_WRITE
+// on /etc/sudoers* with a CONSTANT synthetic flag set, `O_WRONLY|O_CREAT|O_TRUNC`. Against that constant both flag tests are
+// no-ops: write access is always set, and the mutating bits are always set so the sudo suppression can never fire.
+//
+// The logic is kept because an agent predating #301 sends real open(2) flags, and dropping the tests would make a read-only open of
+// /etc/sudoers on such a host start alerting. This test is the record of that reasoning, so a later reader can retire the fields
+// deliberately once those agents are gone rather than discovering the masks look pointless and guessing. Tracked as #801.
+func TestSudoersFlagChecksAreVestigialForCurrentAgents(t *testing.T) {
+	t.Parallel()
+
+	const synthetic = 0x1 | 0x200 | 0x400 // what FileTamperSubscriber emits, verified against captured telemetry as flags=1537
+	require.Equal(t, 1537, synthetic)
+
+	assert.NotZero(t, synthetic&legacySudoersWriteMask, "write access is always set, so that test always passes")
+	assert.NotZero(t, synthetic&legacySudoersIntent, "the mutating bits are always set, so the sudo suppression can never fire")
+
+	// And so sudo writing a sudoers file DOES alert today, where with real flock flags it would not.
+	assert.True(t, legacySudoersFires("/etc/sudoers", synthetic, "/usr/bin/sudo"))
+	assert.False(t, legacySudoersFires("/etc/sudoers", 0x1, "/usr/bin/sudo"), "the suppression still works on real flags")
+}
+
+// fieldsEvent is a literal sigma.Event, bypassing sigmabind. It exists to evaluate the shipped detection under a DIFFERENT field
+// supplier than ours, which is the situation `portable: mapped` describes.
+type fieldsEvent map[string][]string
+
+func (f fieldsEvent) Field(name string) ([]string, bool) { v, ok := f[name]; return v, ok }
+
+// TestSudoersRuleIsSelfContainedForOtherEngines pins the one thing the equivalence property structurally cannot see.
+//
+// Our adapter supplies TargetFilename only when the open carries write access, so against sigmabind the rule's `WriteIntent: true`
+// is redundant and removing it does not change a single verdict (verified: that mutation survives TestEquivalence_SudoersTamper).
+// It is NOT redundant for the exported rule. `portable: mapped` promises another engine can evaluate this rule given the mapped
+// fields, and an engine that supplies TargetFilename on every open, as a literal reading of the Sigma taxonomy would, needs the
+// rule itself to say it only wants writes. So the guard has a real consumer and is not the speculative kind.
+func TestSudoersRuleIsSelfContainedForOtherEngines(t *testing.T) {
+	t.Parallel()
+
+	// A read-only open of /etc/sudoers, from an engine that does not gate TargetFilename on write access.
+	readOnly := fieldsEvent{"TargetFilename": {"/etc/sudoers"}, "WriteIntent": {"false"}, "MutatingOpen": {"false"}, "Image": {"/bin/cat"}}
+	assert.False(t, sudoersDetection().Matches(readOnly), "the rule must reject a read-only open on its own terms, not ours")
+
+	writing := fieldsEvent{"TargetFilename": {"/etc/sudoers"}, "WriteIntent": {"true"}, "MutatingOpen": {"true"}, "Image": {"/bin/cp"}}
+	assert.True(t, sudoersDetection().Matches(writing))
+}
+
+// spec:server-detection-rules-engine/a-rule-suppresses-a-named-exception-rather-than-branching-on-the-writer/the-suppression-applies-only-to-the-writer-it-names
+//
+// TestSudoersSuppressionIsScopedToSudo pins the half of the rule that a single write-intent boolean could not carry: the flock
+// exception applies to sudo and to nothing else. Any other process performing the identical open still fires, which is what stops
+// the exception from becoming a way to write a sudoers file unnoticed.
+func TestSudoersSuppressionIsScopedToSudo(t *testing.T) {
+	t.Parallel()
+
+	const flockShape = 0x1 // O_WRONLY, no content-changing bit: write access with nothing written
+
+	cases := []struct {
+		name    string
+		subject string
+		want    bool
+	}{
+		{"sudo taking its lock is suppressed", "/usr/bin/sudo", false},
+		{"tee performing the identical open fires", "/usr/bin/tee", true},
+		{"a copy of sudo elsewhere on disk fires", "/tmp/sudo", true},
+		// The detection matches, which is the honest answer for a filter that cannot confirm the writer is sudo. The rule then
+		// produces no finding anyway, because evalEvent needs the process row to attach one to.
+		{"an unresolved writer is not suppressed", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ev, err := sigmabind.NewOpenEventLazy(
+				rulesapi.Event{EventID: "e", EventType: "open",
+					Payload: []byte(fmt.Sprintf(`{"pid":7,"path":"/etc/sudoers","flags":%d}`, flockShape))},
+				func() (string, error) { return tc.subject, nil })
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, sudoersDetection().Matches(ev))
+		})
+	}
+
+	// And sudo is suppressed only for the flock shape: sudo truncating the file is a real edit and still fires.
+	ev, err := sigmabind.NewOpenEventLazy(
+		rulesapi.Event{EventID: "e", EventType: "open", Payload: []byte(`{"pid":7,"path":"/etc/sudoers","flags":1537}`)},
+		func() (string, error) { return "/usr/bin/sudo", nil })
+	require.NoError(t, err)
+	assert.True(t, sudoersDetection().Matches(ev), "the exception is the lock, not the identity")
+}
+
+// countingGraphReader counts GetProcessByPID calls so a test can assert how many graph reads a rule performs. It embeds the
+// package's existing full stub so it tracks the GraphReader interface rather than re-listing every method.
+type countingGraphReader struct {
+	perPIDGraphReader
+	proc  *rulesapi.Process
+	calls int
+}
+
+func (r *countingGraphReader) GetProcessByPID(_ context.Context, _ string, _ int, _ int64) (*rulesapi.Process, error) {
+	r.calls++
+	return r.proc, nil
+}
+
+// TestSudoersReadsTheSubjectProcessAtMostOnce pins that the writer is resolved once per event and that the finding names the same
+// process the detection matched on.
+//
+// Two reads would not just cost more: a materialization commit landing between them could return a different image, so the
+// suppression would be decided against one writer and the alert would name another. The condition can also short-circuit before it
+// reads Image, so "the detection already resolved it" is not something the finding path can assume.
+func TestSudoersReadsTheSubjectProcessAtMostOnce(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		flags     int
+		writer    string
+		wantFind  bool
+		wantReads int
+	}{
+		{"a match resolves once and reuses it", 1537, "/usr/bin/tee", true, 1},
+		{"a suppressed open resolves once", 1, "/usr/bin/sudo", false, 1},
+		// The path test fails before anything needs the writer, so the graph is never touched.
+		{"a non-sudoers path never reads the graph", 1537, "/usr/bin/tee", false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := "/etc/sudoers"
+			if tc.wantReads == 0 {
+				path = "/etc/sudoers.d/nested/deeper" // matches the byte prefilter, fails the rule's path pattern
+			}
+			gr := &countingGraphReader{proc: &rulesapi.Process{ID: 42, PID: 7, Path: tc.writer}}
+			rule := &SudoersTamper{}
+			evt := rulesapi.Event{
+				EventID: "e1", HostID: "h1", EventType: "open", TimestampNs: 1,
+				Payload: []byte(fmt.Sprintf(`{"pid":7,"path":%q,"flags":%d}`, path, tc.flags)),
+			}
+
+			finding, err := rule.evalEvent(t.Context(), evt, gr)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantReads, gr.calls, "graph reads")
+			if !tc.wantFind {
+				assert.Nil(t, finding)
+				return
+			}
+			require.NotNil(t, finding)
+			assert.Contains(t, finding.Description, tc.writer, "the finding names the process the detection matched on")
+		})
+	}
+}
+
+// boolCase is one boolean-valued field occurrence in the shipped pack: a subtest name and the raw YAML value behind it.
+type boolCase struct {
+	name  string
+	value any
+}
+
+// booleanFields are the fields this engine computes as booleans. Scoped to those rather than to anything that looks boolean, so a
+// rule that legitimately matches the literal string "true" on some other field is unaffected.
+var booleanFields = map[string]bool{"WriteIntent": true, "MutatingOpen": true}
+
+// searchAlternatives flattens one named search into the field maps it contains, mirroring compileSearch: a search is a field map,
+// or a LIST of field maps that are OR alternatives. Anything else is the condition string and yields nothing.
+func searchAlternatives(searchName string, search any) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	switch v := search.(type) {
+	case map[string]any:
+		out[searchName] = v
+	case []any:
+		for i, alternative := range v {
+			if fields, ok := alternative.(map[string]any); ok {
+				out[fmt.Sprintf("%s[%d]", searchName, i)] = fields
+			}
+		}
+	}
+	return out
+}
+
+// booleanCasesIn returns one case per boolean-valued field in a single alternative, mirroring scalarList: a field's value is a
+// scalar, or a LIST of values that are OR alternatives. Asserting on the slice itself would reject a legitimate
+// `WriteIntent: [true, false]`, so each element becomes its own case.
+func booleanCasesIn(where string, fields map[string]any) []boolCase {
+	var cases []boolCase
+	for field, value := range fields {
+		if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
+			continue
+		}
+		base := where + "." + field
+		values, isList := value.([]any)
+		if !isList {
+			cases = append(cases, boolCase{name: base, value: value})
+			continue
+		}
+		for i, element := range values {
+			cases = append(cases, boolCase{name: fmt.Sprintf("%s[%d]", base, i), value: element})
+		}
+	}
+	return cases
+}
+
+// packBooleanCases walks every shipped rule file and returns every boolean-valued field occurrence in its detection block.
+func packBooleanCases(t *testing.T) []boolCase {
+	t.Helper()
+
+	entries, err := packFS.ReadDir("pack")
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	var cases []boolCase
+	for _, entry := range entries {
+		body, err := packFS.ReadFile("pack/" + entry.Name())
+		require.NoError(t, err)
+
+		var file struct {
+			Detection map[string]any `yaml:"detection"`
+		}
+		require.NoError(t, yaml.Unmarshal(body, &file))
+
+		for searchName, search := range file.Detection {
+			for where, fields := range searchAlternatives(searchName, search) {
+				for _, c := range booleanCasesIn(where, fields) {
+					cases = append(cases, boolCase{name: entry.Name() + "/" + c.name, value: c.value})
+				}
+			}
+		}
+	}
+	return cases
+}
+
+// TestBooleanDetectionValuesAreYAMLBooleans pins that a boolean-valued field is emitted as a YAML boolean rather than a quoted
+// string.
+//
+// Our evaluator cannot tell the difference: scalarString sends a bool through strconv.FormatBool, so `true` and 'true' match
+// identically here and no behavioural test can catch a regression. The distinction matters to the promise `portable: mapped`
+// makes. Sigma tooling preserves scalar types, so a backend that supplies WriteIntent as a real boolean and type-checks the
+// comparison would not match a rule asking for the string "true", and the rule would silently never fire on that engine.
+//
+// The walk mirrors the compiler across every nesting form a value can take; see searchAlternatives and booleanCasesIn.
+func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
+	t.Parallel()
+
+	// Built before any subtest runs, so "did the walk find anything" is answered synchronously. Accumulating inside parallel
+	// subtests would read zero, because a parallel subtest returns before its body executes.
+	cases := packBooleanCases(t)
+	require.NotEmpty(t, cases, "no boolean fields found, so this test would prove nothing")
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.IsType(t, false, tc.value,
+				"%s must be a YAML boolean, not %T: quoting it breaks a type-checking Sigma backend", tc.name, tc.value)
+		})
+	}
 }

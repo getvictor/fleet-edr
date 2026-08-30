@@ -252,7 +252,7 @@ func TestExecEventWithParent(t *testing.T) {
 			values, present := se.Field("ParentImage")
 			assert.Equal(t, tc.wantPresent, present)
 			assert.Equal(t, tc.wantValues, values)
-			require.NoError(t, se.ParentErr(), "an unresolvable parent is a decline, not a failure")
+			require.NoError(t, se.ResolveErr(), "an unresolvable parent is a decline, not a failure")
 		})
 	}
 }
@@ -300,6 +300,6 @@ func TestExecEventWithParent_ReportsAResolverFailure(t *testing.T) {
 
 	_, present := se.Field("ParentImage")
 	assert.False(t, present, "a failed lookup leaves the field absent")
-	require.Error(t, se.ParentErr(), "and the failure is reported rather than silently read as no parent")
-	assert.Contains(t, se.ParentErr().Error(), "get child pid 1")
+	require.Error(t, se.ResolveErr(), "and the failure is reported rather than silently read as no parent")
+	assert.Contains(t, se.ResolveErr().Error(), "get child pid 1")
 }

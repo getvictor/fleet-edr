@@ -43,7 +43,7 @@ x-engine:
   rule_id: persistence_launchagent
   type: sigma
   portable: mapped
-  portability_note: The rule's logic is the detection block in this file. It is valid Sigma, but it reads at least one field this engine computes from the argument vector rather than one from Sigma's own taxonomy, so another engine needs those fields to evaluate it. The computed fields exist because Sigma represents a command line as a single string, in which argument position is no longer recoverable.
+  portability_note: The rule's logic is the detection block in this file. It is valid Sigma, but it reads the fields CommandArguments and Subcommand, which this engine computes rather than taking from Sigma's own taxonomy, so another engine needs them supplied to evaluate the rule. Sigma has no equivalent because it represents a command line as a single string, in which argument position is no longer recoverable.
   event_types:
     - exec
   exclusions:

@@ -27,12 +27,19 @@ type Event struct {
 	commandLine    []string
 	targetFilename []string
 
-	// Supplied by the caller rather than read from the payload. See NewExecEvent for why.
-	parentImage []string
+	// An image the caller supplies rather than the payload carrying it, because the graph knows it and this package does not.
+	// One slot serves both uses, since an event has at most one: an exec resolves its PARENT's image, an open resolves the image
+	// of the process that did the opening. Which name the taxonomy exposes it under depends on the event type.
+	suppliedImage []string
 	// Resolved on first access rather than up front, so an event no rule asks about costs nothing. See NewExecEventLazy.
-	resolveParent func() (string, error)
-	parentErr     error
-	parentDone    bool
+	resolveImage func() (string, error)
+	resolveErr   error
+	resolveDone  bool
+
+	// Flag-derived facts about a file open, kept as separate fields because the rule reading them applies them separately: one
+	// gates on write access, the other suppresses one specific writer's lock pattern.
+	writeIntent  []string
+	mutatingOpen []string
 
 	// Computed from argv rather than copied from a payload field. See argv.go for why each exists.
 	subcommand       []string
@@ -57,9 +64,13 @@ type openPayload struct {
 // writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything
 // non-zero there means the descriptor can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND) do not affect the access mode.
 //
-// This mirrors the same test in the sudoers_tamper rule deliberately, and the duplication is time-boxed: #772 adds an explicit
-// write-intent field to the event, at which point both derivations give way to reading it.
+// This is now the single derivation: #772 moved the sudoers_tamper rule onto the WriteIntent field below, so the rule no longer
+// carries its own copy of the mask.
 const writeAccessMask = 0x3
+
+// mutatingOpenMask is O_TRUNC | O_APPEND | O_CREAT: the bits a writer that intends to change a file's CONTENT sets, as opposed to
+// one that opens it write-mode only to take a lock. The sudoers rule uses it to suppress exactly that pattern from sudo itself.
+const mutatingOpenMask = 0x400 | 0x8 | 0x200
 
 // NewExecEvent is NewEvent for an exec event whose parent process the caller has already resolved.
 //
@@ -76,8 +87,17 @@ func NewExecEvent(ev api.Event, parentImage string) (*Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.parentImage = presentString(parentImage)
+	e.suppliedImage = presentString(parentImage)
 	return e, nil
+}
+
+// NewOpenEventLazy is NewEvent for a file-open event whose opening process the caller will resolve on demand.
+//
+// An open event carries the pid that did the opening, not its path, for the same reason an exec carries ppid and not the parent's
+// path: the graph knows it and this package does not. Deferred for the same reason too, since a detection reaches the subject only
+// after the far cheaper target-filename test has already narrowed the events.
+func NewOpenEventLazy(ev api.Event, resolveImage func() (string, error)) (*Event, error) {
+	return newEventLazy(ev, resolveImage)
 }
 
 // NewExecEventLazy is NewExecEvent for a parent whose resolution is expensive enough to be worth deferring.
@@ -88,33 +108,40 @@ func NewExecEvent(ev api.Event, parentImage string) (*Event, error) {
 // otherwise have lost and keeps the common case free of a database read.
 //
 // The resolver runs at most once per event. Its error is recorded rather than returned, because Field cannot report one, so a
-// caller that needs to distinguish "no parent" from "could not look one up" checks ParentErr after evaluating.
+// caller that needs to distinguish "no parent" from "could not look one up" checks ResolveErr after evaluating.
 func NewExecEventLazy(ev api.Event, resolveParent func() (string, error)) (*Event, error) {
+	return newEventLazy(ev, resolveParent)
+}
+
+// newEventLazy is the shared body of the two lazy constructors. They stay separate in the API because which image a caller is
+// promising to resolve is the thing worth naming: an exec resolves its parent's, an open resolves its own subject's. The mechanism
+// they share lives here so lazy resolution has one implementation.
+func newEventLazy(ev api.Event, resolveImage func() (string, error)) (*Event, error) {
 	e, err := NewEvent(ev)
 	if err != nil {
 		return nil, err
 	}
-	e.resolveParent = resolveParent
+	e.resolveImage = resolveImage
 	return e, nil
 }
 
-// ParentErr reports a failure from the lazy parent resolver, or nil when it succeeded or was never reached.
+// ResolveErr reports a failure from the lazy image resolver, or nil when it succeeded or was never reached.
 //
-// A rule checks this AFTER evaluating: a resolver that failed leaves ParentImage absent, which is indistinguishable at match time
-// from a process with no parent, and the two deserve different handling.
-func (e *Event) ParentErr() error { return e.parentErr }
+// A rule checks this AFTER evaluating: a resolver that failed leaves its field absent, which at match time is indistinguishable
+// from a process that genuinely has no parent or could not be identified, and the two deserve different handling.
+func (e *Event) ResolveErr() error { return e.resolveErr }
 
-// parentImageValues returns the parent image, resolving it on first access.
-func (e *Event) parentImageValues() ([]string, bool) {
-	if e.resolveParent != nil && !e.parentDone {
-		e.parentDone = true
-		path, err := e.resolveParent()
-		e.parentErr = err
+// suppliedImageValues returns the caller-supplied image, resolving it on first access and at most once per event.
+func (e *Event) suppliedImageValues() ([]string, bool) {
+	if e.resolveImage != nil && !e.resolveDone {
+		e.resolveDone = true
+		path, err := e.resolveImage()
+		e.resolveErr = err
 		if err == nil {
-			e.parentImage = presentString(path)
+			e.suppliedImage = presentString(path)
 		}
 	}
-	return e.parentImage, e.parentImage != nil
+	return e.suppliedImage, e.suppliedImage != nil
 }
 
 // NewEvent decodes an event into the Sigma fields it can supply.
@@ -144,9 +171,15 @@ func NewEvent(ev api.Event) (*Event, error) {
 		// Our open events include read-only opens, which are routine: the sudoers_tamper rule drops them for exactly this reason,
 		// noting that cron, sudo itself and various PAM modules read /etc/sudoers constantly. Exposing TargetFilename for those
 		// would import that noise into every file_event rule we adopt, as false positives rather than as a visible error.
-		if p.Flags&writeAccessMask != 0 {
+		writable := p.Flags&writeAccessMask != 0
+		if writable {
 			e.targetFilename = presentString(p.Path)
 		}
+		// Bound once above so the relationship is visible rather than coincidental: TargetFilename is present exactly when
+		// WriteIntent is true. A rule for another engine still states the write requirement itself, because that engine may
+		// supply TargetFilename unconditionally.
+		e.writeIntent = presentBool(writable)
+		e.mutatingOpen = presentBool(p.Flags&mutatingOpenMask != 0)
 	}
 	return e, nil
 }
@@ -196,4 +229,13 @@ func commandLine(args []string) []string {
 		return nil
 	}
 	return []string{strings.Join(args, " ")}
+}
+
+// presentBool renders a boolean field the way Sigma matches one: as the text a rule writes, `true` or `false`. Always present, since
+// a flag that is not set is a real answer rather than a missing one, unlike a path we could not resolve.
+func presentBool(v bool) []string {
+	if v {
+		return []string{"true"}
+	}
+	return []string{"false"}
 }

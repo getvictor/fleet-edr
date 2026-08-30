@@ -38,7 +38,7 @@ var taxonomy = map[string]map[string]fieldExtractor{
 		"Image": func(e *Event) ([]string, bool) { return e.image, e.image != nil },
 		// Supplied by the caller from the process graph rather than read from the payload, which carries ppid but not the
 		// parent's path. Standard Sigma taxonomy, so a rule reading it stays `portable: standard`.
-		"ParentImage": func(e *Event) ([]string, bool) { return e.parentImageValues() },
+		"ParentImage": func(e *Event) ([]string, bool) { return e.suppliedImageValues() },
 		"CommandLine": func(e *Event) ([]string, bool) { return e.commandLine, e.commandLine != nil },
 		// Computed from argv. Sigma carries no notion of argument position, and three of our detections turn on exactly that,
 		// so the positional facts are precomputed and matched as fields. A rule using one is `portable: mapped`, not
@@ -50,6 +50,14 @@ var taxonomy = map[string]map[string]fieldExtractor{
 	// Sigma calls this category file_event.
 	"open": {
 		"TargetFilename": func(e *Event) ([]string, bool) { return e.targetFilename, e.targetFilename != nil },
+		// The process that did the opening, supplied from the graph the way ParentImage is. Standard Sigma taxonomy: Image
+		// means the acting process, whatever the event type.
+		"Image": func(e *Event) ([]string, bool) { return e.suppliedImageValues() },
+		// Computed from the open flags. Neither is Sigma taxonomy, and neither appears anywhere in the upstream corpus, so a
+		// rule reading them is `portable: mapped`. That is the deliberate trade issue #772 records: it keeps the rule a plain
+		// field match instead of a condition the format cannot express.
+		"WriteIntent":  func(e *Event) ([]string, bool) { return e.writeIntent, e.writeIntent != nil },
+		"MutatingOpen": func(e *Event) ([]string, bool) { return e.mutatingOpen, e.mutatingOpen != nil },
 	},
 }
 

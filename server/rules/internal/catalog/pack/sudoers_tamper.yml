@@ -21,16 +21,36 @@ tags:
 logsource:
   product: macos
   category: file_event
+detection:
+  # A sudoers file being written. TargetFilename is supplied only for an open that carries write access (see sigmabind), and
+  # WriteIntent states that requirement in the rule rather than leaving it to the adapter, so widening the adapter cannot silently
+  # widen this rule.
+  selection:
+    TargetFilename|re: '^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$'
+    WriteIntent: true
+  # sudo itself opens /etc/sudoers write-mode to take a LOCK_EX flock for serialised reads: write by access mode, with no intent to
+  # change the contents. Suppress that one pattern, and ONLY for sudo, so any other writer using bare O_WRONLY still fires.
+  #
+  # This is why a single write-intent boolean cannot express the rule: the second flag test is conditional on who is writing, which
+  # is why the two masks are separate fields and why Image is supplied for open events at all.
+  #
+  # The residual gap this filter opens: a sudo that opens the file with bare O_WRONLY and then writes is suppressed. Scoping the
+  # exception to sudo is what keeps it narrow (any other writer using bare O_WRONLY still fires), but sudo itself is not covered.
+  # Closing it means correlating on NOTIFY_WRITE / NOTIFY_CLOSE_MODIFIED rather than inferring intent from open(2) flags, which is
+  # the same fix the atomic-rename limitation below needs.
+  filter_sudo_lock:
+    Image|re: '^/usr/bin/sudo$'
+    MutatingOpen: false
+  condition: selection and not filter_sudo_lock
 falsepositives:
   - Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.
 x-engine:
   rule_id: sudoers_tamper
-  type: graph
-  portable: none
-  portability_note: The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being converted separately; until a rule's logic lives in its file, this stays the honest answer.
+  type: sigma
+  portable: mapped
+  portability_note: The rule's logic is the detection block in this file. It is valid Sigma, but it reads the fields MutatingOpen and WriteIntent, which this engine computes rather than taking from Sigma's own taxonomy, so another engine needs them supplied to evaluate the rule. Sigma has no equivalent because it represents a file event as a completed creation or modification rather than an open with flags.
   event_types:
     - open
-  algorithm: file_open_write_intent_match
   exclusions:
     - path_glob
   limitations:

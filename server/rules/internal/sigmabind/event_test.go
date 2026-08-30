@@ -1,6 +1,7 @@
 package sigmabind
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -235,5 +236,102 @@ func FuzzNewEvent(f *testing.F) {
 				t.Fatalf("field %q reported absent but returned %v", name, values)
 			}
 		}
+	})
+}
+
+// spec:server-detection-rules-engine/an-open-event-supplies-the-writer-and-the-meaning-of-the-write/a-write-mode-open-that-changes-nothing-is-distinguished-from-one-that-does
+//
+// TestEvent_OpenSeparatesWriteAccessFromMutatingIntent pins that the two facts about an open's flags are supplied separately.
+//
+// They cannot be one field. sudo opens /etc/sudoers write-mode to take a LOCK_EX flock, so it is a write by access mode with no
+// intent to change the contents, and sudoers_tamper suppresses exactly that shape and only for sudo. A combined boolean would
+// either lose the suppression or apply it to every writer.
+func TestEvent_OpenSeparatesWriteAccessFromMutatingIntent(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name             string
+		flags            int
+		wantWriteIntent  string
+		wantMutatingOpen string
+	}{
+		{"read-only", 0x0, "false", "false"},
+		{"sudo's flock: write access, changes nothing", 0x1, "true", "false"},
+		{"O_RDWR alone changes nothing", 0x2, "true", "false"},
+		{"O_TRUNC changes the contents", 0x1 | 0x400, "true", "true"},
+		{"O_APPEND changes the contents", 0x2 | 0x8, "true", "true"},
+		{"O_CREAT changes the contents", 0x1 | 0x200, "true", "true"},
+		// Each field describes one property of the flags, independently: this is not a reachable open(2) shape (O_TRUNC needs
+		// write access), and it is here to pin that the fields do not gate on each other. Collapsing them is the thing the
+		// two-field design exists to avoid, so MutatingOpen stays a statement about the flags rather than a compound verdict.
+		{"a mutating bit without write access", 0x400, "false", "true"},
+		{"what the extension actually emits", 0x601, "true", "true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, err := NewEvent(api.Event{
+				EventID: "e1", EventType: "open",
+				Payload: []byte(fmt.Sprintf(`{"pid":1,"path":"/etc/sudoers","flags":%d}`, tc.flags)),
+			})
+			require.NoError(t, err)
+
+			writeIntent, ok := e.Field("WriteIntent")
+			require.True(t, ok)
+			assert.Equal(t, []string{tc.wantWriteIntent}, writeIntent)
+
+			mutating, ok := e.Field("MutatingOpen")
+			require.True(t, ok)
+			assert.Equal(t, []string{tc.wantMutatingOpen}, mutating)
+		})
+	}
+}
+
+// spec:server-detection-rules-engine/an-open-event-supplies-the-writer-and-the-meaning-of-the-write/the-writing-process-image-is-available-to-a-file-rule
+//
+// TestEvent_OpenSuppliesTheWritingProcessImage pins that a file rule can match on who did the opening. The value is resolved
+// lazily, because a rule that never reads Image must not pay for a process lookup on every open event.
+func TestEvent_OpenSuppliesTheWritingProcessImage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resolved on first read", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		e, err := NewOpenEventLazy(
+			api.Event{EventID: "e1", EventType: "open", Payload: []byte(`{"pid":9,"path":"/etc/sudoers","flags":1537}`)},
+			func() (string, error) { calls++; return "/usr/bin/sudo", nil })
+		require.NoError(t, err)
+
+		image, ok := e.Field("Image")
+		require.True(t, ok)
+		assert.Equal(t, []string{"/usr/bin/sudo"}, image)
+
+		_, _ = e.Field("Image")
+		assert.Equal(t, 1, calls, "the lookup is memoized, not repeated per field read")
+		assert.NoError(t, e.ResolveErr())
+	})
+
+	t.Run("never read means never resolved", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		e, err := NewOpenEventLazy(
+			api.Event{EventID: "e1", EventType: "open", Payload: []byte(`{"pid":9,"path":"/etc/sudoers","flags":1537}`)},
+			func() (string, error) { calls++; return "/usr/bin/sudo", nil })
+		require.NoError(t, err)
+
+		_, _ = e.Field("TargetFilename")
+		assert.Zero(t, calls)
+	})
+
+	t.Run("a failed lookup declines rather than matching", func(t *testing.T) {
+		t.Parallel()
+		e, err := NewOpenEventLazy(
+			api.Event{EventID: "e1", EventType: "open", Payload: []byte(`{"pid":9,"path":"/etc/sudoers","flags":1537}`)},
+			func() (string, error) { return "", errors.New("graph unavailable") })
+		require.NoError(t, err)
+
+		_, ok := e.Field("Image")
+		assert.False(t, ok, "an unresolvable image is absent, not empty: a rule matching Image must not match on a lookup failure")
+		require.Error(t, e.ResolveErr())
 	})
 }
