@@ -243,5 +243,5 @@ func PrunePack(dir string, pack map[string][]byte) ([]string, error) {
 // CatalogOnly list the docs generator does, which is what guarantees the pack and docs/detection-rules.md describe exactly the
 // same set of rules.
 func ExportPack() (map[string][]byte, error) {
-	return export.Pack(CatalogOnly().List(), catalog.ParamsNode)
+	return export.Pack(CatalogOnly().List(), catalog.AuthoredFor)
 }

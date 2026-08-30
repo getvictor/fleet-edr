@@ -85,10 +85,6 @@ var algorithmParams = map[string]map[string]paramSpec{
 	"parent_lookup_path_match": {
 		"office_binaries": {kind: kindStringList},
 	},
-	"exec_path_and_subcommand_match": {
-		"security_paths":     {kind: kindStringList, readOnly: true},
-		"dump_keychain_args": {kind: kindStringList},
-	},
 	"exec_subcommand_and_path_pattern_match": {
 		"launchctl_paths": {kind: kindStringList, readOnly: true},
 	},

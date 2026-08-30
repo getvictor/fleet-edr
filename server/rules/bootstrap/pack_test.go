@@ -119,7 +119,7 @@ func TestServedRuleIsThePackFileWithoutItsHeader(t *testing.T) {
 		if md.ID != "credential_keychain_dump" {
 			continue
 		}
-		served, err := export.Rule(md, catalog.ParamsNode(md.ID))
+		served, err := export.Rule(md, catalog.AuthoredFor(md.ID))
 		require.NoError(t, err)
 		assert.Equal(t, string(committed[md.ID]), export.Header+string(served))
 		assert.NotContains(t, string(served), "Do not hand-edit", "the served document carries no generated-file header")

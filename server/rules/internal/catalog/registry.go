@@ -17,6 +17,7 @@ func New(resolver api.ExclusionResolver) []api.Rule {
 	// lazily-memoized accessors, which are otherwise first touched during evaluation: without this a bad value would let the
 	// server boot and then panic on the first detection, which is precisely what validating at load exists to prevent.
 	MustLoadPack()
+	MustLoadDetections()
 
 	return []api.Rule{
 		&SuspiciousExec{Exclusions: resolver},
