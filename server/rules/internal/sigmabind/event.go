@@ -37,8 +37,16 @@ type execPayload struct {
 
 // openPayload is the subset of a file-open event this package reads.
 type openPayload struct {
-	Path string `json:"path"`
+	Path  string `json:"path"`
+	Flags int    `json:"flags"`
 }
+
+// writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything
+// non-zero there means the descriptor can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND) do not affect the access mode.
+//
+// This mirrors the same test in the sudoers_tamper rule deliberately, and the duplication is time-boxed: #772 adds an explicit
+// write-intent field to the event, at which point both derivations give way to reading it.
+const writeAccessMask = 0x3
 
 // NewEvent decodes an event into the Sigma fields it can supply.
 //
@@ -60,7 +68,13 @@ func NewEvent(ev api.Event) (*Event, error) {
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
 			return nil, fmt.Errorf("decode open payload for event %q: %w", ev.EventID, err)
 		}
-		e.targetFilename = presentString(p.Path)
+		// Sigma's file_event category means file creation or modification (it is Sysmon's FileCreate), not "a file was opened".
+		// Our open events include read-only opens, which are routine: the sudoers_tamper rule drops them for exactly this reason,
+		// noting that cron, sudo itself and various PAM modules read /etc/sudoers constantly. Exposing TargetFilename for those
+		// would import that noise into every file_event rule we adopt, as false positives rather than as a visible error.
+		if p.Flags&writeAccessMask != 0 {
+			e.targetFilename = presentString(p.Path)
+		}
 	}
 	return e, nil
 }
@@ -79,10 +93,12 @@ func (e *Event) EventType() string { return e.eventType }
 
 // presentString wraps a value for storage, treating the empty string as absent.
 //
-// Sigma distinguishes a field that is missing (`Field: null`) from one present but empty (`Field: ”`), and this collapses the two
-// for an empty path. That is deliberate: `path` is required by the event schema for both types we map, so an empty one means a
-// malformed event rather than a process whose executable path is genuinely the empty string. Reporting it as present-and-empty
-// would let a rule written as `Image: ”` match every malformed event, which is a worse answer than reporting nothing.
+// Sigma distinguishes a field that is missing (`Field: null`) from one present but empty (`Field: ""`), and this collapses the two
+// for an empty path. That is deliberate, and measured: of 650,565 real exec events, 18 carry an empty path and every one of them is
+// a `snapshot: true` event, the synthetic exec the extension emits at start-up to materialise a process that already existed and
+// whose path it could not recover. Those are legitimate events with a genuinely unknown image, not corrupt ones, so erroring on
+// them would turn a known capture limitation into a recurring failure. Reporting the field present-and-empty would be worse still:
+// a rule written `Image: ""` would then match every one of them.
 func presentString(v string) []string {
 	if v == "" {
 		return nil

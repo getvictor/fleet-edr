@@ -1,6 +1,7 @@
 package sigmabind
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -155,4 +156,84 @@ func TestEvent_FieldIsAllocationFree(t *testing.T) {
 		e.Field("ParentImage")
 	})
 	assert.Zero(t, allocs, "field access must not allocate")
+}
+
+// spec:server-detection-rules-engine/our-events-supply-the-sigma-fields-a-rule-reads/a-read-only-open-supplies-no-target-filename
+//
+// TestEvent_FileEventMeansWriteIntent pins that a read-only open supplies no TargetFilename.
+//
+// Sigma's file_event category is file creation or modification (it is Sysmon's FileCreate), not "a file was opened". Our open
+// events include read-only opens, and they are routine rather than signal: the sudoers_tamper rule drops them precisely because
+// cron, sudo itself and various PAM modules read /etc/sudoers constantly. Supplying them here would import that noise into every
+// file_event rule we adopt, as false positives.
+func TestEvent_FileEventMeansWriteIntent(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		flags       int
+		wantPresent bool
+	}{
+		{"O_RDONLY supplies nothing", 0x0, false},
+		{"O_WRONLY supplies the path", 0x1, true},
+		{"O_RDWR supplies the path", 0x2, true},
+		// The flags every real open event in the dev corpus carries: O_WRONLY|O_CREAT|O_TRUNC.
+		{"O_WRONLY|O_CREAT|O_TRUNC supplies the path", 0x601, true},
+		// A read-only open that also sets high bits is still read-only: only bits 0-1 carry the access mode.
+		{"O_RDONLY|O_CLOEXEC is still read-only", 0x1000000, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, err := NewEvent(api.Event{
+				EventID: "e1", EventType: "open",
+				Payload: []byte(fmt.Sprintf(`{"pid":1,"path":"/etc/sudoers","flags":%d}`, tc.flags)),
+			})
+			require.NoError(t, err)
+			_, present := e.Field("TargetFilename")
+			assert.Equal(t, tc.wantPresent, present)
+		})
+	}
+}
+
+// FuzzNewEvent exercises the payload decoder with fuzzer-supplied bytes. CLAUDE.md's test matrix names event JSON as a fuzz target,
+// and this is the package that turns untrusted payload bytes into the values a detection matches on.
+//
+// The invariants are the ones a caller relies on: the adapter never panics, an error and a usable event are mutually exclusive, and
+// a field is never reported present with no values, since a present-but-valueless field would make `Field: null` and a real value
+// indistinguishable downstream.
+func FuzzNewEvent(f *testing.F) {
+	f.Add("exec", `{"pid":1,"ppid":0,"path":"/bin/sh","args":["sh","-c","x"]}`)
+	f.Add("exec", `{"args":[],"path":"","snapshot":true}`)
+	f.Add("open", `{"pid":1,"path":"/etc/sudoers","flags":1537}`)
+	f.Add("open", `{"pid":1,"path":"/etc/sudoers","flags":0}`)
+	f.Add("dns_query", `{"query":"example.com"}`)
+	f.Add("exec", `{"args":null,"path":null}`)
+	f.Add("exec", `null`)
+	f.Add("exec", `{}`)
+
+	f.Fuzz(func(t *testing.T, eventType, payload string) {
+		e, err := NewEvent(api.Event{EventID: "fuzz", EventType: eventType, Payload: []byte(payload)})
+		if err != nil {
+			if e != nil {
+				t.Fatalf("an error must not also return an event: %v", err)
+			}
+			return
+		}
+		if e == nil {
+			t.Fatal("no error but no event")
+		}
+		if e.EventType() != eventType {
+			t.Fatalf("event type %q became %q", eventType, e.EventType())
+		}
+		for _, name := range []string{"Image", "CommandLine", "TargetFilename", "ParentImage", ""} {
+			values, present := e.Field(name)
+			if present && len(values) == 0 {
+				t.Fatalf("field %q reported present with no values", name)
+			}
+			if !present && values != nil {
+				t.Fatalf("field %q reported absent but returned %v", name, values)
+			}
+		}
+	})
 }

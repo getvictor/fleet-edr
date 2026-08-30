@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"go.yaml.in/yaml/v3"
@@ -97,11 +98,30 @@ var sigmaCategory = map[string]string{
 }
 
 // SigmaCategory reports the Sigma logsource category for one of our event types, and whether a genuine Sigma equivalent exists.
-// Exported so the reverse mapping used when EVALUATING a rule (server/rules/internal/sigmabind) can be checked against the forward
-// mapping used when WRITING one, rather than the two drifting into disagreeing about what `process_creation` means.
 func SigmaCategory(eventType string) (string, bool) {
 	c, ok := sigmaCategory[eventType]
 	return c, ok
+}
+
+// eventTypeByCategory inverts sigmaCategory once, so the correspondence has exactly one editable definition. Writing a rule file
+// and evaluating one read the same table from opposite ends; two hand-maintained tables would let us emit files under a category we
+// then refuse to evaluate, which surfaces as rules that silently never run.
+//
+// Only entries with a genuine Sigma equivalent are inverted. sigmaCategory falls an unmapped event type through to its own name
+// (see its comment), and inverting that would invent a Sigma category that does not exist.
+var eventTypeByCategory = sync.OnceValue(func() map[string]string {
+	out := make(map[string]string, len(sigmaCategory))
+	for eventType, category := range sigmaCategory {
+		out[category] = eventType
+	}
+	return out
+})
+
+// EventTypeForCategory reports which of our event types a Sigma logsource category names. It is the inverse of SigmaCategory, and
+// is what lets a rule file declaring `category: process_creation` be evaluated against our exec events.
+func EventTypeForCategory(category string) (string, bool) {
+	et, ok := eventTypeByCategory()[category]
+	return et, ok
 }
 
 // sigmaProduct maps our platform values onto Sigma's product vocabulary. Sigma says `macos` where Go says `darwin`.

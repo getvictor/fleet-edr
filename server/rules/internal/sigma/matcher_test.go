@@ -100,7 +100,7 @@ func TestFieldTest_AllQuantifier(t *testing.T) {
 	}
 }
 
-// TestFieldTest_NullMatchesAbsence covers `Field: null` and, critically, its distinction from `Field: ”`. The corpus rule that
+// TestFieldTest_NullMatchesAbsence covers `Field: null` and, critically, its distinction from `Field: ""`. The corpus rule that
 // drove this implements BOTH as separate filters, so conflating them would change what that rule suppresses.
 func TestFieldTest_NullMatchesAbsence(t *testing.T) {
 	t.Parallel()

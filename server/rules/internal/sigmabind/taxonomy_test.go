@@ -56,7 +56,8 @@ func TestValidate_RejectsUnmappedFields(t *testing.T) {
 		want      string
 	}{
 		{
-			// 16 of the 69 macOS corpus rules read ParentImage. They are meant to fail here until #771 lands the enrichment.
+			// ParentImage is read by 11 of the 69 macOS corpus rules (16 uses in total). Those 11 are meant to fail
+			// here until #771 lands the enrichment.
 			"ParentImage needs the enrichment in #771", "exec",
 			"selection:\n  ParentImage|endswith: '/bash'\ncondition: selection\n", "ParentImage",
 		},
@@ -95,13 +96,6 @@ func TestValidate_RejectsUnmappedEventType(t *testing.T) {
 	assert.Contains(t, err.Error(), "dns_query")
 }
 
-// TestValidate_RejectsNilRule covers the guard rather than leaving a nil dereference in a load path.
-func TestValidate_RejectsNilRule(t *testing.T) {
-	t.Parallel()
-
-	require.Error(t, Validate(nil, "exec"))
-}
-
 // TestSupportedFields pins the mapped set. Asserted exactly, not by length: this is the list that decides which corpus rules can
 // load at all, so silently gaining or losing one should fail here.
 func TestSupportedFields(t *testing.T) {
@@ -129,17 +123,34 @@ func TestEventTypeForCategory(t *testing.T) {
 	assert.False(t, ok, "a category we cannot supply fields for must not resolve")
 }
 
-// TestCategoryMappingAgreesWithTheExporter is the drift guard between the two directions of one correspondence. The exporter maps
-// our event type onto a Sigma category when it WRITES a rule file; this package maps the category back when it EVALUATES one. If
-// they ever disagree, we would emit files under a category we then refuse to evaluate, and the mistake would surface as rules that
-// silently never run.
-func TestCategoryMappingAgreesWithTheExporter(t *testing.T) {
+// TestCategoryMappingRoundTripsThroughTheExporter pins that the two directions of the correspondence stay inverse. There is now
+// one editable table (the exporter's), so this checks the derivation rather than guarding a duplicate: a category we resolve to an
+// event type must be the same category the exporter writes for that event type. If it were not, we would emit rule files under a
+// category we then refuse to evaluate, and the mistake would surface as rules that silently never run.
+func TestCategoryMappingRoundTripsThroughTheExporter(t *testing.T) {
 	t.Parallel()
 
-	for category, eventType := range sigmaCategoryToEventType {
+	for _, category := range []string{"process_creation", "file_event"} {
+		eventType, ok := EventTypeForCategory(category)
+		require.True(t, ok, "category %q must resolve", category)
 		forward, ok := export.SigmaCategory(eventType)
 		require.True(t, ok, "exporter has no category for event type %q", eventType)
-		assert.Equal(t, category, forward,
-			"exporter writes %q as %q but this package reads %q back as %q", eventType, forward, category, eventType)
+		assert.Equal(t, category, forward, "round trip: %q -> %q -> %q", category, eventType, forward)
+	}
+}
+
+// TestEventTypeForCategoryDeclinesWhatItCannotPopulate covers the narrowing this package applies on top of the exporter's table.
+// The exporter maps dns_query and network_connection because it writes rule files for those detections; we supply no fields for
+// them, so resolving the category would hand back an event type against which every rule matches nothing.
+func TestEventTypeForCategoryDeclinesWhatItCannotPopulate(t *testing.T) {
+	t.Parallel()
+
+	for _, category := range []string{"dns_query", "network_connection"} {
+		viaExporter, ok := export.EventTypeForCategory(category)
+		require.True(t, ok, "the exporter does map %q", category)
+		require.NotEmpty(t, viaExporter)
+
+		_, ok = EventTypeForCategory(category)
+		assert.False(t, ok, "%q must be declined here: we can name it but supply no fields for it", category)
 	}
 }

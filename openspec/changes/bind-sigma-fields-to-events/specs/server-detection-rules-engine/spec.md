@@ -12,11 +12,19 @@ The system SHALL decode an event's payload once and reuse it for every rule eval
 
 The system SHALL report a field as absent when the payload does not carry it, so that a rule matching on absence behaves as its author intended.
 
+The system SHALL supply a file-event rule's target filename only for an open that carries write intent. The Sigma category names file creation and modification rather than any access, and read-only opens of a watched path are routine background activity, so supplying them would present known noise to every such rule as a detection.
+
 #### Scenario: Our events supply the Sigma fields a rule reads
 
 - **GIVEN** a rule whose fields are all mapped for its event type
 - **WHEN** an event of that type is evaluated
 - **THEN** the rule sees the values its payload carries
+
+#### Scenario: A read-only open supplies no target filename
+
+- **GIVEN** a file-open event that opens a path for reading only
+- **WHEN** a file-event rule is evaluated against it
+- **THEN** the rule sees no target filename, and does not match
 
 #### Scenario: A rule is inert against an event type it does not name
 

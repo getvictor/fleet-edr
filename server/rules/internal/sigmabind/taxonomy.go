@@ -11,18 +11,18 @@
 // is what the load-time check exists to report:
 //
 //   - ParentImage needs the parent's executable path on an exec event. Our exec payload carries ppid but not the parent's path, so
-//     supplying it needs the enrichment in #771. Until then the 16 rules that read it fail to load, loudly, which is the whole
-//     point: the alternative is a rule that loads and quietly never matches.
+//     supplying it needs the enrichment in #771. Its 16 uses are spread across 11 distinct rules, and those 11 fail to load,
+//     loudly, which is the whole point: the alternative is a rule that loads and quietly never matches.
 //   - OriginalFileName is the name embedded in a Windows PE version resource. It has no macOS equivalent, so it is not a matter of
 //     enrichment; inventing a value would misrepresent what we know.
 package sigmabind
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/fleetdm/edr/server/rules/internal/export"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
 )
 
@@ -44,18 +44,20 @@ var taxonomy = map[string]map[string]fieldExtractor{
 	},
 }
 
-// sigmaCategoryToEventType is the reverse of the mapping the exporter uses to render a rule's logsource, so a rule file that
-// declares `category: process_creation` can be evaluated against our exec events. Only the categories this package can actually
-// supply fields for appear here: a category we can name but not populate would pass a logsource check and then match nothing.
-var sigmaCategoryToEventType = map[string]string{
-	"process_creation": "exec",
-	"file_event":       "open",
-}
-
 // EventTypeForCategory maps a Sigma logsource category onto the event type this package supplies fields for.
+//
+// The correspondence itself lives in the exporter, which owns the one editable definition; this narrows it to the categories we can
+// actually populate. A category we could name but supply no fields for would pass a logsource check and then match nothing, so it
+// is declined here rather than accepted and left inert.
 func EventTypeForCategory(category string) (string, bool) {
-	et, ok := sigmaCategoryToEventType[category]
-	return et, ok
+	eventType, ok := export.EventTypeForCategory(category)
+	if !ok {
+		return "", false
+	}
+	if _, mapped := taxonomy[eventType]; !mapped {
+		return "", false
+	}
+	return eventType, true
 }
 
 // SupportedFields returns the Sigma field names available for an event type, sorted. Empty for a type we do not map.
@@ -75,9 +77,6 @@ func SupportedFields(eventType string) []string {
 // return false for that field on every event forever. That is indistinguishable from the adversary behaviour never occurring, so
 // it must be an error at load rather than silence at match time.
 func Validate(rule *sigma.Rule, eventType string) error {
-	if rule == nil {
-		return errors.New("nil rule")
-	}
 	fields, ok := taxonomy[eventType]
 	if !ok {
 		return fmt.Errorf("event type %q has no Sigma field mapping; supported: %s", eventType, strings.Join(mappedEventTypes(), ", "))
