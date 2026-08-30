@@ -130,7 +130,7 @@ func (r *SudoersTamper) evalEvent(
 	}
 	// The detection decides, including the sudo-lock suppression that used to sit after the subject lookup below. The subject's
 	// image is resolved lazily inside the adapter, so a write to any other path never reads the graph.
-	se, err := openEventWithSubject(ctx, evt, s, p.PID)
+	se, subject, err := openEventWithSubject(ctx, evt, s, p.PID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,11 +142,10 @@ func (r *SudoersTamper) evalEvent(
 		return nil, nil
 	}
 
-	// A second read of the same pid, deliberately: the adapter above needs only a path and takes the plain lookup, while the
-	// finding needs the row itself and the grace-window semantics. Inside that window the plain lookup returns no process, the
-	// detection sees an absent Image, the sudo suppression cannot match and the rule fires, and this call then raises the
-	// retryable error that defers the batch. Reaching here at all means the rule matched, which for this rule is rare.
-	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
+	// The same process the detection matched on, not a second lookup of it: resolving again could return a different image if a
+	// materialization commit landed in between, and the finding would then describe a writer other than the one the suppression
+	// was decided against.
+	proc, err := subject()
 	if err != nil {
 		return nil, err
 	}

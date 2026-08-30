@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -500,8 +501,11 @@ func legacySudoersFires(path string, flags int, subjectPath string) bool {
 }
 
 // TestEquivalence_SudoersTamper compares the shipped detection against the frozen oracle across paths, flag combinations and
-// writers. The flag space is drawn deliberately: read-only, write-without-intent (sudo's flock shape), and write-with-intent are
+// writers. The flag space is chosen deliberately: read-only, write-without-intent (sudo's flock shape), and write-with-intent are
 // the three cases the rule distinguishes, and the third condition only bites on one writer.
+//
+// Exhaustive rather than sampled. The domain is 8 paths x 7 flag sets x 4 writers = 224 cases, which is smaller than rapid's
+// default 100 draws would reliably cover, so sampling could leave a regression isolated to one tuple passing.
 func TestEquivalence_SudoersTamper(t *testing.T) {
 	t.Parallel()
 
@@ -520,21 +524,24 @@ func TestEquivalence_SudoersTamper(t *testing.T) {
 	}
 	subjects := []string{"/usr/bin/sudo", "/usr/bin/tee", "/bin/cp", ""}
 
-	rapid.Check(t, func(t *rapid.T) {
-		path := rapid.SampledFrom(paths).Draw(t, "path")
-		flags := rapid.SampledFrom(flagSets).Draw(t, "flags")
-		subject := rapid.SampledFrom(subjects).Draw(t, "subject")
+	checked := 0
+	for _, path := range paths {
+		for _, flags := range flagSets {
+			for _, subject := range subjects {
+				payload, err := json.Marshal(map[string]any{"pid": 7, "path": path, "flags": flags})
+				require.NoError(t, err)
+				ev, err := sigmabind.NewOpenEventLazy(
+					rulesapi.Event{EventID: "e", EventType: "open", Payload: payload},
+					func() (string, error) { return subject, nil })
+				require.NoError(t, err)
 
-		payload, err := json.Marshal(map[string]any{"pid": 7, "path": path, "flags": flags})
-		require.NoError(t, err)
-		ev, err := sigmabind.NewOpenEventLazy(
-			rulesapi.Event{EventID: "e", EventType: "open", Payload: payload},
-			func() (string, error) { return subject, nil })
-		require.NoError(t, err)
-
-		require.Equal(t, legacySudoersFires(path, flags, subject), sudoersDetection().Matches(ev),
-			"path=%q flags=%#x subject=%q", path, flags, subject)
-	})
+				require.Equal(t, legacySudoersFires(path, flags, subject), sudoersDetection().Matches(ev),
+					"path=%q flags=%#x subject=%q", path, flags, subject)
+				checked++
+			}
+		}
+	}
+	assert.Equal(t, len(paths)*len(flagSets)*len(subjects), checked, "every combination must be exercised")
 }
 
 // TestSudoersFlagChecksAreVestigialForCurrentAgents records what the conversion preserved and why it currently changes nothing.
@@ -624,4 +631,65 @@ func TestSudoersSuppressionIsScopedToSudo(t *testing.T) {
 		func() (string, error) { return "/usr/bin/sudo", nil })
 	require.NoError(t, err)
 	assert.True(t, sudoersDetection().Matches(ev), "the exception is the lock, not the identity")
+}
+
+// countingGraphReader counts GetProcessByPID calls so a test can assert how many graph reads a rule performs. It embeds the
+// package's existing full stub so it tracks the GraphReader interface rather than re-listing every method.
+type countingGraphReader struct {
+	perPIDGraphReader
+	proc  *rulesapi.Process
+	calls int
+}
+
+func (r *countingGraphReader) GetProcessByPID(_ context.Context, _ string, _ int, _ int64) (*rulesapi.Process, error) {
+	r.calls++
+	return r.proc, nil
+}
+
+// TestSudoersReadsTheSubjectProcessAtMostOnce pins that the writer is resolved once per event and that the finding names the same
+// process the detection matched on.
+//
+// Two reads would not just cost more: a materialization commit landing between them could return a different image, so the
+// suppression would be decided against one writer and the alert would name another. The condition can also short-circuit before it
+// reads Image, so "the detection already resolved it" is not something the finding path can assume.
+func TestSudoersReadsTheSubjectProcessAtMostOnce(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		flags     int
+		writer    string
+		wantFind  bool
+		wantReads int
+	}{
+		{"a match resolves once and reuses it", 1537, "/usr/bin/tee", true, 1},
+		{"a suppressed open resolves once", 1, "/usr/bin/sudo", false, 1},
+		// The path test fails before anything needs the writer, so the graph is never touched.
+		{"a non-sudoers path never reads the graph", 1537, "/usr/bin/tee", false, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := "/etc/sudoers"
+			if tc.wantReads == 0 {
+				path = "/etc/sudoers.d/nested/deeper" // matches the byte prefilter, fails the rule's path pattern
+			}
+			gr := &countingGraphReader{proc: &rulesapi.Process{ID: 42, PID: 7, Path: tc.writer}}
+			rule := &SudoersTamper{}
+			evt := rulesapi.Event{
+				EventID: "e1", HostID: "h1", EventType: "open", TimestampNs: 1,
+				Payload: []byte(fmt.Sprintf(`{"pid":7,"path":%q,"flags":%d}`, path, tc.flags)),
+			}
+
+			finding, err := rule.evalEvent(t.Context(), evt, gr)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantReads, gr.calls, "graph reads")
+			if !tc.wantFind {
+				assert.Nil(t, finding)
+				return
+			}
+			require.NotNil(t, finding)
+			assert.Contains(t, finding.Description, tc.writer, "the finding names the process the detection matched on")
+		})
+	}
 }

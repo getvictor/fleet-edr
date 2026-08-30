@@ -10,7 +10,7 @@
 
 An open event supplies three fields it did not before: the writing process's image, whether the open carried write access, and whether it carried a flag that changes the file's contents. The rule then expresses the suppression the way Sigma expresses a conditional exception, as a named filter the condition subtracts, rather than as a branch in Go.
 
-`sudoers_tamper` is converted onto that. Its Go matcher and its two mask parameters are removed; the masks become the two boolean fields, computed once at field-access time.
+`sudoers_tamper` is converted onto that. Its Go matcher and its two mask parameters are removed; the masks become the two boolean fields, derived from the flags when the event is decoded. The writer's image is the part resolved lazily, because it needs the process graph and a rule reaches it only after the far cheaper path test has narrowed the events.
 
 ## What we found while converting it
 
