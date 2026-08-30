@@ -26,6 +26,11 @@ type Event struct {
 	image          []string
 	commandLine    []string
 	targetFilename []string
+
+	// Computed from argv rather than copied from a payload field. See argv.go for why each exists.
+	subcommand       []string
+	commandArguments []string
+	envAssignments   []string
 }
 
 // execPayload is the subset of an exec event this package reads. Deliberately partial: the taxonomy supplies two fields, so
@@ -63,6 +68,9 @@ func NewEvent(ev api.Event) (*Event, error) {
 		}
 		e.image = presentString(p.Path)
 		e.commandLine = commandLine(p.Args)
+		e.subcommand = presentString(subcommand(p.Args))
+		e.commandArguments = commandArguments(p.Args)
+		e.envAssignments = envAssignments(p.Path, p.Args)
 	case "open":
 		var p openPayload
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
