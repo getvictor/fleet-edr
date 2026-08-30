@@ -97,12 +97,7 @@ func NewExecEvent(ev api.Event, parentImage string) (*Event, error) {
 // path: the graph knows it and this package does not. Deferred for the same reason too, since a detection reaches the subject only
 // after the far cheaper target-filename test has already narrowed the events.
 func NewOpenEventLazy(ev api.Event, resolveImage func() (string, error)) (*Event, error) {
-	e, err := NewEvent(ev)
-	if err != nil {
-		return nil, err
-	}
-	e.resolveImage = resolveImage
-	return e, nil
+	return newEventLazy(ev, resolveImage)
 }
 
 // NewExecEventLazy is NewExecEvent for a parent whose resolution is expensive enough to be worth deferring.
@@ -115,11 +110,18 @@ func NewOpenEventLazy(ev api.Event, resolveImage func() (string, error)) (*Event
 // The resolver runs at most once per event. Its error is recorded rather than returned, because Field cannot report one, so a
 // caller that needs to distinguish "no parent" from "could not look one up" checks ResolveErr after evaluating.
 func NewExecEventLazy(ev api.Event, resolveParent func() (string, error)) (*Event, error) {
+	return newEventLazy(ev, resolveParent)
+}
+
+// newEventLazy is the shared body of the two lazy constructors. They stay separate in the API because which image a caller is
+// promising to resolve is the thing worth naming: an exec resolves its parent's, an open resolves its own subject's. The mechanism
+// they share lives here so lazy resolution has one implementation.
+func newEventLazy(ev api.Event, resolveImage func() (string, error)) (*Event, error) {
 	e, err := NewEvent(ev)
 	if err != nil {
 		return nil, err
 	}
-	e.resolveImage = resolveParent
+	e.resolveImage = resolveImage
 	return e, nil
 }
 
