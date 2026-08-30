@@ -708,6 +708,10 @@ func TestSudoersReadsTheSubjectProcessAtMostOnce(t *testing.T) {
 // identically here and no behavioural test can catch a regression. The distinction matters to the promise `portable: mapped`
 // makes. Sigma tooling preserves scalar types, so a backend that supplies WriteIntent as a real boolean and type-checks the
 // comparison would not match a rule asking for the string "true", and the rule would silently never fire on that engine.
+//
+// The walk mirrors compileSearch: a search is a field map, or a LIST of field maps that are OR alternatives. Checking only the
+// first form would leave a quoted boolean inside an alternative undetected, which is the shape a rule reaches for as soon as it
+// needs "either of these two writers".
 func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
 	t.Parallel()
 
@@ -715,35 +719,54 @@ func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
 	// so this is scoped to the ones we know are boolean rather than to anything that looks like one.
 	booleanFields := map[string]bool{"WriteIntent": true, "MutatingOpen": true}
 
+	// checkFields asserts over one alternative's field map, returning how many boolean fields it saw.
+	checkFields := func(t *testing.T, where string, fields map[string]any) int {
+		t.Helper()
+		seen := 0
+		for field, value := range fields {
+			if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
+				continue
+			}
+			assert.IsType(t, false, value,
+				"%s.%s must be a YAML boolean, not %T: quoting it breaks a type-checking Sigma backend", where, field, value)
+			seen++
+		}
+		return seen
+	}
+
 	entries, err := packFS.ReadDir("pack")
 	require.NoError(t, err)
 	require.NotEmpty(t, entries)
 
-	checked := 0
+	// Not parallel: the subtests feed a shared counter, and the assertion that the walk found anything at all has to run after
+	// they have. A parallel subtest returns before its body executes, which would leave the counter at zero.
+	total := 0
 	for _, entry := range entries {
-		body, err := packFS.ReadFile("pack/" + entry.Name())
-		require.NoError(t, err)
+		t.Run(entry.Name(), func(t *testing.T) {
+			body, err := packFS.ReadFile("pack/" + entry.Name())
+			require.NoError(t, err)
 
-		var file struct {
-			Detection map[string]any `yaml:"detection"`
-		}
-		require.NoError(t, yaml.Unmarshal(body, &file))
-
-		for searchName, search := range file.Detection {
-			fields, ok := search.(map[string]any)
-			if !ok {
-				continue // the condition string, or a list-valued search identifier
+			var file struct {
+				Detection map[string]any `yaml:"detection"`
 			}
-			for field, value := range fields {
-				if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
-					continue
+			require.NoError(t, yaml.Unmarshal(body, &file))
+
+			for searchName, search := range file.Detection {
+				switch v := search.(type) {
+				case map[string]any:
+					total += checkFields(t, searchName, v)
+				case []any:
+					// OR alternatives. Each entry the compiler accepts is a field map; anything else it refuses at load, so
+					// this test does not need to re-report it.
+					for i, alternative := range v {
+						if fields, ok := alternative.(map[string]any); ok {
+							total += checkFields(t, fmt.Sprintf("%s[%d]", searchName, i), fields)
+						}
+					}
 				}
-				assert.IsType(t, false, value,
-					"%s: %s.%s must be a YAML boolean, not %T: quoting it breaks a type-checking Sigma backend",
-					entry.Name(), searchName, field, value)
-				checked++
+				// Anything else is the condition string.
 			}
-		}
+		})
 	}
-	assert.Positive(t, checked, "no boolean fields found, so this test proved nothing")
+	assert.Positive(t, total, "no boolean fields found, so this test proved nothing")
 }
