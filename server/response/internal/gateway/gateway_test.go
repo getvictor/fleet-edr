@@ -123,6 +123,45 @@ const recvCommandTimeout = 5 * time.Second
 //
 // The reader goroutine is deliberately left running on timeout: Recv has no cancellation of its own, and the stream is torn down at
 // test cleanup, so the goroutine ends with it. Leaking it for the remainder of a failing test is cheaper than the alternative.
+// recvEviction drains a stream that is expected to be torn down and returns the error that ends it.
+//
+// The wait is bounded in wall-clock rather than by an iteration count, because Recv BLOCKS: a loop with a cap advances only when a
+// frame arrives, so it does not bound a stream that simply goes silent. Nor does the surrounding context help, since connectCtx
+// builds on context.Background() and carries no deadline, so the stream would hang until the package timeout. Same shape as
+// recvCommand below, for the same reason.
+//
+// Only a heartbeat may legitimately precede the teardown; any other frame is reported rather than drained, so this cannot pass by
+// mistaking an ordinary frame for an eviction.
+func recvEviction(t *testing.T, stream control.ControlChannel_ConnectClient) error {
+	t.Helper()
+	type drained struct {
+		err error
+		bad *control.ServerFrame
+	}
+	done := make(chan drained, 1)
+	go func() {
+		for {
+			frame, err := stream.Recv()
+			if err != nil {
+				done <- drained{err: err}
+				return
+			}
+			if frame.GetHeartbeat() == nil {
+				done <- drained{bad: frame}
+				return
+			}
+		}
+	}()
+	select {
+	case r := <-done:
+		require.Nil(t, r.bad, "only a heartbeat may reach an evicted stream before its teardown")
+		return r.err
+	case <-time.After(recvCommandTimeout):
+		t.Fatalf("the stream neither closed nor sent a frame within %s: the eviction never reached it", recvCommandTimeout)
+		return nil
+	}
+}
+
 func recvCommand(t *testing.T, stream control.ControlChannel_ConnectClient) (*control.Command, error) {
 	t.Helper()
 	type received struct {
@@ -354,9 +393,11 @@ func TestGateway(t *testing.T) {
 
 		second, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
 		require.NoError(t, err)
-		// The first stream is torn down by the eviction; its Recv returns an error.
-		_, err = first.Recv()
-		require.Error(t, err)
+		// The first stream is torn down by the eviction, so its Recv ends in an error. Heartbeats tick every livenessInterval
+		// (20ms here) and can reach this stream before the teardown does, so they are drained rather than treated as the answer:
+		// on an unloaded machine the eviction won the race and this passed, while a contended CI runner delivered a heartbeat
+		// first and it failed (issue #785).
+		require.Error(t, recvEviction(t, first), "the evicted stream must be torn down")
 		// The registry still holds exactly one connection for the host (the second).
 		require.Eventually(t, func() bool { return g.reg.len() == 1 }, 2*time.Second, 10*time.Millisecond)
 		// The second connection is live: a command queued for the host is delivered on it.
