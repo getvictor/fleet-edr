@@ -17,7 +17,7 @@ import (
 // It carries `\u017f` deliberately. That rune is two bytes and case-folds with the one-byte `s`, so it is the shape that catches a
 // matcher measuring a segment's minimum width from the pattern as written, or comparing a fixed byte count of the value against a
 // literal. Both were real bugs here, and an alphabet without a fold-width-crossing rune could not express either.
-var globAlphabet = []string{"a", "A", "b", "B", "/", "*", "?", "\\", "é", "s", "S", "\u017f", "@", "`"}
+var globAlphabet = []string{"a", "A", "b", "B", "/", "*", "?", "\\", "é", "s", "S", "\u017f", "@", "`", "\xff"}
 
 func drawGlobString(t *rapid.T, label string, maxLen int) string {
 	n := rapid.IntRange(0, maxLen).Draw(t, label+"_len")
@@ -104,7 +104,7 @@ func flipOneRune(t *rapid.T, v string) string {
 
 // globFillAlphabet is what a `*` or `?` is filled with. It excludes the metacharacters so a fill never changes the pattern's
 // meaning when the value is read back, and includes a multi-byte rune so rune-width handling is exercised.
-var globFillAlphabet = []string{"a", "A", "b", "/", "é", "s", "\u017f", "@", "`"}
+var globFillAlphabet = []string{"a", "A", "b", "/", "é", "s", "\u017f", "@", "`", "\xff"}
 
 // spec:server-detection-rules-engine/matching-does-not-backtrack-across-the-star-separated-segments-of-a-pattern/compilation-does-not-change-what-a-pattern-matches
 //
@@ -201,6 +201,11 @@ func TestGlobKnownShapes(t *testing.T) {
 		// The lead-byte scan can land on a candidate too close to the end for the segment to fit, which is the one branch of
 		// find that the property did not reach: `a` is at the last byte, and `ab` needs two.
 		{"a lead byte too close to the end cannot fit", "*ab*", "xa", false},
+		// A malformed byte decodes to U+FFFD with a width of ONE, while the rune's valid encoding is three bytes. Filtering a
+		// middle segment on that encoding's lead byte, or requiring its width, skips every malformed byte in the value: a silent
+		// false negative on exactly the attacker-controlled input this matcher judges.
+		{"a malformed byte satisfies a U+FFFD segment", "*�*", "a\xffb", true},
+		{"a malformed byte satisfies a U+FFFD suffix", "*�", "a\xff", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

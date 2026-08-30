@@ -154,8 +154,15 @@ func asciiLiteralOf(atoms []globAtom) string {
 	return b.String()
 }
 
-// foldLeadBytes returns the distinct first bytes of every rune that case-folds together with r.
+// foldLeadBytes returns the distinct first bytes of every rune that case-folds together with r, or nil when no filter is sound.
+//
+// U+FFFD is the nil case. decode maps ANY malformed byte to it with a width of one, so a value can satisfy a U+FFFD atom with a
+// single byte anywhere in 0x80-0xFF as well as with the valid three-byte encoding. Filtering on the encoding's lead byte would skip
+// every malformed byte, which is a silent false negative on exactly the attacker-controlled values this matcher exists to judge.
 func foldLeadBytes(r rune) []byte {
+	if r == utf8.RuneError {
+		return nil
+	}
 	var out []byte
 	add := func(x rune) {
 		var buf [utf8.UTFMax]byte
@@ -174,6 +181,11 @@ func foldLeadBytes(r rune) []byte {
 // minFoldedWidth is the shortest UTF-8 encoding of any rune that case-folds together with r, which is the least a literal atom can
 // consume. For ASCII it is 1; it differs only for the handful of runes whose fold cycle crosses an encoding-length boundary.
 func minFoldedWidth(r rune) int {
+	// A U+FFFD atom can be satisfied by a single malformed byte, because that is what decode returns for one. Measuring it as the
+	// three bytes of its valid encoding would reject a value that the reference implementation matches.
+	if r == utf8.RuneError {
+		return 1
+	}
 	// RuneLen is never negative here: atoms are decoded with DecodeRuneInString, which yields RuneError rather than a surrogate
 	// or an out-of-range rune, and RuneError has a width.
 	minWidth := utf8.RuneLen(r)
