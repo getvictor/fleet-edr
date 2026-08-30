@@ -6,9 +6,11 @@
 
 The system SHALL compile a rule's wildcard pattern when the rule loads, and SHALL match it without re-scanning any part of the pattern against the value more than once per candidate position.
 
-For a pattern fixed at load, the system SHALL match it in a single left-to-right pass over the value, never reconsidering a candidate position it has already rejected. A value is attacker-supplied and a pattern is not, so a matcher that re-scans lets a host choose how much work the server does per rule, per field, for every event it sends.
+For a pattern fixed at load, the system SHALL check each of the pattern's star-separated segments against the value independently, and SHALL NOT retry an earlier segment because a later one failed. A value is attacker-supplied and a pattern is not, so a matcher that re-runs the whole pattern from a new offset lets a host choose how much work the server does per rule, per field, for every event it sends.
 
-This bounds the re-scanning, not the constant: what a value costs still varies with its content, and a segment that cannot be searched bytewise is slower than one that can. The guarantee is that the cost does not compound.
+A literal run at either end of a pattern SHALL be checked once, against that end of the value, rather than at every offset.
+
+This is a bound on re-scanning, not on the constant, and the difference is worth stating plainly. Verifying a candidate position still compares up to a segment's length, so a value dense in near-misses of one segment still costs more than a benign value of the same size. What it cannot do is compound: no failure sends the matcher back to re-run earlier segments, which is what made the previous implementation quadratic in the pattern as a whole.
 
 Matching SHALL be unchanged by compilation. A pattern SHALL match exactly the values it matched before, because an optimisation that alters what a detection matches changes what fires, silently and without an error to notice.
 

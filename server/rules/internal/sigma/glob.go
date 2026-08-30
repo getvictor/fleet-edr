@@ -34,11 +34,11 @@ import (
 // Measured on the same inputs as the reference implementation, 20,000 iterations, all zero-allocation:
 //
 //	shape                                    reference    compiled
-//	typical corpus pattern (`*/MacOS/*`)         443ns      42.9ns
-//	corpus pattern, suffix anchor rejects       29.7us      12.7ns
-//	corpus pattern, past the anchor             29.7us       8.1us
-//	synthetic worst case (`*` + 64 literals)     1.51ms       140ns
-//	`?` in a middle segment                      831us       458us
+//	typical corpus pattern (`*/MacOS/*`)         460ns      40.1ns
+//	corpus pattern, suffix anchor rejects       30.6us      12.3ns
+//	corpus pattern, past the anchor             30.6us       7.6us
+//	synthetic worst case (`*` + 64 literals)     1.52ms       118ns
+//	`?` in a middle segment                      856us       444us
 //
 // The third row is the honest figure for the attacker-driven case: the second rejects on the suffix before searching anything,
 // which is a real and common outcome but compares a full scan against an early exit.
@@ -171,17 +171,6 @@ func foldLeadBytes(r rune) []byte {
 	return out
 }
 
-// asciiFoldEqual reports whether two ASCII bytes are equal ignoring case. Two ASCII letters fold together exactly when they differ
-// only in bit 5, which is what makes this a pair of instructions rather than a table lookup.
-func asciiFoldEqual(a, b byte) bool {
-	if a == b {
-		return true
-	}
-	const caseBit = 'a' - 'A'
-	la, lb := a|caseBit, b|caseBit
-	return la == lb && la >= 'a' && la <= 'z'
-}
-
 // minFoldedWidth is the shortest UTF-8 encoding of any rune that case-folds together with r, which is the least a literal atom can
 // consume. For ASCII it is 1; it differs only for the handful of runes whose fold cycle crosses an encoding-length boundary.
 func minFoldedWidth(r rune) int {
@@ -241,7 +230,7 @@ func (s globSeg) matchASCIIAt(v string, i int) (end int, decided bool) {
 		if c >= utf8.RuneSelf {
 			return 0, false
 		}
-		if !asciiFoldEqual(c, lit[k]) {
+		if !equalFoldASCII(rune(c), rune(lit[k])) {
 			return -1, true
 		}
 	}

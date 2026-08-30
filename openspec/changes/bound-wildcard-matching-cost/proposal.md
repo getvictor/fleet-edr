@@ -16,19 +16,22 @@ What comes next is the point. #764 imports 55 rules, of which 31 of the 69 macOS
 
 A pattern is split at load into the literal segments between its stars. Sigma's `*` matches any run, so those segments must simply appear in order: the first anchored at the start of the value, the last at the end, the rest found left to right. Taking the leftmost occurrence of each middle segment is optimal, because it leaves the most room for the ones after it, so no choice is ever revisited and the backtracking disappears.
 
-Measured on the same inputs, 20,000 iterations, all zero-allocation:
+Measured on the same inputs, 20,000 iterations, all zero-allocation. The reference numbers improve too, because the ASCII fold fast path lives in the shared `equalFoldASCII` that both use, so these ratios are the conservative ones:
 
 | shape | reference | compiled |
 | --- | --- | --- |
-| typical corpus pattern (`*/MacOS/*`) | 546ns | **22.5ns** |
-| corpus pattern, suffix anchor rejects | 43.9us | 18.7ns |
-| corpus pattern, past the anchor | 43.9us | **6.5us** |
-| synthetic worst case (`*` + 64 literals) | 1.52ms | **236ns** |
-| `?` in a middle segment | 829us | 326us |
+| typical corpus pattern (`*/MacOS/*`) | 460ns | **40.1ns** |
+| corpus pattern, suffix anchor rejects | 30.6us | 12.3ns |
+| corpus pattern, past the anchor | 30.6us | **7.6us** |
+| synthetic worst case (`*` + 64 literals) | 1.52ms | **118ns** |
+| `?` in a middle segment | 856us | 444us |
 
 The third row is the honest figure for the attacker-driven case. The second rejects on the suffix anchor before searching anything, which is a real and common outcome, but quoting it would compare a full scan against an early exit.
 
 ## What it does not fix
+
+A literal middle segment is still verified byte by byte at each candidate offset, so a value dense in near-misses of that segment costs more than a benign one: that is the 8.1us row. The guarantee is that no failure sends the matcher back to re-run earlier segments, which is what made the original quadratic in the whole pattern. It is not a claim that cost is independent of the value.
+
 
 A middle segment carrying `?` cannot use a substring search, so it still walks candidate offsets. It is 2.5x faster than the scan it replaces and it is the shape with the most left in it. Reaching it needs a pattern chosen to be pathological rather than a value, which today means a rule author, so it belongs with #767 rather than here.
 

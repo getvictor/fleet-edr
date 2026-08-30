@@ -21,8 +21,8 @@ type Event interface {
 // valueTest is one compiled value on the right-hand side of a field matcher. Exactly one of its three forms is active, chosen at
 // compile time so the hot path branches on a bool rather than re-inspecting the pattern text on every event.
 type valueTest struct {
-	lit  string         // literal comparand, case-folded compare, when glob and re are unset
-	glob *glob          // set when lit carries Sigma wildcard syntax; compiled once at load (issue #787)
+	lit  string         // literal comparand, case-folded compare; the active form when glob and re are nil
+	glob *glob          // the active form when the value carries Sigma wildcard syntax, compiled at load (issue #787)
 	re   *regexp.Regexp // set only by the |re modifier
 }
 
@@ -227,7 +227,9 @@ func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest
 		// Split into star-separated segments here, at load, so the per-event path never re-reads the pattern's escapes and never
 		// backtracks. See glob.go for what that bounds.
 		g := compileGlob(v)
-		return valueTest{lit: v, glob: &g}, nil
+		// lit is left empty: the compiled form is what decides, and keeping the raw pattern beside it would leave two
+		// representations of one value with nothing keeping them in step.
+		return valueTest{glob: &g}, nil
 	}
 	return valueTest{lit: v}, nil
 }

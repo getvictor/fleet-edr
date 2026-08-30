@@ -173,7 +173,7 @@ func TestGlobKnownShapes(t *testing.T) {
 		{"escaped question mark is literal", `a\?c`, "a?c", true},
 		{"trailing backslash is literal", `a\`, `a\`, true},
 		{"multi-byte suffix anchor", "*é", "abé", true},
-		{"multi-byte suffix rejects a shorter value", "*é", "é", true},
+		{"multi-byte suffix matches a value that is exactly it", "*é", "é", true},
 		{"adjacent stars collapse", "a**c", "abc", true},
 		// A middle segment must not eat runes the suffix anchor still needs. matchAt stops at the end of the value, not at the
 		// suffix boundary, so without the bound in find these three question marks would swallow all three runes and the trailing

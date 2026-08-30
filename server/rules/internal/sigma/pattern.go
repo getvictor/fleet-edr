@@ -45,19 +45,28 @@ func decode(s string, i int) (rune, int) {
 	return utf8.DecodeRuneInString(s[i:])
 }
 
+// equalFoldASCII reports whether two ASCII runes are equal ignoring case. Two ASCII letters fold together exactly when they differ
+// only in bit 5, which makes this a pair of instructions rather than the table lookup SimpleFold performs.
+//
+// The single definition: the byte-wise segment comparison in glob.go and the rune-wise equalFoldRune below both call it, so the
+// bit-mask and the letter-range rule exist once. Two copies of a folding rule is how the two paths come to disagree.
+//
+// Callers must establish that BOTH runes are ASCII. `\u017f` folds with `s` and is not ASCII, so a mixed pair needs SimpleFold.
+func equalFoldASCII(a, b rune) bool {
+	if a == b {
+		return true
+	}
+	const caseBit = 'a' - 'A'
+	lowerA, lowerB := a|caseBit, b|caseBit
+	return lowerA == lowerB && lowerA >= 'a' && lowerA <= 'z'
+}
+
 func equalFoldRune(a, b rune) bool {
 	if a == b {
 		return true
 	}
-	// ASCII against ASCII is the overwhelming majority of comparisons and needs none of the machinery below: two ASCII letters fold
-	// together exactly when they differ only in bit 5. Worth special-casing because SimpleFold does a table lookup per call, and
-	// this runs once per rune of every segment comparison.
-	//
-	// Only when BOTH sides are ASCII: `\u017f` folds with `s` and is not ASCII, so a mixed pair has to fall through.
 	if a < utf8.RuneSelf && b < utf8.RuneSelf {
-		const asciiCaseBit = 'a' - 'A'
-		lowerA, lowerB := a|asciiCaseBit, b|asciiCaseBit
-		return lowerA == lowerB && lowerA >= 'a' && lowerA <= 'z'
+		return equalFoldASCII(a, b)
 	}
 	// SimpleFold walks the cycle of runes that fold together, returning to the start; a cycle is at most a few entries long.
 	for r := unicode.SimpleFold(a); r != a; r = unicode.SimpleFold(r) {
