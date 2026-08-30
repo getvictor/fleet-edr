@@ -21,9 +21,9 @@ import (
 	"log/slog"
 	"syscall"
 	"time"
+	"uuid"
 
 	"github.com/fleetdm/edr/agent/proctable"
-	"github.com/fleetdm/edr/internal/eventid"
 )
 
 const (
@@ -94,10 +94,9 @@ type Reconciler struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	kill       KillFunc
-	// newID and marshal are seams for tests so the rare error paths in emitSyntheticExit are reachable. Default to crypto/rand-backed
-	// newUUIDv4 and stdlib json.Marshal. Both effectively never fail in production on a healthy host. Tests inject failing versions to
-	// lock in our error-handling shape (issue: synthetic exits must surface queue-affecting failures rather than silently skip a PID).
-	newID   func() (string, error)
+	// marshal is a seam for tests so the rare error path in emitSyntheticExit is reachable. Defaults to stdlib json.Marshal, which
+	// effectively never fails in production on a healthy host. Tests inject a failing version to lock in our error-handling shape
+	// (issue: synthetic exits must surface queue-affecting failures rather than silently skip a PID).
 	marshal func(any) ([]byte, error)
 }
 
@@ -143,7 +142,6 @@ func New(pt *proctable.Table, q Enqueuer, hostID HostIDProvider, opts Options) *
 		logger:     opts.Logger,
 		now:        opts.Now,
 		kill:       opts.Kill,
-		newID:      eventid.NewV4,
 		marshal:    json.Marshal,
 	}
 }
@@ -281,12 +279,8 @@ func (r *Reconciler) emitHeartbeat(ctx context.Context, hostID string, pid int32
 }
 
 func (r *Reconciler) emitEvent(ctx context.Context, eventType, hostID string, now time.Time, payload map[string]any) error {
-	id, err := r.newID()
-	if err != nil {
-		return fmt.Errorf("generate event id: %w", err)
-	}
 	env := eventEnvelope{
-		EventID:     id,
+		EventID:     uuid.New().String(),
 		HostID:      hostID,
 		TimestampNs: now.UnixNano(),
 		EventType:   eventType,
@@ -298,6 +292,3 @@ func (r *Reconciler) emitEvent(ctx context.Context, eventType, hostID string, no
 	}
 	return r.q.Enqueue(ctx, body)
 }
-
-// newUUIDv4 returns an RFC-4122 v4 UUID without taking on a non-stdlib dependency. The agent already imports crypto/rand for
-// elsewhere; this is a 12-line copy of what google/uuid.NewRandom does, scoped to one call site.

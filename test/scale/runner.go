@@ -22,8 +22,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/fleetdm/edr/test/fakeagent"
@@ -342,7 +342,7 @@ func makeHostStates(opts Options, quiet *fakeagent.Scenario, active []*fakeagent
 	for i := range hosts {
 		st := &hostState{
 			index:  i,
-			hostID: uuid.NewString(),
+			hostID: uuid.New().String(),
 		}
 		if i < quietCutoff {
 			st.scenario = quiet

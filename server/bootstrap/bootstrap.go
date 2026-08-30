@@ -15,8 +15,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/fleetdm/edr/internal/logging"
@@ -32,7 +32,7 @@ const otelFlushTimeout = 5 * time.Second
 // lifetime, so every span and metric the binary emits carries the same replica identifier. That is what lets an operator tell
 // replicas apart in the backend behind a load balancer (server-availability: replica identity). A random UUID is used rather than
 // the hostname so the identifier is unique even when two replicas share a hostname (e.g. host-network pods).
-var instanceID = sync.OnceValue(uuid.NewString)
+var instanceID = sync.OnceValue(func() string { return uuid.New().String() })
 
 // Env is the bundle of ready-to-use primitives returned by Init.
 //

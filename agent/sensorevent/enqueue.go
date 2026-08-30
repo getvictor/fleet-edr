@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/fleetdm/edr/internal/eventid"
+	"uuid"
 )
 
 // envelope is the on-the-wire shape the ingest handler expects. Duplicated locally rather than imported from the server,
@@ -27,10 +26,6 @@ type envelope struct {
 // exist. nowNs is injected so tests pin timestamps.
 func NewEnqueueEmitter(hostID func() string, enqueue func(context.Context, []byte) error, nowNs func() int64) Emitter {
 	return func(ctx context.Context, eventType string, payload map[string]any) error {
-		id, err := eventid.NewV4()
-		if err != nil {
-			return fmt.Errorf("generate event id: %w", err)
-		}
 		host := hostID()
 		if host == "" {
 			// Enrollment has not completed. Dropping is right rather than emitting with an empty host_id: an event nothing
@@ -39,7 +34,7 @@ func NewEnqueueEmitter(hostID func() string, enqueue func(context.Context, []byt
 			return errors.New("no host id yet")
 		}
 		body, err := json.Marshal(envelope{
-			EventID:     id,
+			EventID:     uuid.New().String(),
 			HostID:      host,
 			TimestampNs: nowNs(),
 			EventType:   eventType,

@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"golang.org/x/sys/windows"
 
 	"github.com/fleetdm/edr/agent/receiver"
@@ -149,7 +149,7 @@ func (s *Sensor) execFromRecord(r etw.Record) ([]byte, error) {
 		return nil, fmt.Errorf("etw exec: missing required fields (pid=%d okPID=%v createTime=%d okCT=%v image=%q)", pid, okPID, createFT, okCT, image)
 	}
 	ppid, _ := r.Uint32("ParentProcessID") // best-effort: not every start event carries a parent, and 0 is acceptable for root-ish procs
-	return execEnvelope(uuid.NewString(), s.hostID, time.Now().UnixNano(), execPayload{
+	return execEnvelope(uuid.New().String(), s.hostID, time.Now().UnixNano(), execPayload{
 		PID:          int(pid),
 		PPID:         int(ppid),
 		Path:         image,
@@ -173,7 +173,7 @@ func (s *Sensor) exitFromRecord(r etw.Record) ([]byte, error) {
 	// the DWORD as int32 so NTSTATUS/HRESULT crash codes (e.g. 0xC0000005) land in signed-int range instead of overflowing the column and
 	// failing ingestion. This is bit-lossless: the raw DWORD is recoverable as uint32(int32(v)), and signed is the conventional display for
 	// such codes (0xC0000005 -> -1073741819). Widening the whole path to BIGINT for unsigned display would be a separate cross-context change.
-	return exitEnvelope(uuid.NewString(), s.hostID, time.Now().UnixNano(), exitPayload{
+	return exitEnvelope(uuid.New().String(), s.hostID, time.Now().UnixNano(), exitPayload{
 		PID:          int(pid),
 		ExitCode:     int(int32(exitCode)),
 		CreateTimeNs: filetimeToUnixNano(createFT),

@@ -469,25 +469,6 @@ func TestRunOnce_EnqueueErrorIsLoggedAndPIDStays(t *testing.T) {
 	assert.True(t, ok, "PID must stay in the proctable when its synthetic exit failed to enqueue, so the next pass retries it")
 }
 
-func TestEmitSyntheticExit_NewIDError(t *testing.T) {
-	t.Parallel()
-	pt := proctable.New()
-	pt.Update(7, proctable.ProcessInfo{Path: "/bin/dead", StartTime: 0})
-
-	q := &recorderQueue{}
-	k := &killer{dead: map[int]bool{7: true}}
-	r := newRunner(t, pt, q, k, "h", Options{})
-	// Inject a UUID generator that always fails. Covers the emitSyntheticExit→r.newID error branch: in production this fires only when
-	// crypto/rand stops working, which is a fundamental platform failure we still want to surface rather than swallow.
-	r.newID = func() (string, error) { return "", errors.New("rand unavailable") }
-
-	stats := r.RunOnce(context.Background())
-	assert.Equal(t, 0, stats.Exits, "newID failure must propagate as a per-PID error and not enqueue an event")
-	assert.Empty(t, q.snapshot(), "no event should land in the queue when ID generation fails")
-	_, ok := pt.Lookup(7)
-	assert.True(t, ok, "PID stays in the proctable when emit fails so the next pass can retry")
-}
-
 func TestEmitSyntheticExit_MarshalError(t *testing.T) {
 	t.Parallel()
 	pt := proctable.New()

@@ -22,8 +22,7 @@ import (
 	"slices"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/fleetdm/edr/agent/cmd/fleet-edr-agent-headless/headless"
 	"github.com/fleetdm/edr/test/fakeagent"
@@ -167,7 +166,7 @@ func buildHostState(
 ) *headlessHostState {
 	st := &headlessHostState{
 		index:  i,
-		hostID: uuid.NewString(),
+		hostID: uuid.New().String(),
 	}
 	counterMu.Lock()
 	if i < quietCutoff {
