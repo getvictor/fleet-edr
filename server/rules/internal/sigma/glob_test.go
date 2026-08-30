@@ -198,6 +198,9 @@ func TestGlobKnownShapes(t *testing.T) {
 		// a rule written for a literal bracket would also fire on a brace.
 		{"at sign does not fold to a backtick", "@", "`", false},
 		{"bracket does not fold to a brace", "*[*", "{", false},
+		// The lead-byte scan can land on a candidate too close to the end for the segment to fit, which is the one branch of
+		// find that the property did not reach: `a` is at the last byte, and `ab` needs two.
+		{"a lead byte too close to the end cannot fit", "*ab*", "xa", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -174,10 +174,9 @@ func foldLeadBytes(r rune) []byte {
 // minFoldedWidth is the shortest UTF-8 encoding of any rune that case-folds together with r, which is the least a literal atom can
 // consume. For ASCII it is 1; it differs only for the handful of runes whose fold cycle crosses an encoding-length boundary.
 func minFoldedWidth(r rune) int {
+	// RuneLen is never negative here: atoms are decoded with DecodeRuneInString, which yields RuneError rather than a surrogate
+	// or an out-of-range rune, and RuneError has a width.
 	minWidth := utf8.RuneLen(r)
-	if minWidth < 0 {
-		return 1
-	}
 	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
 		if w := utf8.RuneLen(f); w > 0 && w < minWidth {
 			minWidth = w
@@ -268,14 +267,11 @@ func (s globSeg) matchEndingAt(v string, lo int) (int, bool) {
 			// Out of value before out of atoms: the suffix cannot fit alongside the prefix the first segment already took.
 			return 0, false
 		}
+		// The width is never zero, because the guard above leaves start > lo >= 0 and so v[:start] is never empty. And start
+		// cannot end up below lo: lo is itself a rune boundary, reached by consuming whole runes, and stepping back one rune at
+		// a time visits every boundary in between, so the guard above catches equality first.
 		_, w := utf8.DecodeLastRuneInString(v[:start])
-		if w == 0 {
-			return 0, false
-		}
 		start -= w
-	}
-	if start < lo {
-		return 0, false
 	}
 	end, ok := s.matchAt(v, start)
 	if !ok || end != len(v) {
