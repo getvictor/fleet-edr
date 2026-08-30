@@ -96,6 +96,14 @@ var sigmaCategory = map[string]string{
 	"network_connect": "network_connection",
 }
 
+// SigmaCategory reports the Sigma logsource category for one of our event types, and whether a genuine Sigma equivalent exists.
+// Exported so the reverse mapping used when EVALUATING a rule (server/rules/internal/sigmabind) can be checked against the forward
+// mapping used when WRITING one, rather than the two drifting into disagreeing about what `process_creation` means.
+func SigmaCategory(eventType string) (string, bool) {
+	c, ok := sigmaCategory[eventType]
+	return c, ok
+}
+
 // sigmaProduct maps our platform values onto Sigma's product vocabulary. Sigma says `macos` where Go says `darwin`.
 var sigmaProduct = map[api.Platform]string{
 	api.PlatformDarwin:  "macos",
