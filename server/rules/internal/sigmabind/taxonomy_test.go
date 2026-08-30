@@ -57,12 +57,6 @@ func TestValidate_RejectsUnmappedFields(t *testing.T) {
 		want      string
 	}{
 		{
-			// ParentImage is read by 11 of the 69 macOS corpus rules (16 uses in total). Those 11 are meant to fail
-			// here until #771 lands the enrichment.
-			"ParentImage needs the enrichment in #771", "exec",
-			"selection:\n  ParentImage|endswith: '/bash'\ncondition: selection\n", "ParentImage",
-		},
-		{
 			// A Windows PE version-resource field with no macOS equivalent, so no enrichment will ever supply it.
 			"OriginalFileName has no macOS equivalent", "exec",
 			"selection:\n  OriginalFileName: 'curl.exe'\ncondition: selection\n", "OriginalFileName",
@@ -102,7 +96,8 @@ func TestValidate_RejectsUnmappedEventType(t *testing.T) {
 func TestSupportedFields(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, []string{"CommandArguments", "CommandLine", "EnvAssignments", "Image", "Subcommand"}, SupportedFields("exec"))
+	assert.Equal(t, []string{"CommandArguments", "CommandLine", "EnvAssignments", "Image", "ParentImage", "Subcommand"},
+		SupportedFields("exec"))
 	assert.Equal(t, []string{"TargetFilename"}, SupportedFields("open"))
 	assert.Empty(t, SupportedFields("dns_query"))
 	assert.Empty(t, SupportedFields("nonexistent"))

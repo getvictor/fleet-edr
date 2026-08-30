@@ -172,3 +172,47 @@ func TestEnvAssignments_RejectsNonAssignments(t *testing.T) {
 		})
 	}
 }
+
+// spec:server-detection-rules-engine/a-rule-can-match-on-the-parent-process/the-parent-image-is-supplied-by-the-caller
+//
+// TestParentImage covers the one field this package does not read from the payload. An exec event carries ppid, not the parent's
+// path, and this package deliberately does not know the process graph, so the caller resolves it and passes it in.
+func TestParentImage(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{"pid":1,"ppid":2,"path":"/bin/bash","args":["bash"]}`)
+
+	t.Run("supplied by the caller", func(t *testing.T) {
+		t.Parallel()
+		e, err := NewExecEvent(api.Event{EventID: "e1", EventType: "exec", Payload: payload}, "/Applications/X.app/Contents/MacOS/X")
+		require.NoError(t, err)
+		values, present := e.Field("ParentImage")
+		assert.True(t, present)
+		assert.Equal(t, []string{"/Applications/X.app/Contents/MacOS/X"}, values)
+	})
+
+	t.Run("an unresolved parent is absent, not empty", func(t *testing.T) {
+		t.Parallel()
+		// The honest answer when the graph could not resolve the parent: a rule keyed on it declines rather than matching a
+		// process whose image we do not know.
+		e, err := NewExecEvent(api.Event{EventID: "e1", EventType: "exec", Payload: payload}, "")
+		require.NoError(t, err)
+		_, present := e.Field("ParentImage")
+		assert.False(t, present)
+	})
+
+	t.Run("NewEvent supplies no parent at all", func(t *testing.T) {
+		t.Parallel()
+		// A caller that has not resolved a parent gets a field that is absent rather than wrong.
+		e, err := NewEvent(api.Event{EventID: "e1", EventType: "exec", Payload: payload})
+		require.NoError(t, err)
+		_, present := e.Field("ParentImage")
+		assert.False(t, present)
+	})
+
+	t.Run("a malformed payload still errors", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewExecEvent(api.Event{EventID: "e1", EventType: "exec", Payload: []byte(`{"path":123}`)}, "/bin/sh")
+		require.Error(t, err)
+	})
+}

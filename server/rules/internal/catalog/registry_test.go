@@ -203,7 +203,6 @@ func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 		"descendant_within_window":     {},
 		"dns_resolve_then_connect":     {},
 		"absence_within_window":        {},
-		"parent_lookup_path_match":     {},
 		"file_open_write_intent_match": {},
 		"btm_item_signing_verdict":     {},
 	}

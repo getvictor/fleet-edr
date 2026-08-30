@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"path"
@@ -9,6 +10,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/export"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
 	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
@@ -170,4 +172,27 @@ func firstMatching(se *sigmabind.Event, name string, pred func(string) bool) str
 		}
 	}
 	return ""
+}
+
+// execEventWithParent builds the Sigma adapter for an exec event, resolving the parent's image from the process graph.
+//
+// ParentImage is a standard Sigma field that our payload cannot carry: an exec event has ppid, not the parent's path. Resolving it
+// here rather than denormalising it onto the stored event is deliberate, and the pipeline decides it. Processes are materialized
+// BEFORE rules run ("run detection rules after processes are materialized"), while events are stored before that, so an
+// enrichment written at ingest would miss exactly the parents that arrive in the same batch as their children, and would persist
+// that miss permanently.
+//
+// A parent that cannot be resolved yields an absent ParentImage rather than an error, which is what the Go rules this replaces did:
+// an unresolvable parent means the rule declines, not that the batch failed. The error path stays for a graph read that actually
+// failed, which the caller propagates so the batch is retried rather than silently under-detecting.
+func execEventWithParent(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, ppid int) (*sigmabind.Event, error) {
+	parent, err := gr.GetProcessByPID(ctx, evt.HostID, ppid, evt.TimestampNs)
+	if err != nil {
+		return nil, fmt.Errorf("get parent pid %d: %w", ppid, err)
+	}
+	parentImage := ""
+	if parent != nil {
+		parentImage = parent.Path
+	}
+	return sigmabind.NewExecEvent(evt, parentImage)
 }

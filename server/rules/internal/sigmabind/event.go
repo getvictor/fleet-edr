@@ -27,6 +27,9 @@ type Event struct {
 	commandLine    []string
 	targetFilename []string
 
+	// Supplied by the caller rather than read from the payload. See NewExecEvent for why.
+	parentImage []string
+
 	// Computed from argv rather than copied from a payload field. See argv.go for why each exists.
 	subcommand       []string
 	commandArguments []string
@@ -53,6 +56,25 @@ type openPayload struct {
 // This mirrors the same test in the sudoers_tamper rule deliberately, and the duplication is time-boxed: #772 adds an explicit
 // write-intent field to the event, at which point both derivations give way to reading it.
 const writeAccessMask = 0x3
+
+// NewExecEvent is NewEvent for an exec event whose parent process the caller has already resolved.
+//
+// ParentImage is a standard Sigma field and 11 of the 69 macOS corpus rules read it, but it is not in the payload: an exec event
+// carries ppid, not the parent's path. The graph knows it, and this package deliberately does not know the graph, so the caller
+// resolves it and passes it in. That keeps matching testable against literal values, and it keeps the lookup where the retry
+// semantics live: the pipeline materializes processes before it evaluates rules, and a parent that has not landed yet raises
+// ErrProcessNotYetMaterialized so the batch is retried rather than the finding lost.
+//
+// Passing "" is the honest answer when the parent could not be resolved, and reports the field as absent rather than empty, so a
+// rule keyed on a parent simply does not match rather than matching a process whose image we do not know.
+func NewExecEvent(ev api.Event, parentImage string) (*Event, error) {
+	e, err := NewEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	e.parentImage = presentString(parentImage)
+	return e, nil
+}
 
 // NewEvent decodes an event into the Sigma fields it can supply.
 //

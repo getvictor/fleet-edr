@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -67,10 +68,12 @@ func TestLoadDetections_Rejects(t *testing.T) {
 			"undefined search",
 		},
 		{
+			// Deliberately a field no enrichment will ever supply: ParentImage used to serve here and is now supplied
+			// (#771), which is exactly the kind of quiet weakening this case exists to prevent.
 			"a field the event type does not supply",
 			map[string]string{"pack/x.yml": detectionRuleFile("x", "process_creation",
-				"  selection:\n    ParentImage: '/bin/bash'\n  condition: selection\n")},
-			"ParentImage",
+				"  selection:\n    OriginalFileName: 'curl.exe'\n  condition: selection\n")},
+			"OriginalFileName",
 		},
 		{
 			// A detection under a category we cannot populate would pass a logsource check and then match nothing forever.
@@ -204,4 +207,40 @@ func TestRedactedDyldAssignment(t *testing.T) {
 			}
 		})
 	}
+}
+
+// spec:server-detection-rules-engine/a-rule-can-match-on-the-parent-process/an-unresolvable-parent-declines-rather-than-matching
+//
+// TestExecEventWithParent covers the resolution helper: what a rule sees when the graph knows the parent, when it does not, and
+// when the read itself fails. The middle case is the one that matters, because it is the difference between a rule declining and a
+// batch failing.
+func TestExecEventWithParent(t *testing.T) {
+	t.Parallel()
+
+	evt := rulesapi.Event{EventID: "e", HostID: "h", EventType: "exec", TimestampNs: 100,
+		Payload: []byte(`{"pid":1,"ppid":2,"path":"/bin/bash","args":["bash"]}`)}
+
+	t.Run("a resolved parent supplies the field", func(t *testing.T) {
+		t.Parallel()
+		se, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{byPID: &rulesapi.Process{Path: "/Applications/X"}}, 2)
+		require.NoError(t, err)
+		values, present := se.Field("ParentImage")
+		assert.True(t, present)
+		assert.Equal(t, []string{"/Applications/X"}, values)
+	})
+
+	t.Run("an unresolved parent leaves it absent without failing", func(t *testing.T) {
+		t.Parallel()
+		se, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{}, 2)
+		require.NoError(t, err, "an unresolvable parent is a decline, not a batch failure")
+		_, present := se.Field("ParentImage")
+		assert.False(t, present)
+	})
+
+	t.Run("a failed graph read propagates", func(t *testing.T) {
+		t.Parallel()
+		_, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{errByPID: errors.New("boom")}, 2)
+		require.Error(t, err, "a real read failure must surface so the batch is retried")
+		assert.Contains(t, err.Error(), "get parent pid 2")
+	})
 }

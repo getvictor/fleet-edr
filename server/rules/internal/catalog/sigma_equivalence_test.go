@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
@@ -392,4 +393,80 @@ func TestLiveSymbolsStillAgreeWithTheShippedDetections(t *testing.T) {
 				"the Go regexp and the detection must agree on %q, or the alert would name a path the rule did not fire on", path)
 		}
 	})
+}
+
+// The shell_from_office oracle. Frozen literals, not the live shared list or params, for the reason the others are: an oracle that
+// reads what production reads moves with it and proves nothing.
+var (
+	legacyShellPaths = map[string]bool{
+		"/bin/sh": true, "/bin/bash": true, "/bin/zsh": true, "/bin/dash": true,
+		"/usr/bin/sh": true, "/usr/bin/bash": true, "/usr/bin/zsh": true, "/usr/bin/dash": true,
+	}
+	legacyOfficeBinaries = map[string]bool{
+		"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word":             true,
+		"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel":           true,
+		"/Applications/Microsoft PowerPoint.app/Contents/MacOS/Microsoft PowerPoint": true,
+		"/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook":       true,
+	}
+)
+
+// legacyShellFromOfficeFires is the complete pre-conversion predicate: an exact shell path whose parent is an exact Office binary.
+func legacyShellFromOfficeFires(path, parentPath string) bool {
+	return legacyShellPaths[path] && legacyOfficeBinaries[parentPath]
+}
+
+// TestEquivalence_ShellFromOffice compares the shipped detection against the frozen oracle over both halves of the predicate: the
+// shell being executed and the parent that spawned it. ParentImage is supplied to the adapter the way the rule supplies it.
+func TestEquivalence_ShellFromOffice(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/bin/sh", "/bin/bash", "/usr/bin/zsh", "/bin/DASH", "/tmp/bash", "/usr/local/bin/sh", "/bin/ls", "",
+	}
+	parents := []string{
+		"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word",
+		"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel",
+		"/Applications/Microsoft WORD.app/Contents/MacOS/Microsoft Word",
+		"/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+		"/tmp/Microsoft Word", "/bin/zsh", "",
+	}
+
+	rapid.Check(t, func(t *rapid.T) {
+		path := rapid.SampledFrom(paths).Draw(t, "path")
+		parent := rapid.SampledFrom(parents).Draw(t, "parent")
+
+		payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 2, "path": path, "args": []string{path}})
+		require.NoError(t, err)
+		ev, err := sigmabind.NewExecEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload}, parent)
+		require.NoError(t, err)
+
+		require.Equal(t, legacyShellFromOfficeFires(path, parent), shellFromOfficeDetection().Matches(ev),
+			"path=%q parent=%q", path, parent)
+	})
+}
+
+// TestSharedShellListMatchesTheShippedDetection is the guard the detection block's comment promises.
+//
+// Sigma cannot reference a list defined elsewhere, so converting a rule that read the shared `unix_shells` list necessarily inlined
+// it. suspicious_exec still reads the shared list, so the two descriptions of one set can now part company: a shell added to
+// lists.yml would extend one rule and not the other, silently. This asserts the shipped detection matches exactly the shared list,
+// in both directions.
+func TestSharedShellListMatchesTheShippedDetection(t *testing.T) {
+	t.Parallel()
+
+	office := "/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"
+	fires := func(path string) bool {
+		payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 2, "path": path, "args": []string{path}})
+		require.NoError(t, err)
+		ev, err := sigmabind.NewExecEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload}, office)
+		require.NoError(t, err)
+		return shellFromOfficeDetection().Matches(ev)
+	}
+
+	for shell := range shellPaths() {
+		assert.Truef(t, fires(shell), "shared list has %q but the inlined detection does not match it", shell)
+	}
+	for _, notAShell := range []string{"/bin/ls", "/usr/bin/python3", "/tmp/bash", "/bin/shx"} {
+		assert.Falsef(t, fires(notAShell), "the detection matches %q, which the shared list does not contain", notAShell)
+	}
 }
