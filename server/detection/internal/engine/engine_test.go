@@ -562,3 +562,44 @@ func TestEngine_Evaluate_ASkippedRuleRecordsNoSpan(t *testing.T) {
 	assert.Equal(t, []string{"exec-rule"}, sawRuleIDs,
 		"only the rule that actually evaluated the batch may record a span")
 }
+
+// spec:server-detection-rules-engine/a-rule-is-invoked-only-for-batches-carrying-an-event-type-it-consumes/a-batch-left-with-no-events-evaluates-no-rule
+//
+// TestEngine_Evaluate_AnEmptyBatchEvaluatesNoRule pins that dispatch did NOT change the empty-batch path.
+//
+// A rule declaring no event types is selected for every batch, including an empty one, but selection is not evaluation: the
+// platform scope leaves nothing, so the rule's Evaluate is never called. That was already true before dispatch existed, because
+// evaluateRule has always returned early on an empty scope, and it is asserted here so the fail-open contract is not misread as a
+// promise that an unconditional rule runs against nothing.
+func TestEngine_Evaluate_AnEmptyBatchEvaluatesNoRule(t *testing.T) {
+	t.Parallel()
+
+	undeclared := &stubRule{id: "undeclared"}
+	declared := &typedRule{stubRule: stubRule{id: "exec-rule"}, eventTypes: []string{"exec"}}
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{undeclared, declared}})
+
+	require.NoError(t, e.Evaluate(t.Context(), nil))
+	assert.Zero(t, undeclared.calls, "an empty batch has nothing to evaluate, so even an unconditional rule is not called")
+	assert.Zero(t, declared.calls)
+
+	// And a batch that is entirely plumbing reduces to the same thing.
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventType: "snapshot_heartbeat", Platform: "darwin"}}))
+	assert.Zero(t, undeclared.calls)
+}
+
+// TestEngine_Evaluate_ARuleDeclaringATypeTwiceIsEvaluatedOnce pins the deduplication in the index build.
+//
+// It is load-bearing rather than defensive. A single-type batch takes a fast path that returns the index entry verbatim, so a
+// duplicate index entry would put the rule in the list twice and evaluate it twice, producing duplicate findings from one batch.
+// The general path's sort-and-compact would hide it; the fast path would not.
+func TestEngine_Evaluate_ARuleDeclaringATypeTwiceIsEvaluatedOnce(t *testing.T) {
+	t.Parallel()
+
+	r := &typedRule{stubRule: stubRule{id: "doubled"}, eventTypes: []string{"exec", "exec"}}
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{r}})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{execEvent("exec")}))
+	assert.Equal(t, 1, r.calls, "a rule declaring the same event type twice must still be evaluated once per batch")
+}

@@ -8,7 +8,9 @@ The system SHALL evaluate a rule against a batch only when that batch carries at
 
 A rule's declared event types SHALL act as a trigger filter and not as a batch filter: a rule that is invoked SHALL receive the whole batch, because a rule triggered by one event type may read another from the same batch to build its finding. Narrowing the batch to the triggering type would silently degrade those rules.
 
-The system SHALL invoke a rule that declares no event types for every batch. Skipping a rule that had something to do loses a detection with no error and no alert, whereas invoking one that had nothing to do costs only time, so the engine SHALL resolve this asymmetry in favour of running the rule.
+The system SHALL NOT exclude a rule that declares no event types from dispatch, whatever event types a batch carries. Skipping a rule that had something to do loses a detection with no error and no alert, whereas invoking one that had nothing to do costs only time, so the engine SHALL resolve this asymmetry in favour of running the rule.
+
+Dispatch decides only whether a rule is offered a batch. Whether that rule then evaluates remains governed by the platform scoping applied to every rule, which this leaves unchanged: a rule left with no events after scoping evaluates nothing, as before.
 
 Dispatch SHALL preserve the order in which rules were registered, because the engine reports the first retryable error it encounters and reordering would change which rule is named to the operator.
 
@@ -27,8 +29,14 @@ Dispatch SHALL preserve the order in which rules were registered, because the en
 #### Scenario: A rule declaring no event types still runs
 
 - **GIVEN** a registered rule that declares no event types
-- **WHEN** any batch is evaluated
+- **WHEN** a batch is evaluated carrying only event types that rule never named
 - **THEN** the rule is invoked, because dispatch is an optimisation and must not drop a detection
+
+#### Scenario: A batch left with no events evaluates no rule
+
+- **GIVEN** a batch whose events are all filtered out before evaluation
+- **WHEN** it is evaluated
+- **THEN** no rule evaluates it, which is what happened before dispatch existed
 
 ### Requirement: A rule declares the event types it consumes
 
