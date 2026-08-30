@@ -120,7 +120,8 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 	return out
 }
 
-// Evaluate runs all registered rules against the event batch.
+// Evaluate runs the rules that consume the batch's event types against it, per rulesFor: a rule is invoked only when the batch
+// carries at least one event of a type it declares, and a rule declaring none is invoked for every batch.
 // Findings are persisted as alerts. Rule evaluation failures are
 // logged and skipped, but alert persistence failures and retryable
 // not-yet-materialized subject-process misses are returned so the

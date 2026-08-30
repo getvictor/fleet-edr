@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -73,15 +74,28 @@ func TestAll_ARuleThatFindsSomethingDeclaredTheBatchsEventType(t *testing.T) {
 	rules := New(nil)
 	require.NotEmpty(t, rules)
 
-	// A gate that never sees a finding proves nothing: the property is vacuously true when no rule fires anywhere in the corpus.
-	// Recorded across the parallel subtests and checked once they have all finished.
+	// The gate is only as good as the rules the corpus actually fires, so the covered set is asserted EXACTLY rather than as "at
+	// least one". "At least one" would stay green while some other rule's declaration silently went wrong, and it would hide the
+	// fact that most of the catalog is untested here.
+	//
+	// Four of the twelve rules have replay fixtures. The other eight are covered by the synthetic tripwire in registry_test.go and
+	// by each rule's own event-type gate, which is weaker; adding a fixture corpus for any of them strengthens this gate
+	// automatically, and this assertion is what makes that visible when it happens.
+	coveredByCorpus := []string{
+		"credential_keychain_dump",
+		"dns_c2_beacon",
+		"privilege_launchd_plist_write",
+		"sudoers_tamper",
+	}
 	var mu sync.Mutex
 	fired := map[string]int{}
 	t.Cleanup(func() {
 		mu.Lock()
 		defer mu.Unlock()
-		assert.NotEmpty(t, fired, "no rule fired anywhere in the corpus, so this gate asserted nothing")
-		t.Logf("corpus exercised these rules: %v", fired)
+		got := slices.Sorted(maps.Keys(fired))
+		assert.Equal(t, coveredByCorpus, got,
+			"the set of rules this corpus exercises changed; if a fixture corpus was added, extend coveredByCorpus, and if one "+
+				"stopped firing that is a regression in the rule, not in this list")
 	})
 
 	for _, path := range fixtures {

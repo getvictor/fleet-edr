@@ -228,8 +228,18 @@ type Documentation struct {
 	// Severity is the SeverityLow|Medium|High|Critical constant the rule emits. Stored separately from per-finding severities because a
 	// single rule always emits a single class today.
 	Severity string `json:"severity"`
-	// EventTypes lists the agent event types the rule consumes (e.g. "exec", "open_write"). Helps operators decide which ESF/NE
-	// subscriptions a minimal deployment must keep enabled.
+	// EventTypes lists the agent event types the rule consumes (e.g. "exec", "open"). Two audiences read it, and the second one
+	// makes it a correctness contract rather than documentation.
+	//
+	// Operators read it to decide which ESF/NE subscriptions a minimal deployment must keep enabled.
+	//
+	// The detection engine DISPATCHES on it (issue #762): a rule is evaluated only for batches carrying at least one event of a
+	// type listed here. So this list MUST cover every event type the rule can act on. Under-declaring does not fail, log, or
+	// alert; the rule is simply never invoked for the batches it would have matched, and those findings are lost silently. Values
+	// must be event types the agent actually emits, per the enum in schema/events.json.
+	//
+	// An empty list means "invoke for every batch". That is the fail-open direction, chosen because over-invoking costs time while
+	// under-invoking costs detections, but a shipped rule relying on it forfeits dispatch and the catalog guard tests reject it.
 	EventTypes []string `json:"event_types"`
 	// FalsePositives names well-known legitimate sources that can trip the rule. Each entry is one short sentence; UI renders as a
 	// bullet list.
