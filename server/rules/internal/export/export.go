@@ -32,6 +32,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 )
 
 // idNamespace is the frozen UUID namespace rule ids are derived under. Sigma requires `id` to be a UUID and rejects a slug with
@@ -54,16 +55,17 @@ const author = "Fleet EDR"
 // alien to read in an artifact whose entire purpose is being read. Structs rather than maps throughout for the same reason: Go
 // randomises map iteration, and a generated file that reorders itself between runs is unreviewable.
 type file struct {
-	Title          string    `yaml:"title"`
-	ID             string    `yaml:"id"`
-	Status         string    `yaml:"status"`
-	Description    string    `yaml:"description"`
-	Author         string    `yaml:"author"`
-	Level          string    `yaml:"level"`
-	Tags           []string  `yaml:"tags,omitempty"`
-	Logsource      logsource `yaml:"logsource"`
-	FalsePositives []string  `yaml:"falsepositives,omitempty"`
-	Engine         engine    `yaml:"x-engine"`
+	Title          string     `yaml:"title"`
+	ID             string     `yaml:"id"`
+	Status         string     `yaml:"status"`
+	Description    string     `yaml:"description"`
+	Author         string     `yaml:"author"`
+	Level          string     `yaml:"level"`
+	Tags           []string   `yaml:"tags,omitempty"`
+	Logsource      logsource  `yaml:"logsource"`
+	Detection      *yaml.Node `yaml:"detection,omitempty"`
+	FalsePositives []string   `yaml:"falsepositives,omitempty"`
+	Engine         engine     `yaml:"x-engine"`
 }
 
 type logsource struct {
@@ -131,6 +133,70 @@ var sigmaProduct = map[api.Platform]string{
 	api.PlatformLinux:   "linux",
 }
 
+// Authored is the part of a rule file that is written by hand rather than generated, and which regeneration therefore re-emits
+// verbatim, comments included.
+//
+// Params are the values a graph rule reads at boot (issue #758). Detection is the Sigma `detection:` block that IS a converted
+// rule's logic (issue #761). Grouping them keeps Rule's signature stable as more of a rule moves into its file, which is the
+// direction this epic runs in.
+type Authored struct {
+	Params    *yaml.Node
+	Detection *yaml.Node
+}
+
+// computedFields are the Sigma field names this engine supplies itself rather than taking from Sigma's taxonomy. A detection
+// reading any of them is `portable: mapped`: valid Sigma, but not evaluable by another engine without them.
+//
+// Owned here because portability is a property of the rendered FILE, and this package already owns the rest of the Sigma-format
+// correspondence. server/rules/internal/sigmabind, which computes the values, drift-tests its taxonomy against this list.
+var computedFields = map[string]bool{
+	"Subcommand":       true,
+	"CommandArguments": true,
+	"EnvAssignments":   true,
+}
+
+// IsComputedField reports whether a Sigma field name is one this engine supplies rather than one from Sigma's own taxonomy.
+func IsComputedField(name string) bool { return computedFields[name] }
+
+// classify derives x-engine.type and x-engine.portable from the rule itself, rather than taking either on trust.
+//
+// A rule with a detection block IS Sigma, and is portable to the extent that the fields it reads are Sigma's own: `standard` when
+// every field comes from the taxonomy, `mapped` when any is one we compute. A rule without one is a Go implementation, so there is
+// nothing in the file for another engine to run and `none` is the honest answer.
+func classify(detection *yaml.Node) (kind, portable string) {
+	if detection == nil {
+		return "graph", "none"
+	}
+	// The evaluator is asked which fields the block reads rather than this package walking the YAML itself. A second traversal of
+	// the same shape would drift the moment the evaluator gained a search form, and the failure would be silent: a rule reading a
+	// computed field would export as `portable: standard`, promising another engine it can run something it cannot.
+	fields, err := detectionFieldNames(detection)
+	if err != nil {
+		// A block that does not compile cannot be classified. The caller refuses it a moment later with a better message; the
+		// conservative answer here is the one that promises least.
+		return "sigma", "mapped"
+	}
+	for _, field := range fields {
+		if computedFields[field] {
+			return "sigma", "mapped"
+		}
+	}
+	return "sigma", "standard"
+}
+
+// detectionFieldNames compiles a detection block and asks it which fields it reads.
+func detectionFieldNames(detection *yaml.Node) ([]string, error) {
+	var block map[string]any
+	if err := detection.Decode(&block); err != nil {
+		return nil, err
+	}
+	rule, err := sigma.Compile(block)
+	if err != nil {
+		return nil, err
+	}
+	return rule.Fields(), nil
+}
+
 // RuleID derives the Sigma `id` for a rule id. Exported so tests and tooling can assert stability without duplicating the
 // derivation, since the whole point of a uuid5 is that everyone computes the same answer.
 func RuleID(ruleID string) string {
@@ -144,7 +210,7 @@ func RuleID(ruleID string) string {
 // params is the rule's verbatim params block, or nil when it declares none. It is passed in rather than derived because params
 // are the one part of a rule file that is NOT generated from Go: the rules read them, so re-rendering them from parsed values
 // would drop the comments that explain why each threshold is what it is.
-func Rule(md api.RuleMetadata, params *yaml.Node) ([]byte, error) {
+func Rule(md api.RuleMetadata, authored Authored) ([]byte, error) {
 	if md.ID == "" {
 		return nil, errors.New("export: rule has no id")
 	}
@@ -162,8 +228,9 @@ func Rule(md api.RuleMetadata, params *yaml.Node) ([]byte, error) {
 	}
 	// An empty algorithm is the most dangerous omission of the three, because `omitempty` drops the key rather than emitting a
 	// blank one: the file would look complete while missing the single thing that says what decides the rule.
-	if md.Algorithm == "" {
-		return nil, fmt.Errorf("export: rule %s names no algorithm", md.ID)
+	kind, portable := classify(authored.Detection)
+	if kind == "graph" && md.Algorithm == "" {
+		return nil, fmt.Errorf("export: rule %s names no algorithm and has no detection block, so nothing says what decides it", md.ID)
 	}
 	product, ok := sigmaProduct[md.Platforms[0]]
 	if !ok {
@@ -184,15 +251,16 @@ func Rule(md api.RuleMetadata, params *yaml.Node) ([]byte, error) {
 		Level:          md.Doc.Severity,
 		Tags:           tags(md.Techniques),
 		Logsource:      logsource{Product: product, Category: category},
+		Detection:      authored.Detection,
 		FalsePositives: md.Doc.FalsePositives,
 		Engine: engine{
 			RuleID:          md.ID,
-			Type:            "graph",
-			Portable:        "none",
-			PortabilityNote: portabilityNote,
+			Type:            kind,
+			Portable:        portable,
+			PortabilityNote: portabilityNote(kind, portable),
 			EventTypes:      md.Doc.EventTypes,
-			Algorithm:       md.Algorithm,
-			Params:          params,
+			Algorithm:       algorithmFor(kind, md.Algorithm),
+			Params:          authored.Params,
 			Exclusions:      exclusions(md.SupportedExclusionMatchTypes),
 			Limitations:     md.Doc.Limitations,
 		},
@@ -216,11 +284,24 @@ func marshal(doc file) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// portabilityNote is the same for every Phase 1 export, because the reason is the same for every rule: the logic is Go. It is
-// written out per file rather than left implicit so a reader of one file in isolation learns why it will not run elsewhere.
-const portabilityNote = "The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, " +
-	"so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being converted " +
-	"separately; until a rule's logic lives in its file, this stays the honest answer."
+// portabilityNote explains, in the file itself, why a rule will or will not run in another engine. Written out per file rather than
+// left implicit so a reader of one rule in isolation learns the reason without going looking for it.
+func portabilityNote(kind, portable string) string {
+	switch {
+	case kind != "sigma":
+		return "The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, " +
+			"so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being " +
+			"converted separately; until a rule's logic lives in its file, this stays the honest answer."
+	case portable == "mapped":
+		return "The rule's logic is the detection block in this file. It is valid Sigma, but it reads at least one field this " +
+			"engine computes from the argument vector rather than one from Sigma's own taxonomy, so another engine needs those " +
+			"fields to evaluate it. The computed fields exist because Sigma represents a command line as a single string, in " +
+			"which argument position is no longer recoverable."
+	default:
+		return "The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, so any " +
+			"Sigma-compatible engine can evaluate it as it stands."
+	}
+}
 
 // description joins the one-line summary and the long-form description into Sigma's single description field. Sigma has no
 // summary, and dropping either half would lose the part an operator actually reads: the summary is the elevator pitch the UI
@@ -272,13 +353,14 @@ func exclusions(types []api.ExclusionMatchType) []string {
 // response is the operator's own copy to do as they like with, and telling them not to hand-edit their own download would be
 // both wrong and confusing.
 const Header = "# Generated by tools/gen-rule-pack from the registered rule catalog.\n" +
-	"# Everything here is regenerated from the rule's Go documentation EXCEPT x-engine.params, which the rules read at boot and\n" +
-	"# which is therefore authored by hand: regeneration re-emits an existing params block verbatim, comments included.\n" +
+	"# Everything here is regenerated from the rule's Go documentation EXCEPT the detection block and x-engine.params. Those are\n" +
+	"# the rule's own logic and the values it reads, so they are authored by hand and regeneration re-emits them verbatim,\n" +
+	"# comments included.\n" +
 	"# Run `task docs:rule-pack` after changing a rule's documentation or metadata.\n"
 
 // File renders one detection as it appears in the committed pack: the rule document behind the generated-file header.
-func File(md api.RuleMetadata, params *yaml.Node) ([]byte, error) {
-	body, err := Rule(md, params)
+func File(md api.RuleMetadata, authored Authored) ([]byte, error) {
+	body, err := Rule(md, authored)
 	if err != nil {
 		return nil, err
 	}
@@ -292,10 +374,10 @@ func File(md api.RuleMetadata, params *yaml.Node) ([]byte, error) {
 // with nothing written is unambiguous.
 // paramsFor supplies each rule's verbatim params block. Passed in as a function so this package stays independent of the
 // catalog that owns the pack; bootstrap, which imports both, wires them together.
-func Pack(rules []api.RuleMetadata, paramsFor func(string) *yaml.Node) (map[string][]byte, error) {
+func Pack(rules []api.RuleMetadata, authoredFor func(string) Authored) (map[string][]byte, error) {
 	out := make(map[string][]byte, len(rules))
 	for _, md := range rules {
-		body, err := File(md, paramsFor(md.ID))
+		body, err := File(md, authoredFor(md.ID))
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", md.ID, err)
 		}
@@ -330,4 +412,13 @@ func Prune(dir string, pack map[string][]byte, keep string) ([]string, error) {
 		removed = append(removed, path)
 	}
 	return removed, nil
+}
+
+// algorithmFor drops the algorithm from a Sigma rule. A converted rule's logic IS its detection block, so naming a Go evaluator
+// beside it would point a reader at code that no longer decides anything.
+func algorithmFor(kind, algorithm string) string {
+	if kind == "sigma" {
+		return ""
+	}
+	return algorithm
 }

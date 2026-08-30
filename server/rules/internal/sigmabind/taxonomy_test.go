@@ -1,6 +1,7 @@
 package sigmabind
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -152,5 +153,39 @@ func TestEventTypeForCategoryDeclinesWhatItCannotPopulate(t *testing.T) {
 
 		_, ok = EventTypeForCategory(category)
 		assert.False(t, ok, "%q must be declined here: we can name it but supply no fields for it", category)
+	}
+}
+
+// TestComputedFieldsAgreeWithTheExporter is the drift guard the exporter's comment promises, and which did not exist until review
+// pointed that out.
+//
+// Provenance is stated in two places because neither package can import the other: sigmabind computes the values, and export
+// classifies a rule's portability from which fields it reads. If they disagreed, a rule reading a newly added computed field would
+// export as `portable: standard`, telling another team they can run something that needs a field only we supply. The exactness in
+// both directions is the point: a field added here but not there, or there but not here, fails.
+func TestComputedFieldsAgreeWithTheExporter(t *testing.T) {
+	t.Parallel()
+
+	computed := map[string]bool{}
+	for _, eventType := range mappedEventTypes() {
+		for _, name := range SupportedFields(eventType) {
+			if export.IsComputedField(name) {
+				computed[name] = true
+			}
+		}
+	}
+	assert.Equal(t, map[string]bool{"Subcommand": true, "CommandArguments": true, "EnvAssignments": true}, computed,
+		"the exporter must classify exactly our computed fields as computed")
+
+	// And the other direction: every field the exporter calls computed must be one we actually supply, or a rule could be labelled
+	// `mapped` for a field no event carries.
+	for _, name := range []string{"Subcommand", "CommandArguments", "EnvAssignments"} {
+		found := false
+		for _, eventType := range mappedEventTypes() {
+			if slices.Contains(SupportedFields(eventType), name) {
+				found = true
+			}
+		}
+		assert.Truef(t, found, "the exporter calls %q computed, but no event type supplies it", name)
 	}
 }

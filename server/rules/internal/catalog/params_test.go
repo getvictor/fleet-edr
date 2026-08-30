@@ -193,8 +193,6 @@ func TestEmbeddedPackMatchesTheRulesThatReadIt(t *testing.T) {
 		"shebang_shells deliberately omits /usr/bin/sh; widening it silently would be a behaviour change")
 	assert.Equal(t, []string{"/tmp/", "/var/tmp/", "/private/tmp/", "/dev/shm/"}, suspiciousPrefixes())
 
-	assert.True(t, securityBinaryPaths()["/usr/bin/security"])
-	assert.True(t, dumpKeychainArgTokens()["dump-keychain"])
 	assert.True(t, launchctlPaths()["/bin/launchctl"])
 	assert.True(t, officeBinaries()["/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"])
 	assert.True(t, osascriptPaths()["/usr/bin/osascript"])

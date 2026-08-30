@@ -142,7 +142,7 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		if rm.ID != id {
 			continue
 		}
-		body, err := export.Rule(rm, catalog.ParamsNode(rm.ID))
+		body, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
 		if err != nil {
 			h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
 			writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})

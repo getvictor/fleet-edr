@@ -8,6 +8,8 @@ import (
 	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 )
 
+// spec:server-detection-rules-engine/a-converted-rule-carries-its-logic-in-its-file/a-converted-rule-detects-what-it-detected-before
+//
 // TestCredentialKeychainDump_Fixtures runs every fixture case under fixtures/credential_keychain_dump/ as its own sub-test. Add a new
 // case by dropping a *.json file in that directory: no Go edits needed. See server/detection/testkit for the fixture schema.
 func TestCredentialKeychainDump_Fixtures(t *testing.T) {

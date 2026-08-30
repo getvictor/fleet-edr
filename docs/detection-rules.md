@@ -57,7 +57,7 @@ The rule fires on the LAST link of the chain (the temp-exec or the network_conne
 
 ### Limitations
 
-- 30s window is hard-coded; long-tail post-shell activity is missed by design.
+- The window bounds how long after the shell exec a trigger still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
 - A parent-path-glob exclusion silences BOTH arms of the rule for that parent.
 - An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.
 
@@ -171,7 +171,7 @@ The rule requires both halves of the chain to be present, so download-only or te
 
 ### Limitations
 
-- 30-second descendant window is hard-coded; longer-running chains are missed by design.
+- The descendant window bounds how long after the osascript exec a stage-2 still counts; longer-running chains are missed by design. Set in x-engine.params.window.
 - Does not cover Python URL fetches or AppleScript built-in URL access: only flags the explicit curl/wget shape.
 
 ## credential_keychain_dump
@@ -199,7 +199,7 @@ Match shape is exact-path + exact-subcommand to keep the rule high-precision. A 
 ### Limitations
 
 - Does not cover Keychain reads via the Security framework (SecItemCopyMatching, etc.) or raw SQLite scrapes of login.keychain-db. Those paths are tracked for a future file-integrity rule.
-- Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w); left out for precision; add them to dumpKeychainArgTokens if a pilot fleet surfaces real abuse.
+- Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w); left out for precision; add them to the detection block in the rule's pack file if a pilot fleet surfaces real abuse.
 
 ## privilege_launchd_plist_write
 

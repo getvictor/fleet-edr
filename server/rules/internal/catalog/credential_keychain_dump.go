@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
+	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // CredentialKeychainDump fires when a process invokes `/usr/bin/security
@@ -30,10 +31,6 @@ import (
 type CredentialKeychainDump struct{}
 
 func (r *CredentialKeychainDump) ID() string { return "credential_keychain_dump" }
-
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches one exec on an exact binary
-// path plus an exact argv subcommand.
-func (r *CredentialKeychainDump) AlgorithmName() string { return "exec_path_and_subcommand_match" }
 
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
 func (r *CredentialKeychainDump) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
@@ -64,20 +61,14 @@ func (r *CredentialKeychainDump) Doc() api.Documentation {
 		},
 		Limitations: []string{
 			"Does not cover Keychain reads via the Security framework (SecItemCopyMatching, etc.) or raw SQLite scrapes of login.keychain-db. Those paths are tracked for a future file-integrity rule.",
-			"Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w); left out for precision; add them to dumpKeychainArgTokens if a pilot fleet surfaces real abuse.",
+			"Does not cover adjacent enumerative subcommands (find-internet-password -w, find-generic-password -w); left out for precision; add them to the detection block in the rule's pack file if a pilot fleet surfaces real abuse.",
 		},
 	}
 }
 
-// securityBinaryPaths is the set of `security` binary locations we'll flag. Canonical-only by design: /usr/bin/security is where the
-// tool lives on every shipping macOS SKU; SIP guarantees it. If a pilot customer surfaces a legitimate alternate path (symlink farm on
-// a locked-down dev VM, for example), extend the map here rather than loosening the match.
-var securityBinaryPaths = sync.OnceValue(func() map[string]bool { return paramsFor("credential_keychain_dump").StringSet("security_paths") })
-
-// dumpKeychainArgTokens is the subcommand set we flag. `dump-keychain` is the observed hit; `find-internet-password -w`,
-// `find-generic-password -w`, and `unlock-keychain <path>` are adjacent tools that also exfiltrate credentials but we leave them out
-// to keep the rule high-precision. Add them when a pilot customer asks.
-var dumpKeychainArgTokens = sync.OnceValue(func() map[string]bool { return paramsFor("credential_keychain_dump").StringSet("dump_keychain_args") })
+// keychainDetection is the rule's logic, compiled from the detection block in its pack file. Memoised because the compile happens
+// once at start-up, where a malformed block fails loudly, rather than per event.
+var keychainDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("credential_keychain_dump") })
 
 type keychainDumpPayload struct {
 	PID  int      `json:"pid"`
@@ -92,16 +83,26 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 		if evt.EventType != "exec" {
 			continue
 		}
+		// Built per rule rather than per event, because the engine hands each rule the raw batch and offers no way to share an
+		// adapter. Measured at 1.3us and 776 bytes per exec event, which is nothing for one converted rule and is not nothing
+		// once the catalog is mostly Sigma; issue #794 moves the decode into the engine.
+		se, err := sigmabind.NewEvent(evt)
+		if err != nil {
+			// A payload that does not decode is a malformed event rather than an uninteresting one, but one bad event must not
+			// discard the findings the rest of the batch produced.
+			continue
+		}
+		if !keychainDetection().Matches(se) {
+			continue
+		}
 		var p keychainDumpPayload
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			continue
 		}
-		if !securityBinaryPaths()[p.Path] {
-			continue
-		}
-		sub, ok := findDumpKeychainArg(p.Args)
-		if !ok {
-			continue
+		// The subcommand the detection matched on, read back from the same computed field, so the alert names what fired.
+		sub := ""
+		if values, ok := se.Field("Subcommand"); ok && len(values) > 0 {
+			sub = values[0]
 		}
 
 		proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
@@ -125,28 +126,4 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 		})
 	}
 	return findings, miss.err
-}
-
-// findDumpKeychainArg returns the matched subcommand (e.g. "dump-keychain") and true when argv invokes a flagged subcommand as the
-// security tool's actual subcommand, i.e. the first non-flag token after argv[0]. argv[0] is the binary itself and is skipped; flag
-// tokens (leading `-`) are skipped so `security -v dump-keychain` still matches. A subcommand like `help` that merely mentions the
-// string `dump-keychain` in its arguments (`security help dump-keychain`) does NOT match, because `help` is the first non-flag token.
-func findDumpKeychainArg(argv []string) (string, bool) {
-	for i, a := range argv {
-		if i == 0 {
-			// argv[0] is the invocation name, not a subcommand.
-			continue
-		}
-		if strings.HasPrefix(a, "-") {
-			// Flag, not a subcommand.
-			continue
-		}
-		if dumpKeychainArgTokens()[a] {
-			return a, true
-		}
-		// First non-flag token after argv[0] is the subcommand the security tool will act on; if it's not one we flag,
-		// don't keep scanning for a later match (avoids matching a path arg that happens to contain "dump-keychain").
-		return "", false
-	}
-	return "", false
 }

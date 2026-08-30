@@ -182,7 +182,7 @@ func TestHandler_ExportRule(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "title: Keychain credential dump")
 	assert.Contains(t, string(body), "rule_id: credential_keychain_dump")
-	assert.Contains(t, string(body), "algorithm: exec_path_and_subcommand_match")
+	assert.Contains(t, string(body), "type: sigma")
 }
 
 // TestHandler_ExportRule_NotFound covers both absences with one status, deliberately. A non-detection and a rule id that names

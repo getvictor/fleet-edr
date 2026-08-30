@@ -192,15 +192,17 @@ func TestAll_DetectionsClaimTechniques(t *testing.T) {
 // not exported at all, and it asserts the name is one of the registered set rather than merely non-empty: a typo would otherwise
 // ship as an algorithm nothing implements, which is exactly the failure that put a fabricated `interval_regularity_and_entropy`
 // into an early draft of the format.
-func TestAll_DetectionsNameTheirAlgorithm(t *testing.T) {
+func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 	t.Parallel()
 
+	// A detection says what decides it in exactly one of two ways: a graph rule names the Go evaluator that runs it, and a
+	// converted rule carries a Sigma detection block in its pack file instead (issue #761). Naming both would point a reader at
+	// code that no longer decides anything; naming neither leaves an exported file that cannot say what the rule does.
 	known := map[string]struct{}{
 		"ancestor_walk_path_prefix":              {},
 		"descendant_within_window":               {},
 		"dns_resolve_then_connect":               {},
 		"absence_within_window":                  {},
-		"exec_path_and_subcommand_match":         {},
 		"exec_leading_argv_env_match":            {},
 		"exec_subcommand_and_path_pattern_match": {},
 		"parent_lookup_path_match":               {},
@@ -209,16 +211,28 @@ func TestAll_DetectionsNameTheirAlgorithm(t *testing.T) {
 	}
 
 	seen := map[string]struct{}{}
+	converted := 0
 	for _, r := range New(nil) {
 		if !api.IsDetection(r) {
 			continue
 		}
 		name := api.AlgorithmNameOf(r)
-		require.NotEmptyf(t, name, "detection %s declares no algorithm, so its exported file cannot say what decides it", r.ID())
+		_, hasDetection := detections()[r.ID()]
+
+		if hasDetection {
+			converted++
+			assert.Emptyf(t, name, "detection %s carries a detection block AND names algorithm %q; only one can decide it",
+				r.ID(), name)
+			continue
+		}
+		require.NotEmptyf(t, name,
+			"detection %s names no algorithm and carries no detection block, so its exported file cannot say what decides it",
+			r.ID())
 		assert.Containsf(t, known, name, "detection %s names algorithm %q, which is not in the registered set", r.ID(), name)
 		seen[name] = struct{}{}
 	}
 
+	assert.Positive(t, converted, "at least one rule is converted; if this drops to zero the conversion was reverted silently")
 	assert.Len(t, seen, len(known),
 		"every registered algorithm name must be claimed by a rule; an unclaimed name is a leftover from a deleted or renamed rule")
 }

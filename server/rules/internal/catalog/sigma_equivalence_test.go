@@ -100,6 +100,16 @@ func skipsAnEmptyBeforeItsSubcommand(argv []string) bool {
 	return false
 }
 
+// evalCompiled evaluates an already-compiled detection against an exec event. Used for a rule that has been converted, so the
+// property tests the detection the pack actually ships rather than a copy of it in this file.
+func evalCompiled(t require.TestingT, rule *sigma.Rule, path string, argv []string) bool {
+	payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 0, "path": path, "args": argv})
+	require.NoError(t, err)
+	ev, err := sigmabind.NewEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload})
+	require.NoError(t, err)
+	return rule.Matches(ev)
+}
+
 // evalDetection compiles a real Sigma detection block and evaluates it against an exec event, so these properties test the rule PR B
 // will actually ship rather than a Go stand-in for it.
 //
@@ -125,11 +135,6 @@ func evalDetection(t require.TestingT, detection, path string, argv []string) bo
 // a plain Sigma value folds case, and `security DUMP-KEYCHAIN` or `DYLD_INSERT_LIBRARIES=` in another case would then fire where
 // the Go rule does not. |re is applied verbatim by this evaluator, which is what makes it the faithful choice here.
 const (
-	keychainDetection = `
-selection:
-  Subcommand|re: '^dump-keychain$'
-condition: selection
-`
 	launchAgentDetection = `
 selection:
   Subcommand|re: '^(load|bootstrap)$'
@@ -143,15 +148,61 @@ condition: selection
 `
 )
 
+// legacyFindDumpKeychainArg is credential_keychain_dump's Go matcher as it stood before the conversion, kept verbatim as the
+// oracle for the property below.
+//
+// Retaining it is deliberate. The gate #761 asks for is that the converted rule detect exactly what the Go one did, and that claim
+// is only checkable while both exist. Frozen here, it becomes the specification of the pre-conversion behaviour: any later drift in
+// the detection block fails against it, so a change to what this rule detects has to be made deliberately and in both places rather
+// than noticed later from an absence of alerts.
+func legacyFindDumpKeychainArg(argv []string) (string, bool) {
+	for i, a := range argv {
+		if i == 0 {
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if legacyDumpKeychainTokens[a] {
+			return a, true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// legacyDumpKeychainTokens and legacySecurityBinaryPaths are the two value sets the Go rule matched against, frozen alongside it.
+// The live values now live in the pack file's detection block, and TestShippedDetectionMatchesTheFrozenTokens holds them together.
+var legacyDumpKeychainTokens = map[string]bool{"dump-keychain": true}
+
+var legacySecurityBinaryPaths = map[string]bool{"/usr/bin/security": true}
+
+// legacyKeychainFires is the COMPLETE pre-conversion predicate: the rule required the exact binary AND the flagged subcommand.
+// Comparing only the argv half would leave the binary check outside the gate, so widening selection_binary would pass unnoticed.
+func legacyKeychainFires(path string, argv []string) bool {
+	if !legacySecurityBinaryPaths[path] {
+		return false
+	}
+	_, ok := legacyFindDumpKeychainArg(argv)
+	return ok
+}
+
 // TestEquivalence_KeychainDump: the Go matcher and the shipped detection agree on every generated invocation.
 func TestEquivalence_KeychainDump(t *testing.T) {
 	t.Parallel()
 
 	rapid.Check(t, func(t *rapid.T) {
 		argv := drawArgv(t)
-		_, goFires := findDumpKeychainArg(argv)
-		sigmaFires := evalDetection(t, keychainDetection, "/usr/bin/security", argv)
-		require.Equal(t, goFires, sigmaFires, "argv=%q", argv)
+		// Paths drawn from the frozen set, near-misses, and case variants: the binary half of the conjunction is as much a part
+		// of the rule as the subcommand, and holding it constant would leave any widening of selection_binary untested.
+		path := rapid.SampledFrom([]string{
+			"/usr/bin/security", "/usr/local/bin/security", "/usr/bin/SECURITY", "/tmp/security",
+			"/usr/bin/securityd", "/bin/sh",
+		}).Draw(t, "path")
+
+		goFires := legacyKeychainFires(path, argv)
+		sigmaFires := evalCompiled(t, keychainDetection(), path, argv)
+		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q", path, argv)
 	})
 }
 
@@ -213,13 +264,20 @@ func TestLaunchAgentEmptySubcommandIsTheOneDeliberateChange(t *testing.T) {
 func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 	t.Parallel()
 
-	_, goFires := findDumpKeychainArg([]string{"security", "DUMP-KEYCHAIN"})
-	require.False(t, goFires, "the Go matcher is a case-sensitive map lookup")
-	require.False(t, evalDetection(t, keychainDetection, "/usr/bin/security", []string{"security", "DUMP-KEYCHAIN"}),
+	_, goFires := legacyFindDumpKeychainArg([]string{"security", "DUMP-KEYCHAIN"})
+	require.False(t, goFires, "the Go matcher was a case-sensitive map lookup")
+	require.False(t, evalCompiled(t, keychainDetection(), "/usr/bin/security", []string{"security", "DUMP-KEYCHAIN"}),
 		"the shipped detection must not fold case either")
 
-	require.True(t, evalDetection(t, keychainDetection, "/usr/bin/security", []string{"security", "dump-keychain"}),
+	require.True(t, evalCompiled(t, keychainDetection(), "/usr/bin/security", []string{"security", "dump-keychain"}),
 		"and it must still fire on the real spelling")
+
+	// The same trap on the binary half. The property covers this only when a case-variant path and a real subcommand happen to be
+	// drawn together, which is likely but not certain; a known trap deserves a deterministic test rather than a probable one.
+	require.False(t, legacyKeychainFires("/usr/bin/SECURITY", []string{"security", "dump-keychain"}),
+		"the Go rule matched the binary against an exact set")
+	require.False(t, evalCompiled(t, keychainDetection(), "/usr/bin/SECURITY", []string{"security", "dump-keychain"}),
+		"so the shipped detection must not fold case on Image either")
 
 	// The same trap on the other side: Sigma's |startswith folds case, so it would match a lowercased assignment key that
 	// strings.HasPrefix in the Go matcher rejects.
@@ -227,4 +285,22 @@ func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 	require.False(t, evalDetection(t, dyldDetection, "/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
 	require.NotEmpty(t, matchDyldArg("/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
 	require.True(t, evalDetection(t, dyldDetection, "/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
+}
+
+// TestShippedDetectionMatchesTheFrozenTokens ties the frozen oracle to the shipped file. The subcommand set moved out of Go and into
+// the detection block, so nothing would otherwise notice if the two drifted apart and the property started comparing the rule
+// against a set it no longer uses.
+func TestShippedDetectionMatchesTheFrozenTokens(t *testing.T) {
+	t.Parallel()
+
+	for path := range legacySecurityBinaryPaths {
+		for token := range legacyDumpKeychainTokens {
+			require.True(t, evalCompiled(t, keychainDetection(), path, []string{"security", token}),
+				"the shipped detection must still match %q + %q, which the frozen oracle expects", path, token)
+		}
+	}
+	require.False(t, evalCompiled(t, keychainDetection(), "/usr/bin/security", []string{"security", "list-keychains"}),
+		"and must not have quietly widened by subcommand")
+	require.False(t, evalCompiled(t, keychainDetection(), "/usr/local/bin/security", []string{"security", "dump-keychain"}),
+		"nor by binary path")
 }
