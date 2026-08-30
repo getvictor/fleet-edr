@@ -17,7 +17,7 @@ import (
 
 // spec:server-detection-rules-engine/a-rule-declares-the-event-types-it-consumes/a-rule-finds-nothing-in-a-batch-of-types-it-does-not-declare
 //
-// TestAll_ARuleThatFindsSomethingDeclaredTheBatchsEventType is the corpus equivalence gate for engine dispatch (issue #762).
+// TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType is the corpus equivalence gate for engine dispatch (issue #762).
 //
 // The engine invokes a rule only when the batch carries an event type it declares. Dispatch is therefore behaviour-preserving
 // exactly when no rule can find something in a batch carrying none of its declared types, which is what this asserts over the real
@@ -64,7 +64,7 @@ func wouldDispatch(declared, present []string) bool {
 	return false
 }
 
-func TestAll_ARuleThatFindsSomethingDeclaredTheBatchsEventType(t *testing.T) {
+func TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType(t *testing.T) {
 	t.Parallel()
 
 	fixtures, err := filepath.Glob(filepath.Join("fixtures", "*", "*.json"))

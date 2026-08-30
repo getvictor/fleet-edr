@@ -344,13 +344,13 @@ func execEvent(t string) api.Event {
 
 // spec:server-detection-rules-engine/a-rule-is-invoked-only-for-batches-carrying-an-event-type-it-consumes/a-rule-is-not-invoked-for-a-batch-it-cannot-act-on
 //
-// TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchsEventTypes is the dispatch contract: a rule is invoked when the batch
+// TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchesEventTypes is the dispatch contract: a rule is invoked when the batch
 // carries at least one event type it declares, and is not invoked otherwise.
 //
 // This is what makes per-batch cost independent of catalog size. Measured against 2.55M real dev events, fork and exit are 28% of
 // telemetry and no rule consumes either, while the four rules reading open, btm_launch_item_add, sensor_provider_transition and
 // sensor_recovery_failed cover 52 events in that entire corpus yet were invoked on every batch.
-func TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchsEventTypes(t *testing.T) {
+func TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchesEventTypes(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {

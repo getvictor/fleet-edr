@@ -281,7 +281,11 @@ func TestAll_DeclareTheEventTypesTheyConsume(t *testing.T) {
 }
 
 // triggeringPayloads are deliberately incriminating payloads, each carrying a superset of the fields the catalog's rules decode,
-// with values those rules WANT to see: a lookup, a remote address, and a paired image path and argv.
+// with values those rules WANT to see: a lookup, a remote address, a launch item, and a paired image path and argv.
+//
+// The field NAMES are the ones the rules' decoders actually read, taken from their payload structs and schema/events.json. An
+// earlier version used `query` and `remote_addr`, which are not schema fields at all, so those decoders saw zero values and
+// short-circuited: the payload was inert for the DNS and network rules while claiming to be incriminating.
 //
 // Path and argv vary TOGETHER, because a rule that turns on argument position also gates on the image that ran it: pinning the path
 // to one rule's target makes every other rule's image test fail, and the payload stops being incriminating for anything but that
@@ -301,8 +305,10 @@ var triggeringPayloads = func() []string {
 	out := make([]string, 0, len(variants))
 	for _, v := range variants {
 		out = append(out, `{"pid":100,"ppid":1,"path":"`+v.path+`","args":`+v.argv+
-			`,"flags":1537,"query":"evil.example.com","remote_addr":"93.184.216.34","remote_port":443,`+
-			`"provider":"content_filter","state":"stopped"}`)
+			`,"flags":1537,"query_name":"evil.example.com","response_addresses":["93.184.216.34"],`+
+			`"direction":"outbound","remote_address":"93.184.216.34","remote_port":443,`+
+			`"provider":"content_filter","state":"stopped","item_type":"agent",`+
+			`"item_path":"/Users/x/Library/LaunchAgents/com.evil.plist","executable_path":"/tmp/evil"}`)
 	}
 	return out
 }()
@@ -328,9 +334,15 @@ func (resolvingGraph) GetProcessByPID(_ context.Context, _ string, pid int, _ in
 // and no alert to notice.
 //
 // What it does and does not prove, measured rather than assumed. Deliberately mis-declaring each rule's event type, this catches 4
-// of 6: sudoers_tamper, credential_keychain_dump, persistence_launchagent and dyld_insert. It misses osascript_network_exec and
-// privilege_launchd_plist_write, both of which need a correlated ancestry or a BTM payload shape that a generic stub cannot supply
-// without becoming a per-rule fixture. So treat this as a tripwire for the common shape, not a proof.
+// of 7: sudoers_tamper, credential_keychain_dump, persistence_launchagent and dyld_insert. It misses three, each for a reason no
+// single synthetic batch can fix:
+//
+//   - dns_c2_beacon needs a periodic BEACON across many events, not one lookup.
+//   - osascript_network_exec needs a correlated ancestry in the process graph.
+//   - privilege_launchd_plist_write needs a code-signing verdict on the launch item.
+//
+// Reproducing any of those means writing that rule's fixture, at which point the corpus gate in dispatch_equivalence_test.go covers
+// it properly. So treat this as a tripwire for the common shape, not a proof.
 //
 // The complete evidence for the current catalog is not this test: it is that every rule's Evaluate gates on its declared type
 // explicitly (an `evt.EventType != ...` guard on the first line), which was read rule by rule when dispatch was introduced.
