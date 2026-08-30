@@ -142,6 +142,10 @@ func (r *SudoersTamper) evalEvent(
 		return nil, nil
 	}
 
+	// A second read of the same pid, deliberately: the adapter above needs only a path and takes the plain lookup, while the
+	// finding needs the row itself and the grace-window semantics. Inside that window the plain lookup returns no process, the
+	// detection sees an absent Image, the sudo suppression cannot match and the rule fires, and this call then raises the
+	// retryable error that defers the batch. Reaching here at all means the rule matched, which for this rule is rare.
 	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 	if err != nil {
 		return nil, err
@@ -152,10 +156,6 @@ func (r *SudoersTamper) evalEvent(
 		return nil, nil
 	}
 
-	// Narrow the intent-mask suppression to /usr/bin/sudo specifically. sudo is the one writer we know opens with O_WRONLY-only as part of
-	// its LOCK_EX flock pattern (never actually writes); any other writer reaching write-mode against /etc/sudoers stays on the unhappy
-	// path even when no intent bit is set, so a custom binary doing open(O_WRONLY) → write() at offset 0 still alerts. (The known-gap note
-	// up at the top of the file describes the residual case where the writer IS sudo but is doing something other than flocking.)
 	if r.excluded(proc.Path, evt.HostID) {
 		return nil, nil
 	}

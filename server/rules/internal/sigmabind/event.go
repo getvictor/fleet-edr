@@ -64,8 +64,8 @@ type openPayload struct {
 // writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything
 // non-zero there means the descriptor can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND) do not affect the access mode.
 //
-// This mirrors the same test in the sudoers_tamper rule deliberately, and the duplication is time-boxed: #772 adds an explicit
-// write-intent field to the event, at which point both derivations give way to reading it.
+// This is now the single derivation: #772 moved the sudoers_tamper rule onto the WriteIntent field below, so the rule no longer
+// carries its own copy of the mask.
 const writeAccessMask = 0x3
 
 // mutatingOpenMask is O_TRUNC | O_APPEND | O_CREAT: the bits a writer that intends to change a file's CONTENT sets, as opposed to
@@ -113,7 +113,7 @@ func NewOpenEventLazy(ev api.Event, resolveImage func() (string, error)) (*Event
 // otherwise have lost and keeps the common case free of a database read.
 //
 // The resolver runs at most once per event. Its error is recorded rather than returned, because Field cannot report one, so a
-// caller that needs to distinguish "no parent" from "could not look one up" checks ParentErr after evaluating.
+// caller that needs to distinguish "no parent" from "could not look one up" checks ResolveErr after evaluating.
 func NewExecEventLazy(ev api.Event, resolveParent func() (string, error)) (*Event, error) {
 	e, err := NewEvent(ev)
 	if err != nil {
@@ -169,10 +169,14 @@ func NewEvent(ev api.Event) (*Event, error) {
 		// Our open events include read-only opens, which are routine: the sudoers_tamper rule drops them for exactly this reason,
 		// noting that cron, sudo itself and various PAM modules read /etc/sudoers constantly. Exposing TargetFilename for those
 		// would import that noise into every file_event rule we adopt, as false positives rather than as a visible error.
-		if p.Flags&writeAccessMask != 0 {
+		writable := p.Flags&writeAccessMask != 0
+		if writable {
 			e.targetFilename = presentString(p.Path)
 		}
-		e.writeIntent = presentBool(p.Flags&writeAccessMask != 0)
+		// Bound once above so the relationship is visible rather than coincidental: TargetFilename is present exactly when
+		// WriteIntent is true. A rule for another engine still states the write requirement itself, because that engine may
+		// supply TargetFilename unconditionally.
+		e.writeIntent = presentBool(writable)
 		e.mutatingOpen = presentBool(p.Flags&mutatingOpenMask != 0)
 	}
 	return e, nil

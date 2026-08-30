@@ -602,7 +602,9 @@ func TestSudoersSuppressionIsScopedToSudo(t *testing.T) {
 		{"sudo taking its lock is suppressed", "/usr/bin/sudo", false},
 		{"tee performing the identical open fires", "/usr/bin/tee", true},
 		{"a copy of sudo elsewhere on disk fires", "/tmp/sudo", true},
-		{"an unresolved writer fires", "", true},
+		// The detection matches, which is the honest answer for a filter that cannot confirm the writer is sudo. The rule then
+		// produces no finding anyway, because evalEvent needs the process row to attach one to.
+		{"an unresolved writer is not suppressed", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
