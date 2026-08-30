@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/fleetdm/edr/internal/secretseal"
 	detapi "github.com/fleetdm/edr/server/detection/api"
@@ -37,7 +36,7 @@ func (t *Tester) SendTest(ctx context.Context, url string, sealed []byte) (int, 
 	}
 	defer clear(secret)
 
-	id := uuid.NewString()
+	id := uuid.New().String()
 	env := Build(BuildParams{
 		EventID:    id,
 		EventType:  EventTest,

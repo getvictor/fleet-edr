@@ -21,6 +21,8 @@ package export
 
 import (
 	"bytes"
+	// #nosec G505 -- not a security primitive here: RFC 9562 section 5.5 mandates SHA-1 as the v5 digest. See RuleID.
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"os"
@@ -28,8 +30,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"uuid"
 
-	"github.com/google/uuid"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/fleetdm/edr/server/rules/api"
@@ -43,6 +45,16 @@ import (
 // The value is arbitrary and PERMANENT. It deliberately encodes nothing about the product or repository, because a rename would
 // then silently change every rule's Sigma id, and an id that moves is worse than an ugly one: downstream tools key on it.
 const idNamespace = "a53805f4-5268-4387-9a08-9dc59215332f"
+
+// RFC 9562 sections 4.1 and 4.2: after hashing, the version nibble and the variant bits are overwritten in place so the digest
+// becomes a well-formed v5 UUID rather than bare SHA-1 bytes. Named rather than inline because a bare 0x50 in a bit operation is
+// exactly the unexplained constant the magic-number linter exists to catch.
+const (
+	v5VersionMask byte = 0x0f
+	v5VersionBits byte = 0x50
+	v5VariantMask byte = 0x3f
+	v5VariantBits byte = 0x80
+)
 
 // author is the attribution written into every exported rule. Imported community rules carry their own author, which the
 // Detection Rule License obliges us to preserve wherever their matches are shown.
@@ -213,9 +225,22 @@ func detectionFieldNames(detection *yaml.Node) ([]string, error) {
 }
 
 // RuleID derives the Sigma `id` for a rule id. Exported so tests and tooling can assert stability without duplicating the
-// derivation, since the whole point of a uuid5 is that everyone computes the same answer.
+// derivation, since the whole point of a uuid5 is that everyone computes the same answer. The derivation is written out here
+// rather than called from a library because the stdlib uuid package deliberately covers only v4 and v7; v5 is ten lines of
+// RFC 9562 section 5.5 and the ids it produces are frozen in the published pack, so they cannot move.
 func RuleID(ruleID string) string {
-	return uuid.NewSHA1(uuid.MustParse(idNamespace), []byte(ruleID)).String()
+	ns := uuid.MustParse(idNamespace)
+	data := make([]byte, 0, len(ns)+len(ruleID))
+	data = append(data, ns[:]...)
+	data = append(data, ruleID...)
+	// #nosec G401 -- SHA-1 is not a security primitive here: it is the digest RFC 9562 section 5.5 mandates for v5, so the rule
+	// ids already published in the Sigma pack are reproducible only with it. A stronger hash would silently renumber every rule.
+	sum := sha1.Sum(data)
+	var derived uuid.UUID
+	copy(derived[:], sum[:])
+	derived[6] = (derived[6] & v5VersionMask) | v5VersionBits
+	derived[8] = (derived[8] & v5VariantMask) | v5VariantBits
+	return derived.String()
 }
 
 // Rule renders one registered detection as a rule file.

@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/fleetdm/edr/server/detection/api"
@@ -59,7 +59,7 @@ type webhookEnqueueSpec struct {
 // status transition collides on the (alert_id, destination_id, dedup_key) unique key and is a no-op rather than a second delivery.
 func (s *Store) enqueueWebhookDeliveries(ctx context.Context, tx *sqlx.Tx, destIDs []int64, spec webhookEnqueueSpec) error {
 	for _, destID := range destIDs {
-		pubID := uuid.NewString()
+		pubID := uuid.New().String()
 		payload, err := json.Marshal(webhook.Build(webhook.BuildParams{
 			EventID:        pubID,
 			EventType:      webhook.EventType(spec.eventType),

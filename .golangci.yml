@@ -108,6 +108,12 @@ linters:
           deny:
             - pkg: github.com/pkg/errors
               desc: "use stdlib errors.New / fmt.Errorf with the %w verb"
+            # Go 1.27 absorbed UUIDs into the standard library, so the third-party package buys nothing on the paths we use it
+            # on. uuid.New().String() replaces uuid.NewString(); Parse and MustParse keep their signatures. The stdlib package
+            # covers v4 and v7 only, so a name-based v5 has to be derived in place (server/rules/internal/export does this for
+            # Sigma rule ids) rather than reached for here.
+            - pkg: github.com/google/uuid
+              desc: "use the stdlib uuid package (Go 1.27+): uuid.New().String() replaces uuid.NewString()"
         # Agent packages must not depend on server packages. The two were
         # separate Go modules until the 2026-04 single-module refactor; the
         # enforcement now lives here instead of at the module boundary. If

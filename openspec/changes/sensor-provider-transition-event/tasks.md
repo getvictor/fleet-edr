@@ -17,7 +17,7 @@
 
 ## 4. Reuse
 
-- [x] `internal/eventid`: the v4 UUID minting that `agent/reconcile` already had, extracted rather than cloned when a second caller appeared. `schema/events.json` declares `event_id` as uuid-format and the server dedups on it, so one implementation is what keeps the two producers agreeing by construction. The format and uniqueness test moved with the function.
+- [x] Shared v4 UUID minting: the generation `agent/reconcile` already had, extracted rather than cloned when a second caller appeared. `schema/events.json` declares `event_id` as uuid-format and the server dedups on it, so one implementation is what keeps the two producers agreeing by construction. This was the `internal/eventid` package, whose format and uniqueness test moved with the function; PR #806 superseded it with Go 1.27's standard-library `uuid`, which each producer now calls directly, so the package and its test were removed.
 
 ## 5. Spec
 
