@@ -85,9 +85,6 @@ var algorithmParams = map[string]map[string]paramSpec{
 	"parent_lookup_path_match": {
 		"office_binaries": {kind: kindStringList},
 	},
-	"exec_subcommand_and_path_pattern_match": {
-		"launchctl_paths": {kind: kindStringList, readOnly: true},
-	},
 }
 
 // Params is one rule's parameter block, parsed from its pack file.

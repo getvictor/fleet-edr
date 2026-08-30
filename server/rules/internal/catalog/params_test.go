@@ -132,12 +132,12 @@ func TestLoadPack_SkipsTheSharedListsFile(t *testing.T) {
 
 	got, err := loadPack(fsWith(map[string]string{
 		"pack/" + SharedListsFile: "unix_shells:\n  - /bin/sh\n",
-		"pack/persistence_launchagent.yml": ruleFile("persistence_launchagent", "exec_subcommand_and_path_pattern_match",
-			"    launchctl_paths:\n      - /bin/launchctl\n"),
+		"pack/shell_from_office.yml": ruleFile("shell_from_office", "parent_lookup_path_match",
+			"    office_binaries:\n      - /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word\n"),
 	}))
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "only the rule file yields params")
-	assert.Contains(t, got, "persistence_launchagent")
+	assert.Contains(t, got, "shell_from_office")
 }
 
 // TestLoadPack_RejectsAFileWithNoRuleID keeps a malformed pack from loading half-populated.
@@ -193,7 +193,6 @@ func TestEmbeddedPackMatchesTheRulesThatReadIt(t *testing.T) {
 		"shebang_shells deliberately omits /usr/bin/sh; widening it silently would be a behaviour change")
 	assert.Equal(t, []string{"/tmp/", "/var/tmp/", "/private/tmp/", "/dev/shm/"}, suspiciousPrefixes())
 
-	assert.True(t, launchctlPaths()["/bin/launchctl"])
 	assert.True(t, officeBinaries()["/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"])
 	assert.True(t, osascriptPaths()["/usr/bin/osascript"])
 	assert.True(t, downloadBinaries()["/usr/bin/curl"])

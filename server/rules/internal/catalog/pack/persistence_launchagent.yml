@@ -19,22 +19,33 @@ tags:
 logsource:
   product: macos
   category: process_creation
+detection:
+  # The launchctl binaries whose invocation this rule is about. Matched with |re rather than a plain value or a list because a
+  # plain Sigma value folds case, while the Go rule this replaces compared against an exact set.
+  selection_binary:
+    Image|re: '^(/bin/launchctl|/usr/bin/launchctl)$'
+  # The subcommands that actually register a job. `launchctl list` or `print` naming a plist path is not persistence, which is why
+  # this matches the verb rather than the command line: Subcommand is the first non-flag token after argv[0], so the plist path
+  # cannot be mistaken for it and a later mention of `load` cannot stand in for one.
+  selection_subcommand:
+    Subcommand|re: '^(load|bootstrap)$'
+  # The target must be a LaunchAgent plist, and it must be an ARGUMENT rather than anywhere in the command line.
+  # CommandArguments holds the operands after the subcommand, and Sigma matches a list-valued field when any element does, which is
+  # exactly the question the rule asks. Case-insensitive here deliberately: the path is a filesystem path on a case-insensitive
+  # volume, and the Go regexp this replaces carried (?i) for the same reason.
+  selection_target:
+    CommandArguments|re: '(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$'
+  condition: selection_binary and selection_subcommand and selection_target
 falsepositives:
   - MDM- or installer-provisioned LaunchAgents (Munki, Kandji, JumpCloud) loaded at deploy time. Add a path-glob exclusion for their plist paths via the detection-config surface.
   - Developer tools that register helper agents (Docker Desktop, Backblaze, etc.) on first launch.
 x-engine:
   rule_id: persistence_launchagent
-  type: graph
-  portable: none
-  portability_note: The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being converted separately; until a rule's logic lives in its file, this stays the honest answer.
+  type: sigma
+  portable: mapped
+  portability_note: The rule's logic is the detection block in this file. It is valid Sigma, but it reads at least one field this engine computes from the argument vector rather than one from Sigma's own taxonomy, so another engine needs those fields to evaluate it. The computed fields exist because Sigma represents a command line as a single string, in which argument position is no longer recoverable.
   event_types:
     - exec
-  algorithm: exec_subcommand_and_path_pattern_match
-  params:
-    # The launchctl binaries whose invocation this rule watches. Read-only: this is the rule's identity, not a threshold.
-    launchctl_paths:
-      - /bin/launchctl
-      - /usr/bin/launchctl
   exclusions:
     - path_glob
   limitations:

@@ -1,10 +1,15 @@
 package catalog
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // detectionFile builds a minimal pack file carrying a detection block.
@@ -143,4 +148,60 @@ func TestAuthoredFor(t *testing.T) {
 func TestMustLoadDetections_LoadsTheEmbeddedPack(t *testing.T) {
 	t.Parallel()
 	assert.NotPanics(t, MustLoadDetections)
+}
+
+// spec:server-detection-rules-engine/an-alert-from-a-converted-rule-names-what-fired/a-finding-names-the-matched-element-rather-than-the-whole-field
+//
+// TestFieldReadback covers the helpers a converted rule uses to name what fired. The evaluator reports only THAT a list-valued
+// field matched, not which element did, so the rule re-finds it with the same predicate the detection used.
+func TestFieldReadback(t *testing.T) {
+	t.Parallel()
+
+	payload := `{"pid":1,"ppid":0,"path":"/bin/launchctl","args":["launchctl","load","-w","/Library/LaunchAgents/evil.plist"]}`
+	se, err := sigmabind.NewEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: []byte(payload)})
+	require.NoError(t, err)
+
+	assert.Equal(t, "load", firstField(se, "Subcommand"))
+	assert.Equal(t, "/Library/LaunchAgents/evil.plist", firstMatching(se, "CommandArguments", launchAgentPath.MatchString),
+		"the element that satisfied the detection, not the first operand")
+
+	assert.Empty(t, firstField(se, "EnvAssignments"), "an absent field reads as empty rather than panicking")
+	assert.Empty(t, firstMatching(se, "CommandArguments", func(string) bool { return false }), "no element matches")
+	assert.Empty(t, firstMatching(se, "NoSuchField", func(string) bool { return true }))
+}
+
+// spec:server-detection-rules-engine/an-alert-from-a-converted-rule-names-what-fired/an-attacker-supplied-value-is-withheld-from-the-description
+//
+// TestRedactedDyldAssignment pins that the injected library path stays out of the alert. The variable identifies the technique;
+// the value is attacker-chosen content that would be rendered into an operator-facing string.
+func TestRedactedDyldAssignment(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"insert libraries", []string{"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib"}, "DYLD_INSERT_LIBRARIES=<redacted>"},
+		{"library path", []string{"DYLD_LIBRARY_PATH=/tmp/evil"}, "DYLD_LIBRARY_PATH=<redacted>"},
+		{"no assignment", []string{"/usr/bin/true"}, ""},
+		{"an unrelated assignment", []string{"PATH=/bin"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 0, "path": "/usr/bin/true", "args": tc.argv})
+			require.NoError(t, err)
+			se, err := sigmabind.NewEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload})
+			require.NoError(t, err)
+
+			got := redactedDyldAssignment(se)
+			assert.Equal(t, tc.want, got)
+			for _, a := range tc.argv {
+				if _, value, found := strings.Cut(a, "="); found && value != "" {
+					assert.NotContains(t, got, value, "the assigned value must never reach the description")
+				}
+			}
+		})
+	}
 }

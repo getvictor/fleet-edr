@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
+	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // DyldInsert fires when a process is launched with DYLD_INSERT_LIBRARIES or
@@ -23,10 +26,6 @@ import (
 type DyldInsert struct{}
 
 func (r *DyldInsert) ID() string { return "dyld_insert" }
-
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches an environment-variable
-// assignment in the leading argv slot, covering both the shell VAR=value form and env(1).
-func (r *DyldInsert) AlgorithmName() string { return "exec_leading_argv_env_match" }
 
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
 func (r *DyldInsert) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
@@ -72,6 +71,9 @@ var dyldPrefixes = []string{
 	"DYLD_LIBRARY_PATH=",
 }
 
+// dyldDetection is the rule's logic, compiled from the detection block in its pack file.
+var dyldDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("dyld_insert") })
+
 type dyldPayload struct {
 	PID  int      `json:"pid"`
 	Path string   `json:"path"`
@@ -89,10 +91,16 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			continue
 		}
-		matched := matchDyldArg(p.Path, p.Args)
-		if matched == "" {
+		se, err := sigmabind.NewEvent(evt)
+		if err != nil {
 			continue
 		}
+		if !dyldDetection().Matches(se) {
+			continue
+		}
+		// The variable the detection matched on, named in the alert WITHOUT its value: the injected dylib path is attacker-chosen
+		// content and the finding is read by people, so the rule has always redacted it.
+		matched := redactedDyldAssignment(se)
 
 		proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 		if fatal := miss.absorb(err); fatal != nil {
@@ -115,32 +123,16 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 	return findings, miss.err
 }
 
-// matchDyldArg returns the matching DYLD env prefix when the exec is launching with one
-// of the dangerous env vars in a leading assignment position, or "" otherwise. We strip
-// the value side so logs / alerts don't accidentally echo a potentially-sensitive dylib
-// path; the full argv is still in the raw event payload for responders who need it.
-//
-// Why leading-only: `echo DYLD_INSERT_LIBRARIES=/tmp/x` or `curl --data
-// DYLD_INSERT_LIBRARIES=...` would false-positive if we scanned every argv slot. The
-// dangerous shape is the shell-style "VAR=value /path/to/binary" prefix (argv[0] onwards)
-// or the `env VAR=value binary` invocation. We capture both without firing on arbitrary
-// data that happens to contain the substring.
-func matchDyldArg(path string, args []string) string {
-	// The canonical env invocations are "env", "/usr/bin/env", and shim paths ending in "/env". For anything else, only argv[0] is a
-	// legitimate VAR=VALUE slot (the shell's `VAR=value cmd` form).
-	isEnv := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
-
-	for i, a := range args {
-		// Stop once we've walked past the leading env-assignment window. For `env`-style invocations that's every leading
-		// KEY=VALUE until the first non-assignment arg; for everything else it's argv[0] only.
-		if !isEnv && i > 0 {
-			break
-		}
-		if isEnv && i > 0 && !strings.Contains(a, "=") {
-			break
-		}
+// redactedDyldAssignment names the DYLD variable the detection matched, with its value withheld. The finding is operator-facing and
+// the value is a path the attacker chose, so only the key is reported.
+func redactedDyldAssignment(se *sigmabind.Event) string {
+	values, ok := se.Field("EnvAssignments")
+	if !ok {
+		return ""
+	}
+	for _, assignment := range values {
 		for _, prefix := range dyldPrefixes {
-			if strings.HasPrefix(a, prefix) {
+			if strings.HasPrefix(assignment, prefix) {
 				return prefix + "<redacted>"
 			}
 		}

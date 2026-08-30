@@ -142,3 +142,32 @@ func AuthoredFor(ruleID string) export.Authored {
 
 // MustLoadDetections forces the detection blocks to compile, so a malformed one fails when the catalog is built.
 func MustLoadDetections() { detections() }
+
+// firstField returns the first value of a computed field, or "" when the event does not carry it.
+//
+// A converted rule reads back what its detection matched on so the alert can name it. Going through the same field the detection
+// used, rather than re-deriving the value in Go, is what keeps the alert text and the match from drifting apart.
+func firstField(se *sigmabind.Event, name string) string {
+	values, ok := se.Field(name)
+	if !ok || len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+// firstMatching returns the first value of a list-valued field satisfying pred, or "" when none does.
+//
+// Sigma matches a list-valued field when ANY element does, but a finding has to name WHICH one, and the evaluator does not report
+// that. Re-finding it with the same predicate the detection used keeps the two in step.
+func firstMatching(se *sigmabind.Event, name string, pred func(string) bool) string {
+	values, ok := se.Field(name)
+	if !ok {
+		return ""
+	}
+	for _, v := range values {
+		if pred(v) {
+			return v
+		}
+	}
+	return ""
+}

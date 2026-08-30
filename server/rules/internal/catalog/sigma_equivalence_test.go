@@ -8,8 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
-	"go.yaml.in/yaml/v3"
-
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
 	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
@@ -110,43 +108,9 @@ func evalCompiled(t require.TestingT, rule *sigma.Rule, path string, argv []stri
 	return rule.Matches(ev)
 }
 
-// evalDetection compiles a real Sigma detection block and evaluates it against an exec event, so these properties test the rule PR B
-// will actually ship rather than a Go stand-in for it.
-//
-// This matters more than it sounds. The first version of this test substituted a Go map lookup for the detection, and a map lookup
-// is case-sensitive while an ordinary Sigma value is not. `security DUMP-KEYCHAIN` would have been reported equivalent even though
-// the real rule fires on it and the Go matcher does not. Compiling the detection is the only way the property can see that, which is
-// why the generator below also draws case variants.
-func evalDetection(t require.TestingT, detection, path string, argv []string) bool {
-	var doc map[string]any
-	require.NoError(t, yaml.Unmarshal([]byte(detection), &doc))
-	rule, err := sigma.Compile(doc)
-	require.NoError(t, err)
-
-	payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 0, "path": path, "args": argv})
-	require.NoError(t, err)
-	ev, err := sigmabind.NewEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload})
-	require.NoError(t, err)
-	require.NoError(t, sigmabind.Validate(rule, "exec"), "every field the detection reads must be one we supply")
-	return rule.Matches(ev)
-}
-
-// The detections below are the ones PR B will author into the pack files. Each uses |re where the Go matcher is case-SENSITIVE:
-// a plain Sigma value folds case, and `security DUMP-KEYCHAIN` or `DYLD_INSERT_LIBRARIES=` in another case would then fire where
-// the Go rule does not. |re is applied verbatim by this evaluator, which is what makes it the faithful choice here.
-const (
-	launchAgentDetection = `
-selection:
-  Subcommand|re: '^(load|bootstrap)$'
-  CommandArguments|re: '(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$'
-condition: selection
-`
-	dyldDetection = `
-selection:
-  EnvAssignments|re: '^DYLD_(INSERT_LIBRARIES|LIBRARY_PATH)='
-condition: selection
-`
-)
+// Every property below evaluates the detection block the pack actually SHIPS, via evalCompiled. There is deliberately no helper
+// left that compiles a detection from a string in this file: while one existed, a property could pass against a copy of a rule
+// rather than the rule, which is the shape that let a case-folding divergence hide in #790.
 
 // legacyFindDumpKeychainArg is credential_keychain_dump's Go matcher as it stood before the conversion, kept verbatim as the
 // oracle for the property below.
@@ -187,6 +151,61 @@ func legacyKeychainFires(path string, argv []string) bool {
 	return ok
 }
 
+// legacyExtractLaunchctlSubcommand and legacyMatchDyldArg are the launch-agent and DYLD matchers as they stood before conversion,
+// frozen here for the same reason as the keychain one: the gate #761 asks for is only checkable while both implementations exist.
+//
+// legacyLaunchctlPaths is the binary set the launch-agent rule required. Freezing it matters as much as the argv half. In #793 the
+// property compared only the argv half of the keychain rule and left the binary check outside the gate, so a widening of
+// selection_binary would have passed unnoticed; review caught it. These properties compare the complete conjunction from the start.
+var legacyLaunchctlPaths = map[string]bool{"/bin/launchctl": true, "/usr/bin/launchctl": true}
+
+func legacyExtractLaunchctlSubcommand(args []string) (subcommand, plistPath string) {
+	for i := 1; i < len(args); i++ {
+		if args[i] == "" || strings.HasPrefix(args[i], "-") {
+			continue
+		}
+		if subcommand == "" {
+			subcommand = args[i]
+			continue
+		}
+		if launchAgentPath.MatchString(args[i]) {
+			return subcommand, args[i]
+		}
+	}
+	return subcommand, ""
+}
+
+// legacyLaunchAgentFires is the COMPLETE pre-conversion predicate: the exact binary, a registering subcommand, and a LaunchAgent
+// plist among the later arguments.
+func legacyLaunchAgentFires(path string, argv []string) bool {
+	if !legacyLaunchctlPaths[path] {
+		return false
+	}
+	sub, plist := legacyExtractLaunchctlSubcommand(argv)
+	if sub != "load" && sub != "bootstrap" {
+		return false
+	}
+	return plist != "" && launchAgentPath.MatchString(plist)
+}
+
+func legacyMatchDyldArg(path string, args []string) string {
+	isEnv := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
+	for i, a := range args {
+		if !isEnv && i > 0 {
+			break
+		}
+		if isEnv && i > 0 && !strings.Contains(a, "=") {
+			break
+		}
+		for _, prefix := range dyldPrefixes {
+			if strings.HasPrefix(a, prefix) {
+				return prefix + "<redacted>"
+			}
+		}
+	}
+	return ""
+}
+
 // TestEquivalence_KeychainDump: the Go matcher and the shipped detection agree on every generated invocation.
 func TestEquivalence_KeychainDump(t *testing.T) {
 	t.Parallel()
@@ -216,18 +235,21 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 
 	rapid.Check(t, func(t *rapid.T) {
 		argv := drawArgv(t)
-		sub, plist := extractLaunchctlSubcommand(argv)
-		goFires := (sub == "load" || sub == "bootstrap") && plist != "" && launchAgentPath.MatchString(plist)
-		sigmaFires := evalDetection(t, launchAgentDetection, "/bin/launchctl", argv)
+		path := rapid.SampledFrom([]string{
+			"/bin/launchctl", "/usr/bin/launchctl", "/usr/local/bin/launchctl", "/bin/LAUNCHCTL", "/tmp/launchctl", "/bin/sh",
+		}).Draw(t, "path")
+
+		goFires := legacyLaunchAgentFires(path, argv)
+		sigmaFires := evalCompiled(t, launchAgentDetection(), path, argv)
 
 		if goFires != sigmaFires {
 			require.True(t, skipsAnEmptyBeforeItsSubcommand(argv),
-				"undocumented divergence: argv=%q go=%v sigma=%v", argv, goFires, sigmaFires)
+				"undocumented divergence: path=%q argv=%q go=%v sigma=%v", path, argv, goFires, sigmaFires)
 			require.True(t, goFires && !sigmaFires,
-				"the correction must only ever remove findings, never add them: argv=%q", argv)
+				"the correction must only ever remove findings, never add them: path=%q argv=%q", path, argv)
 			return
 		}
-		require.Equal(t, goFires, sigmaFires, "argv=%q", argv)
+		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q", path, argv)
 	})
 }
 
@@ -238,8 +260,8 @@ func TestEquivalence_DyldInsert(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		path := rapid.SampledFrom([]string{"/usr/bin/env", "/opt/homebrew/bin/env", "/bin/sh", "/usr/bin/true"}).Draw(t, "path")
 		argv := drawArgv(t)
-		goFires := matchDyldArg(path, argv) != ""
-		sigmaFires := evalDetection(t, dyldDetection, path, argv)
+		goFires := legacyMatchDyldArg(path, argv) != ""
+		sigmaFires := evalCompiled(t, dyldDetection(), path, argv)
 		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q", path, argv)
 	})
 }
@@ -251,11 +273,11 @@ func TestLaunchAgentEmptySubcommandIsTheOneDeliberateChange(t *testing.T) {
 
 	argv := []string{"launchctl", "", "load", "/Library/LaunchAgents/evil.plist"}
 
-	sub, plist := extractLaunchctlSubcommand(argv)
-	require.Equal(t, "load", sub, "the Go matcher skips the empty token and reaches load")
+	sub, plist := legacyExtractLaunchctlSubcommand(argv)
+	require.Equal(t, "load", sub, "the Go matcher skipped the empty token and reached load")
 	require.NotEmpty(t, plist)
 
-	require.False(t, evalDetection(t, launchAgentDetection, "/bin/launchctl", argv),
+	require.False(t, evalCompiled(t, launchAgentDetection(), "/bin/launchctl", argv),
 		"the computed field treats the empty token as the verb, which is what launchctl would do, so the rule declines")
 }
 
@@ -281,10 +303,16 @@ func TestDetectionsAreCaseSensitiveWhereGoIs(t *testing.T) {
 
 	// The same trap on the other side: Sigma's |startswith folds case, so it would match a lowercased assignment key that
 	// strings.HasPrefix in the Go matcher rejects.
-	require.Empty(t, matchDyldArg("/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
-	require.False(t, evalDetection(t, dyldDetection, "/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
-	require.NotEmpty(t, matchDyldArg("/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
-	require.True(t, evalDetection(t, dyldDetection, "/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
+	require.Empty(t, legacyMatchDyldArg("/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
+	require.False(t, evalCompiled(t, dyldDetection(), "/usr/bin/true", []string{"dyld_insert_libraries=/tmp/x"}))
+	require.NotEmpty(t, legacyMatchDyldArg("/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
+	require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/true", []string{"DYLD_INSERT_LIBRARIES=/tmp/x"}))
+
+	// The binary half of the launch-agent rule, the same trap #793's review found in the keychain one.
+	require.False(t, legacyLaunchAgentFires("/bin/LAUNCHCTL", []string{"launchctl", "load", "/Library/LaunchAgents/x.plist"}))
+	require.False(t, evalCompiled(t, launchAgentDetection(), "/bin/LAUNCHCTL",
+		[]string{"launchctl", "load", "/Library/LaunchAgents/x.plist"}),
+		"the shipped detection must not fold case on Image either")
 }
 
 // TestShippedDetectionMatchesTheFrozenTokens ties the frozen oracle to the shipped file. The subcommand set moved out of Go and into
