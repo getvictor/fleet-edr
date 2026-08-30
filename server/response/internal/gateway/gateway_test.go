@@ -354,9 +354,22 @@ func TestGateway(t *testing.T) {
 
 		second, err := dial(ctx, "tok-a").Connect(connectCtx("tok-a"))
 		require.NoError(t, err)
-		// The first stream is torn down by the eviction; its Recv returns an error.
-		_, err = first.Recv()
-		require.Error(t, err)
+		// The first stream is torn down by the eviction, so its Recv ends in an error. Heartbeats tick every livenessInterval
+		// (20ms here) and can reach this stream before the teardown does, so drain them rather than asserting on whatever frame
+		// happens to arrive first: on an unloaded machine the eviction wins and the test passed, while a contended CI runner
+		// delivers a heartbeat and it failed (issue #785). Asserting each drained frame IS a heartbeat keeps the test honest
+		// about what may legitimately precede the eviction. Bounded, so a stream that never closes fails here rather than
+		// hanging until the context deadline.
+		var evictErr error
+		for range 100 {
+			frame, recvErr := first.Recv()
+			if recvErr != nil {
+				evictErr = recvErr
+				break
+			}
+			require.NotNil(t, frame.GetHeartbeat(), "only a heartbeat may reach an evicted stream before its teardown")
+		}
+		require.Error(t, evictErr, "the evicted stream must be torn down")
 		// The registry still holds exactly one connection for the host (the second).
 		require.Eventually(t, func() bool { return g.reg.len() == 1 }, 2*time.Second, 10*time.Millisecond)
 		// The second connection is live: a command queued for the host is delivered on it.
