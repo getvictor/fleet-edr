@@ -13,7 +13,7 @@ import (
 //
 // Field returns every value the event carries for name. Most fields are single-valued, but some are genuinely lists (an exec
 // event's argv), and Sigma matches a list-valued field if ANY element matches. ok is false when the event has no such field at
-// all, which is distinct from a field present but empty: `Image: ”` matches the latter and not the former.
+// all, which is distinct from a field present but empty: `Image: ""` matches the latter and not the former.
 type Event interface {
 	Field(name string) (values []string, ok bool)
 }
@@ -56,7 +56,7 @@ func (f fieldTest) match(ev Event) bool {
 	values, ok := ev.Field(f.field)
 	if f.absent {
 		// A field present but holding no values is as absent as one the event never carried; both mean "nothing to match here".
-		// Distinct from `Field: ''`, which requires the field to be present AND empty, and is a separate rule in the corpus.
+		// Distinct from `Field: ""`, which requires the field to be present AND empty, and is a separate rule in the corpus.
 		return !ok || len(values) == 0
 	}
 	if !ok {
