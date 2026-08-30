@@ -731,11 +731,21 @@ func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
 	// The table is built synchronously so "did the walk find anything" is answered before any subtest runs. Accumulating it
 	// inside parallel subtests would read zero, because a parallel subtest returns before its body executes.
 	var cases []boolCase
+	// Mirrors scalarList: a field's value is a scalar, or a LIST of values that are OR alternatives. Asserting on the slice
+	// itself would reject a legitimate `WriteIntent: [true, false]`, so each element becomes its own case.
 	collect := func(file, where string, fields map[string]any) {
 		for field, value := range fields {
-			if booleanFields[strings.SplitN(field, "|", 2)[0]] {
-				cases = append(cases, boolCase{name: fmt.Sprintf("%s/%s.%s", file, where, field), value: value})
+			if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
+				continue
 			}
+			base := fmt.Sprintf("%s/%s.%s", file, where, field)
+			if values, ok := value.([]any); ok {
+				for i, element := range values {
+					cases = append(cases, boolCase{name: fmt.Sprintf("%s[%d]", base, i), value: element})
+				}
+				continue
+			}
+			cases = append(cases, boolCase{name: base, value: value})
 		}
 	}
 	for _, entry := range entries {
