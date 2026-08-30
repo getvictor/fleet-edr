@@ -49,6 +49,16 @@ func equalFoldRune(a, b rune) bool {
 	if a == b {
 		return true
 	}
+	// ASCII against ASCII is the overwhelming majority of comparisons and needs none of the machinery below: two ASCII letters fold
+	// together exactly when they differ only in bit 5. Worth special-casing because SimpleFold does a table lookup per call, and
+	// this runs once per rune of every segment comparison.
+	//
+	// Only when BOTH sides are ASCII: `\u017f` folds with `s` and is not ASCII, so a mixed pair has to fall through.
+	if a < utf8.RuneSelf && b < utf8.RuneSelf {
+		const asciiCaseBit = 'a' - 'A'
+		lowerA, lowerB := a|asciiCaseBit, b|asciiCaseBit
+		return lowerA == lowerB && lowerA >= 'a' && lowerA <= 'z'
+	}
 	// SimpleFold walks the cycle of runes that fold together, returning to the start; a cycle is at most a few entries long.
 	for r := unicode.SimpleFold(a); r != a; r = unicode.SimpleFold(r) {
 		if r == b {

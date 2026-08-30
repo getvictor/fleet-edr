@@ -6,7 +6,9 @@
 
 The system SHALL compile a rule's wildcard pattern when the rule loads, and SHALL match it without re-scanning any part of the pattern against the value more than once per candidate position.
 
-The cost of testing a field SHALL NOT be materially increased by the content of the event value. A value is attacker-supplied and a pattern is not, so a matcher whose cost depends on the value lets a host choose how much work the server does per rule, per field, for every event it sends.
+For a pattern fixed at load, the system SHALL match it in a single left-to-right pass over the value, never reconsidering a candidate position it has already rejected. A value is attacker-supplied and a pattern is not, so a matcher that re-scans lets a host choose how much work the server does per rule, per field, for every event it sends.
+
+This bounds the re-scanning, not the constant: what a value costs still varies with its content, and a segment that cannot be searched bytewise is slower than one that can. The guarantee is that the cost does not compound.
 
 Matching SHALL be unchanged by compilation. A pattern SHALL match exactly the values it matched before, because an optimisation that alters what a detection matches changes what fires, silently and without an error to notice.
 

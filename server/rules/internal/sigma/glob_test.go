@@ -3,6 +3,7 @@ package sigma
 import (
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +13,11 @@ import (
 // globAlphabet is deliberately tiny and adversarial: a couple of letters in both cases so folding is exercised, the two wildcard
 // metacharacters, a backslash so escapes are generated, a slash because corpus patterns are paths, and one multi-byte rune so the
 // rune-stepping in matchEndingAt is not tested only against ASCII.
-var globAlphabet = []string{"a", "A", "b", "B", "/", "*", "?", "\\", "é"}
+//
+// It carries `\u017f` deliberately. That rune is two bytes and case-folds with the one-byte `s`, so it is the shape that catches a
+// matcher measuring a segment's minimum width from the pattern as written, or comparing a fixed byte count of the value against a
+// literal. Both were real bugs here, and an alphabet without a fold-width-crossing rune could not express either.
+var globAlphabet = []string{"a", "A", "b", "B", "/", "*", "?", "\\", "é", "s", "S", "\u017f", "@", "`"}
 
 func drawGlobString(t *rapid.T, label string, maxLen int) string {
 	n := rapid.IntRange(0, maxLen).Draw(t, label+"_len")
@@ -51,7 +56,14 @@ func drawValueFor(t *rapid.T, pattern string) string {
 	}
 	v := b.String()
 
-	switch rapid.IntRange(0, 4).Draw(t, "perturb") {
+	return perturb(t, v)
+}
+
+// perturb nudges a value that matches its pattern by construction into the neighbourhood where the two implementations could
+// disagree. Each case probes a different part of the matcher: case handling, the suffix anchor, and the widths the anchors step
+// over.
+func perturb(t *rapid.T, v string) string {
+	switch rapid.IntRange(0, 5).Draw(t, "perturb") {
 	case 0:
 		return v
 	case 1:
@@ -60,18 +72,39 @@ func drawValueFor(t *rapid.T, pattern string) string {
 		return strings.ToLower(v)
 	case 3:
 		return v + rapid.SampledFrom(globFillAlphabet).Draw(t, "suffix_ch")
+	case 4:
+		return flipOneRune(t, v)
 	default:
-		if runes := []rune(v); len(runes) > 0 {
-			drop := rapid.IntRange(0, len(runes)-1).Draw(t, "drop")
-			return string(append(append([]rune{}, runes[:drop]...), runes[drop+1:]...))
+		runes := []rune(v)
+		if len(runes) == 0 {
+			return v
 		}
+		drop := rapid.IntRange(0, len(runes)-1).Draw(t, "drop")
+		return string(append(append([]rune{}, runes[:drop]...), runes[drop+1:]...))
+	}
+}
+
+// flipOneRune changes the case of a single rune, leaving the rest alone.
+//
+// Whole-string ToUpper and ToLower cannot produce a value whose exact-case occurrence of a segment sits LATER than a folded one,
+// which is exactly the shape that caught a search taking the leftmost exact hit instead of the leftmost folded hit.
+func flipOneRune(t *rapid.T, v string) string {
+	runes := []rune(v)
+	if len(runes) == 0 {
 		return v
 	}
+	at := rapid.IntRange(0, len(runes)-1).Draw(t, "flip")
+	flipped := unicode.ToUpper(runes[at])
+	if flipped == runes[at] {
+		flipped = unicode.ToLower(runes[at])
+	}
+	runes[at] = flipped
+	return string(runes)
 }
 
 // globFillAlphabet is what a `*` or `?` is filled with. It excludes the metacharacters so a fill never changes the pattern's
 // meaning when the value is read back, and includes a multi-byte rune so rune-width handling is exercised.
-var globFillAlphabet = []string{"a", "A", "b", "/", "é"}
+var globFillAlphabet = []string{"a", "A", "b", "/", "é", "s", "\u017f", "@", "`"}
 
 // spec:server-detection-rules-engine/wildcard-matching-cost-does-not-depend-on-the-event-value-being-adversarial/compilation-does-not-change-what-a-pattern-matches
 //
@@ -147,6 +180,24 @@ func TestGlobKnownShapes(t *testing.T) {
 		// literal would match nothing at all. The property generator never produced this shape; it is here deliberately.
 		{"question marks cannot borrow from the suffix", "*???*é", "ééé", false},
 		{"question marks fit when the value is long enough", "*???*é", "éééé", true},
+		// The three below are regression pins for bugs the compiled matcher carried into review, each found by reading rather than
+		// by the property. They are named rather than left to the generator because a specific bug wants a reproducer whose name
+		// says what broke.
+		//
+		// Taking the leftmost EXACT-case hit rather than the leftmost FOLDED one: the `a` at offset 2 is found before the `A` at
+		// offset 0, and consuming it puts the `/` out of reach.
+		{"a folded match earlier than an exact one wins", "*a*/*b", "A/ab", true},
+		// Measuring a segment's minimum width from the pattern as written: U+017F is two bytes and folds with the one-byte `s`, so
+		// a one-byte value satisfies it and a width check on the written form rejects it before comparing anything.
+		{"a pattern rune folds to a narrower one", "*ſ*X", "SX", true},
+		// The mirror image, in the value: comparing a fixed byte count of the value against the segment's own byte length reads the
+		// wrong span when the value's runes fold to a different width.
+		{"a value rune folds to a narrower pattern rune", "*ass*", "aſſ", true},
+		// ASCII case folding is `differ only in bit 5`, which is true for letters and false for everything else: `@` and a
+		// backtick differ only in bit 5, as do `[` and `{`. A fold test without the letter check silently matches those pairs, so
+		// a rule written for a literal bracket would also fire on a brace.
+		{"at sign does not fold to a backtick", "@", "`", false},
+		{"bracket does not fold to a brace", "*[*", "{", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -314,10 +365,19 @@ func BenchmarkMatchWildcardQuestionMarkSegment(b *testing.B) {
 func TestCompileGlobDecomposesIntoAnchoredSegments(t *testing.T) {
 	t.Parallel()
 
-	literals := func(g glob) []string {
+	// Renders each segment's atoms, writing `?` for a wildcard atom, so the expectations below read as the pattern's pieces.
+	segments := func(g glob) []string {
 		out := make([]string, 0, len(g.segs))
 		for _, seg := range g.segs {
-			out = append(out, seg.literal)
+			var b strings.Builder
+			for _, a := range seg.atoms {
+				if a.any {
+					b.WriteByte('?')
+					continue
+				}
+				b.WriteRune(a.r)
+			}
+			out = append(out, b.String())
 		}
 		return out
 	}
@@ -339,12 +399,12 @@ func TestCompileGlobDecomposesIntoAnchoredSegments(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, literals(compileGlob(tc.pattern)))
+			assert.Equal(t, tc.want, segments(compileGlob(tc.pattern)))
 		})
 	}
 
-	// A `?` leaves the segment without a literal form, because no substring search can express it.
-	seg := compileGlob("*a?c*").segs[1]
-	assert.Empty(t, seg.literal, "a segment carrying ? has no literal form")
-	assert.Equal(t, 3, seg.minBytes, "and its minimum width is one byte per atom")
+	// minBytes is the least a segment can consume, and it is measured across each atom's fold cycle rather than as written.
+	assert.Equal(t, 3, compileGlob("*a?c*").segs[1].minBytes, "three atoms of one byte each")
+	assert.Equal(t, 1, compileGlob("*\u017f*").segs[1].minBytes,
+		"\u017f is two bytes but folds with the one-byte s, so a value can satisfy it in one")
 }

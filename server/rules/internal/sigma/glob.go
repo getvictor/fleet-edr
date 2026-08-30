@@ -1,7 +1,9 @@
 package sigma
 
 import (
+	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -32,18 +34,24 @@ import (
 // Measured on the same inputs as the reference implementation, 20,000 iterations, all zero-allocation:
 //
 //	shape                                    reference    compiled
-//	typical corpus pattern (`*/MacOS/*`)         546ns      22.5ns
-//	corpus pattern, suffix anchor rejects       43.9us      18.7ns
-//	corpus pattern, past the anchor             43.9us       6.5us
-//	synthetic worst case (`*` + 64 literals)     1.52ms       236ns
-//	`?` in a middle segment                      829us       326us
+//	typical corpus pattern (`*/MacOS/*`)         443ns      42.9ns
+//	corpus pattern, suffix anchor rejects       29.7us      12.7ns
+//	corpus pattern, past the anchor             29.7us       8.1us
+//	synthetic worst case (`*` + 64 literals)     1.51ms       140ns
+//	`?` in a middle segment                      831us       458us
 //
-// The third row is the honest one for the attacker-driven case: the second rejects on the suffix before searching anything, which
-// is a real and common outcome but compares a full scan against an early exit.
+// The third row is the honest figure for the attacker-driven case: the second rejects on the suffix before searching anything,
+// which is a real and common outcome but compares a full scan against an early exit.
+//
+// Three things do the work, and each is only sound with a caveat that cost a bug in review. Segments are anchored, so a literal run
+// after a star is checked once at the end rather than at every offset. Candidate positions are found by scanning for the possible
+// lead bytes of the first rune, which must be computed across its FOLD cycle or a foldable value rune is skipped. And verification
+// compares bytes when both sides are ASCII, which must abandon the byte loop on any wide value rune, because a rune folding in from
+// outside ASCII occupies more bytes than the segment allots.
 //
 // This bounds what an attacker-controlled VALUE can do against a fixed pattern. It does not make every pattern linear. A middle
-// segment carrying `?` cannot use a substring search, so it walks candidate offsets and stays O(value x segment); that is the last
-// row, still 2.5x faster than the scan it replaces but the shape with the most left in it. Reaching it needs a pattern chosen to be
+// segment carrying `?` cannot use the byte paths at all, so it walks candidate offsets and stays O(value x segment); that is the
+// last row, still faster than the scan it replaces but the shape with the most left in it. Reaching it needs a pattern chosen to be
 // pathological, which today means a rule author. Issue #767 is where operator-authored patterns arrive, and is where that residual
 // belongs.
 type glob struct {
@@ -56,13 +64,25 @@ type glob struct {
 type globSeg struct {
 	atoms []globAtom
 	// minBytes is the shortest UTF-8 encoding the segment can match, used to abandon a search that cannot fit.
+	//
+	// It is the minimum across each atom's FOLD CYCLE, not the width of the rune as written. Those differ: `\u017f` is two bytes
+	// and folds with the one-byte `s`, so a segment written with it can match a shorter run than its own encoding suggests, and
+	// measuring the written width would reject a value that does match.
 	minBytes int
-	// literal is the segment's text when every atom is a literal, so the search can use strings.Index rather than walking atoms.
-	// Empty when the segment holds a `?`, which no substring search can express.
-	literal string
-	// asciiOnly reports whether literal is pure ASCII, which is what makes a byte-wise case-insensitive search sound: folding a
-	// non-ASCII rune can change its encoded length, so the byte offsets a byte search returns would not be rune boundaries.
-	asciiOnly bool
+	// leadBytes are every possible FIRST byte of a rune that could begin this segment, precomputed across the first atom's fold
+	// cycle. Scanning for them is what makes the search skip rather than walk.
+	//
+	// Soundness rests on two facts. Any match must begin with a rune that folds to the first atom, and every such rune's first byte
+	// is in this set, so nothing valid is skipped. And a UTF-8 lead byte is never a continuation byte, so a position found this way
+	// is always a rune boundary. Empty when the first atom is `?`, which any rune satisfies.
+	leadBytes []byte
+	// asciiLiteral is the segment's text when every atom is a literal ASCII rune, which lets verification compare bytes instead of
+	// decoding runes. Empty otherwise.
+	//
+	// It is only a fast path, never the decision: an ASCII segment can still be matched by a value rune that folds to it from
+	// outside ASCII (`\u017f` folds to `s`), and such a rune occupies more bytes than the segment allots. The comparison therefore
+	// abandons the byte loop the moment it meets a byte outside ASCII and re-runs the span rune by rune.
+	asciiLiteral string
 }
 
 // globAtom is one pattern element: a literal rune, or `?` standing for exactly one rune.
@@ -100,28 +120,81 @@ func compileGlob(pattern string) glob {
 
 // newGlobSeg precomputes what the search path needs so the hot path does no analysis.
 func newGlobSeg(atoms []globAtom) globSeg {
-	seg := globSeg{atoms: atoms, asciiOnly: true}
-	var b strings.Builder
-	literal := true
+	seg := globSeg{atoms: atoms}
 	for _, a := range atoms {
 		if a.any {
 			// A `?` matches exactly one rune, which is 1 to 4 bytes; the shortest is what bounds the search.
 			seg.minBytes++
-			literal = false
 			continue
 		}
-		seg.minBytes += utf8.RuneLen(a.r)
-		if a.r >= utf8.RuneSelf {
-			seg.asciiOnly = false
-		}
-		b.WriteRune(a.r)
+		seg.minBytes += minFoldedWidth(a.r)
 	}
-	if literal {
-		seg.literal = b.String()
-	} else {
-		seg.asciiOnly = false
+	if len(atoms) > 0 && !atoms[0].any {
+		seg.leadBytes = foldLeadBytes(atoms[0].r)
+	}
+	if ascii := asciiLiteralOf(atoms); ascii != "" {
+		seg.asciiLiteral = ascii
 	}
 	return seg
+}
+
+// asciiLiteralOf returns the segment's text when every atom is a literal ASCII rune, and "" otherwise.
+func asciiLiteralOf(atoms []globAtom) string {
+	if len(atoms) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, a := range atoms {
+		if a.any || a.r < 0 || a.r >= utf8.RuneSelf {
+			return ""
+		}
+		// The guard above proves 0 <= r < 0x80, so the conversion cannot truncate.
+		b.WriteByte(byte(a.r)) //nolint:gosec // G115: bounded to ASCII on the line above
+	}
+	return b.String()
+}
+
+// foldLeadBytes returns the distinct first bytes of every rune that case-folds together with r.
+func foldLeadBytes(r rune) []byte {
+	var out []byte
+	add := func(x rune) {
+		var buf [utf8.UTFMax]byte
+		utf8.EncodeRune(buf[:], x)
+		if !slices.Contains(out, buf[0]) {
+			out = append(out, buf[0])
+		}
+	}
+	add(r)
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		add(f)
+	}
+	return out
+}
+
+// asciiFoldEqual reports whether two ASCII bytes are equal ignoring case. Two ASCII letters fold together exactly when they differ
+// only in bit 5, which is what makes this a pair of instructions rather than a table lookup.
+func asciiFoldEqual(a, b byte) bool {
+	if a == b {
+		return true
+	}
+	const caseBit = 'a' - 'A'
+	la, lb := a|caseBit, b|caseBit
+	return la == lb && la >= 'a' && la <= 'z'
+}
+
+// minFoldedWidth is the shortest UTF-8 encoding of any rune that case-folds together with r, which is the least a literal atom can
+// consume. For ASCII it is 1; it differs only for the handful of runes whose fold cycle crosses an encoding-length boundary.
+func minFoldedWidth(r rune) int {
+	minWidth := utf8.RuneLen(r)
+	if minWidth < 0 {
+		return 1
+	}
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		if w := utf8.RuneLen(f); w > 0 && w < minWidth {
+			minWidth = w
+		}
+	}
+	return minWidth
 }
 
 // match reports whether s matches the compiled pattern, folding case.
@@ -152,8 +225,36 @@ func (g glob) match(s string) bool {
 	return true
 }
 
+// matchASCIIAt is matchAt's fast path for an all-ASCII-literal segment. decided is false when the comparison has to be redone rune
+// by rune, which happens the moment a byte of the value is not ASCII: a value rune outside ASCII can fold INTO an ASCII segment
+// (`\u017f` folds to `s`) while occupying more bytes than the segment allots, so a byte-length comparison would read the wrong span.
+//
+// When decided is true, end is the offset just past the match, or -1 for a definite mismatch. A mismatch between two ASCII bytes is
+// definite: both are complete runes, so no rune-level comparison could reach a different answer.
+func (s globSeg) matchASCIIAt(v string, i int) (end int, decided bool) {
+	lit := s.asciiLiteral
+	if lit == "" || i+len(lit) > len(v) {
+		return 0, false
+	}
+	for k := range len(lit) {
+		c := v[i+k]
+		if c >= utf8.RuneSelf {
+			return 0, false
+		}
+		if !asciiFoldEqual(c, lit[k]) {
+			return -1, true
+		}
+	}
+	return i + len(lit), true
+}
+
 // matchAt reports whether the segment matches starting at byte offset i, returning the offset just past it.
 func (s globSeg) matchAt(v string, i int) (int, bool) {
+	// Byte-wise comparison when both sides are ASCII, which is nearly every comparison the corpus makes.
+	if end, decided := s.matchASCIIAt(v, i); decided {
+		return end, end >= 0
+	}
+
 	for _, a := range s.atoms {
 		if i >= len(v) {
 			return 0, false
@@ -202,12 +303,19 @@ func (s globSeg) find(v string, lo, hi int) (int, bool) {
 	if s.minBytes > hi-lo {
 		return 0, false
 	}
-	// An all-literal ASCII segment is a plain substring search, which strings.Index does far faster than walking atoms. Case is
-	// folded by searching for both cases of the first byte and verifying the rest, so nothing is lowered or allocated.
-	if s.literal != "" && s.asciiOnly {
-		return s.findLiteral(v, lo, hi)
-	}
 	for i := lo; i+s.minBytes <= hi; {
+		// Skip to the next position that could possibly begin a match, rather than testing every rune. On a value packed with
+		// near-misses this is the difference between verifying at every offset and verifying only where the first rune fits.
+		if len(s.leadBytes) > 0 {
+			j := indexAnyByte(v[i:hi], s.leadBytes)
+			if j < 0 {
+				return 0, false
+			}
+			i += j
+			if i+s.minBytes > hi {
+				return 0, false
+			}
+		}
 		if end, ok := s.matchAt(v, i); ok && end <= hi {
 			return end, true
 		}
@@ -217,37 +325,14 @@ func (s globSeg) find(v string, lo, hi int) (int, bool) {
 	return 0, false
 }
 
-// findLiteral is find for a segment that is pure ASCII with no `?`.
-//
-// Two passes, both skipping rather than walking. The first is an exact-case strings.Index, which is SIMD-accelerated and is what a
-// well-formed value usually satisfies. The second folds case, and rather than testing every offset it jumps between positions whose
-// first byte could begin the literal in either case. That distinction is the difference between scanning 4,000 offsets and scanning
-// the few hundred that could possibly match: measured on a 4 KB value packed with near-misses, 21.6us against 1.5us.
-func (s globSeg) findLiteral(v string, lo, hi int) (int, bool) {
-	if at := strings.Index(v[lo:hi], s.literal); at >= 0 {
-		return lo + at + len(s.literal), true
-	}
-
-	lower, upper := foldASCII(s.literal[0])
-	for i := lo; i+len(s.literal) <= hi; i++ {
-		if c := v[i]; c != lower && c != upper {
-			continue
-		}
-		if strings.EqualFold(v[i:i+len(s.literal)], s.literal) {
-			return i + len(s.literal), true
+// indexAnyByte returns the offset of the first byte in s that appears in set, or -1. The set holds at most a few bytes, so calling
+// the SIMD-backed strings.IndexByte once each and taking the earliest hit beats scanning the string by hand.
+func indexAnyByte(s string, set []byte) int {
+	best := -1
+	for _, b := range set {
+		if at := strings.IndexByte(s, b); at >= 0 && (best < 0 || at < best) {
+			best = at
 		}
 	}
-	return 0, false
-}
-
-// foldASCII returns the two ASCII cases of b. Both are b when it is not a letter, which lets the caller take a single-scan path.
-func foldASCII(b byte) (lower, upper byte) {
-	switch {
-	case b >= 'a' && b <= 'z':
-		return b, b - ('a' - 'A')
-	case b >= 'A' && b <= 'Z':
-		return b + ('a' - 'A'), b
-	default:
-		return b, b
-	}
+	return best
 }
