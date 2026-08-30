@@ -182,9 +182,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 // A batch is not obliged to be well formed, though. Intake accepts up to MaxIngestEventsPerRequest events and validates event_type
 // only as non-empty, so an authenticated host can send a batch whose every event carries a distinct junk type. The linear scan is
 // quadratic in that case, so once the scratch fills this switches to a set and the cost becomes linear again.
-func distinctEventTypes(events []api.Event) []string {
-	var scratch [16]string
-	present := scratch[:0]
+func distinctEventTypes(events []api.Event, present []string) []string {
 	var seen map[string]struct{}
 	for _, ev := range events {
 		if seen != nil {
@@ -199,8 +197,8 @@ func distinctEventTypes(events []api.Event) []string {
 			continue
 		}
 		present = append(present, ev.EventType)
-		if len(present) == len(scratch) {
-			seen = make(map[string]struct{}, 2*len(scratch))
+		if len(present) == cap(present) {
+			seen = make(map[string]struct{}, 2*cap(present))
 			for _, t := range present {
 				seen[t] = struct{}{}
 			}
@@ -220,7 +218,8 @@ func distinctEventTypes(events []api.Event) []string {
 // Cost is proportional to the number of MATCHING rules rather than to the catalog size, which is what keeps a batch of a rarely
 // consumed type cheap however many rules are registered.
 func (e *Engine) rulesFor(live []api.Event) []int {
-	present := distinctEventTypes(live)
+	var scratch [16]string
+	present := distinctEventTypes(live, scratch[:0])
 
 	switch {
 	case len(present) == 0:
