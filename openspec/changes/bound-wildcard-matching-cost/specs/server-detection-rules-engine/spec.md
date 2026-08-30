@@ -2,7 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: Wildcard matching cost does not depend on the event value being adversarial
+### Requirement: Matching does not backtrack across the star-separated segments of a pattern
 
 The system SHALL compile a rule's wildcard pattern when the rule loads, and SHALL match it without re-scanning any part of the pattern against the value more than once per candidate position.
 

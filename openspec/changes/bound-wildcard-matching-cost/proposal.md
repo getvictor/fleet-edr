@@ -30,7 +30,7 @@ The third row is the honest figure for the attacker-driven case. The second reje
 
 ## What it does not fix
 
-A literal middle segment is still verified byte by byte at each candidate offset, so a value dense in near-misses of that segment costs more than a benign one: that is the 8.1us row. The guarantee is that no failure sends the matcher back to re-run earlier segments, which is what made the original quadratic in the whole pattern. It is not a claim that cost is independent of the value.
+A literal middle segment is still verified byte by byte at each candidate offset, so a value dense in near-misses of that segment costs more than a benign one: that is the 7.6us row. The guarantee is that no failure sends the matcher back to re-run earlier segments, which is what made the original quadratic in the whole pattern. It is not a claim that cost is independent of the value.
 
 
 A middle segment carrying `?` cannot use a substring search, so it still walks candidate offsets. It is 2.5x faster than the scan it replaces and it is the shape with the most left in it. Reaching it needs a pattern chosen to be pathological rather than a value, which today means a rule author, so it belongs with #767 rather than here.

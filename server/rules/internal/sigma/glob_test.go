@@ -106,7 +106,7 @@ func flipOneRune(t *rapid.T, v string) string {
 // meaning when the value is read back, and includes a multi-byte rune so rune-width handling is exercised.
 var globFillAlphabet = []string{"a", "A", "b", "/", "é", "s", "\u017f", "@", "`"}
 
-// spec:server-detection-rules-engine/wildcard-matching-cost-does-not-depend-on-the-event-value-being-adversarial/compilation-does-not-change-what-a-pattern-matches
+// spec:server-detection-rules-engine/matching-does-not-backtrack-across-the-star-separated-segments-of-a-pattern/compilation-does-not-change-what-a-pattern-matches
 //
 // TestGlobMatchesTheBacktrackingScan is the equivalence gate for the compiled matcher (issue #787).
 //
@@ -357,7 +357,7 @@ func BenchmarkMatchWildcardQuestionMarkSegment(b *testing.B) {
 	}
 }
 
-// spec:server-detection-rules-engine/wildcard-matching-cost-does-not-depend-on-the-event-value-being-adversarial/a-literal-run-after-a-star-is-checked-once-not-at-every-offset
+// spec:server-detection-rules-engine/matching-does-not-backtrack-across-the-star-separated-segments-of-a-pattern/a-literal-run-after-a-star-is-checked-once-not-at-every-offset
 //
 // TestCompileGlobDecomposesIntoAnchoredSegments pins the structure that bounds the cost, rather than asserting a timing.
 //
