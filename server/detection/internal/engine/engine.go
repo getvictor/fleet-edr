@@ -245,8 +245,10 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, declared 
 	}
 	// Dispatch decided on the WHOLE batch, so in a mixed-platform batch it can select a rule on an event that rule cannot see: a
 	// macOS rule reading exec, dispatched because a Windows exec was present, then handed only the macOS events of other types.
-	// Re-check against what the rule actually sees. Skipped entirely when scoping kept the batch intact, which is every batch on a
-	// single-platform fleet, so this costs nothing until there is something for it to catch.
+	// Re-check against what the rule actually sees. The length comparison is the cheap way to ask "did scoping drop anything":
+	// platformScopedEvents returns the input slice verbatim when every event matched and a strictly shorter copy otherwise, so
+	// equal length means nothing was filtered and the index's decision already applied to exactly these events. That is every
+	// batch on a single-platform fleet, so this costs nothing until there is something for it to catch.
 	if len(scoped) != len(live) && !consumesAny(declared, scoped) {
 		return nil
 	}
