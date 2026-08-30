@@ -701,53 +701,64 @@ func TestSudoersReadsTheSubjectProcessAtMostOnce(t *testing.T) {
 	}
 }
 
-// TestBooleanDetectionValuesAreYAMLBooleans pins that a boolean-valued field is emitted as a YAML boolean rather than a quoted
-// string.
-//
-// Our evaluator cannot tell the difference: scalarString sends a bool through strconv.FormatBool, so `true` and 'true' match
-// identically here and no behavioural test can catch a regression. The distinction matters to the promise `portable: mapped`
-// makes. Sigma tooling preserves scalar types, so a backend that supplies WriteIntent as a real boolean and type-checks the
-// comparison would not match a rule asking for the string "true", and the rule would silently never fire on that engine.
-//
-// The walk mirrors compileSearch: a search is a field map, or a LIST of field maps that are OR alternatives. Checking only the
-// first form would leave a quoted boolean inside an alternative undetected, which is the shape a rule reaches for as soon as it
-// needs "either of these two writers".
-func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
-	t.Parallel()
+// boolCase is one boolean-valued field occurrence in the shipped pack: a subtest name and the raw YAML value behind it.
+type boolCase struct {
+	name  string
+	value any
+}
 
-	// The fields this engine computes as booleans. A rule may legitimately match the literal string "true" on some other field,
-	// so this is scoped to the ones we know are boolean rather than to anything that looks like one.
-	booleanFields := map[string]bool{"WriteIntent": true, "MutatingOpen": true}
+// booleanFields are the fields this engine computes as booleans. Scoped to those rather than to anything that looks boolean, so a
+// rule that legitimately matches the literal string "true" on some other field is unaffected.
+var booleanFields = map[string]bool{"WriteIntent": true, "MutatingOpen": true}
 
-	type boolCase struct {
-		name  string // pack file, search, and field: the subtest name
-		value any
+// searchAlternatives flattens one named search into the field maps it contains, mirroring compileSearch: a search is a field map,
+// or a LIST of field maps that are OR alternatives. Anything else is the condition string and yields nothing.
+func searchAlternatives(searchName string, search any) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	switch v := search.(type) {
+	case map[string]any:
+		out[searchName] = v
+	case []any:
+		for i, alternative := range v {
+			if fields, ok := alternative.(map[string]any); ok {
+				out[fmt.Sprintf("%s[%d]", searchName, i)] = fields
+			}
+		}
 	}
+	return out
+}
+
+// booleanCasesIn returns one case per boolean-valued field in a single alternative, mirroring scalarList: a field's value is a
+// scalar, or a LIST of values that are OR alternatives. Asserting on the slice itself would reject a legitimate
+// `WriteIntent: [true, false]`, so each element becomes its own case.
+func booleanCasesIn(where string, fields map[string]any) []boolCase {
+	var cases []boolCase
+	for field, value := range fields {
+		if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
+			continue
+		}
+		base := where + "." + field
+		values, isList := value.([]any)
+		if !isList {
+			cases = append(cases, boolCase{name: base, value: value})
+			continue
+		}
+		for i, element := range values {
+			cases = append(cases, boolCase{name: fmt.Sprintf("%s[%d]", base, i), value: element})
+		}
+	}
+	return cases
+}
+
+// packBooleanCases walks every shipped rule file and returns every boolean-valued field occurrence in its detection block.
+func packBooleanCases(t *testing.T) []boolCase {
+	t.Helper()
 
 	entries, err := packFS.ReadDir("pack")
 	require.NoError(t, err)
 	require.NotEmpty(t, entries)
 
-	// The table is built synchronously so "did the walk find anything" is answered before any subtest runs. Accumulating it
-	// inside parallel subtests would read zero, because a parallel subtest returns before its body executes.
 	var cases []boolCase
-	// Mirrors scalarList: a field's value is a scalar, or a LIST of values that are OR alternatives. Asserting on the slice
-	// itself would reject a legitimate `WriteIntent: [true, false]`, so each element becomes its own case.
-	collect := func(file, where string, fields map[string]any) {
-		for field, value := range fields {
-			if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
-				continue
-			}
-			base := fmt.Sprintf("%s/%s.%s", file, where, field)
-			if values, ok := value.([]any); ok {
-				for i, element := range values {
-					cases = append(cases, boolCase{name: fmt.Sprintf("%s[%d]", base, i), value: element})
-				}
-				continue
-			}
-			cases = append(cases, boolCase{name: base, value: value})
-		}
-	}
 	for _, entry := range entries {
 		body, err := packFS.ReadFile("pack/" + entry.Name())
 		require.NoError(t, err)
@@ -758,21 +769,31 @@ func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
 		require.NoError(t, yaml.Unmarshal(body, &file))
 
 		for searchName, search := range file.Detection {
-			switch v := search.(type) {
-			case map[string]any:
-				collect(entry.Name(), searchName, v)
-			case []any:
-				// OR alternatives. Each entry the compiler accepts is a field map; anything else it refuses at load, so this
-				// test does not need to re-report it.
-				for i, alternative := range v {
-					if fields, ok := alternative.(map[string]any); ok {
-						collect(entry.Name(), fmt.Sprintf("%s[%d]", searchName, i), fields)
-					}
+			for where, fields := range searchAlternatives(searchName, search) {
+				for _, c := range booleanCasesIn(where, fields) {
+					cases = append(cases, boolCase{name: entry.Name() + "/" + c.name, value: c.value})
 				}
 			}
-			// Anything else is the condition string.
 		}
 	}
+	return cases
+}
+
+// TestBooleanDetectionValuesAreYAMLBooleans pins that a boolean-valued field is emitted as a YAML boolean rather than a quoted
+// string.
+//
+// Our evaluator cannot tell the difference: scalarString sends a bool through strconv.FormatBool, so `true` and 'true' match
+// identically here and no behavioural test can catch a regression. The distinction matters to the promise `portable: mapped`
+// makes. Sigma tooling preserves scalar types, so a backend that supplies WriteIntent as a real boolean and type-checks the
+// comparison would not match a rule asking for the string "true", and the rule would silently never fire on that engine.
+//
+// The walk mirrors the compiler across every nesting form a value can take; see searchAlternatives and booleanCasesIn.
+func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
+	t.Parallel()
+
+	// Built before any subtest runs, so "did the walk find anything" is answered synchronously. Accumulating inside parallel
+	// subtests would read zero, because a parallel subtest returns before its body executes.
+	cases := packBooleanCases(t)
 	require.NotEmpty(t, cases, "no boolean fields found, so this test would prove nothing")
 
 	for _, tc := range cases {
