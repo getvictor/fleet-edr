@@ -199,12 +199,11 @@ func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 	// converted rule carries a Sigma detection block in its pack file instead (issue #761). Naming both would point a reader at
 	// code that no longer decides anything; naming neither leaves an exported file that cannot say what the rule does.
 	known := map[string]struct{}{
-		"ancestor_walk_path_prefix":    {},
-		"descendant_within_window":     {},
-		"dns_resolve_then_connect":     {},
-		"absence_within_window":        {},
-		"file_open_write_intent_match": {},
-		"btm_item_signing_verdict":     {},
+		"ancestor_walk_path_prefix": {},
+		"descendant_within_window":  {},
+		"dns_resolve_then_connect":  {},
+		"absence_within_window":     {},
+		"btm_item_signing_verdict":  {},
 	}
 
 	seen := map[string]struct{}{}

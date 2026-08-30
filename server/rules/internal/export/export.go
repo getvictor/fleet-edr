@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -149,23 +150,32 @@ type Authored struct {
 //
 // Owned here because portability is a property of the rendered FILE, and this package already owns the rest of the Sigma-format
 // correspondence. server/rules/internal/sigmabind, which computes the values, drift-tests its taxonomy against this list.
-var computedFields = map[string]bool{
-	"Subcommand":       true,
-	"CommandArguments": true,
-	"EnvAssignments":   true,
+// The value is why the field has to be computed, which differs by field and is what the rendered note reports. Fields sharing a
+// reason render it once.
+var computedFields = map[string]string{
+	"Subcommand":       reasonFlattenedCommandLine,
+	"CommandArguments": reasonFlattenedCommandLine,
+	"EnvAssignments":   reasonFlattenedCommandLine,
+	"WriteIntent":      reasonCompletedFileEvent,
+	"MutatingOpen":     reasonCompletedFileEvent,
 }
 
+const (
+	reasonFlattenedCommandLine = "it represents a command line as a single string, in which argument position is no longer recoverable"
+	reasonCompletedFileEvent   = "it represents a file event as a completed creation or modification rather than an open with flags"
+)
+
 // IsComputedField reports whether a Sigma field name is one this engine supplies rather than one from Sigma's own taxonomy.
-func IsComputedField(name string) bool { return computedFields[name] }
+func IsComputedField(name string) bool { _, ok := computedFields[name]; return ok }
 
 // classify derives x-engine.type and x-engine.portable from the rule itself, rather than taking either on trust.
 //
 // A rule with a detection block IS Sigma, and is portable to the extent that the fields it reads are Sigma's own: `standard` when
 // every field comes from the taxonomy, `mapped` when any is one we compute. A rule without one is a Go implementation, so there is
 // nothing in the file for another engine to run and `none` is the honest answer.
-func classify(detection *yaml.Node) (kind, portable string) {
+func classify(detection *yaml.Node) (kind, portable string, computed []string) {
 	if detection == nil {
-		return "graph", "none"
+		return "graph", "none", nil
 	}
 	// The evaluator is asked which fields the block reads rather than this package walking the YAML itself. A second traversal of
 	// the same shape would drift the moment the evaluator gained a search form, and the failure would be silent: a rule reading a
@@ -174,14 +184,19 @@ func classify(detection *yaml.Node) (kind, portable string) {
 	if err != nil {
 		// A block that does not compile cannot be classified. The caller refuses it a moment later with a better message; the
 		// conservative answer here is the one that promises least.
-		return "sigma", "mapped"
+		return "sigma", "mapped", nil
 	}
 	for _, field := range fields {
-		if computedFields[field] {
-			return "sigma", "mapped"
+		if _, ok := computedFields[field]; ok {
+			computed = append(computed, field)
 		}
 	}
-	return "sigma", "standard"
+	if len(computed) == 0 {
+		return "sigma", "standard", nil
+	}
+	// Sorted so the rendered note is stable: detectionFieldNames follows the block's own order, which changes when a rule is edited.
+	slices.Sort(computed)
+	return "sigma", "mapped", computed
 }
 
 // detectionFieldNames compiles a detection block and asks it which fields it reads.
@@ -228,7 +243,7 @@ func Rule(md api.RuleMetadata, authored Authored) ([]byte, error) {
 	}
 	// An empty algorithm is the most dangerous omission of the three, because `omitempty` drops the key rather than emitting a
 	// blank one: the file would look complete while missing the single thing that says what decides the rule.
-	kind, portable := classify(authored.Detection)
+	kind, portable, computed := classify(authored.Detection)
 	if kind == "graph" && md.Algorithm == "" {
 		return nil, fmt.Errorf("export: rule %s names no algorithm and has no detection block, so nothing says what decides it", md.ID)
 	}
@@ -257,7 +272,7 @@ func Rule(md api.RuleMetadata, authored Authored) ([]byte, error) {
 			RuleID:          md.ID,
 			Type:            kind,
 			Portable:        portable,
-			PortabilityNote: portabilityNote(kind, portable),
+			PortabilityNote: portabilityNote(kind, portable, computed),
 			EventTypes:      md.Doc.EventTypes,
 			Algorithm:       algorithmFor(kind, md.Algorithm),
 			Params:          authored.Params,
@@ -286,20 +301,57 @@ func marshal(doc file) ([]byte, error) {
 
 // portabilityNote explains, in the file itself, why a rule will or will not run in another engine. Written out per file rather than
 // left implicit so a reader of one rule in isolation learns the reason without going looking for it.
-func portabilityNote(kind, portable string) string {
+func portabilityNote(kind, portable string, computed []string) string {
 	switch {
 	case kind != "sigma":
 		return "The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, " +
 			"so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being " +
 			"converted separately; until a rule's logic lives in its file, this stays the honest answer."
 	case portable == "mapped":
-		return "The rule's logic is the detection block in this file. It is valid Sigma, but it reads at least one field this " +
-			"engine computes from the argument vector rather than one from Sigma's own taxonomy, so another engine needs those " +
-			"fields to evaluate it. The computed fields exist because Sigma represents a command line as a single string, in " +
-			"which argument position is no longer recoverable."
+		// The note names the fields rather than giving one canned reason for every mapped rule. The reasons genuinely differ:
+		// the argv fields exist because Sigma flattens a command line into one string, the open-intent fields because Sigma
+		// models a completed file modification rather than an open(2) with flags. A reader of one file in isolation is being
+		// told whether they can run this rule, so the answer has to be about this rule.
+		field, them := computedFieldPhrase(computed)
+		return "The rule's logic is the detection block in this file. It is valid Sigma, but it reads " + field +
+			", which this engine computes rather than taking from Sigma's own taxonomy, so another engine needs " + them +
+			" supplied to evaluate the rule. Sigma has no equivalent because " + computedFieldReasons(computed) + "."
 	default:
 		return "The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, so any " +
 			"Sigma-compatible engine can evaluate it as it stands."
+	}
+}
+
+// computedFieldReasons renders the distinct reasons the given fields have to be computed, in the order the fields were reported so
+// the sentence tracks the phrase that precedes it. Reciting every reason regardless of which fields a rule reads is what made the
+// old canned note wrong: it told the reader of a file-event rule about argument vectors it never touches.
+func computedFieldReasons(computed []string) string {
+	var reasons []string
+	for _, field := range computed {
+		if reason, ok := computedFields[field]; ok && !slices.Contains(reasons, reason) {
+			reasons = append(reasons, reason)
+		}
+	}
+	switch len(reasons) {
+	case 0:
+		return "Sigma's taxonomy does not carry it"
+	case 1:
+		return reasons[0]
+	default:
+		return strings.Join(reasons[:len(reasons)-1], ", ") + " and " + reasons[len(reasons)-1]
+	}
+}
+
+// computedFieldPhrase renders the computed field names as a noun phrase. A rule with no named fields reaches this only via the
+// does-not-compile path in classify, which the caller refuses moments later, so the generic phrasing is the honest one there.
+func computedFieldPhrase(computed []string) (phrase, pronoun string) {
+	switch len(computed) {
+	case 0:
+		return "at least one field", "them"
+	case 1:
+		return "the field " + computed[0], "it"
+	default:
+		return "the fields " + strings.Join(computed[:len(computed)-1], ", ") + " and " + computed[len(computed)-1], "them"
 	}
 }
 

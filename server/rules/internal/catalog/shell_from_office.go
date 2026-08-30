@@ -86,7 +86,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 		return nil, err
 	}
 	matched := shellFromOfficeDetection().Matches(se)
-	if err := se.ParentErr(); err != nil {
+	if err := se.ResolveErr(); err != nil {
 		return nil, err
 	}
 	if !matched {

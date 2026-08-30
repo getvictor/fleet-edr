@@ -249,8 +249,8 @@ func TestParentImageLazy(t *testing.T) {
 
 		_, present := e.Field("ParentImage")
 		assert.False(t, present)
-		require.Error(t, e.ParentErr())
-		assert.Contains(t, e.ParentErr().Error(), "graph down")
+		require.Error(t, e.ResolveErr())
+		assert.Contains(t, e.ResolveErr().Error(), "graph down")
 	})
 
 	t.Run("a resolver returning no parent is not a failure", func(t *testing.T) {
@@ -260,7 +260,7 @@ func TestParentImageLazy(t *testing.T) {
 
 		_, present := e.Field("ParentImage")
 		assert.False(t, present)
-		assert.NoError(t, e.ParentErr(), "no parent and a failed lookup must be distinguishable")
+		assert.NoError(t, e.ResolveErr(), "no parent and a failed lookup must be distinguishable")
 	})
 
 	t.Run("a malformed payload still errors before any resolution", func(t *testing.T) {
@@ -278,6 +278,6 @@ func TestParentImageLazy(t *testing.T) {
 		require.NoError(t, err)
 		_, present := e.Field("ParentImage")
 		assert.False(t, present)
-		assert.NoError(t, e.ParentErr())
+		assert.NoError(t, e.ResolveErr())
 	})
 }

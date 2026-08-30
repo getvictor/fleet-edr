@@ -98,7 +98,7 @@ func TestSupportedFields(t *testing.T) {
 
 	assert.Equal(t, []string{"CommandArguments", "CommandLine", "EnvAssignments", "Image", "ParentImage", "Subcommand"},
 		SupportedFields("exec"))
-	assert.Equal(t, []string{"TargetFilename"}, SupportedFields("open"))
+	assert.Equal(t, []string{"Image", "MutatingOpen", "TargetFilename", "WriteIntent"}, SupportedFields("open"))
 	assert.Empty(t, SupportedFields("dns_query"))
 	assert.Empty(t, SupportedFields("nonexistent"))
 }
@@ -169,12 +169,14 @@ func TestComputedFieldsAgreeWithTheExporter(t *testing.T) {
 			}
 		}
 	}
-	assert.Equal(t, map[string]bool{"Subcommand": true, "CommandArguments": true, "EnvAssignments": true}, computed,
-		"the exporter must classify exactly our computed fields as computed")
+	assert.Equal(t, map[string]bool{
+		"Subcommand": true, "CommandArguments": true, "EnvAssignments": true,
+		"WriteIntent": true, "MutatingOpen": true,
+	}, computed, "the exporter must classify exactly our computed fields as computed")
 
 	// And the other direction: every field the exporter calls computed must be one we actually supply, or a rule could be labelled
 	// `mapped` for a field no event carries.
-	for _, name := range []string{"Subcommand", "CommandArguments", "EnvAssignments"} {
+	for _, name := range []string{"Subcommand", "CommandArguments", "EnvAssignments", "WriteIntent", "MutatingOpen"} {
 		found := false
 		for _, eventType := range mappedEventTypes() {
 			if slices.Contains(SupportedFields(eventType), name) {

@@ -213,3 +213,23 @@ func execEventWithParent(ctx context.Context, evt rulesapi.Event, gr rulesapi.Gr
 		return parent.Path, nil
 	})
 }
+
+// openEventWithSubject builds the Sigma adapter for a file-open event, resolving the image of the process that did the opening.
+//
+// Same shape and same reasons as execEventWithParent: an open event carries the pid, not the path, the graph knows it, and the
+// resolution is deferred so a detection whose target-filename test fails never reads the graph at all.
+//
+// Unlike the exec case there is no fork-time subtlety: the opening process IS the subject, so it is resolved at the event's own
+// timestamp, which is the same lookup resolveSubjectProcess performs for the finding.
+func openEventWithSubject(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, pid int) (*sigmabind.Event, error) {
+	return sigmabind.NewOpenEventLazy(evt, func() (string, error) {
+		proc, err := gr.GetProcessByPID(ctx, evt.HostID, pid, evt.TimestampNs)
+		if err != nil {
+			return "", fmt.Errorf("get subject pid %d: %w", pid, err)
+		}
+		if proc == nil {
+			return "", nil
+		}
+		return proc.Path, nil
+	})
+}

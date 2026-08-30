@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -474,4 +475,151 @@ func TestSharedShellListMatchesTheShippedDetection(t *testing.T) {
 
 	assert.Equal(t, shared, inDetection,
 		"the inlined detection and the shared unix_shells list must describe the same set; they are one set written twice")
+}
+
+// The sudoers_tamper oracle. Frozen literals, not the live regexp or masks.
+var (
+	legacySudoersPath      = regexp.MustCompile(`^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$`)
+	legacySudoersWriteMask = 0x3
+	legacySudoersIntent    = 0x400 | 0x8 | 0x200
+)
+
+// legacySudoersFires is the complete pre-conversion predicate, including the suppression that a single write-intent boolean could
+// not express: the intent mask applies ONLY when the writer is sudo.
+func legacySudoersFires(path string, flags int, subjectPath string) bool {
+	if !legacySudoersPath.MatchString(path) {
+		return false
+	}
+	if flags&legacySudoersWriteMask == 0 {
+		return false
+	}
+	if subjectPath == "/usr/bin/sudo" && flags&legacySudoersIntent == 0 {
+		return false
+	}
+	return true
+}
+
+// TestEquivalence_SudoersTamper compares the shipped detection against the frozen oracle across paths, flag combinations and
+// writers. The flag space is drawn deliberately: read-only, write-without-intent (sudo's flock shape), and write-with-intent are
+// the three cases the rule distinguishes, and the third condition only bites on one writer.
+func TestEquivalence_SudoersTamper(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/etc/sudoers", "/private/etc/sudoers", "/etc/sudoers.d/evil", "/private/etc/sudoers.d/edr-uat",
+		"/etc/sudoers.d/", "/etc/sudoersX", "/etc/passwd", "/etc/sudoers.d/a/b",
+	}
+	flagSets := []int{
+		0x0,                 // O_RDONLY
+		0x1,                 // O_WRONLY, no mutating bits: sudo's flock shape
+		0x2,                 // O_RDWR, no mutating bits
+		0x1 | 0x400,         // O_WRONLY|O_TRUNC
+		0x1 | 0x200 | 0x400, // what the extension actually emits
+		0x8,                 // O_APPEND alone, no write access
+		0x2 | 0x8,           // O_RDWR|O_APPEND
+	}
+	subjects := []string{"/usr/bin/sudo", "/usr/bin/tee", "/bin/cp", ""}
+
+	rapid.Check(t, func(t *rapid.T) {
+		path := rapid.SampledFrom(paths).Draw(t, "path")
+		flags := rapid.SampledFrom(flagSets).Draw(t, "flags")
+		subject := rapid.SampledFrom(subjects).Draw(t, "subject")
+
+		payload, err := json.Marshal(map[string]any{"pid": 7, "path": path, "flags": flags})
+		require.NoError(t, err)
+		ev, err := sigmabind.NewOpenEventLazy(
+			rulesapi.Event{EventID: "e", EventType: "open", Payload: payload},
+			func() (string, error) { return subject, nil })
+		require.NoError(t, err)
+
+		require.Equal(t, legacySudoersFires(path, flags, subject), sudoersDetection().Matches(ev),
+			"path=%q flags=%#x subject=%q", path, flags, subject)
+	})
+}
+
+// TestSudoersFlagChecksAreVestigialForCurrentAgents records what the conversion preserved and why it currently changes nothing.
+//
+// Since #301 (2026-05-31) the only source of `open` events is FileTamperSubscriber, which re-emits NOTIFY_CREATE and NOTIFY_WRITE
+// on /etc/sudoers* with a CONSTANT synthetic flag set, `O_WRONLY|O_CREAT|O_TRUNC`. Against that constant both flag tests are
+// no-ops: write access is always set, and the mutating bits are always set so the sudo suppression can never fire.
+//
+// The logic is kept because an agent predating #301 sends real open(2) flags, and dropping the tests would make a read-only open of
+// /etc/sudoers on such a host start alerting. This test is the record of that reasoning, so a later reader can retire the fields
+// deliberately once those agents are gone rather than discovering the masks look pointless and guessing.
+func TestSudoersFlagChecksAreVestigialForCurrentAgents(t *testing.T) {
+	t.Parallel()
+
+	const synthetic = 0x1 | 0x200 | 0x400 // what FileTamperSubscriber emits, verified against captured telemetry as flags=1537
+	require.Equal(t, 1537, synthetic)
+
+	assert.NotZero(t, synthetic&legacySudoersWriteMask, "write access is always set, so that test always passes")
+	assert.NotZero(t, synthetic&legacySudoersIntent, "the mutating bits are always set, so the sudo suppression can never fire")
+
+	// And so sudo writing a sudoers file DOES alert today, where with real flock flags it would not.
+	assert.True(t, legacySudoersFires("/etc/sudoers", synthetic, "/usr/bin/sudo"))
+	assert.False(t, legacySudoersFires("/etc/sudoers", 0x1, "/usr/bin/sudo"), "the suppression still works on real flags")
+}
+
+// fieldsEvent is a literal sigma.Event, bypassing sigmabind. It exists to evaluate the shipped detection under a DIFFERENT field
+// supplier than ours, which is the situation `portable: mapped` describes.
+type fieldsEvent map[string][]string
+
+func (f fieldsEvent) Field(name string) ([]string, bool) { v, ok := f[name]; return v, ok }
+
+// TestSudoersRuleIsSelfContainedForOtherEngines pins the one thing the equivalence property structurally cannot see.
+//
+// Our adapter supplies TargetFilename only when the open carries write access, so against sigmabind the rule's `WriteIntent: true`
+// is redundant and removing it does not change a single verdict (verified: that mutation survives TestEquivalence_SudoersTamper).
+// It is NOT redundant for the exported rule. `portable: mapped` promises another engine can evaluate this rule given the mapped
+// fields, and an engine that supplies TargetFilename on every open, as a literal reading of the Sigma taxonomy would, needs the
+// rule itself to say it only wants writes. So the guard has a real consumer and is not the speculative kind.
+func TestSudoersRuleIsSelfContainedForOtherEngines(t *testing.T) {
+	t.Parallel()
+
+	// A read-only open of /etc/sudoers, from an engine that does not gate TargetFilename on write access.
+	readOnly := fieldsEvent{"TargetFilename": {"/etc/sudoers"}, "WriteIntent": {"false"}, "MutatingOpen": {"false"}, "Image": {"/bin/cat"}}
+	assert.False(t, sudoersDetection().Matches(readOnly), "the rule must reject a read-only open on its own terms, not ours")
+
+	writing := fieldsEvent{"TargetFilename": {"/etc/sudoers"}, "WriteIntent": {"true"}, "MutatingOpen": {"true"}, "Image": {"/bin/cp"}}
+	assert.True(t, sudoersDetection().Matches(writing))
+}
+
+// spec:server-detection-rules-engine/a-rule-suppresses-a-named-exception-rather-than-branching-on-the-writer/the-suppression-applies-only-to-the-writer-it-names
+//
+// TestSudoersSuppressionIsScopedToSudo pins the half of the rule that a single write-intent boolean could not carry: the flock
+// exception applies to sudo and to nothing else. Any other process performing the identical open still fires, which is what stops
+// the exception from becoming a way to write a sudoers file unnoticed.
+func TestSudoersSuppressionIsScopedToSudo(t *testing.T) {
+	t.Parallel()
+
+	const flockShape = 0x1 // O_WRONLY, no content-changing bit: write access with nothing written
+
+	cases := []struct {
+		name    string
+		subject string
+		want    bool
+	}{
+		{"sudo taking its lock is suppressed", "/usr/bin/sudo", false},
+		{"tee performing the identical open fires", "/usr/bin/tee", true},
+		{"a copy of sudo elsewhere on disk fires", "/tmp/sudo", true},
+		{"an unresolved writer fires", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ev, err := sigmabind.NewOpenEventLazy(
+				rulesapi.Event{EventID: "e", EventType: "open",
+					Payload: []byte(fmt.Sprintf(`{"pid":7,"path":"/etc/sudoers","flags":%d}`, flockShape))},
+				func() (string, error) { return tc.subject, nil })
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, sudoersDetection().Matches(ev))
+		})
+	}
+
+	// And sudo is suppressed only for the flock shape: sudo truncating the file is a real edit and still fires.
+	ev, err := sigmabind.NewOpenEventLazy(
+		rulesapi.Event{EventID: "e", EventType: "open", Payload: []byte(`{"pid":7,"path":"/etc/sudoers","flags":1537}`)},
+		func() (string, error) { return "/usr/bin/sudo", nil })
+	require.NoError(t, err)
+	assert.True(t, sudoersDetection().Matches(ev), "the exception is the lock, not the identity")
 }

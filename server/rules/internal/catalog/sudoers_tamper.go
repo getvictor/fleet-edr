@@ -5,9 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 )
 
 // SudoersTamper fires on a write-mode `open(2)` against `/etc/sudoers`
@@ -52,15 +53,6 @@ type SudoersTamper struct {
 
 func (r *SudoersTamper) ID() string { return "sudoers_tamper" }
 
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches a file open on a target path
-// set where the open flags carry write intent.
-func (r *SudoersTamper) AlgorithmName() string { return "file_open_write_intent_match" }
-
-// SupportedExclusionMatchTypes lists the match types this rule consults: the sudoers writer path glob (issue #520).
-func (r *SudoersTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
-	return []api.ExclusionMatchType{api.ExclusionMatchPathGlob}
-}
-
 // DisplayName is the canonical human-readable name reused by Doc().Title and the finding (issue #519).
 func (r *SudoersTamper) DisplayName() string { return "Sudoers tamper" }
 
@@ -94,16 +86,19 @@ func (r *SudoersTamper) Doc() api.Documentation {
 	}
 }
 
-// sudoersPath matches /etc/sudoers itself and any direct child of /etc/sudoers.d/. ESF reports both forms (/etc/... and
-// /private/etc/... since /etc is a symlink); we accept either. Nested paths (/etc/sudoers.d/foo/bar) are excluded by `[^/]+` so the
-// rule can't be lured by an attacker creating a same-named subdirectory somewhere unrelated.
-var sudoersPath = regexp.MustCompile(`^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$`)
-
 // sudoersBytes is the substring fast-path filter applied to the raw JSON payload before json.Unmarshal. NOTIFY_OPEN fires on every
 // file open in the kernel (thousands per second) and writes to sudoers happen on a stable host literally never. Skipping the JSON
 // decode for opens that obviously don't qualify cuts the rule's CPU cost from "one unmarshal per open" to "one bytes.Contains per
 // open". Both /etc/sudoers and /private/etc/sudoers contain the same magic substring, so a single check covers both forms.
 var sudoersBytes = []byte("/etc/sudoers")
+
+// SupportedExclusionMatchTypes lists the match types this rule consults: the sudoers writer path glob (issue #520).
+func (r *SudoersTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
+	return []api.ExclusionMatchType{api.ExclusionMatchPathGlob}
+}
+
+// sudoersDetection is the rule's logic, compiled from the detection block in its pack file.
+var sudoersDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("sudoers_tamper") })
 
 // sudoersOpenPayload mirrors the open event shape we care about. Local to this rule: the sibling privilege_launchd_plist_write rule
 // no longer consumes open events (it keys on BTM registration per ADR-0008), so there is no shared open-payload type to extract. The
@@ -113,31 +108,6 @@ type sudoersOpenPayload struct {
 	Path  string `json:"path"`
 	Flags int    `json:"flags"`
 }
-
-// Bits 0 and 1 of open(2) flags hold the access mode: O_RDONLY=0, O_WRONLY=1, O_RDWR=2. Anything non-zero in those two bits means the
-// fd can be written. Higher bits (O_CREAT, O_TRUNC, O_APPEND, ...) don't affect the access mode.
-const sudoersWriteAccessMask = 0x3
-
-// O_TRUNC (0x400) | O_APPEND (0x8) | O_CREAT (0x200): the bits an
-// attacker who actually wants to mutate /etc/sudoers reaches for in
-// the common case (cp / tee / shell `>` / shell `>>` / dd / vi-direct-
-// save all set at least one of these three). macOS sudo opens
-// /etc/sudoers with O_WRONLY (sometimes plus O_NONBLOCK or O_CLOEXEC)
-// to take a LOCK_EX flock for serialised reads: write-mode by access,
-// but no intent to modify content. The intent-mask check below
-// suppresses sudo's flock pattern; we scope that suppression to
-// `/usr/bin/sudo` specifically (see evalEvent) so a non-sudo writer
-// using bare O_WRONLY still fires.
-//
-// Known limitation: a custom binary that opens /etc/sudoers with
-// only O_WRONLY (no O_TRUNC/O_APPEND/O_CREAT) and writes a NOPASSWD
-// entry from offset 0 is sufficient to plant the escalation, and
-// neither the intent-mask gate (because the writer isn't sudo) nor
-// the existing rename gap closes on it. Correlating on
-// NOTIFY_WRITE / NOTIFY_CLOSE_MODIFIED instead of inferring intent
-// from open(2) flags is the real fix; tracked alongside the rename
-// limitation noted above.
-const sudoersWriteIntentMask = 0x400 | 0x8 | 0x200
 
 func (r *SudoersTamper) Evaluate(
 	ctx context.Context, events []api.Event, s api.GraphReader,
@@ -158,12 +128,17 @@ func (r *SudoersTamper) evalEvent(
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, nil
 	}
-	if !sudoersPath.MatchString(p.Path) {
-		return nil, nil
+	// The detection decides, including the sudo-lock suppression that used to sit after the subject lookup below. The subject's
+	// image is resolved lazily inside the adapter, so a write to any other path never reads the graph.
+	se, err := openEventWithSubject(ctx, evt, s, p.PID)
+	if err != nil {
+		return nil, err
 	}
-	if p.Flags&sudoersWriteAccessMask == 0 {
-		// Read-only open. cron, sudo itself, and various PAM modules
-		// read /etc/sudoers all the time; none of those are signal.
+	matched := sudoersDetection().Matches(se)
+	if resolveErr := se.ResolveErr(); resolveErr != nil {
+		return nil, resolveErr
+	}
+	if !matched {
 		return nil, nil
 	}
 
@@ -181,9 +156,6 @@ func (r *SudoersTamper) evalEvent(
 	// its LOCK_EX flock pattern (never actually writes); any other writer reaching write-mode against /etc/sudoers stays on the unhappy
 	// path even when no intent bit is set, so a custom binary doing open(O_WRONLY) → write() at offset 0 still alerts. (The known-gap note
 	// up at the top of the file describes the residual case where the writer IS sudo but is doing something other than flocking.)
-	if proc.Path == "/usr/bin/sudo" && p.Flags&sudoersWriteIntentMask == 0 {
-		return nil, nil
-	}
 	if r.excluded(proc.Path, evt.HostID) {
 		return nil, nil
 	}

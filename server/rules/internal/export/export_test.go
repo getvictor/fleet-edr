@@ -327,7 +327,7 @@ func TestClassify(t *testing.T) {
 			if tc.detection != "" {
 				node = detectionNode(t, tc.detection)
 			}
-			kind, portable := classify(node)
+			kind, portable, _ := classify(node)
 			assert.Equal(t, tc.wantKind, kind)
 			assert.Equal(t, tc.wantPortable, portable)
 		})
@@ -423,9 +423,104 @@ func TestClassify_UncompilableDetectionPromisesLeast(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			kind, portable := classify(detectionNode(t, tc.detection))
+			kind, portable, _ := classify(detectionNode(t, tc.detection))
 			assert.Equal(t, "sigma", kind)
 			assert.Equal(t, "mapped", portable, "an unclassifiable block must not be advertised as portable")
 		})
 	}
+}
+
+// TestPortabilityNoteNamesTheComputedFields pins that a mapped rule's note says which fields it is that another engine must supply.
+//
+// The note is the file's answer to "can I run this?", and it used to give one canned reason (argument-vector fields) for every
+// mapped rule. That became untrue the moment a rule was mapped for a different reason: sudoers_tamper reads open-flag fields and
+// never touches an argument vector, so the canned note described a rule other than the one in the file.
+func TestPortabilityNoteNamesTheComputedFields(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		kind        string
+		portable    string
+		computed    []string
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "one computed field", kind: "sigma", portable: "mapped", computed: []string{"Subcommand"},
+			wantContain: []string{"the field Subcommand"},
+		},
+		{
+			name: "several computed fields", kind: "sigma", portable: "mapped", computed: []string{"MutatingOpen", "WriteIntent"},
+			wantContain: []string{"the fields MutatingOpen and WriteIntent"},
+		},
+		{
+			name: "three computed fields are comma-joined", kind: "sigma", portable: "mapped",
+			computed:    []string{"CommandArguments", "EnvAssignments", "Subcommand"},
+			wantContain: []string{"the fields CommandArguments, EnvAssignments and Subcommand"},
+		},
+		{
+			name: "an argv field explains the flattened command line", kind: "sigma", portable: "mapped",
+			computed:    []string{"Subcommand"},
+			wantContain: []string{"needs it supplied", "command line as a single string"},
+			wantAbsent:  []string{"open with flags"},
+		},
+		{
+			name: "an open-flag field explains the completed file event", kind: "sigma", portable: "mapped",
+			computed:    []string{"WriteIntent"},
+			wantContain: []string{"completed creation or modification"},
+			wantAbsent:  []string{"argument position"},
+		},
+		{
+			name: "a rule reading both kinds gets both reasons", kind: "sigma", portable: "mapped",
+			computed:    []string{"Subcommand", "WriteIntent"},
+			wantContain: []string{"needs them supplied", "argument position", "completed creation or modification"},
+		},
+		{
+			// classify returns mapped with no field names when the block does not compile: it cannot know what the rule reads,
+			// so it promises least. The caller refuses the rule moments later, but the note still has to read as a sentence.
+			name: "mapped with no field names, the does-not-compile path", kind: "sigma", portable: "mapped", computed: nil,
+			wantContain: []string{"at least one field", "needs them supplied", "Sigma's taxonomy does not carry it"},
+		},
+		{
+			name: "a standard rule names no fields", kind: "sigma", portable: "standard",
+			wantContain: []string{"any Sigma-compatible engine can evaluate it"},
+			wantAbsent:  []string{"the field"},
+		},
+		{
+			name: "a Go rule is not about fields at all", kind: "graph", portable: "none",
+			wantContain: []string{"Go implementation"}, wantAbsent: []string{"the field"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			note := portabilityNote(tc.kind, tc.portable, tc.computed)
+			for _, want := range tc.wantContain {
+				assert.Contains(t, note, want)
+			}
+			for _, absent := range tc.wantAbsent {
+				assert.NotContains(t, note, absent)
+			}
+		})
+	}
+}
+
+// TestClassifyReportsComputedFieldsSorted pins that the reported fields are ordered independently of the block's own key order, so
+// that editing a rule does not reorder the note and produce a spurious regeneration diff.
+func TestClassifyReportsComputedFieldsSorted(t *testing.T) {
+	t.Parallel()
+
+	// Key order here is deliberately not alphabetical: it is what the note would follow if classify did not sort.
+	const detection = `
+selection:
+  WriteIntent: 'true'
+  Subcommand: x
+  MutatingOpen: 'false'
+condition: selection
+`
+	kind, portable, computed := classify(detectionNode(t, detection))
+	assert.Equal(t, "sigma", kind)
+	assert.Equal(t, "mapped", portable)
+	assert.Equal(t, []string{"MutatingOpen", "Subcommand", "WriteIntent"}, computed)
 }
