@@ -14,6 +14,12 @@ Each detection matches the **complete** predicate its Go rule did, including the
 
 A converted rule reads back the values its detection matched on, through the same computed fields, so the alert text does not drift from the match. `persistence_launchagent` names the subcommand and the plist it registered; `dyld_insert` names the DYLD variable and, as before, **withholds its value**, because the injected dylib path is attacker-chosen content in an operator-facing string.
 
+## One observable change, in `persistence_launchagent`
+
+Calling this behaviour-neutral would be wrong, and review caught the claim. `Subcommand` treats an empty token as the verb rather than skipping it, so `launchctl "" load x.plist` no longer produces a finding where the Go matcher did. The correction was introduced with the field in #790 and reaches this rule here, because this is where the rule starts reading it.
+
+It is a narrowing, never a widening: the matcher skipped the empty token only because it used `""` as its not-found sentinel and could not record an empty verb, and `launchctl` would reject that verb and load nothing. Triage should expect one fewer finding shape, not a different one. The equivalence property requires that any divergence be exactly this shape AND always in the direction of removing findings, so nothing else can hide behind it.
+
 ## Impact
 
-No behaviour change. Both rules' test files and fixtures are untouched: 21 of their existing tests pass against the Sigma implementations unchanged, and the pre-conversion matchers are frozen in the equivalence properties as the oracles.
+No other behaviour change, and none that expands what either rule alerts on. Both rules' test files and fixtures are untouched: 21 of their existing tests pass against the Sigma implementations unchanged, and the pre-conversion matchers are frozen in the equivalence properties as the oracles, as literal copies rather than references to the live symbols.

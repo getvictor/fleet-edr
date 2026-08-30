@@ -21,3 +21,15 @@ Where a detection matched a list-valued field, the system SHALL name the element
 - **GIVEN** a rule that fires on an environment assignment
 - **WHEN** the finding is built
 - **THEN** it names the variable and not the value assigned to it
+
+### Requirement: Converting a rule may narrow what it detects, never widen it
+
+The system SHALL NOT begin alerting on anything a rule did not alert on before its logic moved into its file. Where reading a computed field corrects a matcher's behaviour, the correction SHALL remove findings rather than add them, and SHALL be recorded rather than absorbed silently.
+
+A conversion is offered as behaviour-preserving, so an operator has no reason to re-tune a rule afterwards. A widening breaks that promise in the direction that costs an analyst time; a narrowing that is documented does not.
+
+#### Scenario: A conversion removes a finding rather than adding one
+
+- **GIVEN** a rule whose converted form declines an invocation its previous implementation matched
+- **WHEN** the two are compared over generated invocations
+- **THEN** every difference is the converted form declining, and none is it firing where the previous implementation did not

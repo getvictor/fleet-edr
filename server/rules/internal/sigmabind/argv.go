@@ -24,8 +24,8 @@ import "strings"
 // An empty token counts as the subcommand rather than being skipped. `security "" dump-keychain` therefore yields "", so a rule
 // keyed on a real subcommand does not fire, which is right: the tool would reject the empty verb and never act on the later token.
 // This is the safe direction, since it can only make a rule fire less. It matches the keychain rule's pre-conversion matcher,
-// frozen as legacyFindDumpKeychainArg in the equivalence test, and differs from extractLaunchctlSubcommand, whose empty-skip is an
-// artifact of using "" as its not-found sentinel rather than a decision.
+// frozen as legacyFindDumpKeychainArg in the equivalence test, and differs from the launch-agent rule's
+// pre-conversion matcher, whose empty-skip was an artifact of using "" as its not-found sentinel rather than a decision.
 //
 // Known limitation, inherited from the Go rules rather than introduced here: a flag that takes a SEPARATE value has that value
 // mistaken for the subcommand, so `sudo -S -p "" cp` yields "" rather than "cp". That shape is real (59 of 669,428 exec events on a

@@ -63,8 +63,6 @@ func (r *PersistenceLaunchAgent) Doc() api.Documentation {
 	}
 }
 
-// launchctlPaths covers the common macOS launchctl binary locations.
-
 // launchAgentPath matches arguments that reference a plist under a LaunchAgents directory. We accept both system-wide
 // (/Library/LaunchAgents) and per-user (~ / /Users/<u>/Library) locations: an attacker-planted plist at either is a persistence
 // mechanism.

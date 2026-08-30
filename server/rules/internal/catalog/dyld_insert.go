@@ -59,13 +59,16 @@ func (r *DyldInsert) Doc() api.Documentation {
 		},
 		Limitations: []string{
 			"Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.",
-			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.",
+			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule's pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.",
 		},
 	}
 }
 
 // Dangerous env prefixes. DYLD_FRAMEWORK_PATH + DYLD_FALLBACK_* also exist but are higher-false-positive (SIP disables them for Apple
 // binaries anyway); we leave them out for MVP and revisit if pilot customers surface real evasion.
+// dyldPrefixes names the variable a finding reports. It no longer decides whether the rule fires: the detection block does, and
+// this list exists only so the alert can say WHICH assignment matched, since the evaluator reports only that one did (issue #796).
+// TestLiveSymbolsStillAgreeWithTheShippedDetections keeps the two in step.
 var dyldPrefixes = []string{
 	"DYLD_INSERT_LIBRARIES=",
 	"DYLD_LIBRARY_PATH=",
