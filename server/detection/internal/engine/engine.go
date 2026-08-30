@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -23,7 +24,13 @@ const tracerName = "server/detection/engine"
 // Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
 // api.GraphReader through the same interface and dispatch stays non-allocating.
 type Engine struct {
-	rules        []rulesapi.Rule
+	rules []rulesapi.Rule
+	// dispatch maps an agent event type to the indices into rules of the rules that consume it, ascending. Rebuilt whenever the
+	// rule set changes; read-only during Evaluate, which the processor may call concurrently.
+	dispatch map[string][]int
+	// always holds the indices of rules that declare no event types at all. They are invoked for every batch, because dispatch is
+	// an optimisation and over-invoking a rule costs time while under-invoking it loses detections.
+	always       []int
 	store        *mysql.Store
 	logger       *slog.Logger
 	metrics      api.MetricsRecorder
@@ -53,6 +60,35 @@ func (e *Engine) SetModeResolver(m rulesapi.RuleModeResolver) { e.modeResolver =
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r rulesapi.Rule) {
 	e.rules = append(e.rules, r)
+	e.reindex()
+}
+
+// reindex rebuilds the event-type dispatch index from the current rule set.
+//
+// Built eagerly on every rule-set change rather than lazily on first Evaluate, because the processor calls Evaluate from concurrent
+// workers (issue #535) and a lazily-populated map would be a data race. Register and LoadActive run at bootstrap, before serving,
+// so this stays on the cold path.
+//
+// The index is derived state: a pure function of the registered rules, rebuilt from them on load. It holds nothing a peer replica
+// would need to serve the next request, so it is a per-replica cache in ADR-0010's sense and safe to lose.
+func (e *Engine) reindex() {
+	e.dispatch = make(map[string][]int, len(e.rules))
+	e.always = e.always[:0]
+	for i, r := range e.rules {
+		types := r.Doc().EventTypes
+		if len(types) == 0 {
+			// A rule that declares nothing is invoked unconditionally. See the `always` field for why this fails open.
+			e.always = append(e.always, i)
+			continue
+		}
+		for _, t := range types {
+			// A rule declaring the same type twice must not be evaluated twice for one batch.
+			if idx := e.dispatch[t]; len(idx) > 0 && idx[len(idx)-1] == i {
+				continue
+			}
+			e.dispatch[t] = append(e.dispatch[t], i)
+		}
+	}
 }
 
 // LoadActive replaces the engine's active rule set with what the
@@ -65,6 +101,7 @@ func (e *Engine) Register(r rulesapi.Rule) {
 // interface is the canonical implementation.
 func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 	e.rules = append(e.rules[:0], cs.ActiveRules()...)
+	e.reindex()
 }
 
 // Catalog returns the metadata for every registered rule. Order matches registration order so callers can render deterministic output.
@@ -107,7 +144,8 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 	live := filterSnapshotEvents(events)
 	var pendingMiss error
-	for _, rule := range e.rules {
+	for _, i := range e.rulesFor(live) {
+		rule := e.rules[i]
 		err := e.evaluateRule(ctx, rule, live)
 		if err == nil {
 			continue
@@ -130,12 +168,62 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 	return pendingMiss
 }
 
+// rulesFor returns the indices of the rules to invoke for this batch: those consuming at least one event type the batch carries,
+// plus any rule that declares no types. Ascending, so evaluation keeps registration order and the "first retryable error wins"
+// precedence in Evaluate is unchanged.
+//
+// The declared types are a TRIGGER filter, not a batch filter. A dispatched rule still receives the whole batch, because a rule
+// triggered by one type routinely reads another from the same batch: suspicious_exec triggers on a network_connect and reaches back
+// for the exec that made it. Narrowing the batch to the trigger type would silently degrade that.
+//
+// Cost is proportional to the number of MATCHING rules rather than to the catalog size, which is what keeps a batch of a rarely
+// consumed type cheap however many rules are registered.
+func (e *Engine) rulesFor(live []api.Event) []int {
+	// Stack-allocated: there are 13 event types in the wire schema, so a real batch never exceeds this. A malformed batch carrying
+	// more simply spills to the heap, which is correct if slower.
+	var scratch [16]string
+	present := scratch[:0]
+	for _, ev := range live {
+		if !slices.Contains(present, ev.EventType) {
+			present = append(present, ev.EventType)
+		}
+	}
+
+	switch {
+	case len(present) == 0:
+		// An empty batch (or one that was entirely plumbing) can produce no findings, so only the unconditional rules run.
+		return e.always
+	case len(present) == 1 && len(e.always) == 0:
+		// The common single-type batch: the index entry is already ascending and duplicate-free, so hand it back as-is and
+		// allocate nothing.
+		return e.dispatch[present[0]]
+	}
+
+	matched := make([]int, 0, len(e.always)+len(e.dispatch[present[0]]))
+	matched = append(matched, e.always...)
+	for _, t := range present {
+		matched = append(matched, e.dispatch[t]...)
+	}
+	// A rule consuming two types both present in the batch appears twice; sorting restores registration order and Compact drops
+	// the duplicates, so it is still evaluated exactly once.
+	slices.Sort(matched)
+	return slices.Compact(matched)
+}
+
 // evaluateRule opens a per-rule span carrying rule_id (observability-instrumentation spec) so detection latency and alert counts
 // can be grouped by rule in downstream dashboards. The span is annotated with alert_count after the rule returns; on rule-evaluate
 // failure the span records the error and the loop continues (per-rule isolation). Returns a non-nil error ONLY when alert
 // persistence fails or the rule reported a retryable rulesapi.ErrProcessNotYetMaterialized: other rule-evaluation errors are
 // logged + swallowed so a buggy rule doesn't block the rest.
 func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []api.Event) error {
+	// Scope the batch to the rule's target platforms (ADR-0018): a macOS-only rule never sees a Windows event. Checked BEFORE the
+	// span is opened, because a rule left with nothing to evaluate did not run, and emitting a span for it reports work that never
+	// happened and inflates per-rule span volume by the whole cross-platform mismatch.
+	scoped := platformScopedEvents(rule.Platforms(), live)
+	if len(scoped) == 0 {
+		return nil
+	}
+
 	ctx, span := e.tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
 	defer span.End()
@@ -143,13 +231,6 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []ap
 	// paths. The success path below overrides this with the actual count; the rule-error early-return below would otherwise
 	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal.
 	span.SetAttributes(attribute.Int("alert_count", 0))
-
-	// Scope the batch to the rule's target platforms (ADR-0018): a macOS-only rule never sees a Windows event. With nothing left after
-	// scoping there is nothing to evaluate, so skip the rule with alert_count=0 already stamped.
-	scoped := platformScopedEvents(rule.Platforms(), live)
-	if len(scoped) == 0 {
-		return nil
-	}
 
 	findings, err := rule.Evaluate(ctx, scoped, e.store)
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is

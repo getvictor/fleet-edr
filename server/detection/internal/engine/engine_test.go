@@ -149,7 +149,10 @@ func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
 	e.tracer = tp.Tracer("server/detection/engine")
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "stub-rule-x"}}})
 
-	require.NoError(t, e.Evaluate(t.Context(), nil))
+	// The batch has to carry an event the rule is actually handed. A rule left with nothing to evaluate no longer opens a span,
+	// because the platform scope is checked first: a span for a rule that never ran reports work that did not happen. This test is
+	// about what an emitted span carries, so it feeds one event and asserts on the span that results.
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
 
 	ended := rec.Ended()
 	require.NotEmpty(t, ended, "evaluateRule MUST end at least one span per Evaluate call")
@@ -322,4 +325,240 @@ func TestEngine_Evaluate_AFailingRuleDoesNotSuppressLaterRules(t *testing.T) {
 				"a rule registered after a failing rule must still be evaluated; skipping it burned its own grace window (issue #661)")
 		})
 	}
+}
+
+// typedRule is a stub that declares the event types it consumes, so the dispatch tests can assert which rules an event batch
+// reaches. stubRule deliberately declares none (the fail-open case); this one declares.
+type typedRule struct {
+	stubRule
+	eventTypes []string
+}
+
+func (r *typedRule) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: r.DisplayName(), Severity: rulesapi.SeverityHigh, EventTypes: r.eventTypes}
+}
+
+func execEvent(t string) api.Event {
+	return api.Event{EventType: t, Platform: string(rulesapi.PlatformDarwin)}
+}
+
+// spec:server-detection-rules-engine/a-rule-is-invoked-only-for-batches-carrying-an-event-type-it-consumes/a-rule-is-not-invoked-for-a-batch-it-cannot-act-on
+//
+// TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchsEventTypes is the dispatch contract: a rule is invoked when the batch
+// carries at least one event type it declares, and is not invoked otherwise.
+//
+// This is what makes per-batch cost independent of catalog size. Measured against 2.55M real dev events, fork and exit are 28% of
+// telemetry and no rule consumes either, while the four rules reading open, btm_launch_item_add, sensor_provider_transition and
+// sensor_recovery_failed cover 52 events in that entire corpus yet were invoked on every batch.
+func TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchsEventTypes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		batch  []api.Event
+		want   []string // rule ids expected to be invoked
+		absent []string
+	}{
+		{
+			name:   "a single-type batch reaches only that type's rules",
+			batch:  []api.Event{execEvent("dns_query")},
+			want:   []string{"dns"},
+			absent: []string{"exec-only", "open-only", "multi"},
+		},
+		{
+			name:   "a rule declaring several types is reached by any of them",
+			batch:  []api.Event{execEvent("network_connect")},
+			want:   []string{"multi"},
+			absent: []string{"exec-only", "dns", "open-only"},
+		},
+		{
+			name:   "a mixed batch reaches the union",
+			batch:  []api.Event{execEvent("exec"), execEvent("dns_query")},
+			want:   []string{"exec-only", "dns", "multi"},
+			absent: []string{"open-only"},
+		},
+		{
+			// fork and exit are 28% of real telemetry and no rule consumes either, so this batch shape does no rule work at all.
+			name:   "a batch no rule consumes reaches nothing",
+			batch:  []api.Event{execEvent("fork"), execEvent("exit")},
+			absent: []string{"exec-only", "dns", "open-only", "multi"},
+		},
+		{
+			name:   "an empty batch reaches nothing",
+			batch:  nil,
+			absent: []string{"exec-only", "dns", "open-only", "multi"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rules := map[string]*typedRule{
+				"exec-only": {stubRule: stubRule{id: "exec-only"}, eventTypes: []string{"exec"}},
+				"dns":       {stubRule: stubRule{id: "dns"}, eventTypes: []string{"dns_query"}},
+				"open-only": {stubRule: stubRule{id: "open-only"}, eventTypes: []string{"open"}},
+				"multi":     {stubRule: stubRule{id: "multi"}, eventTypes: []string{"exec", "network_connect"}},
+			}
+			e := New(nil, nil)
+			// Registration order is fixed so the assertions do not depend on map iteration order.
+			e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+				rules["exec-only"], rules["dns"], rules["open-only"], rules["multi"],
+			}})
+
+			require.NoError(t, e.Evaluate(t.Context(), tc.batch))
+
+			for _, id := range tc.want {
+				assert.Equal(t, 1, rules[id].calls, "rule %q consumes a type in the batch and must be invoked", id)
+			}
+			for _, id := range tc.absent {
+				assert.Zero(t, rules[id].calls, "rule %q consumes no type in the batch and must not be invoked", id)
+			}
+		})
+	}
+}
+
+// spec:server-detection-rules-engine/a-rule-is-invoked-only-for-batches-carrying-an-event-type-it-consumes/a-rule-declaring-no-event-types-still-runs
+//
+// TestEngine_Evaluate_ARuleDeclaringNoEventTypesAlwaysRuns pins the fail-open direction.
+//
+// Dispatch is an optimisation, so the two ways of being wrong are not symmetric: invoking a rule that had nothing to do costs
+// time, while skipping one that did have something to do loses a detection silently. A rule that declares nothing therefore runs
+// for every batch rather than none.
+func TestEngine_Evaluate_ARuleDeclaringNoEventTypesAlwaysRuns(t *testing.T) {
+	t.Parallel()
+
+	undeclared := &stubRule{id: "undeclared"} // stubRule.Doc() carries no EventTypes
+	declared := &typedRule{stubRule: stubRule{id: "declared"}, eventTypes: []string{"open"}}
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{undeclared, declared}})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{execEvent("dns_query")}))
+	assert.Equal(t, 1, undeclared.calls, "a rule declaring nothing must still be invoked")
+	assert.Zero(t, declared.calls, "a rule declaring only open must not be invoked for a dns_query batch")
+}
+
+// TestEngine_Evaluate_DispatchPreservesRegistrationOrder pins that dispatch hands rules back in registration order.
+//
+// Evaluate's error precedence depends on it: the first retryable error wins, so the error names the rule that started the wait.
+// Reordering would change which rule the operator sees named.
+func TestEngine_Evaluate_DispatchPreservesRegistrationOrder(t *testing.T) {
+	t.Parallel()
+
+	var order []string
+	record := func(id string) *typedRule {
+		r := &typedRule{stubRule: stubRule{id: id}, eventTypes: []string{"exec", "dns_query"}}
+		return r
+	}
+	first, second, third := record("first"), record("second"), record("third")
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{first, second, third}})
+
+	// A batch carrying BOTH types every rule declares, so each appears twice in the pre-merge candidate list.
+	for _, i := range e.rulesFor([]api.Event{execEvent("dns_query"), execEvent("exec")}) {
+		order = append(order, e.rules[i].ID())
+	}
+	assert.Equal(t, []string{"first", "second", "third"}, order,
+		"dispatch must return registration order, and must not repeat a rule that declares two present types")
+}
+
+// benchRules builds a catalog of n rules of which exactly one consumes dns_query, modelling the real shape: most rules read exec,
+// and the rarely consumed types are read by very few.
+func benchRules(n int) []rulesapi.Rule {
+	out := make([]rulesapi.Rule, 0, n)
+	out = append(out, &typedRule{stubRule: stubRule{id: "dns"}, eventTypes: []string{"dns_query"}})
+	for i := 1; i < n; i++ {
+		out = append(out, &typedRule{stubRule: stubRule{id: fmt.Sprintf("exec-%d", i)}, eventTypes: []string{"exec"}})
+	}
+	return out
+}
+
+// BenchmarkEvaluate_RareTypeBatch measures the case the index exists for: a batch of a type almost no rule consumes, against a
+// catalog large enough that scanning it dominates. Cost should be flat in catalog size.
+func BenchmarkEvaluate_RareTypeBatch(b *testing.B) {
+	for _, n := range []int{12, 100, 500} {
+		b.Run(fmt.Sprintf("catalog=%d", n), func(b *testing.B) {
+			e := New(nil, nil)
+			e.LoadActive(stubProvider{rules: benchRules(n)})
+			batch := []api.Event{execEvent("dns_query")}
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = e.Evaluate(context.Background(), batch)
+			}
+		})
+	}
+}
+
+// BenchmarkEvaluate_MixedBatch measures the unfavourable case: a batch carrying both types, so nearly every rule dispatches and the
+// index only adds the union work. This is the cost the optimisation has to be worth paying.
+func BenchmarkEvaluate_MixedBatch(b *testing.B) {
+	for _, n := range []int{12, 100, 500} {
+		b.Run(fmt.Sprintf("catalog=%d", n), func(b *testing.B) {
+			e := New(nil, nil)
+			e.LoadActive(stubProvider{rules: benchRules(n)})
+			batch := []api.Event{execEvent("exec"), execEvent("dns_query")}
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = e.Evaluate(context.Background(), batch)
+			}
+		})
+	}
+}
+
+// spec:server-detection-rules-engine/a-rule-is-invoked-only-for-batches-carrying-an-event-type-it-consumes/a-triggered-rule-still-sees-the-whole-batch
+//
+// TestEngine_Evaluate_ADispatchedRuleReceivesTheWholeBatch pins that the declared types are a TRIGGER filter, not a batch filter.
+//
+// suspicious_exec is the live example: it triggers on a network_connect and then reaches back for the exec that made the connection,
+// to name the process in its finding. Handing it only the network_connect events would leave the finding unattributed, so a rule
+// that is dispatched sees every event in the batch, including types it never declared.
+func TestEngine_Evaluate_ADispatchedRuleReceivesTheWholeBatch(t *testing.T) {
+	t.Parallel()
+
+	r := &typedRule{stubRule: stubRule{id: "network-only"}, eventTypes: []string{"network_connect"}}
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{r}})
+
+	batch := []api.Event{execEvent("exec"), execEvent("network_connect"), execEvent("dns_query")}
+	require.NoError(t, e.Evaluate(t.Context(), batch))
+
+	require.Equal(t, 1, r.calls, "the batch carries network_connect, so the rule must be invoked")
+	assert.Len(t, r.received, 3, "a dispatched rule receives the whole batch, not just its trigger type")
+}
+
+// spec:server-detection-rules-engine/a-rule-that-does-not-run-records-no-span/a-rule-scoped-out-by-platform-records-no-span
+//
+// TestEngine_Evaluate_ASkippedRuleRecordsNoSpan pins that a rule which does not run records nothing.
+//
+// Both ways of not running are covered: scoped out by platform, and not dispatched at all. A span for either reports evaluation that
+// never happened, and at catalog scale it is the bulk of per-rule span volume, since most rules are irrelevant to most batches.
+func TestEngine_Evaluate_ASkippedRuleRecordsNoSpan(t *testing.T) {
+	t.Parallel()
+
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	wrongPlatform := &typedRule{
+		stubRule:   stubRule{id: "windows-only", platforms: []rulesapi.Platform{rulesapi.PlatformWindows}},
+		eventTypes: []string{"exec"},
+	}
+	notDispatched := &typedRule{stubRule: stubRule{id: "open-only"}, eventTypes: []string{"open"}}
+	runs := &typedRule{stubRule: stubRule{id: "exec-rule"}, eventTypes: []string{"exec"}}
+
+	e := New(nil, nil)
+	e.tracer = tp.Tracer("server/detection/engine")
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{wrongPlatform, notDispatched, runs}})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{execEvent("exec")}))
+
+	var sawRuleIDs []string
+	for _, sp := range rec.Ended() {
+		for _, a := range sp.Attributes() {
+			if a.Key == attribute.Key("rule_id") {
+				sawRuleIDs = append(sawRuleIDs, a.Value.AsString())
+			}
+		}
+	}
+	assert.Equal(t, []string{"exec-rule"}, sawRuleIDs,
+		"only the rule that actually evaluated the batch may record a span")
 }
