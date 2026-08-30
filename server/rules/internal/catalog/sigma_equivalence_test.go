@@ -545,7 +545,7 @@ func TestEquivalence_SudoersTamper(t *testing.T) {
 //
 // The logic is kept because an agent predating #301 sends real open(2) flags, and dropping the tests would make a read-only open of
 // /etc/sudoers on such a host start alerting. This test is the record of that reasoning, so a later reader can retire the fields
-// deliberately once those agents are gone rather than discovering the masks look pointless and guessing.
+// deliberately once those agents are gone rather than discovering the masks look pointless and guessing. Tracked as #801.
 func TestSudoersFlagChecksAreVestigialForCurrentAgents(t *testing.T) {
 	t.Parallel()
 

@@ -18,7 +18,7 @@ Both mask tests are **inert against any agent shipping today**, and the conversi
 
 Since #301 (2026-05-31) dropped the broad `NOTIFY_OPEN` subscription, the only source of `open` events is `FileTamperSubscriber`, which re-emits `NOTIFY_CREATE` and `NOTIFY_WRITE` on sudoers paths with a **constant synthetic flag set**, `O_WRONLY|O_CREAT|O_TRUNC` (1537). Against a constant, write access is always set and the mutating bits are always set, so the flock suppression cannot fire and no read-only open ever arrives to be filtered. The rule fires on path alone in practice.
 
-Keeping the tests is not speculative: an agent predating #301 sends real `open(2)` flags, and dropping them would make a read-only open of `/etc/sudoers` on such a host start alerting. A test records this so the fields can be retired deliberately once those agents are gone, rather than a later reader finding two masks that look pointless and guessing. Filed as #799.
+Keeping the tests is not speculative: an agent predating #301 sends real `open(2)` flags, and dropping them would make a read-only open of `/etc/sudoers` on such a host start alerting. A test records this so the fields can be retired deliberately once those agents are gone, rather than a later reader finding two masks that look pointless and guessing. Filed as #801.
 
 ## The `mapped` trade
 
