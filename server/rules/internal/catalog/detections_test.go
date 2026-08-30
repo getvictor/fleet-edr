@@ -211,36 +211,95 @@ func TestRedactedDyldAssignment(t *testing.T) {
 
 // spec:server-detection-rules-engine/a-rule-can-match-on-the-parent-process/an-unresolvable-parent-declines-rather-than-matching
 //
-// TestExecEventWithParent covers the resolution helper: what a rule sees when the graph knows the parent, when it does not, and
-// when the read itself fails. The middle case is the one that matters, because it is the difference between a rule declining and a
-// batch failing.
+// TestExecEventWithParent covers what a rule sees for each resolution outcome. The unresolvable case is the one that matters: it is
+// the difference between a rule declining and a batch failing.
 func TestExecEventWithParent(t *testing.T) {
 	t.Parallel()
 
 	evt := rulesapi.Event{EventID: "e", HostID: "h", EventType: "exec", TimestampNs: 100,
 		Payload: []byte(`{"pid":1,"ppid":2,"path":"/bin/bash","args":["bash"]}`)}
 
-	t.Run("a resolved parent supplies the field", func(t *testing.T) {
-		t.Parallel()
-		se, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{byPID: &rulesapi.Process{Path: "/Applications/X"}}, 2)
-		require.NoError(t, err)
-		values, present := se.Field("ParentImage")
-		assert.True(t, present)
-		assert.Equal(t, []string{"/Applications/X"}, values)
-	})
+	cases := []struct {
+		name        string
+		graph       *recordingGraphReader
+		wantValues  []string
+		wantPresent bool
+	}{
+		{
+			// The parent is resolved at the CHILD'S fork time, not the event timestamp: a parent must be alive when it forks,
+			// but by the exec it may have exited and had its pid reused.
+			"a resolved parent supplies the field",
+			&recordingGraphReader{byPID: &rulesapi.Process{Path: "/Applications/X", PPID: 2, ForkTimeNs: 50}},
+			[]string{"/Applications/X"}, true,
+		},
+		{
+			"an unresolvable child leaves it absent",
+			&recordingGraphReader{},
+			nil, false,
+		},
+		{
+			// PPID <= 1 means the process was reparented or is a root: there is no meaningful parent image to report.
+			"a reparented process has no parent image",
+			&recordingGraphReader{byPID: &rulesapi.Process{Path: "/bin/bash", PPID: 1, ForkTimeNs: 50}},
+			nil, false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			se, err := execEventWithParent(t.Context(), evt, tc.graph, 1)
+			require.NoError(t, err)
+			values, present := se.Field("ParentImage")
+			assert.Equal(t, tc.wantPresent, present)
+			assert.Equal(t, tc.wantValues, values)
+			require.NoError(t, se.ParentErr(), "an unresolvable parent is a decline, not a failure")
+		})
+	}
+}
 
-	t.Run("an unresolved parent leaves it absent without failing", func(t *testing.T) {
-		t.Parallel()
-		se, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{}, 2)
-		require.NoError(t, err, "an unresolvable parent is a decline, not a batch failure")
-		_, present := se.Field("ParentImage")
-		assert.False(t, present)
-	})
+// TestExecEventWithParent_ResolvesLazily pins the property that restores the prefilter a converted rule loses.
+//
+// shell_from_office checked eight shell paths in Go before touching the graph. As a detection block the binary and the parent are
+// one condition, so without deferral every exec event on the host would read the process graph. Sigma short-circuits, so a resolver
+// is only reached once the cheaper half has already matched.
+func TestExecEventWithParent_ResolvesLazily(t *testing.T) {
+	t.Parallel()
 
-	t.Run("a failed graph read propagates", func(t *testing.T) {
-		t.Parallel()
-		_, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{errByPID: errors.New("boom")}, 2)
-		require.Error(t, err, "a real read failure must surface so the batch is retried")
-		assert.Contains(t, err.Error(), "get parent pid 2")
-	})
+	evt := rulesapi.Event{EventID: "e", HostID: "h", EventType: "exec", TimestampNs: 100,
+		Payload: []byte(`{"pid":1,"ppid":2,"path":"/usr/bin/true","args":["true"]}`)}
+	graph := &recordingGraphReader{byPID: &rulesapi.Process{Path: "/Applications/X", PPID: 2, ForkTimeNs: 50}}
+
+	se, err := execEventWithParent(t.Context(), evt, graph, 1)
+	require.NoError(t, err)
+	assert.False(t, graph.calledByPID, "constructing the adapter must not read the graph")
+
+	// /usr/bin/true is not a shell, so the detection's cheap half fails and the parent is never needed.
+	assert.False(t, shellFromOfficeDetection().Matches(se))
+	assert.False(t, graph.calledByPID, "a non-matching image must not cost a graph read")
+
+	// Asking for the field directly does resolve it, once.
+	values, present := se.Field("ParentImage")
+	assert.True(t, present)
+	assert.Equal(t, []string{"/Applications/X"}, values)
+	assert.True(t, graph.calledByPID)
+
+	graph.calledByPID = false
+	se.Field("ParentImage")
+	assert.False(t, graph.calledByPID, "the resolver runs at most once per event")
+}
+
+// TestExecEventWithParent_ReportsAResolverFailure pins that a graph read failure is distinguishable from a process with no parent.
+// Both leave the field absent, and they deserve different handling.
+func TestExecEventWithParent_ReportsAResolverFailure(t *testing.T) {
+	t.Parallel()
+
+	evt := rulesapi.Event{EventID: "e", HostID: "h", EventType: "exec", TimestampNs: 100,
+		Payload: []byte(`{"pid":1,"ppid":2,"path":"/bin/bash","args":["bash"]}`)}
+	se, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{errByPID: errors.New("boom")}, 1)
+	require.NoError(t, err, "construction does not read the graph, so it cannot fail here")
+
+	_, present := se.Field("ParentImage")
+	assert.False(t, present, "a failed lookup leaves the field absent")
+	require.Error(t, se.ParentErr(), "and the failure is reported rather than silently read as no parent")
+	assert.Contains(t, se.ParentErr().Error(), "get child pid 1")
 }

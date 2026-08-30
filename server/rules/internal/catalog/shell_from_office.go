@@ -81,11 +81,15 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	// Resolves the parent from the graph and supplies it as ParentImage. An unresolved parent leaves the field absent, so the
 	// detection declines: the same answer the Go matcher gave, and for the same reason. The processor marks the batch processed
 	// after Evaluate returns, so a missing parent is accepted rather than retried; a deferred retry queue is a future improvement.
-	se, err := execEventWithParent(ctx, evt, s, p.PPID)
+	se, err := execEventWithParent(ctx, evt, s, p.PID)
 	if err != nil {
 		return nil, err
 	}
-	if !shellFromOfficeDetection().Matches(se) {
+	matched := shellFromOfficeDetection().Matches(se)
+	if err := se.ParentErr(); err != nil {
+		return nil, err
+	}
+	if !matched {
 		return nil, nil
 	}
 	// The parent the detection matched on, read back from the same field, so the alert names the Office app that spawned the shell.

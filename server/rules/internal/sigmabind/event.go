@@ -29,6 +29,10 @@ type Event struct {
 
 	// Supplied by the caller rather than read from the payload. See NewExecEvent for why.
 	parentImage []string
+	// Resolved on first access rather than up front, so an event no rule asks about costs nothing. See NewExecEventLazy.
+	resolveParent func() (string, error)
+	parentErr     error
+	parentDone    bool
 
 	// Computed from argv rather than copied from a payload field. See argv.go for why each exists.
 	subcommand       []string
@@ -74,6 +78,43 @@ func NewExecEvent(ev api.Event, parentImage string) (*Event, error) {
 	}
 	e.parentImage = presentString(parentImage)
 	return e, nil
+}
+
+// NewExecEventLazy is NewExecEvent for a parent whose resolution is expensive enough to be worth deferring.
+//
+// Resolving the parent means reading the process graph, and a detection that reads ParentImage almost always reads something
+// cheaper first: `Image` narrows to a handful of binaries before the parent matters at all. Sigma's conditions short-circuit, so a
+// resolver passed here runs only if the rule actually reaches the field, which restores the prefilter a converted rule would
+// otherwise have lost and keeps the common case free of a database read.
+//
+// The resolver runs at most once per event. Its error is recorded rather than returned, because Field cannot report one, so a
+// caller that needs to distinguish "no parent" from "could not look one up" checks ParentErr after evaluating.
+func NewExecEventLazy(ev api.Event, resolveParent func() (string, error)) (*Event, error) {
+	e, err := NewEvent(ev)
+	if err != nil {
+		return nil, err
+	}
+	e.resolveParent = resolveParent
+	return e, nil
+}
+
+// ParentErr reports a failure from the lazy parent resolver, or nil when it succeeded or was never reached.
+//
+// A rule checks this AFTER evaluating: a resolver that failed leaves ParentImage absent, which is indistinguishable at match time
+// from a process with no parent, and the two deserve different handling.
+func (e *Event) ParentErr() error { return e.parentErr }
+
+// parentImageValues returns the parent image, resolving it on first access.
+func (e *Event) parentImageValues() ([]string, bool) {
+	if e.resolveParent != nil && !e.parentDone {
+		e.parentDone = true
+		path, err := e.resolveParent()
+		e.parentErr = err
+		if err == nil {
+			e.parentImage = presentString(path)
+		}
+	}
+	return e.parentImage, e.parentImage != nil
 }
 
 // NewEvent decodes an event into the Sigma fields it can supply.

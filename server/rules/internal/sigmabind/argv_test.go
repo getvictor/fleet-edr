@@ -2,6 +2,7 @@ package sigmabind
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -214,5 +215,69 @@ func TestParentImage(t *testing.T) {
 		t.Parallel()
 		_, err := NewExecEvent(api.Event{EventID: "e1", EventType: "exec", Payload: []byte(`{"path":123}`)}, "/bin/sh")
 		require.Error(t, err)
+	})
+}
+
+// TestParentImageLazy covers the deferred resolver: that it is not called until the field is read, runs at most once, and reports a
+// failure rather than presenting it as an absent parent.
+func TestParentImageLazy(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{"pid":1,"ppid":2,"path":"/bin/bash","args":["bash"]}`)
+	event := func() api.Event { return api.Event{EventID: "e1", EventType: "exec", Payload: payload} }
+
+	t.Run("not called until the field is read", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		e, err := NewExecEventLazy(event(), func() (string, error) { calls++; return "/Applications/X", nil })
+		require.NoError(t, err)
+		assert.Zero(t, calls, "construction must not resolve")
+
+		values, present := e.Field("ParentImage")
+		assert.True(t, present)
+		assert.Equal(t, []string{"/Applications/X"}, values)
+		assert.Equal(t, 1, calls)
+
+		e.Field("ParentImage")
+		assert.Equal(t, 1, calls, "resolved at most once per event")
+	})
+
+	t.Run("a resolver failure is reported, not read as no parent", func(t *testing.T) {
+		t.Parallel()
+		e, err := NewExecEventLazy(event(), func() (string, error) { return "", errors.New("graph down") })
+		require.NoError(t, err)
+
+		_, present := e.Field("ParentImage")
+		assert.False(t, present)
+		require.Error(t, e.ParentErr())
+		assert.Contains(t, e.ParentErr().Error(), "graph down")
+	})
+
+	t.Run("a resolver returning no parent is not a failure", func(t *testing.T) {
+		t.Parallel()
+		e, err := NewExecEventLazy(event(), func() (string, error) { return "", nil })
+		require.NoError(t, err)
+
+		_, present := e.Field("ParentImage")
+		assert.False(t, present)
+		assert.NoError(t, e.ParentErr(), "no parent and a failed lookup must be distinguishable")
+	})
+
+	t.Run("a malformed payload still errors before any resolution", func(t *testing.T) {
+		t.Parallel()
+		called := false
+		_, err := NewExecEventLazy(api.Event{EventID: "e1", EventType: "exec", Payload: []byte(`{"path":123}`)},
+			func() (string, error) { called = true; return "", nil })
+		require.Error(t, err)
+		assert.False(t, called, "a payload that does not decode is rejected without touching the graph")
+	})
+
+	t.Run("an event built without a resolver reports nothing", func(t *testing.T) {
+		t.Parallel()
+		e, err := NewEvent(event())
+		require.NoError(t, err)
+		_, present := e.Field("ParentImage")
+		assert.False(t, present)
+		assert.NoError(t, e.ParentErr())
 	})
 }

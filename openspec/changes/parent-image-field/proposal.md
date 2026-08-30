@@ -32,4 +32,6 @@ This is worth watching as more rules convert. It is a real cost of the format, n
 
 ## Impact
 
-No behaviour change. The rule's seven table cases pass unchanged, including the negatives that pin exact-path matching, and its pre-conversion predicate is frozen in the equivalence property as the oracle.
+Rules gain a field they did not have, so 11 corpus rules that could not load now can: that is the point of the change rather than an incidental effect. What is unchanged is **what the existing rules detect**. `shell_from_office`'s seven table cases pass untouched, including the negatives pinning exact-path matching, and its pre-conversion predicate is frozen in the equivalence property as the oracle.
+
+One deliberate correction inside that: the parent is now resolved at the child's fork time rather than at the exec timestamp. A parent must be alive when it forks a child, but by the time the child execs it may have exited and had its pid reused, so the exec timestamp can select a different process entirely. This is the bracket `SuspiciousExec.lookupParentOf` already uses, and adopting it here makes the field mean the same thing for the 11 imported rules that will read it. A related gap in the shared lookup, where a re-exec can supply an image the process adopted later, is filed as #799.

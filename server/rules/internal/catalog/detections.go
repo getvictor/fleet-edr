@@ -174,25 +174,42 @@ func firstMatching(se *sigmabind.Event, name string, pred func(string) bool) str
 	return ""
 }
 
-// execEventWithParent builds the Sigma adapter for an exec event, resolving the parent's image from the process graph.
+// execEventWithParent builds the Sigma adapter for an exec event, resolving the parent's image from the process graph LAZILY.
 //
-// ParentImage is a standard Sigma field that our payload cannot carry: an exec event has ppid, not the parent's path. Resolving it
-// here rather than denormalising it onto the stored event is deliberate, and the pipeline decides it. Processes are materialized
-// BEFORE rules run ("run detection rules after processes are materialized"), while events are stored before that, so an
-// enrichment written at ingest would miss exactly the parents that arrive in the same batch as their children, and would persist
-// that miss permanently.
+// ParentImage is a standard Sigma field our payload cannot carry: an exec event has ppid, not the parent's path. Resolving it here
+// rather than denormalising it onto the stored event is deliberate, and the pipeline decides it. Processes are materialized BEFORE
+// rules run, while events are stored before that, so an enrichment written at ingest would miss exactly the parents that arrive in
+// the same batch as their children, and would persist that miss permanently.
 //
-// A parent that cannot be resolved yields an absent ParentImage rather than an error, which is what the Go rules this replaces did:
-// an unresolvable parent means the rule declines, not that the batch failed. The error path stays for a graph read that actually
-// failed, which the caller propagates so the batch is retried rather than silently under-detecting.
-func execEventWithParent(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, ppid int) (*sigmabind.Event, error) {
-	parent, err := gr.GetProcessByPID(ctx, evt.HostID, ppid, evt.TimestampNs)
-	if err != nil {
-		return nil, fmt.Errorf("get parent pid %d: %w", ppid, err)
-	}
-	parentImage := ""
-	if parent != nil {
-		parentImage = parent.Path
-	}
-	return sigmabind.NewExecEvent(evt, parentImage)
+// Deferred rather than eager, because a converted rule loses the cheap Go prefilter it used to have. shell_from_office checked eight
+// shell paths before touching the graph; expressed as a detection block, the binary and the parent are one condition. Sigma's
+// conditions short-circuit, so passing a resolver means the graph is read only for the events whose image already matched, which is
+// what the prefilter bought.
+//
+// The parent is resolved at the CHILD'S FORK TIME, not the exec timestamp. A parent must be alive when it forks the child, but by
+// the time the child execs it may have exited and had its pid reused, so the exec timestamp can select a different process
+// entirely. This is the same bracket SuspiciousExec.lookupParentOf uses, and the reason it uses it.
+//
+// A parent that cannot be resolved leaves the field absent, so the rule declines rather than matching a process whose image is
+// unknown. A graph read that genuinely fails is recorded on the event and the caller decides; note that the engine isolates
+// ordinary rule errors rather than retrying the batch, which is pre-existing behaviour for every rule that reads the graph and is
+// tracked in issue #798.
+func execEventWithParent(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) (*sigmabind.Event, error) {
+	return sigmabind.NewExecEventLazy(evt, func() (string, error) {
+		child, err := gr.GetProcessByPID(ctx, evt.HostID, childPID, evt.TimestampNs)
+		if err != nil {
+			return "", fmt.Errorf("get child pid %d: %w", childPID, err)
+		}
+		if child == nil || child.PPID <= 1 {
+			return "", nil
+		}
+		parent, err := gr.GetProcessByPID(ctx, evt.HostID, child.PPID, child.ForkTimeNs)
+		if err != nil {
+			return "", fmt.Errorf("get parent pid %d: %w", child.PPID, err)
+		}
+		if parent == nil {
+			return "", nil
+		}
+		return parent.Path, nil
+	})
 }

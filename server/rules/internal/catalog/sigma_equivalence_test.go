@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -448,25 +449,29 @@ func TestEquivalence_ShellFromOffice(t *testing.T) {
 // TestSharedShellListMatchesTheShippedDetection is the guard the detection block's comment promises.
 //
 // Sigma cannot reference a list defined elsewhere, so converting a rule that read the shared `unix_shells` list necessarily inlined
-// it. suspicious_exec still reads the shared list, so the two descriptions of one set can now part company: a shell added to
-// lists.yml would extend one rule and not the other, silently. This asserts the shipped detection matches exactly the shared list,
-// in both directions.
+// it. suspicious_exec still reads the shared list, so the two descriptions of one set can part company.
+//
+// Compares the SETS rather than sampling either side, which review caught: checking that each shared entry fires, plus a handful of
+// hand-picked non-shells, still passed when a path was added to the detection alone. The detection's alternatives are read out of
+// the shipped pack file, so both directions of drift fail here.
 func TestSharedShellListMatchesTheShippedDetection(t *testing.T) {
 	t.Parallel()
 
-	office := "/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"
-	fires := func(path string) bool {
-		payload, err := json.Marshal(map[string]any{"pid": 1, "ppid": 2, "path": path, "args": []string{path}})
-		require.NoError(t, err)
-		ev, err := sigmabind.NewExecEvent(rulesapi.Event{EventID: "e", EventType: "exec", Payload: payload}, office)
-		require.NoError(t, err)
-		return shellFromOfficeDetection().Matches(ev)
+	body, err := os.ReadFile("pack/shell_from_office.yml")
+	require.NoError(t, err)
+	m := regexp.MustCompile(`Image\|re: '\^\(([^)]*)\)\$'`).FindSubmatch(body)
+	require.NotNil(t, m, "the detection must declare its shells as an anchored alternation")
+
+	inDetection := map[string]bool{}
+	for alt := range strings.SplitSeq(string(m[1]), "|") {
+		inDetection[strings.ReplaceAll(alt, `\.`, ".")] = true
 	}
 
-	for shell := range shellPaths() {
-		assert.Truef(t, fires(shell), "shared list has %q but the inlined detection does not match it", shell)
+	shared := map[string]bool{}
+	for path := range shellPaths() {
+		shared[path] = true
 	}
-	for _, notAShell := range []string{"/bin/ls", "/usr/bin/python3", "/tmp/bash", "/bin/shx"} {
-		assert.Falsef(t, fires(notAShell), "the detection matches %q, which the shared list does not contain", notAShell)
-	}
+
+	assert.Equal(t, shared, inDetection,
+		"the inlined detection and the shared unix_shells list must describe the same set; they are one set written twice")
 }
