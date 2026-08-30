@@ -338,8 +338,10 @@ func (r *typedRule) Doc() rulesapi.Documentation {
 	return rulesapi.Documentation{Title: r.DisplayName(), Severity: rulesapi.SeverityHigh, EventTypes: r.eventTypes}
 }
 
-func execEvent(t string) api.Event {
-	return api.Event{EventType: t, Platform: string(rulesapi.PlatformDarwin)}
+// eventOfType builds a darwin event of the given type. Named for what it does rather than for its first caller: most call sites
+// pass dns_query, network_connect or fork, and the dispatch tests are precisely about which type a batch carries.
+func eventOfType(eventType string) api.Event {
+	return api.Event{EventType: eventType, Platform: string(rulesapi.PlatformDarwin)}
 }
 
 // spec:server-detection-rules-engine/a-rule-is-invoked-only-for-batches-carrying-an-event-type-it-consumes/a-rule-is-not-invoked-for-a-batch-it-cannot-act-on
@@ -361,26 +363,26 @@ func TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchesEventTypes(t *tes
 	}{
 		{
 			name:   "a single-type batch reaches only that type's rules",
-			batch:  []api.Event{execEvent("dns_query")},
+			batch:  []api.Event{eventOfType("dns_query")},
 			want:   []string{"dns"},
 			absent: []string{"exec-only", "open-only", "multi"},
 		},
 		{
 			name:   "a rule declaring several types is reached by any of them",
-			batch:  []api.Event{execEvent("network_connect")},
+			batch:  []api.Event{eventOfType("network_connect")},
 			want:   []string{"multi"},
 			absent: []string{"exec-only", "dns", "open-only"},
 		},
 		{
 			name:   "a mixed batch reaches the union",
-			batch:  []api.Event{execEvent("exec"), execEvent("dns_query")},
+			batch:  []api.Event{eventOfType("exec"), eventOfType("dns_query")},
 			want:   []string{"exec-only", "dns", "multi"},
 			absent: []string{"open-only"},
 		},
 		{
 			// fork and exit are 28% of real telemetry and no rule consumes either, so this batch shape does no rule work at all.
 			name:   "a batch no rule consumes reaches nothing",
-			batch:  []api.Event{execEvent("fork"), execEvent("exit")},
+			batch:  []api.Event{eventOfType("fork"), eventOfType("exit")},
 			absent: []string{"exec-only", "dns", "open-only", "multi"},
 		},
 		{
@@ -432,7 +434,7 @@ func TestEngine_Evaluate_ARuleDeclaringNoEventTypesAlwaysRuns(t *testing.T) {
 	e := New(nil, nil)
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{undeclared, declared}})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{execEvent("dns_query")}))
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{eventOfType("dns_query")}))
 	assert.Equal(t, 1, undeclared.calls, "a rule declaring nothing must still be invoked")
 	assert.Zero(t, declared.calls, "a rule declaring only open must not be invoked for a dns_query batch")
 }
@@ -454,7 +456,7 @@ func TestEngine_Evaluate_DispatchPreservesRegistrationOrder(t *testing.T) {
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{first, second, third}})
 
 	// A batch carrying BOTH types every rule declares, so each appears twice in the pre-merge candidate list.
-	for _, i := range e.rulesFor([]api.Event{execEvent("dns_query"), execEvent("exec")}) {
+	for _, i := range e.rulesFor([]api.Event{eventOfType("dns_query"), eventOfType("exec")}) {
 		order = append(order, e.rules[i].ID())
 	}
 	assert.Equal(t, []string{"first", "second", "third"}, order,
@@ -479,7 +481,7 @@ func BenchmarkEvaluate_RareTypeBatch(b *testing.B) {
 		b.Run(fmt.Sprintf("catalog=%d", n), func(b *testing.B) {
 			e := New(nil, nil)
 			e.LoadActive(stubProvider{rules: benchRules(n)})
-			batch := []api.Event{execEvent("dns_query")}
+			batch := []api.Event{eventOfType("dns_query")}
 			b.ReportAllocs()
 			for b.Loop() {
 				_ = e.Evaluate(context.Background(), batch)
@@ -495,7 +497,7 @@ func BenchmarkEvaluate_MixedBatch(b *testing.B) {
 		b.Run(fmt.Sprintf("catalog=%d", n), func(b *testing.B) {
 			e := New(nil, nil)
 			e.LoadActive(stubProvider{rules: benchRules(n)})
-			batch := []api.Event{execEvent("exec"), execEvent("dns_query")}
+			batch := []api.Event{eventOfType("exec"), eventOfType("dns_query")}
 			b.ReportAllocs()
 			for b.Loop() {
 				_ = e.Evaluate(context.Background(), batch)
@@ -518,7 +520,7 @@ func TestEngine_Evaluate_ADispatchedRuleReceivesTheWholeBatch(t *testing.T) {
 	e := New(nil, nil)
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{r}})
 
-	batch := []api.Event{execEvent("exec"), execEvent("network_connect"), execEvent("dns_query")}
+	batch := []api.Event{eventOfType("exec"), eventOfType("network_connect"), eventOfType("dns_query")}
 	require.NoError(t, e.Evaluate(t.Context(), batch))
 
 	require.Equal(t, 1, r.calls, "the batch carries network_connect, so the rule must be invoked")
@@ -549,7 +551,7 @@ func TestEngine_Evaluate_ASkippedRuleRecordsNoSpan(t *testing.T) {
 	e.tracer = tp.Tracer("server/detection/engine")
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{wrongPlatform, notDispatched, runs}})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{execEvent("exec")}))
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{eventOfType("exec")}))
 
 	var sawRuleIDs []string
 	for _, sp := range rec.Ended() {
@@ -600,7 +602,7 @@ func TestEngine_Evaluate_ARuleDeclaringATypeTwiceIsEvaluatedOnce(t *testing.T) {
 	e := New(nil, nil)
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{r}})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{execEvent("exec")}))
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{eventOfType("exec")}))
 	assert.Equal(t, 1, r.calls, "a rule declaring the same event type twice must still be evaluated once per batch")
 }
 
@@ -669,9 +671,9 @@ func TestEngine_Evaluate_ManyDistinctEventTypesStayCorrect(t *testing.T) {
 	// the set path too.
 	batch := make([]api.Event, 0, 256)
 	for i := range 250 {
-		batch = append(batch, execEvent(fmt.Sprintf("junk_type_%d", i)))
+		batch = append(batch, eventOfType(fmt.Sprintf("junk_type_%d", i)))
 	}
-	batch = append(batch, execEvent("exec"), execEvent("exec"))
+	batch = append(batch, eventOfType("exec"), eventOfType("exec"))
 
 	require.NoError(t, e.Evaluate(t.Context(), batch))
 	assert.Equal(t, 1, execRule.calls, "the batch carries exec, so the rule runs exactly once despite the duplicate")
@@ -687,7 +689,7 @@ func BenchmarkEvaluate_ManyDistinctTypes(b *testing.B) {
 			e.LoadActive(stubProvider{rules: benchRules(50)})
 			batch := make([]api.Event, 0, n)
 			for i := range n {
-				batch = append(batch, execEvent(fmt.Sprintf("junk_type_%d", i)))
+				batch = append(batch, eventOfType(fmt.Sprintf("junk_type_%d", i)))
 			}
 			b.ReportAllocs()
 			for b.Loop() {
