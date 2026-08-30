@@ -30,11 +30,14 @@ type Engine struct {
 	dispatch map[string][]int
 	// always holds the indices of rules that declare no event types at all. They are invoked for every batch, because dispatch is
 	// an optimisation and over-invoking a rule costs time while under-invoking it loses detections.
-	always       []int
-	store        *mysql.Store
-	logger       *slog.Logger
-	metrics      api.MetricsRecorder
-	modeResolver rulesapi.RuleModeResolver
+	always []int
+	// declaredTypes is each rule's declared event types, by the same index as rules. Cached here because Doc() builds a fresh
+	// Documentation (slice included) on every call, which is fine at load and wasteful per batch.
+	declaredTypes [][]string
+	store         *mysql.Store
+	logger        *slog.Logger
+	metrics       api.MetricsRecorder
+	modeResolver  rulesapi.RuleModeResolver
 	// tracer is per-Engine rather than a package global so a test can install its own tracer on its own Engine instance without a data
 	// race against another parallel test (a package-level var mutated by one test is read by evaluateRule in another). Production always
 	// gets the same named tracer via New.
@@ -74,8 +77,10 @@ func (e *Engine) Register(r rulesapi.Rule) {
 func (e *Engine) reindex() {
 	e.dispatch = make(map[string][]int, len(e.rules))
 	e.always = e.always[:0]
+	e.declaredTypes = make([][]string, len(e.rules))
 	for i, r := range e.rules {
 		types := r.Doc().EventTypes
+		e.declaredTypes[i] = types
 		if len(types) == 0 {
 			// A rule that declares nothing is invoked unconditionally. See the `always` field for why this fails open.
 			e.always = append(e.always, i)
@@ -147,7 +152,7 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 	var pendingMiss error
 	for _, i := range e.rulesFor(live) {
 		rule := e.rules[i]
-		err := e.evaluateRule(ctx, rule, live)
+		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live)
 		if err == nil {
 			continue
 		}
@@ -211,17 +216,38 @@ func (e *Engine) rulesFor(live []api.Event) []int {
 	return slices.Compact(matched)
 }
 
+// consumesAny reports whether any event in the batch is of a type the rule declares. A rule declaring nothing consumes everything,
+// matching the fail-open direction the index takes.
+func consumesAny(declared []string, events []api.Event) bool {
+	if len(declared) == 0 {
+		return true
+	}
+	for _, ev := range events {
+		if slices.Contains(declared, ev.EventType) {
+			return true
+		}
+	}
+	return false
+}
+
 // evaluateRule opens a per-rule span carrying rule_id (observability-instrumentation spec) so detection latency and alert counts
 // can be grouped by rule in downstream dashboards. The span is annotated with alert_count after the rule returns; on rule-evaluate
 // failure the span records the error and the loop continues (per-rule isolation). Returns a non-nil error ONLY when alert
 // persistence fails or the rule reported a retryable rulesapi.ErrProcessNotYetMaterialized: other rule-evaluation errors are
 // logged + swallowed so a buggy rule doesn't block the rest.
-func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, live []api.Event) error {
+func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, declared []string, live []api.Event) error {
 	// Scope the batch to the rule's target platforms (ADR-0018): a macOS-only rule never sees a Windows event. Checked BEFORE the
 	// span is opened, because a rule left with nothing to evaluate did not run, and emitting a span for it reports work that never
 	// happened and inflates per-rule span volume by the whole cross-platform mismatch.
 	scoped := platformScopedEvents(rule.Platforms(), live)
 	if len(scoped) == 0 {
+		return nil
+	}
+	// Dispatch decided on the WHOLE batch, so in a mixed-platform batch it can select a rule on an event that rule cannot see: a
+	// macOS rule reading exec, dispatched because a Windows exec was present, then handed only the macOS events of other types.
+	// Re-check against what the rule actually sees. Skipped entirely when scoping kept the batch intact, which is every batch on a
+	// single-platform fleet, so this costs nothing until there is something for it to catch.
+	if len(scoped) != len(live) && !consumesAny(declared, scoped) {
 		return nil
 	}
 

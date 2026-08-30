@@ -603,3 +603,51 @@ func TestEngine_Evaluate_ARuleDeclaringATypeTwiceIsEvaluatedOnce(t *testing.T) {
 	require.NoError(t, e.Evaluate(t.Context(), []api.Event{execEvent("exec")}))
 	assert.Equal(t, 1, r.calls, "a rule declaring the same event type twice must still be evaluated once per batch")
 }
+
+// TestEngine_Evaluate_MixedPlatformBatchDoesNotInvokeARuleOnEventsItCannotSee pins the interaction between dispatch and platform
+// scoping.
+//
+// Dispatch decides on the whole batch, but each rule then sees only the events for its platforms. In a mixed-platform batch those
+// differ: a macOS rule reading exec can be selected because a WINDOWS exec is present, and then be handed only the macOS events,
+// none of which it consumes. Before this check it was invoked and traced for work it could not do.
+//
+// The check is skipped when platform scoping leaves the batch intact, which is every batch on a single-platform fleet, so it costs
+// nothing until there is something to catch.
+func TestEngine_Evaluate_MixedPlatformBatchDoesNotInvokeARuleOnEventsItCannotSee(t *testing.T) {
+	t.Parallel()
+
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	macExec := &typedRule{
+		stubRule:   stubRule{id: "mac-exec", platforms: []rulesapi.Platform{rulesapi.PlatformDarwin}},
+		eventTypes: []string{"exec"},
+	}
+	macDNS := &typedRule{
+		stubRule:   stubRule{id: "mac-dns", platforms: []rulesapi.Platform{rulesapi.PlatformDarwin}},
+		eventTypes: []string{"dns_query"},
+	}
+	e := New(nil, nil)
+	e.tracer = tp.Tracer("server/detection/engine")
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{macExec, macDNS}})
+
+	// The only exec is a Windows one, which no macOS rule can see; the only macOS event is a dns_query.
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{
+		{EventType: "exec", Platform: string(rulesapi.PlatformWindows)},
+		{EventType: "dns_query", Platform: string(rulesapi.PlatformDarwin)},
+	}))
+
+	assert.Zero(t, macExec.calls, "the only exec belongs to a platform this rule cannot see, so it must not be invoked")
+	assert.Equal(t, 1, macDNS.calls, "the macOS dns_query is a type this rule declares, so it must be invoked")
+
+	var traced []string
+	for _, sp := range rec.Ended() {
+		for _, a := range sp.Attributes() {
+			if a.Key == attribute.Key("rule_id") {
+				traced = append(traced, a.Value.AsString())
+			}
+		}
+	}
+	assert.Equal(t, []string{"mac-dns"}, traced, "a rule that was not invoked must record no span")
+}
