@@ -174,28 +174,19 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 	return pendingMiss
 }
 
-// rulesFor returns the indices of the rules to invoke for this batch: those consuming at least one event type the batch carries,
-// plus any rule that declares no types. Ascending, so evaluation keeps registration order and the "first retryable error wins"
-// precedence in Evaluate is unchanged.
+// distinctEventTypes returns the event types a batch carries, in first-seen order.
 //
-// The declared types are a TRIGGER filter, not a batch filter. A dispatched rule still receives the whole batch, because a rule
-// triggered by one type routinely reads another from the same batch: suspicious_exec triggers on a network_connect and reaches back
-// for the exec that made it. Narrowing the batch to the trigger type would silently degrade that.
+// The scratch array is stack-allocated: there are 13 event types in the wire schema, so a real batch never exceeds it and the
+// linear scan is over at most 16 strings, allocating nothing.
 //
-// Cost is proportional to the number of MATCHING rules rather than to the catalog size, which is what keeps a batch of a rarely
-// consumed type cheap however many rules are registered.
-func (e *Engine) rulesFor(live []api.Event) []int {
-	// Stack-allocated: there are 13 event types in the wire schema, so a real batch never exceeds this and the linear scan below is
-	// over at most 16 strings.
-	//
-	// A batch is not obliged to be well formed, though. Intake accepts up to MaxIngestEventsPerRequest events and validates
-	// event_type only as non-empty, so an authenticated host can send a batch whose every event carries a distinct junk type. The
-	// linear scan is quadratic in that case, so once the scratch fills it switches to a set and the cost becomes linear again. The
-	// common path keeps the scan and allocates nothing.
+// A batch is not obliged to be well formed, though. Intake accepts up to MaxIngestEventsPerRequest events and validates event_type
+// only as non-empty, so an authenticated host can send a batch whose every event carries a distinct junk type. The linear scan is
+// quadratic in that case, so once the scratch fills this switches to a set and the cost becomes linear again.
+func distinctEventTypes(events []api.Event) []string {
 	var scratch [16]string
 	present := scratch[:0]
 	var seen map[string]struct{}
-	for _, ev := range live {
+	for _, ev := range events {
 		if seen != nil {
 			if _, dup := seen[ev.EventType]; dup {
 				continue
@@ -215,6 +206,21 @@ func (e *Engine) rulesFor(live []api.Event) []int {
 			}
 		}
 	}
+	return present
+}
+
+// rulesFor returns the indices of the rules to invoke for this batch: those consuming at least one event type the batch carries,
+// plus any rule that declares no types. Ascending, so evaluation keeps registration order and the "first retryable error wins"
+// precedence in Evaluate is unchanged.
+//
+// The declared types are a TRIGGER filter, not a batch filter. A dispatched rule still receives the whole batch, because a rule
+// triggered by one type routinely reads another from the same batch: suspicious_exec triggers on a network_connect and reaches back
+// for the exec that made it. Narrowing the batch to the trigger type would silently degrade that.
+//
+// Cost is proportional to the number of MATCHING rules rather than to the catalog size, which is what keeps a batch of a rarely
+// consumed type cheap however many rules are registered.
+func (e *Engine) rulesFor(live []api.Event) []int {
+	present := distinctEventTypes(live)
 
 	switch {
 	case len(present) == 0:
