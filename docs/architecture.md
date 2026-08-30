@@ -255,7 +255,7 @@ The agent binary must be signed with `--options runtime` (hardened runtime) for 
 
 - macOS 26+ with Xcode
 - Docker (for MySQL)
-- Go 1.26+
+- Go 1.27+
 - Node.js 22+
 
 ### Quick start

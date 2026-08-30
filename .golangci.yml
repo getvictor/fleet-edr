@@ -127,6 +127,14 @@ linters:
             - pkg: github.com/fleetdm/edr/agent
               desc: "server packages must not import agent packages (move shared code to internal/)"
 
+    # embedlit rewrites `Outer{Embedded: Embedded{...}}` to hoist the embedded fields, which is only legal from Go 1.27. The
+    # toolchain bump to 1.27 switched it on across three detection test files that this change does not otherwise touch, and its
+    # autofix collapses the closing brace onto the last field, losing the trailing-comma style used everywhere else. Adopting the
+    # new syntax is a deliberate style call worth its own pass, so the check stays off until then.
+    modernize:
+      disable:
+        - embedlit
+
     govet:
       enable:
         - nilness
