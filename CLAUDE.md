@@ -157,7 +157,7 @@ Layered on the global guide. Project-specific:
   would need to serve the next request. Durable cross-request state goes in MySQL; per-request state may ride in signed cookies;
   a new in-process map / channel / queue holding shared state is a review defect unless it carries a "per-replica perf cache,
   safe to lose" note. The app tier is multi-replica behind a load balancer (the server-availability arc).
-- The project builds on Go 1.26+ (see `go.mod`); modern language and standard-library features through 1.26 are in-bounds.
+- The project builds on Go 1.27+ (see `go.mod`); modern language and standard-library features through 1.27 are in-bounds.
   Integer range expressions (`for i := range N` where `N` is an `int`) are valid project style and the modernize linter
   prefers them over `for i := 0; i < N; i++`; the same applies to newer stdlib like `strings.SplitSeq` / `bytes.SplitSeq`.
   Copilot and CodeRabbit have re-flagged these as "doesn't compile" or "breaks Go 1.22+" on multiple PRs;

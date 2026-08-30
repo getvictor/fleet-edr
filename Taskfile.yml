@@ -585,6 +585,12 @@ tasks:
       - go.sum
     generates:
       - tmp/golangci-lint-custom
+    env:
+      # Build the custom binary with the same toolchain that go.mod targets. golangci-lint's own module still declares go 1.26,
+      # so whichever `go` happens to satisfy that first gets used, and a 1.26-built binary cannot read the export data a 1.27
+      # toolchain writes: it starts, then panics inside go/types partway through the run. Pinning this removes the dependence on
+      # PATH ordering. Move it in lockstep with the go directive in go.mod.
+      GOTOOLCHAIN: go1.27.0
     cmds:
       - mkdir -p tmp
       - golangci-lint custom
