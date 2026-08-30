@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	"pgregory.net/rapid"
 
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
@@ -692,4 +693,51 @@ func TestSudoersReadsTheSubjectProcessAtMostOnce(t *testing.T) {
 			assert.Contains(t, finding.Description, tc.writer, "the finding names the process the detection matched on")
 		})
 	}
+}
+
+// TestBooleanDetectionValuesAreYAMLBooleans pins that a boolean-valued field is emitted as a YAML boolean rather than a quoted
+// string.
+//
+// Our evaluator cannot tell the difference: scalarString sends a bool through strconv.FormatBool, so `true` and 'true' match
+// identically here and no behavioural test can catch a regression. The distinction matters to the promise `portable: mapped`
+// makes. Sigma tooling preserves scalar types, so a backend that supplies WriteIntent as a real boolean and type-checks the
+// comparison would not match a rule asking for the string "true", and the rule would silently never fire on that engine.
+func TestBooleanDetectionValuesAreYAMLBooleans(t *testing.T) {
+	t.Parallel()
+
+	// The fields this engine computes as booleans. A rule may legitimately match the literal string "true" on some other field,
+	// so this is scoped to the ones we know are boolean rather than to anything that looks like one.
+	booleanFields := map[string]bool{"WriteIntent": true, "MutatingOpen": true}
+
+	entries, err := packFS.ReadDir("pack")
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	checked := 0
+	for _, entry := range entries {
+		body, err := packFS.ReadFile("pack/" + entry.Name())
+		require.NoError(t, err)
+
+		var file struct {
+			Detection map[string]any `yaml:"detection"`
+		}
+		require.NoError(t, yaml.Unmarshal(body, &file))
+
+		for searchName, search := range file.Detection {
+			fields, ok := search.(map[string]any)
+			if !ok {
+				continue // the condition string, or a list-valued search identifier
+			}
+			for field, value := range fields {
+				if !booleanFields[strings.SplitN(field, "|", 2)[0]] {
+					continue
+				}
+				assert.IsType(t, false, value,
+					"%s: %s.%s must be a YAML boolean, not %T: quoting it breaks a type-checking Sigma backend",
+					entry.Name(), searchName, field, value)
+				checked++
+			}
+		}
+	}
+	assert.Positive(t, checked, "no boolean fields found, so this test proved nothing")
 }

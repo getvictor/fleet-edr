@@ -27,7 +27,7 @@ detection:
   # widen this rule.
   selection:
     TargetFilename|re: '^(?:/private)?/etc/sudoers(?:\.d/[^/]+)?$'
-    WriteIntent: 'true'
+    WriteIntent: true
   # sudo itself opens /etc/sudoers write-mode to take a LOCK_EX flock for serialised reads: write by access mode, with no intent to
   # change the contents. Suppress that one pattern, and ONLY for sudo, so any other writer using bare O_WRONLY still fires.
   #
@@ -40,7 +40,7 @@ detection:
   # the same fix the atomic-rename limitation below needs.
   filter_sudo_lock:
     Image|re: '^/usr/bin/sudo$'
-    MutatingOpen: 'false'
+    MutatingOpen: false
   condition: selection and not filter_sudo_lock
 falsepositives:
   - Configuration-management agents (Ansible, Chef, Puppet, MDM-driven scripts) that drop a sudoers fragment under /etc/sudoers.d. Add a path-glob exclusion for their absolute writer paths.
