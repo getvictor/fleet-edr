@@ -185,13 +185,34 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 // Cost is proportional to the number of MATCHING rules rather than to the catalog size, which is what keeps a batch of a rarely
 // consumed type cheap however many rules are registered.
 func (e *Engine) rulesFor(live []api.Event) []int {
-	// Stack-allocated: there are 13 event types in the wire schema, so a real batch never exceeds this. A malformed batch carrying
-	// more simply spills to the heap, which is correct if slower.
+	// Stack-allocated: there are 13 event types in the wire schema, so a real batch never exceeds this and the linear scan below is
+	// over at most 16 strings.
+	//
+	// A batch is not obliged to be well formed, though. Intake accepts up to MaxIngestEventsPerRequest events and validates
+	// event_type only as non-empty, so an authenticated host can send a batch whose every event carries a distinct junk type. The
+	// linear scan is quadratic in that case, so once the scratch fills it switches to a set and the cost becomes linear again. The
+	// common path keeps the scan and allocates nothing.
 	var scratch [16]string
 	present := scratch[:0]
+	var seen map[string]struct{}
 	for _, ev := range live {
-		if !slices.Contains(present, ev.EventType) {
+		if seen != nil {
+			if _, dup := seen[ev.EventType]; dup {
+				continue
+			}
+			seen[ev.EventType] = struct{}{}
 			present = append(present, ev.EventType)
+			continue
+		}
+		if slices.Contains(present, ev.EventType) {
+			continue
+		}
+		present = append(present, ev.EventType)
+		if len(present) == len(scratch) {
+			seen = make(map[string]struct{}, 2*len(scratch))
+			for _, t := range present {
+				seen[t] = struct{}{}
+			}
 		}
 	}
 

@@ -651,3 +651,48 @@ func TestEngine_Evaluate_MixedPlatformBatchDoesNotInvokeARuleOnEventsItCannotSee
 	}
 	assert.Equal(t, []string{"mac-dns"}, traced, "a rule that was not invoked must record no span")
 }
+
+// TestEngine_Evaluate_ManyDistinctEventTypesStayCorrect pins that the set-based path past the scratch array agrees with the linear
+// scan it replaces: the same rules are dispatched, once each.
+//
+// The switch exists because intake validates event_type only as non-empty, so an authenticated host can send a batch whose every
+// event carries a distinct junk type. Scanning a slice per event is quadratic in that case.
+func TestEngine_Evaluate_ManyDistinctEventTypesStayCorrect(t *testing.T) {
+	t.Parallel()
+
+	execRule := &typedRule{stubRule: stubRule{id: "exec-rule"}, eventTypes: []string{"exec"}}
+	openRule := &typedRule{stubRule: stubRule{id: "open-rule"}, eventTypes: []string{"open"}}
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{execRule, openRule}})
+
+	// Far past the 16-entry scratch array, with the real type buried among the junk and repeated so duplicates are exercised on
+	// the set path too.
+	batch := make([]api.Event, 0, 256)
+	for i := range 250 {
+		batch = append(batch, execEvent(fmt.Sprintf("junk_type_%d", i)))
+	}
+	batch = append(batch, execEvent("exec"), execEvent("exec"))
+
+	require.NoError(t, e.Evaluate(t.Context(), batch))
+	assert.Equal(t, 1, execRule.calls, "the batch carries exec, so the rule runs exactly once despite the duplicate")
+	assert.Zero(t, openRule.calls, "no open event is present, so that rule must not run")
+}
+
+// BenchmarkEvaluate_ManyDistinctTypes measures the adversarial batch shape: every event a distinct unknown type, dispatching
+// nothing. Cost should be linear in batch size, not quadratic.
+func BenchmarkEvaluate_ManyDistinctTypes(b *testing.B) {
+	for _, n := range []int{100, 500} {
+		b.Run(fmt.Sprintf("events=%d", n), func(b *testing.B) {
+			e := New(nil, nil)
+			e.LoadActive(stubProvider{rules: benchRules(50)})
+			batch := make([]api.Event, 0, n)
+			for i := range n {
+				batch = append(batch, execEvent(fmt.Sprintf("junk_type_%d", i)))
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = e.Evaluate(context.Background(), batch)
+			}
+		})
+	}
+}
