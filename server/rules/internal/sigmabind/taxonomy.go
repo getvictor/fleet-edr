@@ -37,6 +37,12 @@ var taxonomy = map[string]map[string]fieldExtractor{
 	"exec": {
 		"Image":       func(e *Event) ([]string, bool) { return e.image, e.image != nil },
 		"CommandLine": func(e *Event) ([]string, bool) { return e.commandLine, e.commandLine != nil },
+		// Computed from argv. Sigma carries no notion of argument position, and three of our detections turn on exactly that,
+		// so the positional facts are precomputed and matched as fields. A rule using one is `portable: mapped`, not
+		// `standard`: valid Sigma, but it needs a field only we supply. See argv.go.
+		"Subcommand":       func(e *Event) ([]string, bool) { return e.subcommand, e.subcommand != nil },
+		"CommandArguments": func(e *Event) ([]string, bool) { return e.commandArguments, e.commandArguments != nil },
+		"EnvAssignments":   func(e *Event) ([]string, bool) { return e.envAssignments, e.envAssignments != nil },
 	},
 	// Sigma calls this category file_event.
 	"open": {

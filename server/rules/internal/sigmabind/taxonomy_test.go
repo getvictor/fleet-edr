@@ -101,7 +101,7 @@ func TestValidate_RejectsUnmappedEventType(t *testing.T) {
 func TestSupportedFields(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, []string{"CommandLine", "Image"}, SupportedFields("exec"))
+	assert.Equal(t, []string{"CommandArguments", "CommandLine", "EnvAssignments", "Image", "Subcommand"}, SupportedFields("exec"))
 	assert.Equal(t, []string{"TargetFilename"}, SupportedFields("open"))
 	assert.Empty(t, SupportedFields("dns_query"))
 	assert.Empty(t, SupportedFields("nonexistent"))
