@@ -6,13 +6,13 @@
 // looks like.
 //
 // The field set is what the corpus actually reads, measured rather than assumed. Across the 69 macOS SigmaHQ rules there are
-// exactly five distinct detection fields: CommandLine (107 uses), Image (85), ParentImage (16), TargetFilename (5) and
-// OriginalFileName (1). Three of them are supplied here. The other two are absent for reasons worth stating, because their absence
-// is what the load-time check exists to report:
+// exactly five distinct detection fields: CommandLine (107 uses), Image (85), ParentImage (16 uses across 11 rules),
+// TargetFilename (5) and OriginalFileName (1). Four are supplied. The one that is not is absent for a reason worth stating, because
+// that absence is what the load-time check exists to report:
 //
-//   - ParentImage needs the parent's executable path on an exec event. Our exec payload carries ppid but not the parent's path, so
-//     supplying it needs the enrichment in #771. Its 16 uses are spread across 11 distinct rules, and those 11 fail to load,
-//     loudly, which is the whole point: the alternative is a rule that loads and quietly never matches.
+//   - ParentImage is supplied by the CALLER rather than read from the payload, which carries ppid but not the parent's path. The
+//     graph knows it and this package does not know the graph, so NewExecEvent takes it as an argument (issue #771). An event
+//     built without it reports the field absent, so a rule keyed on a parent declines rather than matching an unknown image.
 //   - OriginalFileName is the name embedded in a Windows PE version resource. It has no macOS equivalent, so it is not a matter of
 //     enrichment; inventing a value would misrepresent what we know.
 package sigmabind
@@ -35,7 +35,10 @@ type fieldExtractor func(*Event) ([]string, bool)
 var taxonomy = map[string]map[string]fieldExtractor{
 	// Sigma calls this category process_creation.
 	"exec": {
-		"Image":       func(e *Event) ([]string, bool) { return e.image, e.image != nil },
+		"Image": func(e *Event) ([]string, bool) { return e.image, e.image != nil },
+		// Supplied by the caller from the process graph rather than read from the payload, which carries ppid but not the
+		// parent's path. Standard Sigma taxonomy, so a rule reading it stays `portable: standard`.
+		"ParentImage": func(e *Event) ([]string, bool) { return e.parentImageValues() },
 		"CommandLine": func(e *Event) ([]string, bool) { return e.commandLine, e.commandLine != nil },
 		// Computed from argv. Sigma carries no notion of argument position, and three of our detections turn on exactly that,
 		// so the positional facts are precomputed and matched as fields. A rule using one is `portable: mapped`, not

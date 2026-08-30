@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 )
 
 // ShellFromOffice fires when a shell (/bin/sh, /bin/bash, /bin/zsh, etc.) is spawned
@@ -19,10 +20,6 @@ import (
 type ShellFromOffice struct{}
 
 func (r *ShellFromOffice) ID() string { return "shell_from_office" }
-
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Resolves the parent process from the
-// graph and matches both parent and child against fixed path sets.
-func (r *ShellFromOffice) AlgorithmName() string { return "parent_lookup_path_match" }
 
 // SupportedExclusionMatchTypes returns nil: this rule consults no exclusions, so the admin UI offers none for it (issue #520).
 func (r *ShellFromOffice) SupportedExclusionMatchTypes() []api.ExclusionMatchType { return nil }
@@ -58,9 +55,8 @@ func (r *ShellFromOffice) Doc() api.Documentation {
 	}
 }
 
-// officeBinaries is the set of macOS Office executable paths that, as a parent, make a shell exec suspicious. We match full paths,
-// not substrings, so a user-named file like `/tmp/Microsoft Word` cannot accidentally silence or spoof a finding.
-var officeBinaries = sync.OnceValue(func() map[string]bool { return paramsFor("shell_from_office").StringSet("office_binaries") })
+// shellFromOfficeDetection is the rule's logic, compiled from the detection block in its pack file.
+var shellFromOfficeDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("shell_from_office") })
 
 type shellFromOfficePayload struct {
 	PID  int    `json:"pid"`
@@ -82,19 +78,22 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, nil
 	}
-	if !shellPaths()[p.Path] {
-		return nil, nil
-	}
-
-	parent, err := s.GetProcessByPID(ctx, evt.HostID, p.PPID, evt.TimestampNs)
+	// Resolves the parent from the graph and supplies it as ParentImage. An unresolved parent leaves the field absent, so the
+	// detection declines: the same answer the Go matcher gave, and for the same reason. The processor marks the batch processed
+	// after Evaluate returns, so a missing parent is accepted rather than retried; a deferred retry queue is a future improvement.
+	se, err := execEventWithParent(ctx, evt, s, p.PID)
 	if err != nil {
-		return nil, fmt.Errorf("get parent pid %d: %w", p.PPID, err)
+		return nil, err
 	}
-	// Parent not yet materialised, or not an Office binary. The processor marks the whole batch processed after Evaluate returns, so a
-	// re-feed does not happen automatically. Missing-parent cases are accepted today; a deferred retry queue is a future improvement.
-	if parent == nil || !officeBinaries()[parent.Path] {
+	matched := shellFromOfficeDetection().Matches(se)
+	if err := se.ParentErr(); err != nil {
+		return nil, err
+	}
+	if !matched {
 		return nil, nil
 	}
+	// The parent the detection matched on, read back from the same field, so the alert names the Office app that spawned the shell.
+	parentPath := firstField(se, "ParentImage")
 
 	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
 	if err != nil {
@@ -108,7 +107,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 		RuleID:      r.ID(),
 		Severity:    api.SeverityHigh,
 		Title:       r.DisplayName(),
-		Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parent.Path), p.Path),
+		Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parentPath), p.Path),
 		ProcessID:   proc.ID,
 		EventIDs:    []string{evt.EventID},
 	}, nil

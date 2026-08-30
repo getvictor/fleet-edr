@@ -20,25 +20,32 @@ tags:
 logsource:
   product: macos
   category: process_creation
+detection:
+  # The shells this rule treats as a spawned interpreter. Anchored with |re rather than matched as a plain value or a suffix
+  # because the rule has always compared whole paths: a table case pins that a binary merely NAMED sh does not fire, and a plain
+  # Sigma value would additionally fold case.
+  #
+  # These eight paths are the shared `unix_shells` list from lists.yml, INLINED. Sigma has no way to reference a list defined
+  # elsewhere, so converting a rule that reads a shared list necessarily copies it, which is a drift surface that #759's
+  # define-once property was meant to remove. suspicious_exec still reads the shared list, so the two can part company;
+  # TestSharedShellListMatchesTheShippedDetection is what stops them.
+  selection_shell:
+    Image|re: '^(/bin/sh|/bin/bash|/bin/zsh|/bin/dash|/usr/bin/sh|/usr/bin/bash|/usr/bin/zsh|/usr/bin/dash)$'
+  # The Office binaries whose child shell is the signal. ParentImage is supplied from the process graph rather than the payload,
+  # which carries ppid but not the parent's path (issue #771).
+  selection_office:
+    ParentImage|re: '^(/Applications/Microsoft Word\.app/Contents/MacOS/Microsoft Word|/Applications/Microsoft Excel\.app/Contents/MacOS/Microsoft Excel|/Applications/Microsoft PowerPoint\.app/Contents/MacOS/Microsoft PowerPoint|/Applications/Microsoft Outlook\.app/Contents/MacOS/Microsoft Outlook)$'
+  condition: selection_shell and selection_office
 falsepositives:
   - Office's internal `Get Started` first-run flow has historically shelled out to fetch help content. Confirm by inspecting argv on the alert.
   - Admin-driven user-environment scripts that template Office settings via shell.
 x-engine:
   rule_id: shell_from_office
-  type: graph
-  portable: none
-  portability_note: The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being converted separately; until a rule's logic lives in its file, this stays the honest answer.
+  type: sigma
+  portable: standard
+  portability_note: The rule's logic is the detection block in this file and reads only fields from Sigma's own taxonomy, so any Sigma-compatible engine can evaluate it as it stands.
   event_types:
     - exec
-  algorithm: parent_lookup_path_match
-  params:
-    # Matched on full path, not substring, so a user-named file such as /tmp/Microsoft Word cannot silence or spoof a finding.
-    # Office installed outside /Applications (an external volume) is missed by design.
-    office_binaries:
-      - /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
-      - /Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel
-      - /Applications/Microsoft PowerPoint.app/Contents/MacOS/Microsoft PowerPoint
-      - /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
   limitations:
     - Does not catch non-shell payloads (osascript, python, ruby) launched directly from Office. Pair with osascript_network_exec for the AppleScript variant.
     - 'Office binary path matching is exact: `/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word`. Apps installed elsewhere (e.g. on an external volume) are missed by design.'

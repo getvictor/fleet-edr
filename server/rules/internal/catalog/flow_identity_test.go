@@ -17,13 +17,14 @@ import (
 type recordingGraphReader struct {
 	byPIDVersion    *api.Process // returned by GetProcessByPIDVersion
 	byPID           *api.Process // returned by GetProcessByPID
+	errByPID        error        // returned by GetProcessByPID; zero value keeps the previous always-succeeds behaviour
 	calledByVersion bool
 	calledByPID     bool
 }
 
 func (r *recordingGraphReader) GetProcessByPID(_ context.Context, _ string, _ int, _ int64) (*api.Process, error) {
 	r.calledByPID = true
-	return r.byPID, nil
+	return r.byPID, r.errByPID
 }
 
 func (r *recordingGraphReader) GetProcessByPIDVersion(_ context.Context, _ string, _ int, _ uint32, _ int64) (*api.Process, error) {

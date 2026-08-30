@@ -82,9 +82,6 @@ var algorithmParams = map[string]map[string]paramSpec{
 		"download_binaries": {kind: kindStringList},
 		"window":            {kind: kindDuration},
 	},
-	"parent_lookup_path_match": {
-		"office_binaries": {kind: kindStringList},
-	},
 }
 
 // Params is one rule's parameter block, parsed from its pack file.

@@ -108,7 +108,8 @@ func TestLoadPack_RejectsEmptyList(t *testing.T) {
 	t.Parallel()
 
 	_, err := loadPack(fsWith(map[string]string{
-		"pack/shell_from_office.yml": ruleFile("shell_from_office", "parent_lookup_path_match", "    office_binaries: []\n"),
+		"pack/osascript_network_exec.yml": ruleFile("osascript_network_exec", "descendant_within_window",
+			"    osascript_paths: []\n"),
 	}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-empty")
@@ -131,13 +132,12 @@ func TestLoadPack_SkipsTheSharedListsFile(t *testing.T) {
 	t.Parallel()
 
 	got, err := loadPack(fsWith(map[string]string{
-		"pack/" + SharedListsFile: "unix_shells:\n  - /bin/sh\n",
-		"pack/shell_from_office.yml": ruleFile("shell_from_office", "parent_lookup_path_match",
-			"    office_binaries:\n      - /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word\n"),
+		"pack/" + SharedListsFile:  "unix_shells:\n  - /bin/sh\n",
+		"pack/suspicious_exec.yml": ruleFile("suspicious_exec", "ancestor_walk_path_prefix", "    window: 30s\n"),
 	}))
 	require.NoError(t, err)
 	assert.Len(t, got, 1, "only the rule file yields params")
-	assert.Contains(t, got, "shell_from_office")
+	assert.Contains(t, got, "suspicious_exec")
 }
 
 // TestLoadPack_RejectsAFileWithNoRuleID keeps a malformed pack from loading half-populated.
@@ -193,7 +193,6 @@ func TestEmbeddedPackMatchesTheRulesThatReadIt(t *testing.T) {
 		"shebang_shells deliberately omits /usr/bin/sh; widening it silently would be a behaviour change")
 	assert.Equal(t, []string{"/tmp/", "/var/tmp/", "/private/tmp/", "/dev/shm/"}, suspiciousPrefixes())
 
-	assert.True(t, officeBinaries()["/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"])
 	assert.True(t, osascriptPaths()["/usr/bin/osascript"])
 	assert.True(t, downloadBinaries()["/usr/bin/curl"])
 
