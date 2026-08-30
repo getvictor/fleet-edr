@@ -406,3 +406,26 @@ func TestRule_GraphRuleStillNeedsAnAlgorithm(t *testing.T) {
 	_, err = Rule(md, Authored{Detection: detectionNode(t, "selection:\n  Image: '/x'\ncondition: selection\n")})
 	require.NoError(t, err, "a detection block is the other way a rule says what decides it")
 }
+
+// TestClassify_UncompilableDetectionPromisesLeast covers the branch where a detection block cannot be compiled, which the pack
+// loader refuses a moment later with a better message. Classification still has to answer something, and the conservative answer
+// is the one that promises another engine the least.
+func TestClassify_UncompilableDetectionPromisesLeast(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		detection string
+	}{
+		{"a condition naming no search", "selection:\n  Image: '/x'\ncondition: nosuchsearch\n"},
+		{"a search that is not a field map", "selection: junk\ncondition: selection\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			kind, portable := classify(detectionNode(t, tc.detection))
+			assert.Equal(t, "sigma", kind)
+			assert.Equal(t, "mapped", portable, "an unclassifiable block must not be advertised as portable")
+		})
+	}
+}

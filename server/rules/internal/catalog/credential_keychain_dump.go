@@ -83,6 +83,9 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 		if evt.EventType != "exec" {
 			continue
 		}
+		// Built per rule rather than per event, because the engine hands each rule the raw batch and offers no way to share an
+		// adapter. Measured at 1.3us and 776 bytes per exec event, which is nothing for one converted rule and is not nothing
+		// once the catalog is mostly Sigma; issue #794 moves the decode into the engine.
 		se, err := sigmabind.NewEvent(evt)
 		if err != nil {
 			// A payload that does not decode is a malformed event rather than an uninteresting one, but one bad event must not

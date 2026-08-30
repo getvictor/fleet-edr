@@ -32,6 +32,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 )
 
 // idNamespace is the frozen UUID namespace rule ids are derived under. Sigma requires `id` to be a UUID and rejects a slug with
@@ -166,7 +167,16 @@ func classify(detection *yaml.Node) (kind, portable string) {
 	if detection == nil {
 		return "graph", "none"
 	}
-	for _, field := range detectionFields(detection) {
+	// The evaluator is asked which fields the block reads rather than this package walking the YAML itself. A second traversal of
+	// the same shape would drift the moment the evaluator gained a search form, and the failure would be silent: a rule reading a
+	// computed field would export as `portable: standard`, promising another engine it can run something it cannot.
+	fields, err := detectionFieldNames(detection)
+	if err != nil {
+		// A block that does not compile cannot be classified. The caller refuses it a moment later with a better message; the
+		// conservative answer here is the one that promises least.
+		return "sigma", "mapped"
+	}
+	for _, field := range fields {
 		if computedFields[field] {
 			return "sigma", "mapped"
 		}
@@ -174,37 +184,17 @@ func classify(detection *yaml.Node) (kind, portable string) {
 	return "sigma", "standard"
 }
 
-// detectionFields returns the field names a detection block reads, by walking its search identifiers. It reads the node rather than
-// compiling the rule so this package stays independent of the evaluator.
-func detectionFields(detection *yaml.Node) []string {
-	var out []string
-	var walk func(*yaml.Node, bool)
-	walk = func(n *yaml.Node, inSearch bool) {
-		switch n.Kind {
-		case yaml.MappingNode:
-			for i := 0; i+1 < len(n.Content); i += 2 {
-				key := n.Content[i].Value
-				if !inSearch {
-					// Top level: every key except `condition` names a search.
-					if key != "condition" {
-						walk(n.Content[i+1], true)
-					}
-					continue
-				}
-				// Inside a search, a key is `Field` or `Field|modifier`.
-				out = append(out, strings.Split(key, "|")[0])
-			}
-		case yaml.SequenceNode:
-			for _, c := range n.Content {
-				walk(c, inSearch)
-			}
-		case yaml.DocumentNode, yaml.ScalarNode, yaml.AliasNode:
-			// A search is a mapping or a list of mappings, so nothing else carries a field name. Listed explicitly rather than
-			// left to a default so a new node kind is a compile-time decision rather than a silent skip.
-		}
+// detectionFieldNames compiles a detection block and asks it which fields it reads.
+func detectionFieldNames(detection *yaml.Node) ([]string, error) {
+	var block map[string]any
+	if err := detection.Decode(&block); err != nil {
+		return nil, err
 	}
-	walk(detection, false)
-	return out
+	rule, err := sigma.Compile(block)
+	if err != nil {
+		return nil, err
+	}
+	return rule.Fields(), nil
 }
 
 // RuleID derives the Sigma `id` for a rule id. Exported so tests and tooling can assert stability without duplicating the

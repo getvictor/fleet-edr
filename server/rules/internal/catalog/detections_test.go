@@ -87,6 +87,15 @@ func TestLoadDetections_Rejects(t *testing.T) {
 			"rule_id is empty",
 		},
 		{
+			// The registry guard checks the same invariant from the Go side; this closes it on the file, which a hand edit
+			// reaches without touching Go at all.
+			"a file declaring both a detection block and an algorithm",
+			map[string]string{"pack/x.yml": "title: T\nlogsource:\n  category: process_creation\n" +
+				"detection:\n  selection:\n    Image: '/x'\n  condition: selection\n" +
+				"x-engine:\n  rule_id: x\n  algorithm: some_walk\n"},
+			"only one can decide it",
+		},
+		{
 			"a rule id repeated across files",
 			map[string]string{
 				"pack/a.yml": detectionRuleFile("dup", "process_creation", "  selection:\n    Image: '/a'\n  condition: selection\n"),

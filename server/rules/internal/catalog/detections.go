@@ -40,7 +40,8 @@ type detectionFile struct {
 	// decodes to an empty node that reads as "this rule declares no detection".
 	Detection yaml.Node `yaml:"detection"`
 	Engine    struct {
-		RuleID string `yaml:"rule_id"`
+		RuleID    string `yaml:"rule_id"`
+		Algorithm string `yaml:"algorithm"`
 	} `yaml:"x-engine"`
 }
 
@@ -79,6 +80,12 @@ func loadDetections(fsys fs.FS) (map[string]*detection, error) {
 		}
 		if f.Engine.RuleID == "" {
 			return nil, fmt.Errorf("%s: x-engine.rule_id is empty", name)
+		}
+		// A rule says what decides it exactly once. Carrying both would leave a reader, and the exported file, unable to tell
+		// which one actually runs, and would point maintenance at a Go evaluator the engine no longer consults.
+		if f.Engine.Algorithm != "" {
+			return nil, fmt.Errorf("%s: rule %q declares both a detection block and x-engine.algorithm %q; only one can decide it",
+				name, f.Engine.RuleID, f.Engine.Algorithm)
 		}
 		d, err := compileDetection(&f)
 		if err != nil {
