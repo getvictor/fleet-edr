@@ -529,16 +529,22 @@ func TestEquivalence_SudoersTamper(t *testing.T) {
 	for _, path := range paths {
 		for _, flags := range flagSets {
 			for _, subject := range subjects {
-				payload, err := json.Marshal(map[string]any{"pid": 7, "path": path, "flags": flags})
-				require.NoError(t, err)
-				ev, err := sigmabind.NewOpenEventLazy(
-					rulesapi.Event{EventID: "e", EventType: "open", Payload: payload},
-					func() (string, error) { return subject, nil })
-				require.NoError(t, err)
-
-				require.Equal(t, legacySudoersFires(path, flags, subject), sudoersDetection().Matches(ev),
-					"path=%q flags=%#x subject=%q", path, flags, subject)
+				writer := subject
+				if writer == "" {
+					writer = "an unresolved writer"
+				}
 				checked++
+				t.Run(fmt.Sprintf("%s flags=%#x by %s", path, flags, writer), func(t *testing.T) {
+					t.Parallel()
+					payload, err := json.Marshal(map[string]any{"pid": 7, "path": path, "flags": flags})
+					require.NoError(t, err)
+					ev, err := sigmabind.NewOpenEventLazy(
+						rulesapi.Event{EventID: "e", EventType: "open", Payload: payload},
+						func() (string, error) { return subject, nil })
+					require.NoError(t, err)
+
+					require.Equal(t, legacySudoersFires(path, flags, subject), sudoersDetection().Matches(ev))
+				})
 			}
 		}
 	}
