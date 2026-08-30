@@ -115,7 +115,7 @@ The matching dylib path is redacted in alert text (a sensitive payload location)
 ### Limitations
 
 - Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.
-- DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.
+- DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule's pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.
 
 ## shell_from_office
 

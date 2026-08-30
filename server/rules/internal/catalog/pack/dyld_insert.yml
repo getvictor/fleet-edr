@@ -19,17 +19,30 @@ tags:
 logsource:
   product: macos
   category: process_creation
+detection:
+  # EnvAssignments holds only the leading KEY=VALUE window: argv[0] for an ordinary binary, and the run of leading assignments for
+  # an `env`-style invocation. That is the whole point of the field. `DYLD_INSERT_LIBRARIES=x /bin/true` and
+  # `/bin/true DYLD_INSERT_LIBRARIES=x` carry the same text and only the first is an injection, and a CommandLine substring match
+  # cannot tell them apart because a substring match is precisely what discards position.
+  #
+  # Matched with |re rather than |startswith because |startswith folds case, while the Go rule this replaces used
+  # strings.HasPrefix: a lowercased `dyld_insert_libraries=` would otherwise have started firing.
+  #
+  # No binary condition, deliberately: the rule has never had one. The executable path decides only whether the leading window is
+  # argv[0] alone or a run of `env` assignments, and that decision lives in the field rather than here.
+  selection:
+    EnvAssignments|re: '^DYLD_(INSERT_LIBRARIES|LIBRARY_PATH)='
+  condition: selection
 falsepositives:
   - Local development of code that itself uses DYLD_INSERT_LIBRARIES (rare; usually scoped to non-managed dev hosts).
   - 'Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch: investigate why an admin script is setting these vars at all.'
 x-engine:
   rule_id: dyld_insert
-  type: graph
-  portable: none
-  portability_note: The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being converted separately; until a rule's logic lives in its file, this stays the honest answer.
+  type: sigma
+  portable: mapped
+  portability_note: The rule's logic is the detection block in this file. It is valid Sigma, but it reads at least one field this engine computes from the argument vector rather than one from Sigma's own taxonomy, so another engine needs those fields to evaluate it. The computed fields exist because Sigma represents a command line as a single string, in which argument position is no longer recoverable.
   event_types:
     - exec
-  algorithm: exec_leading_argv_env_match
   limitations:
     - 'Inherited environment variables (set by a parent shell, not on the exec line) are invisible: ESF does not yet hand the agent the full env map. Tracked as future work.'
-    - 'DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Extend dyldPrefixes if a pilot surfaces real abuse.'
+    - 'DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule''s pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.'

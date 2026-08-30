@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
 	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
+	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // PersistenceLaunchAgent fires when a process calls `launchctl load` or
@@ -24,12 +25,6 @@ type PersistenceLaunchAgent struct {
 }
 
 func (r *PersistenceLaunchAgent) ID() string { return "persistence_launchagent" }
-
-// AlgorithmName names the evaluator that decides this rule, for the exported rule file (issue #757). Matches a launchctl activation
-// subcommand whose plist argument matches a LaunchAgents path pattern.
-func (r *PersistenceLaunchAgent) AlgorithmName() string {
-	return "exec_subcommand_and_path_pattern_match"
-}
 
 // SupportedExclusionMatchTypes lists the match types this rule consults: the LaunchAgent plist writer path glob (issue #520).
 func (r *PersistenceLaunchAgent) SupportedExclusionMatchTypes() []api.ExclusionMatchType {
@@ -68,13 +63,13 @@ func (r *PersistenceLaunchAgent) Doc() api.Documentation {
 	}
 }
 
-// launchctlPaths covers the common macOS launchctl binary locations.
-var launchctlPaths = sync.OnceValue(func() map[string]bool { return paramsFor("persistence_launchagent").StringSet("launchctl_paths") })
-
 // launchAgentPath matches arguments that reference a plist under a LaunchAgents directory. We accept both system-wide
 // (/Library/LaunchAgents) and per-user (~ / /Users/<u>/Library) locations: an attacker-planted plist at either is a persistence
 // mechanism.
 var launchAgentPath = regexp.MustCompile(`(?i)(^|/)(Users/[^/]+/)?Library/LaunchAgents/[^/]+\.plist$`)
+
+// launchAgentDetection is the rule's logic, compiled from the detection block in its pack file.
+var launchAgentDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("persistence_launchagent") })
 
 type persistenceLaunchCtlPayload struct {
 	PID  int      `json:"pid"`
@@ -96,14 +91,17 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, nil
 	}
-	if !launchctlPaths()[p.Path] {
+	se, err := sigmabind.NewEvent(evt)
+	if err != nil {
 		return nil, nil
 	}
-	subcommand, plistPath := extractLaunchctlSubcommand(p.Args)
-	if subcommand != "load" && subcommand != "bootstrap" {
+	if !launchAgentDetection().Matches(se) {
 		return nil, nil
 	}
-	if plistPath == "" || !launchAgentPath.MatchString(plistPath) || r.excluded(plistPath, evt.HostID) {
+	// Read back the values the detection matched on, so the alert names the job that was registered.
+	subcommand := firstField(se, "Subcommand")
+	plistPath := firstMatching(se, "CommandArguments", launchAgentPath.MatchString)
+	if r.excluded(plistPath, evt.HostID) {
 		return nil, nil
 	}
 	// Look up the process row so the alert can link to the process detail view. A young miss raises the retryable
@@ -129,39 +127,4 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 
 func (r *PersistenceLaunchAgent) excluded(path, hostID string) bool {
 	return r.Exclusions != nil && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchPathGlob, path, hostID)
-}
-
-// extractLaunchctlSubcommand pulls the subcommand (`load`, `bootstrap`, `unload`, etc.) and
-// the first LaunchAgents plist argument out of an argv. argv[0] is the binary path; we look
-// for the first non-flag token for the subcommand and then keep walking until we find an
-// arg that looks like an actual LaunchAgents plist.
-//
-// Why "keep walking" rather than "first arg with /": `launchctl bootstrap gui/501
-// /Users/alice/Library/LaunchAgents/evil.plist` puts the launch-domain specifier
-// ("gui/501") before the plist path. A naive "first slash-containing arg" grab catches
-// the domain and then the rule drops the event entirely. Matching on `launchAgentPath`
-// keeps the scan going past launch domains so the plist is the thing we return.
-//
-// Example inputs:
-//
-//	[]string{"/bin/launchctl", "load", "/Users/alice/Library/LaunchAgents/evil.plist"}
-//	  → ("load", "/Users/alice/Library/LaunchAgents/evil.plist")
-//	[]string{"/bin/launchctl", "load", "-w", "/Library/LaunchAgents/foo.plist"}
-//	  → ("load", "/Library/LaunchAgents/foo.plist")
-//	[]string{"/bin/launchctl", "bootstrap", "gui/501", "/Users/alice/Library/LaunchAgents/evil.plist"}
-//	  → ("bootstrap", "/Users/alice/Library/LaunchAgents/evil.plist")
-func extractLaunchctlSubcommand(args []string) (subcommand, plistPath string) {
-	for i := 1; i < len(args); i++ {
-		if args[i] == "" || strings.HasPrefix(args[i], "-") {
-			continue
-		}
-		if subcommand == "" {
-			subcommand = args[i]
-			continue
-		}
-		if launchAgentPath.MatchString(args[i]) {
-			return subcommand, args[i]
-		}
-	}
-	return subcommand, ""
 }
