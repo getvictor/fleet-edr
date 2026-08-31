@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,6 +65,30 @@ func TestEngine_RegisterAccumulates(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, ids,
 		"Catalog returns rules in registration order")
 	assert.Equal(t, []string{"T1"}, cat[1].Techniques)
+}
+
+// TestEngine_CatalogAlwaysCarriesAMode pins RuleMetadata.DefaultMode's contract on this builder too.
+//
+// The field documents itself as always holding a mode rather than sometimes the empty string, so a consumer never has to know what
+// the server's default is to read it. Two builders produce RuleMetadata, and a contract that holds in only one of them is not a
+// contract: this one omitted the field and handed back entries whose mode read as "".
+func TestEngine_CatalogAlwaysCarriesAMode(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, discardLogger())
+	e.Register(&stubRule{id: "silent"})
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{stubRule: stubRule{id: "declaring"}},
+		mode:                 rulesapi.DetectionRuleModeMonitor,
+	})
+
+	got := map[string]rulesapi.DetectionRuleMode{}
+	for _, rm := range e.Catalog() {
+		got[rm.ID] = rm.DefaultMode
+	}
+
+	assert.Equal(t, rulesapi.DetectionRuleModeAlert, got["silent"], "a rule declaring nothing reports alert, not the zero value")
+	assert.Equal(t, rulesapi.DetectionRuleModeMonitor, got["declaring"])
 }
 
 // TestEngine_LoadActiveReplacesRuleSet pins the replace (not append) semantics: a hot-reload caller can invoke LoadActive repeatedly
@@ -755,4 +782,103 @@ func TestEngine_ScopedRulesShareOneBatchScope(t *testing.T) {
 	require.NoError(t, e.Evaluate(t.Context(), events))
 	require.Len(t, first.scopes, 2)
 	assert.NotSame(t, first.scopes[0], first.scopes[1], "a later batch gets its own scope")
+}
+
+// stubRuleWithFindings is a stubRule that returns findings, so a routing test has something to route.
+type stubRuleWithFindings struct {
+	stubRule
+	findings []api.Finding
+}
+
+func (r *stubRuleWithFindings) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
+	r.calls++
+	r.received = events
+	return r.findings, nil
+}
+
+// discardLogger is a logger whose output nothing reads, for tests asserting on state rather than on log lines.
+func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// modeDeclaringStub is stubRuleWithFindings plus a declared default mode, standing in for an imported rule.
+//
+// It embeds rather than reimplements Evaluate: the two differ only in the declaration, and a second copy of the routing stub would
+// have to be kept in step with the first by hand.
+type modeDeclaringStub struct {
+	stubRuleWithFindings
+	mode rulesapi.DetectionRuleMode
+}
+
+func (r *modeDeclaringStub) DefaultMode() rulesapi.DetectionRuleMode { return r.mode }
+
+// recordingModeResolver records the rule default it was handed and answers with a fixed mode.
+type recordingModeResolver struct {
+	seen   map[string]rulesapi.DetectionRuleMode
+	answer rulesapi.DetectionRuleMode
+}
+
+func (r *recordingModeResolver) ResolveRuleMode(
+	ruleID, _ string, ruleDefault rulesapi.DetectionRuleMode,
+) (rulesapi.DetectionRuleMode, string) {
+	r.seen[ruleID] = ruleDefault
+	return r.answer, ""
+}
+
+// spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-rule-declaring-a-default-operates-in-it-when-nothing-is-configured
+//
+// TestEngine_ThreadsEachRulesDeclaredDefaultIntoResolution pins that the engine hands the resolver the mode the RULE declared, not a
+// constant.
+//
+// Asserted on what the resolver received rather than on what was persisted, because the two rules in this test must be
+// distinguishable: if the engine passed a constant, a monitor-declaring rule and a silent one would look identical from outside and
+// only an alert that should not exist would reveal it, at a layer that needs a database.
+func TestEngine_ThreadsEachRulesDeclaredDefaultIntoResolution(t *testing.T) {
+	t.Parallel()
+
+	finding := []api.Finding{{HostID: "h1", RuleID: "x", Severity: "high", Title: "t"}}
+	imported := &modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{stubRule: stubRule{id: "imported"}, findings: finding},
+		mode:                 rulesapi.DetectionRuleModeMonitor,
+	}
+	handWritten := &stubRuleWithFindings{stubRule: stubRule{id: "hand_written"}, findings: finding}
+
+	e := New(nil, discardLogger())
+	e.Register(imported)
+	e.Register(handWritten)
+	// Answering monitor keeps every finding away from the store, so this stays a unit test.
+	resolver := &recordingModeResolver{seen: map[string]rulesapi.DetectionRuleMode{}, answer: rulesapi.DetectionRuleModeMonitor}
+	e.SetModeResolver(resolver)
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+	assert.Equal(t, rulesapi.DetectionRuleModeMonitor, resolver.seen["imported"],
+		"the declaring rule's own default reaches the resolver")
+	assert.Equal(t, rulesapi.DetectionRuleModeAlert, resolver.seen["hand_written"],
+		"a rule declaring nothing still resolves against alert, so nothing about it changes")
+}
+
+// spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-rule-declaring-a-default-operates-in-it-when-nothing-is-configured
+//
+// TestEngine_HonoursADeclaredDefaultWithNoResolverWired pins the case that would otherwise defeat the whole feature.
+//
+// A deployment or a test with no detection-config service wired resolved every rule to alert. Left that way, every imported rule
+// would alert on any such deployment, which is precisely what declaring monitor exists to prevent. The store is nil here on
+// purpose: routing to monitor must return before persistence is attempted, so a regression that alerted would fail loudly rather
+// than silently writing.
+func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	e := New(nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{
+			stubRule: stubRule{id: "imported"},
+			findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+		},
+		mode: rulesapi.DetectionRuleModeMonitor,
+	})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+	assert.Contains(t, logs.String(), "monitor mode", "the finding was routed to monitor, not persisted")
+	assert.Contains(t, logs.String(), "imported")
 }

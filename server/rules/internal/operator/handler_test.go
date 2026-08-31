@@ -158,6 +158,45 @@ func TestHandler_ListRules_Platforms(t *testing.T) {
 	}
 }
 
+// spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-declared-default-is-listed-on-the-rule-catalog
+//
+// TestHandler_ListRules_DefaultMode pins that GET /api/rules reports the mode each rule runs in absent configuration.
+//
+// It is asserted over the real catalog rather than a stub because the value has to be a MODE for every rule, never the empty string:
+// a consumer reading "" would have to know what the server's default is to interpret it, which is exactly the knowledge this field
+// exists to publish.
+func TestHandler_ListRules_DefaultMode(t *testing.T) {
+	t.Parallel()
+	svc := service.New(catalog.New(nil), slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		Rules []struct {
+			ID          string `json:"id"`
+			DefaultMode string `json:"default_mode"`
+		} `json:"rules"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+
+	require.NotEmpty(t, body.Rules)
+	for _, r := range body.Rules {
+		assert.Truef(t, rulesapi.IsValidDetectionRuleMode(rulesapi.DetectionRuleMode(r.DefaultMode)),
+			"rule %q reports default_mode %q, which is not a mode", r.ID, r.DefaultMode)
+		assert.Equalf(t, "alert", r.DefaultMode, "every hand-written rule alerts by default; rule %q", r.ID)
+	}
+}
+
 // TestHandler_ExportRule serves one detection as its declarative rule file (issue #757). The response IS the artifact, so it is
 // YAML rather than a JSON envelope the caller would have to unwrap before the bytes were useful.
 func TestHandler_ExportRule(t *testing.T) {

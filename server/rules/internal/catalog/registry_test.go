@@ -378,3 +378,18 @@ func TestAll_DeclaredEventTypesCoverWhatTheRuleReads(t *testing.T) {
 		})
 	}
 }
+
+// TestAll_RulesDeclareAValidDefaultMode asserts every registered rule's default mode is one this engine can act on.
+//
+// api.DefaultModeOf deliberately reports what a rule declared rather than repairing it, so this is the gate: a rule declaring a
+// mode the engine does not recognise would resolve to that value, fall past every case of the routing switch, and persist an alert.
+// A monitor-mode rule silently promoted by a typo is the exact failure the declaration exists to prevent, and it would be invisible
+// without this.
+func TestAll_RulesDeclareAValidDefaultMode(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range New(nil) {
+		mode := api.DefaultModeOf(r)
+		assert.True(t, api.IsValidDetectionRuleMode(mode), "rule %s declares default mode %q, which is not a mode", r.ID(), mode)
+	}
+}

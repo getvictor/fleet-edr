@@ -57,7 +57,11 @@ func (e *Engine) SetMetrics(m api.MetricsRecorder) { e.metrics = m }
 
 // SetModeResolver installs the per-host rule-mode resolver (issue #459). It routes each finding by the (rule, host) resolved mode:
 // disabled drops it, monitor records an observability signal without persisting an alert, alert persists (applying a severity
-// override). Nil (the default) means every rule alerts with no override, which is the pre-config behavior.
+// override).
+//
+// Nil (the default) applies each rule's own declared default with no override (issue #764), NOT alert unconditionally. A rule that
+// declares nothing still alerts, so this is the pre-config behavior for every hand-written rule; a rule that declares monitor must
+// not start alerting merely because no configuration surface is wired.
 func (e *Engine) SetModeResolver(m rulesapi.RuleModeResolver) { e.modeResolver = m }
 
 // Register adds a detection rule to the engine.
@@ -120,6 +124,10 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 			Techniques: r.Techniques(),
 			Doc:        r.Doc(),
 			Platforms:  r.Platforms(),
+			// Populated here as well as in the rules service, unlike Algorithm and SupportedExclusionMatchTypes, because this
+			// field's contract is that it always holds a mode. Those two document themselves as empty when absent, so omitting
+			// them keeps their contract; omitting this one would break its.
+			DefaultMode: rulesapi.DefaultModeOf(r),
 		})
 	}
 	return out
@@ -314,8 +322,11 @@ func (e *Engine) evaluateRule(
 	span.SetAttributes(attribute.Int("alert_count", len(findings)))
 
 	techniques := rule.Techniques()
+	// Read once per rule per batch rather than per finding: it is a type assertion, but so is the reason declaredTypes is cached,
+	// and a batch can carry many findings for one rule.
+	ruleDefault := rulesapi.DefaultModeOf(rule)
 	for _, f := range findings {
-		if err := e.routeFinding(ctx, rule.ID(), f, techniques); err != nil {
+		if err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques); err != nil {
 			span.RecordError(err)
 			return err
 		}
@@ -337,26 +348,33 @@ func evaluate(
 	return rule.Evaluate(ctx, events, gr)
 }
 
-// routeFinding applies the per-host resolved mode to a single finding before persistence (issue #459): a `disabled` (rule, host)
-// drops the finding, `monitor` records an observability signal without persisting an alert, and `alert` (the default, and the case
-// when no mode resolver is wired) persists, applying any severity override. Keeping this off persistFinding keeps the mode policy in
-// one place and persistFinding focused on the insert.
-func (e *Engine) routeFinding(ctx context.Context, ruleID string, f api.Finding, techniques []string) error {
+// routeFinding applies the resolved mode to a single finding before persistence (issue #459): a `disabled` (rule, host) drops the
+// finding, `monitor` records an observability signal without persisting an alert, and `alert` persists, applying any severity
+// override. Keeping this off persistFinding keeps the mode policy in one place and persistFinding focused on the insert.
+//
+// ruleDefault is the mode the RULE declares for itself (issue #764), and it is what applies when no setting matches. It is also
+// what applies when no mode resolver is wired at all, which matters: a deployment or a test with no detection-config service must
+// not alert on a rule whose author declared monitor, since that is precisely the case the declaration exists to cover. A rule that
+// declares nothing yields alert here, so nothing about an existing rule changes.
+func (e *Engine) routeFinding(
+	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, f api.Finding, techniques []string,
+) error {
+	mode, severityOverride := ruleDefault, ""
 	if e.modeResolver != nil {
-		mode, severityOverride := e.modeResolver.ResolveRuleMode(ruleID, f.HostID)
-		switch mode {
-		case rulesapi.DetectionRuleModeDisabled:
-			return nil
-		case rulesapi.DetectionRuleModeMonitor:
-			e.logger.InfoContext(ctx, "detection rule matched in monitor mode (no alert)",
-				"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
-			return nil
-		case rulesapi.DetectionRuleModeAlert:
-			// Fall through to the severity-override + persist path below.
-		}
-		if severityOverride != "" {
-			f.Severity = severityOverride
-		}
+		mode, severityOverride = e.modeResolver.ResolveRuleMode(ruleID, f.HostID, ruleDefault)
+	}
+	switch mode {
+	case rulesapi.DetectionRuleModeDisabled:
+		return nil
+	case rulesapi.DetectionRuleModeMonitor:
+		e.logger.InfoContext(ctx, "detection rule matched in monitor mode (no alert)",
+			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+		return nil
+	case rulesapi.DetectionRuleModeAlert:
+		// Fall through to the severity-override + persist path below.
+	}
+	if severityOverride != "" {
+		f.Severity = severityOverride
 	}
 	return e.persistFinding(ctx, f, techniques)
 }

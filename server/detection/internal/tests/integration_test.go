@@ -882,6 +882,8 @@ func TestIngest_RightAtCapAccepted(t *testing.T) {
 
 // ---- Engine + processor tests ----------------------------------------------
 
+// spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-rule-declaring-no-default-alerts
+//
 // spec:server-detection-rules-engine/persisted-alert-schema/a-rule-fires-and-creates-an-alert
 //
 // The spec scenario requires the persisted alert row to carry HostID, RuleID, Severity, Title, Description, ProcessID,
@@ -932,7 +934,7 @@ type fakeMode struct {
 	resolve func(ruleID, hostID string) (rulesapi.DetectionRuleMode, string)
 }
 
-func (f fakeMode) ResolveRuleMode(ruleID, hostID string) (rulesapi.DetectionRuleMode, string) {
+func (f fakeMode) ResolveRuleMode(ruleID, hostID string, _ rulesapi.DetectionRuleMode) (rulesapi.DetectionRuleMode, string) {
 	return f.resolve(ruleID, hostID)
 }
 

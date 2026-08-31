@@ -1216,12 +1216,23 @@ components:
 
     RuleDocEntry:
       type: object
-      required: [id, techniques, doc]
+      required: [id, techniques, doc, default_mode]
       properties:
         id:
           type: string
           description: Rule identifier (e.g. `credential_keychain_dump`). Stable across releases.
           example: credential_keychain_dump
+        default_mode:
+          type: string
+          enum: [alert, monitor, disabled]
+          description: |
+            The mode this rule runs in when no per-rule setting applies to it. Most rules are
+            `alert`; a rule imported from an upstream corpus starts at `monitor` so it records
+            what it would have fired on without raising alerts. This is the rule's own default,
+            not a resolved per-host mode: a setting created at
+            `PUT /api/v1/detection-config/rule-settings` overrides it, and those settings are
+            listed separately at `GET /api/v1/detection-config/rule-settings`.
+          example: alert
         techniques:
           type: array
           items:

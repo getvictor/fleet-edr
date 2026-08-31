@@ -37,10 +37,13 @@ var (
 	_ api.RuleModeResolver  = (*Service)(nil)
 )
 
-// NewService builds a Service seeded with an empty snapshot (excludes nothing, every rule alerts) so the resolver is safe to consult
-// before the first Reload. membership decides whether a group-scoped record applies to a host; nil means only global records apply
-// (the Phase A norm, since the only host group is the immutable all-hosts group). audit may be nil (a mutation then drops its audit
-// row with a WARN, matching app-control's posture); logger defaults to slog.Default.
+// NewService builds a Service seeded with an empty snapshot so the resolver is safe to consult before the first Reload. An empty
+// snapshot excludes nothing and matches no setting, so every rule resolves to the default its caller supplies, which is the rule's
+// own declared default (issue #764) rather than alert unconditionally.
+//
+// membership decides whether a group-scoped record applies to a host; nil means only global records apply (the Phase A norm, since
+// the only host group is the immutable all-hosts group). audit may be nil (a mutation then drops its audit row with a WARN,
+// matching app-control's posture); logger defaults to slog.Default.
 func NewService(store *Store, membership Membership, audit identityapi.AuditRecorder, logger *slog.Logger) *Service {
 	if store == nil {
 		panic("detectionconfig.NewService: store must not be nil")
@@ -263,6 +266,6 @@ func (s *Service) Excluded(ruleID string, matchType api.ExclusionMatchType, valu
 
 // ResolveRuleMode implements api.RuleModeResolver against the current snapshot. The single snap.Load() guarantees the engine gets a
 // consistent (mode, severity) pair even if a reload swaps the snapshot concurrently.
-func (s *Service) ResolveRuleMode(ruleID, hostID string) (api.DetectionRuleMode, string) {
-	return s.snap.Load().ResolveRuleMode(ruleID, hostID)
+func (s *Service) ResolveRuleMode(ruleID, hostID string, ruleDefault api.DetectionRuleMode) (api.DetectionRuleMode, string) {
+	return s.snap.Load().ResolveRuleMode(ruleID, hostID, ruleDefault)
 }

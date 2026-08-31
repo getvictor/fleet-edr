@@ -57,3 +57,50 @@ func TestDetectionRuleModeAndMatchTypeValidators(t *testing.T) {
 	assert.True(t, api.IsValidExclusionMatchType(api.ExclusionMatchTeamID))
 	assert.False(t, api.IsValidExclusionMatchType("ip"))
 }
+
+// declaringRule is a Rule that declares a default mode, standing in for an imported rule.
+type declaringRule struct {
+	api.Rule
+	mode api.DetectionRuleMode
+}
+
+func (r declaringRule) DefaultMode() api.DetectionRuleMode { return r.mode }
+
+// silentRule is a Rule that declares nothing, which is every hand-written rule.
+type silentRule struct{ api.Rule }
+
+// TestDefaultModeOf pins the two answers the helper gives, because the fallback is what makes this change invisible to every rule
+// that existed before it: a rule declaring nothing must resolve to alert, exactly as it did.
+func TestDefaultModeOf(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		rule api.Rule
+		want api.DetectionRuleMode
+	}{
+		{"a rule declaring monitor", declaringRule{mode: api.DetectionRuleModeMonitor}, api.DetectionRuleModeMonitor},
+		{"a rule declaring disabled", declaringRule{mode: api.DetectionRuleModeDisabled}, api.DetectionRuleModeDisabled},
+		{"a rule declaring alert", declaringRule{mode: api.DetectionRuleModeAlert}, api.DetectionRuleModeAlert},
+		{"a rule declaring nothing", silentRule{}, api.DetectionRuleModeAlert},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, api.DefaultModeOf(tc.rule))
+		})
+	}
+}
+
+// TestDefaultModeOf_DoesNotLaunderAnInvalidDeclaration pins that the helper reports what the rule said.
+//
+// Coercing an invalid declaration to alert here would hide an author error in exchange for nothing: the catalog guard test asserting
+// every registered rule's default is valid is what keeps such a rule out of a release, and a helper that silently repaired the value
+// would make that guard unfailable.
+func TestDefaultModeOf_DoesNotLaunderAnInvalidDeclaration(t *testing.T) {
+	t.Parallel()
+
+	got := api.DefaultModeOf(declaringRule{mode: "throttled"})
+	assert.Equal(t, api.DetectionRuleMode("throttled"), got)
+	assert.False(t, api.IsValidDetectionRuleMode(got), "which is exactly what the catalog guard test looks for")
+}
