@@ -124,7 +124,9 @@ func writeRuleHeading(b *strings.Builder, id string, d rulesapi.Documentation) {
 	}
 }
 
-func writeRuleMeta(b *strings.Builder, id string, d rulesapi.Documentation, techs []string, mode rulesapi.DetectionRuleMode, origin string) {
+func writeRuleMeta(
+	b *strings.Builder, id string, d rulesapi.Documentation, techs []string, mode rulesapi.DetectionRuleMode, origin string,
+) {
 	b.WriteString("| | |\n| --- | --- |\n")
 	fmt.Fprintf(b, "| Rule ID | `%s` |\n", id)
 	fmt.Fprintf(b, "| Severity | `%s` |\n", d.Severity)

@@ -15,7 +15,8 @@ const (
 	navigatorLayerName = "Fleet EDR coverage"
 	// navigatorLayerDescription is the layer's human-readable subtitle.
 	navigatorLayerDescription = "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. " +
-		"Amber techniques are covered only by rules that raise no alert as shipped, whether because they record without alerting or are off by default."
+		"Amber techniques are covered only by rules that raise no alert as shipped, whether because they record " +
+		"without alerting or are off by default."
 	// navigatorDomain pins the layer to the enterprise matrix; combined with the macOS platform filter this renders only the
 	// macOS columns Fleet EDR actually covers.
 	navigatorDomain = "enterprise-attack"
