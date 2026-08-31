@@ -103,6 +103,13 @@ func (s search) match(ev Event) bool {
 // comment. A modifier outside this set is a load error rather than a silent no-op: a rule whose modifier we ignored would still
 // evaluate, and would match far more broadly than its author wrote, which produces confident wrong alerts rather than an obvious
 // failure.
+//
+// A name outside this set is reported as ErrUnsupported, which treats it as a modifier we have not built rather than one Sigma
+// does not define. That conflates a real gap (`windash`, `base64offset`, `cidr`) with a misspelling of a modifier we do
+// implement, and it does so deliberately. Telling them apart needs an authoritative list of every modifier Sigma defines, which this package would then have
+// to keep current forever; the first modifier Sigma adds that we had not heard of would be classified as invalid and would abort
+// an entire corpus import. Declining one rule and naming the modifier in the reason is the cheaper error, and it is legible: a
+// reader sees the modifier that stopped it either way.
 var knownModifiers = map[string]bool{
 	"contains":   true,
 	"startswith": true,
