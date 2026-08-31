@@ -34,3 +34,18 @@ Unlike `edr.alerts.created`, `edr.detection.monitor_matches` SHALL NOT be dedupl
 - **GIVEN** a rule whose resolved mode is monitor and whose setting carries a severity override
 - **WHEN** it matches an event
 - **THEN** the counter's `severity` attribute is the overridden severity, not the rule's declared one
+
+## ADDED Requirements
+
+### Requirement: A per-rule span reports the alerts it raised
+
+The per-rule evaluation span SHALL report the number of findings that were raised as alerts, not the number the rule produced. A finding the resolved mode suppresses SHALL NOT be counted as an alert, and the count of suppressed findings SHALL be reported alongside it so the span still says how much the rule found.
+
+The two were the same number while every rule alerted. They are not once rules ship in a mode that suppresses, and a span that counted produced findings would report alerts that were never raised to every dashboard grouping by rule.
+
+#### Scenario: A rule whose findings are all suppressed reports no alerts
+
+- **GIVEN** a rule whose resolved mode is monitor and which produces findings for a batch
+- **WHEN** the batch is evaluated
+- **THEN** the rule's span reports an alert count of zero
+- **AND** reports the number of suppressed findings

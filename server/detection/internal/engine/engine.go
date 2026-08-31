@@ -302,8 +302,9 @@ func (e *Engine) evaluateRule(
 	defer span.End()
 	// Stamp alert_count=0 up front so dashboards grouping by rule_id see a consistent attribute set across success and failure
 	// paths. The success path below overrides this with the actual count; the rule-error early-return below would otherwise
-	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal.
-	span.SetAttributes(attribute.Int("alert_count", 0))
+	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal. suppressed_count is stamped
+	// alongside it for the same reason: a rule that raised nothing and suppressed nothing should say so rather than say nothing.
+	span.SetAttributes(attribute.Int("alert_count", 0), attribute.Int("suppressed_count", 0))
 
 	findings, err := evaluate(ctx, rule, scoped, e.store, scope)
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
@@ -322,18 +323,29 @@ func (e *Engine) evaluateRule(
 		// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
 		retryableMiss = fmt.Errorf("rule %s: %w", rule.ID(), err)
 	}
-	span.SetAttributes(attribute.Int("alert_count", len(findings)))
-
 	techniques := rule.Techniques()
 	// Read once per rule per batch rather than per finding: it is a type assertion, but so is the reason declaredTypes is cached,
 	// and a batch can carry many findings for one rule.
 	ruleDefault := rulesapi.DefaultModeOf(rule)
+
+	// alert_count counts findings that were ROUTED TO AN ALERT, not findings the rule returned. Those were the same number until
+	// the vendored corpus landed in monitor mode (issue #764); now most findings are suppressed, and counting what the rule
+	// returned would have every dashboard grouping by rule_id report alerts that were never raised. suppressed_count carries the
+	// other half, so the span still says how much the rule found rather than losing that when the two stopped being equal.
+	var alerted, suppressed int
 	for _, f := range findings {
-		if err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques); err != nil {
+		routed, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques)
+		if err != nil {
 			span.RecordError(err)
 			return err
 		}
+		if routed {
+			alerted++
+			continue
+		}
+		suppressed++
 	}
+	span.SetAttributes(attribute.Int("alert_count", alerted), attribute.Int("suppressed_count", suppressed))
 	return retryableMiss
 }
 
@@ -359,9 +371,11 @@ func evaluate(
 // what applies when no mode resolver is wired at all, which matters: a deployment or a test with no detection-config service must
 // not alert on a rule whose author declared monitor, since that is precisely the case the declaration exists to cover. A rule that
 // declares nothing yields alert here, so nothing about an existing rule changes.
+// It reports whether the finding was routed to an alert, so the caller can annotate its span with what was actually raised rather
+// than with what the rule returned.
 func (e *Engine) routeFinding(
 	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, f api.Finding, techniques []string,
-) error {
+) (bool, error) {
 	mode, severityOverride := ruleDefault, ""
 	if e.modeResolver != nil {
 		mode, severityOverride = e.modeResolver.ResolveRuleMode(ruleID, f.HostID, ruleDefault)
@@ -375,7 +389,7 @@ func (e *Engine) routeFinding(
 
 	switch mode {
 	case rulesapi.DetectionRuleModeDisabled:
-		return nil
+		return false, nil
 	case rulesapi.DetectionRuleModeMonitor:
 		// Counted, then logged at DEBUG. This was an INFO line per match, which was proportionate when monitor was a state an
 		// operator set deliberately on one noisy rule. Issue #764 made it the default for most of the catalog, and several of
@@ -387,11 +401,11 @@ func (e *Engine) routeFinding(
 		}
 		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
-		return nil
+		return false, nil
 	case rulesapi.DetectionRuleModeAlert:
 		// Fall through to the severity-override + persist path below.
 	}
-	return e.persistFinding(ctx, f, techniques)
+	return true, e.persistFinding(ctx, f, techniques)
 }
 
 // persistFinding inserts a single finding as an alert, stamping it

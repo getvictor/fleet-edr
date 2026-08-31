@@ -1002,3 +1002,56 @@ type severityRecordingMetrics struct {
 func (m *severityRecordingMetrics) MonitorMatched(_ context.Context, _, severity string) {
 	m.monitorSeverities = append(m.monitorSeverities, severity)
 }
+
+// spec:observability-instrumentation/a-per-rule-span-reports-the-alerts-it-raised/a-rule-whose-findings-are-all-suppressed-reports-no-alerts
+//
+// TestEngine_SpanCountsAlertsRaisedNotFindingsReturned pins that the per-rule span reports what was raised.
+//
+// alert_count was set from the findings the rule returned. Those were the same number until the vendored corpus arrived in monitor
+// mode, and now most findings are suppressed: counting what the rule returned would have every dashboard grouping by rule_id
+// report alerts that were never raised, which is the same overstatement this PR closes on the coverage export and the reference,
+// arriving through the tracing surface instead.
+func TestEngine_SpanCountsAlertsRaisedNotFindingsReturned(t *testing.T) {
+	t.Parallel()
+
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	e := New(nil, discardLogger())
+	e.tracer = tp.Tracer("test")
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{
+			stubRule: stubRule{id: "imported"},
+			findings: []api.Finding{
+				{HostID: "h1", RuleID: "imported", Severity: "high", Title: "one"},
+				{HostID: "h1", RuleID: "imported", Severity: "high", Title: "two"},
+			},
+		},
+		mode: rulesapi.DetectionRuleModeMonitor,
+	})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+	var alertCount, suppressedCount int64
+	var found bool
+	for _, span := range rec.Ended() {
+		for _, attr := range span.Attributes() {
+			switch attr.Key {
+			case attribute.Key("rule_id"):
+				found = attr.Value.AsString() == "imported"
+			case attribute.Key("alert_count"):
+				alertCount = attr.Value.AsInt64()
+			case attribute.Key("suppressed_count"):
+				suppressedCount = attr.Value.AsInt64()
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	require.True(t, found, "the rule's span was recorded")
+	assert.Equal(t, int64(0), alertCount, "two findings were produced and neither was raised as an alert")
+	assert.Equal(t, int64(2), suppressedCount, "and the span still says how much the rule found")
+}
