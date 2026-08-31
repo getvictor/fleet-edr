@@ -39,8 +39,24 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"sensor_recovery_failed":        {},
 	}
 
-	rules := New(nil)
-	require.Len(t, rules, len(expected), "expected table must list every registered rule; update it when adding a rule")
+	// Scoped to the rules this project authors, whose exclusion surface is a design decision someone made and should have to
+	// restate here when it changes. A vendored rule consults no exclusions at all, which is asserted as a set just below rather
+	// than by adding sixty-six empty rows to a table whose purpose is to be read.
+	rules := make([]api.Rule, 0, len(expected))
+	var vendored []api.Rule
+	for _, r := range New(nil) {
+		if authored(r) {
+			rules = append(rules, r)
+			continue
+		}
+		vendored = append(vendored, r)
+	}
+	require.Len(t, rules, len(expected), "expected table must list every authored rule; update it when adding a rule")
+	require.NotEmpty(t, vendored, "no vendored rules registered; this scoping would then be hiding nothing and should be removed")
+	for _, r := range vendored {
+		assert.Emptyf(t, r.SupportedExclusionMatchTypes(),
+			"vendored rule %q offers an exclusion surface; an imported rule has no tuning contract this project designed", r.ID())
+	}
 
 	for _, r := range rules {
 		t.Run(r.ID(), func(t *testing.T) {

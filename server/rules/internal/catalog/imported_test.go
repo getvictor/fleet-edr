@@ -32,7 +32,7 @@ import (
 func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 	t.Parallel()
 
-	rules, rejected, err := loadImported(os.DirFS("testdata"), "imported")
+	rules, rejected, err := loadImported(importedCorpus, "imported")
 	require.NoError(t, err)
 
 	assert.Len(t, rules, 66, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
@@ -288,7 +288,7 @@ func TestTechniquesFrom(t *testing.T) {
 func TestImportedRule_FiresOnAMatchingEvent(t *testing.T) {
 	t.Parallel()
 
-	rules, _, err := loadImported(os.DirFS("testdata"), "imported")
+	rules, _, err := loadImported(importedCorpus, "imported")
 	require.NoError(t, err)
 	var rule api.Rule
 	for _, r := range rules {
@@ -663,7 +663,7 @@ func TestImportedCorpus_MatchesTheVendoredManifest(t *testing.T) {
 	t.Parallel()
 
 	// One filesystem for both halves, so the manifest and the files it pins are read through the same root.
-	fsys := os.DirFS("testdata/imported")
+	fsys := mustSubFS(t, importedCorpus, "imported")
 	manifest, err := fs.ReadFile(fsys, "MANIFEST.sha256")
 	require.NoError(t, err)
 
@@ -741,4 +741,55 @@ func TestParseImported_CorruptionOutranksInapplicability(t *testing.T) {
 		require.True(t, isRejection)
 		assert.Contains(t, err.Error(), "maps to no event type")
 	})
+}
+
+// mustSubFS narrows the embedded corpus to its rule tree, so a test reads exactly the files production loads rather than a copy
+// that could drift from them.
+func mustSubFS(t *testing.T, fsys fs.FS, dir string) fs.FS {
+	t.Helper()
+
+	sub, err := fs.Sub(fsys, dir)
+	require.NoError(t, err)
+	return sub
+}
+
+// spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/the-vendored-corpus-is-registered-alongside-the-rules-this-project-authored
+//
+// TestNew_RegistersTheVendoredCorpus pins that the corpus actually reaches the catalog, which is the whole of issue #764 and the
+// one thing every other guarantee here depends on.
+//
+// Asserted against the corpus loader rather than a literal count, so this does not become a second place to update on a re-sync;
+// the exact count lives in TestLoadImported_TheWholeUpstreamCorpus, which is where a change to it should be reviewed.
+func TestNew_RegistersTheVendoredCorpus(t *testing.T) {
+	t.Parallel()
+
+	registered := map[string]api.Rule{}
+	for _, r := range New(nil) {
+		registered[r.ID()] = r
+	}
+
+	imported := MustLoadImported()
+	require.NotEmpty(t, imported)
+	for _, want := range imported {
+		assert.Contains(t, registered, want.ID(), "imported rule %s loaded but was never registered", want.ID())
+	}
+	assert.Greater(t, len(registered), len(imported), "the rules this project authored are still registered too")
+}
+
+// spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/a-vendored-rule-raises-no-alert-until-an-operator-promotes-it
+//
+// TestImported_EveryRuleShipsInMonitorMode pins that no vendored rule arrives alerting.
+//
+// Asserted over every one of them rather than a sample, because the failure this prevents is per-rule: one rule declaring nothing
+// would alert on day one, and it would be the rule nobody looked at. The engine half, that a monitor default actually suppresses
+// the alert, is pinned in the detection engine's own tests.
+func TestImported_EveryRuleShipsInMonitorMode(t *testing.T) {
+	t.Parallel()
+
+	imported := MustLoadImported()
+	require.NotEmpty(t, imported)
+	for _, r := range imported {
+		assert.Equal(t, api.DetectionRuleModeMonitor, api.DefaultModeOf(r),
+			"imported rule %s must not alert before an operator has seen what it does", r.ID())
+	}
 }

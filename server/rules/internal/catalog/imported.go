@@ -2,12 +2,14 @@ package catalog
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path"
 	"sort"
 	"strings"
+	"sync"
 
 	"go.yaml.in/yaml/v3"
 
@@ -32,6 +34,10 @@ import (
 // The three refusals: one reads OriginalFileName, a Sysmon field naming a PE's embedded original name that has no macOS
 // equivalent; two are file_event rules watching paths the agent emits no open event for (see categoryIsInert).
 type importedRule struct {
+	// source is the vendored file's bytes, verbatim. Kept so an operator exporting this rule gets the upstream rule they can diff
+	// against SigmaHQ, rather than a re-rendering of it in this project's format. See VendoredSource.
+	source []byte
+
 	id          string
 	title       string
 	description string
@@ -267,6 +273,7 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 	}
 
 	return &importedRule{
+		source:      raw,
 		id:          id,
 		title:       f.Title,
 		description: f.Description,
@@ -382,6 +389,16 @@ func allDigits(s string) bool {
 	return true
 }
 
+// DefaultMode implements api.ModeDefaulter: an imported rule starts in monitor (issue #764).
+//
+// This project did not write these rules and no operator here has seen what they do on real fleets. Sixty-six unfamiliar rules
+// arriving in alert mode is how a catalog loses trust in a week, and once trust is gone the alerts get muted wholesale, including
+// the ones that were right. Monitor keeps each rule evaluating and records what it would have fired on, so promotion is a decision
+// made against observed behaviour rather than against a rule's reputation upstream.
+//
+// This is the rule's DEFAULT, not a floor: an operator promoting one to alert overrides it, per the resolution order.
+func (r *importedRule) DefaultMode() api.DetectionRuleMode { return api.DetectionRuleModeMonitor }
+
 // Evaluate runs the compiled detection over the batch with a scope of its own, which is the un-shared behaviour a direct caller
 // (the replay harness, a test) gets. The engine calls EvaluateScoped instead.
 func (r *importedRule) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
@@ -446,4 +463,55 @@ func (r *importedRule) evalEvent(
 		ProcessID:   proc.ID,
 		EventIDs:    []string{evt.EventID},
 	}, nil
+}
+
+// importedCorpus is the vendored SigmaHQ macOS corpus, embedded so the rules ship with the binary rather than being read from a
+// path an operator could move. The tree layout is upstream's own `<category>/` one, byte-for-byte, so a re-sync is a copy.
+//
+//go:embed imported
+var importedCorpus embed.FS
+
+// importedRules is the corpus loaded once. Memoized because loadImported walks 69 files and compiles a detection for each, which is
+// start-up work, not per-call work.
+var importedRules = sync.OnceValues(func() ([]api.Rule, []rejection) {
+	rules, rejected, err := loadImported(importedCorpus, "imported")
+	if err != nil {
+		// A corpus this repository vendors either loads or the build is broken. Failing at start-up is the whole point of
+		// checking it in: the alternative is a server that boots with a detection silently missing.
+		panic(fmt.Sprintf("catalog: load imported corpus: %v", err))
+	}
+	return rules, rejected
+})
+
+// MustLoadImported returns the imported rules, panicking if the vendored corpus does not load. Mirrors MustLoadPack and
+// MustLoadDetections: a malformed file fails at start-up rather than on the first event.
+func MustLoadImported() []api.Rule {
+	rules, _ := importedRules()
+	return rules
+}
+
+// ImportedRejections returns the rules the corpus carries that this sensor cannot run, with the reason for each.
+//
+// Exported so start-up can report them. A refusal is an expected outcome, not an error, but it is one an operator should be able to
+// see: "66 imported, 3 refused" is the difference between a corpus that loaded and one that half loaded.
+func ImportedRejections() []rejection {
+	_, rejected := importedRules()
+	return rejected
+}
+
+// VendoredSource returns the upstream file a rule was imported from, verbatim, and whether the rule is a vendored one at all.
+//
+// It is the single place that answers "is this rule ours or upstream's", and both callers that need to know go through it. The
+// exported rule pack skips vendored rules, because their declarative form already exists as the file this repository vendored and
+// rendering a second one in this project's format would put two representations of one rule on disk. The per-rule export endpoint
+// serves these bytes instead, so an operator exporting an imported rule gets the upstream rule they can diff against SigmaHQ
+// rather than a re-rendering of it.
+func VendoredSource(ruleID string) ([]byte, bool) {
+	for _, r := range MustLoadImported() {
+		imported, ok := r.(*importedRule)
+		if ok && imported.id == ruleID {
+			return imported.source, true
+		}
+	}
+	return nil, false
 }

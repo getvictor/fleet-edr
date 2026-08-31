@@ -15,7 +15,7 @@ import (
 // DetectionRuleMode is the per-(rule, scope) operating mode. Three values, the shape every major EDR converged on (Defender ASR audit
 // mode, Falcon detect-vs-prevent, SentinelOne rule states):
 //
-//   - alert:    the rule produces alerts as normal (the default when unset).
+//   - alert:    the rule produces alerts as normal (what a rule operates in when it declares no default; see ModeDefaulter).
 //   - monitor:  the rule still evaluates, but a match emits an observability signal instead of persisting an alert, so an operator can
 //     gauge a rule's noise before promoting it to alert.
 //   - disabled: the rule produces nothing for the scope.

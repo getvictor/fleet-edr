@@ -53,7 +53,7 @@ func TestBuildNavigatorLayer(t *testing.T) {
 		assert.Equal(t, "Covered by: rule_c", layer.Techniques[0].Comment)
 		assert.Equal(t, "Covered by: rule_a, rule_b", layer.Techniques[1].Comment)
 		// Every covered technique scores 1.
-		assert.Equal(t, 1, layer.Techniques[1].Score)
+		assert.InDelta(t, 1.0, layer.Techniques[1].Score, 0)
 	})
 }
 
@@ -72,7 +72,7 @@ func TestMarshalNavigatorLayerIndented(t *testing.T) {
     "navigator": "5.2.0"
   },
   "domain": "enterprise-attack",
-  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",
+  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. Amber techniques are covered only by rules that ship in monitor mode and raise no alert until an operator promotes them.",
   "filters": {
     "platforms": [
       "macOS"
@@ -89,4 +89,45 @@ func TestMarshalNavigatorLayerIndented(t *testing.T) {
 	//nolint:testifylint // intentional literal-bytes pin; JSONEq would mask the formatting drift this test guards
 	assert.Equal(t, wantEmptyLayer, string(b),
 		"committed-artifact encoding drifted: indentation, trailing newline, unescaped ampersand, or empty techniques array changed")
+}
+
+// spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/coverage-from-non-alerting-rules-is-not-claimed-as-coverage
+//
+// TestBuildNavigatorLayer_MonitorOnlyCoverageIsMarkedApart pins that a technique covered only by rules which do not alert is scored
+// and coloured differently from one an alerting rule covers.
+//
+// This document is read by people evaluating the product, and the codebase already flags that an inflated coverage figure is the
+// specific harm to avoid. Registering the vendored corpus (issue #764) took the layer from 13 techniques to 64, and 51 of those are
+// covered only by rules that ship in monitor mode and raise nothing until an operator promotes them. Scoring all 64 alike would
+// quintuple the claim on the strength of rules that, as shipped, do not alert.
+//
+// A technique covered by BOTH kinds scores as covered: one alerting rule is enough for the claim to be true.
+func TestBuildNavigatorLayer_MonitorOnlyCoverageIsMarkedApart(t *testing.T) {
+	t.Parallel()
+
+	layer := api.BuildNavigatorLayer([]api.RuleMetadata{
+		{ID: "alerting", Techniques: []string{"T1000"}, DefaultMode: api.DetectionRuleModeAlert},
+		{ID: "monitoring", Techniques: []string{"T2000"}, DefaultMode: api.DetectionRuleModeMonitor},
+		{ID: "silenced", Techniques: []string{"T3000"}, DefaultMode: api.DetectionRuleModeDisabled},
+		{ID: "mixed_alerting", Techniques: []string{"T4000"}, DefaultMode: api.DetectionRuleModeAlert},
+		{ID: "mixed_monitoring", Techniques: []string{"T4000"}, DefaultMode: api.DetectionRuleModeMonitor},
+	})
+
+	byID := map[string]api.NavigatorTechnique{}
+	for _, tech := range layer.Techniques {
+		byID[tech.TechniqueID] = tech
+	}
+	require.Len(t, byID, 4)
+
+	assert.InDelta(t, 1.0, byID["T1000"].Score, 0, "an alerting rule is real coverage")
+	assert.NotContains(t, byID["T1000"].Comment, "Monitor only")
+
+	for _, tid := range []string{"T2000", "T3000"} {
+		assert.InDelta(t, 0.5, byID[tid].Score, 0, "%s is covered only by a rule that raises nothing", tid)
+		assert.NotEqual(t, byID["T1000"].Color, byID[tid].Color, "%s must not be painted as covered", tid)
+		assert.Contains(t, byID[tid].Comment, "Monitor only", "%s says so in words as well as colour", tid)
+	}
+
+	assert.InDelta(t, 1.0, byID["T4000"].Score, 0, "one alerting rule is enough, even alongside a monitor-mode one")
+	assert.Contains(t, byID["T4000"].Comment, "mixed_monitoring", "and the monitor-mode rule is still credited in the comment")
 }

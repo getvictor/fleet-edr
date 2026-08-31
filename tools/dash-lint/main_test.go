@@ -198,14 +198,20 @@ func TestIsExcluded_VendoredSigmaRules(t *testing.T) {
 		path string
 		want bool
 	}{
-		{"server/rules/internal/catalog/testdata/imported/process_creation/rule.yml", true},
+		// The corpus left testdata when it became something the binary embeds rather than something only tests read (#764).
+		{"server/rules/internal/catalog/imported/process_creation/rule.yml", true},
 		// Our own prose, sitting beside the vendored rules: still gated.
-		{"server/rules/internal/catalog/testdata/imported/README.md", false},
+		{"server/rules/internal/catalog/imported/README.md", false},
+		// The old testdata location is no longer special, so a fixture that reappears there is covered like any other.
+		{"server/rules/internal/catalog/testdata/imported/process_creation/rule.yml", false},
 		// Ours, not upstream: a same-named directory elsewhere in the tree stays covered.
 		{"server/detection/testdata/imported/notes.md", false},
 		{"ui/src/testdata/imported/thing.md", false},
+		// The loader is our code, and its neighbouring package files are not the corpus.
 		{"server/rules/internal/catalog/imported.go", false},
-		{"docs/detection-rules.md", false},
+		// Generated from the catalog, and it reproduces vendored rule titles verbatim, several of which use a spaced hyphen. The
+		// generator's own prose is gated where it is written, as string literals in tools/gen-rule-docs.
+		{"docs/detection-rules.md", true},
 	}
 	for _, tc := range cases {
 		if got := isExcluded(tc.path); got != tc.want {

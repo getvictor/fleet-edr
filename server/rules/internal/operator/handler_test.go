@@ -190,11 +190,18 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 
 	require.NotEmpty(t, body.Rules)
+	modes := map[string]int{}
 	for _, r := range body.Rules {
 		assert.Truef(t, rulesapi.IsValidDetectionRuleMode(rulesapi.DetectionRuleMode(r.DefaultMode)),
 			"rule %q reports default_mode %q, which is not a mode", r.ID, r.DefaultMode)
-		assert.Equalf(t, "alert", r.DefaultMode, "every hand-written rule alerts by default; rule %q", r.ID)
+		modes[r.DefaultMode]++
 	}
+
+	// Both kinds are present and the endpoint tells them apart, which is the whole reason the field exists: a rule sitting at its
+	// own monitor default appears on no other surface, so without this an operator cannot see that it raises nothing.
+	assert.Positive(t, modes["alert"], "the rules this project authored alert by default")
+	assert.Positive(t, modes["monitor"], "the vendored corpus ships in monitor mode (issue #764)")
+	assert.Equal(t, len(body.Rules), modes["alert"]+modes["monitor"], "every rule reports one of the two, never an empty string")
 }
 
 // TestHandler_ExportRule serves one detection as its declarative rule file (issue #757). The response IS the artifact, so it is
@@ -247,4 +254,38 @@ func TestHandler_ExportRule_NotFound(t *testing.T) {
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 		})
 	}
+}
+
+// spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/exporting-a-vendored-rule-returns-the-upstream-file
+//
+// TestHandler_ExportRule_VendoredRuleServesTheUpstreamFile pins that exporting an imported rule hands back the file this repository
+// vendored, byte for byte, rather than a re-rendering of it.
+//
+// Two things depend on this. An operator comparing what runs here against SigmaHQ needs the upstream bytes to diff, and the pack on
+// disk deliberately omits these rules so that one rule has one authoritative description; if this endpoint rendered its own version
+// instead, that second description would exist after all, just served rather than committed.
+func TestHandler_ExportRule_VendoredRuleServesTheUpstreamFile(t *testing.T) {
+	t.Parallel()
+	svc := service.New(catalog.New(nil), slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	const id = "proc_creation_macos_xattr_gatekeeper_bypass"
+	want, vendored := catalog.VendoredSource(id)
+	require.True(t, vendored, "fixture rule must be one of the vendored ones")
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules/"+id+"/export", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), string(got), "the exported bytes are the vendored file, not a rendering of it")
+	assert.Contains(t, string(got), "title:", "and it is still the upstream Sigma document")
 }

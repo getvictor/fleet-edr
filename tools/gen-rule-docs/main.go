@@ -67,13 +67,29 @@ func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 
 	// Index: operators jumping in from a CVE or alert title want a fast
 	// lookup. ID is what shows up in alert rows; title is the friendly name.
+	// Upstream rules this sensor does not run, before the index, because a reader looking for a rule that is absent needs to find
+	// out why here rather than concluding the import missed it. The reason names the telemetry a re-sync would need.
+	if refused := rulesbootstrap.ImportedRejections(); len(refused) > 0 {
+		b.WriteString("## Upstream rules not run\n\n")
+		b.WriteString("These rules are carried in the vendored upstream corpus but are not registered, because this sensor cannot run them. ")
+		b.WriteString("They are listed so an absent rule reads as a decision rather than an oversight.\n\n")
+		b.WriteString("| File | Why not |\n| --- | --- |\n")
+		for _, r := range refused {
+			fmt.Fprintf(&b, "| `%s` | %s |\n", r.File, mdCell(r.Reason))
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("## Index\n\n")
-	b.WriteString("| Rule ID | Title | Severity | ATT&CK |\n")
-	b.WriteString("| --- | --- | --- | --- |\n")
+	// Mode is in the index rather than only in each rule's detail table because the question it answers, "does this actually raise
+	// anything", is one a reader needs while scanning. Most of this catalog ships in monitor mode (issue #764) and a reader who
+	// assumed otherwise would take the list for a list of alerts.
+	b.WriteString("| Rule ID | Title | Severity | Default mode | ATT&CK |\n")
+	b.WriteString("| --- | --- | --- | --- | --- |\n")
 	for _, r := range rs {
-		fmt.Fprintf(&b, "| [`%s`](#%s) | %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| [`%s`](#%s) | %s | %s | %s | %s |\n",
 			r.ID, anchor(r.ID),
-			mdCell(r.Doc.Title), mdCell(r.Doc.Severity),
+			mdCell(r.Doc.Title), mdCell(r.Doc.Severity), mdCell(string(r.DefaultMode)),
 			mdCell(strings.Join(r.Techniques, ", ")))
 	}
 	b.WriteString("\n")
@@ -91,7 +107,7 @@ func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 // Fprintf-style call here.
 func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
 	writeRuleHeading(b, r.ID, r.Doc)
-	writeRuleMeta(b, r.ID, r.Doc, r.Techniques)
+	writeRuleMeta(b, r.ID, r.Doc, r.Techniques, r.DefaultMode)
 	writeRuleDescription(b, r.Doc)
 	writeRuleBulletSection(b, "Known false-positive sources", r.Doc.FalsePositives)
 	writeRuleBulletSection(b, "Limitations", r.Doc.Limitations)
@@ -105,10 +121,14 @@ func writeRuleHeading(b *strings.Builder, id string, d rulesapi.Documentation) {
 	}
 }
 
-func writeRuleMeta(b *strings.Builder, id string, d rulesapi.Documentation, techs []string) {
+func writeRuleMeta(b *strings.Builder, id string, d rulesapi.Documentation, techs []string, mode rulesapi.DetectionRuleMode) {
 	b.WriteString("| | |\n| --- | --- |\n")
 	fmt.Fprintf(b, "| Rule ID | `%s` |\n", id)
 	fmt.Fprintf(b, "| Severity | `%s` |\n", d.Severity)
+	fmt.Fprintf(b, "| Default mode | `%s` |\n", mode)
+	if mode == rulesapi.DetectionRuleModeMonitor {
+		b.WriteString("| | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |\n")
+	}
 	if len(techs) > 0 {
 		fmt.Fprintf(b, "| ATT&CK | %s |\n", joinTechniqueLinks(techs))
 	}

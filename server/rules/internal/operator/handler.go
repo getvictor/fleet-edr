@@ -149,11 +149,18 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		if rm.ID != id {
 			continue
 		}
-		body, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
-		if err != nil {
-			h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
-			writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
-			return
+		// A vendored rule exports as the upstream file it was imported from, byte for byte (issue #764). Re-rendering it in this
+		// project's format would hand back a second description of a rule whose authoritative description already exists, and the
+		// upstream bytes are the more useful artifact anyway: they are what an operator can diff against SigmaHQ.
+		body, vendored := catalog.VendoredSource(rm.ID)
+		if !vendored {
+			rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
+			if err != nil {
+				h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
+				writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
+				return
+			}
+			body = rendered
 		}
 		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+id+`.yml"`)

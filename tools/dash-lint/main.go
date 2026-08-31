@@ -139,7 +139,12 @@ func isExcluded(p string) bool {
 		//
 		// Scoped to the exact path AND to .yml, so an unrelated fixture directory cannot inherit the exemption and the README we
 		// wrote beside those rules stays under the gate like every other piece of our own prose.
-		(strings.HasPrefix(p, "server/rules/internal/catalog/testdata/imported/") && strings.HasSuffix(p, ".yml")) ||
+		(strings.HasPrefix(p, "server/rules/internal/catalog/imported/") && strings.HasSuffix(p, ".yml")) ||
+		// docs/detection-rules.md is generated from the rule catalog (tools/gen-rule-docs) and now reproduces vendored rule
+		// titles verbatim, several of which use a spaced hyphen ("Binary Padding - MacOS"). Rewriting someone else's rule title
+		// to suit our house style would make the reference disagree with the rule it documents and with upstream. The generator's
+		// OWN prose is still gated: it lives as string literals in tools/gen-rule-docs, which this linter reads.
+		p == "docs/detection-rules.md" ||
 		p == "docs/maintenance/log.md"
 }
 

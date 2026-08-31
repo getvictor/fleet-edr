@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -25,7 +26,15 @@ import (
 // registry also includes application_control_block which is operator-policy-driven, not part of the spec-named catalog set.
 func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	t.Parallel()
-	got := New(nil)
+	// Scoped to the rules this project authors. The vendored corpus is asserted by count and by name in the corpus test, and
+	// re-listing sixty-six ids here would duplicate that while making this list unreadable as what it is, which is the set of
+	// rules someone on this team decided to ship.
+	got := make([]api.Rule, 0, 12)
+	for _, r := range New(nil) {
+		if authored(r) {
+			got = append(got, r)
+		}
+	}
 	wantIDs := []string{
 		"suspicious_exec",
 		"persistence_launchagent",
@@ -90,6 +99,25 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 	}
 }
 
+// authored reports whether r is a rule this project wrote, as opposed to one vendored from an upstream corpus (issue #764).
+//
+// The guards below fall into two kinds and this is the line between them. An ENGINE CONTRACT is a property every rule must satisfy
+// however it got here, because the engine acts on it: a valid platform set, declared event types, a mode the router can act on, a
+// title the alert and the docs agree on. Those stay unscoped.
+//
+// A HOUSE STYLE rule is a standard for prose and metadata this project authors: a title with no parenthetical, a claimed ATT&CK
+// technique. Applying those to vendored data leaves two bad options. Editing the vendored file breaks the byte-identical guarantee
+// a re-sync depends on and that TestImportedCorpus_MatchesTheVendoredManifest enforces; carrying a per-rule exemption list means a
+// list that grows with every import and that nobody prunes. Scoping the guard says the real thing instead, which is that upstream
+// does not write to our style guide and was never going to.
+//
+// Where a vendored rule falls outside a house rule, the exception is pinned by name in its own test, so the gap is visible and a
+// re-sync that changes it fails rather than passing quietly.
+func authored(r api.Rule) bool {
+	_, imported := r.(*importedRule)
+	return !imported
+}
+
 // spec:server-detection-rules-engine/canonical-rule-naming/a-rule-names-itself-the-same-way-everywhere
 //
 // TestAll_CanonicalDisplayName is the structural guard against the three-names-for-one-detection drift issue #519 fixed. It pins the
@@ -110,9 +138,11 @@ func TestAll_CanonicalDisplayName(t *testing.T) {
 			assert.NotEmpty(t, name, "DisplayName must be set for %s", r.ID())
 			assert.Equal(t, name, r.Doc().Title,
 				"%s: Doc().Title must equal DisplayName() so the docs and the alert name the rule one way", r.ID())
-			assert.NotContains(t, name, "(",
-				"%s DisplayName %q carries a parenthetical; the implementation detail belongs in Summary, the title stays a clean name",
-				r.ID(), name)
+			if authored(r) {
+				assert.NotContains(t, name, "(",
+					"%s DisplayName %q carries a parenthetical; the implementation detail belongs in Summary, the title stays a clean name",
+					r.ID(), name)
+			}
 			assert.Equal(t, strings.TrimSpace(name), name, "%s DisplayName must not carry leading/trailing whitespace", r.ID())
 		})
 	}
@@ -183,7 +213,7 @@ func TestAll_DetectionsClaimTechniques(t *testing.T) {
 	t.Parallel()
 
 	for _, r := range New(nil) {
-		if !api.IsDetection(r) {
+		if !api.IsDetection(r) || !authored(r) {
 			continue
 		}
 		assert.NotEmpty(t, r.Techniques(), "detection %s must map to at least one ATT&CK technique", r.ID())
@@ -218,7 +248,11 @@ func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 			continue
 		}
 		name := api.AlgorithmNameOf(r)
+		// An imported rule is decided by the vendored Sigma file it was loaded from, which is a detection block like any other;
+		// it simply does not live in the pack, because the pack is where the rules this project authors keep theirs. Extending
+		// the check rather than exempting these keeps the invariant saying what it means: every detection says what decides it.
 		_, hasDetection := detections()[r.ID()]
+		hasDetection = hasDetection || !authored(r)
 
 		if hasDetection {
 			converted++
@@ -392,4 +426,48 @@ func TestAll_RulesDeclareAValidDefaultMode(t *testing.T) {
 		mode := api.DefaultModeOf(r)
 		assert.True(t, api.IsValidDetectionRuleMode(mode), "rule %s declares default mode %q, which is not a mode", r.ID(), mode)
 	}
+}
+
+// spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/a-vendored-rule-outside-an-authoring-standard-is-recorded-by-name
+//
+// TestImported_RulesOutsideTheHouseStyleArePinned names every vendored rule that falls outside a guard the authored rules must
+// satisfy, so scoping those guards costs visibility rather than buying silence.
+//
+// Each list is an exact set, not a lower bound. A re-sync that adds a rule claiming no technique, or one whose title carries a
+// parenthetical, fails here and has to be looked at, which is the whole point: the guards were scoped because upstream does not
+// write to our style guide, not because the gap stopped mattering.
+func TestImported_RulesOutsideTheHouseStyleArePinned(t *testing.T) {
+	t.Parallel()
+
+	var noTechnique, parentheticalTitle []string
+	for _, r := range New(nil) {
+		if authored(r) {
+			continue
+		}
+		if len(r.Techniques()) == 0 {
+			noTechnique = append(noTechnique, r.ID())
+		}
+		if strings.Contains(r.DisplayName(), "(") {
+			parentheticalTitle = append(parentheticalTitle, r.ID())
+		}
+	}
+	sort.Strings(noTechnique)
+	sort.Strings(parentheticalTitle)
+
+	// Upstream tags these with a tactic only, or with nothing. A tactic is not a technique, and deriving one would put a mapping
+	// nobody made into the ATT&CK coverage export, which is read during procurement. Claiming nothing is the honest answer: these
+	// rules contribute no coverage rather than false coverage.
+	assert.Equal(t, []string{
+		"proc_creation_macos_hdiutil_create",
+		"proc_creation_macos_jamf_susp_child",
+		"proc_creation_macos_jamf_usage",
+		"proc_creation_macos_susp_macos_firmware_activity",
+		"proc_creation_macos_wizardupdate_malware_infection",
+		"proc_creation_macos_xcsset_malware_infection",
+	}, noTechnique, "the set of imported rules claiming no ATT&CK technique changed")
+
+	assert.Equal(t, []string{
+		"proc_creation_macos_csrutil_disable",
+		"proc_creation_macos_csrutil_status",
+	}, parentheticalTitle, "the set of imported rules whose title carries a parenthetical changed")
 }
