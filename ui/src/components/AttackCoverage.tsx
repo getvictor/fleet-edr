@@ -93,6 +93,10 @@ export function AttackCoverage() {
   // The wording stays mode-neutral. A sub-1 score means monitor OR disabled, and calling it "monitored" would misstate a disabled
   // rule, which records nothing rather than recording without alerting. The score does not distinguish them and neither should
   // this label; what both cases share, and all this card can honestly claim, is that nothing there alerts.
+  //
+  // "by default" is the other half of that honesty. The score is derived from each rule's catalog default, not from the settings
+  // this deployment has stored, so a promoted vendored rule still scores 0.5 and a disabled authored rule still scores 1. Without
+  // the qualifier these cards would read as live state and be wrong for exactly the deployments that have tuned anything.
   const alerting = layer?.techniques.filter((t) => t.score >= 1).length ?? 0;
   const notAlerting = (layer?.techniques.length ?? 0) - alerting;
 
@@ -118,9 +122,9 @@ export function AttackCoverage() {
       {!loading && layer && (
         <>
           <SummaryStrip>
-            <StatCard accent="green" value={alerting} label="techniques alerting" />
+            <StatCard accent="green" value={alerting} label="techniques alerting by default" />
             {notAlerting > 0 && (
-              <StatCard accent="neutral" value={notAlerting} label="techniques not alerting" />
+              <StatCard accent="neutral" value={notAlerting} label="techniques not alerting by default" />
             )}
             <StatCard accent="green" value={distinctRules.size} label="detection rules" />
             <StatCard accent="green" value={groups.length} label="tactics with coverage" />

@@ -52,7 +52,7 @@ describe("AttackCoverage summary strip", () => {
 
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
-    expect(within(cardFor("techniques alerting")).getByText("2")).toBeInTheDocument();
+    expect(within(cardFor("techniques alerting by default")).getByText("2")).toBeInTheDocument();
     // rule_a + rule_b are the two distinct covering rules across both techniques.
     expect(within(cardFor("detection rules")).getByText("2")).toBeInTheDocument();
     expect(within(cardFor("tactics with coverage")).getByText("2")).toBeInTheDocument();
@@ -87,7 +87,7 @@ describe("AttackCoverage summary strip", () => {
 
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
-    expect(within(cardFor("techniques alerting")).getByText("1")).toBeInTheDocument();
-    expect(within(cardFor("techniques not alerting")).getByText("2")).toBeInTheDocument();
+    expect(within(cardFor("techniques alerting by default")).getByText("1")).toBeInTheDocument();
+    expect(within(cardFor("techniques not alerting by default")).getByText("2")).toBeInTheDocument();
   });
 });
