@@ -1233,6 +1233,13 @@ components:
             `PUT /api/v1/detection-config/rule-settings` overrides it, and those settings are
             listed separately at `GET /api/v1/detection-config/rule-settings`.
           example: alert
+        origin:
+          type: string
+          description: |
+            Where the rule came from. Absent for a rule written for this engine. For a rule vendored from an
+            upstream corpus, names that project and the rule's own author, which is the attribution the corpus
+            licence carries; those rules are shipped and exported unmodified.
+          example: "SigmaHQ, by Daniil Yugoslavskiy, oscd.community"
         techniques:
           type: array
           items:

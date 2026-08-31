@@ -1,5 +1,7 @@
 # Detection rules
 
+Rules marked with a **Source** carry that source's attribution and are reproduced unmodified. The upstream macOS corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the [Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License); each rule names its own author.
+
 This page is generated from `tools/gen-rule-docs` by reading the
 `rulesapi.RuleMetadata.Doc` field on every rule registered in
 `server/cmd/fleet-edr-server/main.go`. To refresh after changing a
@@ -418,6 +420,7 @@ MacOS Scripting Interpreter AppleScript
 | Rule ID | `proc_creation_macos_applescript` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/) |
 | Event types | `exec` |
@@ -440,6 +443,7 @@ Decode Base64 Encoded Text -MacOs
 | Rule ID | `proc_creation_macos_base64_decode` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniil Yugoslavskiy, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1027`](https://attack.mitre.org/techniques/T1027/) |
 | Event types | `exec` |
@@ -462,6 +466,7 @@ Binary Padding - MacOS
 | Rule ID | `proc_creation_macos_binary_padding` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Igor Fits, Mikhail Larin, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1027.001`](https://attack.mitre.org/techniques/T1027/001/) |
 | Event types | `exec` |
@@ -484,6 +489,7 @@ File Time Attribute Change
 | Rule ID | `proc_creation_macos_change_file_time_attr` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Igor Fits, Mikhail Larin, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1070.006`](https://attack.mitre.org/techniques/T1070/006/) |
 | Event types | `exec` |
@@ -506,6 +512,7 @@ Hidden Flag Set On File/Directory Via Chflags - MacOS
 | Rule ID | `proc_creation_macos_chflags_hidden_flag` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Omar Khaled (@beacon_exe) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1218`](https://attack.mitre.org/techniques/T1218/), [`T1564.004`](https://attack.mitre.org/techniques/T1564/004/), [`T1552.001`](https://attack.mitre.org/techniques/T1552/001/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
 | Event types | `exec` |
@@ -530,6 +537,7 @@ Indicator Removal on Host - Clear Mac System Logs
 | Rule ID | `proc_creation_macos_clear_system_logs` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by remotephone, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1685.006`](https://attack.mitre.org/techniques/T1685/006/) |
 | Event types | `exec` |
@@ -552,6 +560,7 @@ Clipboard Access Via OSAScript
 | Rule ID | `proc_creation_macos_clipboard_access_via_osascript` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1115`](https://attack.mitre.org/techniques/T1115/), [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/) |
 | Event types | `exec` |
@@ -575,6 +584,7 @@ Creation Of A Local User Account
 | Rule ID | `proc_creation_macos_create_account` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1136.001`](https://attack.mitre.org/techniques/T1136/001/) |
 | Event types | `exec` |
@@ -597,6 +607,7 @@ Hidden User Creation
 | Rule ID | `proc_creation_macos_create_hidden_account` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniil Yugoslavskiy, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1564.002`](https://attack.mitre.org/techniques/T1564/002/) |
 | Event types | `exec` |
@@ -619,6 +630,7 @@ Credentials from Password Stores - Keychain
 | Rule ID | `proc_creation_macos_creds_from_keychain` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Tim Ismilyaev, oscd.community, Florian Roth (Nextron Systems) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1555.001`](https://attack.mitre.org/techniques/T1555/001/) |
 | Event types | `exec` |
@@ -641,6 +653,7 @@ System Integrity Protection (SIP) Disabled
 | Rule ID | `proc_creation_macos_csrutil_disable` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Joseliyo Sanchez, @Joseliyo_Jstnk |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1518.001`](https://attack.mitre.org/techniques/T1518/001/) |
 | Event types | `exec` |
@@ -664,6 +677,7 @@ System Integrity Protection (SIP) Enumeration
 | Rule ID | `proc_creation_macos_csrutil_status` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Joseliyo Sanchez, @Joseliyo_Jstnk |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1518.001`](https://attack.mitre.org/techniques/T1518/001/) |
 | Event types | `exec` |
@@ -687,6 +701,7 @@ Disable Security Tools
 | Rule ID | `proc_creation_macos_disable_security_tools` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniil Yugoslavskiy, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1685`](https://attack.mitre.org/techniques/T1685/) |
 | Event types | `exec` |
@@ -709,6 +724,7 @@ User Added To Admin Group Via Dscl
 | Rule ID | `proc_creation_macos_dscl_add_user_to_admin_group` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1078.003`](https://attack.mitre.org/techniques/T1078/003/) |
 | Event types | `exec` |
@@ -731,6 +747,7 @@ User Added To Admin Group Via DseditGroup
 | Rule ID | `proc_creation_macos_dseditgroup_add_to_admin_group` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1078.003`](https://attack.mitre.org/techniques/T1078/003/) |
 | Event types | `exec` |
@@ -753,6 +770,7 @@ Root Account Enable Via Dsenableroot
 | Rule ID | `proc_creation_macos_dsenableroot_enable_root_account` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1078`](https://attack.mitre.org/techniques/T1078/), [`T1078.001`](https://attack.mitre.org/techniques/T1078/001/), [`T1078.003`](https://attack.mitre.org/techniques/T1078/003/) |
 | Event types | `exec` |
@@ -775,6 +793,7 @@ File and Directory Discovery - MacOS
 | Rule ID | `proc_creation_macos_file_and_directory_discovery` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniil Yugoslavskiy, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1083`](https://attack.mitre.org/techniques/T1083/) |
 | Event types | `exec` |
@@ -797,6 +816,7 @@ Credentials In Files
 | Rule ID | `proc_creation_macos_find_cred_in_files` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Igor Fits, Mikhail Larin, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1552.001`](https://attack.mitre.org/techniques/T1552/001/) |
 | Event types | `exec` |
@@ -819,6 +839,7 @@ GUI Input Capture - macOS
 | Rule ID | `proc_creation_macos_gui_input_capture` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by remotephone, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1056.002`](https://attack.mitre.org/techniques/T1056/002/) |
 | Event types | `exec` |
@@ -841,6 +862,7 @@ Disk Image Creation Via Hdiutil - MacOS
 | Rule ID | `proc_creation_macos_hdiutil_create` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Omar Khaled (@beacon_exe) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | Event types | `exec` |
 
@@ -862,6 +884,7 @@ Disk Image Mounting Via Hdiutil - MacOS
 | Rule ID | `proc_creation_macos_hdiutil_mount` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Omar Khaled (@beacon_exe) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1566.001`](https://attack.mitre.org/techniques/T1566/001/), [`T1560.001`](https://attack.mitre.org/techniques/T1560/001/) |
 | Event types | `exec` |
@@ -884,6 +907,7 @@ Suspicious Installer Package Child Process
 | Rule ID | `proc_creation_macos_installer_susp_child_process` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1059.007`](https://attack.mitre.org/techniques/T1059/007/), [`T1071`](https://attack.mitre.org/techniques/T1071/), [`T1071.001`](https://attack.mitre.org/techniques/T1071/001/) |
 | Event types | `exec` |
@@ -906,6 +930,7 @@ System Information Discovery Using Ioreg
 | Rule ID | `proc_creation_macos_ioreg_discovery` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Joseliyo Sanchez, @Joseliyo_Jstnk |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1082`](https://attack.mitre.org/techniques/T1082/) |
 | Event types | `exec` |
@@ -931,6 +956,7 @@ JAMF MDM Potential Suspicious Child Process
 | Rule ID | `proc_creation_macos_jamf_susp_child` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Nasreddine Bencherchali (Nextron Systems) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | Event types | `exec` |
 
@@ -952,6 +978,7 @@ JAMF MDM Execution
 | Rule ID | `proc_creation_macos_jamf_usage` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Jay Pandit |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | Event types | `exec` |
 
@@ -974,6 +1001,7 @@ JXA In-memory Execution Via OSAScript
 | Rule ID | `proc_creation_macos_jxa_in_memory_execution` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/), [`T1059.007`](https://attack.mitre.org/techniques/T1059/007/) |
 | Event types | `exec` |
@@ -996,6 +1024,7 @@ Launch Agent/Daemon Execution Via Launchctl
 | Rule ID | `proc_creation_macos_launchctl_execution` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Pratinav Chandra |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1569.001`](https://attack.mitre.org/techniques/T1569/001/), [`T1543.001`](https://attack.mitre.org/techniques/T1543/001/), [`T1543.004`](https://attack.mitre.org/techniques/T1543/004/) |
 | Event types | `exec` |
@@ -1018,6 +1047,7 @@ Local System Accounts Discovery - MacOs
 | Rule ID | `proc_creation_macos_local_account` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1087.001`](https://attack.mitre.org/techniques/T1087/001/) |
 | Event types | `exec` |
@@ -1042,6 +1072,7 @@ Local Groups Discovery - MacOs
 | Rule ID | `proc_creation_macos_local_groups` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Ömer Günal, Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1069.001`](https://attack.mitre.org/techniques/T1069/001/) |
 | Event types | `exec` |
@@ -1064,6 +1095,7 @@ MacOS Network Service Scanning
 | Rule ID | `proc_creation_macos_network_service_scanning` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1046`](https://attack.mitre.org/techniques/T1046/) |
 | Event types | `exec` |
@@ -1086,6 +1118,7 @@ Network Sniffing - MacOs
 | Rule ID | `proc_creation_macos_network_sniffing` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1040`](https://attack.mitre.org/techniques/T1040/) |
 | Event types | `exec` |
@@ -1110,6 +1143,7 @@ File Download Via Nscurl - MacOS
 | Rule ID | `proc_creation_macos_nscurl_usage` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniel Cortez |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1105`](https://attack.mitre.org/techniques/T1105/) |
 | Event types | `exec` |
@@ -1132,6 +1166,7 @@ Suspicious Microsoft Office Child Process - MacOS
 | Rule ID | `proc_creation_macos_office_susp_child_processes` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/), [`T1137.002`](https://attack.mitre.org/techniques/T1137/002/), [`T1204.002`](https://attack.mitre.org/techniques/T1204/002/) |
 | Event types | `exec` |
@@ -1154,6 +1189,7 @@ OSACompile Run-Only Execution
 | Rule ID | `proc_creation_macos_osacompile_runonly_execution` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/) |
 | Event types | `exec` |
@@ -1176,6 +1212,7 @@ Payload Decoded and Decrypted via Built-in Utilities
 | Rule ID | `proc_creation_macos_payload_decoded_and_decrypted` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Tim Rauch (rule), Elastic (idea) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1204`](https://attack.mitre.org/techniques/T1204/), [`T1140`](https://attack.mitre.org/techniques/T1140/) |
 | Event types | `exec` |
@@ -1198,6 +1235,7 @@ Potential Persistence Via PlistBuddy
 | Rule ID | `proc_creation_macos_persistence_via_plistbuddy` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1543.001`](https://attack.mitre.org/techniques/T1543/001/), [`T1543.004`](https://attack.mitre.org/techniques/T1543/004/) |
 | Event types | `exec` |
@@ -1220,6 +1258,7 @@ Remote Access Tool - Potential MeshAgent Execution - MacOS
 | Rule ID | `proc_creation_macos_remote_access_tools_meshagent_arguments` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Norbert Jaśniewicz (AlphaSOC) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1219.002`](https://attack.mitre.org/techniques/T1219/002/) |
 | Event types | `exec` |
@@ -1245,6 +1284,7 @@ Remote Access Tool - Team Viewer Session Started On MacOS Host
 | Rule ID | `proc_creation_macos_remote_access_tools_teamviewer_incoming_connection` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Josh Nickels, Qi Nan |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1133`](https://attack.mitre.org/techniques/T1133/) |
 | Event types | `exec` |
@@ -1269,6 +1309,7 @@ Macos Remote System Discovery
 | Rule ID | `proc_creation_macos_remote_system_discovery` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1018`](https://attack.mitre.org/techniques/T1018/) |
 | Event types | `exec` |
@@ -1291,6 +1332,7 @@ Scheduled Cron Task/Job - MacOs
 | Rule ID | `proc_creation_macos_schedule_task_job_cron` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Alejandro Ortuno, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1053.003`](https://attack.mitre.org/techniques/T1053/003/) |
 | Event types | `exec` |
@@ -1313,6 +1355,7 @@ Screen Capture - macOS
 | Rule ID | `proc_creation_macos_screencapture` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by remotephone, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1113`](https://attack.mitre.org/techniques/T1113/) |
 | Event types | `exec` |
@@ -1335,6 +1378,7 @@ Security Software Discovery - MacOs
 | Rule ID | `proc_creation_macos_security_software_discovery` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniil Yugoslavskiy, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1518.001`](https://attack.mitre.org/techniques/T1518/001/) |
 | Event types | `exec` |
@@ -1357,6 +1401,7 @@ Space After Filename - macOS
 | Rule ID | `proc_creation_macos_space_after_filename` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by remotephone |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1036.006`](https://attack.mitre.org/techniques/T1036/006/) |
 | Event types | `exec` |
@@ -1379,6 +1424,7 @@ Split A File Into Pieces
 | Rule ID | `proc_creation_macos_split_file_into_pieces` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Igor Fits, Mikhail Larin, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1030`](https://attack.mitre.org/techniques/T1030/) |
 | Event types | `exec` |
@@ -1401,6 +1447,7 @@ Suspicious Browser Child Process - MacOS
 | Rule ID | `proc_creation_macos_susp_browser_child_process` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1189`](https://attack.mitre.org/techniques/T1189/), [`T1203`](https://attack.mitre.org/techniques/T1203/), [`T1059`](https://attack.mitre.org/techniques/T1059/) |
 | Event types | `exec` |
@@ -1423,6 +1470,7 @@ Suspicious Execution via macOS Script Editor
 | Rule ID | `proc_creation_macos_susp_execution_macos_script_editor` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Tim Rauch (rule), Elastic (idea) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1566`](https://attack.mitre.org/techniques/T1566/), [`T1566.002`](https://attack.mitre.org/techniques/T1566/002/), [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/), [`T1204`](https://attack.mitre.org/techniques/T1204/), [`T1204.001`](https://attack.mitre.org/techniques/T1204/001/), [`T1553`](https://attack.mitre.org/techniques/T1553/) |
 | Event types | `exec` |
@@ -1445,6 +1493,7 @@ Potential Discovery Activity Using Find - MacOS
 | Rule ID | `proc_creation_macos_susp_find_execution` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Nasreddine Bencherchali (Nextron Systems) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1083`](https://attack.mitre.org/techniques/T1083/) |
 | Event types | `exec` |
@@ -1467,6 +1516,7 @@ Suspicious History File Operations
 | Rule ID | `proc_creation_macos_susp_histfile_operations` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Mikhail Larin, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1552.003`](https://attack.mitre.org/techniques/T1552/003/) |
 | Event types | `exec` |
@@ -1490,6 +1540,7 @@ Potential In-Memory Download And Compile Of Payloads
 | Rule ID | `proc_creation_macos_susp_in_memory_download_and_compile` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r), Red Canary (idea) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059.007`](https://attack.mitre.org/techniques/T1059/007/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
 | Event types | `exec` |
@@ -1512,6 +1563,7 @@ Suspicious MacOS Firmware Activity
 | Rule ID | `proc_creation_macos_susp_macos_firmware_activity` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Austin Songer @austinsonger |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | Event types | `exec` |
 
@@ -1533,6 +1585,7 @@ System Network Discovery - macOS
 | Rule ID | `proc_creation_macos_susp_system_network_discovery` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by remotephone, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1016`](https://attack.mitre.org/techniques/T1016/) |
 | Event types | `exec` |
@@ -1555,6 +1608,7 @@ Osacompile Execution By Potentially Suspicious Applet/Osascript
 | Rule ID | `proc_creation_macos_suspicious_applet_behaviour` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r), Red Canary (Idea) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/) |
 | Event types | `exec` |
@@ -1577,6 +1631,7 @@ System Information Discovery Using sw_vers
 | Rule ID | `proc_creation_macos_swvers_discovery` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Joseliyo Sanchez, @Joseliyo_Jstnk |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1082`](https://attack.mitre.org/techniques/T1082/) |
 | Event types | `exec` |
@@ -1599,6 +1654,7 @@ User Added To Admin Group Via Sysadminctl
 | Rule ID | `proc_creation_macos_sysadminctl_add_user_to_admin_group` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1078.003`](https://attack.mitre.org/techniques/T1078/003/) |
 | Event types | `exec` |
@@ -1621,6 +1677,7 @@ Guest Account Enabled Via Sysadminctl
 | Rule ID | `proc_creation_macos_sysadminctl_enable_guest_account` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Sohan G (D4rkCiph3r) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1078`](https://attack.mitre.org/techniques/T1078/), [`T1078.001`](https://attack.mitre.org/techniques/T1078/001/) |
 | Event types | `exec` |
@@ -1643,6 +1700,7 @@ System Information Discovery Via Sysctl - MacOS
 | Rule ID | `proc_creation_macos_sysctl_discovery` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Pratinav Chandra |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1497.001`](https://attack.mitre.org/techniques/T1497/001/), [`T1082`](https://attack.mitre.org/techniques/T1082/) |
 | Event types | `exec` |
@@ -1667,6 +1725,7 @@ System Network Connections Discovery - MacOs
 | Rule ID | `proc_creation_macos_system_network_connections_discovery` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniil Yugoslavskiy, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1049`](https://attack.mitre.org/techniques/T1049/) |
 | Event types | `exec` |
@@ -1689,6 +1748,7 @@ System Information Discovery Using System_Profiler
 | Rule ID | `proc_creation_macos_system_profiler_discovery` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Stephen Lincoln `@slincoln_aiq` (AttackIQ) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1082`](https://attack.mitre.org/techniques/T1082/), [`T1497.001`](https://attack.mitre.org/techniques/T1497/001/) |
 | Event types | `exec` |
@@ -1713,6 +1773,7 @@ System Shutdown/Reboot - MacOs
 | Rule ID | `proc_creation_macos_system_shutdown_reboot` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Igor Fits, Mikhail Larin, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1529`](https://attack.mitre.org/techniques/T1529/) |
 | Event types | `exec` |
@@ -1735,6 +1796,7 @@ Potential Base64 Decoded From Images
 | Rule ID | `proc_creation_macos_tail_base64_decode_from_image` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Joseliyo Sanchez, @Joseliyo_Jstnk |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1140`](https://attack.mitre.org/techniques/T1140/) |
 | Event types | `exec` |
@@ -1758,6 +1820,7 @@ Time Machine Backup Deletion Attempt Via Tmutil - MacOS
 | Rule ID | `proc_creation_macos_tmutil_delete_backup` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Pratinav Chandra |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1490`](https://attack.mitre.org/techniques/T1490/) |
 | Event types | `exec` |
@@ -1782,6 +1845,7 @@ Time Machine Backup Disabled Via Tmutil - MacOS
 | Rule ID | `proc_creation_macos_tmutil_disable_backup` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Pratinav Chandra |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1490`](https://attack.mitre.org/techniques/T1490/) |
 | Event types | `exec` |
@@ -1806,6 +1870,7 @@ New File Exclusion Added To Time Machine Via Tmutil - MacOS
 | Rule ID | `proc_creation_macos_tmutil_exclude_file_from_backup` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Pratinav Chandra |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1490`](https://attack.mitre.org/techniques/T1490/) |
 | Event types | `exec` |
@@ -1830,6 +1895,7 @@ Potential WizardUpdate Malware Infection
 | Rule ID | `proc_creation_macos_wizardupdate_malware_infection` |
 | Severity | `high` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Tim Rauch (rule), Elastic (idea) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | Event types | `exec` |
 
@@ -1851,6 +1917,7 @@ Gatekeeper Bypass via Xattr
 | Rule ID | `proc_creation_macos_xattr_gatekeeper_bypass` |
 | Severity | `low` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Daniil Yugoslavskiy, oscd.community |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | ATT&CK | [`T1553.001`](https://attack.mitre.org/techniques/T1553/001/) |
 | Event types | `exec` |
@@ -1873,6 +1940,7 @@ Potential XCSSET Malware Infection
 | Rule ID | `proc_creation_macos_xcsset_malware_infection` |
 | Severity | `medium` |
 | Default mode | `monitor` |
+| Source | SigmaHQ, by Tim Rauch (rule), Elastic (idea) |
 | | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
 | Event types | `exec` |
 

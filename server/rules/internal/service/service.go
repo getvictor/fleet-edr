@@ -51,6 +51,7 @@ func (s *Service) List() []api.RuleMetadata {
 			Platforms:                    r.Platforms(),
 			Algorithm:                    api.AlgorithmNameOf(r),
 			DefaultMode:                  api.DefaultModeOf(r),
+			Origin:                       api.OriginOf(r),
 		})
 	}
 	return out

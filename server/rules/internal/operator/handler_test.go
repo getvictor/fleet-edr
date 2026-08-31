@@ -185,6 +185,7 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 		Rules []struct {
 			ID          string `json:"id"`
 			DefaultMode string `json:"default_mode"`
+			Origin      string `json:"origin"`
 		} `json:"rules"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
@@ -202,6 +203,22 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	assert.Positive(t, modes["alert"], "the rules this project authored alert by default")
 	assert.Positive(t, modes["monitor"], "the vendored corpus ships in monitor mode (issue #764)")
 	assert.Equal(t, len(body.Rules), modes["alert"]+modes["monitor"], "every rule reports one of the two, never an empty string")
+
+	// Attribution rides the same response. A vendored rule is rendered exactly like an authored one on every surface built from
+	// this payload, so the origin is what lets a reader tell them apart, and it is how the corpus licence's attribution reaches
+	// the reader of our documentation rather than only the reader of the rule file.
+	var credited, uncredited int
+	for _, r := range body.Rules {
+		if r.Origin == "" {
+			uncredited++
+			assert.Equal(t, "alert", r.DefaultMode, "rule %q names no source, so it should be one we wrote and alerts", r.ID)
+			continue
+		}
+		credited++
+		assert.Contains(t, r.Origin, "SigmaHQ", "rule %q credits an unexpected source %q", r.ID, r.Origin)
+	}
+	assert.Positive(t, credited, "the vendored rules credit their upstream")
+	assert.Positive(t, uncredited, "the rules this project wrote claim no upstream")
 }
 
 // TestHandler_ExportRule serves one detection as its declarative rule file (issue #757). The response IS the artifact, so it is

@@ -70,6 +70,27 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
             <th scope="row">Severity</th>
             <td><SeverityBadge severity={doc.severity} /></td>
           </tr>
+          {/*
+            Monitor-mode rules record what they would have fired on and raise nothing until promoted (issue #764). Shown next to
+            severity because severity alone reads as a promise the rule does not make: "high" on a rule that never alerts is the
+            most misleading pair on this page. Rendered only when the server says monitor, so a rule that alerts stays uncluttered
+            and an older server that omits the field keeps its previous appearance.
+          */}
+          {entry.default_mode === "monitor" && (
+            <tr>
+              <th scope="row">Mode</th>
+              <td>
+                <span className="rule-detail__mode">Monitor</span>{" "}
+                Records matches without raising an alert, until an operator promotes it.
+              </td>
+            </tr>
+          )}
+          {entry.origin && (
+            <tr>
+              <th scope="row">Source</th>
+              <td>{entry.origin}</td>
+            </tr>
+          )}
           <tr>
             <th scope="row">ATT&amp;CK</th>
             <td>

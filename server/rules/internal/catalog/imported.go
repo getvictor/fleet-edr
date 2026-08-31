@@ -34,6 +34,11 @@ import (
 // The three refusals: one reads OriginalFileName, a Sysmon field naming a PE's embedded original name that has no macOS
 // equivalent; two are file_event rules watching paths the agent emits no open event for (see categoryIsInert).
 type importedRule struct {
+	// author is the upstream rule's own author field, carried so the operator-facing reference can credit them. The corpus is
+	// licensed under DRL 1.1 and the bytes we distribute are unmodified, so attribution travels with the rule itself; this is what
+	// lets it travel into our documentation about the rule as well.
+	author string
+
 	// source is the vendored file's bytes, verbatim. Kept so an operator exporting this rule gets the upstream rule they can diff
 	// against SigmaHQ, rather than a re-rendering of it in this project's format. See VendoredSource.
 	source []byte
@@ -82,6 +87,8 @@ type sigmaFile struct {
 		Product  string `yaml:"product"`
 	} `yaml:"logsource"`
 	Detection yaml.Node `yaml:"detection"`
+	// Author is the upstream rule's attribution, carried into the operator-facing reference (DRL 1.1).
+	Author string `yaml:"author"`
 }
 
 // sigmaFilesUnder lists every *.yml in the tree under dir, sorted so a load is deterministic.
@@ -274,6 +281,7 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 
 	return &importedRule{
 		source:      raw,
+		author:      f.Author,
 		id:          id,
 		title:       f.Title,
 		description: f.Description,
@@ -492,8 +500,9 @@ func MustLoadImported() []api.Rule {
 
 // ImportedRejections returns the rules the corpus carries that this sensor cannot run, with the reason for each.
 //
-// Exported so start-up can report them. A refusal is an expected outcome, not an error, but it is one an operator should be able to
-// see: "66 imported, 3 refused" is the difference between a corpus that loaded and one that half loaded.
+// Exported for the generated rule reference, which lists them (via bootstrap.ImportedRejections, the seam tooling reaches the
+// catalog through). A refusal is an expected outcome rather than an error, but it is one a reader should be able to see: without
+// it, an upstream rule that is absent reads as an oversight instead of a decision.
 func ImportedRejections() []rejection {
 	_, rejected := importedRules()
 	return rejected
@@ -514,4 +523,12 @@ func VendoredSource(ruleID string) ([]byte, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Origin implements the origin accessor the catalog surfaces mirror, naming the upstream project and the rule's own author.
+func (r *importedRule) Origin() string {
+	if r.author == "" {
+		return "SigmaHQ"
+	}
+	return "SigmaHQ, by " + r.author
 }

@@ -131,3 +131,22 @@ func TestList_MirrorsADeclaredDefaultMode(t *testing.T) {
 type monitorStubRule struct{ stubRule }
 
 func (monitorStubRule) DefaultMode() api.DetectionRuleMode { return api.DetectionRuleModeMonitor }
+
+// TestList_CreditsAVendoredRulesSource pins that a vendored rule's attribution reaches the operator-facing catalog.
+//
+// The corpus is licensed under DRL 1.1 and its rules are shipped and exported unmodified, so attribution travels with the rule
+// itself. This is what carries it onto the surfaces built FROM the rule rather than out of it: the generated reference and the UI
+// render a vendored rule exactly like one this project wrote, so without this an operator cannot tell whose rule they are reading.
+func TestList_CreditsAVendoredRulesSource(t *testing.T) {
+	t.Parallel()
+
+	got := New([]api.Rule{vendoredStubRule{stubRule{id: "vendored"}}, stubRule{id: "ours"}}, nil).List()
+	require.Len(t, got, 2)
+	assert.Equal(t, "Upstream, by Someone", got[0].Origin)
+	assert.Empty(t, got[1].Origin, "a rule this project wrote announces no origin")
+}
+
+// vendoredStubRule is a stubRule that names an upstream source, standing in for an imported rule.
+type vendoredStubRule struct{ stubRule }
+
+func (vendoredStubRule) Origin() string { return "Upstream, by Someone" }

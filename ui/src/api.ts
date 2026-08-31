@@ -556,6 +556,13 @@ export interface RuleDocEntry {
   id: string;
   techniques: string[];
   doc: RuleDoc;
+  // The mode this rule runs in when no per-rule setting applies (issue #764). Most rules are "alert"; a rule imported from an
+  // upstream corpus is "monitor", meaning it records what it would have fired on and raises nothing until an operator promotes it.
+  // Optional so an older server response that predates the field degrades to "assume it alerts", which was true before the field.
+  default_mode?: string;
+  // Where the rule came from: absent for one this project wrote, and the upstream project plus that rule's author for a vendored
+  // one. Shown so an operator can tell whose rule they are reading.
+  origin?: string;
   // The exclusion match types this rule actually consults (issue #520). The detection-tuning exclusion editor offers only these for
   // the selected rule, so an operator cannot create an exclusion the rule would silently ignore. Optional so an older server response
   // that predates the field degrades to "offer nothing".

@@ -84,6 +84,10 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		// indistinguishable from one that does. This is the rule's default, NOT a resolved per-host mode, which depends on a host.
 		// Additive field; existing consumers ignore it.
 		DefaultMode api.DetectionRuleMode `json:"default_mode"`
+		// Origin credits a vendored rule's upstream project and author, and is omitted for a rule this project wrote. The corpus
+		// is under DRL 1.1 and the rules are served unmodified, so attribution travels with the rule itself; this carries it onto
+		// the surface an operator actually reads. Additive field; existing consumers ignore it.
+		Origin string `json:"origin,omitempty"`
 	}
 	rules := h.svc.List()
 	out := make([]ruleResponse, 0, len(rules))
@@ -103,6 +107,7 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 			SupportedExclusionMatchTypes: matchTypes,
 			Platforms:                    platforms,
 			DefaultMode:                  rm.DefaultMode,
+			Origin:                       rm.Origin,
 		})
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})

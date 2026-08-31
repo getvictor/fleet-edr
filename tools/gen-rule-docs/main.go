@@ -56,6 +56,9 @@ func generate(out string) error {
 func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 	var b strings.Builder
 	b.WriteString("# Detection rules\n\n")
+	b.WriteString("Rules marked with a **Source** carry that source's attribution and are reproduced unmodified. ")
+	b.WriteString("The upstream macOS corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the ")
+	b.WriteString("[Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License); each rule names its own author.\n\n")
 	b.WriteString("This page is generated from `tools/gen-rule-docs` by reading the\n")
 	b.WriteString("`rulesapi.RuleMetadata.Doc` field on every rule registered in\n")
 	b.WriteString("`server/cmd/fleet-edr-server/main.go`. To refresh after changing a\n")
@@ -107,7 +110,7 @@ func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 // Fprintf-style call here.
 func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
 	writeRuleHeading(b, r.ID, r.Doc)
-	writeRuleMeta(b, r.ID, r.Doc, r.Techniques, r.DefaultMode)
+	writeRuleMeta(b, r.ID, r.Doc, r.Techniques, r.DefaultMode, r.Origin)
 	writeRuleDescription(b, r.Doc)
 	writeRuleBulletSection(b, "Known false-positive sources", r.Doc.FalsePositives)
 	writeRuleBulletSection(b, "Limitations", r.Doc.Limitations)
@@ -121,11 +124,14 @@ func writeRuleHeading(b *strings.Builder, id string, d rulesapi.Documentation) {
 	}
 }
 
-func writeRuleMeta(b *strings.Builder, id string, d rulesapi.Documentation, techs []string, mode rulesapi.DetectionRuleMode) {
+func writeRuleMeta(b *strings.Builder, id string, d rulesapi.Documentation, techs []string, mode rulesapi.DetectionRuleMode, origin string) {
 	b.WriteString("| | |\n| --- | --- |\n")
 	fmt.Fprintf(b, "| Rule ID | `%s` |\n", id)
 	fmt.Fprintf(b, "| Severity | `%s` |\n", d.Severity)
 	fmt.Fprintf(b, "| Default mode | `%s` |\n", mode)
+	if origin != "" {
+		fmt.Fprintf(b, "| Source | %s |\n", mdCell(origin))
+	}
 	if mode == rulesapi.DetectionRuleModeMonitor {
 		b.WriteString("| | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |\n")
 	}
