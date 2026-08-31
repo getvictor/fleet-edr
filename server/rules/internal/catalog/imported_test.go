@@ -23,7 +23,8 @@ import (
 // spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-rule-reading-an-unavailable-field-is-refused-and-the-others-still-import
 //
 // TestLoadImported_TheWholeUpstreamCorpus is issue #763's acceptance criterion stated as a test rather than as a number in a PR
-// description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and the one rule this sensor cannot run is refused by name.
+// description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and each rule this sensor cannot run is refused BY NAME with a
+// reason. 66 of the 69 import; the other three are refused for two distinct reasons, both of them the contract working.
 //
 // The fixtures are the upstream tree copied byte-for-byte, including its `<category>/` layout, so this exercises the directory walk
 // the production loader does. Asserting the exact counts rather than a lower bound is the point: a version that imported one rule
@@ -36,7 +37,7 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 
 	assert.Len(t, rules, 66, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
 
-	// Two refusals, for two different reasons, and both are the refusal contract working rather than a gap.
+	// Three refusals across two distinct reasons, and both reasons are the refusal contract working rather than a gap.
 	reasons := map[string]string{}
 	for _, r := range rejected {
 		reasons[path.Base(r.File)] = r.Reason
