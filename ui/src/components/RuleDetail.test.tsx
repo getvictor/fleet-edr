@@ -143,7 +143,8 @@ describe("RuleDetail monitor mode and attribution", () => {
     renderAt("vendored");
 
     expect(await screen.findByText(/Monitor/)).toBeInTheDocument();
-    expect(screen.getByText(/Records matches without raising an alert/)).toBeInTheDocument();
+    expect(screen.getByText(/By default this rule records matches without raising an alert/)).toBeInTheDocument();
+    expect(screen.getByText(/not the mode in force for a given host/)).toBeInTheDocument();
   });
 
   // The absence of the row is the point for an alerting rule: adding "Mode: Alert" to every rule that behaves normally is noise,
@@ -152,13 +153,13 @@ describe("RuleDetail monitor mode and attribution", () => {
     mockDocs([makeEntry({ id: "alerting", default_mode: "alert" })]);
     const { unmount } = renderAt("alerting");
     expect(await screen.findByText("Severity")).toBeInTheDocument();
-    expect(screen.queryByText(/Records matches without raising an alert/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/By default this rule records matches/)).not.toBeInTheDocument();
     unmount();
 
     mockDocs([makeEntry({ id: "legacy" })]);
     renderAt("legacy");
     expect(await screen.findByText("Severity")).toBeInTheDocument();
-    expect(screen.queryByText(/Records matches without raising an alert/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/By default this rule records matches/)).not.toBeInTheDocument();
   });
 
   // A vendored rule is rendered exactly like one this project wrote, so without this an operator cannot tell whose rule they are

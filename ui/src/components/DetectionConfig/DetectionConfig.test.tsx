@@ -452,3 +452,43 @@ describe("DetectionConfig", () => {
     expect(screen.getByLabelText("severity override for suspicious_exec")).toBeDisabled();
   });
 });
+
+describe("DetectionConfig monitor-default rules", () => {
+  // Sixty-six imported rules ship with a monitor default and no persisted setting (issue #764). Falling back to "alert" showed
+  // them as alerting, which is wrong on its own, but the same value is what handleSeverityChange resubmits: touching only the
+  // severity of one of these rules would have written mode=alert and silently promoted a rule nobody decided to promote.
+  it("shows a monitor-default rule as monitor rather than alert", async () => {
+    stubReads({
+      rules: [makeRuleEntry({ id: "vendored", default_mode: "monitor" })],
+      settings: [],
+    });
+    renderPage();
+
+    await waitFor(() => { expect(screen.getByLabelText("mode for vendored")).toBeInTheDocument(); });
+    expect(screen.getByLabelText("mode for vendored")).toHaveValue("monitor");
+  });
+
+  it("does not promote a monitor-default rule when only its severity changes", async () => {
+    stubReads({
+      rules: [makeRuleEntry({ id: "vendored", default_mode: "monitor" })],
+      settings: [],
+    });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "monitor" }));
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("severity override for vendored")).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("severity override for vendored"), { target: { value: "high" } });
+
+    await waitFor(() => { expect(upsert).toHaveBeenCalled(); });
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ rule_id: "vendored", mode: "monitor", severity_override: "high" }));
+  });
+
+  // A rule this project wrote still falls back to alert, so the fix does not change how the rest of the catalog behaves.
+  it("still treats a rule with no default and no setting as alerting", async () => {
+    stubReads({ rules: [makeRuleEntry({ id: "ours" })], settings: [] });
+    renderPage();
+
+    await waitFor(() => { expect(screen.getByLabelText("mode for ours")).toBeInTheDocument(); });
+    expect(screen.getByLabelText("mode for ours")).toHaveValue("alert");
+  });
+});

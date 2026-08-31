@@ -78,10 +78,11 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
           */}
           {entry.default_mode === "monitor" && (
             <tr>
-              <th scope="row">Mode</th>
+              <th scope="row">Default mode</th>
               <td>
                 <span className="rule-detail__mode">Monitor</span>{" "}
-                Records matches without raising an alert, until an operator promotes it.
+                By default this rule records matches without raising an alert. A per-rule setting overrides that; this page shows
+                the rule&apos;s own default, not the mode in force for a given host.
               </td>
             </tr>
           )}

@@ -33,13 +33,18 @@ const MATCH_TYPES = [
   "domain",
 ] as const;
 
-// The per-rule modes an operator can select: alert (default) and disabled (emit nothing). A legacy `monitor` value may still exist on
-// persisted rows and the engine continues to honor it, but monitor is no longer operator-selectable (it had no review surface). See
-// the detection-tuning-author-and-modes openspec change.
+// The per-rule modes an operator can select: alert and disabled (emit nothing). Monitor is not selectable here, per the
+// detection-tuning-author-and-modes openspec change, on the grounds that it had no review surface.
+//
+// That reasoning is now partly overtaken: issue #764 ships sixty-six imported rules whose DEFAULT is monitor, so monitor is no
+// longer a legacy value on a handful of rows but the mode most of the catalog runs in. modeOptions still renders it for such a row,
+// so those rules display correctly and can be promoted; what an operator cannot yet do is put a promoted rule back. Making monitor
+// first-class belongs with the promotion surface that issue asks for, not here.
 const MODES = ["alert", "disabled"] as const;
 
-// modeOptions returns the modes shown for a row. It prepends the row's current mode when that mode is not operator-selectable (a
-// legacy `monitor` row) so the controlled <select> renders a matching option and the operator can migrate it to alert/disabled.
+// modeOptions returns the modes shown for a row. It prepends the row's current mode when that mode is not operator-selectable, so
+// the controlled <select> renders a matching option and the operator can move it to alert/disabled. That path now carries the
+// imported corpus as well as the legacy rows it was written for.
 function modeOptions(current: string): readonly string[] {
   return (MODES as readonly string[]).includes(current) ? MODES : [current, ...MODES];
 }
@@ -353,7 +358,10 @@ export function DetectionConfig() {
               <tbody>
                 {rulesBySeverity.map((r) => {
                   const setting = globalSetting(settings, r.id);
-                  const mode = setting?.mode ?? "alert";
+                  // The rule's OWN default when no operator setting applies, not a constant (issue #764). Sixty-six imported
+                  // rules ship in monitor, so falling back to "alert" both displayed them as alerting and, because this value is
+                  // what handleSeverityChange resubmits, silently promoted one the moment an operator touched only its severity.
+                  const mode = setting?.mode ?? r.default_mode ?? "alert";
                   const severity = setting?.severity_override ?? "";
                   return (
                     <tr key={r.id}>
