@@ -347,7 +347,7 @@ export function DetectionConfig() {
                   <th title="The severity each rule declares in the catalog. It applies whenever no override is set below.">
                     Default severity
                   </th>
-                  <th title="Alert (default) raises alerts; monitor evaluates but emits a signal instead; disabled emits nothing.">
+                  <th title="Alert raises alerts; monitor evaluates and records a signal instead; disabled emits nothing. A rule with no setting here runs in its own default, which is alert for the rules Fleet wrote and monitor for imported ones.">
                     Mode
                   </th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">

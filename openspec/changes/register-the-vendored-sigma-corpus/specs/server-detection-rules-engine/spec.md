@@ -10,6 +10,8 @@ Each vendored rule SHALL operate in `monitor` by default, recording what it woul
 
 Every operator-facing surface that describes the catalog SHALL distinguish a rule that does not alert from one that does. In particular, a coverage export SHALL NOT represent a technique covered only by non-alerting rules the same way it represents one covered by an alerting rule, because such a document is read as a claim about what the product raises.
 
+A vendored rule SHALL be attributed. Its upstream project and the rule's own author SHALL be reported wherever the catalog is described to an operator, because a vendored rule is otherwise presented exactly as one this project wrote and a reader cannot tell them apart. A rule this project authored SHALL report no attribution rather than naming this project, so the field distinguishes rather than decorates.
+
 A vendored rule's declarative form SHALL be the file that was vendored. The system SHALL NOT emit a second rendering of it in its own format, and a request to export such a rule SHALL return the vendored bytes.
 
 Guards that enforce this project's authoring standards SHALL apply to the rules it authors. Where a vendored rule falls outside one, the exception SHALL be recorded by name, so that scoping a guard costs visibility rather than concealing the gap.
@@ -31,6 +33,13 @@ Guards that enforce this project's authoring standards SHALL apply to the rules 
 - **GIVEN** one technique covered only by rules that do not alert, and another covered by a rule that does
 - **WHEN** the ATT&CK coverage layer is built
 - **THEN** the two are given different scores, and the first is annotated as raising no alert until promoted
+
+#### Scenario: A vendored rule is attributed on the operator-facing catalog
+
+- **GIVEN** a registered vendored rule and a registered rule this project authored
+- **WHEN** an operator reads the rule catalog surface
+- **THEN** the vendored rule's entry names its upstream project and that rule's author
+- **AND** the authored rule's entry names no source
 
 #### Scenario: Exporting a vendored rule returns the upstream file
 

@@ -951,3 +951,50 @@ func TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt(t *testing.T) {
 	assert.Equal(t, []string{"imported"}, metrics.monitors, "the suppressed match is counted against the rule that produced it")
 	assert.Empty(t, metrics.alerts, "and no alert was created, which is the point of the mode")
 }
+
+// overridingResolver applies a severity override alongside a mode, the way a stored setting can.
+type overridingResolver struct {
+	mode     rulesapi.DetectionRuleMode
+	severity string
+}
+
+func (r overridingResolver) ResolveRuleMode(_, _ string, _ rulesapi.DetectionRuleMode) (rulesapi.DetectionRuleMode, string) {
+	return r.mode, r.severity
+}
+
+// TestEngine_MonitorCounterUsesTheOverriddenSeverity pins that both series describe one rule at one severity.
+//
+// A setting can carry a severity override, and the alert path applies it before persisting. The monitor path returned before that,
+// so the same rule was counted at its declared severity while its alerts carried the overridden one. The whole reason the monitor
+// counter shares the alert counter's attribute shape is that the two are meant to be compared per rule and severity, and that
+// comparison is wrong if one series is labelled differently from the other.
+func TestEngine_MonitorCounterUsesTheOverriddenSeverity(t *testing.T) {
+	t.Parallel()
+
+	metrics := &severityRecordingMetrics{}
+	e := New(nil, discardLogger())
+	e.SetMetrics(metrics)
+	e.SetModeResolver(overridingResolver{mode: rulesapi.DetectionRuleModeMonitor, severity: "critical"})
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{
+			stubRule: stubRule{id: "imported"},
+			findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "low", Title: "t"}},
+		},
+		mode: rulesapi.DetectionRuleModeMonitor,
+	})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+	assert.Equal(t, []string{"critical"}, metrics.monitorSeverities,
+		"the counter labels the match with the severity the alert would have carried, not the rule's declared one")
+}
+
+// severityRecordingMetrics records the severity each counter was called with.
+type severityRecordingMetrics struct {
+	api.MetricsRecorder
+	monitorSeverities []string
+}
+
+func (m *severityRecordingMetrics) MonitorMatched(_ context.Context, _, severity string) {
+	m.monitorSeverities = append(m.monitorSeverities, severity)
+}

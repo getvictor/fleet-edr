@@ -160,6 +160,8 @@ func TestHandler_ListRules_Platforms(t *testing.T) {
 
 // spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-declared-default-is-listed-on-the-rule-catalog
 //
+// spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/a-vendored-rule-is-attributed-on-the-operator-facing-catalog
+//
 // TestHandler_ListRules_DefaultMode pins that GET /api/rules reports the mode each rule runs in absent configuration.
 //
 // It is asserted over the real catalog rather than a stub because the value has to be a MODE for every rule, never the empty string:

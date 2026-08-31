@@ -132,6 +132,8 @@ type monitorStubRule struct{ stubRule }
 
 func (monitorStubRule) DefaultMode() api.DetectionRuleMode { return api.DetectionRuleModeMonitor }
 
+// spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/a-vendored-rule-is-attributed-on-the-operator-facing-catalog
+//
 // TestList_CreditsAVendoredRulesSource pins that a vendored rule's attribution reaches the operator-facing catalog.
 //
 // The corpus is licensed under DRL 1.1 and its rules are shipped and exported unmodified, so attribution travels with the rule

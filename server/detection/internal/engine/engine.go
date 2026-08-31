@@ -366,6 +366,13 @@ func (e *Engine) routeFinding(
 	if e.modeResolver != nil {
 		mode, severityOverride = e.modeResolver.ResolveRuleMode(ruleID, f.HostID, ruleDefault)
 	}
+	// Resolved before the switch so the monitor counter and a persisted alert label the finding with the SAME severity. A monitor
+	// setting can carry an override, and applying it only on the persist path below left the two series describing one rule at two
+	// severities, which defeats the comparison the counter exists for.
+	if severityOverride != "" {
+		f.Severity = severityOverride
+	}
+
 	switch mode {
 	case rulesapi.DetectionRuleModeDisabled:
 		return nil
@@ -383,9 +390,6 @@ func (e *Engine) routeFinding(
 		return nil
 	case rulesapi.DetectionRuleModeAlert:
 		// Fall through to the severity-override + persist path below.
-	}
-	if severityOverride != "" {
-		f.Severity = severityOverride
 	}
 	return e.persistFinding(ctx, f, techniques)
 }

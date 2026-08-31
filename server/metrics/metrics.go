@@ -115,7 +115,9 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.monitorMatches, _ = meter.Int64Counter(
 		"edr.detection.monitor_matches",
 		metric.WithDescription("Rule matches suppressed because the resolved mode was monitor, by rule + severity. "+
-			"Compare against edr.alerts.created to see what promoting a rule would cost."),
+			"Compare against edr.alerts.created to see what promoting a rule would cost. NOT deduplicated: an alert dedups on "+
+			"insert, and a monitor match has nothing to insert, so re-evaluating a retried batch counts its matches again. "+
+			"Retries are occasional rather than steady, so the series overstates slightly and never understates."),
 		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
