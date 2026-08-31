@@ -72,7 +72,7 @@ func TestMarshalNavigatorLayerIndented(t *testing.T) {
     "navigator": "5.2.0"
   },
   "domain": "enterprise-attack",
-  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. Amber techniques are covered only by rules that ship in monitor mode and raise no alert until an operator promotes them.",
+  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. Amber techniques are covered only by rules that raise no alert as shipped, whether because they record without alerting or are off by default.",
   "filters": {
     "platforms": [
       "macOS"
@@ -120,12 +120,15 @@ func TestBuildNavigatorLayer_MonitorOnlyCoverageIsMarkedApart(t *testing.T) {
 	require.Len(t, byID, 4)
 
 	assert.InDelta(t, 1.0, byID["T1000"].Score, 0, "an alerting rule is real coverage")
-	assert.NotContains(t, byID["T1000"].Comment, "Monitor only")
+	assert.NotContains(t, byID["T1000"].Comment, "raises an alert as shipped")
 
 	for _, tid := range []string{"T2000", "T3000"} {
 		assert.InDelta(t, 0.5, byID[tid].Score, 0, "%s is covered only by a rule that raises nothing", tid)
 		assert.NotEqual(t, byID["T1000"].Color, byID[tid].Color, "%s must not be painted as covered", tid)
-		assert.Contains(t, byID[tid].Comment, "Monitor only", "%s says so in words as well as colour", tid)
+		// Not "monitor only": T3000 is covered by a rule that defaults to DISABLED, which records nothing and is not waiting to be
+		// promoted, so that wording would be wrong twice over. What both cases share is that nothing covering the technique alerts.
+		assert.Contains(t, byID[tid].Comment, "No rule covering this raises an alert as shipped",
+			"%s says so in words as well as colour", tid)
 	}
 
 	assert.InDelta(t, 1.0, byID["T4000"].Score, 0, "one alerting rule is enough, even alongside a monitor-mode one")

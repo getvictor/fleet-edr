@@ -6,7 +6,7 @@
     "navigator": "5.2.0"
   },
   "domain": "enterprise-attack",
-  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. Amber techniques are covered only by rules that ship in monitor mode and raise no alert until an operator promotes them.",
+  "description": "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. Amber techniques are covered only by rules that raise no alert as shipped, whether because they record without alerting or are off by default.",
   "filters": {
     "platforms": [
       "macOS"
@@ -17,67 +17,67 @@
       "techniqueID": "T1016",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_system_network_discovery"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_system_network_discovery"
     },
     {
       "techniqueID": "T1018",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_remote_system_discovery"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_remote_system_discovery"
     },
     {
       "techniqueID": "T1027",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_base64_decode"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_base64_decode"
     },
     {
       "techniqueID": "T1027.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_binary_padding"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_binary_padding"
     },
     {
       "techniqueID": "T1030",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_split_file_into_pieces"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_split_file_into_pieces"
     },
     {
       "techniqueID": "T1036.006",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_space_after_filename"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_space_after_filename"
     },
     {
       "techniqueID": "T1040",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_network_sniffing"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_network_sniffing"
     },
     {
       "techniqueID": "T1046",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_network_service_scanning"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_network_service_scanning"
     },
     {
       "techniqueID": "T1049",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_system_network_connections_discovery"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_system_network_connections_discovery"
     },
     {
       "techniqueID": "T1053.003",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_schedule_task_job_cron"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_schedule_task_job_cron"
     },
     {
       "techniqueID": "T1056.002",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_gui_input_capture"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_gui_input_capture"
     },
     {
       "techniqueID": "T1059",
@@ -101,31 +101,31 @@
       "techniqueID": "T1059.007",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_installer_susp_child_process, proc_creation_macos_jxa_in_memory_execution, proc_creation_macos_susp_in_memory_download_and_compile"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_installer_susp_child_process, proc_creation_macos_jxa_in_memory_execution, proc_creation_macos_susp_in_memory_download_and_compile"
     },
     {
       "techniqueID": "T1069.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_local_groups"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_local_groups"
     },
     {
       "techniqueID": "T1070.006",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_change_file_time_attr"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_change_file_time_attr"
     },
     {
       "techniqueID": "T1071",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_installer_susp_child_process"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_installer_susp_child_process"
     },
     {
       "techniqueID": "T1071.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_installer_susp_child_process"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_installer_susp_child_process"
     },
     {
       "techniqueID": "T1071.004",
@@ -137,37 +137,37 @@
       "techniqueID": "T1078",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_dsenableroot_enable_root_account, proc_creation_macos_sysadminctl_enable_guest_account"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_dsenableroot_enable_root_account, proc_creation_macos_sysadminctl_enable_guest_account"
     },
     {
       "techniqueID": "T1078.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_dsenableroot_enable_root_account, proc_creation_macos_sysadminctl_enable_guest_account"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_dsenableroot_enable_root_account, proc_creation_macos_sysadminctl_enable_guest_account"
     },
     {
       "techniqueID": "T1078.003",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_dscl_add_user_to_admin_group, proc_creation_macos_dseditgroup_add_to_admin_group, proc_creation_macos_dsenableroot_enable_root_account, proc_creation_macos_sysadminctl_add_user_to_admin_group"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_dscl_add_user_to_admin_group, proc_creation_macos_dseditgroup_add_to_admin_group, proc_creation_macos_dsenableroot_enable_root_account, proc_creation_macos_sysadminctl_add_user_to_admin_group"
     },
     {
       "techniqueID": "T1082",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_ioreg_discovery, proc_creation_macos_swvers_discovery, proc_creation_macos_sysctl_discovery, proc_creation_macos_system_profiler_discovery"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_ioreg_discovery, proc_creation_macos_swvers_discovery, proc_creation_macos_sysctl_discovery, proc_creation_macos_system_profiler_discovery"
     },
     {
       "techniqueID": "T1083",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_file_and_directory_discovery, proc_creation_macos_susp_find_execution"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_file_and_directory_discovery, proc_creation_macos_susp_find_execution"
     },
     {
       "techniqueID": "T1087.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_local_account"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_local_account"
     },
     {
       "techniqueID": "T1105",
@@ -179,103 +179,103 @@
       "techniqueID": "T1113",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_screencapture"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_screencapture"
     },
     {
       "techniqueID": "T1115",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_clipboard_access_via_osascript"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_clipboard_access_via_osascript"
     },
     {
       "techniqueID": "T1133",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_remote_access_tools_teamviewer_incoming_connection"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_remote_access_tools_teamviewer_incoming_connection"
     },
     {
       "techniqueID": "T1136.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_create_account"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_create_account"
     },
     {
       "techniqueID": "T1137.002",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_office_susp_child_processes"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_office_susp_child_processes"
     },
     {
       "techniqueID": "T1140",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_payload_decoded_and_decrypted, proc_creation_macos_tail_base64_decode_from_image"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_payload_decoded_and_decrypted, proc_creation_macos_tail_base64_decode_from_image"
     },
     {
       "techniqueID": "T1189",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_browser_child_process"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_browser_child_process"
     },
     {
       "techniqueID": "T1203",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_browser_child_process"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_browser_child_process"
     },
     {
       "techniqueID": "T1204",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_payload_decoded_and_decrypted, proc_creation_macos_susp_execution_macos_script_editor"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_payload_decoded_and_decrypted, proc_creation_macos_susp_execution_macos_script_editor"
     },
     {
       "techniqueID": "T1204.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
     },
     {
       "techniqueID": "T1204.002",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_office_susp_child_processes"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_office_susp_child_processes"
     },
     {
       "techniqueID": "T1218",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_chflags_hidden_flag"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_chflags_hidden_flag"
     },
     {
       "techniqueID": "T1219.002",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_remote_access_tools_meshagent_arguments"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_remote_access_tools_meshagent_arguments"
     },
     {
       "techniqueID": "T1490",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_tmutil_delete_backup, proc_creation_macos_tmutil_disable_backup, proc_creation_macos_tmutil_exclude_file_from_backup"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_tmutil_delete_backup, proc_creation_macos_tmutil_disable_backup, proc_creation_macos_tmutil_exclude_file_from_backup"
     },
     {
       "techniqueID": "T1497.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_sysctl_discovery, proc_creation_macos_system_profiler_discovery"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_sysctl_discovery, proc_creation_macos_system_profiler_discovery"
     },
     {
       "techniqueID": "T1518.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_csrutil_disable, proc_creation_macos_csrutil_status, proc_creation_macos_security_software_discovery"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_csrutil_disable, proc_creation_macos_csrutil_status, proc_creation_macos_security_software_discovery"
     },
     {
       "techniqueID": "T1529",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_system_shutdown_reboot"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_system_shutdown_reboot"
     },
     {
       "techniqueID": "T1543.001",
@@ -299,25 +299,25 @@
       "techniqueID": "T1552.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_chflags_hidden_flag, proc_creation_macos_find_cred_in_files"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_chflags_hidden_flag, proc_creation_macos_find_cred_in_files"
     },
     {
       "techniqueID": "T1552.003",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_histfile_operations"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_histfile_operations"
     },
     {
       "techniqueID": "T1553",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
     },
     {
       "techniqueID": "T1553.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_xattr_gatekeeper_bypass"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_xattr_gatekeeper_bypass"
     },
     {
       "techniqueID": "T1555.001",
@@ -329,7 +329,7 @@
       "techniqueID": "T1560.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_hdiutil_mount"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_hdiutil_mount"
     },
     {
       "techniqueID": "T1562.001",
@@ -341,19 +341,19 @@
       "techniqueID": "T1564.002",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_create_hidden_account"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_create_hidden_account"
     },
     {
       "techniqueID": "T1564.004",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_chflags_hidden_flag"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_chflags_hidden_flag"
     },
     {
       "techniqueID": "T1566",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
     },
     {
       "techniqueID": "T1566.001",
@@ -365,7 +365,7 @@
       "techniqueID": "T1566.002",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_susp_execution_macos_script_editor"
     },
     {
       "techniqueID": "T1568.002",
@@ -377,7 +377,7 @@
       "techniqueID": "T1569.001",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_launchctl_execution"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_launchctl_execution"
     },
     {
       "techniqueID": "T1574.006",
@@ -389,13 +389,13 @@
       "techniqueID": "T1685",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_disable_security_tools"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_disable_security_tools"
     },
     {
       "techniqueID": "T1685.006",
       "score": 0.5,
       "color": "#fdae6b",
-      "comment": "Monitor only, raises no alert until promoted. Covered by: proc_creation_macos_clear_system_logs"
+      "comment": "No rule covering this raises an alert as shipped. Covered by: proc_creation_macos_clear_system_logs"
     }
   ]
 }

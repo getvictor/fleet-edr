@@ -137,6 +137,8 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.EventsIngested(ctx, "host-a", 5)
 	r.EventsIngested(ctx, "host-b", 2)
 	r.AlertCreated(ctx, "dyld_insert", "high")
+	r.MonitorMatched(ctx, "proc_creation_macos_applescript", "medium")
+	r.MonitorMatched(ctx, "proc_creation_macos_applescript", "medium")
 	r.ProcessRetentionRowsDeleted(ctx, 7)
 	r.QueueRowsPruned(ctx, 9)
 	r.QueueDropped(ctx, 3, false)
@@ -149,6 +151,11 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	assert.Equal(t, int64(5), findSum(t, rm, "edr.events.ingested", map[string]any{"host_id": "host-a"}))
 	assert.Equal(t, int64(2), findSum(t, rm, "edr.events.ingested", map[string]any{"host_id": "host-b"}))
 	assert.Equal(t, int64(1), findSum(t, rm, "edr.alerts.created", map[string]any{"rule_id": "dyld_insert", "severity": "high"}))
+	// Same attribute shape as edr.alerts.created on purpose: the two series are meant to be compared per rule and severity, which
+	// is the comparison promoting a monitor-mode rule turns on (issue #764). Asserted here because nothing else collects the
+	// instrument, so a misspelled name or a missing registration would otherwise ship silently.
+	assert.Equal(t, int64(2), findSum(t, rm, "edr.detection.monitor_matches",
+		map[string]any{"rule_id": "proc_creation_macos_applescript", "severity": "medium"}))
 	assert.Equal(t, int64(7), findSum(t, rm, "edr.retention.processes.rows_deleted", nil))
 	assert.Equal(t, int64(9), findSum(t, rm, "edr.event_queue.rows_pruned", nil))
 	assert.Equal(t, int64(3), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": false}))
@@ -199,6 +206,7 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 	assert.NotPanics(t, func() {
 		r.EventsIngested(ctx, "h", 1)
 		r.AlertCreated(ctx, "r", "s")
+		r.MonitorMatched(ctx, "r", "s")
 		r.ProcessRetentionRowsDeleted(ctx, 1)
 		r.QueueDropped(ctx, 1, false)
 		r.QueueDropped(ctx, 1, true)

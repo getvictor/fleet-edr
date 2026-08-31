@@ -926,6 +926,8 @@ func (m *countingMetrics) MonitorMatched(_ context.Context, ruleID, _ string) {
 	m.monitors = append(m.monitors, ruleID)
 }
 
+// spec:observability-instrumentation/stable-counter-names/a-suppressed-match-is-counted-rather-than-only-logged
+//
 // TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt pins the counter that replaced a per-match log line.
 //
 // A monitor match used to produce one INFO line and nothing else. That was proportionate when monitor was a state an operator set
@@ -962,6 +964,8 @@ func (r overridingResolver) ResolveRuleMode(_, _ string, _ rulesapi.DetectionRul
 	return r.mode, r.severity
 }
 
+// spec:observability-instrumentation/stable-counter-names/a-suppressed-match-is-labelled-with-the-severity-the-alert-would-have-carried
+//
 // TestEngine_MonitorCounterUsesTheOverriddenSeverity pins that both series describe one rule at one severity.
 //
 // A setting can carry a severity override, and the alert path applies it before persisting. The monitor path returned before that,
