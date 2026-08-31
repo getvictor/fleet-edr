@@ -3,7 +3,6 @@ package catalog
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -100,40 +99,39 @@ func (r *SudoersTamper) SupportedExclusionMatchTypes() []api.ExclusionMatchType 
 // sudoersDetection is the rule's logic, compiled from the detection block in its pack file.
 var sudoersDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("sudoers_tamper") })
 
-// sudoersOpenPayload mirrors the open event shape we care about. Local to this rule: the sibling privilege_launchd_plist_write rule
-// no longer consumes open events (it keys on BTM registration per ADR-0008), so there is no shared open-payload type to extract. The
-// identical Evaluate fan-out is shared via evalEachEvent.
-type sudoersOpenPayload struct {
-	PID   int    `json:"pid"`
-	Path  string `json:"path"`
-	Flags int    `json:"flags"`
-}
-
+// Evaluate runs the rule with a scope of its own, which is the un-shared behaviour a direct caller gets. The engine calls
+// EvaluateScoped instead, so the batch's Sigma-backed rules share one decode and one subject lookup per event.
 func (r *SudoersTamper) Evaluate(
 	ctx context.Context, events []api.Event, s api.GraphReader,
 ) ([]api.Finding, error) {
-	return evalEachEvent(ctx, events, s, r.evalEvent)
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
+}
+
+// EvaluateScoped implements api.ScopedRule.
+func (r *SudoersTamper) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
+	return evalEachScopedEvent(ctx, scope, events, s, r.evalEvent)
 }
 
 func (r *SudoersTamper) evalEvent(
-	ctx context.Context, evt api.Event, s api.GraphReader,
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader,
 ) (*api.Finding, error) {
 	if evt.EventType != "open" {
 		return nil, nil
 	}
+	// Checked before the adapter, and deliberately still a byte scan: it costs nothing and it keeps every open of some other path
+	// from entering the shared memo, which would hold a decode for an event no rule goes on to read.
 	if !bytes.Contains(evt.Payload, sudoersBytes) {
-		return nil, nil
-	}
-	var p sudoersOpenPayload
-	if err := json.Unmarshal(evt.Payload, &p); err != nil {
 		return nil, nil
 	}
 	// The detection decides, including the sudo-lock suppression that used to sit after the subject lookup below. The subject's
 	// image is resolved lazily inside the adapter, so a write to any other path never reads the graph.
-	se, subject, err := openEventWithSubject(ctx, evt, s, p.PID)
-	if err != nil {
-		return nil, err
+	view, err := sigmaEvent(ctx, scope, evt, s)
+	if err != nil || view == nil {
+		return nil, nil
 	}
+	se := view.Event
 	matched := sudoersDetection().Matches(se)
 	if resolveErr := se.ResolveErr(); resolveErr != nil {
 		return nil, resolveErr
@@ -145,7 +143,7 @@ func (r *SudoersTamper) evalEvent(
 	// The same process the detection matched on, not a second lookup of it: resolving again could return a different image if a
 	// materialization commit landed in between, and the finding would then describe a writer other than the one the suppression
 	// was decided against.
-	proc, err := subject()
+	proc, err := view.Subject()
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +164,8 @@ func (r *SudoersTamper) evalEvent(
 		Title:    r.DisplayName(),
 		Description: fmt.Sprintf(
 			"%s opened %s for writing: sudo escalation surface (MITRE T1548.003)",
-			proc.Path, p.Path,
+			// The path the detection matched on, which is present exactly because it required write intent to get here.
+			proc.Path, firstField(se, "TargetFilename"),
 		),
 		ProcessID: proc.ID,
 		EventIDs:  []string{evt.EventID},

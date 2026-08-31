@@ -698,3 +698,61 @@ func BenchmarkEvaluate_ManyDistinctTypes(b *testing.B) {
 		})
 	}
 }
+
+// scopedStubRule is a stubRule that also implements rulesapi.ScopedRule, recording which scope it was handed.
+type scopedStubRule struct {
+	stubRule
+	scopes       []*rulesapi.BatchScope
+	scopedCalls  int
+	derivedValue any
+}
+
+func (r *scopedStubRule) EvaluateScoped(
+	_ context.Context, scope *rulesapi.BatchScope, events []api.Event, _ rulesapi.GraphReader,
+) ([]api.Finding, error) {
+	r.scopedCalls++
+	r.calls++
+	r.received = events
+	r.scopes = append(r.scopes, scope)
+	// Derive under a shared key, so the test can prove the value crosses rules rather than merely that the pointer does.
+	r.derivedValue = scope.Derive("test", func() any { return &struct{ n int }{n: len(events)} })
+	return nil, nil
+}
+
+// spec:server-detection-rules-engine/rules-evaluating-one-batch-derive-shared-work-once/every-rule-in-one-batch-is-offered-the-same-scope
+// spec:server-detection-rules-engine/rules-evaluating-one-batch-derive-shared-work-once/a-later-batch-does-not-see-an-earlier-batch-s-derivations
+// spec:server-detection-rules-engine/rules-evaluating-one-batch-derive-shared-work-once/a-rule-that-does-not-use-the-scope-is-unaffected
+// TestEngine_ScopedRulesShareOneBatchScope pins the mechanism issue #794 added.
+//
+// The engine cannot know what a rule derives, so what it guarantees is narrow and exact: every scoped rule in one Evaluate call
+// gets the same scope, a different call gets a different one, and a rule that does not implement the interface is untouched. The
+// derived value is compared, not just the scope pointer, because sharing a scope that does not actually share values would satisfy
+// a pointer check and none of the purpose.
+func TestEngine_ScopedRulesShareOneBatchScope(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	first := &scopedStubRule{stubRule: stubRule{id: "scoped-first"}}
+	second := &scopedStubRule{stubRule: stubRule{id: "scoped-second"}}
+	plain := &stubRule{id: "plain"}
+	e.Register(first)
+	e.Register(second)
+	e.Register(plain)
+
+	events := []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}
+	require.NoError(t, e.Evaluate(t.Context(), events))
+
+	require.Len(t, first.scopes, 1)
+	require.Len(t, second.scopes, 1)
+	assert.Same(t, first.scopes[0], second.scopes[0], "one scope per batch, shared by every scoped rule in it")
+	assert.Same(t, first.derivedValue, second.derivedValue, "the second rule reuses what the first derived")
+
+	assert.Equal(t, 1, plain.calls, "a rule that does not implement ScopedRule is still evaluated")
+	assert.Equal(t, 0, first.calls-first.scopedCalls, "a scoped rule is evaluated through EvaluateScoped, not Evaluate")
+
+	// A second batch must not see the first batch's derivations: the scope is per call, which is what keeps it out of ADR-0010's
+	// cross-request state.
+	require.NoError(t, e.Evaluate(t.Context(), events))
+	require.Len(t, first.scopes, 2)
+	assert.NotSame(t, first.scopes[0], first.scopes[1], "a later batch gets its own scope")
+}

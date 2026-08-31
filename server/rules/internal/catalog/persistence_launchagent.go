@@ -2,14 +2,12 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
-	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // PersistenceLaunchAgent fires when a process calls `launchctl load` or
@@ -71,30 +69,31 @@ var launchAgentPath = regexp.MustCompile(`(?i)(^|/)(Users/[^/]+/)?Library/Launch
 // launchAgentDetection is the rule's logic, compiled from the detection block in its pack file.
 var launchAgentDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("persistence_launchagent") })
 
-type persistenceLaunchCtlPayload struct {
-	PID  int      `json:"pid"`
-	PPID int      `json:"ppid"`
-	Path string   `json:"path"`
-	Args []string `json:"args"`
+// Evaluate runs the rule with a scope of its own, which is the un-shared behaviour a direct caller gets. The engine calls
+// EvaluateScoped instead, so the batch's Sigma-backed rules share one decode per event.
+func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
-func (r *PersistenceLaunchAgent) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
-	return evalEachEvent(ctx, events, s, r.evalEvent)
+// EvaluateScoped implements api.ScopedRule.
+func (r *PersistenceLaunchAgent) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
+	return evalEachScopedEvent(ctx, scope, events, s, r.evalEvent)
 }
 
 // evalEvent returns a finding for a single event, or nil when the event doesn't match.
-func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*api.Finding, error) {
+func (r *PersistenceLaunchAgent) evalEvent(
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader,
+) (*api.Finding, error) {
 	if evt.EventType != "exec" {
 		return nil, nil
 	}
-	var p persistenceLaunchCtlPayload
-	if err := json.Unmarshal(evt.Payload, &p); err != nil {
+	view, err := sigmaEvent(ctx, scope, evt, s)
+	if err != nil || view == nil {
 		return nil, nil
 	}
-	se, err := sigmabind.NewEvent(evt)
-	if err != nil {
-		return nil, nil
-	}
+	se := view.Event
 	if !launchAgentDetection().Matches(se) {
 		return nil, nil
 	}
@@ -107,7 +106,7 @@ func (r *PersistenceLaunchAgent) evalEvent(ctx context.Context, evt api.Event, s
 	// Look up the process row so the alert can link to the process detail view. A young miss raises the retryable
 	// ErrProcessNotYetMaterialized so the batch is re-evaluated once the processor lands the row; a stale miss skips. Safer than
 	// firing an alert we can't pivot from.
-	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
+	proc, err := view.Subject()
 	if err != nil {
 		return nil, err
 	}

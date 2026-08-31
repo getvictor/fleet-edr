@@ -2,13 +2,11 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
-	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // CredentialKeychainDump fires when a process invokes `/usr/bin/security
@@ -70,33 +68,33 @@ func (r *CredentialKeychainDump) Doc() api.Documentation {
 // once at start-up, where a malformed block fails loudly, rather than per event.
 var keychainDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("credential_keychain_dump") })
 
-type keychainDumpPayload struct {
-	PID  int      `json:"pid"`
-	Path string   `json:"path"`
-	Args []string `json:"args"`
+// Evaluate runs the rule with a scope of its own, which is the un-shared behaviour a direct caller gets. The engine calls
+// EvaluateScoped instead, so the batch's Sigma-backed rules share one decode per event.
+func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
-func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+// EvaluateScoped implements api.ScopedRule.
+func (r *CredentialKeychainDump) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	var findings []api.Finding
 	var miss pendingMiss
 	for _, evt := range events {
 		if evt.EventType != "exec" {
 			continue
 		}
-		// Built per rule rather than per event, because the engine hands each rule the raw batch and offers no way to share an
-		// adapter. Measured at 1.3us and 776 bytes per exec event, which is nothing for one converted rule and is not nothing
-		// once the catalog is mostly Sigma; issue #794 moves the decode into the engine.
-		se, err := sigmabind.NewEvent(evt)
-		if err != nil {
-			// A payload that does not decode is a malformed event rather than an uninteresting one, but one bad event must not
-			// discard the findings the rest of the batch produced.
+		// Decoded once for the whole batch and shared with every other Sigma-backed rule in it, which is what issue #794 was
+		// about: this used to cost a decode per rule, and again a second decode per rule to read the pid back out.
+		//
+		// A payload that does not decode is a malformed event rather than an uninteresting one, but one bad event must not
+		// discard the findings the rest of the batch produced, so it is skipped.
+		view, err := sigmaEvent(ctx, scope, evt, s)
+		if err != nil || view == nil {
 			continue
 		}
+		se := view.Event
 		if !keychainDetection().Matches(se) {
-			continue
-		}
-		var p keychainDumpPayload
-		if err := json.Unmarshal(evt.Payload, &p); err != nil {
 			continue
 		}
 		// The subcommand the detection matched on, read back from the same computed field, so the alert names what fired.
@@ -105,7 +103,7 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 			sub = values[0]
 		}
 
-		proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
+		proc, err := view.Subject()
 		if fatal := miss.absorb(err); fatal != nil {
 			return nil, fatal
 		}
@@ -116,13 +114,14 @@ func (r *CredentialKeychainDump) Evaluate(ctx context.Context, events []api.Even
 		}
 
 		findings = append(findings, api.Finding{
-			HostID:      evt.HostID,
-			RuleID:      r.ID(),
-			Severity:    api.SeverityHigh,
-			Title:       r.DisplayName(),
-			Description: fmt.Sprintf("%s invoked with %q: reads all Keychain entries (Keychain credential access, MITRE T1555.001)", p.Path, sub),
-			ProcessID:   proc.ID,
-			EventIDs:    []string{evt.EventID},
+			HostID:   evt.HostID,
+			RuleID:   r.ID(),
+			Severity: api.SeverityHigh,
+			Title:    r.DisplayName(),
+			Description: fmt.Sprintf("%s invoked with %q: reads all Keychain entries (Keychain credential access, MITRE T1555.001)",
+				firstField(se, "Image"), sub),
+			ProcessID: proc.ID,
+			EventIDs:  []string{evt.EventID},
 		})
 	}
 	return findings, miss.err

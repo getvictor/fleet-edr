@@ -331,7 +331,7 @@ func TestImportedRule_FiresOnAMatchingEvent(t *testing.T) {
 
 // TestImportedRule_OpenEventResolvesTheSubjectOnce pins that a file_event rule looks its subject up once.
 //
-// Dropping the accessor that openEventWithSubject returns would make matching and the finding two separate reads of the same pid.
+// Dropping the accessor that sigmaEvent returns would make matching and the finding two separate reads of the same pid.
 // A materialization commit landing between them lets a rule with a negated Image filter match on an absent image and then attach
 // the finding to the very process that should have suppressed it. Issue #762 established this for sudoers_tamper; the same helper
 // carries the same obligation here.

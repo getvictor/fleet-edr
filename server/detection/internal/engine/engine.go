@@ -149,10 +149,15 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 // alert-persistence error aborts immediately because the batch must be retried before any more findings are written.
 func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 	live := filterSnapshotEvents(events)
+	// One scope for the whole batch, so rules deriving the same thing from the same events derive it once (issue #794). The engine
+	// never looks inside it: what a rule puts there belongs to the rules context, which owns both the store and the read. It is
+	// created unconditionally because it allocates nothing until a rule actually derives something, and it is discarded when this
+	// call returns, so concurrent batches share nothing.
+	scope := &rulesapi.BatchScope{}
 	var pendingMiss error
 	for _, i := range e.rulesFor(live) {
 		rule := e.rules[i]
-		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live)
+		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live, scope)
 		if err == nil {
 			continue
 		}
@@ -261,7 +266,9 @@ func consumesAny(declared []string, events []api.Event) bool {
 // failure the span records the error and the loop continues (per-rule isolation). Returns a non-nil error ONLY when alert
 // persistence fails or the rule reported a retryable rulesapi.ErrProcessNotYetMaterialized: other rule-evaluation errors are
 // logged + swallowed so a buggy rule doesn't block the rest.
-func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, declared []string, live []api.Event) error {
+func (e *Engine) evaluateRule(
+	ctx context.Context, rule rulesapi.Rule, declared []string, live []api.Event, scope *rulesapi.BatchScope,
+) error {
 	// Scope the batch to the rule's target platforms (ADR-0018): a macOS-only rule never sees a Windows event. Checked BEFORE the
 	// span is opened, because a rule left with nothing to evaluate did not run, and emitting a span for it reports work that never
 	// happened and inflates per-rule span volume by the whole cross-platform mismatch.
@@ -287,7 +294,7 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, declared 
 	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal.
 	span.SetAttributes(attribute.Int("alert_count", 0))
 
-	findings, err := rule.Evaluate(ctx, scoped, e.store)
+	findings, err := evaluate(ctx, rule, scoped, e.store, scope)
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
 	// recorded but the findings are still persisted below rather than thrown away with the error. Only a non-retryable failure
 	// discards the batch's findings: that path means the rule itself misbehaved, so its output is not trustworthy.
@@ -314,6 +321,20 @@ func (e *Engine) evaluateRule(ctx context.Context, rule rulesapi.Rule, declared 
 		}
 	}
 	return retryableMiss
+}
+
+// evaluate runs one rule, handing it the batch scope when it asks for one.
+//
+// The optional interface is checked here rather than at registration because it costs a single type assertion per rule per batch,
+// which is nothing beside the work the rule is about to do, and keeping it out of Register means a rule cannot be registered as one
+// kind and evaluated as another.
+func evaluate(
+	ctx context.Context, rule rulesapi.Rule, events []api.Event, gr *mysql.Store, scope *rulesapi.BatchScope,
+) ([]api.Finding, error) {
+	if scoped, ok := rule.(rulesapi.ScopedRule); ok {
+		return scoped.EvaluateScoped(ctx, scope, events, gr)
+	}
+	return rule.Evaluate(ctx, events, gr)
 }
 
 // routeFinding applies the per-host resolved mode to a single finding before persistence (issue #459): a `disabled` (rule, host)

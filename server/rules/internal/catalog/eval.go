@@ -46,6 +46,23 @@ func (p *pendingMiss) absorb(err error) error {
 	return err
 }
 
+// evalEachScopedEvent is evalEachEvent for a rule that reads Sigma fields, threading the batch scope to its evaluator so the
+// decode and the graph lookups are shared with the batch's other Sigma-backed rules (issue #794).
+//
+// Kept separate from evalEachEvent rather than widening it, because a rule that does not read Sigma fields has no use for the scope
+// and would carry a parameter it ignores.
+func evalEachScopedEvent(
+	ctx context.Context,
+	scope *api.BatchScope,
+	events []api.Event,
+	s api.GraphReader,
+	eval func(context.Context, *api.BatchScope, api.Event, api.GraphReader) (*api.Finding, error),
+) ([]api.Finding, error) {
+	return evalEachEvent(ctx, events, s, func(ctx context.Context, evt api.Event, gr api.GraphReader) (*api.Finding, error) {
+		return eval(ctx, scope, evt, gr)
+	})
+}
+
 // evalEachEvent runs a per-event evaluator over a batch and collects the non-nil findings. Shared by rules whose Evaluate is a plain
 // per-event fan-out (privilege_launchd_plist_write, sudoers_tamper, ...) so the identical loop lives in one place instead of being
 // copy-pasted per rule.

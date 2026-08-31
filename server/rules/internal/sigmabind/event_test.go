@@ -335,3 +335,57 @@ func TestEvent_OpenSuppliesTheWritingProcessImage(t *testing.T) {
 		require.Error(t, e.ResolveErr())
 	})
 }
+
+// TestWithResolver_SharesTheDecodeButNotTheError is the property that lets several rules share one decoded event.
+//
+// The decode and the argv derivations are pure and expensive, so copies share them. The resolver state is not shared, because
+// ResolveErr is read per rule: a rule that never looked at the supplied image must not inherit another rule's graph failure, which
+// would discard its findings for the whole batch over a lookup it did not make.
+func TestWithResolver_SharesTheDecodeButNotTheError(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{"pid":1,"path":"/usr/bin/curl","args":["curl","https://example.test"]}`)
+	core, err := NewEvent(api.Event{EventID: "e1", EventType: "exec", Payload: payload})
+	require.NoError(t, err)
+
+	// One memoizing lookup behind both copies: the graph is read once per event however many rules ask.
+	lookups := 0
+	shared := func() (string, error) {
+		lookups++
+		return "", assert.AnError
+	}
+
+	asked := core.WithResolver(shared)
+	silent := core.WithResolver(shared)
+
+	// Both copies see the decoded fields without decoding again.
+	for name, ev := range map[string]*Event{"asked": asked, "silent": silent} {
+		values, ok := ev.Field("CommandLine")
+		require.True(t, ok, "%s lost the shared decode", name)
+		assert.Equal(t, []string{"curl https://example.test"}, values)
+	}
+
+	// Only one copy reaches the resolver.
+	_, _ = asked.Field("ParentImage")
+
+	assert.Equal(t, 1, lookups, "the memoizing resolver is shared, so the graph is read once")
+	require.Error(t, asked.ResolveErr(), "the rule that asked sees the failure")
+	assert.NoError(t, silent.ResolveErr(), "the rule that never asked must not inherit it")
+}
+
+// TestWithResolver_DoesNotMutateTheOriginal pins that a copy cannot write back through the shared fields.
+func TestWithResolver_DoesNotMutateTheOriginal(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{"pid":1,"path":"/bin/sh","args":["sh"]}`)
+	core, err := NewEvent(api.Event{EventID: "e1", EventType: "exec", Payload: payload})
+	require.NoError(t, err)
+
+	copied := core.WithResolver(func() (string, error) { return "/usr/bin/parent", nil })
+	values, ok := copied.Field("ParentImage")
+	require.True(t, ok)
+	assert.Equal(t, []string{"/usr/bin/parent"}, values)
+
+	_, present := core.Field("ParentImage")
+	assert.False(t, present, "resolving on a copy must not give the original a parent it never had")
+}

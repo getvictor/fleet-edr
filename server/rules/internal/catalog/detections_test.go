@@ -247,14 +247,27 @@ func TestExecEventWithParent(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			se, err := execEventWithParent(t.Context(), evt, tc.graph, 1)
-			require.NoError(t, err)
+			se := execAdapter(t, evt, tc.graph)
 			values, present := se.Field("ParentImage")
 			assert.Equal(t, tc.wantPresent, present)
 			assert.Equal(t, tc.wantValues, values)
 			require.NoError(t, se.ResolveErr(), "an unresolvable parent is a decline, not a failure")
 		})
 	}
+}
+
+// execAdapter builds the Sigma adapter for an exec event the way production does, through the shared per-batch path.
+//
+// The tests below pin how the PARENT is resolved, and that resolution moved behind sigmaEvent when the adapter became shared across
+// rules. Going through the production path rather than a helper only these tests call means the properties stay pinned to the code
+// that actually runs.
+func execAdapter(t *testing.T, evt rulesapi.Event, gr rulesapi.GraphReader) *sigmabind.Event {
+	t.Helper()
+
+	view, err := sigmaEvent(t.Context(), &rulesapi.BatchScope{}, evt, gr)
+	require.NoError(t, err)
+	require.NotNil(t, view)
+	return view.Event
 }
 
 // TestExecEventWithParent_ResolvesLazily pins the property that restores the prefilter a converted rule loses.
@@ -269,8 +282,7 @@ func TestExecEventWithParent_ResolvesLazily(t *testing.T) {
 		Payload: []byte(`{"pid":1,"ppid":2,"path":"/usr/bin/true","args":["true"]}`)}
 	graph := &recordingGraphReader{byPID: &rulesapi.Process{Path: "/Applications/X", PPID: 2, ForkTimeNs: 50}}
 
-	se, err := execEventWithParent(t.Context(), evt, graph, 1)
-	require.NoError(t, err)
+	se := execAdapter(t, evt, graph)
 	assert.False(t, graph.calledByPID, "constructing the adapter must not read the graph")
 
 	// /usr/bin/true is not a shell, so the detection's cheap half fails and the parent is never needed.
@@ -295,8 +307,7 @@ func TestExecEventWithParent_ReportsAResolverFailure(t *testing.T) {
 
 	evt := rulesapi.Event{EventID: "e", HostID: "h", EventType: "exec", TimestampNs: 100,
 		Payload: []byte(`{"pid":1,"ppid":2,"path":"/bin/bash","args":["bash"]}`)}
-	se, err := execEventWithParent(t.Context(), evt, &recordingGraphReader{errByPID: errors.New("boom")}, 1)
-	require.NoError(t, err, "construction does not read the graph, so it cannot fail here")
+	se := execAdapter(t, evt, &recordingGraphReader{errByPID: errors.New("boom")})
 
 	_, present := se.Field("ParentImage")
 	assert.False(t, present, "a failed lookup leaves the field absent")

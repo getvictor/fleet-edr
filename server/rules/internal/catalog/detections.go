@@ -174,79 +174,55 @@ func firstMatching(se *sigmabind.Event, name string, pred func(string) bool) str
 	return ""
 }
 
-// execEventWithParent builds the Sigma adapter for an exec event, resolving the parent's image from the process graph LAZILY.
+// parentImageOf returns a resolver for an exec event's parent image, memoized so the graph is read at most once however many times
+// it is called.
 //
-// ParentImage is a standard Sigma field our payload cannot carry: an exec event has ppid, not the parent's path. Resolving it here
-// rather than denormalising it onto the stored event is deliberate, and the pipeline decides it. Processes are materialized BEFORE
-// rules run, while events are stored before that, so an enrichment written at ingest would miss exactly the parents that arrive in
-// the same batch as their children, and would persist that miss permanently.
-//
-// Deferred rather than eager, because a converted rule loses the cheap Go prefilter it used to have. shell_from_office checked eight
-// shell paths before touching the graph; expressed as a detection block, the binary and the parent are one condition. Sigma's
-// conditions short-circuit, so passing a resolver means the graph is read only for the events whose image already matched, which is
-// what the prefilter bought.
+// Memoization is what lets several rules share one lookup: the resolver is bound into the shared adaptation of the event and each
+// rule gets its own view of it (see sigmabatch.go). Without it, eleven corpus rules reading ParentImage would each issue their own
+// pair of graph reads for the same event, which costs far more than the decode they also each repeated.
+func parentImageOf(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) func() (string, error) {
+	var (
+		path     string
+		err      error
+		resolved bool
+	)
+	return func() (string, error) {
+		if resolved {
+			return path, err
+		}
+		resolved = true
+		path, err = lookupParentImage(ctx, evt, gr, childPID)
+		return path, err
+	}
+}
+
+// lookupParentImage walks child to parent for one exec event.
 //
 // The parent is resolved at the CHILD'S FORK TIME, not the exec timestamp. A parent must be alive when it forks the child, but by
 // the time the child execs it may have exited and had its pid reused, so the exec timestamp can select a different process
 // entirely. This is the same bracket SuspiciousExec.lookupParentOf uses, and the reason it uses it.
-//
-// A parent that cannot be resolved leaves the field absent, so the rule declines rather than matching a process whose image is
-// unknown. A graph read that genuinely fails is recorded on the event and the caller decides; note that the engine isolates
-// ordinary rule errors rather than retrying the batch, which is pre-existing behaviour for every rule that reads the graph and is
-// tracked in issue #798.
-func execEventWithParent(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) (*sigmabind.Event, error) {
-	return sigmabind.NewExecEventLazy(evt, func() (string, error) {
-		child, err := gr.GetProcessByPID(ctx, evt.HostID, childPID, evt.TimestampNs)
-		if err != nil {
-			return "", fmt.Errorf("get child pid %d: %w", childPID, err)
-		}
-		if child == nil || child.PPID <= 1 {
-			return "", nil
-		}
-		parent, err := gr.GetProcessByPID(ctx, evt.HostID, child.PPID, child.ForkTimeNs)
-		if err != nil {
-			return "", fmt.Errorf("get parent pid %d: %w", child.PPID, err)
-		}
-		if parent == nil {
-			return "", nil
-		}
-		return parent.Path, nil
-	})
+func lookupParentImage(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) (string, error) {
+	child, err := gr.GetProcessByPID(ctx, evt.HostID, childPID, evt.TimestampNs)
+	if err != nil {
+		return "", fmt.Errorf("get child pid %d: %w", childPID, err)
+	}
+	if child == nil || child.PPID <= 1 {
+		return "", nil
+	}
+	parent, err := gr.GetProcessByPID(ctx, evt.HostID, child.PPID, child.ForkTimeNs)
+	if err != nil {
+		return "", fmt.Errorf("get parent pid %d: %w", child.PPID, err)
+	}
+	if parent == nil {
+		return "", nil
+	}
+	return parent.Path, nil
 }
 
-// openEventWithSubject builds the Sigma adapter for a file-open event, and returns an accessor for the process that did the
-// opening alongside it.
-//
-// Same shape and same reasons as execEventWithParent: an open event carries the pid, not the path, the graph knows it, and the
-// resolution is deferred so a detection whose target-filename test fails never reads the graph at all.
-//
-// The accessor exists so the rule's finding names the SAME process the detection matched on. Resolving twice would let a
-// materialization commit land between the reads and produce a finding about a different image than the one that decided the
-// suppression. It also cannot be left implicit: a condition may short-circuit before it reads Image (`A and B` where B is false
-// first), so the accessor resolves on demand and memoizes, whether or not matching already triggered it.
-//
-// Unlike the exec case there is no fork-time subtlety about WHICH process to ask for: the opening process is the subject. Which
-// image comes back for it at evt.TimestampNs is subject to #799.
-func openEventWithSubject(
-	ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, pid int,
-) (*sigmabind.Event, func() (*rulesapi.Process, error), error) {
-	var (
-		proc     *rulesapi.Process
-		resolved bool
-		resolve  = func() (*rulesapi.Process, error) {
-			if resolved {
-				return proc, nil
-			}
-			found, err := resolveSubjectProcess(ctx, gr, evt, pid)
-			if err != nil {
-				return nil, err
-			}
-			proc, resolved = found, true
-			return proc, nil
-		}
-	)
-	ev, err := sigmabind.NewOpenEventLazy(evt, func() (string, error) {
-		found, err := resolve()
+// subjectImageOf adapts a subject-process accessor to the image resolver the Sigma adapter takes, so both read through one memo.
+func subjectImageOf(subject func() (*rulesapi.Process, error)) func() (string, error) {
+	return func() (string, error) {
+		found, err := subject()
 		if err != nil {
 			return "", err
 		}
@@ -254,9 +230,31 @@ func openEventWithSubject(
 			return "", nil
 		}
 		return found.Path, nil
-	})
-	if err != nil {
-		return nil, nil, err
 	}
-	return ev, resolve, nil
+}
+
+// subjectProcessOf returns an accessor for the process that did the opening, memoized so the graph is read at most once however
+// many times it is called.
+//
+// The memo is not an optimisation alone. Resolving twice would let a materialization commit land between the reads and produce a
+// finding about a different image than the one the detection matched, and sharing one accessor across the rules in a batch extends
+// that guarantee across rules as well as within one.
+func subjectProcessOf(
+	ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, pid int,
+) func() (*rulesapi.Process, error) {
+	var (
+		proc     *rulesapi.Process
+		resolved bool
+	)
+	return func() (*rulesapi.Process, error) {
+		if resolved {
+			return proc, nil
+		}
+		found, err := resolveSubjectProcess(ctx, gr, evt, pid)
+		if err != nil {
+			return nil, err
+		}
+		proc, resolved = found, true
+		return proc, nil
+	}
 }

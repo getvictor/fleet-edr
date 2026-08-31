@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -58,33 +57,36 @@ func (r *ShellFromOffice) Doc() api.Documentation {
 // shellFromOfficeDetection is the rule's logic, compiled from the detection block in its pack file.
 var shellFromOfficeDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("shell_from_office") })
 
-type shellFromOfficePayload struct {
-	PID  int    `json:"pid"`
-	PPID int    `json:"ppid"`
-	Path string `json:"path"`
+// Evaluate runs the rule with a scope of its own, which is the un-shared behaviour a direct caller gets. The engine calls
+// EvaluateScoped instead, so the batch's Sigma-backed rules share one decode and one parent lookup per event.
+func (r *ShellFromOffice) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
-func (r *ShellFromOffice) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
-	return evalEachEvent(ctx, events, s, r.evalEvent)
+// EvaluateScoped implements api.ScopedRule.
+func (r *ShellFromOffice) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
+	return evalEachScopedEvent(ctx, scope, events, s, r.evalEvent)
 }
 
 // evalEvent returns a finding for a single event, or nil when the event doesn't match. Splitting this out of Evaluate keeps the
 // per-event short-circuits (non-exec, bad JSON, non-shell path, non-Office parent) from stacking cognitive complexity on the caller.
-func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*api.Finding, error) {
+func (r *ShellFromOffice) evalEvent(
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader,
+) (*api.Finding, error) {
 	if evt.EventType != "exec" {
 		return nil, nil
 	}
-	var p shellFromOfficePayload
-	if err := json.Unmarshal(evt.Payload, &p); err != nil {
+	// The adapter resolves the parent from the graph and supplies it as ParentImage, lazily and through a memo shared with the
+	// batch's other rules, so the graph is read once per event however many rules read the field. An unresolved parent leaves the
+	// field absent, so the detection declines: the same answer the Go matcher gave, and for the same reason. The processor marks
+	// the batch processed after Evaluate returns, so a missing parent is accepted rather than retried.
+	view, err := sigmaEvent(ctx, scope, evt, s)
+	if err != nil || view == nil {
 		return nil, nil
 	}
-	// Resolves the parent from the graph and supplies it as ParentImage. An unresolved parent leaves the field absent, so the
-	// detection declines: the same answer the Go matcher gave, and for the same reason. The processor marks the batch processed
-	// after Evaluate returns, so a missing parent is accepted rather than retried; a deferred retry queue is a future improvement.
-	se, err := execEventWithParent(ctx, evt, s, p.PID)
-	if err != nil {
-		return nil, err
-	}
+	se := view.Event
 	matched := shellFromOfficeDetection().Matches(se)
 	if err := se.ResolveErr(); err != nil {
 		return nil, err
@@ -95,7 +97,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 	// The parent the detection matched on, read back from the same field, so the alert names the Office app that spawned the shell.
 	parentPath := firstField(se, "ParentImage")
 
-	proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
+	proc, err := view.Subject()
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +109,7 @@ func (r *ShellFromOffice) evalEvent(ctx context.Context, evt api.Event, s api.Gr
 		RuleID:      r.ID(),
 		Severity:    api.SeverityHigh,
 		Title:       r.DisplayName(),
-		Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parentPath), p.Path),
+		Description: fmt.Sprintf("%s → %s", prettyOfficeParent(parentPath), firstField(se, "Image")),
 		ProcessID:   proc.ID,
 		EventIDs:    []string{evt.EventID},
 	}, nil
