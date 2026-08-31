@@ -116,29 +116,37 @@ func (s *Snapshot) matchAny(ruleID string, matchType api.ExclusionMatchType, val
 
 // ResolveRuleMode implements api.RuleModeResolver: it resolves the winning setting for (ruleID, hostID) ONCE and returns both the
 // mode and the severity override, so the engine never observes a mode from one snapshot and a severity from another.
-func (s *Snapshot) ResolveRuleMode(ruleID, hostID string) (api.DetectionRuleMode, string) {
+//
+// A setting always wins over ruleDefault, and that ordering is the point of the parameter rather than an implementation detail: an
+// operator who promotes a rule must not be overridden by the rule's own opinion of how it should run.
+//
+// ruleDefault is also what an UNINTERPRETABLE stored mode falls back to, where this used to fall back to alerting. A stored value
+// this build does not recognise is not an instruction to alert; it is not an instruction at all. Falling back to alert would take a
+// rule whose author declared monitor and promote it on the strength of a value we could not read, which is the one outcome the
+// declared default exists to prevent. The severity override is still honoured, because it is legible even when the mode is not.
+func (s *Snapshot) ResolveRuleMode(ruleID, hostID string, ruleDefault api.DetectionRuleMode) (api.DetectionRuleMode, string) {
 	w, ok := s.winning(ruleID, hostID)
 	if !ok {
-		return api.DetectionRuleModeAlert, ""
+		return ruleDefault, ""
 	}
 	mode := w.mode
 	if !api.IsValidDetectionRuleMode(mode) {
-		mode = api.DetectionRuleModeAlert
+		mode = ruleDefault
 	}
 	return mode, w.severity
 }
 
-// Mode reports the resolved mode for (ruleID, hostID). Retained for direct snapshot unit tests; the engine path goes through
-// ResolveRuleMode.
+// Mode reports the resolved mode for (ruleID, hostID) against a rule that declares no default. Retained for direct snapshot unit
+// tests; the engine path goes through ResolveRuleMode with the rule's own default.
 func (s *Snapshot) Mode(ruleID, hostID string) api.DetectionRuleMode {
-	mode, _ := s.ResolveRuleMode(ruleID, hostID)
+	mode, _ := s.ResolveRuleMode(ruleID, hostID, api.DetectionRuleModeAlert)
 	return mode
 }
 
 // SeverityOverride reports the resolved severity override for (ruleID, hostID), or "" when none applies. Retained for direct
 // snapshot unit tests.
 func (s *Snapshot) SeverityOverride(ruleID, hostID string) string {
-	_, severity := s.ResolveRuleMode(ruleID, hostID)
+	_, severity := s.ResolveRuleMode(ruleID, hostID, api.DetectionRuleModeAlert)
 	return severity
 }
 

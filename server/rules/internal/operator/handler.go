@@ -78,6 +78,12 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		// Platforms lists the operating systems the rule applies to (ADR-0018). Always a JSON array (never null) so the UI can iterate
 		// without a nil guard. Additive field; existing consumers ignore it.
 		Platforms []api.Platform `json:"platforms"`
+		// DefaultMode is the mode the rule runs in when no setting applies to it (issue #764), always one of alert, monitor or
+		// disabled rather than sometimes empty. It is here because the rule-settings surface lists only settings an OPERATOR
+		// created, so a rule left at its own default appears nowhere on it: without this, a detection that does not alert is
+		// indistinguishable from one that does. This is the rule's default, NOT a resolved per-host mode, which depends on a host.
+		// Additive field; existing consumers ignore it.
+		DefaultMode api.DetectionRuleMode `json:"default_mode"`
 	}
 	rules := h.svc.List()
 	out := make([]ruleResponse, 0, len(rules))
@@ -96,6 +102,7 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 			Doc:                          rm.Doc,
 			SupportedExclusionMatchTypes: matchTypes,
 			Platforms:                    platforms,
+			DefaultMode:                  rm.DefaultMode,
 		})
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})

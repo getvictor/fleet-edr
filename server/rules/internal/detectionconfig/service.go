@@ -263,6 +263,6 @@ func (s *Service) Excluded(ruleID string, matchType api.ExclusionMatchType, valu
 
 // ResolveRuleMode implements api.RuleModeResolver against the current snapshot. The single snap.Load() guarantees the engine gets a
 // consistent (mode, severity) pair even if a reload swaps the snapshot concurrently.
-func (s *Service) ResolveRuleMode(ruleID, hostID string) (api.DetectionRuleMode, string) {
-	return s.snap.Load().ResolveRuleMode(ruleID, hostID)
+func (s *Service) ResolveRuleMode(ruleID, hostID string, ruleDefault api.DetectionRuleMode) (api.DetectionRuleMode, string) {
+	return s.snap.Load().ResolveRuleMode(ruleID, hostID, ruleDefault)
 }

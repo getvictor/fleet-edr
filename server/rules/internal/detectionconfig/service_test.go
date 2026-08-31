@@ -159,7 +159,7 @@ func TestService_UpsertRuleSetting_ResolvesAndAudits(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mode, _ := svc.ResolveRuleMode("suspicious_exec", "host-a")
+	mode, _ := svc.ResolveRuleMode("suspicious_exec", "host-a", api.DetectionRuleModeAlert)
 	assert.Equal(t, api.DetectionRuleModeDisabled, mode)
 
 	settings, err := svc.ListRuleSettings(ctx)
@@ -185,7 +185,7 @@ func TestService_UpsertRuleSetting_ReEnablePreviouslyDisabledRule(t *testing.T) 
 		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeDisabled,
 	})
 	require.NoError(t, err)
-	mode, _ := svc.ResolveRuleMode("suspicious_exec", "host-a")
+	mode, _ := svc.ResolveRuleMode("suspicious_exec", "host-a", api.DetectionRuleModeAlert)
 	require.Equal(t, api.DetectionRuleModeDisabled, mode, "rule starts disabled")
 
 	// Re-enable the same rule on the same Service instance: no restart, no new Service.
@@ -193,7 +193,7 @@ func TestService_UpsertRuleSetting_ReEnablePreviouslyDisabledRule(t *testing.T) 
 		RuleID: "suspicious_exec", Mode: api.DetectionRuleModeAlert,
 	})
 	require.NoError(t, err)
-	mode, _ = svc.ResolveRuleMode("suspicious_exec", "host-a")
+	mode, _ = svc.ResolveRuleMode("suspicious_exec", "host-a", api.DetectionRuleModeAlert)
 	assert.Equal(t, api.DetectionRuleModeAlert, mode, "re-enable takes effect without a restart")
 }
 

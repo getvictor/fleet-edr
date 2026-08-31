@@ -205,12 +205,50 @@ type ExclusionResolver interface {
 	Excluded(ruleID string, matchType ExclusionMatchType, value, hostID string) bool
 }
 
+// ModeDefaulter is an OPTIONAL interface a registered rule implements to declare the mode it operates in when no configuration
+// applies to it. A rule that does not implement it operates in alert mode, which is what every rule did before this existed.
+//
+// It exists because "which mode does this rule start in" is a property of the RULE, not of an operator's configuration. The
+// alternative was to seed a row per rule into detection_rule_settings, which puts policy in data: every fresh install and every
+// test database would have to reproduce it, a rule added later would need another migration, and an operator deleting the row
+// would silently promote the rule to alerting. Declaring it in the rule keeps the default where the rule is and leaves
+// detection_rule_settings meaning what it says, which is "an operator changed this".
+//
+// The motivating case is issue #764: sixty-six upstream Sigma rules this project did not write, which must not alert until an
+// operator has seen what they do. Sixty-six unfamiliar rules going straight to alert is how a catalog loses trust in a week.
+//
+// Optional and absent from Rule for the same reason NonDetection and AlgorithmNamer are: most rules have no opinion, and requiring
+// one would make every future rule declare something the engine would read as the default anyway.
+//
+// The -er suffix is deliberate, for the same reason AlgorithmNamer carries it: an interface named identically to its own method
+// trips a lint.
+type ModeDefaulter interface {
+	DefaultMode() DetectionRuleMode
+}
+
+// DefaultModeOf returns r's declared default mode, or DetectionRuleModeAlert when the rule declares none.
+//
+// It does NOT validate the declaration. A rule declaring something that is not a mode is an author error, caught by the catalog
+// guard test that asserts every registered rule's default is valid, and coercing it here would hide that in exchange for nothing:
+// the guard is what keeps it out of a release.
+func DefaultModeOf(r Rule) DetectionRuleMode {
+	defaulter, ok := r.(ModeDefaulter)
+	if !ok {
+		return DetectionRuleModeAlert
+	}
+	return defaulter.DefaultMode()
+}
+
 // RuleModeResolver is the narrow read surface the engine consults to route a finding by the resolved per-host mode and apply a
 // severity override. A nil resolver behaves as "every rule alerts, no override".
 type RuleModeResolver interface {
 	// ResolveRuleMode returns the resolved mode and severity override for (ruleID, hostID) in a single call, most-specific-wins (a
 	// host-group setting overrides global). Returning both from one resolution guarantees the engine observes a consistent
-	// (mode, severity) pair even if a config reload races the call. Mode defaults to DetectionRuleModeAlert and severity to "" when
-	// no setting applies.
-	ResolveRuleMode(ruleID, hostID string) (mode DetectionRuleMode, severityOverride string)
+	// (mode, severity) pair even if a config reload races the call.
+	//
+	// ruleDefault is the mode to apply when no setting applies, which the caller takes from the rule itself (DefaultModeOf).
+	// Passing it in rather than returning "no setting applies" keeps the fallback in one place: a caller cannot forget to apply it,
+	// and the notion of an unconfigured rule never leaves this interface. Severity is "" whenever the default is used, since a
+	// severity override is something only a setting can carry.
+	ResolveRuleMode(ruleID, hostID string, ruleDefault DetectionRuleMode) (mode DetectionRuleMode, severityOverride string)
 }

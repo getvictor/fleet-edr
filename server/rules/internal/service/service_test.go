@@ -108,4 +108,26 @@ func TestList_CarriesFullMetadata(t *testing.T) {
 	assert.Equal(t, []string{"T1059"}, got[0].Techniques)
 	assert.Equal(t, "r", got[0].Doc.Title)
 	assert.Equal(t, []api.Platform{api.PlatformDarwin}, got[0].Platforms)
+	assert.Equal(t, api.DetectionRuleModeAlert, got[0].DefaultMode,
+		"a rule declaring no default mirrors alert, never the empty string, so a consumer never has to guess")
 }
+
+// spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-declared-default-is-listed-on-the-rule-catalog
+//
+// TestList_MirrorsADeclaredDefaultMode pins that a rule's declared default reaches the operator-facing catalog.
+//
+// Without it the declaration is invisible: the rule-settings surface lists only settings an operator created, so a rule left at its
+// own monitor default appears on no surface at all and reads as alerting. That is the difference between a rule an operator has
+// chosen to silence and one that was never going to fire, and an operator has to be able to tell them apart.
+func TestList_MirrorsADeclaredDefaultMode(t *testing.T) {
+	t.Parallel()
+
+	got := New([]api.Rule{monitorStubRule{stubRule{id: "imported"}}}, nil).List()
+	require.Len(t, got, 1)
+	assert.Equal(t, api.DetectionRuleModeMonitor, got[0].DefaultMode)
+}
+
+// monitorStubRule is a stubRule that declares monitor, standing in for an imported rule.
+type monitorStubRule struct{ stubRule }
+
+func (monitorStubRule) DefaultMode() api.DetectionRuleMode { return api.DetectionRuleModeMonitor }

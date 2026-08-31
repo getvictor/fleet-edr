@@ -210,6 +210,11 @@ type RuleMetadata struct {
 	// Algorithm mirrors the rule's AlgorithmName() when it declares one, and is empty otherwise. Names the evaluator that decides
 	// the rule, which is what makes a Go-implemented rule inspectable without reading the source. Consumed by the rule-file export.
 	Algorithm string
+	// DefaultMode mirrors the rule's DefaultMode() when it declares one (api.ModeDefaulter) and is DetectionRuleModeAlert otherwise,
+	// so it is always a mode rather than sometimes empty. Surfaced on GET /api/rules because a detection that does not alert has to
+	// be distinguishable from one that does without reading the source: the rule-settings surface lists only settings an operator
+	// created, so a rule left at its own default appears nowhere on it.
+	DefaultMode DetectionRuleMode
 }
 
 // Documentation is the structured per-rule descriptor consumed by the

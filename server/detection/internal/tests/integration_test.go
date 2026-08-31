@@ -932,7 +932,7 @@ type fakeMode struct {
 	resolve func(ruleID, hostID string) (rulesapi.DetectionRuleMode, string)
 }
 
-func (f fakeMode) ResolveRuleMode(ruleID, hostID string) (rulesapi.DetectionRuleMode, string) {
+func (f fakeMode) ResolveRuleMode(ruleID, hostID string, _ rulesapi.DetectionRuleMode) (rulesapi.DetectionRuleMode, string) {
 	return f.resolve(ruleID, hostID)
 }
 
