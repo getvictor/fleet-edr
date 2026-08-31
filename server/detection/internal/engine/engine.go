@@ -332,6 +332,11 @@ func (e *Engine) evaluateRule(
 	// the vendored corpus landed in monitor mode (issue #764); now most findings are suppressed, and counting what the rule
 	// returned would have every dashboard grouping by rule_id report alerts that were never raised. suppressed_count carries the
 	// other half, so the span still says how much the rule found rather than losing that when the two stopped being equal.
+	// NOTE ON COVERAGE: the monitor and disabled arms of this are asserted by unit tests, which reach them without a store. The
+	// deduplicated-alert arm is not: persistFinding needs a real store, and asserting the span from the integration package would
+	// mean installing a global tracer provider from tests that run in parallel, which is the race the per-Engine tracer exists to
+	// avoid. It is three lines returning the same `created` flag that already gates the alert log and edr.alerts.created, so it is
+	// correct by construction rather than by test, and that is worth knowing rather than assuming.
 	var alerted, suppressed int
 	for _, f := range findings {
 		routed, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques)
@@ -405,7 +410,7 @@ func (e *Engine) routeFinding(
 	case rulesapi.DetectionRuleModeAlert:
 		// Fall through to the severity-override + persist path below.
 	}
-	return true, e.persistFinding(ctx, f, techniques)
+	return e.persistFinding(ctx, f, techniques)
 }
 
 // persistFinding inserts a single finding as an alert, stamping it
@@ -417,7 +422,9 @@ func (e *Engine) routeFinding(
 // Finding.Source defaults to AlertSourceDetection when blank so
 // catalog rules don't need to set it; the application-control block
 // rule overrides it explicitly.
-func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string) error {
+// It reports whether an alert was newly CREATED, which is not the same as whether persistence succeeded: an alert deduplicated on
+// insert is a success that raised nothing, and a span or counter that treats the two alike reports alerts nobody received.
+func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string) (bool, error) {
 	if f.Techniques == nil {
 		f.Techniques = techniques
 	}
@@ -437,16 +444,16 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 		Techniques:  f.Techniques,
 	}, f.EventIDs)
 	if err != nil {
-		return fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
+		return false, fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
 	}
 	if !created {
 		// Dedup-skip path: same rule + process + host. Evaluator noise.
-		return nil
+		return false, nil
 	}
 	e.logger.InfoContext(ctx, "detection alert created",
 		"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
 	if e.metrics != nil {
 		e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
 	}
-	return nil
+	return true, nil
 }

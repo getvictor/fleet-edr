@@ -86,7 +86,11 @@ export function AttackCoverage() {
     () => buildCoverageGroups(layer),
     [layer],
   );
-  const totalCovered = layer?.techniques.length ?? 0;
+  // Split by whether anything covering the technique actually alerts. The server scores a technique below 1 when every rule
+  // covering it raises nothing as shipped (issue #764), and most of the catalog is now in that state, so a single "techniques
+  // covered" figure would tell a reader the product raises alerts for sixty-odd techniques when it raises them for thirteen.
+  const alerting = layer?.techniques.filter((t) => t.score >= 1).length ?? 0;
+  const notAlerting = (layer?.techniques.length ?? 0) - alerting;
 
   return (
     <>
@@ -110,7 +114,10 @@ export function AttackCoverage() {
       {!loading && layer && (
         <>
           <SummaryStrip>
-            <StatCard accent="green" value={totalCovered} label="techniques covered" />
+            <StatCard accent="green" value={alerting} label="techniques alerting" />
+            {notAlerting > 0 && (
+              <StatCard accent="neutral" value={notAlerting} label="techniques monitored, no alert" />
+            )}
             <StatCard accent="green" value={distinctRules.size} label="detection rules" />
             <StatCard accent="green" value={groups.length} label="tactics with coverage" />
           </SummaryStrip>
