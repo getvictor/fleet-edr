@@ -101,7 +101,7 @@ func TestCompile_Rejects(t *testing.T) {
 	}{
 		{"no condition", "selection:\n  Image: '/bin/sh'\n", "no condition"},
 		{"no searches", "condition: selection\n", "defines no searches"},
-		{"condition as a list", "selection:\n  Image: '/bin/sh'\ncondition:\n  - selection\n", "must be a single string"},
+		{"condition as a list", "selection:\n  Image: '/bin/sh'\ncondition:\n  - selection\n", "condition is a list"},
 		{"search is a scalar", "selection: nope\ncondition: selection\n", "must be a field map"},
 		{"keyword list search", "selection:\n  - 'some keyword'\ncondition: selection\n", "is a keyword search"},
 		{"empty field map", "selection: {}\ncondition: selection\n", "empty field map"},
@@ -256,6 +256,19 @@ func TestCompile_ErrUnsupportedSeparatesGapsFromDefects(t *testing.T) {
 			name:        "nesting past the depth bound is a limit we impose on a valid rule",
 			detection:   map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": strings.Repeat("(", maxConditionDepth+1) + "sel" + strings.Repeat(")", maxConditionDepth+1)},
 			unsupported: true,
+		},
+		{
+			name:        "a list condition is Sigma's disjunction, which we have not built",
+			detection:   map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": []any{"sel"}},
+			unsupported: true,
+		},
+		{
+			name:      "a condition of neither Sigma form is a broken rule",
+			detection: map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": 7},
+		},
+		{
+			name:      "a list mixing field maps with bare strings is neither form, so it is a broken rule",
+			detection: map[string]any{"sel": []any{"keyword", map[string]any{"Image": "/bin/sh"}}, "condition": "sel"},
 		},
 		{
 			name:      "a condition naming no search is a broken rule",

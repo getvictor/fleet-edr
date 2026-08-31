@@ -624,7 +624,8 @@ func TestParseImported_MalformedDetectionIsAHardError(t *testing.T) {
 	}{
 		{"condition names a search that does not exist", "detection: {sel: {Image: /bin/sh}, condition: nope}"},
 		{"no condition at all", "detection: {sel: {Image: /bin/sh}}"},
-		{"condition is not a string", "detection: {sel: {Image: /bin/sh}, condition: [sel]}"},
+		{"condition of neither Sigma form", "detection: {sel: {Image: /bin/sh}, condition: 7}"},
+		{"a list mixing field maps with bare strings", "detection: {sel: ['kw', {Image: /bin/sh}], condition: sel}"},
 		{"no searches", "detection: {condition: sel}"},
 		{"search with an empty field map", "detection: {sel: {}, condition: sel}"},
 		{"unclosed parenthesis", "detection: {sel: {Image: /bin/sh}, condition: '(sel'}"},
@@ -683,4 +684,56 @@ func TestImportedCorpus_MatchesTheVendoredManifest(t *testing.T) {
 
 	// Compared as whole maps so one assertion reports every edit, addition and deletion at once rather than stopping at the first.
 	assert.Equal(t, want, got, "a vendored rule file differs from the manifest; regenerate it only as part of a deliberate re-sync")
+}
+
+// spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-structurally-invalid-detection-block-fails-the-import
+// TestParseImported_CorruptionOutranksInapplicability pins the ORDER the two verdicts are decided in.
+//
+// A file can be refusable for more than one cause at once, and the causes are not peers. Whether the detection block is intact is a
+// fact about the file, so a corrupted one this repository vendored must fail the import whether or not this sensor would ever have
+// run the rule. Whether we collect its telemetry is a fact about this sensor, and only decides which REJECTION reason to report.
+//
+// Deciding applicability first hid corruption: a broken rule in a category we do not map was reported as an ordinary rejection and
+// the import went green, which is the failure checking the corpus in is supposed to make impossible.
+func TestParseImported_CorruptionOutranksInapplicability(t *testing.T) {
+	t.Parallel()
+
+	const broken = "detection: {sel: {Image: /bin/sh}, condition: nope}\n"
+
+	t.Run("a broken detection block fails even when the category maps to nothing we collect", func(t *testing.T) {
+		t.Parallel()
+
+		body := []byte("title: T\nlevel: high\nlogsource: {category: registry_set, product: windows}\n" + broken)
+		_, err := parseImported("windows.yml", body)
+		require.Error(t, err)
+
+		_, isRejection := errors.AsType[unmappableError](err)
+		assert.False(t, isRejection, "corruption is a fact about the file, so it must not be masked by inapplicability")
+	})
+
+	t.Run("a broken detection block fails even when the category is inert", func(t *testing.T) {
+		t.Parallel()
+
+		body := []byte("title: T\nlevel: high\nlogsource: {category: file_event, product: macos}\n" + broken)
+		_, err := parseImported("inert.yml", body)
+		require.Error(t, err)
+
+		_, isRejection := errors.AsType[unmappableError](err)
+		assert.False(t, isRejection, "corruption is a fact about the file, so it must not be masked by inert telemetry")
+	})
+
+	t.Run("an unsupported feature yields to the more useful applicability reason", func(t *testing.T) {
+		t.Parallel()
+
+		// Refusable twice over: a keyword search we have not built, in a category the agent does not collect. The reason a
+		// re-sync can act on is the telemetry one, so that is the one reported.
+		body := []byte("title: T\nlevel: high\nlogsource: {category: registry_set, product: windows}\n" +
+			"detection:\n  keywords:\n    - 'some phrase'\n  condition: keywords\n")
+		_, err := parseImported("both.yml", body)
+		require.Error(t, err)
+
+		_, isRejection := errors.AsType[unmappableError](err)
+		require.True(t, isRejection)
+		assert.Contains(t, err.Error(), "maps to no event type")
+	})
 }

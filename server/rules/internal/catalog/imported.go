@@ -181,6 +181,32 @@ func unmappable(format string, args ...any) error {
 	return unmappableError{reason: fmt.Sprintf(format, args...)}
 }
 
+// compileImportedDetection compiles one file's detection block, classifying every way it can fail.
+//
+// It returns an unmappableError when the rule is valid Sigma using a feature this evaluator has not built, which is a rule this
+// sensor cannot RUN and joins the rejections so the rest of the corpus still loads. Every other failure is a defect in a file this
+// repository vendored, and the whole point of checking the corpus in is that such a file fails the import loudly rather than
+// disappearing into a rejection list nobody reads.
+func compileImportedDetection(name string, detection yaml.Node) (*sigma.Rule, error) {
+	if detection.IsZero() {
+		return nil, fmt.Errorf("%s: no detection block, so nothing decides whether the rule fires", name)
+	}
+	var block map[string]any
+	if err := detection.Decode(&block); err != nil {
+		return nil, fmt.Errorf("%s: decode detection: %w", name, err)
+	}
+	compiled, err := sigma.Compile(block)
+	switch {
+	case err == nil:
+		return compiled, nil
+	case errors.Is(err, sigma.ErrUnsupported):
+		// The compiler's own wording already leads with "unsupported Sigma feature", so restating it here would double it.
+		return nil, unmappable("%s", err)
+	default:
+		return nil, fmt.Errorf("%s: compile detection: %w", name, err)
+	}
+}
+
 // parseImported turns one upstream file into a rule, or explains exactly why it cannot.
 func parseImported(name string, raw []byte) (*importedRule, error) {
 	var f sigmaFile
@@ -189,6 +215,16 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 	}
 	if f.Title == "" {
 		return nil, fmt.Errorf("%s: no title, so the rule has no name to show an operator", name)
+	}
+
+	// Compiled BEFORE the applicability checks below, and the order is the point. Whether the detection block is intact is a fact
+	// about the FILE, so a corrupted one we vendored must fail the import whether or not this sensor would ever have run the rule.
+	// Applicability is a fact about this SENSOR, so it only decides which rejection reason to report when the rule is refusable
+	// for more than one cause, and it reports the more useful one: "the agent does not collect this" tells a re-sync what to
+	// build, where "this evaluator does not implement windash" would not.
+	compiled, compileErr := compileImportedDetection(name, f.Detection)
+	if _, refusable := errors.AsType[unmappableError](compileErr); compileErr != nil && !refusable {
+		return nil, compileErr
 	}
 
 	eventType, ok := sigmabind.EventTypeForCategory(f.LogSource.Category)
@@ -209,27 +245,10 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
-	if f.Detection.IsZero() {
-		return nil, fmt.Errorf("%s: no detection block, so nothing decides whether the rule fires", name)
-	}
-	var block map[string]any
-	if err := f.Detection.Decode(&block); err != nil {
-		return nil, fmt.Errorf("%s: decode detection: %w", name, err)
-	}
-	compiled, err := sigma.Compile(block)
-	if err != nil {
-		// A rejection, not a hard error. Valid Sigma can use a feature this evaluator does not implement (`windash`, a keyword
-		// search, `timeframe`), and upstream is entitled to ship it: that is a rule this sensor cannot run, exactly like one
-		// reading a field it does not collect. Failing the import would abandon the other sixty-odd rules over it.
-		// Two different failures reach here and they are not the same event. Valid Sigma this evaluator does not implement is a
-		// rule we cannot RUN, so it joins the rejections and the rest of the corpus still loads. A malformed detection block is a
-		// defect in a file we vendored, and the whole point of checking the corpus in is that such a file fails loudly rather
-		// than disappearing into a rejection list nobody reads.
-		if errors.Is(err, sigma.ErrUnsupported) {
-			// The compiler's own wording already leads with "unsupported Sigma feature", so restating it here would double it.
-			return nil, unmappable("%s", err)
-		}
-		return nil, fmt.Errorf("%s: compile detection: %w", name, err)
+	// Held until here: an unsupported feature is a rejection, and the applicability checks above report a better reason when they
+	// also apply. Returned before Validate, which has no compiled rule to look at.
+	if compileErr != nil {
+		return nil, compileErr
 	}
 	if err := sigmabind.Validate(compiled, eventType); err != nil {
 		return nil, unmappable("%s", err)
