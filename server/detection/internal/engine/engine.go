@@ -57,7 +57,11 @@ func (e *Engine) SetMetrics(m api.MetricsRecorder) { e.metrics = m }
 
 // SetModeResolver installs the per-host rule-mode resolver (issue #459). It routes each finding by the (rule, host) resolved mode:
 // disabled drops it, monitor records an observability signal without persisting an alert, alert persists (applying a severity
-// override). Nil (the default) means every rule alerts with no override, which is the pre-config behavior.
+// override).
+//
+// Nil (the default) applies each rule's own declared default with no override (issue #764), NOT alert unconditionally. A rule that
+// declares nothing still alerts, so this is the pre-config behavior for every hand-written rule; a rule that declares monitor must
+// not start alerting merely because no configuration surface is wired.
 func (e *Engine) SetModeResolver(m rulesapi.RuleModeResolver) { e.modeResolver = m }
 
 // Register adds a detection rule to the engine.

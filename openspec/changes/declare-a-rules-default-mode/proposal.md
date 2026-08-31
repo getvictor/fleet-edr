@@ -2,9 +2,9 @@
 
 ## Why
 
-Issue #764 imports sixty-six upstream Sigma rules and requires that none of them alert until an operator promotes it. Sixty-six unfamiliar rules going straight to alert is how a detection catalog loses operator trust in a week, and once trust is gone the alerts get muted wholesale.
+Issue #764 imports the upstream SigmaHQ macOS corpus and requires that none of its rules alert until an operator promotes one. Sixty-six of the sixty-nine vendored rules are runnable, and that many unfamiliar rules going straight to alert is how a detection catalog loses operator trust in a week; once trust is gone the alerts get muted wholesale. (#764 itself says fifty-five, written before the two enrichments it deferred shipped in #771 and #772. Fifty-five plus those thirteen is sixty-eight field-bindable, less two whose category the agent collects too narrowly for them to fire, which is the sixty-six the corpus test asserts.)
 
-The mode column already exists in `detection_rule_settings`, but it records what an OPERATOR set. There is no notion of a rule's own default: `Snapshot.ResolveRuleMode` returns `alert` whenever no setting matches. Defaulting sixty-six rules to monitor by seeding a row each would put policy in data. Every fresh install and every test database would have to reproduce it, a rule added later would need another migration, and an operator deleting a row would silently promote the rule to alerting.
+The mode column already exists in `detection_rule_settings`, but it records what an OPERATOR set. There is no notion of a rule's own default: `Snapshot.ResolveRuleMode` returns `alert` whenever no setting matches. Defaulting that many rules to monitor by seeding a row each would put policy in data. Every fresh install and every test database would have to reproduce it, a rule added later would need another migration, and an operator deleting a row would silently promote the rule to alerting.
 
 ## What changes
 

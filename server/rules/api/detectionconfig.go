@@ -214,8 +214,11 @@ type ExclusionResolver interface {
 // would silently promote the rule to alerting. Declaring it in the rule keeps the default where the rule is and leaves
 // detection_rule_settings meaning what it says, which is "an operator changed this".
 //
-// The motivating case is issue #764: sixty-six upstream Sigma rules this project did not write, which must not alert until an
-// operator has seen what they do. Sixty-six unfamiliar rules going straight to alert is how a catalog loses trust in a week.
+// The motivating case is issue #764, which imports the upstream SigmaHQ macOS rules this project did not write. Sixty-six of the
+// sixty-nine are runnable and must not alert until an operator has seen what they do; that many unfamiliar rules going straight to
+// alert is how a catalog loses trust in a week. (#764 says fifty-five, written before the two enrichments it deferred shipped in
+// #771 and #772; fifty-five plus those thirteen is sixty-eight field-bindable, less two whose category the agent collects too
+// narrowly to ever fire. The corpus test in #763 asserts the sixty-six.)
 //
 // Optional and absent from Rule for the same reason NonDetection and AlgorithmNamer are: most rules have no opinion, and requiring
 // one would make every future rule declare something the engine would read as the default anyway.
@@ -240,7 +243,8 @@ func DefaultModeOf(r Rule) DetectionRuleMode {
 }
 
 // RuleModeResolver is the narrow read surface the engine consults to route a finding by the resolved per-host mode and apply a
-// severity override. A nil resolver behaves as "every rule alerts, no override".
+// severity override. A nil resolver leaves every rule at its own declared default (see ModeDefaulter) with no override, which is
+// "every rule alerts" for a rule that declares nothing and therefore was the whole story before defaults existed.
 type RuleModeResolver interface {
 	// ResolveRuleMode returns the resolved mode and severity override for (ruleID, hostID) in a single call, most-specific-wins (a
 	// host-group setting overrides global). Returning both from one resolution guarantees the engine observes a consistent

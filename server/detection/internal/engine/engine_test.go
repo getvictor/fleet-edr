@@ -775,20 +775,16 @@ func (r *stubRuleWithFindings) Evaluate(_ context.Context, events []api.Event, _
 // discardLogger is a logger whose output nothing reads, for tests asserting on state rather than on log lines.
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// modeDeclaringStub is a stubRule that also declares a default mode, standing in for an imported rule.
+// modeDeclaringStub is stubRuleWithFindings plus a declared default mode, standing in for an imported rule.
+//
+// It embeds rather than reimplements Evaluate: the two differ only in the declaration, and a second copy of the routing stub would
+// have to be kept in step with the first by hand.
 type modeDeclaringStub struct {
-	stubRule
-	mode     rulesapi.DetectionRuleMode
-	findings []api.Finding
+	stubRuleWithFindings
+	mode rulesapi.DetectionRuleMode
 }
 
 func (r *modeDeclaringStub) DefaultMode() rulesapi.DetectionRuleMode { return r.mode }
-
-func (r *modeDeclaringStub) Evaluate(_ context.Context, events []api.Event, _ rulesapi.GraphReader) ([]api.Finding, error) {
-	r.calls++
-	r.received = events
-	return r.findings, nil
-}
 
 // recordingModeResolver records the rule default it was handed and answers with a fixed mode.
 type recordingModeResolver struct {
@@ -816,7 +812,8 @@ func TestEngine_ThreadsEachRulesDeclaredDefaultIntoResolution(t *testing.T) {
 
 	finding := []api.Finding{{HostID: "h1", RuleID: "x", Severity: "high", Title: "t"}}
 	imported := &modeDeclaringStub{
-		stubRule: stubRule{id: "imported"}, mode: rulesapi.DetectionRuleModeMonitor, findings: finding,
+		stubRuleWithFindings: stubRuleWithFindings{stubRule: stubRule{id: "imported"}, findings: finding},
+		mode:                 rulesapi.DetectionRuleModeMonitor,
 	}
 	handWritten := &stubRuleWithFindings{stubRule: stubRule{id: "hand_written"}, findings: finding}
 
@@ -839,8 +836,8 @@ func TestEngine_ThreadsEachRulesDeclaredDefaultIntoResolution(t *testing.T) {
 //
 // TestEngine_HonoursADeclaredDefaultWithNoResolverWired pins the case that would otherwise defeat the whole feature.
 //
-// A deployment or a test with no detection-config service wired resolved every rule to alert. Left that way, sixty-six imported
-// rules would alert on any such deployment, which is precisely what declaring monitor exists to prevent. The store is nil here on
+// A deployment or a test with no detection-config service wired resolved every rule to alert. Left that way, every imported rule
+// would alert on any such deployment, which is precisely what declaring monitor exists to prevent. The store is nil here on
 // purpose: routing to monitor must return before persistence is attempted, so a regression that alerted would fail loudly rather
 // than silently writing.
 func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
@@ -849,9 +846,11 @@ func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
 	var logs bytes.Buffer
 	e := New(nil, slog.New(slog.NewTextHandler(&logs, nil)))
 	e.Register(&modeDeclaringStub{
-		stubRule: stubRule{id: "imported"},
-		mode:     rulesapi.DetectionRuleModeMonitor,
-		findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+		stubRuleWithFindings: stubRuleWithFindings{
+			stubRule: stubRule{id: "imported"},
+			findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+		},
+		mode: rulesapi.DetectionRuleModeMonitor,
 	})
 
 	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
