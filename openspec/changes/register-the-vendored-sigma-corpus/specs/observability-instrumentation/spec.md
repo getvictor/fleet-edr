@@ -39,13 +39,16 @@ Unlike `edr.alerts.created`, `edr.detection.monitor_matches` SHALL NOT be dedupl
 
 ### Requirement: A per-rule span reports the alerts it raised
 
-The per-rule evaluation span SHALL report the number of findings that were raised as alerts, not the number the rule produced. A finding the resolved mode suppresses SHALL NOT be counted as an alert, and the count of suppressed findings SHALL be reported alongside it so the span still says how much the rule found.
+The per-rule evaluation span SHALL report the number of findings that were raised as NEW alerts, not the number the rule produced. A finding the resolved mode suppresses SHALL NOT be counted as an alert, and a finding whose alert deduplicated against one that already existed SHALL NOT be counted as an alert either.
 
-The two were the same number while every rule alerted. They are not once rules ship in a mode that suppresses, and a span that counted produced findings would report alerts that were never raised to every dashboard grouping by rule.
+Those two SHALL be reported as separate counts alongside the alert count, so the span still says how much the rule found and an operator can tell which of the two happened. They are not the same event: a suppressed finding was held back by a configuration the operator chose, and a deduplicated one is the deduplication working as intended on a rule that is alerting normally. Reporting them as one count made a rule in alert mode with a standing condition show a climbing suppressed count with nothing suppressing it, which is a question the operator cannot answer by reading their own settings.
+
+The alert count and the produced-finding count were the same number while every rule alerted. They are not once rules ship in a mode that suppresses, and a span that counted produced findings would report alerts that were never raised to every dashboard grouping by rule.
 
 #### Scenario: A rule whose findings are all suppressed reports no alerts
 
-- **GIVEN** a rule whose resolved mode is monitor and which produces findings for a batch
+- **GIVEN** a rule whose resolved mode is one that raises no alert, whether monitor or disabled, and which produces findings for a batch
 - **WHEN** the batch is evaluated
 - **THEN** the rule's span reports an alert count of zero
 - **AND** reports the number of suppressed findings
+- **AND** reports a deduplicated count of zero, since nothing reached persistence to deduplicate against

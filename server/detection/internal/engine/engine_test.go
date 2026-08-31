@@ -1011,49 +1011,68 @@ func (m *severityRecordingMetrics) MonitorMatched(_ context.Context, _, severity
 // mode, and now most findings are suppressed: counting what the rule returned would have every dashboard grouping by rule_id
 // report alerts that were never raised, which is the same overstatement this PR closes on the coverage export and the reference,
 // arriving through the tracing surface instead.
+//
+// Both non-alerting modes are covered, because they reach the same counter down different arms and only one of them had a test.
+// Disabled is the more dangerous of the two to get wrong: it returns before persistence, so an arm that counted it as an alert
+// would put a number in alert_count with no alert row anywhere to reconcile it against.
 func TestEngine_SpanCountsAlertsRaisedNotFindingsReturned(t *testing.T) {
 	t.Parallel()
 
-	rec := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	for _, tc := range []struct {
+		name string
+		mode rulesapi.DetectionRuleMode
+	}{
+		{"monitor records without alerting", rulesapi.DetectionRuleModeMonitor},
+		{"disabled records nothing at all", rulesapi.DetectionRuleModeDisabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	e := New(nil, discardLogger())
-	e.tracer = tp.Tracer("test")
-	e.Register(&modeDeclaringStub{
-		stubRuleWithFindings: stubRuleWithFindings{
-			stubRule: stubRule{id: "imported"},
-			findings: []api.Finding{
-				{HostID: "h1", RuleID: "imported", Severity: "high", Title: "one"},
-				{HostID: "h1", RuleID: "imported", Severity: "high", Title: "two"},
-			},
-		},
-		mode: rulesapi.DetectionRuleModeMonitor,
-	})
+			rec := tracetest.NewSpanRecorder()
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+			t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+			e := New(nil, discardLogger())
+			e.tracer = tp.Tracer("test")
+			e.Register(&modeDeclaringStub{
+				stubRuleWithFindings: stubRuleWithFindings{
+					stubRule: stubRule{id: "imported"},
+					findings: []api.Finding{
+						{HostID: "h1", RuleID: "imported", Severity: "high", Title: "one"},
+						{HostID: "h1", RuleID: "imported", Severity: "high", Title: "two"},
+					},
+				},
+				mode: tc.mode,
+			})
 
-	var alertCount, suppressedCount int64
-	var found bool
-	for _, span := range rec.Ended() {
-		for _, attr := range span.Attributes() {
-			switch attr.Key {
-			case attribute.Key("rule_id"):
-				found = attr.Value.AsString() == "imported"
-			case attribute.Key("alert_count"):
-				alertCount = attr.Value.AsInt64()
-			case attribute.Key("suppressed_count"):
-				suppressedCount = attr.Value.AsInt64()
+			require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+			var alertCount, suppressedCount, duplicateCount int64
+			var found bool
+			for _, span := range rec.Ended() {
+				for _, attr := range span.Attributes() {
+					switch attr.Key {
+					case attribute.Key("rule_id"):
+						found = attr.Value.AsString() == "imported"
+					case attribute.Key("alert_count"):
+						alertCount = attr.Value.AsInt64()
+					case attribute.Key("suppressed_count"):
+						suppressedCount = attr.Value.AsInt64()
+					case attribute.Key("duplicate_count"):
+						duplicateCount = attr.Value.AsInt64()
+					}
+				}
+				if found {
+					break
+				}
 			}
-		}
-		if found {
-			break
-		}
-	}
 
-	require.True(t, found, "the rule's span was recorded")
-	assert.Equal(t, int64(0), alertCount, "two findings were produced and neither was raised as an alert")
-	assert.Equal(t, int64(2), suppressedCount, "and the span still says how much the rule found")
+			require.True(t, found, "the rule's span was recorded")
+			assert.Equal(t, int64(0), alertCount, "two findings were produced and neither was raised as an alert")
+			assert.Equal(t, int64(2), suppressedCount, "and the span still says how much the rule found")
+			assert.Zero(t, duplicateCount, "the mode held these back; nothing was deduplicated, and conflating the two was the defect")
+		})
+	}
 }
 
 // erroringStub fails evaluation, which is the path that returns before any finding is routed.
@@ -1083,7 +1102,7 @@ func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
 	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}),
 		"a rule error is isolated, not returned")
 
-	var sawAlert, sawSuppressed bool
+	var sawAlert, sawSuppressed, sawDuplicate bool
 	for _, span := range rec.Ended() {
 		for _, attr := range span.Attributes() {
 			switch attr.Key {
@@ -1093,9 +1112,13 @@ func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
 			case attribute.Key("suppressed_count"):
 				sawSuppressed = true
 				assert.Equal(t, int64(0), attr.Value.AsInt64())
+			case attribute.Key("duplicate_count"):
+				sawDuplicate = true
+				assert.Equal(t, int64(0), attr.Value.AsInt64())
 			}
 		}
 	}
 	assert.True(t, sawAlert, "alert_count must be present even when the rule failed, so aggregations do not read it as missing data")
 	assert.True(t, sawSuppressed, "and suppressed_count alongside it")
+	assert.True(t, sawDuplicate, "and duplicate_count, so the attribute set is the same on every path out")
 }

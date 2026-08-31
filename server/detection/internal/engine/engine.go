@@ -19,6 +19,22 @@ import (
 // tracerName is the instrumentation-scope name for the OTel tracer the engine opens per-rule spans on, so downstream dashboards can
 // group detection latency + alert counts by rule_id without parsing log lines. observability-instrumentation spec pins the rule_id +
 // alert_count attribute shape.
+
+// routeOutcome is what happened to one finding once its resolved mode was applied. It exists because "not alerted" was one bucket
+// and covered two unrelated things: a mode holding the finding back, and an alert that already existed. An operator reading a
+// suppressed count wants to know which, since the first is a configuration they chose and the second is the deduplication working.
+//
+// Zero is deliberately not a bucket, so an error return (which carries no outcome) cannot be miscounted as one.
+type routeOutcome int
+
+const (
+	// routeAlerted: a new alert row was written.
+	routeAlerted routeOutcome = iota + 1
+	// routeSuppressed: the resolved mode was monitor or disabled, so no alert was attempted.
+	routeSuppressed
+	// routeDuplicate: the mode was alert and the insert deduplicated against an alert that already existed.
+	routeDuplicate
+)
 const tracerName = "server/detection/engine"
 
 // Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
@@ -305,11 +321,15 @@ func (e *Engine) evaluateRule(
 	// by rule_id need a consistent attribute set, and there are three ways out of this function: a rule error, a persistence
 	// failure partway through the findings, and success. The failure path is the one that motivated moving this: it used to leave
 	// the span reporting 0/0 while findings before it had genuinely been raised or suppressed, so the work already done vanished
-	// from the trace at exactly the moment someone would be reading it. Both counters start at zero, which is the honest answer
+	// from the trace at exactly the moment someone would be reading it. The counters start at zero, which is the honest answer
 	// for a rule that produced nothing.
-	var alerted, suppressed int
+	var alerted, suppressed, duplicates int
 	defer func() {
-		span.SetAttributes(attribute.Int("alert_count", alerted), attribute.Int("suppressed_count", suppressed))
+		span.SetAttributes(
+			attribute.Int("alert_count", alerted),
+			attribute.Int("suppressed_count", suppressed),
+			attribute.Int("duplicate_count", duplicates),
+		)
 	}()
 
 	findings, err := evaluate(ctx, rule, scoped, e.store, scope)
@@ -334,27 +354,35 @@ func (e *Engine) evaluateRule(
 	// and a batch can carry many findings for one rule.
 	ruleDefault := rulesapi.DefaultModeOf(rule)
 
-	// alert_count counts findings that were ROUTED TO AN ALERT, not findings the rule returned. Those were the same number until
+	// alert_count counts findings that were ROUTED TO A NEW ALERT, not findings the rule returned. Those were the same number until
 	// the vendored corpus landed in monitor mode (issue #764); now most findings are suppressed, and counting what the rule
-	// returned would have every dashboard grouping by rule_id report alerts that were never raised. suppressed_count carries the
-	// other half, so the span still says how much the rule found rather than losing that when the two stopped being equal.
+	// returned would have every dashboard grouping by rule_id report alerts that were never raised. The other two carry the rest,
+	// so the three still sum to what the rule found rather than losing that when they stopped being equal.
 	//
-	// NOTE ON COVERAGE: the monitor and disabled arms of this are asserted by unit tests, which reach them without a store. The
-	// deduplicated-alert arm is not: persistFinding needs a real store, and asserting the span from the integration package would
-	// mean installing a global tracer provider from tests that run in parallel, which is the race the per-Engine tracer exists to
-	// avoid. It is three lines returning the same `created` flag that already gates the alert log and edr.alerts.created, so it is
-	// correct by construction rather than by test, and that is worth knowing rather than assuming.
+	// They are three counters rather than two because "not alerted" covered both a mode holding the finding back and an alert that
+	// already existed, and on a rule in alert mode with a standing condition the second happens on every batch. Under two counters
+	// that rule reported a climbing suppressed_count with nothing suppressing it, which is a question an operator cannot answer by
+	// looking at their own configuration.
+	//
+	// NOTE ON COVERAGE: the suppressed arm is asserted by unit tests, which reach it without a store. The duplicate arm is not:
+	// persistFinding needs a real store, and asserting the span from the integration package would mean installing a global tracer
+	// provider from tests that run in parallel, which is the race the per-Engine tracer exists to avoid. It maps the same `created`
+	// flag that already gates the alert log and edr.alerts.created, so it is correct by construction rather than by test, and that
+	// is worth knowing rather than assuming.
 	for _, f := range findings {
-		routed, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques)
+		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques)
 		if err != nil {
 			span.RecordError(err)
 			return err
 		}
-		if routed {
+		switch outcome {
+		case routeAlerted:
 			alerted++
-			continue
+		case routeSuppressed:
+			suppressed++
+		case routeDuplicate:
+			duplicates++
 		}
-		suppressed++
 	}
 	return retryableMiss
 }
@@ -381,11 +409,11 @@ func evaluate(
 // what applies when no mode resolver is wired at all, which matters: a deployment or a test with no detection-config service must
 // not alert on a rule whose author declared monitor, since that is precisely the case the declaration exists to cover. A rule that
 // declares nothing yields alert here, so nothing about an existing rule changes.
-// It reports whether the finding was routed to an alert, so the caller can annotate its span with what was actually raised rather
-// than with what the rule returned.
+// It reports what happened to the finding, so the caller can annotate its span with what was actually raised rather than with what
+// the rule returned.
 func (e *Engine) routeFinding(
 	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, f api.Finding, techniques []string,
-) (bool, error) {
+) (routeOutcome, error) {
 	mode, severityOverride := ruleDefault, ""
 	if e.modeResolver != nil {
 		mode, severityOverride = e.modeResolver.ResolveRuleMode(ruleID, f.HostID, ruleDefault)
@@ -399,7 +427,7 @@ func (e *Engine) routeFinding(
 
 	switch mode {
 	case rulesapi.DetectionRuleModeDisabled:
-		return false, nil
+		return routeSuppressed, nil
 	case rulesapi.DetectionRuleModeMonitor:
 		// Counted, then logged at DEBUG. This was an INFO line per match, which was proportionate when monitor was a state an
 		// operator set deliberately on one noisy rule. Issue #764 made it the default for most of the catalog, and several of
@@ -411,11 +439,18 @@ func (e *Engine) routeFinding(
 		}
 		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
-		return false, nil
+		return routeSuppressed, nil
 	case rulesapi.DetectionRuleModeAlert:
 		// Fall through to the severity-override + persist path below.
 	}
-	return e.persistFinding(ctx, f, techniques)
+	created, err := e.persistFinding(ctx, f, techniques)
+	if err != nil {
+		return 0, err
+	}
+	if !created {
+		return routeDuplicate, nil
+	}
+	return routeAlerted, nil
 }
 
 // persistFinding inserts a single finding as an alert, stamping it
