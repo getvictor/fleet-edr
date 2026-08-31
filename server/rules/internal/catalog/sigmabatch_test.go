@@ -203,3 +203,66 @@ func BenchmarkSigmaEventPerRule(b *testing.B) {
 		}
 	})
 }
+
+// TestSharedDecode_FindingDescriptionsAreUnchanged pins the operator-facing strings across the move to the shared adapter.
+//
+// Four rules used to read the path out of a payload struct of their own. Those structs existed only to re-read what the adapter had
+// already decoded, so they are gone and the descriptions now read the same value from the shared decode. That is meant to be
+// invisible to anyone reading an alert, and two of the four rules had no assertion on their description at all, so "invisible" was
+// a claim rather than a fact. It is a fact here.
+func TestSharedDecode_FindingDescriptionsAreUnchanged(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		rule    api.Rule
+		event   api.Event
+		writer  *api.Process
+		wantSub string
+	}{
+		{
+			name:  "sudoers_tamper names the file that was opened",
+			rule:  &SudoersTamper{},
+			event: openEventFor("/etc/sudoers", 0x601),
+			// TargetFilename is supplied only for a write-mode open, and the detection requires it, so it is present whenever
+			// this rule fires. That is why reading the path back from the field is equivalent to reading the payload.
+			writer:  &api.Process{ID: 42, PID: 7, Path: "/usr/bin/vim"},
+			wantSub: "/etc/sudoers",
+		},
+		{
+			name:    "credential_keychain_dump names the binary that ran",
+			rule:    &CredentialKeychainDump{},
+			event:   keychainDumpEvent(),
+			writer:  &api.Process{ID: 43, PID: 7, Path: "/usr/bin/security"},
+			wantSub: "/usr/bin/security",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gr := &graphCounter{proc: tc.writer}
+			findings, err := tc.rule.Evaluate(t.Context(), []api.Event{tc.event}, gr)
+			require.NoError(t, err)
+			require.Len(t, findings, 1, "the rule must still fire on its own positive fixture")
+			assert.Contains(t, findings[0].Description, tc.wantSub,
+				"the description reads the path from the shared decode and must be byte-identical to what it was")
+		})
+	}
+}
+
+// openEventFor builds a write-mode open of path, which is the shape sudoers_tamper acts on.
+func openEventFor(path string, flags int) api.Event {
+	return api.Event{
+		EventID: "e-open", HostID: "h1", EventType: "open", TimestampNs: 1,
+		Payload: []byte(fmt.Sprintf(`{"pid":7,"path":%q,"flags":%d}`, path, flags)),
+	}
+}
+
+// keychainDumpEvent builds the `security dump-keychain` exec credential_keychain_dump fires on.
+func keychainDumpEvent() api.Event {
+	return api.Event{
+		EventID: "e-exec", HostID: "h1", EventType: "exec", TimestampNs: 1,
+		Payload: []byte(`{"pid":7,"path":"/usr/bin/security","args":["security","dump-keychain","-d"]}`),
+	}
+}
