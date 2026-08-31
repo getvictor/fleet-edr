@@ -14,16 +14,24 @@ const (
 	// navigatorLayerName is the layer's display title in the Navigator UI.
 	navigatorLayerName = "Fleet EDR coverage"
 	// navigatorLayerDescription is the layer's human-readable subtitle.
-	navigatorLayerDescription = "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules."
+	navigatorLayerDescription = "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules. " +
+		"Amber techniques are covered only by rules that raise no alert as shipped, whether because they record " +
+		"without alerting or are off by default."
 	// navigatorDomain pins the layer to the enterprise matrix; combined with the macOS platform filter this renders only the
 	// macOS columns Fleet EDR actually covers.
 	navigatorDomain = "enterprise-attack"
 	// navigatorCoveredScore is the score a technique gets when any rule covers it. Binary coverage (1) rather than a graded heat:
 	// the catalog has no notion of "partial" coverage of a technique today.
-	navigatorCoveredScore = 1
+	navigatorCoveredScore = 1.0
 	// navigatorCoveredColor is the swatch the Navigator paints a covered technique. A mid green that reads as "we have this" on the
 	// matrix without being garish.
 	navigatorCoveredColor = "#31a354"
+	// navigatorNotAlertingScore and navigatorNotAlertingColor mark a technique covered only by rules that do not alert as shipped
+	// (issue #764). A distinct score keeps the two apart when the layer is read as data, and the amber keeps them apart when it is
+	// read as a picture, which is how a coverage heatmap is usually read. Painting these the same green as an alerting rule would
+	// make the product look like it raises something it does not.
+	navigatorNotAlertingScore = 0.5
+	navigatorNotAlertingColor = "#fdae6b"
 	// navigatorPlatformMacOS is the canonical ATT&CK platform string Fleet EDR scopes the layer to. Fleet EDR is a macOS-only
 	// product, so the layer filters the matrix to the macOS columns rather than rendering the full cross-platform enterprise grid.
 	navigatorPlatformMacOS = "macOS"
@@ -42,10 +50,10 @@ const (
 // NavigatorTechnique is one technique entry in a Navigator layer document. Field tags are the layer-4.5 wire shape the upstream
 // Navigator imports verbatim; renaming one is a contract break for both the endpoint and the committed artifact.
 type NavigatorTechnique struct {
-	TechniqueID string `json:"techniqueID"`
-	Score       int    `json:"score"`
-	Color       string `json:"color,omitempty"`
-	Comment     string `json:"comment,omitempty"`
+	TechniqueID string  `json:"techniqueID"`
+	Score       float64 `json:"score"`
+	Color       string  `json:"color,omitempty"`
+	Comment     string  `json:"comment,omitempty"`
 }
 
 // NavigatorFilters carries the layer's platform scoping. Fleet EDR sets Platforms to the single macOS value so the Navigator
@@ -73,11 +81,20 @@ type NavigatorLayer struct {
 // that declares no techniques yields a non-nil empty Techniques slice, so the document serialises `"techniques": []` rather than
 // `null`, which the spec's no-rules contract requires.
 func BuildNavigatorLayer(rules []RuleMetadata) NavigatorLayer {
-	// technique -> rule IDs that cover it.
+	// technique -> rule IDs that cover it, and whether any of those rules alerts by default.
+	//
+	// The distinction is why this document can be shown to someone evaluating the product. A rule whose default mode is monitor
+	// evaluates and records what it would have fired on, but persists no alert until an operator promotes it, so a technique
+	// covered only by such rules is not covered in the sense a reader of a coverage heatmap assumes. Scoring both the same would
+	// inflate the figure with sixty-six rules that, as shipped, raise nothing (issue #764).
 	coverage := make(map[string][]string)
+	alerting := make(map[string]bool)
 	for _, rule := range rules {
 		for _, t := range rule.Techniques {
 			coverage[t] = append(coverage[t], rule.ID)
+			if rule.DefaultMode != DetectionRuleModeMonitor && rule.DefaultMode != DetectionRuleModeDisabled {
+				alerting[t] = true
+			}
 		}
 	}
 
@@ -93,11 +110,19 @@ func BuildNavigatorLayer(rules []RuleMetadata) NavigatorLayer {
 		ruleIDs := coverage[tid]
 		slices.Sort(ruleIDs)
 		ruleIDs = slices.Compact(ruleIDs)
+		score, color, prefix := navigatorCoveredScore, navigatorCoveredColor, "Covered by: "
+		if !alerting[tid] {
+			// Deliberately not "monitor only": a rule can default to disabled as well, and calling that monitor would be wrong
+			// twice over, since a disabled rule records nothing and is not waiting to be promoted. What the two share, and what
+			// this document has to say, is that no rule covering this technique raises an alert as shipped.
+			score, color = navigatorNotAlertingScore, navigatorNotAlertingColor
+			prefix = "No rule covering this raises an alert as shipped. Covered by: "
+		}
 		techniques = append(techniques, NavigatorTechnique{
 			TechniqueID: tid,
-			Score:       navigatorCoveredScore,
-			Color:       navigatorCoveredColor,
-			Comment:     "Covered by: " + strings.Join(ruleIDs, ", "),
+			Score:       score,
+			Color:       color,
+			Comment:     prefix + strings.Join(ruleIDs, ", "),
 		})
 	}
 

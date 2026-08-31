@@ -153,6 +153,21 @@ type AlgorithmNamer interface {
 	AlgorithmName() string
 }
 
+// OriginNamer is an OPTIONAL interface a rule implements to say where it came from. A rule that does not implement it was written
+// for this engine, which is the common case and needs no announcement.
+type OriginNamer interface {
+	Origin() string
+}
+
+// OriginOf returns r's declared origin, or "" for a rule this project authored.
+func OriginOf(r Rule) string {
+	namer, ok := r.(OriginNamer)
+	if !ok {
+		return ""
+	}
+	return namer.Origin()
+}
+
 // AlgorithmNameOf returns r's declared algorithm name, or "" when the rule declares none.
 func AlgorithmNameOf(r Rule) string {
 	namer, ok := r.(AlgorithmNamer)
@@ -210,6 +225,10 @@ type RuleMetadata struct {
 	// Algorithm mirrors the rule's AlgorithmName() when it declares one, and is empty otherwise. Names the evaluator that decides
 	// the rule, which is what makes a Go-implemented rule inspectable without reading the source. Consumed by the rule-file export.
 	Algorithm string
+	// Origin names where the rule came from: empty for one this project authored, and the upstream project plus that rule's own
+	// author for one it vendored. Surfaced so the operator-facing reference can credit third-party rules and so a reader can tell
+	// whose rule they are looking at, which they otherwise cannot: a vendored rule is rendered exactly like an authored one.
+	Origin string
 	// DefaultMode mirrors the rule's DefaultMode() when it declares one (api.ModeDefaulter) and is DetectionRuleModeAlert otherwise,
 	// so it is always a mode rather than sometimes empty. Surfaced on GET /api/rules because a detection that does not alert has to
 	// be distinguishable from one that does without reading the source: the rule-settings surface lists only settings an operator

@@ -18,7 +18,9 @@ const layer: AttackNavigatorLayer = {
   description: "MITRE ATT&CK techniques covered by currently-registered Fleet EDR detection rules.",
   filters: { platforms: ["macOS"] },
   techniques: [
-    // score is 1 (binary coverage) to match the server's Navigator layer builder; the component ignores score, but the fixture
+    // score separates coverage that alerts (1) from coverage that only records (below 1). The component reads it: most of the
+    // catalog now ships in monitor mode, so one combined count would claim the product alerts on techniques it does not.
+    // The original note said the component ignores score, which stopped being true when the corpus landed (issue #764). The fixture
     // should still reflect the real wire value.
     { techniqueID: "T1555.001", score: 1, comment: "Covered by: rule_a, rule_b" },
     { techniqueID: "T1059", score: 1, comment: "Covered by: rule_a" },
@@ -50,9 +52,42 @@ describe("AttackCoverage summary strip", () => {
 
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
-    expect(within(cardFor("techniques covered")).getByText("2")).toBeInTheDocument();
+    expect(within(cardFor("techniques alerting by default")).getByText("2")).toBeInTheDocument();
     // rule_a + rule_b are the two distinct covering rules across both techniques.
     expect(within(cardFor("detection rules")).getByText("2")).toBeInTheDocument();
     expect(within(cardFor("tactics with coverage")).getByText("2")).toBeInTheDocument();
+  });
+
+  // The count that would otherwise overstate the product. The label is mode-neutral on purpose: a sub-1 score means the covering
+  // rules are in monitor OR disabled, the server does not distinguish them in the score, and calling it "monitored" would misstate
+  // a disabled rule, which records nothing at all. A technique the server scored below 1 is covered only by rules that
+  // raise nothing as shipped, and reporting those in one "techniques covered" figure would tell a reader the product alerts on
+  // techniques it merely watches. The monitored card appears only when there is something to report, so a deployment with no
+  // monitor-mode rules sees the strip it saw before.
+  it("counts techniques that only record separately from those that alert", async () => {
+    vi.spyOn(api, "fetchAttackNavigatorLayer").mockResolvedValue({
+      ...layer,
+      techniques: [
+        { techniqueID: "T1555.001", score: 1, comment: "Covered by: rule_a" },
+        { techniqueID: "T1059", score: 0.5, comment: "No rule covering this raises an alert as shipped. Covered by: rule_b" },
+        { techniqueID: "T1105", score: 0.5, comment: "No rule covering this raises an alert as shipped. Covered by: rule_c" },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <AttackCoverage />
+      </MemoryRouter>,
+    );
+    const strip = await waitFor(() => {
+      const el = document.querySelector(".summary-strip");
+      expect(el).toBeInTheDocument();
+      return el as HTMLElement;
+    });
+
+    const cardFor = (label: string) =>
+      within(strip).getByText(label).closest(".stat-card") as HTMLElement;
+    expect(within(cardFor("techniques alerting by default")).getByText("1")).toBeInTheDocument();
+    expect(within(cardFor("techniques not alerting by default")).getByText("2")).toBeInTheDocument();
   });
 });

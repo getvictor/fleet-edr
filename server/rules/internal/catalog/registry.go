@@ -19,7 +19,7 @@ func New(resolver api.ExclusionResolver) []api.Rule {
 	MustLoadPack()
 	MustLoadDetections()
 
-	return []api.Rule{
+	rules := []api.Rule{
 		&SuspiciousExec{Exclusions: resolver},
 		&PersistenceLaunchAgent{Exclusions: resolver},
 		&DyldInsert{},
@@ -33,4 +33,7 @@ func New(resolver api.ExclusionResolver) []api.Rule {
 		&SensorTamper{},
 		&SensorRecoveryFailed{},
 	}
+	// The imported corpus is appended rather than interleaved so registration order still reads as "what this project wrote,
+	// then what it vendored", which is the order the operator-facing catalog and the docs are generated in.
+	return append(rules, MustLoadImported()...)
 }

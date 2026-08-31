@@ -84,6 +84,10 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		// indistinguishable from one that does. This is the rule's default, NOT a resolved per-host mode, which depends on a host.
 		// Additive field; existing consumers ignore it.
 		DefaultMode api.DetectionRuleMode `json:"default_mode"`
+		// Origin credits a vendored rule's upstream project and author, and is omitted for a rule this project wrote. The corpus
+		// is under DRL 1.1 and the rules are served unmodified, so attribution travels with the rule itself; this carries it onto
+		// the surface an operator actually reads. Additive field; existing consumers ignore it.
+		Origin string `json:"origin,omitempty"`
 	}
 	rules := h.svc.List()
 	out := make([]ruleResponse, 0, len(rules))
@@ -103,6 +107,7 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 			SupportedExclusionMatchTypes: matchTypes,
 			Platforms:                    platforms,
 			DefaultMode:                  rm.DefaultMode,
+			Origin:                       rm.Origin,
 		})
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rules": out})
@@ -149,11 +154,18 @@ func (h *Handler) handleExportRule(w http.ResponseWriter, r *http.Request) {
 		if rm.ID != id {
 			continue
 		}
-		body, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
-		if err != nil {
-			h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
-			writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
-			return
+		// A vendored rule exports as the upstream file it was imported from, byte for byte (issue #764). Re-rendering it in this
+		// project's format would hand back a second description of a rule whose authoritative description already exists, and the
+		// upstream bytes are the more useful artifact anyway: they are what an operator can diff against SigmaHQ.
+		body, vendored := catalog.VendoredSource(rm.ID)
+		if !vendored {
+			rendered, err := export.Rule(rm, catalog.AuthoredFor(rm.ID))
+			if err != nil {
+				h.logger.ErrorContext(ctx, "render rule file", "rule", id, "err", err)
+				writeJSON(ctx, h.logger, w, http.StatusInternalServerError, map[string]any{"error": "export_failed"})
+				return
+			}
+			body = rendered
 		}
 		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+id+`.yml"`)

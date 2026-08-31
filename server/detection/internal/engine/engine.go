@@ -19,6 +19,22 @@ import (
 // tracerName is the instrumentation-scope name for the OTel tracer the engine opens per-rule spans on, so downstream dashboards can
 // group detection latency + alert counts by rule_id without parsing log lines. observability-instrumentation spec pins the rule_id +
 // alert_count attribute shape.
+
+// routeOutcome is what happened to one finding once its resolved mode was applied. It exists because "not alerted" was one bucket
+// and covered two unrelated things: a mode holding the finding back, and an alert that already existed. An operator reading a
+// suppressed count wants to know which, since the first is a configuration they chose and the second is the deduplication working.
+//
+// Zero is deliberately not a bucket, so an error return (which carries no outcome) cannot be miscounted as one.
+type routeOutcome int
+
+const (
+	// routeAlerted: a new alert row was written.
+	routeAlerted routeOutcome = iota + 1
+	// routeSuppressed: the resolved mode was monitor or disabled, so no alert was attempted.
+	routeSuppressed
+	// routeDuplicate: the mode was alert and the insert deduplicated against an alert that already existed.
+	routeDuplicate
+)
 const tracerName = "server/detection/engine"
 
 // Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
@@ -128,6 +144,9 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 			// field's contract is that it always holds a mode. Those two document themselves as empty when absent, so omitting
 			// them keeps their contract; omitting this one would break its.
 			DefaultMode: rulesapi.DefaultModeOf(r),
+			// Same reason as DefaultMode above: the field's contract is that an empty origin means this project wrote the rule,
+			// so a builder that never populates it would report every vendored rule as ours.
+			Origin: rulesapi.OriginOf(r),
 		})
 	}
 	return out
@@ -297,10 +316,21 @@ func (e *Engine) evaluateRule(
 	ctx, span := e.tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
 	defer span.End()
-	// Stamp alert_count=0 up front so dashboards grouping by rule_id see a consistent attribute set across success and failure
-	// paths. The success path below overrides this with the actual count; the rule-error early-return below would otherwise
-	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal.
-	span.SetAttributes(attribute.Int("alert_count", 0))
+
+	// Stamped from a defer, so every path reports what it did rather than only the paths that reach the end. Dashboards grouping
+	// by rule_id need a consistent attribute set, and there are three ways out of this function: a rule error, a persistence
+	// failure partway through the findings, and success. The failure path is the one that motivated moving this: it used to leave
+	// the span reporting 0/0 while findings before it had genuinely been raised or suppressed, so the work already done vanished
+	// from the trace at exactly the moment someone would be reading it. The counters start at zero, which is the honest answer
+	// for a rule that produced nothing.
+	var alerted, suppressed, duplicates int
+	defer func() {
+		span.SetAttributes(
+			attribute.Int("alert_count", alerted),
+			attribute.Int("suppressed_count", suppressed),
+			attribute.Int("duplicate_count", duplicates),
+		)
+	}()
 
 	findings, err := evaluate(ctx, rule, scoped, e.store, scope)
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
@@ -319,16 +349,39 @@ func (e *Engine) evaluateRule(
 		// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
 		retryableMiss = fmt.Errorf("rule %s: %w", rule.ID(), err)
 	}
-	span.SetAttributes(attribute.Int("alert_count", len(findings)))
-
 	techniques := rule.Techniques()
 	// Read once per rule per batch rather than per finding: it is a type assertion, but so is the reason declaredTypes is cached,
 	// and a batch can carry many findings for one rule.
 	ruleDefault := rulesapi.DefaultModeOf(rule)
+
+	// alert_count counts findings that were ROUTED TO A NEW ALERT, not findings the rule returned. Those were the same number until
+	// the vendored corpus landed in monitor mode (issue #764); now most findings are suppressed, and counting what the rule
+	// returned would have every dashboard grouping by rule_id report alerts that were never raised. The other two carry the rest,
+	// so the three still sum to what the rule found rather than losing that when they stopped being equal.
+	//
+	// They are three counters rather than two because "not alerted" covered both a mode holding the finding back and an alert that
+	// already existed, and on a rule in alert mode with a standing condition the second happens on every batch. Under two counters
+	// that rule reported a climbing suppressed_count with nothing suppressing it, which is a question an operator cannot answer by
+	// looking at their own configuration.
+	//
+	// NOTE ON COVERAGE: the suppressed arm is asserted by unit tests, which reach it without a store. The duplicate arm is not:
+	// persistFinding needs a real store, and asserting the span from the integration package would mean installing a global tracer
+	// provider from tests that run in parallel, which is the race the per-Engine tracer exists to avoid. It maps the same `created`
+	// flag that already gates the alert log and edr.alerts.created, so it is correct by construction rather than by test, and that
+	// is worth knowing rather than assuming.
 	for _, f := range findings {
-		if err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques); err != nil {
+		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques)
+		if err != nil {
 			span.RecordError(err)
 			return err
+		}
+		switch outcome {
+		case routeAlerted:
+			alerted++
+		case routeSuppressed:
+			suppressed++
+		case routeDuplicate:
+			duplicates++
 		}
 	}
 	return retryableMiss
@@ -356,27 +409,48 @@ func evaluate(
 // what applies when no mode resolver is wired at all, which matters: a deployment or a test with no detection-config service must
 // not alert on a rule whose author declared monitor, since that is precisely the case the declaration exists to cover. A rule that
 // declares nothing yields alert here, so nothing about an existing rule changes.
+// It reports what happened to the finding, so the caller can annotate its span with what was actually raised rather than with what
+// the rule returned.
 func (e *Engine) routeFinding(
 	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, f api.Finding, techniques []string,
-) error {
+) (routeOutcome, error) {
 	mode, severityOverride := ruleDefault, ""
 	if e.modeResolver != nil {
 		mode, severityOverride = e.modeResolver.ResolveRuleMode(ruleID, f.HostID, ruleDefault)
 	}
-	switch mode {
-	case rulesapi.DetectionRuleModeDisabled:
-		return nil
-	case rulesapi.DetectionRuleModeMonitor:
-		e.logger.InfoContext(ctx, "detection rule matched in monitor mode (no alert)",
-			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
-		return nil
-	case rulesapi.DetectionRuleModeAlert:
-		// Fall through to the severity-override + persist path below.
-	}
+	// Resolved before the switch so the monitor counter and a persisted alert label the finding with the SAME severity. A monitor
+	// setting can carry an override, and applying it only on the persist path below left the two series describing one rule at two
+	// severities, which defeats the comparison the counter exists for.
 	if severityOverride != "" {
 		f.Severity = severityOverride
 	}
-	return e.persistFinding(ctx, f, techniques)
+
+	switch mode {
+	case rulesapi.DetectionRuleModeDisabled:
+		return routeSuppressed, nil
+	case rulesapi.DetectionRuleModeMonitor:
+		// Counted, then logged at DEBUG. This was an INFO line per match, which was proportionate when monitor was a state an
+		// operator set deliberately on one noisy rule. Issue #764 made it the default for most of the catalog, and several of
+		// those rules match commonplace commands, so an INFO per match is fleet-scale log amplification: every `id` on every host,
+		// re-emitted whenever a batch is retried, since only alert persistence is deduplicated. The counter is the medium built
+		// for a high-frequency per-rule signal, and it is also the one an operator needs to decide whether to promote the rule.
+		if e.metrics != nil {
+			e.metrics.MonitorMatched(ctx, ruleID, f.Severity)
+		}
+		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
+			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
+		return routeSuppressed, nil
+	case rulesapi.DetectionRuleModeAlert:
+		// Fall through to the severity-override + persist path below.
+	}
+	created, err := e.persistFinding(ctx, f, techniques)
+	if err != nil {
+		return 0, err
+	}
+	if !created {
+		return routeDuplicate, nil
+	}
+	return routeAlerted, nil
 }
 
 // persistFinding inserts a single finding as an alert, stamping it
@@ -388,7 +462,9 @@ func (e *Engine) routeFinding(
 // Finding.Source defaults to AlertSourceDetection when blank so
 // catalog rules don't need to set it; the application-control block
 // rule overrides it explicitly.
-func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string) error {
+// It reports whether an alert was newly CREATED, which is not the same as whether persistence succeeded: an alert deduplicated on
+// insert is a success that raised nothing, and a span or counter that treats the two alike reports alerts nobody received.
+func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string) (bool, error) {
 	if f.Techniques == nil {
 		f.Techniques = techniques
 	}
@@ -408,16 +484,16 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 		Techniques:  f.Techniques,
 	}, f.EventIDs)
 	if err != nil {
-		return fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
+		return false, fmt.Errorf("persist detection alert for rule %s on host %s: %w", f.RuleID, f.HostID, err)
 	}
 	if !created {
 		// Dedup-skip path: same rule + process + host. Evaluator noise.
-		return nil
+		return false, nil
 	}
 	e.logger.InfoContext(ctx, "detection alert created",
 		"rule", f.RuleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
 	if e.metrics != nil {
 		e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
 	}
-	return nil
+	return true, nil
 }

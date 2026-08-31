@@ -236,12 +236,45 @@ func PrunePack(dir string, pack map[string][]byte) ([]string, error) {
 	return export.Prune(dir, pack, PackSharedListsFile)
 }
 
-// ExportPack renders every registered detection as a declarative rule file, keyed by rule id (issue #757).
+// ExportPack renders every registered detection THIS PROJECT AUTHORED as a declarative rule file, keyed by rule id (issue #757).
 //
 // Exposed here rather than from the internal export package because tooling (tools/gen-rule-pack) lives outside server/rules and
-// so cannot import it, and because bootstrap is already the seam through which tooling reaches the catalog. It reads the same
-// CatalogOnly list the docs generator does, which is what guarantees the pack and docs/detection-rules.md describe exactly the
-// same set of rules.
+// so cannot import it, and because bootstrap is already the seam through which tooling reaches the catalog.
+//
+// Vendored rules are skipped (issue #764). Their declarative form already exists as the file this repository vendored, so
+// rendering a second one in this project's format would put two representations of one rule on disk, and the two would say the
+// same thing in different shapes. The per-rule export endpoint serves the vendored bytes for them instead, which is also the more
+// useful artifact: an operator gets the upstream rule they can diff against SigmaHQ.
 func ExportPack() (map[string][]byte, error) {
-	return export.Pack(CatalogOnly().List(), catalog.AuthoredFor)
+	authored := make([]api.RuleMetadata, 0, len(CatalogOnly().List()))
+	for _, rm := range CatalogOnly().List() {
+		if _, vendored := catalog.VendoredSource(rm.ID); vendored {
+			continue
+		}
+		authored = append(authored, rm)
+	}
+	return export.Pack(authored, catalog.AuthoredFor)
+}
+
+// RefusedRule names an upstream rule the vendored corpus carries that this sensor does not run, and why.
+type RefusedRule struct {
+	// File is the vendored file, relative to the corpus root.
+	File string
+	// Reason names the telemetry or the feature that is missing, in the terms a re-sync would act on, rather than blaming the rule.
+	Reason string
+}
+
+// ImportedRejections lists the vendored rules this sensor does not run (issue #764).
+//
+// Exposed here for the same reason ExportPack is: the docs generator lives outside server/rules and cannot reach the catalog
+// directly. It goes in the generated reference rather than a start-up log line because it is a static fact about a corpus this
+// repository vendored, and the person who needs it is asking "why is upstream's rule X not in my catalog" long after any boot log
+// has scrolled away.
+func ImportedRejections() []RefusedRule {
+	rejected := catalog.ImportedRejections()
+	out := make([]RefusedRule, 0, len(rejected))
+	for _, r := range rejected {
+		out = append(out, RefusedRule{File: r.File, Reason: r.Reason})
+	}
+	return out
 }

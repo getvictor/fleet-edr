@@ -22,30 +22,32 @@ import "./DetectionConfig.scss";
 // The canonical display order for exclusion match types, mirroring api.ExclusionMatchType server-side. The editor never offers all of
 // these at once: it filters this list down to the match types the selected rule actually consults (issue #520), sourced from that
 // rule's supported_exclusion_match_types on GET /api/rules.
-const MATCH_TYPES = [
-  "path_glob",
-  "parent_path_glob",
-  "team_id",
-  "signing_id",
-  "cdhash",
-  "sha256",
-  "command_substring",
-  "domain",
-] as const;
+const MATCH_TYPES = ["path_glob", "parent_path_glob", "team_id", "signing_id", "cdhash", "sha256", "command_substring", "domain"] as const;
 
-// The per-rule modes an operator can select: alert (default) and disabled (emit nothing). A legacy `monitor` value may still exist on
-// persisted rows and the engine continues to honor it, but monitor is no longer operator-selectable (it had no review surface). See
-// the detection-tuning-author-and-modes openspec change.
+// The per-rule modes an operator can select: alert and disabled (emit nothing). Monitor is not selectable here, per the
+// detection-tuning-author-and-modes openspec change, on the grounds that it had no review surface.
+//
+// That reasoning is now partly overtaken: issue #764 ships sixty-six imported rules whose DEFAULT is monitor, so monitor is no
+// longer a legacy value on a handful of rows but the mode most of the catalog runs in. modeOptions still renders it for such a row,
+// so those rules display correctly and can be promoted; what an operator cannot yet do is put a promoted rule back. Making monitor
+// first-class belongs with the promotion surface that issue asks for, not here.
 const MODES = ["alert", "disabled"] as const;
 
-// modeOptions returns the modes shown for a row. It prepends the row's current mode when that mode is not operator-selectable (a
-// legacy `monitor` row) so the controlled <select> renders a matching option and the operator can migrate it to alert/disabled.
+// modeOptions returns the modes shown for a row. It prepends the row's current mode when that mode is not operator-selectable, so
+// the controlled <select> renders a matching option and the operator can move it to alert/disabled. That path now carries the
+// imported corpus as well as the legacy rows it was written for.
 function modeOptions(current: string): readonly string[] {
   return (MODES as readonly string[]).includes(current) ? MODES : [current, ...MODES];
 }
 
 // Severity-override choices; the empty value means "no override" (keep the rule's declared severity).
 const SEVERITIES = ["", "low", "medium", "high", "critical"] as const;
+
+// Header tooltip for the Mode column. Held here rather than inline because the sentence has to carry the per-rule default, and
+// as a JSX attribute it was a single 248-character source line.
+const MODE_COLUMN_TOOLTIP =
+  "Alert raises alerts; monitor evaluates and records a signal instead; disabled emits nothing. " +
+  "A rule with no setting here runs in its own default, which is alert for the rules Fleet wrote and monitor for imported ones.";
 
 // SEVERITY_ORDER lists declared severities most- to least-severe; the rule-modes table sorts by it (ascending rank = critical first).
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
@@ -87,7 +89,12 @@ export function DetectionConfig() {
   const [mutating, setMutating] = useState(false);
   // mountedRef gates the state setters in reload() so a response landing after unmount doesn't set state on a dead component.
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   // Add-exclusion form state. formExpires is an optional YYYY-MM-DD from a date input; converted to an RFC3339 end-of-day instant.
   const [formRuleID, setFormRuleID] = useState("");
@@ -104,10 +111,7 @@ export function DetectionConfig() {
 
   // The exclusion picker lists rules alphabetically by their canonical title so an operator can scan to the rule they want. Titles
   // are clean single names (issue #519), so the option shows the title verbatim.
-  const rulesByName = useMemo(
-    () => [...rules].sort((a, b) => a.doc.title.localeCompare(b.doc.title)),
-    [rules],
-  );
+  const rulesByName = useMemo(() => [...rules].sort((a, b) => a.doc.title.localeCompare(b.doc.title)), [rules]);
   // supportedMatchTypesFor returns the match types the given rule consults (issue #520), in canonical display order. The exclusion
   // editor offers only these, so an operator cannot store a (rule, match type) pair the rule ignores. A rule with no supported types
   // (or an unknown id) yields an empty list, which disables the match-type picker. The server is the source of truth: any supported
@@ -127,17 +131,12 @@ export function DetectionConfig() {
   // The rule-modes table orders by declared severity (critical first), where muting a rule is most consequential, then
   // alphabetically by title within a severity band.
   const rulesBySeverity = useMemo(
-    () => [...rules].sort((a, b) =>
-      severityRank(a.doc.severity) - severityRank(b.doc.severity) || a.doc.title.localeCompare(b.doc.title)),
+    () => [...rules].sort((a, b) => severityRank(a.doc.severity) - severityRank(b.doc.severity) || a.doc.title.localeCompare(b.doc.title)),
     [rules],
   );
 
   const reload = useCallback(async (): Promise<void> => {
-    const [excl, ruleDocs, ruleSettings] = await Promise.all([
-      listDetectionExclusions(),
-      fetchRuleDocs(),
-      listDetectionRuleSettings(),
-    ]);
+    const [excl, ruleDocs, ruleSettings] = await Promise.all([listDetectionExclusions(), fetchRuleDocs(), listDetectionRuleSettings()]);
     if (!mountedRef.current) return;
     setExclusions(excl);
     setRules(ruleDocs);
@@ -155,21 +154,26 @@ export function DetectionConfig() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [reload]);
 
-  const runMutation = useCallback(async (op: () => Promise<unknown>): Promise<void> => {
-    setActionError(null);
-    setMutating(true);
-    try {
-      await op();
-      await reload();
-    } catch (err: unknown) {
-      setActionError(errMessage(err));
-    } finally {
-      if (mountedRef.current) setMutating(false);
-    }
-  }, [reload]);
+  const runMutation = useCallback(
+    async (op: () => Promise<unknown>): Promise<void> => {
+      setActionError(null);
+      setMutating(true);
+      try {
+        await op();
+        await reload();
+      } catch (err: unknown) {
+        setActionError(errMessage(err));
+      } finally {
+        if (mountedRef.current) setMutating(false);
+      }
+    },
+    [reload],
+  );
 
   const handleAddExclusion = useCallback(() => {
     // Trim before sending: the UI validates on trimmed input, so persisting the raw string would let stray
@@ -187,58 +191,98 @@ export function DetectionConfig() {
       setFormValue("");
       setFormReason("");
       setFormExpires("");
-    }).catch(() => { /* surfaced via actionError */ });
+    }).catch(() => {
+      /* surfaced via actionError */
+    });
   }, [runMutation, formRuleID, formMatchType, formValue, formReason, formExpires]);
 
-  const handleDelete = useCallback((id: number) => {
-    // Deleting an exclusion restores detection coverage (a coverage-increasing action), so it carries a generated reason rather
-    // than prompting; the audit row still records the actor, target, and timestamp.
-    runMutation(() => deleteDetectionExclusion(id, "removed via admin UI"))
-      .catch(() => { /* surfaced via actionError */ });
-  }, [runMutation]);
+  const handleDelete = useCallback(
+    (id: number) => {
+      // Deleting an exclusion restores detection coverage (a coverage-increasing action), so it carries a generated reason rather
+      // than prompting; the audit row still records the actor, target, and timestamp.
+      runMutation(() => deleteDetectionExclusion(id, "removed via admin UI")).catch(() => {
+        /* surfaced via actionError */
+      });
+    },
+    [runMutation],
+  );
 
-  // handleModeChange splits on whether the new mode reduces alerting. Restoring a rule to `alert` is applied immediately with a
-  // generated reason; disabling it first opens the reason modal so the operator's justification is audited.
-  const handleModeChange = useCallback((ruleID: string, ruleTitle: string, mode: string, severity: string) => {
-    if (mode === "alert") {
-      runMutation(() => upsertDetectionRuleSetting({
-        rule_id: ruleID, mode, severity_override: severity || undefined, reason: "re-enabled via admin UI",
-      })).catch(() => { /* surfaced via actionError */ });
-      return;
-    }
-    setModalError(null);
-    setPendingMode({ ruleID, ruleTitle, mode, severity });
-  }, [runMutation]);
+  // handleModeChange splits on whether the new mode reduces alerting. Moving a rule to `alert` is applied immediately with a
+  // generated reason; reducing it first opens the reason modal so the operator's justification is audited.
+  //
+  // The generated reason distinguishes the two ways a rule reaches `alert`, because the audit row is read later by someone asking
+  // what happened. A rule coming back from `disabled` was off and is being re-enabled. A rule coming from `monitor` was never off:
+  // it was evaluating and recording, and what changed is that its matches now raise alerts. Calling that "re-enabled" would
+  // misdescribe the commonest transition in the catalog now that most rules default to monitor (issue #764).
+  const handleModeChange = useCallback(
+    (ruleID: string, ruleTitle: string, mode: string, severity: string, priorMode: string) => {
+      if (mode === "alert") {
+        const reason = priorMode === "monitor" ? "promoted from monitor to alert via admin UI" : "re-enabled via admin UI";
+        runMutation(() =>
+          upsertDetectionRuleSetting({
+            rule_id: ruleID,
+            mode,
+            severity_override: severity || undefined,
+            reason,
+          }),
+        ).catch(() => {
+          /* surfaced via actionError */
+        });
+        return;
+      }
+      setModalError(null);
+      setPendingMode({ ruleID, ruleTitle, mode, severity });
+    },
+    [runMutation],
+  );
 
   // handleSeverityChange tweaks only the severity override (the rule's alerting on/off is unchanged), so it applies immediately
   // with a generated reason.
-  const handleSeverityChange = useCallback((ruleID: string, mode: string, severity: string) => {
-    runMutation(() => upsertDetectionRuleSetting({
-      rule_id: ruleID, mode, severity_override: severity || undefined, reason: "severity override changed via admin UI",
-    })).catch(() => { /* surfaced via actionError */ });
-  }, [runMutation]);
+  const handleSeverityChange = useCallback(
+    (ruleID: string, mode: string, severity: string) => {
+      runMutation(() =>
+        upsertDetectionRuleSetting({
+          rule_id: ruleID,
+          mode,
+          severity_override: severity || undefined,
+          reason: "severity override changed via admin UI",
+        }),
+      ).catch(() => {
+        /* surfaced via actionError */
+      });
+    },
+    [runMutation],
+  );
 
   // confirmPendingMode applies the pending reducing change with the operator's reason. It keeps its own try/catch (rather than
   // reusing runMutation) so a failure surfaces inside the still-open modal instead of the page-level banner.
-  const confirmPendingMode = useCallback((reason: string) => {
-    const pending = pendingMode;
-    if (!pending) return;
-    setModalError(null);
-    setMutating(true);
-    (async () => {
-      try {
-        await upsertDetectionRuleSetting({
-          rule_id: pending.ruleID, mode: pending.mode, severity_override: pending.severity || undefined, reason,
-        });
-        await reload();
-        if (mountedRef.current) setPendingMode(null);
-      } catch (err: unknown) {
-        if (mountedRef.current) setModalError(errMessage(err));
-      } finally {
-        if (mountedRef.current) setMutating(false);
-      }
-    })().catch(() => { /* inner try/catch handles all paths */ });
-  }, [pendingMode, reload]);
+  const confirmPendingMode = useCallback(
+    (reason: string) => {
+      const pending = pendingMode;
+      if (!pending) return;
+      setModalError(null);
+      setMutating(true);
+      (async () => {
+        try {
+          await upsertDetectionRuleSetting({
+            rule_id: pending.ruleID,
+            mode: pending.mode,
+            severity_override: pending.severity || undefined,
+            reason,
+          });
+          await reload();
+          if (mountedRef.current) setPendingMode(null);
+        } catch (err: unknown) {
+          if (mountedRef.current) setModalError(errMessage(err));
+        } finally {
+          if (mountedRef.current) setMutating(false);
+        }
+      })().catch(() => {
+        /* inner try/catch handles all paths */
+      });
+    },
+    [pendingMode, reload],
+  );
 
   const cancelPendingMode = useCallback(() => {
     setPendingMode(null);
@@ -255,7 +299,11 @@ export function DetectionConfig() {
       />
       {loading && <EmptyState>Loading detection configuration...</EmptyState>}
       {error && !loading && <EmptyState>Error: {error}</EmptyState>}
-      {actionError && <div className="detection-config__error" role="alert">{actionError}</div>}
+      {actionError && (
+        <div className="detection-config__error" role="alert">
+          {actionError}
+        </div>
+      )}
 
       {!loading && !error && (
         <>
@@ -263,36 +311,81 @@ export function DetectionConfig() {
             <h2 className="detection-config__heading">Exclusions</h2>
             {canWrite && (
               <div className="detection-config__form">
-                <Select label="Rule" id="dc-rule" inline={false} value={formRuleID}
+                <Select
+                  label="Rule"
+                  id="dc-rule"
+                  inline={false}
+                  value={formRuleID}
                   onChange={(e) => {
                     // Selecting a rule narrows the match-type picker to that rule's supported set and resets the selection to the
                     // first supported type, so a stale unsupported match type from a previous rule can never be submitted.
                     const ruleID = e.target.value;
                     setFormRuleID(ruleID);
                     setFormMatchType(supportedMatchTypesFor(ruleID)[0] ?? "");
-                  }}>
+                  }}
+                >
                   <option value="">Select a rule...</option>
-                  {rulesByName.map((r) => <option key={r.id} value={r.id}>{r.doc.title}</option>)}
+                  {rulesByName.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.doc.title}
+                    </option>
+                  ))}
                 </Select>
-                <Select label="Match type" id="dc-match" inline={false} value={formMatchType}
+                <Select
+                  label="Match type"
+                  id="dc-match"
+                  inline={false}
+                  value={formMatchType}
                   disabled={supportedMatchTypes.length === 0}
-                  onChange={(e) => { setFormMatchType(e.target.value); }}>
-                  {supportedMatchTypes.length === 0
-                    ? <option value="">Select a rule first...</option>
-                    : supportedMatchTypes.map((m) => <option key={m} value={m}>{m}</option>)}
+                  onChange={(e) => {
+                    setFormMatchType(e.target.value);
+                  }}
+                >
+                  {supportedMatchTypes.length === 0 ? (
+                    <option value="">Select a rule first...</option>
+                  ) : (
+                    supportedMatchTypes.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))
+                  )}
                 </Select>
                 <div className="detection-config__form-field--full">
-                  <Input label="Value" id="dc-value" value={formValue} onChange={(e) => { setFormValue(e.target.value); }}
-                    placeholder="*/MyApp/versions/*" />
+                  <Input
+                    label="Value"
+                    id="dc-value"
+                    value={formValue}
+                    onChange={(e) => {
+                      setFormValue(e.target.value);
+                    }}
+                    placeholder="*/MyApp/versions/*"
+                  />
                 </div>
                 <div className="detection-config__form-field--full">
-                  <Input label="Reason" id="dc-reason" value={formReason} onChange={(e) => { setFormReason(e.target.value); }}
-                    placeholder="why this is benign" />
+                  <Input
+                    label="Reason"
+                    id="dc-reason"
+                    value={formReason}
+                    onChange={(e) => {
+                      setFormReason(e.target.value);
+                    }}
+                    placeholder="why this is benign"
+                  />
                 </div>
-                <Input label="Expires (optional)" id="dc-expires" type="date" value={formExpires}
-                  onChange={(e) => { setFormExpires(e.target.value); }} />
+                <Input
+                  label="Expires (optional)"
+                  id="dc-expires"
+                  type="date"
+                  value={formExpires}
+                  onChange={(e) => {
+                    setFormExpires(e.target.value);
+                  }}
+                />
                 <div className="detection-config__form-actions">
-                  <Button variant="primary" disabled={addDisabled || mutating} onClick={handleAddExclusion}>Add exclusion</Button>
+                  <Button variant="primary" disabled={addDisabled || mutating} onClick={handleAddExclusion}>
+                    Add exclusion
+                  </Button>
                 </div>
               </div>
             )}
@@ -316,14 +409,24 @@ export function DetectionConfig() {
                     <tr key={ex.id}>
                       <td>{ex.rule_id || "(shared)"}</td>
                       <td>{ex.match_type}</td>
-                      <td><code>{ex.value}</code></td>
+                      <td>
+                        <code>{ex.value}</code>
+                      </td>
                       <td>{ex.reason}</td>
                       <td>{ex.expires_at ? ex.expires_at.split("T")[0] : "never"}</td>
                       <td>{ex.created_by_label || ex.created_by}</td>
                       {canWrite && (
                         <td>
-                          <Button variant="alert" disabled={mutating} onClick={() => { handleDelete(ex.id); }}
-                            title="Delete this exclusion">Delete</Button>
+                          <Button
+                            variant="alert"
+                            disabled={mutating}
+                            onClick={() => {
+                              handleDelete(ex.id);
+                            }}
+                            title="Delete this exclusion"
+                          >
+                            Delete
+                          </Button>
                         </td>
                       )}
                     </tr>
@@ -342,9 +445,7 @@ export function DetectionConfig() {
                   <th title="The severity each rule declares in the catalog. It applies whenever no override is set below.">
                     Default severity
                   </th>
-                  <th title="Alert (default) raises alerts; monitor evaluates but emits a signal instead; disabled emits nothing.">
-                    Mode
-                  </th>
+                  <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
                     Severity override
                   </th>
@@ -353,24 +454,53 @@ export function DetectionConfig() {
               <tbody>
                 {rulesBySeverity.map((r) => {
                   const setting = globalSetting(settings, r.id);
-                  const mode = setting?.mode ?? "alert";
+                  // The rule's OWN default when no operator setting applies, not a constant (issue #764). Sixty-six imported
+                  // rules ship in monitor, so falling back to "alert" both displayed them as alerting and, because this value is
+                  // what handleSeverityChange resubmits, silently promoted one the moment an operator touched only its severity.
+                  const mode = setting?.mode ?? r.default_mode ?? "alert";
                   const severity = setting?.severity_override ?? "";
                   return (
                     <tr key={r.id}>
-                      <td>{r.doc.title}<br /><code className="detection-config__rule-id">{r.id}</code></td>
+                      <td>
+                        {r.doc.title}
+                        <br />
+                        <code className="detection-config__rule-id">{r.id}</code>
+                      </td>
                       <td className="detection-config__default-severity">{r.doc.severity || "(unspecified)"}</td>
                       <td>
-                        <Select label="" id={`dc-mode-${r.id}`} value={mode} disabled={!canWrite || mutating}
+                        <Select
+                          label=""
+                          id={`dc-mode-${r.id}`}
+                          value={mode}
+                          disabled={!canWrite || mutating}
                           aria-label={`mode for ${r.id}`}
-                          onChange={(e) => { handleModeChange(r.id, r.doc.title, e.target.value, severity); }}>
-                          {modeOptions(mode).map((m) => <option key={m} value={m}>{m}</option>)}
+                          onChange={(e) => {
+                            handleModeChange(r.id, r.doc.title, e.target.value, severity, mode);
+                          }}
+                        >
+                          {modeOptions(mode).map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
                         </Select>
                       </td>
                       <td>
-                        <Select label="" id={`dc-sev-${r.id}`} value={severity} disabled={!canWrite || mutating}
+                        <Select
+                          label=""
+                          id={`dc-sev-${r.id}`}
+                          value={severity}
+                          disabled={!canWrite || mutating}
                           aria-label={`severity override for ${r.id}`}
-                          onChange={(e) => { handleSeverityChange(r.id, mode, e.target.value); }}>
-                          {SEVERITIES.map((s) => <option key={s || "none"} value={s}>{s || "(none)"}</option>)}
+                          onChange={(e) => {
+                            handleSeverityChange(r.id, mode, e.target.value);
+                          }}
+                        >
+                          {SEVERITIES.map((s) => (
+                            <option key={s || "none"} value={s}>
+                              {s || "(none)"}
+                            </option>
+                          ))}
                         </Select>
                       </td>
                     </tr>

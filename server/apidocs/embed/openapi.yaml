@@ -1191,7 +1191,16 @@ components:
               techniqueID:
                 type: string
                 example: "T1574.006"
-              score: {type: integer, example: 1}
+              score:
+                type: number
+                description: |
+                  1 when at least one rule covering this technique raises alerts. 0.5 when no rule
+                  covering it raises an alert as shipped, whether because those rules record without
+                  alerting or are off by default, so a coverage figure is not inflated by rules that
+                  do not alert.
+                example: 1
+              # A fractional score is emitted for monitor-only coverage; clients must not assume an integer.
+
               color:
                 type: string
                 example: "#31a354"
@@ -1226,13 +1235,21 @@ components:
           type: string
           enum: [alert, monitor, disabled]
           description: |
-            The mode this rule runs in when no per-rule setting applies to it. Most rules are
-            `alert`; a rule imported from an upstream corpus starts at `monitor` so it records
-            what it would have fired on without raising alerts. This is the rule's own default,
+            The mode this rule runs in when no per-rule setting applies to it. A rule this
+            project wrote is `alert`; a rule imported from an upstream corpus starts at
+            `monitor` so it records what it would have fired on without raising alerts, and
+            imported rules outnumber ours. This is the rule's own default,
             not a resolved per-host mode: a setting created at
             `PUT /api/v1/detection-config/rule-settings` overrides it, and those settings are
             listed separately at `GET /api/v1/detection-config/rule-settings`.
           example: alert
+        origin:
+          type: string
+          description: |
+            Where the rule came from. Absent for a rule written for this engine. For a rule vendored from an
+            upstream corpus, names that project and the rule's own author, which is the attribution the corpus
+            licence carries; those rules are shipped and exported unmodified.
+          example: "SigmaHQ, by Daniil Yugoslavskiy, oscd.community"
         techniques:
           type: array
           items:

@@ -78,13 +78,20 @@ func TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType(t *testing.T) {
 	// least one". "At least one" would stay green while some other rule's declaration silently went wrong, and it would hide the
 	// fact that most of the catalog is untested here.
 	//
-	// Four of the twelve rules have replay fixtures. The other eight are covered by the synthetic tripwire in registry_test.go and
-	// by each rule's own event-type gate, which is weaker; adding a fixture corpus for any of them strengthens this gate
-	// automatically, and this assertion is what makes that visible when it happens.
+	// Four of the twelve authored rules have replay fixtures. The other eight are covered by the synthetic tripwire in
+	// registry_test.go and by each rule's own event-type gate, which is weaker; adding a fixture corpus for any of them
+	// strengthens this gate automatically, and this assertion is what makes that visible when it happens.
+	//
+	// The fifth entry is a vendored rule and arrived without anyone writing a fixture for it (issue #764). The keychain-dump
+	// capture fires it as well as the hand-written credential_keychain_dump, which is the first evidence that the imported corpus
+	// matches real captured telemetry rather than only its own synthetic examples. It is also an overlap: two rules reporting one
+	// activity. Both are wanted here, because the vendored one ships in monitor mode, so the overlap shows up as a recorded signal
+	// an operator can compare against the alert before deciding whether promoting it would add anything.
 	coveredByCorpus := []string{
 		"credential_keychain_dump",
 		"dns_c2_beacon",
 		"privilege_launchd_plist_write",
+		"proc_creation_macos_creds_from_keychain",
 		"sudoers_tamper",
 	}
 	var mu sync.Mutex

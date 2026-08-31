@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -90,6 +89,31 @@ func TestEngine_CatalogAlwaysCarriesAMode(t *testing.T) {
 	assert.Equal(t, rulesapi.DetectionRuleModeAlert, got["silent"], "a rule declaring nothing reports alert, not the zero value")
 	assert.Equal(t, rulesapi.DetectionRuleModeMonitor, got["declaring"])
 }
+
+// TestEngine_CatalogCreditsAVendoredRule pins the same property for Origin, on the same builder and for the same reason.
+//
+// An empty origin means "this project wrote it", so a builder that never populates the field reports every vendored rule as ours.
+// That is the second field this builder has silently dropped; the first was DefaultMode, caught in review on #811.
+func TestEngine_CatalogCreditsAVendoredRule(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, discardLogger())
+	e.Register(&stubRule{id: "ours"})
+	e.Register(&originStub{stubRule: stubRule{id: "vendored"}})
+
+	got := map[string]string{}
+	for _, rm := range e.Catalog() {
+		got[rm.ID] = rm.Origin
+	}
+
+	assert.Equal(t, "Upstream, by Someone", got["vendored"])
+	assert.Empty(t, got["ours"], "a rule this project wrote announces no origin")
+}
+
+// originStub is a stubRule that names an upstream source.
+type originStub struct{ stubRule }
+
+func (originStub) Origin() string { return "Upstream, by Someone" }
 
 // TestEngine_LoadActiveReplacesRuleSet pins the replace (not append) semantics: a hot-reload caller can invoke LoadActive repeatedly
 // without the engine accumulating duplicates.
@@ -867,8 +891,9 @@ func TestEngine_ThreadsEachRulesDeclaredDefaultIntoResolution(t *testing.T) {
 func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
 	t.Parallel()
 
-	var logs bytes.Buffer
-	e := New(nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	metrics := &countingMetrics{}
+	e := New(nil, discardLogger())
+	e.SetMetrics(metrics)
 	e.Register(&modeDeclaringStub{
 		stubRuleWithFindings: stubRuleWithFindings{
 			stubRule: stubRule{id: "imported"},
@@ -879,6 +904,221 @@ func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
 
 	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
 
-	assert.Contains(t, logs.String(), "monitor mode", "the finding was routed to monitor, not persisted")
-	assert.Contains(t, logs.String(), "imported")
+	// Asserted on the counter rather than the log line this test originally read. The per-match log moved to DEBUG when the
+	// vendored corpus made monitor the common case, and a test that scrapes a log is hostage to its level; the counter is the
+	// signal that is meant to survive.
+	assert.Equal(t, []string{"imported"}, metrics.monitors, "the finding was routed to monitor, not persisted")
+	assert.Empty(t, metrics.alerts)
+}
+
+// countingMetrics records the per-rule counters the engine emits, so a test can tell a suppressed match from no match at all.
+type countingMetrics struct {
+	api.MetricsRecorder
+	alerts   []string
+	monitors []string
+}
+
+func (m *countingMetrics) AlertCreated(_ context.Context, ruleID, _ string) {
+	m.alerts = append(m.alerts, ruleID)
+}
+
+func (m *countingMetrics) MonitorMatched(_ context.Context, ruleID, _ string) {
+	m.monitors = append(m.monitors, ruleID)
+}
+
+// spec:observability-instrumentation/stable-counter-names/a-suppressed-match-is-counted-rather-than-only-logged
+//
+// TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt pins the counter that replaced a per-match log line.
+//
+// A monitor match used to produce one INFO line and nothing else. That was proportionate when monitor was a state an operator set
+// on a single noisy rule; issue #764 made it the default for most of the catalog, several of whose rules match commonplace
+// commands, so a per-match INFO became fleet-scale log amplification. The signal has to survive that move, and a counter is both
+// the medium built for it and the thing an operator needs in order to judge whether promoting the rule is worth it.
+func TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt(t *testing.T) {
+	t.Parallel()
+
+	metrics := &countingMetrics{}
+	e := New(nil, discardLogger())
+	e.SetMetrics(metrics)
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{
+			stubRule: stubRule{id: "imported"},
+			findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+		},
+		mode: rulesapi.DetectionRuleModeMonitor,
+	})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+	assert.Equal(t, []string{"imported"}, metrics.monitors, "the suppressed match is counted against the rule that produced it")
+	assert.Empty(t, metrics.alerts, "and no alert was created, which is the point of the mode")
+}
+
+// overridingResolver applies a severity override alongside a mode, the way a stored setting can.
+type overridingResolver struct {
+	mode     rulesapi.DetectionRuleMode
+	severity string
+}
+
+func (r overridingResolver) ResolveRuleMode(_, _ string, _ rulesapi.DetectionRuleMode) (rulesapi.DetectionRuleMode, string) {
+	return r.mode, r.severity
+}
+
+// spec:observability-instrumentation/stable-counter-names/a-suppressed-match-is-labelled-with-the-severity-the-alert-would-have-carried
+//
+// TestEngine_MonitorCounterUsesTheOverriddenSeverity pins that both series describe one rule at one severity.
+//
+// A setting can carry a severity override, and the alert path applies it before persisting. The monitor path returned before that,
+// so the same rule was counted at its declared severity while its alerts carried the overridden one. The whole reason the monitor
+// counter shares the alert counter's attribute shape is that the two are meant to be compared per rule and severity, and that
+// comparison is wrong if one series is labelled differently from the other.
+func TestEngine_MonitorCounterUsesTheOverriddenSeverity(t *testing.T) {
+	t.Parallel()
+
+	metrics := &severityRecordingMetrics{}
+	e := New(nil, discardLogger())
+	e.SetMetrics(metrics)
+	e.SetModeResolver(overridingResolver{mode: rulesapi.DetectionRuleModeMonitor, severity: "critical"})
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{
+			stubRule: stubRule{id: "imported"},
+			findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "low", Title: "t"}},
+		},
+		mode: rulesapi.DetectionRuleModeMonitor,
+	})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+	assert.Equal(t, []string{"critical"}, metrics.monitorSeverities,
+		"the counter labels the match with the severity the alert would have carried, not the rule's declared one")
+}
+
+// severityRecordingMetrics records the severity each counter was called with.
+type severityRecordingMetrics struct {
+	api.MetricsRecorder
+	monitorSeverities []string
+}
+
+func (m *severityRecordingMetrics) MonitorMatched(_ context.Context, _, severity string) {
+	m.monitorSeverities = append(m.monitorSeverities, severity)
+}
+
+// spec:observability-instrumentation/a-per-rule-span-reports-the-alerts-it-raised/a-rule-whose-findings-are-all-suppressed-reports-no-alerts
+//
+// TestEngine_SpanCountsAlertsRaisedNotFindingsReturned pins that the per-rule span reports what was raised.
+//
+// alert_count was set from the findings the rule returned. Those were the same number until the vendored corpus arrived in monitor
+// mode, and now most findings are suppressed: counting what the rule returned would have every dashboard grouping by rule_id
+// report alerts that were never raised, which is the same overstatement this PR closes on the coverage export and the reference,
+// arriving through the tracing surface instead.
+//
+// Both non-alerting modes are covered, because they reach the same counter down different arms and only one of them had a test.
+// Disabled is the more dangerous of the two to get wrong: it returns before persistence, so an arm that counted it as an alert
+// would put a number in alert_count with no alert row anywhere to reconcile it against.
+func TestEngine_SpanCountsAlertsRaisedNotFindingsReturned(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		mode rulesapi.DetectionRuleMode
+	}{
+		{"monitor records without alerting", rulesapi.DetectionRuleModeMonitor},
+		{"disabled records nothing at all", rulesapi.DetectionRuleModeDisabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := tracetest.NewSpanRecorder()
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+			t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+			e := New(nil, discardLogger())
+			e.tracer = tp.Tracer("test")
+			e.Register(&modeDeclaringStub{
+				stubRuleWithFindings: stubRuleWithFindings{
+					stubRule: stubRule{id: "imported"},
+					findings: []api.Finding{
+						{HostID: "h1", RuleID: "imported", Severity: "high", Title: "one"},
+						{HostID: "h1", RuleID: "imported", Severity: "high", Title: "two"},
+					},
+				},
+				mode: tc.mode,
+			})
+
+			require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+			var alertCount, suppressedCount, duplicateCount int64
+			var found bool
+			for _, span := range rec.Ended() {
+				for _, attr := range span.Attributes() {
+					switch attr.Key {
+					case attribute.Key("rule_id"):
+						found = attr.Value.AsString() == "imported"
+					case attribute.Key("alert_count"):
+						alertCount = attr.Value.AsInt64()
+					case attribute.Key("suppressed_count"):
+						suppressedCount = attr.Value.AsInt64()
+					case attribute.Key("duplicate_count"):
+						duplicateCount = attr.Value.AsInt64()
+					}
+				}
+				if found {
+					break
+				}
+			}
+
+			require.True(t, found, "the rule's span was recorded")
+			assert.Equal(t, int64(0), alertCount, "two findings were produced and neither was raised as an alert")
+			assert.Equal(t, int64(2), suppressedCount, "and the span still says how much the rule found")
+			assert.Zero(t, duplicateCount, "the mode held these back; nothing was deduplicated, and conflating the two was the defect")
+		})
+	}
+}
+
+// erroringStub fails evaluation, which is the path that returns before any finding is routed.
+type erroringStub struct{ stubRule }
+
+func (r *erroringStub) Evaluate(context.Context, []api.Event, rulesapi.GraphReader) ([]api.Finding, error) {
+	return nil, errors.New("rule blew up")
+}
+
+// TestEngine_SpanCountsSurviveAnEvaluationError pins that a rule which fails still reports counts.
+//
+// These attributes used to be stamped up front precisely so a failing rule did not leave them unset, and dashboards grouping by
+// rule_id treat a missing attribute as missing data rather than as zero. Moving the stamp into a defer, so a persistence failure
+// partway through the findings no longer discards the counts of the findings before it, removed that up-front stamp: this is the
+// case that change could have broken, and it is reachable without a store, unlike the failure that motivated the defer.
+func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
+	t.Parallel()
+
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	e := New(nil, discardLogger())
+	e.tracer = tp.Tracer("test")
+	e.Register(&erroringStub{stubRule: stubRule{id: "broken"}})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}),
+		"a rule error is isolated, not returned")
+
+	var sawAlert, sawSuppressed, sawDuplicate bool
+	for _, span := range rec.Ended() {
+		for _, attr := range span.Attributes() {
+			switch attr.Key {
+			case attribute.Key("alert_count"):
+				sawAlert = true
+				assert.Equal(t, int64(0), attr.Value.AsInt64())
+			case attribute.Key("suppressed_count"):
+				sawSuppressed = true
+				assert.Equal(t, int64(0), attr.Value.AsInt64())
+			case attribute.Key("duplicate_count"):
+				sawDuplicate = true
+				assert.Equal(t, int64(0), attr.Value.AsInt64())
+			}
+		}
+	}
+	assert.True(t, sawAlert, "alert_count must be present even when the rule failed, so aggregations do not read it as missing data")
+	assert.True(t, sawSuppressed, "and suppressed_count alongside it")
+	assert.True(t, sawDuplicate, "and duplicate_count, so the attribute set is the same on every path out")
 }

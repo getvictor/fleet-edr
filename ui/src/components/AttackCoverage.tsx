@@ -59,12 +59,18 @@ export function AttackCoverage() {
   useEffect(() => {
     let cancelled = false;
     fetchAttackNavigatorLayer()
-      .then((l) => { if (!cancelled) setLayer(l); })
+      .then((l) => {
+        if (!cancelled) setLayer(l);
+      })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load coverage");
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const downloadLayer = () => {
@@ -76,17 +82,30 @@ export function AttackCoverage() {
       a.href = url;
       a.download = "fleet-edr-attack-coverage.json";
       document.body.appendChild(a);
-      try { a.click(); } finally { a.remove(); }
+      try {
+        a.click();
+      } finally {
+        a.remove();
+      }
     } finally {
       URL.revokeObjectURL(url);
     }
   };
 
-  const { groups, distinctRules } = useMemo(
-    () => buildCoverageGroups(layer),
-    [layer],
-  );
-  const totalCovered = layer?.techniques.length ?? 0;
+  const { groups, distinctRules } = useMemo(() => buildCoverageGroups(layer), [layer]);
+  // Split by whether anything covering the technique actually alerts. The server scores a technique below 1 when every rule
+  // covering it raises nothing as shipped (issue #764), and most of the catalog is now in that state, so a single "techniques
+  // covered" figure would tell a reader the product raises alerts for sixty-odd techniques when it raises them for thirteen.
+  //
+  // The wording stays mode-neutral. A sub-1 score means monitor OR disabled, and calling it "monitored" would misstate a disabled
+  // rule, which records nothing rather than recording without alerting. The score does not distinguish them and neither should
+  // this label; what both cases share, and all this card can honestly claim, is that nothing there alerts.
+  //
+  // "by default" is the other half of that honesty. The score is derived from each rule's catalog default, not from the settings
+  // this deployment has stored, so a promoted vendored rule still scores 0.5 and a disabled authored rule still scores 1. Without
+  // the qualifier these cards would read as live state and be wrong for exactly the deployments that have tuned anything.
+  const alerting = layer?.techniques.filter((t) => t.score >= 1).length ?? 0;
+  const notAlerting = (layer?.techniques.length ?? 0) - alerting;
 
   return (
     <>
@@ -104,82 +123,89 @@ export function AttackCoverage() {
         }
       />
 
-      {error && <div className="form-error" role="alert">Error: {error}</div>}
+      {error && (
+        <div className="form-error" role="alert">
+          Error: {error}
+        </div>
+      )}
       {loading && <EmptyState>Loading coverage...</EmptyState>}
 
       {!loading && layer && (
         <>
           <SummaryStrip>
-            <StatCard accent="green" value={totalCovered} label="techniques covered" />
+            <StatCard accent="green" value={alerting} label="techniques alerting by default" />
+            {notAlerting > 0 && <StatCard accent="neutral" value={notAlerting} label="techniques not alerting by default" />}
             <StatCard accent="green" value={distinctRules.size} label="detection rules" />
             <StatCard accent="green" value={groups.length} label="tactics with coverage" />
           </SummaryStrip>
 
-          {groups.length === 0
-            ? <EmptyState>No coverage data yet.</EmptyState>
-            : (
-              // Single table for the whole page so column widths line up
-              // across tactics (a per-tactic <Table> sized columns from
-              // its own widest cell, producing a different layout per
-              // section). Tactic names land in colspan rows that act as
-              // visual section headers, the same pattern Crowdstrike Falcon
-              // and Elastic Security use for their ATT&CK coverage tables.
-              <Table className="attack-coverage__table">
-                <colgroup>
-                  <col className="attack-coverage__col-id" />
-                  <col className="attack-coverage__col-name" />
-                  <col className="attack-coverage__col-rules" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>Technique</th>
-                    <th>Name</th>
-                    <th>Covered by</th>
-                  </tr>
-                </thead>
-                {/* One <tbody> per tactic with scope="rowgroup" on the
+          {groups.length === 0 ? (
+            <EmptyState>No coverage data yet.</EmptyState>
+          ) : (
+            // Single table for the whole page so column widths line up
+            // across tactics (a per-tactic <Table> sized columns from
+            // its own widest cell, producing a different layout per
+            // section). Tactic names land in colspan rows that act as
+            // visual section headers, the same pattern Crowdstrike Falcon
+            // and Elastic Security use for their ATT&CK coverage tables.
+            <Table className="attack-coverage__table">
+              <colgroup>
+                <col className="attack-coverage__col-id" />
+                <col className="attack-coverage__col-name" />
+                <col className="attack-coverage__col-rules" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Technique</th>
+                  <th>Name</th>
+                  <th>Covered by</th>
+                </tr>
+              </thead>
+              {/* One <tbody> per tactic with scope="rowgroup" on the
                     header: that's the HTML5 idiom for grouping rows under a
                     label, which lets screen readers announce the tactic as
                     context for each technique row. Visually identical to a
                     Fragment-with-shared-tbody approach. */}
-                {groups.map((g) => (
-                  <tbody key={g.tactic}>
-                    <tr className="attack-coverage__tactic-row">
-                      <th colSpan={3} scope="rowgroup">{g.tactic}</th>
+              {groups.map((g) => (
+                <tbody key={g.tactic}>
+                  <tr className="attack-coverage__tactic-row">
+                    <th colSpan={3} scope="rowgroup">
+                      {g.tactic}
+                    </th>
+                  </tr>
+                  {g.techniques.map((t) => (
+                    <tr key={t.id}>
+                      <td>
+                        <a
+                          className="attack-coverage__technique-id"
+                          href={`https://attack.mitre.org/techniques/${t.id.replace(".", "/")}/`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {t.id}
+                        </a>
+                      </td>
+                      <td>{t.name}</td>
+                      <td>
+                        {t.coveringRules.map((r, i) => (
+                          <span key={r}>
+                            {i > 0 && ", "}
+                            <Link
+                              className="attack-coverage__rule-link"
+                              to={`/rules/${r}`}
+                              title="Open this detection rule's documentation"
+                            >
+                              <code>{r}</code>
+                            </Link>
+                          </span>
+                        ))}
+                      </td>
                     </tr>
-                    {g.techniques.map((t) => (
-                      <tr key={t.id}>
-                        <td>
-                          <a
-                            className="attack-coverage__technique-id"
-                            href={`https://attack.mitre.org/techniques/${t.id.replace(".", "/")}/`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t.id}
-                          </a>
-                        </td>
-                        <td>{t.name}</td>
-                        <td>
-                          {t.coveringRules.map((r, i) => (
-                            <span key={r}>
-                              {i > 0 && ", "}
-                              <Link
-                                className="attack-coverage__rule-link"
-                                to={`/rules/${r}`}
-                                title="Open this detection rule's documentation"
-                              >
-                                <code>{r}</code>
-                              </Link>
-                            </span>
-                          ))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                ))}
-              </Table>
-            )}
+                  ))}
+                </tbody>
+              ))}
+            </Table>
+          )}
         </>
       )}
     </>
@@ -195,16 +221,17 @@ function parseCoveringRules(comment: string | undefined): string[] {
   if (!comment) return [];
   const colon = comment.indexOf(":");
   const tail = colon === -1 ? comment : comment.slice(colon + 1);
-  return tail.split(",").map((s) => s.trim()).filter(Boolean);
+  return tail
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 // buildCoverageGroups runs once per layer fetch (memoised by the caller) and
 // returns the rendered shape: tactics in MITRE order followed by anything
 // else (Unmapped, novel tactics) at the end. It also collects the distinct
 // covering-rule set in the same pass so we don't walk the techniques twice.
-function buildCoverageGroups(
-  layer: AttackNavigatorLayer | null,
-): { groups: CoverageGroup[]; distinctRules: Set<string> } {
+function buildCoverageGroups(layer: AttackNavigatorLayer | null): { groups: CoverageGroup[]; distinctRules: Set<string> } {
   const distinctRules = new Set<string>();
   const groups: CoverageGroup[] = [];
   if (!layer) return { groups, distinctRules };

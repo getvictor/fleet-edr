@@ -452,3 +452,75 @@ describe("DetectionConfig", () => {
     expect(screen.getByLabelText("severity override for suspicious_exec")).toBeDisabled();
   });
 });
+
+describe("DetectionConfig monitor-default rules", () => {
+  // Sixty-six imported rules ship with a monitor default and no persisted setting (issue #764). Falling back to "alert" showed
+  // them as alerting, which is wrong on its own, but the same value is what handleSeverityChange resubmits: touching only the
+  // severity of one of these rules would have written mode=alert and silently promoted a rule nobody decided to promote.
+  it("shows a monitor-default rule as monitor rather than alert", async () => {
+    stubReads({
+      rules: [makeRuleEntry({ id: "vendored", default_mode: "monitor" })],
+      settings: [],
+    });
+    renderPage();
+
+    await waitFor(() => { expect(screen.getByLabelText("mode for vendored")).toBeInTheDocument(); });
+    expect(screen.getByLabelText("mode for vendored")).toHaveValue("monitor");
+  });
+
+  it("does not promote a monitor-default rule when only its severity changes", async () => {
+    stubReads({
+      rules: [makeRuleEntry({ id: "vendored", default_mode: "monitor" })],
+      settings: [],
+    });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "monitor" }));
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("severity override for vendored")).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("severity override for vendored"), { target: { value: "high" } });
+
+    await waitFor(() => { expect(upsert).toHaveBeenCalled(); });
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ rule_id: "vendored", mode: "monitor", severity_override: "high" }));
+  });
+
+  // The audit row is read later by someone asking what happened, so the two ways a rule reaches alert have to read differently. A
+  // rule coming from disabled was off and is being re-enabled; a rule coming from monitor was never off, it was evaluating and
+  // recording, and what changed is that its matches now raise alerts.
+  it("records a monitor-to-alert change as a promotion, not a re-enable", async () => {
+    stubReads({ rules: [makeRuleEntry({ id: "vendored", default_mode: "monitor" })], settings: [] });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("mode for vendored")).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("mode for vendored"), { target: { value: "alert" } });
+
+    await waitFor(() => { expect(upsert).toHaveBeenCalled(); });
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      rule_id: "vendored", mode: "alert", reason: "promoted from monitor to alert via admin UI",
+    }));
+  });
+
+  it("still records a disabled-to-alert change as a re-enable", async () => {
+    stubReads({
+      rules: [makeRuleEntry({ id: "ours" })],
+      settings: [makeSetting({ rule_id: "ours", mode: "disabled" })],
+    });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+    renderPage();
+    await waitFor(() => { expect(screen.getByLabelText("mode for ours")).toBeInTheDocument(); });
+
+    fireEvent.change(screen.getByLabelText("mode for ours"), { target: { value: "alert" } });
+
+    await waitFor(() => { expect(upsert).toHaveBeenCalled(); });
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ rule_id: "ours", reason: "re-enabled via admin UI" }));
+  });
+
+  // A rule this project wrote still falls back to alert, so the fix does not change how the rest of the catalog behaves.
+  it("still treats a rule with no default and no setting as alerting", async () => {
+    stubReads({ rules: [makeRuleEntry({ id: "ours" })], settings: [] });
+    renderPage();
+
+    await waitFor(() => { expect(screen.getByLabelText("mode for ours")).toBeInTheDocument(); });
+    expect(screen.getByLabelText("mode for ours")).toHaveValue("alert");
+  });
+});

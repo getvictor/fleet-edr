@@ -274,6 +274,7 @@ type recordingMetrics struct {
 	eventsIngested      int
 	heartbeatsDropped   int
 	alertsCreated       int
+	monitorMatches      int
 	processesReconciled int64
 	processRowsDeleted  int64
 }
@@ -292,6 +293,14 @@ func (m *recordingMetrics) AlertCreated(_ context.Context, _, _ string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.alertsCreated++
+}
+
+// MonitorMatched records the suppressed twin of an alert (issue #764): the rule matched and its mode kept the alert from being
+// written. Counted separately so a test can tell "the rule did not match" from "the rule matched and was held back".
+func (m *recordingMetrics) MonitorMatched(_ context.Context, _, _ string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.monitorMatches++
 }
 func (m *recordingMetrics) ProcessesTTLReconciled(_ context.Context, n int64) {
 	m.mu.Lock()

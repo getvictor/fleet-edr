@@ -127,8 +127,8 @@ func checkFile(path string, data []byte) []string {
 // isExcluded mirrors the ignore set of the other prose gates (.markdownlint-cli2.yaml, .prettierignore): AI-tool config we do
 // not author, the immutable archived OpenSpec change proposals (format owned upstream, an audit trail we do not rewrite), the
 // free-form maintenance journal, the vendored / generated API-docs embed assets (the minified ReDoc bundle and generated
-// OpenAPI spec, none of which is hand-authored prose), and the vendored upstream Sigma rules. docs/detection-rules.md is intentionally NOT excluded: it is generated
-// from rule Doc() strings (which this gate does cover), so `task docs:rules` keeps it clean.
+// OpenAPI spec, none of which is hand-authored prose), the vendored upstream Sigma rules, and docs/detection-rules.md, which
+// reproduces those vendored rules' titles verbatim. Each exclusion carries its reasoning at the line that adds it.
 func isExcluded(p string) bool {
 	return strings.HasPrefix(p, ".claude/") ||
 		strings.HasPrefix(p, "openspec/changes/") ||
@@ -139,7 +139,12 @@ func isExcluded(p string) bool {
 		//
 		// Scoped to the exact path AND to .yml, so an unrelated fixture directory cannot inherit the exemption and the README we
 		// wrote beside those rules stays under the gate like every other piece of our own prose.
-		(strings.HasPrefix(p, "server/rules/internal/catalog/testdata/imported/") && strings.HasSuffix(p, ".yml")) ||
+		(strings.HasPrefix(p, "server/rules/internal/catalog/imported/") && strings.HasSuffix(p, ".yml")) ||
+		// docs/detection-rules.md is generated from the rule catalog (tools/gen-rule-docs) and now reproduces vendored rule
+		// titles verbatim, several of which use a spaced hyphen ("Binary Padding - MacOS"). Rewriting someone else's rule title
+		// to suit our house style would make the reference disagree with the rule it documents and with upstream. The generator's
+		// OWN prose is still gated: it lives as string literals in tools/gen-rule-docs, which this linter reads.
+		p == "docs/detection-rules.md" ||
 		p == "docs/maintenance/log.md"
 }
 

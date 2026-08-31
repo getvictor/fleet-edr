@@ -24,7 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	identityapi "github.com/fleetdm/edr/server/identity/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
+	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -142,7 +144,7 @@ func newRules(t *testing.T) *rulesbootstrap.Rules {
 func TestCatalog_ListShape(t *testing.T) {
 	t.Parallel()
 	r := newRules(t)
-	catalog := r.Catalog().List()
+	full := r.Catalog().List()
 	wantIDs := []string{
 		"suspicious_exec",
 		"persistence_launchagent",
@@ -155,11 +157,33 @@ func TestCatalog_ListShape(t *testing.T) {
 		"dns_c2_beacon",
 		"sensor_tamper",
 	}
-	require.Len(t, catalog, len(wantIDs))
+
+	// Partitioned by the same predicate production uses rather than by position or by mode, so this cannot drift from what the
+	// catalog actually considers vendored. Listing the sixty-six imported ids here would duplicate the corpus test that already
+	// asserts them and would bury the thing this test is for, which is the shape and order of the rules this project wrote.
+	var authored, vendored []rulesapi.RuleMetadata
+	for _, rm := range full {
+		if _, isVendored := catalog.VendoredSource(rm.ID); isVendored {
+			vendored = append(vendored, rm)
+			continue
+		}
+		authored = append(authored, rm)
+	}
+
+	require.Len(t, authored, len(wantIDs))
 	for i, want := range wantIDs {
-		assert.Equal(t, want, catalog[i].ID, "rule at index %d", i)
-		assert.NotEmpty(t, catalog[i].Doc.Title, "rule %s missing Doc.Title", catalog[i].ID)
-		assert.NotEmpty(t, catalog[i].Doc.Severity, "rule %s missing Doc.Severity", catalog[i].ID)
+		assert.Equal(t, want, authored[i].ID, "rule at index %d", i)
+		assert.NotEmpty(t, authored[i].Doc.Title, "rule %s missing Doc.Title", authored[i].ID)
+		assert.NotEmpty(t, authored[i].Doc.Severity, "rule %s missing Doc.Severity", authored[i].ID)
+	}
+
+	// The vendored corpus is on the same operator-facing surface (issue #764), and carries the documentation an operator reads
+	// there, which is the part registering it could plausibly have got wrong.
+	require.NotEmpty(t, vendored)
+	for _, rm := range vendored {
+		assert.NotEmpty(t, rm.Doc.Title, "vendored rule %s missing Doc.Title", rm.ID)
+		assert.NotEmpty(t, rm.Doc.Severity, "vendored rule %s missing Doc.Severity", rm.ID)
+		assert.Equal(t, rulesapi.DetectionRuleModeMonitor, rm.DefaultMode, "vendored rule %s must not alert", rm.ID)
 	}
 }
 

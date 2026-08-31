@@ -134,3 +134,56 @@ describe("RuleDetail body", () => {
     expect(badge).toHaveClass("rule-detail__sev--unknown");
   });
 });
+
+describe("RuleDetail monitor mode and attribution", () => {
+  // A monitor-mode rule records matches and raises nothing until promoted (issue #764). Severity alone reads as a promise the rule
+  // does not make: "high" on a rule that never alerts is the most misleading pair on this page, so the mode has to appear beside it.
+  it("says a monitor-mode rule raises no alert, next to its severity", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor" })]);
+    renderAt("vendored");
+
+    expect(await screen.findByText(/Monitor/)).toBeInTheDocument();
+    expect(screen.getByText(/By default this rule records matches without raising an alert/)).toBeInTheDocument();
+    expect(screen.getByText(/not the mode in force for a given host/)).toBeInTheDocument();
+  });
+
+  // The absence of the row is the point for an alerting rule: adding "Mode: Alert" to every rule that behaves normally is noise,
+  // and an older server that omits the field must keep its previous appearance rather than claiming anything new.
+  it("says nothing about mode for a rule that alerts, or for a server that omits the field", async () => {
+    mockDocs([makeEntry({ id: "alerting", default_mode: "alert" })]);
+    const { unmount } = renderAt("alerting");
+    expect(await screen.findByText("Severity")).toBeInTheDocument();
+    expect(screen.queryByText(/By default this rule records matches/)).not.toBeInTheDocument();
+    unmount();
+
+    mockDocs([makeEntry({ id: "legacy" })]);
+    renderAt("legacy");
+    expect(await screen.findByText("Severity")).toBeInTheDocument();
+    expect(screen.queryByText(/By default this rule records matches/)).not.toBeInTheDocument();
+  });
+
+  // Disabled is the other non-alerting default ModeDefaulter permits. Keying the row on "monitor" alone left a disabled-default
+  // rule looking exactly like an alerting one, which is the case the requirement is about: distinguish every rule that does not
+  // alert, not just the mode this PR happens to ship.
+  it("distinguishes a disabled default too, not only monitor", async () => {
+    mockDocs([makeEntry({ id: "off", default_mode: "disabled" })]);
+    renderAt("off");
+
+    expect(await screen.findByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText(/this rule is off and produces nothing/)).toBeInTheDocument();
+  });
+
+  // A vendored rule is rendered exactly like one this project wrote, so without this an operator cannot tell whose rule they are
+  // reading. The corpus is under DRL 1.1 and each rule names its own author, which is the attribution this carries.
+  it("credits the source of a vendored rule and stays silent for our own", async () => {
+    mockDocs([makeEntry({ id: "vendored", origin: "SigmaHQ, by Someone Else" })]);
+    const { unmount } = renderAt("vendored");
+    expect(await screen.findByText("SigmaHQ, by Someone Else")).toBeInTheDocument();
+    unmount();
+
+    mockDocs([makeEntry({ id: "ours" })]);
+    renderAt("ours");
+    expect(await screen.findByText("Severity")).toBeInTheDocument();
+    expect(screen.queryByText("Source")).not.toBeInTheDocument();
+  });
+});
