@@ -114,8 +114,11 @@ func TestAll_DocStructIsPopulated(t *testing.T) {
 // Where a vendored rule falls outside a house rule, the exception is pinned by name in its own test, so the gap is visible and a
 // re-sync that changes it fails rather than passing quietly.
 func authored(r api.Rule) bool {
-	_, imported := r.(*importedRule)
-	return !imported
+	// Delegates to the classifier production uses (the exported pack skips these, the export endpoint serves their bytes) rather
+	// than re-deriving it from the concrete type. A second definition would drift the moment an imported rule is wrapped or its
+	// type changes, and it would drift silently, because both answers look plausible.
+	_, vendored := VendoredSource(r.ID())
+	return !vendored
 }
 
 // spec:server-detection-rules-engine/canonical-rule-naming/a-rule-names-itself-the-same-way-everywhere

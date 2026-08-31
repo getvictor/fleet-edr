@@ -202,12 +202,20 @@ export function DetectionConfig() {
       .catch(() => { /* surfaced via actionError */ });
   }, [runMutation]);
 
-  // handleModeChange splits on whether the new mode reduces alerting. Restoring a rule to `alert` is applied immediately with a
-  // generated reason; disabling it first opens the reason modal so the operator's justification is audited.
-  const handleModeChange = useCallback((ruleID: string, ruleTitle: string, mode: string, severity: string) => {
+  // handleModeChange splits on whether the new mode reduces alerting. Moving a rule to `alert` is applied immediately with a
+  // generated reason; reducing it first opens the reason modal so the operator's justification is audited.
+  //
+  // The generated reason distinguishes the two ways a rule reaches `alert`, because the audit row is read later by someone asking
+  // what happened. A rule coming back from `disabled` was off and is being re-enabled. A rule coming from `monitor` was never off:
+  // it was evaluating and recording, and what changed is that its matches now raise alerts. Calling that "re-enabled" would
+  // misdescribe the commonest transition in the catalog now that most rules default to monitor (issue #764).
+  const handleModeChange = useCallback((ruleID: string, ruleTitle: string, mode: string, severity: string, priorMode: string) => {
     if (mode === "alert") {
+      const reason = priorMode === "monitor"
+        ? "promoted from monitor to alert via admin UI"
+        : "re-enabled via admin UI";
       runMutation(() => upsertDetectionRuleSetting({
-        rule_id: ruleID, mode, severity_override: severity || undefined, reason: "re-enabled via admin UI",
+        rule_id: ruleID, mode, severity_override: severity || undefined, reason,
       })).catch(() => { /* surfaced via actionError */ });
       return;
     }
@@ -370,7 +378,7 @@ export function DetectionConfig() {
                       <td>
                         <Select label="" id={`dc-mode-${r.id}`} value={mode} disabled={!canWrite || mutating}
                           aria-label={`mode for ${r.id}`}
-                          onChange={(e) => { handleModeChange(r.id, r.doc.title, e.target.value, severity); }}>
+                          onChange={(e) => { handleModeChange(r.id, r.doc.title, e.target.value, severity, mode); }}>
                           {modeOptions(mode).map((m) => <option key={m} value={m}>{m}</option>)}
                         </Select>
                       </td>
