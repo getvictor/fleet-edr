@@ -137,9 +137,9 @@ func TestCompileFieldTest_Rejects(t *testing.T) {
 		value any
 		want  string
 	}{
-		{"unknown modifier", "CommandLine|base64offset", "x", "unsupported modifier"},
-		{"windash is not implemented", "CommandLine|windash", "x", "unsupported modifier"},
-		{"cidr is not implemented", "DestinationIp|cidr", "10.0.0.0/8", "unsupported modifier"},
+		{"unknown modifier", "CommandLine|base64offset", "x", "uses modifier"},
+		{"windash is not implemented", "CommandLine|windash", "x", "uses modifier"},
+		{"cidr is not implemented", "DestinationIp|cidr", "10.0.0.0/8", "uses modifier"},
 		{"empty field name", "|contains", "x", "empty field name"},
 		{"empty value list", "CommandLine|contains", []any{}, "no values"},
 		{"regexp combined with a substring modifier", "CommandLine|re|contains", "x", "no defined meaning"},

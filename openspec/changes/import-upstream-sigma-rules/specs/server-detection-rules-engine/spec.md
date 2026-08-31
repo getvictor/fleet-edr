@@ -1,0 +1,53 @@
+# Server detection rules engine: an upstream Sigma rule runs here unmodified delta
+
+## ADDED Requirements
+
+### Requirement: A detection can be an upstream Sigma file with nothing added
+
+The system SHALL load a rule from a Sigma file that carries no engine-specific keys, deriving what it needs from what Sigma already defines: the rule's identifier from the file name, its target platforms from the log source product, the event types it consumes from the log source category, its severity from its level, and its technique mapping from its tags.
+
+Requiring any additional key would fork the upstream corpus, because a file that must be edited cannot be re-synced without a conflict and its provenance can no longer be checked against upstream.
+
+Operator tuning of an imported rule SHALL live outside the rule file, so that re-syncing the file does not discard it.
+
+#### Scenario: An unmodified upstream rule loads and fires
+
+- **GIVEN** a Sigma rule file taken unchanged from an upstream corpus
+- **WHEN** it is imported and an event it describes is evaluated
+- **THEN** the rule produces a finding carrying the severity its level maps to
+
+### Requirement: A rule this sensor cannot run is refused by name
+
+The system SHALL refuse to import a rule it cannot run, and SHALL report the reason. Importing it anyway would install a detection that can never match, which is indistinguishable from the behaviour never occurring.
+
+A rule SHALL be refused both when it reads data this sensor does not collect, and when its category maps to an event type the sensor collects too narrowly for that category's rules to fire. The second is not a property of the rule but of the agent, so its reason SHALL name the missing telemetry rather than the rule, and the refusal SHALL be revisited when the agent's collection widens.
+
+Refusing one rule SHALL NOT refuse the rest. An upstream corpus is written for many sensors, so some of its rules will always read data this one does not collect, and abandoning the import over them would import nothing.
+
+A file that cannot be read or parsed, or that claims an identifier another file already claimed, SHALL fail the import rather than being reported as a rejection: those mean the import itself is broken rather than that one detection does not fit.
+
+A detection block the evaluator cannot compile SHALL be classified by WHY it cannot. A rule using a construct the evaluator has not implemented SHALL be refused like any other rule this sensor cannot run. A detection block that is structurally invalid SHALL fail the import, because a vendored file the evaluator cannot parse is a defect in this repository rather than a rule that does not fit.
+
+#### Scenario: A rule reading an unavailable field is refused, and the others still import
+
+- **GIVEN** a corpus in which one rule reads a field this sensor does not collect
+- **WHEN** the corpus is imported
+- **THEN** that rule is reported as refused, naming the field, and every other rule imports
+
+#### Scenario: A rule using an unimplemented Sigma feature is refused, not a failed import
+
+- **GIVEN** an upstream rule whose detection block is valid Sigma but uses a feature the evaluator does not implement, such as a keyword search
+- **WHEN** the corpus is imported
+- **THEN** that rule is reported as refused, naming the feature, and every other rule imports
+
+#### Scenario: A structurally invalid detection block fails the import
+
+- **GIVEN** a vendored rule file whose detection block names a search that does not exist
+- **WHEN** the corpus is imported
+- **THEN** the import fails and names the file, rather than reporting the rule as refused
+
+#### Scenario: Two files claiming one identifier fail the import
+
+- **GIVEN** two rule files that resolve to the same identifier
+- **WHEN** the corpus is imported
+- **THEN** the import fails, rather than one file silently replacing the other

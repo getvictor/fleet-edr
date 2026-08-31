@@ -7,6 +7,16 @@ import (
 	"slices"
 )
 
+// ErrUnsupported marks a compile failure that means "this is valid Sigma, and this evaluator does not implement it" as opposed to
+// "this rule is broken". Compile returns errors of both kinds and a caller usually has to act on them differently: a rule using a
+// construct we have not built is one to decline and count, while a malformed rule is a defect in the rule file itself.
+//
+// The distinction is drawn here rather than by a caller matching on message text, because only this package knows which of its
+// refusals are gaps in the implementation. Wrapped by exactly five refusals today: a reserved detection key, a keyword search, an
+// unknown field modifier, a condition nested past the depth bound, and a list-valued condition. Everything else Compile rejects is
+// malformed.
+var ErrUnsupported = errors.New("unsupported Sigma feature")
+
 // Rule is a compiled Sigma detection: the named searches and the condition that combines them. Compile it once at load; Matches
 // is then allocation-free and safe to call concurrently.
 type Rule struct {
@@ -21,6 +31,42 @@ var reservedDetectionKeys = map[string]bool{
 	"timeframe": true,
 }
 
+// listCondition reports why a list-valued condition cannot be compiled, which is not always the same reason.
+//
+// Sigma's list form is a non-empty list of condition STRINGS, meaning their disjunction, and that is the form this evaluator has
+// not built. A list that is empty, or that carries anything else, is not that form and not a condition at all, so it is a broken
+// rule. Treating every list as the unsupported form would let `condition: [7]` load as a rejection and go green.
+func listCondition(entries []any) error {
+	if len(entries) == 0 {
+		return errors.New("condition is an empty list, so nothing decides whether the rule fires")
+	}
+	for _, entry := range entries {
+		if _, ok := entry.(string); !ok {
+			return fmt.Errorf("condition list entries must be strings, got %T", entry)
+		}
+	}
+	return fmt.Errorf("%w: condition is a list of %d conditions, meaning their disjunction", ErrUnsupported, len(entries))
+}
+
+// conditionString extracts the condition text, naming each way a `detection:` block can fail to carry one.
+//
+// Sigma defines two condition forms: a string, and a list of strings meaning their disjunction. This evaluator implements only the
+// first, so a list is a gap rather than a defect: no rule in the corpus uses it, and guessing at it would be worse than declining
+// it. A condition of any other type is neither form Sigma defines, so that one is a broken rule, as is a block carrying none.
+func conditionString(raw any, present bool) (string, error) {
+	if !present {
+		return "", errors.New("detection block has no condition")
+	}
+	switch c := raw.(type) {
+	case string:
+		return c, nil
+	case []any:
+		return "", listCondition(c)
+	default:
+		return "", fmt.Errorf("condition must be a single string or a list of strings, got %T", raw)
+	}
+}
+
 // Compile turns a decoded Sigma `detection:` block into an evaluable rule.
 //
 // Everything that can be wrong with a rule is rejected here rather than at match time: an unknown modifier, a condition naming a
@@ -28,15 +74,10 @@ var reservedDetectionKeys = map[string]bool{
 // clean and then quietly never fires, which is indistinguishable from "the adversary behaviour did not occur" and is therefore
 // the worst failure this package can have.
 func Compile(detection map[string]any) (*Rule, error) {
-	rawCondition, ok := detection["condition"]
-	if !ok {
-		return nil, errors.New("detection block has no condition")
-	}
-	conditionText, ok := rawCondition.(string)
-	if !ok {
-		// Sigma permits a list of conditions, meaning their disjunction. No rule in the corpus uses it, so it is refused rather
-		// than guessed at.
-		return nil, fmt.Errorf("condition must be a single string, got %T", rawCondition)
+	rawCondition, present := detection["condition"]
+	conditionText, err := conditionString(rawCondition, present)
+	if err != nil {
+		return nil, err
 	}
 
 	// Sorted so glob resolution, and any error naming a search, are deterministic: Go randomises map iteration order.
@@ -49,7 +90,7 @@ func Compile(detection map[string]any) (*Rule, error) {
 			// A reserved key is not a search. Collected as one it would be compiled as a field map and, worse, swept into any
 			// `1 of` / `all of` quantifier, so the rule would evaluate a condition nobody wrote instead of being refused for
 			// using a construct this evaluator does not implement.
-			return nil, fmt.Errorf("detection block uses unsupported Sigma construct %q", name)
+			return nil, fmt.Errorf("%w: detection block uses reserved key %q", ErrUnsupported, name)
 		}
 		names = append(names, name)
 	}
@@ -101,6 +142,37 @@ func (r *Rule) Fields() []string {
 	return out
 }
 
+// listSearchMaps classifies a list-valued search and returns its field maps.
+//
+// Sigma's list form ORs its entries, and an entry is either a field map or a bare string. A bare string is a keyword, matched
+// against the WHOLE event rather than a named field, and the spec does not require the list to be homogeneous: a list may mix the
+// two and still be valid Sigma.
+//
+// So the question is not whether the list is homogeneous but whether it uses keywords at all. One keyword anywhere in the list
+// means the rule needs a whole-event surface, which this evaluator does not have, and that is a gap in this implementation rather
+// than a defect in the rule. An entry that is neither a field map nor a string is neither Sigma form, and that IS a broken rule.
+//
+// Classifying a mixed list as malformed was wrong in the direction that costs most: it would abort the whole corpus over one valid
+// upstream rule, where calling it unsupported merely declines that rule and reports why.
+func listSearchMaps(name string, entries []any) ([]map[string]any, error) {
+	fieldMaps := make([]map[string]any, 0, len(entries))
+	keywords := 0
+	for _, entry := range entries {
+		switch e := entry.(type) {
+		case map[string]any:
+			fieldMaps = append(fieldMaps, e)
+		case string:
+			keywords++
+		default:
+			return nil, fmt.Errorf("search %q: list entries must be field maps or keywords, got %T", name, entry)
+		}
+	}
+	if keywords > 0 {
+		return nil, fmt.Errorf("%w: search %q uses %d keyword(s), which match the whole event", ErrUnsupported, name, keywords)
+	}
+	return fieldMaps, nil
+}
+
 // compileSearch builds one named search. A Sigma search is a map of field matchers (AND across fields) or a list of such maps
 // (OR across the list).
 func compileSearch(name string, raw any) (search, error) {
@@ -113,13 +185,11 @@ func compileSearch(name string, raw any) (search, error) {
 		}
 		s.alternatives = append(s.alternatives, alt)
 	case []any:
-		for _, entry := range v {
-			m, ok := entry.(map[string]any)
-			if !ok {
-				// A list of bare strings is Sigma's keyword search, which matches against the whole event rather than a named
-				// field. Zero macOS rules use it and this evaluator has no whole-event surface, so it is refused at load.
-				return search{}, fmt.Errorf("search %q: list entries must be field maps, got %T (keyword search is unsupported)", name, entry)
-			}
+		maps, err := listSearchMaps(name, v)
+		if err != nil {
+			return search{}, err
+		}
+		for _, m := range maps {
 			alt, err := compileAlternative(name, m)
 			if err != nil {
 				return search{}, err
