@@ -82,8 +82,8 @@ func (r *ShellFromOffice) evalEvent(
 	// batch's other rules, so the graph is read once per event however many rules read the field. An unresolved parent leaves the
 	// field absent, so the detection declines: the same answer the Go matcher gave, and for the same reason. The processor marks
 	// the batch processed after Evaluate returns, so a missing parent is accepted rather than retried.
-	view, err := sigmaEvent(ctx, scope, evt, s)
-	if err != nil || view == nil {
+	view := sigmaEvent(ctx, scope, evt, s)
+	if view == nil {
 		return nil, nil
 	}
 	se := view.Event

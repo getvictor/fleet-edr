@@ -89,8 +89,8 @@ func (r *PersistenceLaunchAgent) evalEvent(
 	if evt.EventType != "exec" {
 		return nil, nil
 	}
-	view, err := sigmaEvent(ctx, scope, evt, s)
-	if err != nil || view == nil {
+	view := sigmaEvent(ctx, scope, evt, s)
+	if view == nil {
 		return nil, nil
 	}
 	se := view.Event

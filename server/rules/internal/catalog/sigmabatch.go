@@ -72,23 +72,23 @@ type sigmaView struct {
 	PID int
 }
 
-// sigmaEvent returns this rule's view of the shared adaptation of one event, building the adaptation on the batch's first ask.
+// sigmaEvent returns this rule's view of the shared adaptation of one event, or nil when the event cannot be adapted at all.
 //
 // Every Sigma-backed rule goes through here rather than constructing its own adapter, and that is what turns the two decodes per
 // rule per event (one for the pid, one inside the adapter) into one decode per event however many rules look at it. The graph
 // lookups are shared on the same terms; only the resolver ERROR is per rule, so a rule that never read the image does not lose its
 // batch to another rule's failed lookup.
 //
-// A nil view with a nil error means the event carries no pid, which is a malformed event to skip rather than to raise.
-func sigmaEvent(ctx context.Context, scope *api.BatchScope, evt api.Event, gr api.GraphReader) (*sigmaView, error) {
+// It returns NO error, and that is the contract rather than an omission. The two ways an event fails to adapt, a payload that does
+// not decode and one carrying no pid, both mean the event is malformed rather than uninteresting, and every rule answers a
+// malformed event the same way: skip it. Reporting them as errors would let one bad event discard the findings a rule had already
+// collected from the rest of the batch, which is the behaviour each of these rules was written to avoid.
+func sigmaEvent(ctx context.Context, scope *api.BatchScope, evt api.Event, gr api.GraphReader) *sigmaView {
 	shared := sigmaEventsFor(scope).adapt(evt, func() *adaptedEvent { return buildAdapted(ctx, evt, gr) })
-	if shared.err != nil {
-		return nil, shared.err
+	if shared.err != nil || !shared.hasPID {
+		return nil
 	}
-	if !shared.hasPID {
-		return nil, nil
-	}
-	return &sigmaView{Event: shared.core.WithResolver(shared.image), Subject: shared.subject, PID: shared.pid}, nil
+	return &sigmaView{Event: shared.core.WithResolver(shared.image), Subject: shared.subject, PID: shared.pid}
 }
 
 // buildAdapted decodes one event and binds the memoized lookups its type calls for.

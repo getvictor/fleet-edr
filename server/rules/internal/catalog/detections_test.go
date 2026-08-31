@@ -264,8 +264,7 @@ func TestExecEventWithParent(t *testing.T) {
 func execAdapter(t *testing.T, evt rulesapi.Event, gr rulesapi.GraphReader) *sigmabind.Event {
 	t.Helper()
 
-	view, err := sigmaEvent(t.Context(), &rulesapi.BatchScope{}, evt, gr)
-	require.NoError(t, err)
+	view := sigmaEvent(t.Context(), &rulesapi.BatchScope{}, evt, gr)
 	require.NotNil(t, view)
 	return view.Event
 }

@@ -89,8 +89,8 @@ func (r *CredentialKeychainDump) EvaluateScoped(
 		//
 		// A payload that does not decode is a malformed event rather than an uninteresting one, but one bad event must not
 		// discard the findings the rest of the batch produced, so it is skipped.
-		view, err := sigmaEvent(ctx, scope, evt, s)
-		if err != nil || view == nil {
+		view := sigmaEvent(ctx, scope, evt, s)
+		if view == nil {
 			continue
 		}
 		se := view.Event

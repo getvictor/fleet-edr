@@ -92,8 +92,8 @@ func (r *DyldInsert) EvaluateScoped(
 		if evt.EventType != "exec" {
 			continue
 		}
-		view, err := sigmaEvent(ctx, scope, evt, s)
-		if err != nil || view == nil {
+		view := sigmaEvent(ctx, scope, evt, s)
+		if view == nil {
 			continue
 		}
 		se := view.Event

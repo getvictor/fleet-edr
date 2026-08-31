@@ -414,13 +414,10 @@ func (r *importedRule) EvaluateScoped(
 func (r *importedRule) evalEvent(
 	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader,
 ) (*api.Finding, error) {
-	view, err := sigmaEvent(ctx, scope, evt, s)
-	if err != nil {
-		return nil, err
-	}
+	// A payload that does not decode, or that carries no pid, is malformed rather than uninteresting. One bad event must not
+	// discard the findings the rest of the batch produced, so it is skipped rather than raised.
+	view := sigmaEvent(ctx, scope, evt, s)
 	if view == nil {
-		// A payload carrying no pid is malformed rather than uninteresting. One bad event must not discard the findings the rest
-		// of the batch produced, so it is skipped rather than raised.
 		return nil, nil
 	}
 	matched := r.detection.Matches(view.Event)

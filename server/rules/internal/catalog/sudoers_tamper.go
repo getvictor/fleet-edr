@@ -127,8 +127,8 @@ func (r *SudoersTamper) evalEvent(
 	}
 	// The detection decides, including the sudo-lock suppression that used to sit after the subject lookup below. The subject's
 	// image is resolved lazily inside the adapter, so a write to any other path never reads the graph.
-	view, err := sigmaEvent(ctx, scope, evt, s)
-	if err != nil || view == nil {
+	view := sigmaEvent(ctx, scope, evt, s)
+	if view == nil {
 		return nil, nil
 	}
 	se := view.Event

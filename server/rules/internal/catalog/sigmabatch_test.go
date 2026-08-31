@@ -52,14 +52,35 @@ func TestSigmaEvent_DecodesEachEventOncePerBatch(t *testing.T) {
 	// Ten rules looking at the same event, which is the shape the imported corpus produces.
 	views := make([]*sigmaView, 0, 10)
 	for range 10 {
-		view, err := sigmaEvent(t.Context(), scope, evt, gr)
-		require.NoError(t, err)
+		view := sigmaEvent(t.Context(), scope, evt, gr)
 		require.NotNil(t, view)
 		views = append(views, view)
 	}
 
+	// Counting BUILDS, not map entries. A memo that rebuilt and overwrote the same key on every ask would leave exactly one entry
+	// and satisfy a length check while doing all the work this exists to avoid, so the length check would pass the regression it
+	// is named for.
+	builds := 0
 	shared := sigmaEventsFor(scope)
-	assert.Len(t, shared.events, 1, "one event decoded once, however many rules asked for it")
+	for range 10 {
+		shared.adapt(evt, func() *adaptedEvent {
+			builds++
+			return buildAdapted(t.Context(), evt, gr)
+		})
+	}
+	assert.Zero(t, builds, "the event was already adapted, so no further ask rebuilds it")
+	assert.Len(t, shared.events, 1, "and it is held under one key")
+
+	// The same counter proves the memo is what suppressed the rebuilds rather than the event being uninteresting: a DIFFERENT
+	// event does build, exactly once, however many times it is asked for.
+	other := execEventFor("e-other", 11)
+	for range 5 {
+		shared.adapt(other, func() *adaptedEvent {
+			builds++
+			return buildAdapted(t.Context(), other, gr)
+		})
+	}
+	assert.Equal(t, 1, builds, "a new event is built once and then served from the memo")
 
 	// Every view sees the same decoded fields and the same pid.
 	for i, view := range views {
@@ -82,8 +103,7 @@ func TestSigmaEvent_ReadsTheGraphOncePerEvent(t *testing.T) {
 	evt := execEventFor("e1", 7)
 
 	for range 5 {
-		view, err := sigmaEvent(t.Context(), scope, evt, gr)
-		require.NoError(t, err)
+		view := sigmaEvent(t.Context(), scope, evt, gr)
 		require.NotNil(t, view)
 		// Reading the field is what triggers resolution; the detections short-circuit, so a rule that never reads it pays nothing.
 		_, _ = view.Event.Field("ParentImage")
@@ -104,11 +124,9 @@ func TestSigmaEvent_ResolverErrorsDoNotCrossRules(t *testing.T) {
 	gr := &failingGraphReader{}
 	evt := execEventFor("e1", 7)
 
-	asked, err := sigmaEvent(t.Context(), scope, evt, gr)
-	require.NoError(t, err)
+	asked := sigmaEvent(t.Context(), scope, evt, gr)
 	require.NotNil(t, asked)
-	silent, err := sigmaEvent(t.Context(), scope, evt, gr)
-	require.NoError(t, err)
+	silent := sigmaEvent(t.Context(), scope, evt, gr)
 	require.NotNil(t, silent)
 
 	_, _ = asked.Event.Field("ParentImage")
@@ -127,11 +145,9 @@ func TestSigmaEvent_DistinctEventsGetDistinctAdaptations(t *testing.T) {
 	scope := &api.BatchScope{}
 	gr := &graphCounter{}
 
-	first, err := sigmaEvent(t.Context(), scope, execEventFor("e1", 7), gr)
-	require.NoError(t, err)
+	first := sigmaEvent(t.Context(), scope, execEventFor("e1", 7), gr)
 	require.NotNil(t, first)
-	second, err := sigmaEvent(t.Context(), scope, execEventFor("e2", 9), gr)
-	require.NoError(t, err)
+	second := sigmaEvent(t.Context(), scope, execEventFor("e2", 9), gr)
 	require.NotNil(t, second)
 
 	assert.Equal(t, 7, first.PID)
@@ -144,10 +160,7 @@ func TestSigmaEvent_APayloadWithNoPIDIsSkippedNotRaised(t *testing.T) {
 	t.Parallel()
 
 	evt := api.Event{EventID: "e1", HostID: "h1", EventType: "exec", Payload: []byte(`{"path":"/bin/sh","args":["sh"]}`)}
-	view, err := sigmaEvent(t.Context(), &api.BatchScope{}, evt, &graphCounter{})
-
-	require.NoError(t, err, "a missing pid is an event to skip, not a reason to fail the rule's batch")
-	assert.Nil(t, view)
+	assert.Nil(t, sigmaEvent(t.Context(), &api.BatchScope{}, evt, &graphCounter{}))
 }
 
 // TestSigmaEvent_WithoutAScopeStillWorks pins that a direct caller does not have to build one.
@@ -156,8 +169,7 @@ func TestSigmaEvent_APayloadWithNoPIDIsSkippedNotRaised(t *testing.T) {
 func TestSigmaEvent_WithoutAScopeStillWorks(t *testing.T) {
 	t.Parallel()
 
-	view, err := sigmaEvent(t.Context(), nil, execEventFor("e1", 7), &graphCounter{})
-	require.NoError(t, err)
+	view := sigmaEvent(t.Context(), nil, execEventFor("e1", 7), &graphCounter{})
 	require.NotNil(t, view)
 	assert.Equal(t, 7, view.PID)
 }
@@ -185,8 +197,8 @@ func BenchmarkSigmaEventPerRule(b *testing.B) {
 		for range b.N {
 			scope := &api.BatchScope{}
 			for range 10 {
-				if _, err := sigmaEvent(b.Context(), scope, evt, gr); err != nil {
-					b.Fatal(err)
+				if sigmaEvent(b.Context(), scope, evt, gr) == nil {
+					b.Fatal("adaptation failed")
 				}
 			}
 		}
@@ -196,8 +208,8 @@ func BenchmarkSigmaEventPerRule(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
 			for range 10 {
-				if _, err := sigmaEvent(b.Context(), &api.BatchScope{}, evt, gr); err != nil {
-					b.Fatal(err)
+				if sigmaEvent(b.Context(), &api.BatchScope{}, evt, gr) == nil {
+					b.Fatal("adaptation failed")
 				}
 			}
 		}
@@ -265,4 +277,31 @@ func keychainDumpEvent() api.Event {
 		EventID: "e-exec", HostID: "h1", EventType: "exec", TimestampNs: 1,
 		Payload: []byte(`{"pid":7,"path":"/usr/bin/security","args":["security","dump-keychain","-d"]}`),
 	}
+}
+
+// TestSigmaEvent_AMalformedEventDoesNotDiscardTheBatch is a regression test for a behaviour I broke while sharing the adapter.
+//
+// Before the shared path, every Sigma-backed rule read the pid first and SKIPPED an event whose payload did not decode. Routing the
+// decode through sigmaEvent made that failure an error instead, and an error from a rule's per-event evaluator is fatal: it
+// discards the findings the rule had already collected from the rest of the batch. One type-invalid payload from one host would
+// have silently cost every other alert in that batch, for every imported rule.
+//
+// The fix is that sigmaEvent reports no error at all. Skipping is what all six rules already did and what their comments already
+// promised.
+func TestSigmaEvent_AMalformedEventDoesNotDiscardTheBatch(t *testing.T) {
+	t.Parallel()
+
+	// A payload whose types are wrong, so json.Unmarshal fails rather than yielding a zero value.
+	malformed := api.Event{EventID: "bad", HostID: "h1", EventType: "exec", TimestampNs: 1, Payload: []byte(`{"path":123}`)}
+	good := keychainDumpEvent()
+
+	assert.Nil(t, sigmaEvent(t.Context(), &api.BatchScope{}, malformed, &graphCounter{}),
+		"an undecodable payload yields no view, and no error for a caller to treat as fatal")
+
+	// End to end: the malformed event sits in front of the one that fires, which is the order that loses findings if it raises.
+	gr := &graphCounter{proc: &api.Process{ID: 43, PID: 7, Path: "/usr/bin/security"}}
+	findings, err := (&CredentialKeychainDump{}).Evaluate(t.Context(), []api.Event{malformed, good}, gr)
+
+	require.NoError(t, err)
+	assert.Len(t, findings, 1, "the malformed event is skipped and the rest of the batch still produces its findings")
 }
