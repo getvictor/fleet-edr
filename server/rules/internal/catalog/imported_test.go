@@ -100,9 +100,10 @@ func TestSeverityFor(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		level   string
-		want    string
-		wantErr string
+		level         string
+		want          string
+		wantErr       string
+		wantRejection bool
 	}{
 		{level: "critical", want: api.SeverityCritical},
 		{level: "high", want: api.SeverityHigh},
@@ -112,8 +113,9 @@ func TestSeverityFor(t *testing.T) {
 		// label, so it lands at the lowest severity we can raise.
 		{level: "informational", want: api.SeverityLow},
 		{level: "MEDIUM", want: api.SeverityMedium},
-		{level: "", wantErr: "no level"},
-		{level: "catastrophic", wantErr: "catastrophic"},
+		// `level` is optional in the Sigma specification, so omitting it makes a rule unrunnable here without making it broken.
+		{level: "", wantErr: "no level", wantRejection: true},
+		{level: "catastrophic", wantErr: "catastrophic", wantRejection: true},
 	}
 	for _, tc := range cases {
 		t.Run("level="+tc.level, func(t *testing.T) {
@@ -122,6 +124,8 @@ func TestSeverityFor(t *testing.T) {
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
+				_, isRejection := errors.AsType[unmappableError](err)
+				assert.Equal(t, tc.wantRejection, isRejection, "a level we cannot map is a rejection; a broken file is not")
 				return
 			}
 			require.NoError(t, err)
@@ -605,7 +609,7 @@ func TestParseImported_UnsupportedSigmaIsARejection(t *testing.T) {
 
 	_, isRejection := errors.AsType[unmappableError](err)
 	assert.True(t, isRejection, "an unsupported feature is a rejection, so the rest of the corpus still imports")
-	assert.Contains(t, err.Error(), "keyword search", "the reason names the feature, so a re-sync report says what to build")
+	assert.Contains(t, err.Error(), "keyword", "the reason names the feature, so a re-sync report says what to build")
 }
 
 // spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-structurally-invalid-detection-block-fails-the-import
@@ -625,7 +629,7 @@ func TestParseImported_MalformedDetectionIsAHardError(t *testing.T) {
 		{"condition names a search that does not exist", "detection: {sel: {Image: /bin/sh}, condition: nope}"},
 		{"no condition at all", "detection: {sel: {Image: /bin/sh}}"},
 		{"condition of neither Sigma form", "detection: {sel: {Image: /bin/sh}, condition: 7}"},
-		{"a list mixing field maps with bare strings", "detection: {sel: ['kw', {Image: /bin/sh}], condition: sel}"},
+		{"a list entry that is neither a field map nor a keyword", "detection: {sel: [{Image: /bin/sh}, 7], condition: sel}"},
 		{"no searches", "detection: {condition: sel}"},
 		{"search with an empty field map", "detection: {sel: {}, condition: sel}"},
 		{"unclosed parenthesis", "detection: {sel: {Image: /bin/sh}, condition: '(sel'}"},

@@ -103,7 +103,7 @@ func TestCompile_Rejects(t *testing.T) {
 		{"no searches", "condition: selection\n", "defines no searches"},
 		{"condition as a list", "selection:\n  Image: '/bin/sh'\ncondition:\n  - selection\n", "condition is a list"},
 		{"search is a scalar", "selection: nope\ncondition: selection\n", "must be a field map"},
-		{"keyword list search", "selection:\n  - 'some keyword'\ncondition: selection\n", "is a keyword search"},
+		{"keyword list search", "selection:\n  - 'some keyword'\ncondition: selection\n", "uses 1 keyword(s)"},
 		{"empty field map", "selection: {}\ncondition: selection\n", "empty field map"},
 	}
 	for _, tc := range cases {
@@ -275,8 +275,15 @@ func TestCompile_ErrUnsupportedSeparatesGapsFromDefects(t *testing.T) {
 			detection: map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": 7},
 		},
 		{
-			name:      "a list mixing field maps with bare strings is neither form, so it is a broken rule",
-			detection: map[string]any{"sel": []any{"keyword", map[string]any{"Image": "/bin/sh"}}, "condition": "sel"},
+			// Sigma's list form ORs its entries and does not require them to be homogeneous, so a mixed list is valid Sigma.
+			// One keyword anywhere in it means the rule needs a whole-event surface we do not have, which is a gap.
+			name:        "a list mixing field maps with keywords still uses keywords, so it is a gap",
+			detection:   map[string]any{"sel": []any{"keyword", map[string]any{"Image": "/bin/sh"}}, "condition": "sel"},
+			unsupported: true,
+		},
+		{
+			name:      "a list entry that is neither a field map nor a keyword is a broken rule",
+			detection: map[string]any{"sel": []any{map[string]any{"Image": "/bin/sh"}, 7}, "condition": "sel"},
 		},
 		{
 			name:      "a condition naming no search is a broken rule",

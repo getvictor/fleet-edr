@@ -144,14 +144,16 @@ func (r *Rule) Fields() []string {
 
 // listSearchMaps classifies a list-valued search and returns its field maps.
 //
-// Sigma defines two list forms and they are not interchangeable: a list of field maps is a disjunction of alternatives, and a list
-// of bare strings is a keyword search, matching the whole event rather than a named field. The classification is made over the
-// WHOLE list rather than entry by entry, because a list mixing the two forms is neither of them. Deciding per entry would let the
-// first string in a corrupted list report the file as merely using a keyword search, which downgrades a broken rule to a feature
-// this evaluator has not built, and a caller importing a corpus acts on that difference.
+// Sigma's list form ORs its entries, and an entry is either a field map or a bare string. A bare string is a keyword, matched
+// against the WHOLE event rather than a named field, and the spec does not require the list to be homogeneous: a list may mix the
+// two and still be valid Sigma.
 //
-// Zero macOS rules use a keyword search and this evaluator has no whole-event surface, so that form is a gap, marked unsupported.
-// A mixed list, or one carrying an entry of any other type, is a malformed rule.
+// So the question is not whether the list is homogeneous but whether it uses keywords at all. One keyword anywhere in the list
+// means the rule needs a whole-event surface, which this evaluator does not have, and that is a gap in this implementation rather
+// than a defect in the rule. An entry that is neither a field map nor a string is neither Sigma form, and that IS a broken rule.
+//
+// Classifying a mixed list as malformed was wrong in the direction that costs most: it would abort the whole corpus over one valid
+// upstream rule, where calling it unsupported merely declines that rule and reports why.
 func listSearchMaps(name string, entries []any) ([]map[string]any, error) {
 	fieldMaps := make([]map[string]any, 0, len(entries))
 	keywords := 0
@@ -162,14 +164,11 @@ func listSearchMaps(name string, entries []any) ([]map[string]any, error) {
 		case string:
 			keywords++
 		default:
-			return nil, fmt.Errorf("search %q: list entries must be field maps, got %T", name, entry)
+			return nil, fmt.Errorf("search %q: list entries must be field maps or keywords, got %T", name, entry)
 		}
 	}
-	switch {
-	case keywords == len(entries) && keywords > 0:
-		return nil, fmt.Errorf("%w: search %q is a keyword search", ErrUnsupported, name)
-	case keywords > 0:
-		return nil, fmt.Errorf("search %q mixes field maps with %d bare string(s), which is neither Sigma list form", name, keywords)
+	if keywords > 0 {
+		return nil, fmt.Errorf("%w: search %q uses %d keyword(s), which match the whole event", ErrUnsupported, name, keywords)
 	}
 	return fieldMaps, nil
 }

@@ -333,7 +333,9 @@ func severityFor(level string) (string, error) {
 	case "low", "informational":
 		return api.SeverityLow, nil
 	case "":
-		return "", errors.New("no level, so the rule has no severity to raise an alert at")
+		// `level` is OPTIONAL in the Sigma specification, so a rule omitting it is valid Sigma rather than a broken file. We
+		// cannot raise an alert without a severity, which makes it a rule this sensor cannot run: a rejection, not a hard error.
+		return "", unmappable("no level, so the rule has no severity to raise an alert at")
 	default:
 		return "", unmappable("level %q is not one this engine can raise an alert at", level)
 	}
