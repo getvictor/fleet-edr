@@ -128,6 +128,9 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 			// field's contract is that it always holds a mode. Those two document themselves as empty when absent, so omitting
 			// them keeps their contract; omitting this one would break its.
 			DefaultMode: rulesapi.DefaultModeOf(r),
+			// Same reason as DefaultMode above: the field's contract is that an empty origin means this project wrote the rule,
+			// so a builder that never populates it would report every vendored rule as ours.
+			Origin: rulesapi.OriginOf(r),
 		})
 	}
 	return out
@@ -367,7 +370,15 @@ func (e *Engine) routeFinding(
 	case rulesapi.DetectionRuleModeDisabled:
 		return nil
 	case rulesapi.DetectionRuleModeMonitor:
-		e.logger.InfoContext(ctx, "detection rule matched in monitor mode (no alert)",
+		// Counted, then logged at DEBUG. This was an INFO line per match, which was proportionate when monitor was a state an
+		// operator set deliberately on one noisy rule. Issue #764 made it the default for most of the catalog, and several of
+		// those rules match commonplace commands, so an INFO per match is fleet-scale log amplification: every `id` on every host,
+		// re-emitted whenever a batch is retried, since only alert persistence is deduplicated. The counter is the medium built
+		// for a high-frequency per-rule signal, and it is also the one an operator needs to decide whether to promote the rule.
+		if e.metrics != nil {
+			e.metrics.MonitorMatched(ctx, ruleID, f.Severity)
+		}
+		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
 		return nil
 	case rulesapi.DetectionRuleModeAlert:

@@ -1191,7 +1191,15 @@ components:
               techniqueID:
                 type: string
                 example: "T1574.006"
-              score: {type: integer, example: 1}
+              score:
+                type: number
+                description: |
+                  1 when at least one rule covering this technique raises alerts. 0.5 when every rule
+                  covering it ships in monitor mode and raises nothing until an operator promotes it,
+                  so a coverage figure is not inflated by rules that do not alert as shipped.
+                example: 1
+              # A fractional score is emitted for monitor-only coverage; clients must not assume an integer.
+
               color:
                 type: string
                 example: "#31a354"

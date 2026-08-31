@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -90,6 +89,31 @@ func TestEngine_CatalogAlwaysCarriesAMode(t *testing.T) {
 	assert.Equal(t, rulesapi.DetectionRuleModeAlert, got["silent"], "a rule declaring nothing reports alert, not the zero value")
 	assert.Equal(t, rulesapi.DetectionRuleModeMonitor, got["declaring"])
 }
+
+// TestEngine_CatalogCreditsAVendoredRule pins the same property for Origin, on the same builder and for the same reason.
+//
+// An empty origin means "this project wrote it", so a builder that never populates the field reports every vendored rule as ours.
+// That is the second field this builder has silently dropped; the first was DefaultMode, caught in review on #811.
+func TestEngine_CatalogCreditsAVendoredRule(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, discardLogger())
+	e.Register(&stubRule{id: "ours"})
+	e.Register(&originStub{stubRule: stubRule{id: "vendored"}})
+
+	got := map[string]string{}
+	for _, rm := range e.Catalog() {
+		got[rm.ID] = rm.Origin
+	}
+
+	assert.Equal(t, "Upstream, by Someone", got["vendored"])
+	assert.Empty(t, got["ours"], "a rule this project wrote announces no origin")
+}
+
+// originStub is a stubRule that names an upstream source.
+type originStub struct{ stubRule }
+
+func (originStub) Origin() string { return "Upstream, by Someone" }
 
 // TestEngine_LoadActiveReplacesRuleSet pins the replace (not append) semantics: a hot-reload caller can invoke LoadActive repeatedly
 // without the engine accumulating duplicates.
@@ -867,8 +891,9 @@ func TestEngine_ThreadsEachRulesDeclaredDefaultIntoResolution(t *testing.T) {
 func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
 	t.Parallel()
 
-	var logs bytes.Buffer
-	e := New(nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	metrics := &countingMetrics{}
+	e := New(nil, discardLogger())
+	e.SetMetrics(metrics)
 	e.Register(&modeDeclaringStub{
 		stubRuleWithFindings: stubRuleWithFindings{
 			stubRule: stubRule{id: "imported"},
@@ -879,6 +904,50 @@ func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
 
 	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
 
-	assert.Contains(t, logs.String(), "monitor mode", "the finding was routed to monitor, not persisted")
-	assert.Contains(t, logs.String(), "imported")
+	// Asserted on the counter rather than the log line this test originally read. The per-match log moved to DEBUG when the
+	// vendored corpus made monitor the common case, and a test that scrapes a log is hostage to its level; the counter is the
+	// signal that is meant to survive.
+	assert.Equal(t, []string{"imported"}, metrics.monitors, "the finding was routed to monitor, not persisted")
+	assert.Empty(t, metrics.alerts)
+}
+
+// countingMetrics records the per-rule counters the engine emits, so a test can tell a suppressed match from no match at all.
+type countingMetrics struct {
+	api.MetricsRecorder
+	alerts   []string
+	monitors []string
+}
+
+func (m *countingMetrics) AlertCreated(_ context.Context, ruleID, _ string) {
+	m.alerts = append(m.alerts, ruleID)
+}
+
+func (m *countingMetrics) MonitorMatched(_ context.Context, ruleID, _ string) {
+	m.monitors = append(m.monitors, ruleID)
+}
+
+// TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt pins the counter that replaced a per-match log line.
+//
+// A monitor match used to produce one INFO line and nothing else. That was proportionate when monitor was a state an operator set
+// on a single noisy rule; issue #764 made it the default for most of the catalog, several of whose rules match commonplace
+// commands, so a per-match INFO became fleet-scale log amplification. The signal has to survive that move, and a counter is both
+// the medium built for it and the thing an operator needs in order to judge whether promoting the rule is worth it.
+func TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt(t *testing.T) {
+	t.Parallel()
+
+	metrics := &countingMetrics{}
+	e := New(nil, discardLogger())
+	e.SetMetrics(metrics)
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{
+			stubRule: stubRule{id: "imported"},
+			findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+		},
+		mode: rulesapi.DetectionRuleModeMonitor,
+	})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+
+	assert.Equal(t, []string{"imported"}, metrics.monitors, "the suppressed match is counted against the rule that produced it")
+	assert.Empty(t, metrics.alerts, "and no alert was created, which is the point of the mode")
 }

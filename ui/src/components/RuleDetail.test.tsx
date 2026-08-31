@@ -162,6 +162,17 @@ describe("RuleDetail monitor mode and attribution", () => {
     expect(screen.queryByText(/By default this rule records matches/)).not.toBeInTheDocument();
   });
 
+  // Disabled is the other non-alerting default ModeDefaulter permits. Keying the row on "monitor" alone left a disabled-default
+  // rule looking exactly like an alerting one, which is the case the requirement is about: distinguish every rule that does not
+  // alert, not just the mode this PR happens to ship.
+  it("distinguishes a disabled default too, not only monitor", async () => {
+    mockDocs([makeEntry({ id: "off", default_mode: "disabled" })]);
+    renderAt("off");
+
+    expect(await screen.findByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText(/this rule is off and produces nothing/)).toBeInTheDocument();
+  });
+
   // A vendored rule is rendered exactly like one this project wrote, so without this an operator cannot tell whose rule they are
   // reading. The corpus is under DRL 1.1 and each rule names its own author, which is the attribution this carries.
   it("credits the source of a vendored rule and stays silent for our own", async () => {

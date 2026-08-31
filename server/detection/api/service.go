@@ -108,6 +108,12 @@ type MetricsRecorder interface {
 	// processed for their freshness side effect and then dropped instead of persisted as retained event rows (issue #408).
 	EventsHeartbeatDropped(ctx context.Context, hostID string, n int)
 	AlertCreated(ctx context.Context, ruleID, severity string)
+	// MonitorMatched is called when a rule matches but its resolved mode is monitor, so no alert is persisted. It is the counted
+	// form of what used to be only a log line, and it exists because issue #764 made monitor the default for most of the catalog:
+	// a per-match log entry was reasonable when monitor was a state an operator deliberately set on one noisy rule, and is not
+	// when sixty-six rules match commonplace commands on every host. The counter is also what an operator needs in order to decide
+	// whether promoting a rule is worth it.
+	MonitorMatched(ctx context.Context, ruleID, severity string)
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.
 	ProcessesTTLReconciled(ctx context.Context, n int64)

@@ -57,6 +57,7 @@ type Recorder struct {
 	eventsIngested                  metric.Int64Counter
 	heartbeatsDropped               metric.Int64Counter
 	alertsCreated                   metric.Int64Counter
+	monitorMatches                  metric.Int64Counter
 	processRetentionRowsDeleted     metric.Int64Counter
 	queueRowsPruned                 metric.Int64Counter
 	processesReconciled             metric.Int64Counter
@@ -110,6 +111,12 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		"edr.alerts.created",
 		metric.WithDescription("Detection alerts created (dedup-skipped alerts not counted), by rule + severity."),
 		metric.WithUnit("{alert}"),
+	)
+	r.monitorMatches, _ = meter.Int64Counter(
+		"edr.detection.monitor_matches",
+		metric.WithDescription("Rule matches suppressed because the resolved mode was monitor, by rule + severity. "+
+			"Compare against edr.alerts.created to see what promoting a rule would cost."),
+		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
 		"edr.retention.processes.rows_deleted",
@@ -212,6 +219,18 @@ func (r *Recorder) AlertCreated(ctx context.Context, ruleID, severity string) {
 		return
 	}
 	r.alertsCreated.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("rule_id", ruleID),
+		attribute.String("severity", severity),
+	))
+}
+
+// MonitorMatched increments the monitor-match counter: a rule matched, and its resolved mode suppressed the alert. Same attribute
+// shape as AlertCreated so the two can be compared per rule, which is exactly the comparison promoting a rule turns on.
+func (r *Recorder) MonitorMatched(ctx context.Context, ruleID, severity string) {
+	if r == nil || r.monitorMatches == nil {
+		return
+	}
+	r.monitorMatches.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("rule_id", ruleID),
 		attribute.String("severity", severity),
 	))
