@@ -49,35 +49,35 @@ func TestSigmaEvent_DecodesEachEventOncePerBatch(t *testing.T) {
 	gr := &graphCounter{}
 	evt := execEventFor("e1", 7)
 
-	// Ten rules looking at the same event, which is the shape the imported corpus produces.
+	// Ten rules looking at the same event, which is the shape the imported corpus produces. After each call, the memo entry the
+	// call went through is captured.
+	//
+	// Comparing the ENTRY POINTER is what actually counts decodes. Asserting the map holds one key does not: a memo that rebuilt
+	// and overwrote the same key on every ask would leave exactly one entry while doing all the work this exists to avoid, so the
+	// length check would pass the very regression it is named for. A counter installed AFTER these ten calls does not either, since
+	// it can only observe the eleventh ask onward. A stable pointer across all ten says each of them was served the first build.
 	views := make([]*sigmaView, 0, 10)
+	entries := make([]*adaptedEvent, 0, 10)
 	for range 10 {
 		view := sigmaEvent(t.Context(), scope, evt, gr)
 		require.NotNil(t, view)
 		views = append(views, view)
+		entries = append(entries, sigmaEventsFor(scope).events[evt.EventID])
+	}
+	for i, entry := range entries {
+		assert.Same(t, entries[0], entry, "ask %d was served a rebuilt adaptation rather than the memoized one", i)
 	}
 
-	// Counting BUILDS, not map entries. A memo that rebuilt and overwrote the same key on every ask would leave exactly one entry
-	// and satisfy a length check while doing all the work this exists to avoid, so the length check would pass the regression it
-	// is named for.
-	builds := 0
 	shared := sigmaEventsFor(scope)
-	for range 10 {
-		shared.adapt(evt, func() *adaptedEvent {
-			builds++
-			return buildAdapted(t.Context(), evt, gr)
-		})
-	}
-	assert.Zero(t, builds, "the event was already adapted, so no further ask rebuilds it")
 	assert.Len(t, shared.events, 1, "and it is held under one key")
 
-	// The same counter proves the memo is what suppressed the rebuilds rather than the event being uninteresting: a DIFFERENT
-	// event does build, exactly once, however many times it is asked for.
+	// A DIFFERENT event still builds, exactly once, so the stability above is the memo working rather than nothing happening.
+	builds := 0
 	other := execEventFor("e-other", 11)
 	for range 5 {
 		shared.adapt(other, func() *adaptedEvent {
 			builds++
-			return buildAdapted(t.Context(), other, gr)
+			return buildAdapted(other, gr)
 		})
 	}
 	assert.Equal(t, 1, builds, "a new event is built once and then served from the memo")
@@ -226,11 +226,14 @@ func TestSharedDecode_FindingDescriptionsAreUnchanged(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name    string
-		rule    api.Rule
-		event   api.Event
-		writer  *api.Process
-		wantSub string
+		name  string
+		rule  api.Rule
+		event api.Event
+		// writer is the process row the graph returns, which the description also names in one case.
+		writer *api.Process
+		// want is the WHOLE description, not a substring. The fixed operator-facing text around the path is part of what a reader
+		// sees, so a reworded or reordered description is as much a change as a wrong path.
+		want string
 	}{
 		{
 			name:  "sudoers_tamper names the file that was opened",
@@ -238,15 +241,16 @@ func TestSharedDecode_FindingDescriptionsAreUnchanged(t *testing.T) {
 			event: openEventFor("/etc/sudoers", 0x601),
 			// TargetFilename is supplied only for a write-mode open, and the detection requires it, so it is present whenever
 			// this rule fires. That is why reading the path back from the field is equivalent to reading the payload.
-			writer:  &api.Process{ID: 42, PID: 7, Path: "/usr/bin/vim"},
-			wantSub: "/etc/sudoers",
+			writer: &api.Process{ID: 42, PID: 7, Path: "/usr/bin/vim"},
+			want:   "/usr/bin/vim opened /etc/sudoers for writing: sudo escalation surface (MITRE T1548.003)",
 		},
 		{
-			name:    "credential_keychain_dump names the binary that ran",
-			rule:    &CredentialKeychainDump{},
-			event:   keychainDumpEvent(),
-			writer:  &api.Process{ID: 43, PID: 7, Path: "/usr/bin/security"},
-			wantSub: "/usr/bin/security",
+			name:   "credential_keychain_dump names the binary that ran",
+			rule:   &CredentialKeychainDump{},
+			event:  keychainDumpEvent(),
+			writer: &api.Process{ID: 43, PID: 7, Path: "/usr/bin/security"},
+			want: `/usr/bin/security invoked with "dump-keychain": reads all Keychain entries ` +
+				`(Keychain credential access, MITRE T1555.001)`,
 		},
 	}
 	for _, tc := range cases {
@@ -257,7 +261,7 @@ func TestSharedDecode_FindingDescriptionsAreUnchanged(t *testing.T) {
 			findings, err := tc.rule.Evaluate(t.Context(), []api.Event{tc.event}, gr)
 			require.NoError(t, err)
 			require.Len(t, findings, 1, "the rule must still fire on its own positive fixture")
-			assert.Contains(t, findings[0].Description, tc.wantSub,
+			assert.Equal(t, tc.want, findings[0].Description,
 				"the description reads the path from the shared decode and must be byte-identical to what it was")
 		})
 	}
@@ -304,4 +308,84 @@ func TestSigmaEvent_AMalformedEventDoesNotDiscardTheBatch(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Len(t, findings, 1, "the malformed event is skipped and the rest of the batch still produces its findings")
+}
+
+// TestSigmaEvent_AFailedLookupIsMemoizedToo pins that a failing graph read is not retried by every later rule in the batch.
+//
+// Three reviewers raised this independently, and the reason it matters is not only load. Retrying means the rules in ONE batch can
+// disagree about whether the same process exists: an early rule sees a failure and declines, a later one succeeds and fires. With
+// the corpus registered that is 66 retries of a read that just failed, issued exactly when the database is least able to serve
+// them. Nothing is cached beyond the batch, because a batch that hits a retryable miss is nacked and re-evaluated with a fresh
+// scope.
+func TestSigmaEvent_AFailedLookupIsMemoizedToo(t *testing.T) {
+	t.Parallel()
+
+	scope := &api.BatchScope{}
+	gr := &countingFailure{}
+	evt := execEventFor("e1", 7)
+
+	var errs []error
+	for range 5 {
+		view := sigmaEvent(t.Context(), scope, evt, gr)
+		require.NotNil(t, view)
+		_, err := view.Subject()
+		errs = append(errs, err)
+	}
+
+	assert.Equal(t, 1, gr.reads, "the failing read is issued once, not once per rule")
+	for i, err := range errs {
+		require.Error(t, err, "rule %d must see the failure rather than a silent success", i)
+		assert.Equal(t, errs[0].Error(), err.Error(), "every rule in the batch gets the same answer")
+	}
+}
+
+// countingFailure fails every lookup and counts how many were attempted.
+type countingFailure struct {
+	api.GraphReader
+	reads int
+}
+
+func (g *countingFailure) GetProcessByPID(context.Context, string, int, int64) (*api.Process, error) {
+	g.reads++
+	return nil, assert.AnError
+}
+
+// TestSigmaEvent_LazyLookupsRunUnderTheAskingRulesContext pins which rule a deferred graph read is attributed to.
+//
+// The adaptation is built by whichever rule sees the event first, but the lookups are lazy, so the rule that TRIGGERS one is
+// usually a different one. Capturing the builder's context would run the query under a span that has already ended, and MySQL is
+// instrumented through otelsql, so the query would be traced against a rule that never asked for it.
+func TestSigmaEvent_LazyLookupsRunUnderTheAskingRulesContext(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey struct{}
+	scope := &api.BatchScope{}
+	gr := &ctxRecordingGraph{}
+	evt := execEventFor("e1", 7)
+
+	// The first rule builds the adaptation and never reads the graph.
+	building := context.WithValue(t.Context(), ctxKey{}, "first-rule")
+	require.NotNil(t, sigmaEvent(building, scope, evt, gr))
+
+	// A later rule triggers the lookup. Its context is the live one.
+	asking := context.WithValue(t.Context(), ctxKey{}, "asking-rule")
+	view := sigmaEvent(asking, scope, evt, gr)
+	require.NotNil(t, view)
+	_, err := view.Subject()
+	require.NoError(t, err)
+
+	require.NotNil(t, gr.seen)
+	assert.Equal(t, "asking-rule", gr.seen.Value(ctxKey{}),
+		"the query must run under the context of the rule that asked, whose span is live")
+}
+
+// ctxRecordingGraph records the context a lookup was performed with.
+type ctxRecordingGraph struct {
+	api.GraphReader
+	seen context.Context //nolint:containedctx // recorded for assertion, never used to carry a deadline
+}
+
+func (g *ctxRecordingGraph) GetProcessByPID(ctx context.Context, _ string, pid int, _ int64) (*api.Process, error) {
+	g.seen = ctx
+	return &api.Process{ID: 1, PID: pid, Path: "/bin/sh"}, nil
 }

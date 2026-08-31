@@ -21,11 +21,11 @@ type adaptedEvent struct {
 	core *sigmabind.Event
 	// image resolves whichever image the taxonomy supplies for this event type: an exec resolves its PARENT's, an open resolves
 	// its own subject's. Memoized, so the graph is read at most once per event per batch however many rules ask.
-	image func() (string, error)
-	// subject resolves the process a finding names, which the open path needs and the exec path does not. Nil when the event type
-	// has none. Memoized for the same reason, and it is the SAME lookup the matcher used, so a finding cannot name a different
-	// process than the one the detection matched.
-	subject func() (*api.Process, error)
+	image func(context.Context) (string, error)
+	// subject resolves the process a finding names, which EVERY converted rule needs: each one attaches its finding to a process
+	// row. Memoized for the same reason as image. On an open it is the SAME lookup image reads through, so a finding cannot name a
+	// different process than the one the detection matched; on an exec the two are different rows, the parent's and the subject's.
+	subject func(context.Context) (*api.Process, error)
 	// pid is the process the event is about, read from the one decode above rather than from a second pass over the payload.
 	pid    int
 	hasPID bool
@@ -84,19 +84,29 @@ type sigmaView struct {
 // malformed event the same way: skip it. Reporting them as errors would let one bad event discard the findings a rule had already
 // collected from the rest of the batch, which is the behaviour each of these rules was written to avoid.
 func sigmaEvent(ctx context.Context, scope *api.BatchScope, evt api.Event, gr api.GraphReader) *sigmaView {
-	shared := sigmaEventsFor(scope).adapt(evt, func() *adaptedEvent { return buildAdapted(ctx, evt, gr) })
+	shared := sigmaEventsFor(scope).adapt(evt, func() *adaptedEvent { return buildAdapted(evt, gr) })
 	if shared.err != nil || !shared.hasPID {
 		return nil
 	}
-	return &sigmaView{Event: shared.core.WithResolver(shared.image), Subject: shared.subject, PID: shared.pid}
+	// Bound to THIS rule's context, not the one that first saw the event. The lookups are lazy, so whichever rule triggers one
+	// runs it, and running it under an earlier rule's already-ended span would attribute the MySQL query (instrumented through
+	// otelsql) to a rule that did not ask for it.
+	return &sigmaView{
+		Event:   shared.core.WithResolver(func() (string, error) { return shared.image(ctx) }),
+		Subject: func() (*api.Process, error) { return shared.subject(ctx) },
+		PID:     shared.pid,
+	}
 }
 
 // buildAdapted decodes one event and binds the memoized lookups its type calls for.
 //
+// It takes no context on purpose: nothing here reads the graph. The lookups it binds take their context when they are invoked, so
+// the rule that triggers one is the rule the query is traced under.
+//
 // An exec resolves its PARENT's image, at the child's fork time; an open resolves the image of the process that did the opening and
 // also hands that process back, so the finding names the one the detection matched. Both are deferred, because a detection reaches
 // the graph only after the far cheaper field tests have already narrowed the events, and Sigma's conditions short-circuit.
-func buildAdapted(ctx context.Context, evt api.Event, gr api.GraphReader) *adaptedEvent {
+func buildAdapted(evt api.Event, gr api.GraphReader) *adaptedEvent {
 	core, err := sigmabind.NewEvent(evt)
 	if err != nil {
 		return &adaptedEvent{err: err}
@@ -111,9 +121,9 @@ func buildAdapted(ctx context.Context, evt api.Event, gr api.GraphReader) *adapt
 	// The subject is memoized in both branches, but it is not the same lookup as the image in either. On an open they resolve the
 	// SAME row, so they share one accessor and a finding cannot name a different process than the detection matched. On an exec
 	// they are genuinely different rows, the parent's and the subject's, so each gets its own memo.
-	subject := subjectProcessOf(ctx, evt, gr, pid)
+	subject := subjectProcessOf(evt, gr, pid)
 	if evt.EventType == "open" {
 		return &adaptedEvent{core: core, pid: pid, hasPID: true, image: subjectImageOf(subject), subject: subject}
 	}
-	return &adaptedEvent{core: core, pid: pid, hasPID: true, image: parentImageOf(ctx, evt, gr, pid), subject: subject}
+	return &adaptedEvent{core: core, pid: pid, hasPID: true, image: parentImageOf(evt, gr, pid), subject: subject}
 }

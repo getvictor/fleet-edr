@@ -180,13 +180,21 @@ func firstMatching(se *sigmabind.Event, name string, pred func(string) bool) str
 // Memoization is what lets several rules share one lookup: the resolver is bound into the shared adaptation of the event and each
 // rule gets its own view of it (see sigmabatch.go). Without it, eleven corpus rules reading ParentImage would each issue their own
 // pair of graph reads for the same event, which costs far more than the decode they also each repeated.
-func parentImageOf(ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) func() (string, error) {
+//
+// The context is taken at INVOCATION, not here. Resolution is lazy, so the rule that triggers the lookup is usually not the rule
+// that first saw the event, and capturing the latter's context would run the query under a span that has already ended: MySQL is
+// instrumented through otelsql, so the query would be attributed to the wrong rule. Taking it at call time attributes the work to
+// the rule that actually caused it, whose span is live.
+//
+// A FAILED lookup is memoized too. The alternative lets every later rule in the batch retry a failing graph read, which multiplies
+// load exactly when the database is already struggling, and lets two rules disagree about whether the same process exists.
+func parentImageOf(evt rulesapi.Event, gr rulesapi.GraphReader, childPID int) func(context.Context) (string, error) {
 	var (
 		path     string
 		err      error
 		resolved bool
 	)
-	return func() (string, error) {
+	return func(ctx context.Context) (string, error) {
 		if resolved {
 			return path, err
 		}
@@ -220,9 +228,9 @@ func lookupParentImage(ctx context.Context, evt rulesapi.Event, gr rulesapi.Grap
 }
 
 // subjectImageOf adapts a subject-process accessor to the image resolver the Sigma adapter takes, so both read through one memo.
-func subjectImageOf(subject func() (*rulesapi.Process, error)) func() (string, error) {
-	return func() (string, error) {
-		found, err := subject()
+func subjectImageOf(subject func(context.Context) (*rulesapi.Process, error)) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		found, err := subject(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -239,22 +247,26 @@ func subjectImageOf(subject func() (*rulesapi.Process, error)) func() (string, e
 // The memo is not an optimisation alone. Resolving twice would let a materialization commit land between the reads and produce a
 // finding about a different image than the one the detection matched, and sharing one accessor across the rules in a batch extends
 // that guarantee across rules as well as within one.
-func subjectProcessOf(
-	ctx context.Context, evt rulesapi.Event, gr rulesapi.GraphReader, pid int,
-) func() (*rulesapi.Process, error) {
+//
+// A FAILURE is memoized alongside a success, and the distinction matters here more than it looks. Retrying on failure would have
+// every later rule in the batch re-issue a graph read that just failed, multiplying load exactly when the database is already
+// struggling, and would let two rules in one batch disagree about whether the same process exists. A batch that hits
+// ErrProcessNotYetMaterialized is nacked and re-evaluated with a fresh scope, so nothing is permanently cached.
+//
+// The context is taken at invocation for the same reason parentImageOf takes it there: the rule that triggers a lazy lookup is
+// usually not the rule that first saw the event, and its span is the live one.
+func subjectProcessOf(evt rulesapi.Event, gr rulesapi.GraphReader, pid int) func(context.Context) (*rulesapi.Process, error) {
 	var (
 		proc     *rulesapi.Process
+		err      error
 		resolved bool
 	)
-	return func() (*rulesapi.Process, error) {
+	return func(ctx context.Context) (*rulesapi.Process, error) {
 		if resolved {
-			return proc, nil
+			return proc, err
 		}
-		found, err := resolveSubjectProcess(ctx, gr, evt, pid)
-		if err != nil {
-			return nil, err
-		}
-		proc, resolved = found, true
-		return proc, nil
+		resolved = true
+		proc, err = resolveSubjectProcess(ctx, gr, evt, pid)
+		return proc, err
 	}
 }
