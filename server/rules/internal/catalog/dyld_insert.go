@@ -2,14 +2,13 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 	"strings"
 	"sync"
 
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
-	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
 
 // DyldInsert fires when a process is launched with DYLD_INSERT_LIBRARIES or
@@ -77,27 +76,27 @@ var dyldPrefixes = []string{
 // dyldDetection is the rule's logic, compiled from the detection block in its pack file.
 var dyldDetection = sync.OnceValue(func() *sigma.Rule { return detectionFor("dyld_insert") })
 
-type dyldPayload struct {
-	PID  int      `json:"pid"`
-	Path string   `json:"path"`
-	Args []string `json:"args"`
+// Evaluate runs the rule with a scope of its own, which is the un-shared behaviour a direct caller gets. The engine calls
+// EvaluateScoped instead, so the batch's Sigma-backed rules share one decode per event.
+func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
 }
 
-func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+// EvaluateScoped implements api.ScopedRule.
+func (r *DyldInsert) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	var findings []api.Finding
 	var miss pendingMiss
 	for _, evt := range events {
 		if evt.EventType != "exec" {
 			continue
 		}
-		var p dyldPayload
-		if err := json.Unmarshal(evt.Payload, &p); err != nil {
+		view := sigmaEvent(ctx, scope, evt, s)
+		if view == nil {
 			continue
 		}
-		se, err := sigmabind.NewEvent(evt)
-		if err != nil {
-			continue
-		}
+		se := view.Event
 		if !dyldDetection().Matches(se) {
 			continue
 		}
@@ -105,7 +104,7 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 		// content and the finding is read by people, so the rule has always redacted it.
 		matched := redactedDyldAssignment(se)
 
-		proc, err := resolveSubjectProcess(ctx, s, evt, p.PID)
+		proc, err := view.Subject()
 		if fatal := miss.absorb(err); fatal != nil {
 			return nil, fatal
 		}
@@ -118,7 +117,7 @@ func (r *DyldInsert) Evaluate(ctx context.Context, events []api.Event, s api.Gra
 			RuleID:      r.ID(),
 			Severity:    api.SeverityHigh,
 			Title:       r.DisplayName(),
-			Description: fmt.Sprintf("%s launched with %s", p.Path, matched),
+			Description: fmt.Sprintf("%s launched with %s", firstField(se, "Image"), matched),
 			ProcessID:   proc.ID,
 			EventIDs:    []string{evt.EventID},
 		})

@@ -688,7 +688,7 @@ func TestSudoersReadsTheSubjectProcessAtMostOnce(t *testing.T) {
 				Payload: []byte(fmt.Sprintf(`{"pid":7,"path":%q,"flags":%d}`, path, tc.flags)),
 			}
 
-			finding, err := rule.evalEvent(t.Context(), evt, gr)
+			finding, err := rule.evalEvent(t.Context(), &rulesapi.BatchScope{}, evt, gr)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantReads, gr.calls, "graph reads")
 			if !tc.wantFind {

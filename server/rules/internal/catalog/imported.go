@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -383,53 +382,24 @@ func allDigits(s string) bool {
 	return true
 }
 
-// adaptEvent builds the Sigma view of an event for this rule's event type, and returns the accessor for the subject process
-// alongside it.
-//
-// An exec resolves its PARENT's image for ParentImage; an open resolves the image of the process that did the opening. Both are
-// lazy, so a rule reading neither never touches the graph.
-//
-// The accessor is returned rather than discarded because for an open event it is the SAME lookup the finding needs, and issue #762
-// established why that matters: resolving twice lets a materialization commit land between the reads, so a rule with a negated
-// Image filter can match on an absent image and then attach the finding to the very process that should have suppressed it. The
-// exec path has no such accessor to share, because there the two lookups are genuinely different rows: the parent's and the
-// subject's.
-func (r *importedRule) adaptEvent(
-	ctx context.Context, evt api.Event, gr api.GraphReader, pid int,
-) (*sigmabind.Event, func() (*api.Process, error), error) {
-	if r.eventTypes[0] == "open" {
-		return openEventWithSubject(ctx, evt, gr, pid)
-	}
-	ev, err := execEventWithParent(ctx, evt, gr, pid)
-	return ev, func() (*api.Process, error) { return resolveSubjectProcess(ctx, gr, evt, pid) }, err
-}
-
-// subjectPID reads the pid the event is about. Every event type this engine maps carries one under the same key, which is what
-// lets an imported rule stay generic: it never needs to know which payload shape it is looking at.
-//
-// This decode is paid PER RULE, and again inside the adapter, because the engine hands each rule the raw batch and offers no way to
-// share an adapted event. With the corpus registered that is roughly two decodes per rule per event, which is the cost issue #794
-// exists to remove by decoding once in the engine. It is not fixable from inside a rule, and #764 should not register the corpus
-// before #794 lands.
-func subjectPID(evt api.Event) (int, bool) {
-	var p struct {
-		PID *int `json:"pid"`
-	}
-	if err := json.Unmarshal(evt.Payload, &p); err != nil || p.PID == nil {
-		return 0, false
-	}
-	return *p.PID, true
-}
-
-// Evaluate runs the compiled detection over the batch, in the same shape a converted rule uses.
+// Evaluate runs the compiled detection over the batch with a scope of its own, which is the un-shared behaviour a direct caller
+// (the replay harness, a test) gets. The engine calls EvaluateScoped instead.
 func (r *importedRule) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
+}
+
+// EvaluateScoped runs the compiled detection over the batch, decoding each event through the scope so the corpus does not decode
+// every event once per rule (issue #794).
+func (r *importedRule) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	var findings []api.Finding
 	var miss pendingMiss
 	for _, evt := range events {
 		if evt.EventType != r.eventTypes[0] {
 			continue
 		}
-		finding, err := r.evalEvent(ctx, evt, s)
+		finding, err := r.evalEvent(ctx, scope, evt, s)
 		if fatal := miss.absorb(err); fatal != nil {
 			return nil, fatal
 		}
@@ -441,19 +411,17 @@ func (r *importedRule) Evaluate(ctx context.Context, events []api.Event, s api.G
 }
 
 // evalEvent decides one event, returning the finding it produced or nil.
-func (r *importedRule) evalEvent(ctx context.Context, evt api.Event, s api.GraphReader) (*api.Finding, error) {
-	pid, ok := subjectPID(evt)
-	if !ok {
-		// A payload carrying no pid is malformed rather than uninteresting. One bad event must not discard the findings the rest
-		// of the batch produced, so it is skipped rather than raised.
+func (r *importedRule) evalEvent(
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader,
+) (*api.Finding, error) {
+	// A payload that does not decode, or that carries no pid, is malformed rather than uninteresting. One bad event must not
+	// discard the findings the rest of the batch produced, so it is skipped rather than raised.
+	view := sigmaEvent(ctx, scope, evt, s)
+	if view == nil {
 		return nil, nil
 	}
-	se, subject, err := r.adaptEvent(ctx, evt, s, pid)
-	if err != nil {
-		return nil, err
-	}
-	matched := r.detection.Matches(se)
-	if resolveErr := se.ResolveErr(); resolveErr != nil {
+	matched := r.detection.Matches(view.Event)
+	if resolveErr := view.Event.ResolveErr(); resolveErr != nil {
 		return nil, resolveErr
 	}
 	if !matched {
@@ -461,7 +429,7 @@ func (r *importedRule) evalEvent(ctx context.Context, evt api.Event, s api.Graph
 	}
 
 	// The same process the detection matched against, not a second lookup of it.
-	proc, err := subject()
+	proc, err := view.Subject()
 	if err != nil {
 		return nil, err
 	}

@@ -41,6 +41,11 @@ type Event struct {
 	writeIntent  []string
 	mutatingOpen []string
 
+	// pid identifies the process the event is ABOUT, which every mapped type carries under the same key. Kept here so a caller
+	// reads it from the one decode this type already performs rather than unmarshalling the payload a second time to find it.
+	pid    int
+	hasPID bool
+
 	// Computed from argv rather than copied from a payload field. See argv.go for why each exists.
 	subcommand       []string
 	commandArguments []string
@@ -53,12 +58,14 @@ type Event struct {
 type execPayload struct {
 	Path string   `json:"path"`
 	Args []string `json:"args"`
+	PID  *int     `json:"pid"`
 }
 
 // openPayload is the subset of a file-open event this package reads.
 type openPayload struct {
 	Path  string `json:"path"`
 	Flags int    `json:"flags"`
+	PID   *int   `json:"pid"`
 }
 
 // writeAccessMask selects the access mode from open(2) flags: bits 0 and 1 hold O_RDONLY=0, O_WRONLY=1, O_RDWR=2, so anything
@@ -125,6 +132,40 @@ func newEventLazy(ev api.Event, resolveImage func() (string, error)) (*Event, er
 	return e, nil
 }
 
+// WithResolver returns a copy of e that resolves its supplied image through resolve, sharing e's decoded fields.
+//
+// It exists so several rules can share one decoded event without sharing each other's errors. The decode and the argv derivations
+// are the expensive part and are pure, so copying the struct shares them at the cost of one shallow copy; the resolver state is
+// NOT shared, because ResolveErr is read per rule and a rule that never looked at the supplied image must not inherit another
+// rule's failure. Inheriting it would discard that rule's findings for the whole batch over a lookup it did not ask for.
+//
+// Pass a resolver that memoizes across the copies to read the graph once per event rather than once per rule. That is the split
+// this is for: the LOOKUP is shared, the ERROR is not.
+//
+// The copy is safe because everything it shares is written once at construction and only read afterwards.
+func (e *Event) WithResolver(resolve func() (string, error)) *Event {
+	copied := *e
+	copied.suppliedImage = nil
+	copied.resolveImage = resolve
+	copied.resolveErr = nil
+	copied.resolveDone = false
+	return &copied
+}
+
+// SubjectPID returns the pid of the process the event is about, and whether the payload carried one.
+//
+// Every event type this package maps carries it under the same key, which is what lets a generic rule stay generic: it never needs
+// to know which payload shape it is looking at. Reading it from here rather than unmarshalling the payload again is the point, and
+// a payload carrying no pid reports false rather than zero, because pid 0 is a real pid and "absent" is not it.
+func (e *Event) SubjectPID() (int, bool) { return e.pid, e.hasPID }
+
+// setPID records the pid from a decoded payload, leaving it absent when the payload omitted the key.
+func (e *Event) setPID(pid *int) {
+	if pid != nil {
+		e.pid, e.hasPID = *pid, true
+	}
+}
+
 // ResolveErr reports a failure from the lazy image resolver, or nil when it succeeded or was never reached.
 //
 // A rule checks this AFTER evaluating: a resolver that failed leaves its field absent, which at match time is indistinguishable
@@ -157,6 +198,7 @@ func NewEvent(ev api.Event) (*Event, error) {
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
 			return nil, fmt.Errorf("decode exec payload for event %q: %w", ev.EventID, err)
 		}
+		e.setPID(p.PID)
 		e.image = presentString(p.Path)
 		e.commandLine = commandLine(p.Args)
 		e.subcommand = presentString(subcommand(p.Args))
@@ -167,6 +209,7 @@ func NewEvent(ev api.Event) (*Event, error) {
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
 			return nil, fmt.Errorf("decode open payload for event %q: %w", ev.EventID, err)
 		}
+		e.setPID(p.PID)
 		// Sigma's file_event category means file creation or modification (it is Sysmon's FileCreate), not "a file was opened".
 		// Our open events include read-only opens, which are routine: the sudoers_tamper rule drops them for exactly this reason,
 		// noting that cron, sudo itself and various PAM modules read /etc/sudoers constantly. Exposing TargetFilename for those
