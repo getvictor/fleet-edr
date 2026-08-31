@@ -18,9 +18,13 @@ Measured against SigmaHQ's 69 macOS rules rather than estimated. The fields they
 
 Every one but the last is already supplied. Their modifiers are `contains`, `endswith`, `all`, `re` and `startswith`, all of which the evaluator already implements, and their categories are `process_creation` (67) and `file_event` (2), both of which already map.
 
-So **68 of the 69 import with no enrichment at all.** The issue's acceptance criterion asks for 55; the number is higher because the taxonomy work landed across #786, #788 and #790, and the computed fields those added are not what the upstream corpus reads.
+So the fields are not the constraint: **66 of the 69 import**, and the three refusals are for two different reasons, both of which are the refusal contract working rather than a gap in it.
 
-The 69th needs `OriginalFileName`, a Sysmon field naming a PE's embedded original name. macOS has no equivalent, so the rule is refused rather than imported broken.
+One needs `OriginalFileName`, a Sysmon field naming a PE's embedded original name, which macOS has no equivalent for.
+
+The other two are `file_event` rules, and they are the more interesting case. `file_event` maps to our `open` event, so on fields alone they look importable. But since #301 the agent's file client inverts target-path muting to observe ONLY `/etc/sudoers` and `/etc/sudoers.d/`, and both rules watch launch daemons and startup items. They would have loaded, registered, and never once fired. A rule that can never match is indistinguishable from the behaviour never occurring, which is precisely what this engine refuses to ship, so the category is refused with a reason naming the missing telemetry.
+
+That refusal is a statement about the **agent**, not about Sigma. Widening the watched path set is what makes those rules importable, and the refusal should be revisited then.
 
 ## What changes
 
@@ -34,7 +38,7 @@ A file this engine cannot map is reported as a rejection naming the field or cat
 
 The fixtures under `testdata/imported` are **verbatim** SigmaHQ files, and the test asserts they are unmodified by loading them as they are. One of them is the `OriginalFileName` rule, so the rejection path is exercised by the real corpus rather than by a constructed example. A third test runs an upstream rule against a real event through a real store and asserts it fires, and declines the near-miss.
 
-Run against the full macOS corpus with the production loader: 68 imported, 1 rejected, matching the census.
+Run against the full macOS corpus with the production loader: 66 imported, 3 rejected.
 
 ## Impact
 

@@ -18,7 +18,9 @@ Operator tuning of an imported rule SHALL live outside the rule file, so that re
 
 ### Requirement: A rule this sensor cannot run is refused by name
 
-The system SHALL refuse to import a rule whose fields or category it cannot map, and SHALL report which field or category was the reason. Importing it anyway would install a detection that can never match, which is indistinguishable from the behaviour never occurring.
+The system SHALL refuse to import a rule it cannot run, and SHALL report the reason. Importing it anyway would install a detection that can never match, which is indistinguishable from the behaviour never occurring.
+
+A rule SHALL be refused both when it reads data this sensor does not collect, and when its category maps to an event type the sensor collects too narrowly for that category's rules to fire. The second is not a property of the rule but of the agent, so its reason SHALL name the missing telemetry rather than the rule, and the refusal SHALL be revisited when the agent's collection widens.
 
 Refusing one rule SHALL NOT refuse the rest. An upstream corpus is written for many sensors, so some of its rules will always read data this one does not collect, and abandoning the import over them would import nothing.
 

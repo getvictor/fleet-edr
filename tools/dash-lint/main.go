@@ -134,10 +134,10 @@ func isExcluded(p string) bool {
 		strings.HasPrefix(p, "openspec/changes/") ||
 		strings.HasPrefix(p, "tools/dash-lint/") || // never scan the scanner: its doc comments and test fixtures hold the pattern by design
 		strings.HasPrefix(p, "server/apidocs/embed/") || // vendored ReDoc bundle + generated OpenAPI/asset files, not authored prose
-		// Vendored SigmaHQ detection rules (issue #763). They are third-party prose we deliberately mirror byte-for-byte, and
-		// their being UNMODIFIED is the property their tests assert: the claim is that an upstream file runs here with no edit.
-		// Rewording someone else's rule comment to satisfy our house style would break exactly what the fixtures exist to prove.
-		strings.Contains(p, "/testdata/imported/") ||
+		// Vendored SigmaHQ rules (#763): third-party prose mirrored byte-for-byte, whose being UNMODIFIED is what their tests
+		// assert. Rewording someone else's rule comment to suit our house style would break what the fixtures exist to prove.
+		// Scoped to the exact path so an unrelated future fixture directory cannot inherit the exemption.
+		strings.HasPrefix(p, "server/rules/internal/catalog/testdata/imported/") ||
 		p == "docs/maintenance/log.md"
 }
 

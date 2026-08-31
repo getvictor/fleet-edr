@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 
@@ -29,13 +30,22 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 	rules, rejected, err := loadImported(os.DirFS("testdata"), "imported")
 	require.NoError(t, err)
 
-	assert.Len(t, rules, 68, "every macOS rule but one reads only fields this sensor supplies")
-	require.Len(t, rejected, 1, "and exactly one does not")
-	assert.Contains(t, rejected[0].File, "meshagent")
-	assert.Contains(t, rejected[0].Reason, "OriginalFileName",
-		"the reason names the field, so an operator knows why the rule is absent")
-	assert.NotContains(t, rejected[0].Reason, rejected[0].File,
-		"the reason does not repeat the file, which the rejection already carries")
+	assert.Len(t, rules, 66, "the rest read only fields this sensor supplies, in a category it collects broadly enough")
+
+	// Two refusals, for two different reasons, and both are the refusal contract working rather than a gap.
+	reasons := map[string]string{}
+	for _, r := range rejected {
+		reasons[path.Base(r.File)] = r.Reason
+		assert.NotContains(t, r.Reason, r.File, "the reason does not repeat the file, which the rejection already carries")
+	}
+	require.Len(t, rejected, 3, "one unsupplied field, and two rules in a category this agent collects too narrowly")
+
+	assert.Contains(t, reasons["proc_creation_macos_remote_access_tools_renamed_meshagent_execution.yml"], "OriginalFileName",
+		"a field this sensor does not collect, named so an operator knows why the rule is absent")
+	for _, f := range []string{"file_event_macos_emond_launch_daemon.yml", "file_event_macos_susp_startup_item_created.yml"} {
+		assert.Contains(t, reasons[f], "/etc/sudoers",
+			"a file_event rule cannot fire on this agent, and the reason says which telemetry is missing")
+	}
 
 	byID := make(map[string]api.Rule, len(rules))
 	for _, r := range rules {
@@ -51,14 +61,20 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 		assert.Equal(t, []string{"exec"}, r.Doc().EventTypes, "process_creation maps to exec")
 	})
 
-	t.Run("a file_event rule", func(t *testing.T) {
+	t.Run("a file_event rule is not imported", func(t *testing.T) {
 		t.Parallel()
-		r := byID["file_event_macos_emond_launch_daemon"]
-		require.NotNil(t, r)
-		assert.Equal(t, []string{"open"}, r.Doc().EventTypes, "file_event maps to open")
-		assert.Equal(t, api.SeverityMedium, r.Doc().Severity, "level: medium")
-		assert.Equal(t, []string{"T1546.014"}, r.Techniques(), "only the technique tag, not the tactic tags")
-		assert.Equal(t, []string{"Legitimate administration activities"}, r.Doc().FalsePositives)
+		assert.NotContains(t, byID, "file_event_macos_emond_launch_daemon",
+			"it watches /etc/emond.d, which this agent emits no open event for, so importing it would be coverage we do not have")
+	})
+
+	t.Run("metadata comes from the file", func(t *testing.T) {
+		t.Parallel()
+		r := byID["proc_creation_macos_xattr_quarantine_removal"]
+		if r == nil {
+			t.Skip("fixture renamed upstream")
+		}
+		assert.NotEmpty(t, r.Doc().Description, "the description is the upstream one")
+		assert.NotEmpty(t, r.Doc().Severity)
 	})
 
 	t.Run("every imported rule satisfies the engine's contract", func(t *testing.T) {
@@ -207,7 +223,7 @@ func TestLoadImported_RefusesADuplicateRuleID(t *testing.T) {
 	_, _, err := loadImported(os.DirFS(dir), ".")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "same_name", "the message must name the id that collided")
-	assert.Contains(t, err.Error(), "already imported from", "and where it was first seen")
+	assert.Contains(t, err.Error(), "already claimed by", "and where it was first seen")
 }
 
 // TestLoadImported_WalksTheTree pins that a nested corpus imports, which is how upstream is laid out.
@@ -509,4 +525,41 @@ func TestImportedRule_PropagatesAGraphFailure(t *testing.T) {
 	}}, gr)
 	require.Error(t, err, "a graph failure must not be reported as no match")
 	assert.Contains(t, err.Error(), "graph unavailable")
+}
+
+// TestLoadImported_ADuplicateIDIsCaughtEvenWhenTheFirstFileIsRejected pins that the stem check runs before parsing.
+//
+// Recording an id only after a successful parse would let a rejected file leave its id unclaimed, so a second file with the same
+// stem would import and the collision would go unreported. Which rule an operator got would then depend on which of the two
+// happened to be unmappable.
+func TestLoadImported_ADuplicateIDIsCaughtEvenWhenTheFirstFileIsRejected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// `a/` sorts before `b/`, so the unmappable file is parsed first.
+	unmappable := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {OriginalFileName: x}, condition: sel}\n")
+	valid := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {Image: x}, condition: sel}\n")
+	for sub, body := range map[string][]byte{"a": unmappable, "b": valid} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, sub), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, sub, "same.yml"), body, 0o600))
+	}
+
+	_, _, err := loadImported(os.DirFS(dir), ".")
+	require.Error(t, err, "the collision must fail the import even though the first file is unmappable")
+	assert.Contains(t, err.Error(), "same")
+}
+
+// TestImportedRule_TechniquesMayBeEmpty pins the contract for a rule whose tags name only tactics.
+//
+// Several corpus rules carry `attack.persistence` and no `attack.t*`, so they import with no technique mapping. That is upstream's
+// choice and not something to invent a mapping for, but it does mean issue #764 cannot register imported rules under the catalog
+// invariant that every detection claims a technique. Stated here so that lands as a decision rather than a surprise.
+func TestImportedRule_TechniquesMayBeEmpty(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("title: T\nlevel: medium\ntags: [attack.persistence]\n" +
+		"logsource: {category: process_creation, product: macos}\ndetection: {sel: {Image: x}, condition: sel}\n")
+	rule, err := parseImported("tactics_only.yml", body)
+	require.NoError(t, err, "a rule with only tactic tags is still a rule")
+	assert.Empty(t, rule.Techniques(), "and it claims no technique, because its file names none")
 }

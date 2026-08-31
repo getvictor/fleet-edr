@@ -140,10 +140,23 @@ func EventTypeForCategory(category string) (string, bool) {
 }
 
 // sigmaProduct maps our platform values onto Sigma's product vocabulary. Sigma says `macos` where Go says `darwin`.
+//
+// One table, read in both directions: PlatformForProduct is its inverse, used by the importer. A second table would let an
+// exported file become unimportable the moment a platform is added or renamed on one side only.
 var sigmaProduct = map[api.Platform]string{
 	api.PlatformDarwin:  "macos",
 	api.PlatformWindows: "windows",
 	api.PlatformLinux:   "linux",
+}
+
+// PlatformForProduct resolves a Sigma logsource product to the platform this engine scopes rules by (issue #763).
+func PlatformForProduct(product string) (api.Platform, bool) {
+	for platform, name := range sigmaProduct {
+		if strings.EqualFold(name, product) {
+			return platform, true
+		}
+	}
+	return "", false
 }
 
 // Authored is the part of a rule file that is written by hand rather than generated, and which regeneration therefore re-emits

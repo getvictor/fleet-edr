@@ -185,3 +185,30 @@ func TestCheckHashComments(t *testing.T) {
 		})
 	}
 }
+
+// TestIsExcluded_VendoredSigmaRules pins the scope of the vendored-rules exemption (issue #763).
+//
+// The exemption exists because those files are third-party prose mirrored byte-for-byte, and editing one to suit our house style
+// would break the property their tests assert. It must not widen: an unrelated fixture directory that happens to be called
+// `testdata/imported` is our own prose and this gate should still read it.
+func TestIsExcluded_VendoredSigmaRules(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"server/rules/internal/catalog/testdata/imported/process_creation/rule.yml", true},
+		{"server/rules/internal/catalog/testdata/imported/README.md", true},
+		// Ours, not upstream: a same-named directory elsewhere in the tree stays covered.
+		{"server/detection/testdata/imported/notes.md", false},
+		{"ui/src/testdata/imported/thing.md", false},
+		{"server/rules/internal/catalog/imported.go", false},
+		{"docs/detection-rules.md", false},
+	}
+	for _, tc := range cases {
+		if got := isExcluded(tc.path); got != tc.want {
+			t.Errorf("isExcluded(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/export"
 	"github.com/fleetdm/edr/server/rules/internal/sigma"
 	"github.com/fleetdm/edr/server/rules/internal/sigmabind"
 )
@@ -100,6 +101,23 @@ func sigmaFilesUnder(fsys fs.FS, dir string) ([]string, error) {
 	return names, nil
 }
 
+// checkDuplicateStems fails when two files resolve to one rule id, whatever directories they sit in.
+//
+// The id is the filename stem, so this is reachable only because the import walks a tree. Whichever file loaded second would
+// otherwise win silently, and which rule an operator gets would depend on directory order.
+func checkDuplicateStems(names []string) error {
+	seen := make(map[string]string, len(names))
+	for _, name := range names {
+		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+		if prev, dup := seen[id]; dup {
+			return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
+				name, id, prev)
+		}
+		seen[id] = name
+	}
+	return nil
+}
+
 // rejection is one upstream file this engine will not run, and why.
 type rejection struct {
 	File   string
@@ -122,9 +140,14 @@ func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
 		return nil, nil, err
 	}
 
+	// Stems are checked BEFORE anything is parsed. Recording an id only after a successful parse would let a rejected file leave
+	// its id unclaimed, so a second file with the same stem would import and the collision would go unreported.
+	if err := checkDuplicateStems(names); err != nil {
+		return nil, nil, err
+	}
+
 	out := make([]api.Rule, 0, len(names))
 	var rejected []rejection
-	seen := make(map[string]string, len(names))
 	for _, name := range names {
 		raw, err := fs.ReadFile(fsys, name)
 		if err != nil {
@@ -138,11 +161,6 @@ func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
 			}
 			return nil, nil, err
 		}
-		if prev, dup := seen[rule.id]; dup {
-			return nil, nil, fmt.Errorf("%s: rule id %q already imported from %s; the later file would silently replace the earlier rule",
-				name, rule.id, prev)
-		}
-		seen[rule.id] = name
 		out = append(out, rule)
 	}
 	return out, rejected, nil
@@ -173,6 +191,9 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 	eventType, ok := sigmabind.EventTypeForCategory(f.LogSource.Category)
 	if !ok {
 		return nil, unmappable("logsource category %q maps to no event type this agent collects", f.LogSource.Category)
+	}
+	if reason, inert := categoryIsInert(f.LogSource.Category); inert {
+		return nil, unmappable("%s", reason)
 	}
 	platforms, err := platformsFor(f.LogSource.Product)
 	if err != nil {
@@ -222,18 +243,35 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 	}, nil
 }
 
+// categoryIsInert reports whether a category maps to an event type the agent emits too narrowly for the category's rules to fire.
+//
+// `file_event` is the case. It maps to `open`, but since #301 the agent's file client inverts target-path muting to observe ONLY
+// /etc/sudoers and /etc/sudoers.d/ (see FileTamperSubscriber.watchedTargets), so an `open` event exists for no other path. An
+// upstream file_event rule watching launch daemons or startup items would therefore load, register, and never once fire.
+//
+// That is exactly the outcome the refusal contract exists to prevent: a rule that can never match is indistinguishable from the
+// behaviour never occurring. Refusing it says so, where importing it would look like coverage we do not have.
+//
+// This is a statement about the AGENT, not about Sigma. Widening the watched set, or subscribing to NOTIFY_WRITE more broadly,
+// is what makes these rules importable; the refusal should be revisited then and not before.
+func categoryIsInert(category string) (string, bool) {
+	if category == "file_event" {
+		return "category file_event maps to open, but this agent emits open only for /etc/sudoers paths (#301), " +
+			"so a file_event rule watching anything else could never fire", true
+	}
+	return "", false
+}
+
 // platformsFor maps a Sigma logsource product onto the platforms this engine scopes rules by.
+//
+// It reads the same table the exporter writes with, inverted, rather than keeping a second copy. Two tables would let a platform
+// added or renamed on one side make an exported file unimportable.
 func platformsFor(product string) ([]api.Platform, error) {
-	switch strings.ToLower(product) {
-	case "macos":
-		return []api.Platform{api.PlatformDarwin}, nil
-	case "windows":
-		return []api.Platform{api.PlatformWindows}, nil
-	case "linux":
-		return []api.Platform{api.PlatformLinux}, nil
-	default:
+	platform, ok := export.PlatformForProduct(product)
+	if !ok {
 		return nil, unmappable("logsource product %q is not a platform this engine targets", product)
 	}
+	return []api.Platform{platform}, nil
 }
 
 // severityFor maps a Sigma level onto the four severities an alert can carry.
