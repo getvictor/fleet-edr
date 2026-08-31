@@ -126,7 +126,7 @@ func parseModifiers(field string, mods []string) (modifiers, error) {
 	seen := make(map[string]bool, len(mods))
 	for _, name := range mods {
 		if !knownModifiers[name] {
-			return modifiers{}, fmt.Errorf("field %q uses unsupported modifier %q", field, name)
+			return modifiers{}, fmt.Errorf("%w: field %q uses modifier %q", ErrUnsupported, field, name)
 		}
 		if seen[name] {
 			return modifiers{}, fmt.Errorf("field %q repeats modifier %q", field, name)

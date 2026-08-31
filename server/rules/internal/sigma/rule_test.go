@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -102,7 +103,7 @@ func TestCompile_Rejects(t *testing.T) {
 		{"no searches", "condition: selection\n", "defines no searches"},
 		{"condition as a list", "selection:\n  Image: '/bin/sh'\ncondition:\n  - selection\n", "must be a single string"},
 		{"search is a scalar", "selection: nope\ncondition: selection\n", "must be a field map"},
-		{"keyword list search", "selection:\n  - 'some keyword'\ncondition: selection\n", "keyword search is unsupported"},
+		{"keyword list search", "selection:\n  - 'some keyword'\ncondition: selection\n", "is a keyword search"},
 		{"empty field map", "selection: {}\ncondition: selection\n", "empty field map"},
 	}
 	for _, tc := range cases {
@@ -175,7 +176,8 @@ timeframe: 15m
 condition: selection
 `)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported Sigma construct")
+	assert.Contains(t, err.Error(), "reserved key")
+	require.ErrorIs(t, err, ErrUnsupported, "a reserved key is a construct we have not built, not a broken rule")
 	assert.Contains(t, err.Error(), "timeframe")
 }
 
@@ -220,4 +222,77 @@ func TestCompile_AcceptsOrdinaryNesting(t *testing.T) {
 	assert.True(t, r.Matches(mapEvent{"Image": {"/bin/sh"}}), "selection matches and the filter does not")
 	assert.False(t, r.Matches(mapEvent{"Image": {"/bin/sh"}, "CommandLine": {"safe"}}), "the filter suppresses")
 	assert.False(t, r.Matches(mapEvent{"Image": {"/bin/zsh"}}), "selection does not match")
+}
+
+// TestCompile_ErrUnsupportedSeparatesGapsFromDefects pins which compile refusals mean "valid Sigma we have not implemented".
+//
+// The distinction is drawn in this package because only this package knows which of its refusals are gaps. A caller importing a
+// corpus acts on it directly: a gap is a rule to decline and count, a defect is a broken file that must fail loudly. Mislabelling
+// in either direction is silent, so each refusal is pinned by name rather than left to whichever branch happens to run.
+func TestCompile_ErrUnsupportedSeparatesGapsFromDefects(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		detection   map[string]any
+		unsupported bool
+	}{
+		{
+			name:        "a reserved detection key is a construct we have not built",
+			detection:   map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "timeframe": "15m", "condition": "sel"},
+			unsupported: true,
+		},
+		{
+			name:        "a keyword search is valid Sigma with no whole-event surface here",
+			detection:   map[string]any{"sel": []any{"some phrase"}, "condition": "sel"},
+			unsupported: true,
+		},
+		{
+			name:        "an unknown modifier is a modifier we have not built",
+			detection:   map[string]any{"sel": map[string]any{"Image|windash": "/bin/sh"}, "condition": "sel"},
+			unsupported: true,
+		},
+		{
+			name:        "nesting past the depth bound is a limit we impose on a valid rule",
+			detection:   map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": strings.Repeat("(", maxConditionDepth+1) + "sel" + strings.Repeat(")", maxConditionDepth+1)},
+			unsupported: true,
+		},
+		{
+			name:      "a condition naming no search is a broken rule",
+			detection: map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": "nope"},
+		},
+		{
+			name:      "a missing condition is a broken rule",
+			detection: map[string]any{"sel": map[string]any{"Image": "/bin/sh"}},
+		},
+		{
+			name:      "a detection block with no searches is a broken rule",
+			detection: map[string]any{"condition": "sel"},
+		},
+		{
+			name:      "a list entry that is neither a field map nor a keyword is a broken rule",
+			detection: map[string]any{"sel": []any{3}, "condition": "sel"},
+		},
+		{
+			name:      "an empty field map is a broken rule",
+			detection: map[string]any{"sel": map[string]any{}, "condition": "sel"},
+		},
+		{
+			name:      "an uncompilable regexp is a broken rule",
+			detection: map[string]any{"sel": map[string]any{"Image|re": "("}, "condition": "sel"},
+		},
+		{
+			name:      "contradictory modifiers are a broken rule",
+			detection: map[string]any{"sel": map[string]any{"Image|contains|endswith": "sh"}, "condition": "sel"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Compile(tc.detection)
+			require.Error(t, err)
+			assert.Equal(t, tc.unsupported, errors.Is(err, ErrUnsupported), "err: %v", err)
+		})
+	}
 }

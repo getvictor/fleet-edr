@@ -584,6 +584,7 @@ func TestCategoryIsInert_RefusesEvenASudoersRule(t *testing.T) {
 	assert.Contains(t, err.Error(), "/etc/sudoers", "the reason names the telemetry, which is what makes the trade auditable")
 }
 
+// spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-rule-using-an-unimplemented-sigma-feature-is-refused-not-a-failed-import
 // TestParseImported_UnsupportedSigmaIsARejection pins that valid Sigma using a feature this evaluator does not implement is
 // reported as one rejection rather than failing the whole import.
 //
@@ -600,5 +601,42 @@ func TestParseImported_UnsupportedSigmaIsARejection(t *testing.T) {
 
 	_, isRejection := errors.AsType[unmappableError](err)
 	assert.True(t, isRejection, "an unsupported feature is a rejection, so the rest of the corpus still imports")
-	assert.Contains(t, err.Error(), "does not compile")
+	assert.Contains(t, err.Error(), "keyword search", "the reason names the feature, so a re-sync report says what to build")
+}
+
+// spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-structurally-invalid-detection-block-fails-the-import
+// TestParseImported_MalformedDetectionIsAHardError is the counterpart to TestParseImported_UnsupportedSigmaIsARejection.
+//
+// Both are sigma.Compile failures and they must not be treated alike. A rule using a feature we have not built is one we cannot run,
+// so it is rejected and the corpus loads on. A detection block that is structurally broken is a defect in a file this repository
+// vendored, and the reason for checking the corpus in at all is that such a file fails loudly instead of vanishing into a rejection
+// list. Collapsing the two, in either direction, is a bug we have already shipped once.
+func TestParseImported_MalformedDetectionIsAHardError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		detect string
+	}{
+		{"condition names a search that does not exist", "detection: {sel: {Image: /bin/sh}, condition: nope}"},
+		{"no condition at all", "detection: {sel: {Image: /bin/sh}}"},
+		{"condition is not a string", "detection: {sel: {Image: /bin/sh}, condition: [sel]}"},
+		{"no searches", "detection: {condition: sel}"},
+		{"search with an empty field map", "detection: {sel: {}, condition: sel}"},
+		{"unclosed parenthesis", "detection: {sel: {Image: /bin/sh}, condition: '(sel'}"},
+		{"a list entry that is not a field map and not a keyword", "detection: {sel: [3], condition: sel}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" + tc.detect + "\n")
+			_, err := parseImported("broken.yml", body)
+			require.Error(t, err)
+
+			_, isRejection := errors.AsType[unmappableError](err)
+			assert.False(t, isRejection, "a broken vendored file must fail the import, not join the rejections")
+			assert.Contains(t, err.Error(), "broken.yml", "a hard error names the file so the failure is actionable")
+		})
+	}
 }

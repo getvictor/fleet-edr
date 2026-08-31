@@ -7,6 +7,15 @@ import (
 	"slices"
 )
 
+// ErrUnsupported marks a compile failure that means "this is valid Sigma, and this evaluator does not implement it" as opposed to
+// "this rule is broken". Compile returns errors of both kinds and a caller usually has to act on them differently: a rule using a
+// construct we have not built is one to decline and count, while a malformed rule is a defect in the rule file itself.
+//
+// The distinction is drawn here rather than by a caller matching on message text, because only this package knows which of its
+// refusals are gaps in the implementation. Wrapped by exactly four refusals today: a reserved detection key, a keyword search, an
+// unknown field modifier, and a condition nested past the depth bound. Everything else Compile rejects is malformed.
+var ErrUnsupported = errors.New("unsupported Sigma feature")
+
 // Rule is a compiled Sigma detection: the named searches and the condition that combines them. Compile it once at load; Matches
 // is then allocation-free and safe to call concurrently.
 type Rule struct {
@@ -49,7 +58,7 @@ func Compile(detection map[string]any) (*Rule, error) {
 			// A reserved key is not a search. Collected as one it would be compiled as a field map and, worse, swept into any
 			// `1 of` / `all of` quantifier, so the rule would evaluate a condition nobody wrote instead of being refused for
 			// using a construct this evaluator does not implement.
-			return nil, fmt.Errorf("detection block uses unsupported Sigma construct %q", name)
+			return nil, fmt.Errorf("%w: detection block uses reserved key %q", ErrUnsupported, name)
 		}
 		names = append(names, name)
 	}
@@ -117,8 +126,13 @@ func compileSearch(name string, raw any) (search, error) {
 			m, ok := entry.(map[string]any)
 			if !ok {
 				// A list of bare strings is Sigma's keyword search, which matches against the whole event rather than a named
-				// field. Zero macOS rules use it and this evaluator has no whole-event surface, so it is refused at load.
-				return search{}, fmt.Errorf("search %q: list entries must be field maps, got %T (keyword search is unsupported)", name, entry)
+				// field. Zero macOS rules use it and this evaluator has no whole-event surface, so it is refused at load. That
+				// is a gap in this implementation, so it is marked unsupported. A list entry of any OTHER type is not a
+				// keyword search and not valid Sigma either, so it stays a plain malformed-rule error.
+				if _, keyword := entry.(string); keyword {
+					return search{}, fmt.Errorf("%w: search %q is a keyword search", ErrUnsupported, name)
+				}
+				return search{}, fmt.Errorf("search %q: list entries must be field maps, got %T", name, entry)
 			}
 			alt, err := compileAlternative(name, m)
 			if err != nil {

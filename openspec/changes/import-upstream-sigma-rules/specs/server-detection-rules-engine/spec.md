@@ -26,11 +26,25 @@ Refusing one rule SHALL NOT refuse the rest. An upstream corpus is written for m
 
 A file that cannot be read or parsed, or that claims an identifier another file already claimed, SHALL fail the import rather than being reported as a rejection: those mean the import itself is broken rather than that one detection does not fit.
 
+A detection block the evaluator cannot compile SHALL be classified by WHY it cannot. A rule using a construct the evaluator has not implemented SHALL be refused like any other rule this sensor cannot run. A detection block that is structurally invalid SHALL fail the import, because a vendored file the evaluator cannot parse is a defect in this repository rather than a rule that does not fit.
+
 #### Scenario: A rule reading an unavailable field is refused, and the others still import
 
 - **GIVEN** a corpus in which one rule reads a field this sensor does not collect
 - **WHEN** the corpus is imported
 - **THEN** that rule is reported as refused, naming the field, and every other rule imports
+
+#### Scenario: A rule using an unimplemented Sigma feature is refused, not a failed import
+
+- **GIVEN** an upstream rule whose detection block is valid Sigma but uses a feature the evaluator does not implement, such as a keyword search
+- **WHEN** the corpus is imported
+- **THEN** that rule is reported as refused, naming the feature, and every other rule imports
+
+#### Scenario: A structurally invalid detection block fails the import
+
+- **GIVEN** a vendored rule file whose detection block names a search that does not exist
+- **WHEN** the corpus is imported
+- **THEN** the import fails and names the file, rather than reporting the rule as refused
 
 #### Scenario: Two files claiming one identifier fail the import
 

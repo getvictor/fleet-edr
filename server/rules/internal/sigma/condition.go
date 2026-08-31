@@ -93,7 +93,7 @@ type parser struct {
 func (p *parser) enter() error {
 	p.depth++
 	if p.depth > maxConditionDepth {
-		return fmt.Errorf("condition nests deeper than %d levels", maxConditionDepth)
+		return fmt.Errorf("%w: condition nests deeper than %d levels", ErrUnsupported, maxConditionDepth)
 	}
 	return nil
 }

@@ -221,7 +221,15 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 		// A rejection, not a hard error. Valid Sigma can use a feature this evaluator does not implement (`windash`, a keyword
 		// search, `timeframe`), and upstream is entitled to ship it: that is a rule this sensor cannot run, exactly like one
 		// reading a field it does not collect. Failing the import would abandon the other sixty-odd rules over it.
-		return nil, unmappable("detection does not compile: %s", err)
+		// Two different failures reach here and they are not the same event. Valid Sigma this evaluator does not implement is a
+		// rule we cannot RUN, so it joins the rejections and the rest of the corpus still loads. A malformed detection block is a
+		// defect in a file we vendored, and the whole point of checking the corpus in is that such a file fails loudly rather
+		// than disappearing into a rejection list nobody reads.
+		if errors.Is(err, sigma.ErrUnsupported) {
+			// The compiler's own wording already leads with "unsupported Sigma feature", so restating it here would double it.
+			return nil, unmappable("%s", err)
+		}
+		return nil, fmt.Errorf("%s: compile detection: %w", name, err)
 	}
 	if err := sigmabind.Validate(compiled, eventType); err != nil {
 		return nil, unmappable("%s", err)
