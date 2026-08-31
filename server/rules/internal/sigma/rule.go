@@ -110,6 +110,23 @@ func (r *Rule) Fields() []string {
 	return out
 }
 
+// searchAlternativeMap asserts one entry of a list-valued search to the field map an alternative has to be.
+//
+// It exists to name the two ways an entry can fail to be one, because they are not the same event. A list of bare strings is
+// Sigma's keyword search, which matches against the whole event rather than a named field: zero macOS rules use it and this
+// evaluator has no whole-event surface, so it is a gap in this implementation and is marked unsupported. An entry of any other
+// type is not a keyword search and not valid Sigma either, so it is a malformed rule.
+func searchAlternativeMap(name string, entry any) (map[string]any, error) {
+	switch e := entry.(type) {
+	case map[string]any:
+		return e, nil
+	case string:
+		return nil, fmt.Errorf("%w: search %q is a keyword search", ErrUnsupported, name)
+	default:
+		return nil, fmt.Errorf("search %q: list entries must be field maps, got %T", name, entry)
+	}
+}
+
 // compileSearch builds one named search. A Sigma search is a map of field matchers (AND across fields) or a list of such maps
 // (OR across the list).
 func compileSearch(name string, raw any) (search, error) {
@@ -123,16 +140,9 @@ func compileSearch(name string, raw any) (search, error) {
 		s.alternatives = append(s.alternatives, alt)
 	case []any:
 		for _, entry := range v {
-			m, ok := entry.(map[string]any)
-			if !ok {
-				// A list of bare strings is Sigma's keyword search, which matches against the whole event rather than a named
-				// field. Zero macOS rules use it and this evaluator has no whole-event surface, so it is refused at load. That
-				// is a gap in this implementation, so it is marked unsupported. A list entry of any OTHER type is not a
-				// keyword search and not valid Sigma either, so it stays a plain malformed-rule error.
-				if _, keyword := entry.(string); keyword {
-					return search{}, fmt.Errorf("%w: search %q is a keyword search", ErrUnsupported, name)
-				}
-				return search{}, fmt.Errorf("search %q: list entries must be field maps, got %T", name, entry)
+			m, err := searchAlternativeMap(name, entry)
+			if err != nil {
+				return search{}, err
 			}
 			alt, err := compileAlternative(name, m)
 			if err != nil {
