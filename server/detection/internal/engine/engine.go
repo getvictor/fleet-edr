@@ -124,6 +124,10 @@ func (e *Engine) Catalog() []rulesapi.RuleMetadata {
 			Techniques: r.Techniques(),
 			Doc:        r.Doc(),
 			Platforms:  r.Platforms(),
+			// Populated here as well as in the rules service, unlike Algorithm and SupportedExclusionMatchTypes, because this
+			// field's contract is that it always holds a mode. Those two document themselves as empty when absent, so omitting
+			// them keeps their contract; omitting this one would break its.
+			DefaultMode: rulesapi.DefaultModeOf(r),
 		})
 	}
 	return out

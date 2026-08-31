@@ -67,6 +67,30 @@ func TestEngine_RegisterAccumulates(t *testing.T) {
 	assert.Equal(t, []string{"T1"}, cat[1].Techniques)
 }
 
+// TestEngine_CatalogAlwaysCarriesAMode pins RuleMetadata.DefaultMode's contract on this builder too.
+//
+// The field documents itself as always holding a mode rather than sometimes the empty string, so a consumer never has to know what
+// the server's default is to read it. Two builders produce RuleMetadata, and a contract that holds in only one of them is not a
+// contract: this one omitted the field and handed back entries whose mode read as "".
+func TestEngine_CatalogAlwaysCarriesAMode(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, discardLogger())
+	e.Register(&stubRule{id: "silent"})
+	e.Register(&modeDeclaringStub{
+		stubRuleWithFindings: stubRuleWithFindings{stubRule: stubRule{id: "declaring"}},
+		mode:                 rulesapi.DetectionRuleModeMonitor,
+	})
+
+	got := map[string]rulesapi.DetectionRuleMode{}
+	for _, rm := range e.Catalog() {
+		got[rm.ID] = rm.DefaultMode
+	}
+
+	assert.Equal(t, rulesapi.DetectionRuleModeAlert, got["silent"], "a rule declaring nothing reports alert, not the zero value")
+	assert.Equal(t, rulesapi.DetectionRuleModeMonitor, got["declaring"])
+}
+
 // TestEngine_LoadActiveReplacesRuleSet pins the replace (not append) semantics: a hot-reload caller can invoke LoadActive repeatedly
 // without the engine accumulating duplicates.
 func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
