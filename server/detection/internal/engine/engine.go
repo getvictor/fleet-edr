@@ -300,11 +300,17 @@ func (e *Engine) evaluateRule(
 	ctx, span := e.tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
 	defer span.End()
-	// Stamp alert_count=0 up front so dashboards grouping by rule_id see a consistent attribute set across success and failure
-	// paths. The success path below overrides this with the actual count; the rule-error early-return below would otherwise
-	// leave alert_count unset and break aggregations that treat its absence as a missing-data signal. suppressed_count is stamped
-	// alongside it for the same reason: a rule that raised nothing and suppressed nothing should say so rather than say nothing.
-	span.SetAttributes(attribute.Int("alert_count", 0), attribute.Int("suppressed_count", 0))
+
+	// Stamped from a defer, so every path reports what it did rather than only the paths that reach the end. Dashboards grouping
+	// by rule_id need a consistent attribute set, and there are three ways out of this function: a rule error, a persistence
+	// failure partway through the findings, and success. The failure path is the one that motivated moving this: it used to leave
+	// the span reporting 0/0 while findings before it had genuinely been raised or suppressed, so the work already done vanished
+	// from the trace at exactly the moment someone would be reading it. Both counters start at zero, which is the honest answer
+	// for a rule that produced nothing.
+	var alerted, suppressed int
+	defer func() {
+		span.SetAttributes(attribute.Int("alert_count", alerted), attribute.Int("suppressed_count", suppressed))
+	}()
 
 	findings, err := evaluate(ctx, rule, scoped, e.store, scope)
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
@@ -332,12 +338,12 @@ func (e *Engine) evaluateRule(
 	// the vendored corpus landed in monitor mode (issue #764); now most findings are suppressed, and counting what the rule
 	// returned would have every dashboard grouping by rule_id report alerts that were never raised. suppressed_count carries the
 	// other half, so the span still says how much the rule found rather than losing that when the two stopped being equal.
+	//
 	// NOTE ON COVERAGE: the monitor and disabled arms of this are asserted by unit tests, which reach them without a store. The
 	// deduplicated-alert arm is not: persistFinding needs a real store, and asserting the span from the integration package would
 	// mean installing a global tracer provider from tests that run in parallel, which is the race the per-Engine tracer exists to
 	// avoid. It is three lines returning the same `created` flag that already gates the alert log and edr.alerts.created, so it is
 	// correct by construction rather than by test, and that is worth knowing rather than assuming.
-	var alerted, suppressed int
 	for _, f := range findings {
 		routed, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques)
 		if err != nil {
@@ -350,7 +356,6 @@ func (e *Engine) evaluateRule(
 		}
 		suppressed++
 	}
-	span.SetAttributes(attribute.Int("alert_count", alerted), attribute.Int("suppressed_count", suppressed))
 	return retryableMiss
 }
 

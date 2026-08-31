@@ -58,7 +58,9 @@ describe("AttackCoverage summary strip", () => {
     expect(within(cardFor("tactics with coverage")).getByText("2")).toBeInTheDocument();
   });
 
-  // The count that would otherwise overstate the product. A technique the server scored below 1 is covered only by rules that
+  // The count that would otherwise overstate the product. The label is mode-neutral on purpose: a sub-1 score means the covering
+  // rules are in monitor OR disabled, the server does not distinguish them in the score, and calling it "monitored" would misstate
+  // a disabled rule, which records nothing at all. A technique the server scored below 1 is covered only by rules that
   // raise nothing as shipped, and reporting those in one "techniques covered" figure would tell a reader the product alerts on
   // techniques it merely watches. The monitored card appears only when there is something to report, so a deployment with no
   // monitor-mode rules sees the strip it saw before.
@@ -86,6 +88,6 @@ describe("AttackCoverage summary strip", () => {
     const cardFor = (label: string) =>
       within(strip).getByText(label).closest(".stat-card") as HTMLElement;
     expect(within(cardFor("techniques alerting")).getByText("1")).toBeInTheDocument();
-    expect(within(cardFor("techniques monitored, no alert")).getByText("2")).toBeInTheDocument();
+    expect(within(cardFor("techniques not alerting")).getByText("2")).toBeInTheDocument();
   });
 });

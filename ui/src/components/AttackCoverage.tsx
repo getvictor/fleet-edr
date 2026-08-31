@@ -89,6 +89,10 @@ export function AttackCoverage() {
   // Split by whether anything covering the technique actually alerts. The server scores a technique below 1 when every rule
   // covering it raises nothing as shipped (issue #764), and most of the catalog is now in that state, so a single "techniques
   // covered" figure would tell a reader the product raises alerts for sixty-odd techniques when it raises them for thirteen.
+  //
+  // The wording stays mode-neutral. A sub-1 score means monitor OR disabled, and calling it "monitored" would misstate a disabled
+  // rule, which records nothing rather than recording without alerting. The score does not distinguish them and neither should
+  // this label; what both cases share, and all this card can honestly claim, is that nothing there alerts.
   const alerting = layer?.techniques.filter((t) => t.score >= 1).length ?? 0;
   const notAlerting = (layer?.techniques.length ?? 0) - alerting;
 
@@ -116,7 +120,7 @@ export function AttackCoverage() {
           <SummaryStrip>
             <StatCard accent="green" value={alerting} label="techniques alerting" />
             {notAlerting > 0 && (
-              <StatCard accent="neutral" value={notAlerting} label="techniques monitored, no alert" />
+              <StatCard accent="neutral" value={notAlerting} label="techniques not alerting" />
             )}
             <StatCard accent="green" value={distinctRules.size} label="detection rules" />
             <StatCard accent="green" value={groups.length} label="tactics with coverage" />

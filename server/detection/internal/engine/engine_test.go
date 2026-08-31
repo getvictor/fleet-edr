@@ -1055,3 +1055,47 @@ func TestEngine_SpanCountsAlertsRaisedNotFindingsReturned(t *testing.T) {
 	assert.Equal(t, int64(0), alertCount, "two findings were produced and neither was raised as an alert")
 	assert.Equal(t, int64(2), suppressedCount, "and the span still says how much the rule found")
 }
+
+// erroringStub fails evaluation, which is the path that returns before any finding is routed.
+type erroringStub struct{ stubRule }
+
+func (r *erroringStub) Evaluate(context.Context, []api.Event, rulesapi.GraphReader) ([]api.Finding, error) {
+	return nil, errors.New("rule blew up")
+}
+
+// TestEngine_SpanCountsSurviveAnEvaluationError pins that a rule which fails still reports counts.
+//
+// These attributes used to be stamped up front precisely so a failing rule did not leave them unset, and dashboards grouping by
+// rule_id treat a missing attribute as missing data rather than as zero. Moving the stamp into a defer, so a persistence failure
+// partway through the findings no longer discards the counts of the findings before it, removed that up-front stamp: this is the
+// case that change could have broken, and it is reachable without a store, unlike the failure that motivated the defer.
+func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
+	t.Parallel()
+
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	e := New(nil, discardLogger())
+	e.tracer = tp.Tracer("test")
+	e.Register(&erroringStub{stubRule: stubRule{id: "broken"}})
+
+	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}),
+		"a rule error is isolated, not returned")
+
+	var sawAlert, sawSuppressed bool
+	for _, span := range rec.Ended() {
+		for _, attr := range span.Attributes() {
+			switch attr.Key {
+			case attribute.Key("alert_count"):
+				sawAlert = true
+				assert.Equal(t, int64(0), attr.Value.AsInt64())
+			case attribute.Key("suppressed_count"):
+				sawSuppressed = true
+				assert.Equal(t, int64(0), attr.Value.AsInt64())
+			}
+		}
+	}
+	assert.True(t, sawAlert, "alert_count must be present even when the rule failed, so aggregations do not read it as missing data")
+	assert.True(t, sawSuppressed, "and suppressed_count alongside it")
+}
