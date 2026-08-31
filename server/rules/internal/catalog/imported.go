@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/export"
@@ -227,6 +227,10 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 		return nil, compileErr
 	}
 
+	// Two categories reach this import today, because that is what the macOS corpus contains: 67 process_creation rules and 2
+	// file_event. Issue #763 also lists dns_query, network_connection and process_termination, and those stay unrouted on purpose:
+	// SigmaHQ ships no macOS rule in any of them, so a mapping added now would be code no rule exercises and no test could reach
+	// through this loader. They are routed when a rule needs them, which is also when the adapter for them can be verified.
 	eventType, ok := sigmabind.EventTypeForCategory(f.LogSource.Category)
 	if !ok {
 		return nil, unmappable("logsource category %q maps to no event type this agent collects", f.LogSource.Category)

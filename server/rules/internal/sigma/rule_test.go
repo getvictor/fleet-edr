@@ -263,6 +263,14 @@ func TestCompile_ErrUnsupportedSeparatesGapsFromDefects(t *testing.T) {
 			unsupported: true,
 		},
 		{
+			name:      "an empty list condition is not Sigma's list form, so it is a broken rule",
+			detection: map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": []any{}},
+		},
+		{
+			name:      "a list condition carrying a non-string is not Sigma's list form either",
+			detection: map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": []any{7}},
+		},
+		{
 			name:      "a condition of neither Sigma form is a broken rule",
 			detection: map[string]any{"sel": map[string]any{"Image": "/bin/sh"}, "condition": 7},
 		},

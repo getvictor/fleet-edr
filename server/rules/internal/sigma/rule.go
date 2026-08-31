@@ -12,8 +12,9 @@ import (
 // construct we have not built is one to decline and count, while a malformed rule is a defect in the rule file itself.
 //
 // The distinction is drawn here rather than by a caller matching on message text, because only this package knows which of its
-// refusals are gaps in the implementation. Wrapped by exactly four refusals today: a reserved detection key, a keyword search, an
-// unknown field modifier, and a condition nested past the depth bound. Everything else Compile rejects is malformed.
+// refusals are gaps in the implementation. Wrapped by exactly five refusals today: a reserved detection key, a keyword search, an
+// unknown field modifier, a condition nested past the depth bound, and a list-valued condition. Everything else Compile rejects is
+// malformed.
 var ErrUnsupported = errors.New("unsupported Sigma feature")
 
 // Rule is a compiled Sigma detection: the named searches and the condition that combines them. Compile it once at load; Matches
@@ -30,6 +31,23 @@ var reservedDetectionKeys = map[string]bool{
 	"timeframe": true,
 }
 
+// listCondition reports why a list-valued condition cannot be compiled, which is not always the same reason.
+//
+// Sigma's list form is a non-empty list of condition STRINGS, meaning their disjunction, and that is the form this evaluator has
+// not built. A list that is empty, or that carries anything else, is not that form and not a condition at all, so it is a broken
+// rule. Treating every list as the unsupported form would let `condition: [7]` load as a rejection and go green.
+func listCondition(entries []any) error {
+	if len(entries) == 0 {
+		return errors.New("condition is an empty list, so nothing decides whether the rule fires")
+	}
+	for _, entry := range entries {
+		if _, ok := entry.(string); !ok {
+			return fmt.Errorf("condition list entries must be strings, got %T", entry)
+		}
+	}
+	return fmt.Errorf("%w: condition is a list of %d conditions, meaning their disjunction", ErrUnsupported, len(entries))
+}
+
 // conditionString extracts the condition text, naming each way a `detection:` block can fail to carry one.
 //
 // Sigma defines two condition forms: a string, and a list of strings meaning their disjunction. This evaluator implements only the
@@ -43,9 +61,9 @@ func conditionString(raw any, present bool) (string, error) {
 	case string:
 		return c, nil
 	case []any:
-		return "", fmt.Errorf("%w: condition is a list, meaning a disjunction", ErrUnsupported)
+		return "", listCondition(c)
 	default:
-		return "", fmt.Errorf("condition must be a single string or a list, got %T", raw)
+		return "", fmt.Errorf("condition must be a single string or a list of strings, got %T", raw)
 	}
 }
 
