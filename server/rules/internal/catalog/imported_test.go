@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,36 +12,36 @@ import (
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 )
 
 // spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-rule-reading-an-unavailable-field-is-refused-and-the-others-still-import
 //
-// TestLoadImported_UpstreamRulesLoadUnmodified is the acceptance criterion of issue #763 stated literally: a SigmaHQ file imports
-// byte-identical, with no `x-engine` block and nothing added.
+// TestLoadImported_TheWholeUpstreamCorpus is issue #763's acceptance criterion stated as a test rather than as a number in a PR
+// description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and the one rule this sensor cannot run is refused by name.
 //
-// The fixtures under testdata/imported are verbatim copies of SigmaHQ macOS rules. Nothing about them was edited to make this pass,
-// which is the whole claim: every key we made mandatory would be a key that forks the corpus and turns a re-sync into a merge
-// conflict.
-func TestLoadImported_UpstreamRulesLoadUnmodified(t *testing.T) {
+// The fixtures are the upstream tree copied byte-for-byte, including its `<category>/` layout, so this exercises the directory walk
+// the production loader does. Asserting the exact counts rather than a lower bound is the point: a version that imported one rule
+// and rejected 68 would satisfy "some rules import", and that is precisely the regression worth catching.
+func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 	t.Parallel()
 
 	rules, rejected, err := loadImported(os.DirFS("testdata"), "imported")
 	require.NoError(t, err)
-	require.NotEmpty(t, rules)
 
-	// The corpus genuinely contains one rule this sensor cannot run, and it is reported rather than dropped. Asserting the exact
-	// set keeps a future fixture that stops importing from passing unnoticed.
-	require.Len(t, rejected, 1)
+	assert.Len(t, rules, 68, "every macOS rule but one reads only fields this sensor supplies")
+	require.Len(t, rejected, 1, "and exactly one does not")
 	assert.Contains(t, rejected[0].File, "meshagent")
 	assert.Contains(t, rejected[0].Reason, "OriginalFileName",
-		"the reason must name the field, so an operator knows why the rule is absent")
+		"the reason names the field, so an operator knows why the rule is absent")
+	assert.NotContains(t, rejected[0].Reason, rejected[0].File,
+		"the reason does not repeat the file, which the rejection already carries")
 
 	byID := make(map[string]api.Rule, len(rules))
 	for _, r := range rules {
 		byID[r.ID()] = r
 	}
 
-	// A process_creation rule and a file_event rule, so both category mappings are exercised by real upstream files.
 	t.Run("a process_creation rule", func(t *testing.T) {
 		t.Parallel()
 		r := byID["proc_creation_macos_applescript"]
@@ -47,7 +49,6 @@ func TestLoadImported_UpstreamRulesLoadUnmodified(t *testing.T) {
 		assert.NotEmpty(t, r.DisplayName())
 		assert.Equal(t, []api.Platform{api.PlatformDarwin}, r.Platforms())
 		assert.Equal(t, []string{"exec"}, r.Doc().EventTypes, "process_creation maps to exec")
-		assert.NotEmpty(t, r.Doc().Severity)
 	})
 
 	t.Run("a file_event rule", func(t *testing.T) {
@@ -67,9 +68,45 @@ func TestLoadImported_UpstreamRulesLoadUnmodified(t *testing.T) {
 			assert.NotEmpty(t, r.DisplayName(), "a rule with no name cannot be triaged")
 			assert.NotEmpty(t, r.Platforms(), "the engine scopes every batch by platform")
 			assert.NotEmpty(t, r.Doc().EventTypes, "the engine dispatches on this (#762)")
-			assert.NotEmpty(t, r.Doc().Severity)
+			assert.NotEmpty(t, r.Doc().Severity, "an alert has to be raised at some severity")
 		}
 	})
+}
+
+// TestSeverityFor pins every level mapping, because the severity an alert carries is behaviour this PR introduces and the corpus
+// test above only asserts that one is present.
+func TestSeverityFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		level   string
+		want    string
+		wantErr string
+	}{
+		{level: "critical", want: api.SeverityCritical},
+		{level: "high", want: api.SeverityHigh},
+		{level: "medium", want: api.SeverityMedium},
+		{level: "low", want: api.SeverityLow},
+		// 7 of the 69 macOS rules are informational. It has no counterpart here, and refusing them would fork the corpus over a
+		// label, so it lands at the lowest severity we can raise.
+		{level: "informational", want: api.SeverityLow},
+		{level: "MEDIUM", want: api.SeverityMedium},
+		{level: "", wantErr: "no level"},
+		{level: "catastrophic", wantErr: "catastrophic"},
+	}
+	for _, tc := range cases {
+		t.Run("level="+tc.level, func(t *testing.T) {
+			t.Parallel()
+			got, err := severityFor(tc.level)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 // TestParseImported_RefusesWhatItCannotRun pins that an unimportable file fails the load with a reason naming what is wrong.
@@ -264,4 +301,212 @@ func TestImportedRule_FiresOnAMatchingEvent(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, findings, "chflags without the hidden flag is not what the rule describes")
 	})
+}
+
+// TestImportedRule_OpenEventResolvesTheSubjectOnce pins that a file_event rule looks its subject up once.
+//
+// Dropping the accessor that openEventWithSubject returns would make matching and the finding two separate reads of the same pid.
+// A materialization commit landing between them lets a rule with a negated Image filter match on an absent image and then attach
+// the finding to the very process that should have suppressed it. Issue #762 established this for sudoers_tamper; the same helper
+// carries the same obligation here.
+func TestImportedRule_OpenEventResolvesTheSubjectOnce(t *testing.T) {
+	t.Parallel()
+
+	rule := &importedRule{
+		id:         "open-rule",
+		title:      "Open rule",
+		severity:   api.SeverityMedium,
+		eventTypes: []string{"open"},
+		// The detection MUST read Image, or the lazy accessor is never invoked during matching and the finding's lookup is the
+		// only one either way: the test would then pass whether or not the accessor is reused.
+		detection: mustCompileDetection(t, map[string]any{
+			"TargetFilename|contains": "/etc/emond.d/",
+			"Image|endswith":          "/tee",
+		}),
+	}
+	gr := &countingGraphReader{
+		perPIDGraphReader: perPIDGraphReader{},
+		proc:              &api.Process{ID: 7, PID: 99, Path: "/usr/bin/tee"},
+	}
+	evt := api.Event{
+		EventID: "e1", HostID: "h1", EventType: "open", TimestampNs: 1,
+		Payload: []byte(`{"pid":99,"path":"/etc/emond.d/rules/evil.plist","flags":1537}`),
+	}
+
+	findings, err := rule.Evaluate(t.Context(), []api.Event{evt}, gr)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, 1, gr.calls, "the subject is read once, and the finding names the process matching saw")
+}
+
+// mustCompileDetection builds a single-search detection block for a test rule.
+func mustCompileDetection(t *testing.T, fields map[string]any) *sigma.Rule {
+	t.Helper()
+	compiled, err := sigma.Compile(map[string]any{
+		"selection": fields,
+		"condition": "selection",
+	})
+	require.NoError(t, err)
+	return compiled
+}
+
+// TestPlatformsFor pins the product mapping, which decides which hosts' events a rule is ever scoped to. A wrong mapping makes a
+// rule silently inert on the fleet it was written for.
+func TestPlatformsFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		product string
+		want    []api.Platform
+		wantErr string
+	}{
+		{product: "macos", want: []api.Platform{api.PlatformDarwin}},
+		{product: "windows", want: []api.Platform{api.PlatformWindows}},
+		{product: "linux", want: []api.Platform{api.PlatformLinux}},
+		{product: "MacOS", want: []api.Platform{api.PlatformDarwin}},
+		{product: "aix", wantErr: "aix"},
+		{product: "", wantErr: "not a platform"},
+	}
+	for _, tc := range cases {
+		t.Run("product="+tc.product, func(t *testing.T) {
+			t.Parallel()
+			got, err := platformsFor(tc.product)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestImportedRule_ConsultsNoExclusion pins that an imported rule reads no exclusion, which is what keeps operator tuning in
+// detection_rule_settings where a re-sync cannot clobber it.
+func TestImportedRule_ConsultsNoExclusion(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, (&importedRule{}).SupportedExclusionMatchTypes())
+}
+
+// TestParseImported_MalformedFiles pins the hard-error paths: a file that is not a rule at all, rather than a rule this sensor
+// cannot run. These fail the import, because they mean the corpus on disk is not the corpus we think it is.
+func TestParseImported_MalformedFiles(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		file    string
+		wantErr string
+	}{
+		{"not yaml at all", "\tthis: [is: not\n  valid", "rule.yml"},
+		{"a detection block that is not a mapping", `title: T
+level: medium
+logsource: {category: process_creation, product: macos}
+detection: "a string"`, "decode detection"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseImported("rule.yml", []byte(tc.file))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+			assert.NotErrorIs(t, err, unmappableError{}, "a broken file is not a rule this sensor merely cannot run")
+		})
+	}
+}
+
+// TestParseImported_RefusesAnEmptyFilenameStem pins that a file named exactly `.yml` is refused.
+//
+// It is a valid directory entry and leaves the rule with no identifier, which findings, exclusions and per-host settings all key
+// on. Importing it would create a rule nothing can refer to.
+func TestParseImported_RefusesAnEmptyFilenameStem(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {Image: x}, condition: sel}\n")
+	_, err := parseImported(".yml", body)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no filename stem")
+}
+
+// TestImportedRule_SkipsEventsItCannotAct on pins the per-event guards: a batch carrying another event type, a payload with no pid,
+// and an event whose subject never materialized all produce nothing rather than an error or a bad finding.
+func TestImportedRule_SkipsEventsItCannotActOn(t *testing.T) {
+	t.Parallel()
+
+	rule := &importedRule{
+		id: "r", title: "R", severity: api.SeverityMedium, eventTypes: []string{"exec"},
+		detection: mustCompileDetection(t, map[string]any{"Image|endswith": "/sh"}),
+	}
+
+	t.Run("an event of another type", func(t *testing.T) {
+		t.Parallel()
+		gr := &countingGraphReader{proc: &api.Process{ID: 1, PID: 5, Path: "/bin/sh"}}
+		findings, err := rule.Evaluate(t.Context(), []api.Event{{
+			EventID: "e", HostID: "h", EventType: "dns_query", Payload: []byte(`{"pid":5}`),
+		}}, gr)
+		require.NoError(t, err)
+		assert.Empty(t, findings)
+		assert.Zero(t, gr.calls, "a rule does not touch the graph for an event type it does not consume")
+	})
+
+	t.Run("a payload carrying no pid", func(t *testing.T) {
+		t.Parallel()
+		gr := &countingGraphReader{proc: &api.Process{ID: 1, PID: 5, Path: "/bin/sh"}}
+		findings, err := rule.Evaluate(t.Context(), []api.Event{{
+			EventID: "e", HostID: "h", EventType: "exec", Payload: []byte(`{"path":"/bin/sh"}`),
+		}}, gr)
+		require.NoError(t, err, "a malformed payload is skipped, not raised: one bad event must not discard the batch")
+		assert.Empty(t, findings)
+	})
+
+	t.Run("an event the detection does not match", func(t *testing.T) {
+		t.Parallel()
+		gr := &countingGraphReader{proc: &api.Process{ID: 1, PID: 5, Path: "/bin/zsh"}}
+		findings, err := rule.Evaluate(t.Context(), []api.Event{{
+			EventID: "e", HostID: "h", EventType: "exec", Payload: []byte(`{"pid":5,"path":"/bin/zsh"}`),
+		}}, gr)
+		require.NoError(t, err)
+		assert.Empty(t, findings)
+	})
+
+	t.Run("a subject that never materialized", func(t *testing.T) {
+		t.Parallel()
+		gr := &countingGraphReader{proc: nil} // the row is not there
+		findings, err := rule.Evaluate(t.Context(), []api.Event{{
+			EventID: "e", HostID: "h", EventType: "exec", TimestampNs: 1, Payload: []byte(`{"pid":5,"path":"/bin/sh"}`),
+		}}, gr)
+		require.NoError(t, err)
+		assert.Empty(t, findings, "with no process row there is nothing to attach a finding to")
+	})
+}
+
+// erroringGraphReader fails every process lookup, so a test can pin what an imported rule does when the graph is unavailable.
+type erroringGraphReader struct {
+	*perPIDGraphReader
+	err error
+}
+
+func (r erroringGraphReader) GetProcessByPID(_ context.Context, _ string, _ int, _ int64) (*api.Process, error) {
+	return nil, r.err
+}
+
+// TestImportedRule_PropagatesAGraphFailure pins that a graph failure surfaces rather than being read as "no match".
+//
+// The distinction matters: a lookup that failed and a process that genuinely has no parent are the same absence at match time, and
+// treating a failure as a miss would turn an outage into silence across every imported rule at once.
+func TestImportedRule_PropagatesAGraphFailure(t *testing.T) {
+	t.Parallel()
+
+	rule := &importedRule{
+		id: "r", title: "R", severity: api.SeverityMedium, eventTypes: []string{"exec"},
+		detection: mustCompileDetection(t, map[string]any{"ParentImage|endswith": "/launchd"}),
+	}
+	gr := erroringGraphReader{perPIDGraphReader: &perPIDGraphReader{}, err: errors.New("graph unavailable")}
+
+	_, err := rule.Evaluate(t.Context(), []api.Event{{
+		EventID: "e", HostID: "h", EventType: "exec", TimestampNs: 1, Payload: []byte(`{"pid":5,"ppid":1,"path":"/bin/sh"}`),
+	}}, gr)
+	require.Error(t, err, "a graph failure must not be reported as no match")
+	assert.Contains(t, err.Error(), "graph unavailable")
 }

@@ -126,14 +126,18 @@ func checkFile(path string, data []byte) []string {
 
 // isExcluded mirrors the ignore set of the other prose gates (.markdownlint-cli2.yaml, .prettierignore): AI-tool config we do
 // not author, the immutable archived OpenSpec change proposals (format owned upstream, an audit trail we do not rewrite), the
-// free-form maintenance journal, and the vendored / generated API-docs embed assets (the minified ReDoc bundle and generated
-// OpenAPI spec, none of which is hand-authored prose). docs/detection-rules.md is intentionally NOT excluded: it is generated
+// free-form maintenance journal, the vendored / generated API-docs embed assets (the minified ReDoc bundle and generated
+// OpenAPI spec, none of which is hand-authored prose), and the vendored upstream Sigma rules. docs/detection-rules.md is intentionally NOT excluded: it is generated
 // from rule Doc() strings (which this gate does cover), so `task docs:rules` keeps it clean.
 func isExcluded(p string) bool {
 	return strings.HasPrefix(p, ".claude/") ||
 		strings.HasPrefix(p, "openspec/changes/") ||
 		strings.HasPrefix(p, "tools/dash-lint/") || // never scan the scanner: its doc comments and test fixtures hold the pattern by design
 		strings.HasPrefix(p, "server/apidocs/embed/") || // vendored ReDoc bundle + generated OpenAPI/asset files, not authored prose
+		// Vendored SigmaHQ detection rules (issue #763). They are third-party prose we deliberately mirror byte-for-byte, and
+		// their being UNMODIFIED is the property their tests assert: the claim is that an upstream file runs here with no edit.
+		// Rewording someone else's rule comment to satisfy our house style would break exactly what the fixtures exist to prove.
+		strings.Contains(p, "/testdata/imported/") ||
 		p == "docs/maintenance/log.md"
 }
 

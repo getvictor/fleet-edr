@@ -180,7 +180,9 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 	}
 	severity, err := severityFor(f.Level)
 	if err != nil {
-		return nil, err
+		// Wrapped, not replaced: an unmappable level stays extractable as a rejection, while the file is named either way so a
+		// corpus load says WHICH file is wrong rather than only that one is.
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
 	if f.Detection.IsZero() {
@@ -198,10 +200,17 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 		return nil, unmappable("%s", err)
 	}
 
+	// The rule id is the filename stem, which is what lets an upstream file carry no x-engine block at all. SigmaHQ names its files
+	// after the rule, and the stem is stable across a re-sync in a way the file's own UUID is not readable.
+	id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+	if id == "" {
+		// A file named exactly `.yml` is a valid directory entry and leaves nothing to identify the rule by. Findings, exclusions
+		// and per-host settings all key on the id.
+		return nil, fmt.Errorf("%s: no filename stem, so the rule has no identifier", name)
+	}
+
 	return &importedRule{
-		// The rule id is the filename stem, which is what lets an upstream file carry no x-engine block at all. SigmaHQ names its
-		// files after the rule, and the stem is stable across a re-sync in a way the file's own UUID is not readable.
-		id:          strings.TrimSuffix(path.Base(name), path.Ext(name)),
+		id:          id,
 		title:       f.Title,
 		description: f.Description,
 		severity:    severity,
@@ -262,34 +271,53 @@ func techniquesFrom(tags []string) []string {
 	return out
 }
 
-// isTechniqueID reports whether s is a MITRE technique number: digits, optionally a dot and more digits.
+// isTechniqueID reports whether s is a MITRE technique number: digits, optionally followed by a dot and more digits.
+//
+// Both sides of the dot must carry digits. `t.123` would otherwise export as the technique id `T.123`, which no ATT&CK Navigator
+// layer can resolve, and a malformed tag is better dropped than turned into a mapping that looks real.
 func isTechniqueID(s string) bool {
-	dots := 0
+	base, sub, hasDot := strings.Cut(s, ".")
+	if !allDigits(base) {
+		return false
+	}
+	if !hasDot {
+		return true
+	}
+	return allDigits(sub)
+}
+
+// allDigits reports whether s is one or more ASCII digits.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
 	for _, r := range s {
-		switch {
-		case r >= '0' && r <= '9':
-		case r == '.':
-			dots++
-			if dots > 1 {
-				return false
-			}
-		default:
+		if r < '0' || r > '9' {
 			return false
 		}
 	}
-	return !strings.HasSuffix(s, ".")
+	return true
 }
 
-// adaptEvent builds the Sigma view of an event for this rule's event type. An exec resolves its PARENT's image for ParentImage; an
-// open resolves the image of the process that did the opening. Both are lazy, so a rule that reads neither never touches the graph.
+// adaptEvent builds the Sigma view of an event for this rule's event type, and returns the accessor for the subject process
+// alongside it.
+//
+// An exec resolves its PARENT's image for ParentImage; an open resolves the image of the process that did the opening. Both are
+// lazy, so a rule reading neither never touches the graph.
+//
+// The accessor is returned rather than discarded because for an open event it is the SAME lookup the finding needs, and issue #762
+// established why that matters: resolving twice lets a materialization commit land between the reads, so a rule with a negated
+// Image filter can match on an absent image and then attach the finding to the very process that should have suppressed it. The
+// exec path has no such accessor to share, because there the two lookups are genuinely different rows: the parent's and the
+// subject's.
 func (r *importedRule) adaptEvent(
 	ctx context.Context, evt api.Event, gr api.GraphReader, pid int,
-) (*sigmabind.Event, error) {
+) (*sigmabind.Event, func() (*api.Process, error), error) {
 	if r.eventTypes[0] == "open" {
-		ev, _, err := openEventWithSubject(ctx, evt, gr, pid)
-		return ev, err
+		return openEventWithSubject(ctx, evt, gr, pid)
 	}
-	return execEventWithParent(ctx, evt, gr, pid)
+	ev, err := execEventWithParent(ctx, evt, gr, pid)
+	return ev, func() (*api.Process, error) { return resolveSubjectProcess(ctx, gr, evt, pid) }, err
 }
 
 // subjectPID reads the pid the event is about. Every event type this engine maps carries one under the same key, which is what
@@ -331,7 +359,7 @@ func (r *importedRule) evalEvent(ctx context.Context, evt api.Event, s api.Graph
 		// of the batch produced, so it is skipped rather than raised.
 		return nil, nil
 	}
-	se, err := r.adaptEvent(ctx, evt, s, pid)
+	se, subject, err := r.adaptEvent(ctx, evt, s, pid)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +371,8 @@ func (r *importedRule) evalEvent(ctx context.Context, evt api.Event, s api.Graph
 		return nil, nil
 	}
 
-	proc, err := resolveSubjectProcess(ctx, s, evt, pid)
+	// The same process the detection matched against, not a second lookup of it.
+	proc, err := subject()
 	if err != nil {
 		return nil, err
 	}
