@@ -69,12 +69,13 @@ func TestLoadImported_TheWholeUpstreamCorpus(t *testing.T) {
 
 	t.Run("metadata comes from the file", func(t *testing.T) {
 		t.Parallel()
-		r := byID["proc_creation_macos_xattr_quarantine_removal"]
-		if r == nil {
-			t.Skip("fixture renamed upstream")
-		}
+		// Required rather than skipped: a subtest that skips when its fixture is missing asserts nothing, and an earlier version
+		// of this one named a rule the corpus does not contain and passed for months of nobody noticing.
+		r := byID["proc_creation_macos_xattr_gatekeeper_bypass"]
+		require.NotNil(t, r, "fixture renamed upstream: point this at a rule that exists rather than letting it skip")
 		assert.NotEmpty(t, r.Doc().Description, "the description is the upstream one")
 		assert.NotEmpty(t, r.Doc().Severity)
+		assert.Equal(t, []api.Platform{api.PlatformDarwin}, r.Platforms())
 	})
 
 	t.Run("every imported rule satisfies the engine's contract", func(t *testing.T) {
@@ -562,4 +563,42 @@ func TestImportedRule_TechniquesMayBeEmpty(t *testing.T) {
 	rule, err := parseImported("tactics_only.yml", body)
 	require.NoError(t, err, "a rule with only tactic tags is still a rule")
 	assert.Empty(t, rule.Techniques(), "and it claims no technique, because its file names none")
+}
+
+// TestCategoryIsInert_RefusesEvenASudoersRule pins the known false refusal in the file_event decision.
+//
+// The refusal is at CATEGORY granularity, so it also refuses a file_event rule watching /etc/sudoers, which the agent does collect
+// and which would therefore run. That is coarser than the refusal contract allows, and it is a deliberate trade: narrowing to path
+// scope means comparing each rule's TargetFilename values against the agent's watched prefixes, which is guesswork as soon as a
+// rule matches a fragment with |contains, and no rule in the corpus needs it.
+//
+// This test exists to make the trade visible. Delete it, and narrow categoryIsInert, when a sudoers-watching file_event rule
+// actually appears.
+func TestCategoryIsInert_RefusesEvenASudoersRule(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("title: Sudoers write\nlevel: high\nlogsource: {category: file_event, product: macos}\n" +
+		"detection: {sel: {TargetFilename|startswith: '/etc/sudoers'}, condition: sel}\n")
+	_, err := parseImported("sudoers.yml", body)
+	require.Error(t, err, "known false refusal: this rule WOULD run, and the category refusal does not look at its paths")
+	assert.Contains(t, err.Error(), "/etc/sudoers", "the reason names the telemetry, which is what makes the trade auditable")
+}
+
+// TestParseImported_UnsupportedSigmaIsARejection pins that valid Sigma using a feature this evaluator does not implement is
+// reported as one rejection rather than failing the whole import.
+//
+// Upstream is entitled to ship `windash`, a keyword search or `timeframe`. Those are rules this sensor cannot run, exactly like one
+// reading a field it does not collect, and abandoning sixty-odd runnable rules over one of them would be the wrong answer.
+func TestParseImported_UnsupportedSigmaIsARejection(t *testing.T) {
+	t.Parallel()
+
+	// A keyword search: a list of bare strings rather than field matchers. Valid Sigma, unsupported here.
+	body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection:\n  keywords:\n    - 'some phrase'\n  condition: keywords\n")
+	_, err := parseImported("keywords.yml", body)
+	require.Error(t, err)
+
+	_, isRejection := errors.AsType[unmappableError](err)
+	assert.True(t, isRejection, "an unsupported feature is a rejection, so the rest of the corpus still imports")
+	assert.Contains(t, err.Error(), "does not compile")
 }

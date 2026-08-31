@@ -26,9 +26,12 @@ import (
 // the logsource product, the event types from its category. Every key we made mandatory would be a key that forks the corpus and
 // turns a re-sync into a merge conflict.
 //
-// Measured against SigmaHQ's 69 macOS rules: 68 read only fields this engine already supplies (Image in 61, CommandLine in 59,
-// ParentImage in 11, TargetFilename in 2), and every modifier they use is supported. The 69th needs OriginalFileName, a Sysmon
-// field naming a PE's embedded original name, which has no macOS equivalent; it is refused at load rather than imported broken.
+// Measured against SigmaHQ's 69 macOS rules, two numbers that are worth keeping apart. 68 are FIELD-BINDABLE: they read only what
+// this engine supplies (Image in 61, CommandLine in 59, ParentImage in 11, TargetFilename in 2) with modifiers it implements. Only
+// 66 are RUNNABLE, because binding a rule's fields is not the same as the agent producing events for it to read.
+//
+// The three refusals: one reads OriginalFileName, a Sysmon field naming a PE's embedded original name that has no macOS
+// equivalent; two are file_event rules watching paths the agent emits no open event for (see categoryIsInert).
 type importedRule struct {
 	id          string
 	title       string
@@ -215,7 +218,10 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 	}
 	compiled, err := sigma.Compile(block)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		// A rejection, not a hard error. Valid Sigma can use a feature this evaluator does not implement (`windash`, a keyword
+		// search, `timeframe`), and upstream is entitled to ship it: that is a rule this sensor cannot run, exactly like one
+		// reading a field it does not collect. Failing the import would abandon the other sixty-odd rules over it.
+		return nil, unmappable("detection does not compile: %s", err)
 	}
 	if err := sigmabind.Validate(compiled, eventType); err != nil {
 		return nil, unmappable("%s", err)
@@ -254,6 +260,13 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 //
 // This is a statement about the AGENT, not about Sigma. Widening the watched set, or subscribing to NOTIFY_WRITE more broadly,
 // is what makes these rules importable; the refusal should be revisited then and not before.
+//
+// It is deliberately COARSER than the contract allows, and the gap is worth naming. A file_event rule watching /etc/sudoers WOULD
+// run, and this refuses it along with the rest. Narrowing to path scope means reading each rule's TargetFilename values and
+// comparing them against the agent's watched prefixes, which is guesswork the moment a rule matches on a fragment with |contains
+// rather than a whole path. No macOS rule in the corpus targets those paths, so the finer check would today be machinery for a
+// rule that does not exist. TestCategoryIsInert_RefusesEvenASudoersRule pins the false refusal so it is a known trade rather than
+// a surprise, and it is the test to delete when a sudoers-watching rule appears.
 func categoryIsInert(category string) (string, bool) {
 	if category == "file_event" {
 		return "category file_event maps to open, but this agent emits open only for /etc/sudoers paths (#301), " +
@@ -360,6 +373,11 @@ func (r *importedRule) adaptEvent(
 
 // subjectPID reads the pid the event is about. Every event type this engine maps carries one under the same key, which is what
 // lets an imported rule stay generic: it never needs to know which payload shape it is looking at.
+//
+// This decode is paid PER RULE, and again inside the adapter, because the engine hands each rule the raw batch and offers no way to
+// share an adapted event. With the corpus registered that is roughly two decodes per rule per event, which is the cost issue #794
+// exists to remove by decoding once in the engine. It is not fixable from inside a rule, and #764 should not register the corpus
+// before #794 lands.
 func subjectPID(evt api.Event) (int, bool) {
 	var p struct {
 		PID *int `json:"pid"`

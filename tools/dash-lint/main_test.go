@@ -199,7 +199,8 @@ func TestIsExcluded_VendoredSigmaRules(t *testing.T) {
 		want bool
 	}{
 		{"server/rules/internal/catalog/testdata/imported/process_creation/rule.yml", true},
-		{"server/rules/internal/catalog/testdata/imported/README.md", true},
+		// Our own prose, sitting beside the vendored rules: still gated.
+		{"server/rules/internal/catalog/testdata/imported/README.md", false},
 		// Ours, not upstream: a same-named directory elsewhere in the tree stays covered.
 		{"server/detection/testdata/imported/notes.md", false},
 		{"ui/src/testdata/imported/thing.md", false},

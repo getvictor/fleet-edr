@@ -136,8 +136,10 @@ func isExcluded(p string) bool {
 		strings.HasPrefix(p, "server/apidocs/embed/") || // vendored ReDoc bundle + generated OpenAPI/asset files, not authored prose
 		// Vendored SigmaHQ rules (#763): third-party prose mirrored byte-for-byte, whose being UNMODIFIED is what their tests
 		// assert. Rewording someone else's rule comment to suit our house style would break what the fixtures exist to prove.
-		// Scoped to the exact path so an unrelated future fixture directory cannot inherit the exemption.
-		strings.HasPrefix(p, "server/rules/internal/catalog/testdata/imported/") ||
+		//
+		// Scoped to the exact path AND to .yml, so an unrelated fixture directory cannot inherit the exemption and the README we
+		// wrote beside those rules stays under the gate like every other piece of our own prose.
+		(strings.HasPrefix(p, "server/rules/internal/catalog/testdata/imported/") && strings.HasSuffix(p, ".yml")) ||
 		p == "docs/maintenance/log.md"
 }
 
