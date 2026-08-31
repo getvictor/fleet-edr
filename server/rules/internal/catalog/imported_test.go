@@ -2,10 +2,14 @@ package catalog
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -639,4 +643,44 @@ func TestParseImported_MalformedDetectionIsAHardError(t *testing.T) {
 			assert.Contains(t, err.Error(), "broken.yml", "a hard error names the file so the failure is actionable")
 		})
 	}
+}
+
+// TestImportedCorpus_MatchesTheVendoredManifest pins that no vendored rule file has been edited since it was imported.
+//
+// The fixture README claims these files are byte-identical to upstream. Nothing offline can check them against upstream, but the
+// half that actually decays is local drift: an edit made to get a rule to load, or a stray reformat, silently turns "what SigmaHQ
+// ships" into "what we found convenient", and the re-sync in #763 would then diff against a corpus that is no longer the baseline
+// it claims to be. Counting loads and rejections does not catch that, because an edited rule can still load.
+//
+// Regenerate MANIFEST.sha256 as part of a deliberate re-sync, never to make this test pass.
+func TestImportedCorpus_MatchesTheVendoredManifest(t *testing.T) {
+	t.Parallel()
+
+	// One filesystem for both halves, so the manifest and the files it pins are read through the same root.
+	fsys := os.DirFS("testdata/imported")
+	manifest, err := fs.ReadFile(fsys, "MANIFEST.sha256")
+	require.NoError(t, err)
+
+	want := map[string]string{}
+	for line := range strings.SplitSeq(strings.TrimSpace(string(manifest)), "\n") {
+		sum, name, found := strings.Cut(line, "  ")
+		require.True(t, found, "malformed manifest line %q", line)
+		want[name] = sum
+	}
+
+	got := map[string]string{}
+	require.NoError(t, fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(name, ".yml") {
+			return err
+		}
+		body, readErr := fs.ReadFile(fsys, name)
+		if readErr != nil {
+			return readErr
+		}
+		got[name] = fmt.Sprintf("%x", sha256.Sum256(body))
+		return nil
+	}))
+
+	// Compared as whole maps so one assertion reports every edit, addition and deletion at once rather than stopping at the first.
+	assert.Equal(t, want, got, "a vendored rule file differs from the manifest; regenerate it only as part of a deliberate re-sync")
 }
