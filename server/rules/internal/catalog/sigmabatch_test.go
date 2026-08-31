@@ -155,6 +155,7 @@ func TestSigmaEvent_DistinctEventsGetDistinctAdaptations(t *testing.T) {
 	assert.Len(t, sigmaEventsFor(scope).events, 2)
 }
 
+// spec:server-detection-rules-engine/an-event-a-rule-cannot-identify-a-subject-for-is-skipped/an-event-carrying-no-process-identifier-is-skipped-rather-than-attributed-to-process-zero
 // TestSigmaEvent_APayloadWithNoPIDIsSkippedNotRaised pins that a malformed event costs the batch nothing.
 func TestSigmaEvent_APayloadWithNoPIDIsSkippedNotRaised(t *testing.T) {
 	t.Parallel()
@@ -283,6 +284,7 @@ func keychainDumpEvent() api.Event {
 	}
 }
 
+// spec:server-detection-rules-engine/an-event-a-rule-cannot-identify-a-subject-for-is-skipped/a-malformed-event-does-not-discard-the-batch-s-findings
 // TestSigmaEvent_AMalformedEventDoesNotDiscardTheBatch is a regression test for a behaviour I broke while sharing the adapter.
 //
 // Before the shared path, every Sigma-backed rule read the pid first and SKIPPED an event whose payload did not decode. Routing the

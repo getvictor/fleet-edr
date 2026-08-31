@@ -14,4 +14,6 @@ Every Sigma-backed rule now reads its event through the shared adaptation: one d
 
 ## Impact
 
-No change to which findings are produced. Measured on one exec event across ten rules: 8042ns/19022B/250 allocs becomes 1430ns/4721B/43 allocs.
+One behaviour change beyond the sharing, in a corner: an event whose payload omits the process identifier is now skipped. Two rules previously decoded the omission to zero and looked up process zero, which cannot resolve, so a young event raised a retryable miss and the whole batch was re-evaluated until the grace window expired. Skipping matches what the imported rule already did and what every rule's own comment promised. No other change to which findings are produced.
+
+Measured on one exec event across ten rules: 8042ns/19022B/250 allocs becomes 1430ns/4721B/43 allocs.

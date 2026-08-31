@@ -41,3 +41,21 @@ Work derived through the scratch space SHALL be shared only where sharing is obs
 - **GIVEN** two Sigma-backed rules reading the same event, where only one reads a field resolved from the process graph, and that lookup fails
 - **WHEN** the engine evaluates the batch
 - **THEN** the rule that read the field reports the failure and the rule that did not is unaffected
+
+### Requirement: An event a rule cannot identify a subject for is skipped
+
+A rule SHALL skip an event whose payload does not decode, or which carries no process identifier, rather than acting on it or failing the batch.
+
+Such an event cannot be attributed to a process, so there is nothing for a finding to name, and it SHALL NOT be treated as an error: an error from a rule's per-event evaluation discards the findings that rule has already collected from the rest of the batch, so one malformed event from one host would cost every other alert in the batch.
+
+#### Scenario: A malformed event does not discard the batch's findings
+
+- **GIVEN** a batch containing an event whose payload does not decode, followed by an event a rule fires on
+- **WHEN** the rule evaluates the batch
+- **THEN** the malformed event is skipped and the finding from the later event is still produced
+
+#### Scenario: An event carrying no process identifier is skipped rather than attributed to process zero
+
+- **GIVEN** an event whose payload omits the process identifier
+- **WHEN** a rule evaluates it
+- **THEN** the event is skipped, rather than a process lookup being performed for identifier zero
