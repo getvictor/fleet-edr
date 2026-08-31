@@ -1235,9 +1235,10 @@ components:
           type: string
           enum: [alert, monitor, disabled]
           description: |
-            The mode this rule runs in when no per-rule setting applies to it. Most rules are
-            `alert`; a rule imported from an upstream corpus starts at `monitor` so it records
-            what it would have fired on without raising alerts. This is the rule's own default,
+            The mode this rule runs in when no per-rule setting applies to it. A rule this
+            project wrote is `alert`; a rule imported from an upstream corpus starts at
+            `monitor` so it records what it would have fired on without raising alerts, and
+            imported rules outnumber ours. This is the rule's own default,
             not a resolved per-host mode: a setting created at
             `PUT /api/v1/detection-config/rule-settings` overrides it, and those settings are
             listed separately at `GET /api/v1/detection-config/rule-settings`.

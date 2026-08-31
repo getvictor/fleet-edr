@@ -220,8 +220,10 @@ type ExclusionResolver interface {
 // #771 and #772; fifty-five plus those thirteen is sixty-eight field-bindable, less two whose category the agent collects too
 // narrowly to ever fire. The corpus test in #763 asserts the sixty-six.)
 //
-// Optional and absent from Rule for the same reason NonDetection and AlgorithmNamer are: most rules have no opinion, and requiring
-// one would make every future rule declare something the engine would read as the default anyway.
+// Optional and absent from Rule for the same reason NonDetection and AlgorithmNamer are: a rule with no opinion should not have to
+// state one, and requiring it would make every future rule declare something the engine would read as the default anyway. (Since
+// the corpus landed, the rules that DO declare a default outnumber the ones that do not; optional here is about not compelling a
+// declaration, not about how many rules make one.)
 //
 // The -er suffix is deliberate, for the same reason AlgorithmNamer carries it: an interface named identically to its own method
 // trips a lint.
