@@ -379,8 +379,6 @@ func TestAll_DeclaredEventTypesCoverWhatTheRuleReads(t *testing.T) {
 	}
 }
 
-// spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-rule-declaring-no-default-alerts
-//
 // TestAll_RulesDeclareAValidDefaultMode asserts every registered rule's default mode is one this engine can act on.
 //
 // api.DefaultModeOf deliberately reports what a rule declared rather than repairing it, so this is the gate: a rule declaring a

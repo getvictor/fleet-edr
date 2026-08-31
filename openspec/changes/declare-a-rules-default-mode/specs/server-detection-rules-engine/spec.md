@@ -27,8 +27,13 @@ A declared default SHALL be reported by the operator-facing rule catalog, and SH
 #### Scenario: A configured setting overrides a declared default
 
 - **GIVEN** a registered detection that declares `monitor` as its default mode, and an operator setting for it whose mode is `alert`
-- **WHEN** a finding it produces is routed
-- **THEN** the finding is persisted as an alert
+- **WHEN** the mode for that detection is resolved
+- **THEN** the resolved mode is `alert`, not the declared `monitor`
+
+<!-- The claim stops at resolution on purpose. What happens to a finding once its mode is `alert` belongs to the
+"Operator toggling of individual rules" requirement, which already specifies and tests it, and no package can assert both halves
+here: the real snapshot lives inside the rules context and the engine inside the detection context, so a test reaching both would
+have to fake one of them and would then be pinning the fake. -->
 
 #### Scenario: An uninterpretable configured mode falls back to the declared default
 

@@ -69,8 +69,6 @@ func (r declaringRule) DefaultMode() api.DetectionRuleMode { return r.mode }
 // silentRule is a Rule that declares nothing, which is every hand-written rule.
 type silentRule struct{ api.Rule }
 
-// spec:server-detection-rules-engine/a-rule-declares-the-mode-it-operates-in-absent-configuration/a-rule-declaring-no-default-alerts
-//
 // TestDefaultModeOf pins the two answers the helper gives, because the fallback is what makes this change invisible to every rule
 // that existed before it: a rule declaring nothing must resolve to alert, exactly as it did.
 func TestDefaultModeOf(t *testing.T) {
