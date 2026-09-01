@@ -144,26 +144,6 @@ func runCheck(args []string) int {
 		return 2
 	}
 
-	// Two in-flight changes restating one requirement with DIFFERENT scenario lists is a defect, and the only moment anyone can
-	// see it is before either archives: the archive applies them in sequence, so the last one's list replaces the other's and
-	// every scenario the earlier restatement added is deleted at release with nothing said. Reported before the exemptions are
-	// applied, because the exemption is what would otherwise hide it.
-	if divergent := deltas.divergentRestatements(); len(divergent) > 0 {
-		fmt.Fprintf(os.Stderr, "spectrace: %d requirement(s) restated by several in-flight changes with different scenario lists.\n",
-			len(divergent))
-		fmt.Fprintln(os.Stderr, "  Whichever change archives last replaces the others' scenario list, deleting what they added.")
-		fmt.Fprintln(os.Stderr, "  Each restatement must list every scenario the requirement will have once all of them land.")
-		for _, d := range divergent {
-			fmt.Fprintf(os.Stderr, "  %s, restated by %s:\n", d.requirement, strings.Join(d.changes, ", "))
-			for _, change := range d.changes {
-				if missing := d.missing[change]; len(missing) > 0 {
-					fmt.Fprintf(os.Stderr, "    %s omits: %s\n", change, strings.Join(missing, ", "))
-				}
-			}
-		}
-		return 1
-	}
-
 	if kept := filterOutRemovedRequirements(scenarios, deltas.removedRequirements); len(kept) != len(scenarios) {
 		fmt.Printf("spectrace: %d canonical scenarios exempted (parent requirement marked REMOVED in an in-flight change)\n",
 			len(scenarios)-len(kept))

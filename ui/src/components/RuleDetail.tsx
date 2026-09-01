@@ -84,7 +84,7 @@ const MODE_EFFECT: Record<string, string> = {
 // server that cannot answer the question: during a rolling deploy an older replica can return `default_mode: monitor` for a rule
 // whose global setting is `disabled`, and presenting the declaration as the mode in force would state the opposite of the truth.
 // So the row reports what it actually has, and says which.
-function modeRow(entry: RuleDocEntry): { heading: string; mode: string; provenance: string } | null {
+function modeRow(entry: RuleDocEntry): { heading: string; mode: string; provenance: string; resolved: boolean } | null {
   if (entry.mode === undefined) {
     // Legacy shape: the declaration is all there is, and it is labelled as the declaration.
     if (!entry.default_mode || entry.default_mode === "alert") return null;
@@ -92,6 +92,7 @@ function modeRow(entry: RuleDocEntry): { heading: string; mode: string; provenan
       heading: "Default mode",
       mode: entry.default_mode,
       provenance: "This server does not report the mode in force, so this is the rule's own declaration; a setting can override it.",
+      resolved: false,
     };
   }
   const declared = entry.default_mode ?? "alert";
@@ -107,6 +108,7 @@ function modeRow(entry: RuleDocEntry): { heading: string; mode: string; provenan
           // server cannot interpret also reports source `default`, and that setting can still carry an active severity override,
           // so "no setting applies" would be a claim this field does not support.
           "This is the mode the rule declares.",
+    resolved: true,
   };
 }
 
@@ -138,8 +140,10 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
                 <th scope="row">{row.heading}</th>
                 <td>
                   <span className="rule-detail__mode">{MODE_LABEL[row.mode] ?? row.mode}</span>{" "}
-                  {MODE_EFFECT[row.mode] ?? "Its mode is not one this page recognises."} {row.provenance} Resolved at global scope; a
-                  host-group setting can differ for the hosts in that group.
+                  {MODE_EFFECT[row.mode] ?? "Its mode is not one this page recognises."} {row.provenance}
+                  {/* Only claimed when a mode was actually resolved: saying "resolved at global scope" right after "this server
+                      does not report the mode in force" is a contradiction in consecutive sentences. */}
+                  {row.resolved && " Resolved at global scope; a host-group setting can differ for the hosts in that group."}
                 </td>
               </tr>
             );

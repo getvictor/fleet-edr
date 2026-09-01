@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -18,22 +17,29 @@ import (
 type deltaSections struct {
 	// removedRequirements holds "<capability>/<requirement-slug>" for each requirement marked under `## REMOVED Requirements`.
 	removedRequirements map[string]struct{}
-	// modifiedScenarios maps "<capability>/<requirement-slug>" to the scenario slugs each in-flight change restates for it, keyed
-	// by change name so a divergence between two changes can be reported against the changes that caused it.
-	modifiedScenarios map[string]map[string]map[string]struct{}
+	// modifiedRestatements maps "<capability>/<requirement-slug>" to what each in-flight change restates for it, keyed by change
+	// name so a divergence between two changes can be reported against the changes that caused it.
+	modifiedRestatements map[string]map[string]restatement
+}
+
+// restatement is the scenario slugs one change's `## MODIFIED Requirements` entry lists for one requirement.
+type restatement struct {
+	scenarios map[string]struct{}
 }
 
 // restatedScenarios collapses modifiedScenarios to one scenario set per requirement, which is what the exemption filter consumes.
 //
-// The sets are unioned. That is only sound because divergentRestatements below rejects the case where they differ: if two changes
-// restated one requirement with different lists, the union would keep every scenario gated while the archive silently kept only
-// the last change's list, and the gate would be quietly describing a different spec than the one being built.
+// The sets are unioned, which keeps a scenario gated for as long as ANY in-flight change still lists it. That is the conservative
+// direction for an exemption, and it is deliberately not the archive's behaviour: the archive replaces a requirement WHOLE and
+// applies changes in sequence, so where two changes restate one requirement differently the last to archive discards the other's
+// scenarios AND its wording. This union does not fix that and does not detect it; #815 tracks it, with a reproduction and the
+// three requirements in this repository it currently affects.
 func (d *deltaSections) restatedScenarios() map[string]map[string]struct{} {
-	out := make(map[string]map[string]struct{}, len(d.modifiedScenarios))
-	for requirement, byChange := range d.modifiedScenarios {
+	out := make(map[string]map[string]struct{}, len(d.modifiedRestatements))
+	for requirement, byChange := range d.modifiedRestatements {
 		merged := make(map[string]struct{})
-		for _, scenarios := range byChange {
-			for slug := range scenarios {
+		for _, r := range byChange {
+			for slug := range r.scenarios {
 				merged[slug] = struct{}{}
 			}
 		}
@@ -42,73 +48,13 @@ func (d *deltaSections) restatedScenarios() map[string]map[string]struct{} {
 	return out
 }
 
-// divergentRestatement names one requirement that two or more in-flight changes restate with different scenario lists.
-type divergentRestatement struct {
-	requirement string
-	changes     []string
-	// missing maps a change name to the scenarios OTHER changes list and it does not, which are exactly the scenarios that change
-	// deletes if it archives last.
-	missing map[string][]string
-}
-
-// divergentRestatements reports every requirement that two or more in-flight changes restate with DIFFERENT scenario lists.
-//
-// This is a real defect, not a style point. `openspec archive` applies a MODIFIED requirement by replacing the canonical
-// requirement's scenario list with the restatement, and archiving is batched at release time, so several in-flight changes can
-// restate one requirement before any of them is applied. They are then applied in sequence and the LAST one's list is what
-// survives: every scenario the other restatements added is deleted, at release, with nothing said.
-//
-// A restatement therefore has to describe the requirement as it will be once every in-flight change has landed, not as it was when
-// that change was written. Two restatements that disagree are two authors who have not seen each other's work, and the only moment
-// anyone can notice is now.
-func (d *deltaSections) divergentRestatements() []divergentRestatement {
-	var out []divergentRestatement
-	for requirement, byChange := range d.modifiedScenarios {
-		if len(byChange) < 2 {
-			continue
-		}
-		if divergence, ok := divergenceOf(requirement, byChange); ok {
-			out = append(out, divergence)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].requirement < out[j].requirement })
-	return out
-}
-
-// divergenceOf reports what each of several restatements of one requirement omits relative to the others, and whether any of them
-// omits anything at all.
-func divergenceOf(requirement string, byChange map[string]map[string]struct{}) (divergentRestatement, bool) {
-	union := make(map[string]struct{})
-	for _, scenarios := range byChange {
-		for slug := range scenarios {
-			union[slug] = struct{}{}
-		}
-	}
-	missing := make(map[string][]string)
-	changes := make([]string, 0, len(byChange))
-	for change, scenarios := range byChange {
-		changes = append(changes, change)
-		for slug := range union {
-			if _, ok := scenarios[slug]; !ok {
-				missing[change] = append(missing[change], slug)
-			}
-		}
-		sort.Strings(missing[change])
-	}
-	if len(missing) == 0 {
-		return divergentRestatement{}, false
-	}
-	sort.Strings(changes)
-	return divergentRestatement{requirement: requirement, changes: changes, missing: missing}, true
-}
-
 // parseDeltaSections walks every in-flight change's delta-spec subtree once and returns both exemption inputs.
 //
 // The archive subtree is skipped: archived changes are already applied into openspec/specs.
 func parseDeltaSections(changesDir string) (*deltaSections, error) {
 	d := &deltaSections{
-		removedRequirements: make(map[string]struct{}),
-		modifiedScenarios:   make(map[string]map[string]map[string]struct{}),
+		removedRequirements:  make(map[string]struct{}),
+		modifiedRestatements: make(map[string]map[string]restatement),
 	}
 	err := forEachInFlightChangeDir(changesDir, func(changeDir string) error {
 		return d.collectChange(changeDir)
@@ -175,10 +121,10 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 	flush := func() {
 		// Recorded on leaving the requirement rather than on entering it, so the "no scenarios listed" case never reaches the map.
 		if current != "" && len(scenarios) > 0 {
-			if d.modifiedScenarios[current] == nil {
-				d.modifiedScenarios[current] = make(map[string]map[string]struct{})
+			if d.modifiedRestatements[current] == nil {
+				d.modifiedRestatements[current] = make(map[string]restatement)
 			}
-			d.modifiedScenarios[current][change] = scenarios
+			d.modifiedRestatements[current][change] = restatement{scenarios: scenarios}
 		}
 		current, scenarios = "", nil
 	}

@@ -213,6 +213,8 @@ describe("RuleDetail monitor mode and attribution", () => {
     expect(await screen.findByText("Default mode")).toBeInTheDocument();
     expect(screen.getByText(/This server does not report the mode in force/)).toBeInTheDocument();
     expect(screen.queryByText("Mode")).not.toBeInTheDocument();
+    // Saying "resolved at global scope" one sentence after "does not report the mode in force" contradicts itself.
+    expect(screen.queryByText(/Resolved at global scope/)).not.toBeInTheDocument();
   });
 
   // `mode_source: default` means the reported MODE came from the rule's declaration. It does not mean no setting exists: a setting
