@@ -129,8 +129,13 @@ type MetricsRecorder interface {
 	//
 	// Most importantly this counts MATCHES, not would-be alerts. AlertCreated fires only for a newly INSERTED alert, and alerts
 	// deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments this series every
-	// time and would have raised exactly one alert. The two series are comparable as volume, and this one is an upper bound on
-	// what promoting the rule would produce, not an estimate of it.
+	// time and would have raised exactly one alert.
+	//
+	// That biases it UPWARD against what promotion produces, and the losses above bias it DOWNWARD, so it is an approximation
+	// rather than a bound in either direction. Calling it an upper bound, as an earlier version of this comment did, contradicts
+	// the losses documented two paragraphs up: a series that can drop counts cannot promise to be above anything. The upward bias
+	// is the systematic one and the downward bias is the rare one, which is worth knowing when reading a number, but it is not a
+	// guarantee to design against.
 	MonitorMatched(ctx context.Context, ruleID, severity string, n int)
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.

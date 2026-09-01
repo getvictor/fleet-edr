@@ -117,7 +117,8 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		metric.WithDescription("Rule matches suppressed because the resolved mode was monitor, by rule + severity. "+
 			"Counts MATCHES, not would-be alerts: edr.alerts.created counts newly created alerts, which deduplicate on "+
 			"(host, rule, subject) forever, so a rule that keeps matching one subject raises this series repeatedly and would "+
-			"raise exactly one alert. Read it as volume and reach, and treat it as an upper bound on what promotion produces. "+
+			"raise exactly one alert. Read it as volume and reach: it is biased upward by repeated subjects and downward by the "+
+			"losses below, so it is an approximation of what promotion produces rather than a bound in either direction. "+
 			"Recorded once the batch is acknowledged, so a nacked and replayed batch counts once rather than once per attempt; "+
 			"the residual inaccuracies are a crash between the acknowledgement and the record, which loses counts and so can "+
 			"make a noisy rule look safe to promote, and an evaluation outliving its claim lease, which can let a reclaimer "+

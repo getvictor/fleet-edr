@@ -38,6 +38,11 @@ const (
 // older call arriving second would drag `last_seen` backwards, and a newer call that inserted the row first would leave
 // `first_seen` too late, in both cases describing a narrower window than was actually observed.
 //
+// Extrema against a per-replica wall clock have one consequence worth naming: a replica whose clock runs ahead writes a
+// `last_seen` no later write can pull back, so skew biases that column forward permanently. The alternative, last-write-wins, was
+// strictly worse (it let ANY out-of-order write move the column, in either direction, including backwards). `last_seen` is a
+// display timestamp rather than an input to the count, so the residual is cosmetic where the count is not.
+//
 // Severity is deliberately NOT part of the key: it belongs to the OTel series, where it exists to line up with
 // `edr.alerts.created`, whereas this table answers how often and how widely, and splitting rows by a severity that an override can
 // change mid-window would fragment both answers.

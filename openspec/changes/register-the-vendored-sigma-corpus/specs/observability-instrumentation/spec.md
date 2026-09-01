@@ -10,7 +10,7 @@ The system SHALL expose the following counters with stable names so dashboards a
 
 `edr.detection.monitor_matches` SHALL be recorded once the batch that produced the matches is acknowledged, not while the batch is evaluated, and this SHALL be documented where the counter is defined. A batch that fails is nacked and replayed whole, so a counter incremented during evaluation counts a retried batch once per attempt; recorded after the acknowledgement, a replayed batch is counted once.
 
-The counter SHALL be documented as counting MATCHES rather than would-be alerts. `edr.alerts.created` counts newly created alerts, which deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments the monitor series every time and would raise exactly one alert. The two are comparable as volume, and the monitor series is an upper bound on what promoting the rule produces rather than an estimate of it. Documenting that is what keeps the recommended comparison from being read as a forecast.
+The counter SHALL be documented as counting MATCHES rather than would-be alerts. `edr.alerts.created` counts newly created alerts, which deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments the monitor series every time and would raise exactly one alert. That biases the monitor series upward against what promoting the rule produces, while the counter's documented losses bias it downward, so it SHALL be described as an approximation rather than as a bound in either direction. Documenting that is what keeps the recommended comparison from being read as a forecast.
 
 #### Scenario: Ingested events are counted by host
 
