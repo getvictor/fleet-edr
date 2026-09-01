@@ -153,7 +153,6 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 	}
 
 	const childPID, parentPID = 4900, 4800
-	argv := append([]string{filepath.Base(image)}, best.args...)
 	var events []detectionapi.Event
 	ppid := 1
 	if best.parent != "" {
@@ -164,7 +163,7 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 	}
 	return append(events,
 		forkEvent(ruleID+"-fork", childPID, ppid, 1_020_000_000),
-		execEvent(ruleID+"-exec", childPID, ppid, image, argv, 1_030_000_000)), nil
+		execEvent(ruleID+"-exec", childPID, ppid, image, subject{image: image, args: best.args}.argv(), 1_030_000_000)), nil
 }
 
 // subject is a candidate event expressed as the Sigma fields the taxonomy supplies for an exec, so the compiled rule can be asked
@@ -172,6 +171,19 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 type subject struct {
 	image, parent string
 	args          []string
+}
+
+// argv renders the candidate's command line the way the agent would: argv[0] then the arguments.
+//
+// argv[0] is the FULL image path when one of the rule's own command-line literals opened with that path, because then the literal
+// was describing the executable and not an argument; the leading token is dropped so the path is not repeated. Otherwise it is
+// the basename, which is what an ordinary invocation carries.
+func (s subject) argv() []string {
+	args := s.args
+	if len(args) > 0 && strings.HasPrefix(args[0], "/") && strings.HasSuffix(s.image, args[0]) {
+		return append([]string{s.image}, args[1:]...)
+	}
+	return append([]string{filepath.Base(s.image)}, args...)
 }
 
 // Field makes a candidate a sigma.Event. The three fields are the ones the imported corpus reads; anything else is reported
@@ -183,10 +195,11 @@ func (s subject) Field(name string) ([]string, bool) {
 	case "ParentImage":
 		return []string{s.parent}, s.parent != ""
 	case "CommandLine":
-		// ALWAYS present, even with no argv beyond the binary: a real exec event always carries a command line, and reporting it
-		// absent made susp_browser_child_process's `filter_optional_empty: CommandLine: ''` match, so the rule's own
-		// `not 1 of filter_optional_*` rejected every candidate. The generator has to model the event faithfully, not minimally.
-		return []string{strings.Join(append([]string{filepath.Base(s.image)}, s.args...), " ")}, true
+		// Always present for a GENERATED event, which always has an argv[0]. Not a claim about real ones: sigmabind reports an
+		// exec with no arguments as carrying no CommandLine at all, deliberately, so that a rule written `CommandLine: null`
+		// matches it. Reporting it absent here made susp_browser_child_process's `filter_optional_empty: CommandLine: ''` match
+		// and its own `not 1 of filter_optional_*` then rejected every candidate.
+		return []string{strings.Join(s.argv(), " ")}, true
 	}
 	return nil, false
 }
@@ -291,7 +304,20 @@ func applyMap(base subject, m map[string]any) (subject, bool) {
 					out.parent = realisticPath(val, modifier)
 				}
 			case "CommandLine":
-				out.args = append(out.args, val)
+				// A corpus value like '/TeamViewer_Desktop --IPCport 5939 --Module 1' is the TAIL OF A COMMAND LINE, not one argv
+				// entry, and emitting it whole produced `TeamViewer_Desktop /TeamViewer_Desktop --IPCport ...`: a fixture
+				// satisfying the endswith predicate while modelling an invocation no machine performs. So a multi-token phrase is
+				// split into arguments.
+				//
+				// A value with leading or trailing whitespace is NOT split. Many corpus values are written ' -d ' or 'hidden '
+				// precisely to force a word boundary, and a joined argv supplies no trailing separator, so splitting drops the
+				// boundary the rule depends on. sigmabind's own commandLine documents that sharp edge; splitting everything
+				// declined eight rules that had been fine.
+				if val == strings.TrimSpace(val) && strings.Contains(val, " ") {
+					out.args = append(out.args, strings.Fields(val)...)
+				} else {
+					out.args = append(out.args, val)
+				}
 			default:
 				return subject{}, false
 			}
