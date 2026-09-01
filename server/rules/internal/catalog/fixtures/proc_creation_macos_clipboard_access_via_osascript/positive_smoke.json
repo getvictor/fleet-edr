@@ -3,7 +3,7 @@
     {"event_id": "proc_creation_macos_clipboard_access_via_osascript-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
      "payload": {"child_pid":4900,"parent_pid":1}},
     {"event_id": "proc_creation_macos_clipboard_access_via_osascript-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
-     "payload": {"pid":4900,"ppid":1,"path":"/usr/bin/osascript","args":["osascript"," -e ","clipboard"],"uid":501,"gid":20}}
+     "payload": {"pid":4900,"ppid":1,"path":"/usr/bin/osascript","args":["osascript","-e","clipboard","/tmp/fixture-target"],"uid":501,"gid":20}}
   ],
   "expected_findings": [
     {"rule_id": "proc_creation_macos_clipboard_access_via_osascript", "severity": "medium"}

@@ -151,12 +151,12 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 		return nil, errors.New("no combination of this rule's selections produced an event its own matcher accepts")
 	}
 
-	image := best.image
-	if image == "" {
+	if best.image == "" {
 		// The rule constrains only the command line or the parent, so any plausible subject satisfies it. Named rather than left
 		// empty: a record with no path reads as broken rather than as an event.
-		image = "/usr/bin/fixture-subject"
+		best.image = "/usr/bin/fixture-subject"
 	}
+	image := best.image
 
 	const childPID, parentPID = 4900, 4800
 	var events []detectionapi.Event
@@ -169,7 +169,7 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 	}
 	return append(events,
 		forkEvent(ruleID+"-fork", childPID, ppid, 1_020_000_000),
-		execEvent(ruleID+"-exec", childPID, ppid, image, subject{image: image, args: best.args}.argv(), 1_030_000_000)), nil
+		execEvent(ruleID+"-exec", childPID, ppid, image, best.argv(), 1_030_000_000)), nil
 }
 
 // subject is a candidate event expressed as the Sigma fields the taxonomy supplies for an exec, so the compiled rule can be asked
@@ -177,6 +177,9 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 type subject struct {
 	image, parent string
 	args          []string
+	// needsTrailer records that some value ended in a space, so the rule is asking for a token after it. The joined argv has no
+	// trailing separator, so without something following, a value like 'hidden ' cannot match however the fixture is written.
+	needsTrailer bool
 }
 
 // argv renders the candidate's command line the way the agent would: argv[0] then the arguments.
@@ -184,8 +187,13 @@ type subject struct {
 // argv[0] is the FULL image path when one of the rule's own command-line literals opened with that path, because then the literal
 // was describing the executable and not an argument; the leading token is dropped so the path is not repeated. Otherwise it is
 // the basename, which is what an ordinary invocation carries.
+const trailingOperand = "/tmp/fixture-target"
+
 func (s subject) argv() []string {
 	args := s.args
+	if s.needsTrailer {
+		args = append(append([]string{}, args...), trailingOperand)
+	}
 	if len(args) > 0 && strings.HasPrefix(args[0], "/") && strings.HasSuffix(s.image, args[0]) {
 		return append([]string{s.image}, args[1:]...)
 	}
@@ -283,7 +291,7 @@ func subjectsFor(block map[string]any, group []string) []subject {
 
 // applyMap folds one selection map into a candidate, reporting false when it asks for something no literal value can supply.
 func applyMap(base subject, m map[string]any) (subject, bool) {
-	out := subject{image: base.image, parent: base.parent, args: append([]string{}, base.args...)}
+	out := subject{image: base.image, parent: base.parent, args: append([]string{}, base.args...), needsTrailer: base.needsTrailer}
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -310,19 +318,17 @@ func applyMap(base subject, m map[string]any) (subject, bool) {
 					out.parent = realisticPath(val, modifier)
 				}
 			case "CommandLine":
-				// A corpus value like '/TeamViewer_Desktop --IPCport 5939 --Module 1' is the TAIL OF A COMMAND LINE, not one argv
-				// entry, and emitting it whole produced `TeamViewer_Desktop /TeamViewer_Desktop --IPCport ...`: a fixture
-				// satisfying the endswith predicate while modelling an invocation no machine performs. So a multi-token phrase is
-				// split into arguments.
+				// A corpus value is a fragment of a COMMAND LINE, not one argv entry. Emitting it whole produced
+				// `TeamViewer_Desktop /TeamViewer_Desktop --IPCport ...` and `args:["chflags","hidden "]`, both of which satisfy
+				// their predicate only because the pattern text was copied verbatim into the event. Real argv elements carry no
+				// surrounding spaces: sigmabind's commandLine joins them, and the join is what supplies the boundaries a value
+				// like ' -d ' or 'hidden ' is written to require.
 				//
-				// A value with leading or trailing whitespace is NOT split. Many corpus values are written ' -d ' or 'hidden '
-				// precisely to force a word boundary, and a joined argv supplies no trailing separator, so splitting drops the
-				// boundary the rule depends on. sigmabind's own commandLine documents that sharp edge; splitting everything
-				// declined eight rules that had been fine.
-				if val == strings.TrimSpace(val) && strings.Contains(val, " ") {
-					out.args = append(out.args, strings.Fields(val)...)
-				} else {
-					out.args = append(out.args, val)
+				// So the value is split into bare tokens, and a trailing space is remembered rather than embedded: it means the
+				// rule needs something to FOLLOW this fragment, which trailingOperand supplies below.
+				out.args = append(out.args, strings.Fields(val)...)
+				if strings.HasSuffix(val, " ") {
+					out.needsTrailer = true
 				}
 			default:
 				return subject{}, false
