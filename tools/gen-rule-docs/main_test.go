@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -118,8 +119,8 @@ func TestMDReference(t *testing.T) {
 		ref  string
 		want string
 	}{
-		{"an https URL stays a bare autolink", "https://redcanary.com/blog/x", "https://redcanary.com/blog/x"},
-		{"an http URL stays a bare autolink", "http://example.com/a", "http://example.com/a"},
+		{"an https URL becomes an explicit autolink", "https://redcanary.com/blog/x", "<https://redcanary.com/blog/x>"},
+		{"an http URL becomes an explicit autolink", "http://example.com/a", "<http://example.com/a>"},
 		{"a markdown link is neutralised", "[citation](//attacker.example)", "`[citation](//attacker.example)`"},
 		{"a javascript URL is not followable", "javascript:alert(1)", "`javascript:alert(1)`"},
 		{"free text is inert", "Internal research note, 2026", "`Internal research note, 2026`"},
@@ -132,6 +133,13 @@ func TestMDReference(t *testing.T) {
 		{"an empty reference renders as an empty span", "   ", "``"},
 		// Padding is required here and only here: without the spaces the content's own backtick merges with the fence.
 		{"a value ending in a backtick keeps its padding", "ab`", "`` ab` ``"},
+		// The reason the URL branch re-serialises instead of echoing: url.Parse accepts a valid prefix followed by anything, so
+		// this reports scheme https and host safe.example. Emitting the input back would render the attacker's image inside our
+		// own operator documentation. Percent-encoding is what makes it inert.
+		{"markdown trailing a valid URL prefix is encoded, not echoed",
+			"https://safe.example/a ![pixel](https://attacker.example/p)",
+			"<https://safe.example/a%20%21%5Bpixel%5D%28https://attacker.example/p%29>"},
+		{"angle brackets in a URL cannot break the autolink", "https://safe.example/a<b>c", "<https://safe.example/a%3Cb%3Ec>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -152,11 +160,11 @@ func TestRenderNeverEmitsAnUnvettedLink(t *testing.T) {
 	for _, r := range rs {
 		for _, ref := range r.Doc.References {
 			rendered := mdReference(ref)
-			if rendered == ref {
-				u, err := url.Parse(ref)
-				require.NoErrorf(t, err, "rule %q citation %q renders bare but does not parse", r.ID, ref)
+			if strings.HasPrefix(rendered, "<") {
+				u, err := url.Parse(strings.Trim(rendered, "<>"))
+				require.NoErrorf(t, err, "rule %q citation %q renders as a link but does not parse", r.ID, ref)
 				assert.Containsf(t, []string{"http", "https"}, u.Scheme,
-					"rule %q citation %q renders bare with scheme %q", r.ID, ref, u.Scheme)
+					"rule %q citation %q renders as a link with scheme %q", r.ID, ref, u.Scheme)
 				continue
 			}
 			assert.Containsf(t, rendered, "`", "rule %q citation %q is neither a vetted URL nor an inert span", r.ID, ref)

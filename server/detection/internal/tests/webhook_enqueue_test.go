@@ -85,6 +85,7 @@ func TestWebhookEnqueue_CreatedFanout(t *testing.T) {
 	makeDest(t, store, "disabled", detapi.SeverityLow, false, detapi.WebhookEventAlertCreated)         // disabled: filtered out
 	makeDest(t, store, "status-only", detapi.SeverityLow, true, detapi.WebhookEventAlertStatusChanged) // wrong event: filtered out
 
+	// spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/a-delivery-credits-the-author-of-the-rule-that-fired
 	t.Run("spec:alert-webhook-delivery/alert-lifecycle-events-durably-enqueue-a-delivery-per-matching-destination/a-new-alert-with-a-matching-destination-queues-one-delivery", func(t *testing.T) {
 		alertID, created, err := store.InsertAlert(ctx, highAlert("test:1"), nil)
 		require.NoError(t, err)

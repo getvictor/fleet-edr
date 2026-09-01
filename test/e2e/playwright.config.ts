@@ -47,33 +47,39 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    // Boot the dev server with OIDC pointed at the local dex. Both
-    // break-glass and OIDC flows route through this one instance.
-    // Probe /readyz instead of /livez: the spec + docs/install-server.md
-    // + docs/operations.md treat /readyz as the readiness signal
-    // (returns 200 when the DB ping succeeds). /livez only proves
-    // the process is up; tests that hit DB-backed endpoints need
-    // the readiness guarantee.
-    command: "cd ../.. && task dev:server:qa-oidc",
-    url: `https://localhost:${PORT}/readyz`,
-    // The webServer probe ignores TLS-cert errors so a self-signed dev cert
-    // doesn't kill the probe before the server has a chance to start. Same
-    // rationale as `use.ignoreHTTPSErrors` above (issue #140).
-    ignoreHTTPSErrors: true,
-    // The default `!CI` reuse rule prevents the coverage runner from
-    // attaching to a server it just booted (CI is set in GH Actions,
-    // so Playwright would normally spawn its own `task dev:server:
-    // qa-oidc`, bypassing the instrumented binary). E2E_REUSE_SERVER=1
-    // is the opt-in that lets `task test:e2e:coverage` start the
-    // covered server in the foreground and then ask Playwright to
-    // reuse it. Other CI contexts (e.g. a future hosted runner that
-    // boots its own webServer) leave the env unset and get the
-    // standard !CI behavior.
-    reuseExistingServer:
-      !process.env.CI || process.env.E2E_REUSE_SERVER === "1",
-    timeout: 60_000,
-    stderr: "pipe",
-    stdout: "pipe",
-  },
+  // Spawning is LANE A ONLY. The command below is `task dev:server:qa-oidc`, which is hardcoded to lane A's port, schema and dex
+  // wiring, so under a lane override it would boot lane A's server on 8088 and then probe lane B's 8089 until the timeout, with
+  // a "webServer was not able to start" error that says nothing about the actual cause. Skipping the spawn instead means a lane
+  // override requires the developer's own server to already be running, which is how lane B is worked anyway, and a missing one
+  // now surfaces as a plain connection refusal. Making the spawn lane-aware means parameterising that task too; not done here.
+  webServer: process.env.E2E_PORT
+    ? undefined
+    : {
+        // Boot the dev server with OIDC pointed at the local dex. Both
+        // break-glass and OIDC flows route through this one instance.
+        // Probe /readyz instead of /livez: the spec + docs/install-server.md
+        // + docs/operations.md treat /readyz as the readiness signal
+        // (returns 200 when the DB ping succeeds). /livez only proves
+        // the process is up; tests that hit DB-backed endpoints need
+        // the readiness guarantee.
+        command: "cd ../.. && task dev:server:qa-oidc",
+        url: `https://localhost:${PORT}/readyz`,
+        // The webServer probe ignores TLS-cert errors so a self-signed dev cert
+        // doesn't kill the probe before the server has a chance to start. Same
+        // rationale as `use.ignoreHTTPSErrors` above (issue #140).
+        ignoreHTTPSErrors: true,
+        // The default `!CI` reuse rule prevents the coverage runner from
+        // attaching to a server it just booted (CI is set in GH Actions,
+        // so Playwright would normally spawn its own `task dev:server:
+        // qa-oidc`, bypassing the instrumented binary). E2E_REUSE_SERVER=1
+        // is the opt-in that lets `task test:e2e:coverage` start the
+        // covered server in the foreground and then ask Playwright to
+        // reuse it. Other CI contexts (e.g. a future hosted runner that
+        // boots its own webServer) leave the env unset and get the
+        // standard !CI behavior.
+        reuseExistingServer: !process.env.CI || process.env.E2E_REUSE_SERVER === "1",
+        timeout: 60_000,
+        stderr: "pipe",
+        stdout: "pipe",
+      },
 });

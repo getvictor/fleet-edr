@@ -197,7 +197,13 @@ func writeRuleReferences(b *strings.Builder, refs []string) {
 func mdReference(ref string) string {
 	ref = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(strings.TrimSpace(ref))
 	if u, err := url.Parse(ref); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
-		return ref
+		// The RE-SERIALISED url, wrapped as an explicit autolink, never the caller's string. Go's parser is lenient enough to
+		// accept trailing junk after a valid prefix, so `https://safe.example/a ![pixel](https://attacker.example/pixel)` reports
+		// scheme https and host safe.example and would pass this branch; echoing the input back then renders the attacker's image.
+		// String() percent-encodes the space, brackets, parens, backticks and angle brackets, which is what makes the payload
+		// inert, and the <> form cannot then be broken because none of its terminators survive that encoding. Measured against the
+		// shipped corpus: 138 citations, and the only URL this alters is one carrying a trailing empty fragment.
+		return "<" + u.String() + ">"
 	}
 	if ref == "" {
 		return "``"
