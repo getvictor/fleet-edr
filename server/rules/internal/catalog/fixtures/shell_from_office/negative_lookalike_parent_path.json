@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"event_id": "sfo-fake-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4520, "parent_pid": 1}},
+    {"event_id": "sfo-fake-exec", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4520, "ppid": 1, "path": "/tmp/Microsoft Word", "args": ["Microsoft Word"], "uid": 501, "gid": 20}},
+    {"event_id": "sfo-fake-shell-fork", "host_id": "fixture-host", "timestamp_ns": 1200, "event_type": "fork",
+     "payload": {"child_pid": 4521, "parent_pid": 4520}},
+    {"event_id": "sfo-fake-shell-exec", "host_id": "fixture-host", "timestamp_ns": 1300, "event_type": "exec",
+     "payload": {"pid": 4521, "ppid": 4520, "path": "/bin/sh", "args": ["sh"], "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": []
+}

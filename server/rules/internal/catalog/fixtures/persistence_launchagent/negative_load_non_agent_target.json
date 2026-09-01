@@ -1,0 +1,10 @@
+{
+  "events": [
+    {"event_id": "pla-other-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4602, "parent_pid": 1}},
+    {"event_id": "pla-other-exec", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4602, "ppid": 1, "path": "/bin/launchctl",
+                 "args": ["launchctl", "load", "/tmp/not-an-agent.txt"], "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": []
+}

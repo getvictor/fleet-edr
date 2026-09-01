@@ -14,7 +14,12 @@ name: OpenSpec sync
 # CLAUDE.md; this is the only one that blocks.
 
 on:
+  # labeled/unlabeled/edited are included so applying the `no-behavior-change` label (or adding the title tag) re-runs this gate
+  # without needing another push. The bare default (opened/synchronize/reopened) leaves the check red after the opt-out is
+  # applied, which reads as "the opt-out does not work". The sibling docs-sync gate has carried these types for the same reason;
+  # this one did not, and PR #821 hit exactly that.
   pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled, edited, ready_for_review]
   workflow_dispatch:
 
 permissions: {}

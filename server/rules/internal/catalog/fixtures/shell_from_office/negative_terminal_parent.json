@@ -1,0 +1,14 @@
+{
+  "events": [
+    {"event_id": "sfo-term-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4510, "parent_pid": 1}},
+    {"event_id": "sfo-term-exec", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4510, "ppid": 1, "path": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+                 "args": ["Terminal"], "uid": 501, "gid": 20}},
+    {"event_id": "sfo-term-shell-fork", "host_id": "fixture-host", "timestamp_ns": 1200, "event_type": "fork",
+     "payload": {"child_pid": 4511, "parent_pid": 4510}},
+    {"event_id": "sfo-term-shell-exec", "host_id": "fixture-host", "timestamp_ns": 1300, "event_type": "exec",
+     "payload": {"pid": 4511, "ppid": 4510, "path": "/bin/bash", "args": ["bash"], "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": []
+}

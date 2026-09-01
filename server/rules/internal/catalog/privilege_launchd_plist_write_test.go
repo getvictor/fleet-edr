@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
-	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -50,17 +49,6 @@ func (stubGraphReader) GetHostEventsByType(context.Context, string, string, api.
 
 func (stubGraphReader) GetNetworkEventsForProcess(context.Context, string, int, api.TimeRange) ([]api.Event, error) {
 	return nil, nil
-}
-
-// TestPrivilegeLaunchdPlistWrite_Fixtures runs every fixture case under fixtures/privilege_launchd_plist_write/ as its own sub-test.
-// Add a new case by dropping a *.json file in that directory; no Go edits needed.
-func TestPrivilegeLaunchdPlistWrite_Fixtures(t *testing.T) {
-	t.Parallel()
-	r := &PrivilegeLaunchdPlistWrite{Exclusions: &fakeExclusions{entries: []fakeExcl{
-		// Synthetic team ID used by the allowlist fixture.
-		{ruleID: "privilege_launchd_plist_write", matchType: api.ExclusionMatchTeamID, value: "FIXTURE-ALLOW"},
-	}}}
-	detectiontestkit.Replay(t, r, "fixtures/privilege_launchd_plist_write")
 }
 
 // TestPrivilegeLaunchdPlistWrite_TechniquesMapping pins the MITRE ATT&CK
@@ -200,7 +188,3 @@ func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
 		assert.Equal(rt, in, out)
 	})
 }
-
-// Compile-time check that detection/testkit is referenced (other tests in this package use Replay; the import sits at file scope
-// alongside the api import so this declaration keeps the unused-import linter happy without forcing a per-test refactor).
-var _ = detectiontestkit.Replay

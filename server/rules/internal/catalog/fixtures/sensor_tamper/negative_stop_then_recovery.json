@@ -1,0 +1,9 @@
+{
+  "events": [
+    {"event_id": "st-rec-stop", "host_id": "fixture-host", "timestamp_ns": 1000000000, "event_type": "sensor_provider_transition",
+     "payload": {"provider": "content_filter", "state": "stopped", "stop_reason": 1}},
+    {"event_id": "st-rec-running", "host_id": "fixture-host", "timestamp_ns": 3000000000, "event_type": "sensor_provider_transition",
+     "payload": {"provider": "content_filter", "state": "running"}}
+  ],
+  "expected_findings": []
+}

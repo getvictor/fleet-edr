@@ -1,0 +1,32 @@
+{
+  "events": [
+    {
+      "event_id": "b64-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000,
+      "event_type": "fork",
+      "payload": {"child_pid": 4300, "parent_pid": 1}
+    },
+    {
+      "event_id": "b64-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100,
+      "event_type": "exec",
+      "payload": {
+        "pid": 4300,
+        "ppid": 1,
+        "path": "/usr/bin/base64",
+        "args": ["base64", "-d", "payload.b64"],
+        "uid": 501,
+        "gid": 20
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "proc_creation_macos_base64_decode",
+      "severity": "low",
+      "event_ids": ["b64-exec"]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "events": [
+    {"event_id": "srf-exhausted", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "sensor_recovery_failed",
+     "payload": {"provider": "content_filter", "outcome": "enable_failed", "attempts": 3}}
+  ],
+  "expected_findings": [
+    {"rule_id": "sensor_recovery_failed", "severity": "critical", "event_ids": ["srf-exhausted"]}
+  ]
+}

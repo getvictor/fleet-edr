@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"event_id": "pla-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4600, "parent_pid": 1}},
+    {"event_id": "pla-exec", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4600, "ppid": 1, "path": "/bin/launchctl",
+                 "args": ["launchctl", "load", "/Users/fixture/Library/LaunchAgents/com.example.persist.plist"],
+                 "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": [
+    {"rule_id": "persistence_launchagent", "severity": "high", "event_ids": ["pla-exec"]}
+  ]
+}

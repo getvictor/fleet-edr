@@ -1,0 +1,10 @@
+{
+  "events": [
+    {"event_id": "dyld-arg-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4401, "parent_pid": 1}},
+    {"event_id": "dyld-arg-exec", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4401, "ppid": 1, "path": "/bin/echo",
+                 "args": ["/bin/echo", "DYLD_INSERT_LIBRARIES=/tmp/inject.dylib"], "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": []
+}

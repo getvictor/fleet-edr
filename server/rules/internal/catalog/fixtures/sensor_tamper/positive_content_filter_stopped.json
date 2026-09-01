@@ -1,0 +1,9 @@
+{
+  "events": [
+    {"event_id": "st-stop", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "sensor_provider_transition",
+     "payload": {"provider": "content_filter", "state": "stopped", "stop_reason": 1}}
+  ],
+  "expected_findings": [
+    {"rule_id": "sensor_tamper", "severity": "high", "event_ids": ["st-stop"]}
+  ]
+}
