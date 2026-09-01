@@ -119,9 +119,11 @@ type MetricsRecorder interface {
 	// whole, so a counter incremented during evaluation counts a retried batch twice. Called after the acknowledgement, a replayed
 	// batch is counted once.
 	//
-	// Two inaccuracies remain and a consumer has to know both. A crash between the acknowledgement and the record loses those
-	// counts, which is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is
-	// gets promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. And an evaluation that outlives its
+	// Three inaccuracies remain and a consumer has to know all of them. A crash between the acknowledgement and the durable record
+	// loses those counts, and so does a failure of that record, which is logged and dropped rather than allowed to fail a batch
+	// that is already acknowledged. Both leave THIS counter ahead of the durable table, since it is incremented first. Losing
+	// counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is gets
+	// promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. Third, an evaluation that outlives its
 	// claim lease can be re-offered to another worker while the first is still running; Ack does not verify claim ownership, so
 	// both attempts can succeed and both can record.
 	//

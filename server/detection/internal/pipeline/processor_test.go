@@ -26,6 +26,8 @@ type scriptedEventLog struct {
 	nacked   []string
 	claimed  bool
 	claimReq []string // hosts ClaimForHost was asked for, in order
+	// ackErr makes Ack fail, which is the only way to exercise the branch where a batch was evaluated but NOT durably accepted.
+	ackErr error
 }
 
 func (s *scriptedEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
@@ -45,6 +47,9 @@ func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int)
 	return s.batch, nil
 }
 func (s *scriptedEventLog) Ack(_ context.Context, ids []string) error {
+	if s.ackErr != nil {
+		return s.ackErr
+	}
 	s.acked = append(s.acked, ids...)
 	return nil
 }
@@ -298,6 +303,24 @@ func TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck(t *testing.T) {
 		p.ProcessOnce(context.Background())
 
 		assert.Equal(t, 2, metrics.total)
+	})
+
+	t.Run("a failed ack records nothing, in either sink", func(t *testing.T) {
+		t.Parallel()
+		// The guarantee is "recorded once the batch is ACCEPTED", and an Ack that errors means it was not: the events stay leased
+		// and will be re-served. Without this case the suite cannot tell "records after a successful ack" from "records after
+		// evaluation regardless of the ack", because the only ack in the other tests always succeeds.
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		log := &scriptedEventLog{batch: oneEventBatch(), ackErr: errors.New("queue unavailable")}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(context.Background())
+
+		assert.Empty(t, rec.calls, "the batch was not durably accepted, so its matches are not this attempt's to record")
+		assert.Zero(t, metrics.total, "and the counter must not move either, or the re-served batch counts twice")
 	})
 
 	t.Run("a recording failure does not nack the acked batch", func(t *testing.T) {
