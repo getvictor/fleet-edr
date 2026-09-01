@@ -31,8 +31,9 @@ type settingEntry struct {
 	severity    string
 }
 
-// Snapshot is an immutable in-memory view of the detection configuration at a given version. It satisfies api.ExclusionResolver and
-// api.RuleModeResolver. Construct it with NewSnapshot; never mutate after construction (it is read concurrently by rule evaluation).
+// Snapshot is an immutable in-memory view of the detection configuration at a given version. It satisfies api.ExclusionResolver,
+// api.RuleModeResolver (the engine's per-host resolution) and api.GlobalRuleModeResolver (the catalog listing's global one).
+// Construct it with NewSnapshot; never mutate after construction (it is read concurrently by rule evaluation).
 type Snapshot struct {
 	version    int64
 	exclusions map[exclKey][]exclEntry

@@ -6,8 +6,9 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// Service is the rules orchestrator. Today it wraps the in-memory rule catalog and exposes it as the api.Lister + api.RuleProvider
-// surfaces. The application-control subsystem will plug new fields in here as it lands; for now the struct holds only the rule slice.
+// Service is the rules orchestrator. It wraps the in-memory rule catalog and exposes it as the api.Lister + api.RuleProvider
+// surfaces, resolving each rule's globally configured mode for the listing. The application-control subsystem will plug new fields
+// in here as it lands.
 type Service struct {
 	rules []api.Rule
 	// modes resolves each rule's globally configured mode for List. Nil is the docs-generator path (CatalogOnly), which has no

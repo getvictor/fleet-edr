@@ -30,18 +30,6 @@ The system SHALL expose the following counters with stable names so dashboards a
 - **WHEN** the retry is recorded
 - **THEN** `edr.detection.materialization_retries` is incremented
 
-#### Scenario: A suppressed match is counted rather than only logged
-
-- **GIVEN** a rule whose resolved mode is monitor
-- **WHEN** it matches an event
-- **THEN** `edr.detection.monitor_matches` is incremented with `rule_id` and `severity` attributes
-- **AND** no alert is created for that match
-
-#### Scenario: A suppressed match is labelled with the severity the alert would have carried
-
-- **GIVEN** a rule whose resolved mode is monitor and whose setting carries a severity override
-- **WHEN** it matches an event
-- **THEN** the counter's `severity` attribute is the overridden severity, not the rule's declared one
 ## ADDED Requirements
 
 ### Requirement: Detection materialization-miss retries are bounded in log volume
