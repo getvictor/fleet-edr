@@ -37,6 +37,7 @@ import (
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/sigma"
 )
 
 // generatedFixtureName is the single file each imported rule gets. One positive per rule is the bar issue #773 sets for the
@@ -89,7 +90,13 @@ func TestGenerateImportedSmokeFixtures(t *testing.T) {
 	}
 }
 
-// candidateEvents synthesises the fork+exec pair (plus the parent's, when the rule reads ParentImage) that should trip a rule.
+// candidateEvents synthesises the fork+exec pair (plus the parent's, when the rule reads ParentImage) that trips a rule.
+//
+// The rule's own compiled detection is the ORACLE. Candidates are enumerated mechanically and each is offered to
+// sigma.Rule.Matches; the first the real matcher accepts is the one written out. An earlier version parsed the condition here to
+// work out which selections had to hold together, which was a second, weaker implementation of a grammar the sigma package
+// already owns: it split on literal " and "/" or " and so lost nested precedence, `(a or b) and c` dropping the {a,c} candidate.
+// Asking the matcher removes the shadow grammar and makes the answer exact rather than approximate.
 func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 	var f sigmaFile
 	if err := yaml.Unmarshal(raw, &f); err != nil {
@@ -99,212 +106,201 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 	if err := f.Detection.Decode(&block); err != nil {
 		return nil, fmt.Errorf("decode detection: %w", err)
 	}
+	compiled, err := sigma.Compile(block)
+	if err != nil {
+		return nil, fmt.Errorf("compile detection: %w", err)
+	}
 
-	// The condition decides which selections have to hold TOGETHER. Merging everything is right for `all of x_*` and wrong for
-	// `1 of x_*`, where the selections are alternatives: the file-and-directory-discovery rule offers five, each with its own
-	// Image, so merging paired /usr/bin/file with a flag belonging to /bin/ls and matched nothing. Conditions like
-	// `selection1 and 1 of selection_cli*` need both halves: the mandatory one plus ONE of the alternatives.
-	condition, _ := block["condition"].(string)
-	// Every branch that builds is collected, then the one naming a subject binary wins. Taking the first that merely succeeds
-	// picked the command-line-only branch of `1 of selection*` rules and produced an event with no Image at all: still a match,
-	// because such a rule does not constrain the image, but useless as an illustration of what the rule is for.
-	var image, parent string
-	var args []string
-	var lastErr error
-	built := false
-	for _, group := range candidateGroups(condition, block) {
-		gotImage, gotParent, gotArgs, err := buildFrom(block, group)
-		if err != nil {
-			lastErr = err
-			continue
+	var names []string
+	for name := range block {
+		// A filter's literals are what the event must NOT carry, so building from one produces the very event the rule exists to
+		// stay quiet on. The matcher would reject it anyway; skipping is just not wasting a candidate on it.
+		if name != "condition" && !strings.HasPrefix(name, "filter") {
+			names = append(names, name)
 		}
-		if !built || (image == "" && gotImage != "") {
-			image, parent, args, built = gotImage, gotParent, gotArgs, true
+	}
+	sort.Strings(names)
+
+	var best *subject
+	for _, group := range candidateGroups(names) {
+		for _, cand := range subjectsFor(block, group) {
+			if !compiled.Matches(cand) {
+				continue
+			}
+			// A candidate naming a real subject binary beats one that leaves the rule's unconstrained Image blank, so keep
+			// looking briefly rather than taking the first match outright.
+			if best == nil || (best.image == "" && cand.image != "") {
+				c := cand
+				best = &c
+			}
+			if best.image != "" {
+				break
+			}
 		}
-		if image != "" {
+		if best != nil && best.image != "" {
 			break
 		}
 	}
-	if !built {
-		if lastErr == nil {
-			lastErr = errors.New("condition names no selection this generator can build from")
-		}
-		return nil, lastErr
+	if best == nil {
+		return nil, errors.New("no combination of this rule's selections produced an event its own matcher accepts")
 	}
+
+	image := best.image
 	if image == "" {
 		// The rule constrains only the command line or the parent, so any plausible subject satisfies it. Named rather than left
-		// empty: a fixture with no path at all reads as a broken record instead of as an event.
+		// empty: a record with no path reads as broken rather than as an event.
 		image = "/usr/bin/fixture-subject"
 	}
 
 	const childPID, parentPID = 4900, 4800
-	argv := append([]string{filepath.Base(image)}, args...)
-	events := []detectionapi.Event{}
+	argv := append([]string{filepath.Base(image)}, best.args...)
+	var events []detectionapi.Event
 	ppid := 1
-	if parent != "" {
+	if best.parent != "" {
 		ppid = parentPID
 		events = append(events,
 			forkEvent(ruleID+"-parent-fork", parentPID, 1, 1_000_000_000),
-			execEvent(ruleID+"-parent-exec", parentPID, 1, parent, []string{filepath.Base(parent)}, 1_010_000_000))
+			execEvent(ruleID+"-parent-exec", parentPID, 1, best.parent, []string{filepath.Base(best.parent)}, 1_010_000_000))
 	}
 	return append(events,
 		forkEvent(ruleID+"-fork", childPID, ppid, 1_020_000_000),
 		execEvent(ruleID+"-exec", childPID, ppid, image, argv, 1_030_000_000)), nil
 }
 
-// candidateGroups turns a Sigma condition into the sets of selections that would each satisfy it, best first.
-//
-// Only the shapes the vendored corpus actually uses are handled, and an unrecognised one falls back to "every non-filter
-// selection", which either builds something the verification step accepts or is declined by name. Guessing more cleverly than the
-// corpus requires would be inventing semantics; the replay gate is what decides whether a guess was right.
-//
-//   - `a or b`      two independent branches, tried in order
-//   - `a and b`     both, merged
-//   - `all of p_*`  every selection whose name starts with p_
-//   - `1 of p_*`    each matching selection on its own, as alternatives
-//   - `not ...`     dropped: filters are already excluded by name, and a negated clause names what must NOT hold
-func candidateGroups(condition string, block map[string]any) [][]string {
-	selectable := func(name string) bool {
-		_, ok := block[name]
-		return ok && name != "condition" && !strings.HasPrefix(name, "filter")
+// subject is a candidate event expressed as the Sigma fields the taxonomy supplies for an exec, so the compiled rule can be asked
+// about it directly.
+type subject struct {
+	image, parent string
+	args          []string
+}
+
+// Field makes a candidate a sigma.Event. The three fields are the ones the imported corpus reads; anything else is reported
+// absent, which is what an exec event genuinely carrying none of it would report.
+func (s subject) Field(name string) ([]string, bool) {
+	switch name {
+	case "Image":
+		return []string{s.image}, s.image != ""
+	case "ParentImage":
+		return []string{s.parent}, s.parent != ""
+	case "CommandLine":
+		// ALWAYS present, even with no argv beyond the binary: a real exec event always carries a command line, and reporting it
+		// absent made susp_browser_child_process's `filter_optional_empty: CommandLine: ''` match, so the rule's own
+		// `not 1 of filter_optional_*` rejected every candidate. The generator has to model the event faithfully, not minimally.
+		return []string{strings.Join(append([]string{filepath.Base(s.image)}, s.args...), " ")}, true
 	}
-	matching := func(pattern string) []string {
-		prefix := strings.TrimSuffix(pattern, "*")
-		var out []string
-		for name := range block {
-			if selectable(name) && strings.HasPrefix(name, prefix) {
-				out = append(out, name)
-			}
+	return nil, false
+}
+
+// candidateGroups enumerates the selection sets worth trying, smallest first, WITHOUT interpreting the condition.
+//
+// Every non-empty subset, because anything less can miss the answer: singletons plus pairs plus the whole set left
+// create_hidden_account uncovered, whose condition needs three of its four selections and specifically NOT the fourth, which
+// matches on a regex. Smallest first so the simplest event that satisfies a rule is the one written out.
+//
+// Exhaustive is affordable here (the widest rule in the corpus has five selections) and it is what lets the matcher be the only
+// thing deciding correctness: this only has to be generous enough to contain a right answer, never to know which one it is. A
+// pathologically wide rule falls back to the cheap enumeration rather than to 2^n.
+func candidateGroups(names []string) [][]string {
+	const exhaustiveLimit = 10
+	if len(names) > exhaustiveLimit {
+		groups := make([][]string, 0, len(names)+1)
+		for _, n := range names {
+			groups = append(groups, []string{n})
 		}
-		sort.Strings(out)
-		return out
+		return append(groups, names)
 	}
 
-	var groups [][]string
-	for branch := range strings.SplitSeq(condition, " or ") {
-		// Each term contributes either one fixed set of names or several alternatives; the branch's candidates are the product.
-		combos := [][]string{{}}
-		usable := true
-		for term := range strings.SplitSeq(branch, " and ") {
-			// Parentheses group terms rather than naming one; the corpus uses them in exactly one rule, and leaving them attached
-			// made `(ishidden_option_declaration` match no selection at all.
-			term = strings.Trim(strings.TrimSpace(term), "()")
-			if term == "" || strings.HasPrefix(term, "not ") {
-				continue
-			}
-			var alternatives [][]string
-			switch {
-			case strings.HasPrefix(term, "all of "):
-				alternatives = [][]string{matching(strings.TrimPrefix(term, "all of "))}
-			case strings.HasPrefix(term, "1 of "):
-				for _, n := range matching(strings.TrimPrefix(term, "1 of ")) {
-					alternatives = append(alternatives, []string{n})
-				}
-			case selectable(term):
-				alternatives = [][]string{{term}}
-			}
-			if len(alternatives) == 0 {
-				// A term this cannot read must INVALIDATE the branch, not be skipped. Skipping built a group holding only the
-				// terms that parsed, which produced an event satisfying no branch of the condition and a fixture that fired
-				// nothing: silently degrading where declining and asking for a hand-written fixture is the honest outcome.
-				usable = false
-				break
-			}
-			var next [][]string
-			for _, base := range combos {
-				for _, alt := range alternatives {
-					next = append(next, append(append([]string{}, base...), alt...))
-				}
-			}
-			combos = next
-		}
-		if !usable {
-			continue
-		}
-		for _, c := range combos {
-			if len(c) > 0 {
-				groups = append(groups, c)
+	bySize := make([][][]string, len(names)+1)
+	for mask := 1; mask < 1<<len(names); mask++ {
+		var group []string
+		for i, n := range names {
+			if mask&(1<<i) != 0 {
+				group = append(group, n)
 			}
 		}
+		bySize[len(group)] = append(bySize[len(group)], group)
 	}
-	if len(groups) == 0 {
-		var all []string
-		for name := range block {
-			if selectable(name) {
-				all = append(all, name)
-			}
-		}
-		sort.Strings(all)
-		groups = [][]string{all}
+	var groups [][]string
+	for _, sized := range bySize {
+		groups = append(groups, sized...)
 	}
 	return groups
 }
 
-// buildFrom assembles the subject, parent and argv one group of selections requires, or explains why it cannot.
-func buildFrom(block map[string]any, names []string) (image, parent string, args []string, err error) {
-	for _, name := range names {
-		for _, lit := range literalsOf(block[name]) {
-			// A regex is a PATTERN, not a value: writing `(.){200,}` into argv satisfies the condition only by coincidence, so a
-			// selection that needs one is declined and the caller tries another.
-			if strings.Contains(lit.modifier, "re") {
-				return "", "", nil, fmt.Errorf("selection %q matches on a regex, which no literal value satisfies", name)
+// subjectsFor expands one selection set into the candidates it can produce.
+//
+// A Sigma search whose value is a LIST OF MAPS is a set of alternative maps, not one merged map, so each is expanded separately:
+// merging them put both branches of a rule into one fixture, and either branch could then keep it green while the other
+// regressed. Within a map, a list value is an OR, so the first entry is taken unless the modifier is `|all`.
+func subjectsFor(block map[string]any, group []string) []subject {
+	combos := []subject{{}}
+	for _, name := range group {
+		var alternatives []map[string]any
+		switch v := block[name].(type) {
+		case map[string]any:
+			alternatives = []map[string]any{v}
+		case []any:
+			for _, item := range v {
+				if m, ok := item.(map[string]any); ok {
+					alternatives = append(alternatives, m)
+				}
 			}
-			switch lit.field {
+		}
+		var next []subject
+		for _, base := range combos {
+			for _, alt := range alternatives {
+				if merged, ok := applyMap(base, alt); ok {
+					next = append(next, merged)
+				}
+			}
+		}
+		if len(next) == 0 {
+			return nil
+		}
+		combos = next
+	}
+	return combos
+}
+
+// applyMap folds one selection map into a candidate, reporting false when it asks for something no literal value can supply.
+func applyMap(base subject, m map[string]any) (subject, bool) {
+	out := subject{image: base.image, parent: base.parent, args: append([]string{}, base.args...)}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic output, so regenerating an unchanged corpus is a no-op diff.
+	for _, k := range keys {
+		field, modifier, _ := strings.Cut(k, "|")
+		// A regex is a PATTERN, not a value: writing `(.){200,}` into argv would satisfy the condition only by coincidence.
+		if strings.Contains(modifier, "re") {
+			return subject{}, false
+		}
+		values := valuesOf(m[k])
+		if !strings.Contains(modifier, "all") && len(values) > 1 {
+			values = values[:1]
+		}
+		for _, val := range values {
+			switch field {
 			case "Image":
-				if image == "" {
-					image = realisticPath(lit.value, lit.modifier)
+				if out.image == "" {
+					out.image = realisticPath(val, modifier)
 				}
 			case "ParentImage":
-				if parent == "" {
-					parent = realisticPath(lit.value, lit.modifier)
+				if out.parent == "" {
+					out.parent = realisticPath(val, modifier)
 				}
 			case "CommandLine":
-				args = append(args, lit.value)
+				out.args = append(out.args, val)
 			default:
-				return "", "", nil, fmt.Errorf("field %q is not one this generator can supply", lit.field)
+				return subject{}, false
 			}
 		}
 	}
-	if image == "" && parent == "" && len(args) == 0 {
-		return "", "", nil, errors.New("no literals to build an event from")
-	}
-	return image, parent, args, nil
+	return out, true
 }
 
-// literal is one value a selection asks a field to carry.
-type literal struct{ field, modifier, value string }
-
-// literalsOf flattens one selection into the values it requires.
-//
-// A Sigma list is an OR, so only the FIRST value of a group is taken: cramming every alternative into one command line produces
-// something that matches but that no machine ever ran (`touch -t -acmr -d -r`), and a smoke fixture doubles as a sample of what
-// the rule is for. `|all` is the exception the format defines, where every value genuinely has to be present.
-func literalsOf(sel any) []literal {
-	var out []literal
-	switch v := sel.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys) // deterministic output, so regenerating an unchanged corpus is a no-op diff.
-		for _, k := range keys {
-			field, modifier, _ := strings.Cut(k, "|")
-			for i, val := range valuesOf(v[k]) {
-				if i > 0 && !strings.Contains(modifier, "all") {
-					break
-				}
-				out = append(out, literal{field: field, modifier: modifier, value: val})
-			}
-		}
-	case []any:
-		for _, item := range v {
-			out = append(out, literalsOf(item)...)
-		}
-	}
-	return out
-}
-
+// valuesOf normalises one Sigma right-hand side to the strings it offers.
 func valuesOf(v any) []string {
 	switch t := v.(type) {
 	case string:
@@ -326,8 +322,9 @@ func valuesOf(v any) []string {
 // realisticPath turns a bare leaf into somewhere a binary actually lives.
 //
 // `Image|endswith: '/osascript'` is satisfied by the literal itself, but `/osascript` is not a path any macOS host would report,
-// and these fixtures are read as examples of the telemetry a rule is about. Only safe for endswith/contains, where extending the
-// left-hand side cannot break the match; an exact match is left exactly as written.
+// and these fixtures are read as examples of the telemetry a rule is about. Only extended for endswith/contains, where adding to
+// the left-hand side cannot break the match; an exact match is left exactly as written. The matcher verifies the result either
+// way, so a wrong guess here is caught rather than shipped.
 func realisticPath(value, modifier string) string {
 	switch {
 	case !strings.HasPrefix(value, "/"):
