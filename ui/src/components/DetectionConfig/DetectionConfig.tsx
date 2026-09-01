@@ -131,7 +131,7 @@ const MODE_COLUMN_TOOLTIP =
   "A rule with no setting here runs in its own default, which is alert for the rules Fleet wrote and monitor for imported ones.";
 
 // Shown in place of the column's normal caption when the counts read failed, so the missing evidence is stated rather than left
-// for the reader to infer from a column of dashes.
+// for the reader to infer from a column that says nothing was recorded.
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
 
@@ -146,7 +146,7 @@ function formatMatches(n: number): string {
 
 // renderObserved draws the Observed cell for one rule.
 //
-// Three states, deliberately distinct. A failed read is UNAVAILABLE, not a dash: the spec requires a read failure be reported as
+// Three states, deliberately distinct. A failed read reads UNAVAILABLE, not "not recorded": the spec requires a read failure be reported as
 // an error rather than as an empty result, because an empty result reads as a quiet rule and a quiet rule is what gets promoted.
 // Rendering a failure as absence would invert the meaning of the column at exactly the moment it is least reliable.
 //
@@ -221,15 +221,15 @@ export function DetectionConfig() {
   const [exclusions, setExclusions] = useState<DetectionExclusion[]>([]);
   const [rules, setRules] = useState<RuleDocEntry[]>([]);
   const [settings, setSettings] = useState<DetectionRuleSetting[]>([]);
-  // Keyed by rule id, holding only rules that matched: a rule absent here has nothing recorded, which the table renders as a dash
-  // rather than a zero (see the cell).
+  // Keyed by rule id, holding only rules that matched: a rule absent here has nothing recorded, which the table spells out as
+  // "not recorded" rather than showing a zero (see the cell).
   // Possibly-undefined per key on purpose: a rule with nothing recorded is ABSENT from the response rather than present with a
   // zero, so the lookup genuinely can miss and the guard below is a real one rather than a formality.
   const [observed, setObserved] = useState<Record<string, RuleMatchCount | undefined>>({});
   const [observedDays, setObservedDays] = useState<number>(0);
-  // observedUnavailable records that the counts read FAILED, which is a different claim from "no rule matched". Without it a
-  // failed read renders as a table of dashes, i.e. as evidence that every rule is quiet, which is the reading that gets a noisy
-  // rule promoted.
+  // observedUnavailable records that the counts read FAILED, which is a different claim from "no rule matched". Without it every
+  // cell would read "not recorded", i.e. as evidence that every rule is quiet, which is the reading that gets a noisy rule
+  // promoted; with it they read "unavailable" instead.
   const [observedUnavailable, setObservedUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -1146,12 +1146,22 @@ export interface RuleMatchCount {
 // window they asked for.
 export async function listDetectionRuleMatchCounts(days?: number): Promise<{ counts: RuleMatchCount[]; days: number }> {
   const query = days === undefined ? "" : `?days=${String(days)}`;
-  const body = await fetchJSON<{ match_counts: RuleMatchCount[] | null; days: number }>(`/v1/detection-config/rule-match-counts${query}`);
-  // Deliberately NOT coalesced to []. The server normalises an empty result to [] (pinned by a handler test), so a null here means
-  // a malformed response, and "no rule matched" is the one wrong reading of it: it renders as a fleet of quiet rules, which is what
-  // gets a noisy rule promoted. Throwing routes it to the caller's unavailable path instead. The sibling list endpoints DO coalesce,
-  // because there an empty list is merely an empty table rather than evidence for a decision.
-  if (body.match_counts === null) throw new Error("rule-match-counts response omitted match_counts");
+  // Typed as optional because fetchJSON does NOT validate its generic at runtime: the declared shape is an assumption, and this is
+  // the one response where believing a wrong assumption is dangerous rather than merely buggy.
+  const body = await fetchJSON<{ match_counts?: RuleMatchCount[] | null; days?: number }>(
+    `/v1/detection-config/rule-match-counts${query}`,
+  );
+  // The envelope is checked by SHAPE rather than against a single sentinel. An earlier version rejected only an explicit null,
+  // which let an omitted key through as undefined and threw on .map() further out, failing the whole page instead of degrading
+  // one column. Half-validating is worse than either extreme: it reads as a guarantee that does not hold.
+  //
+  // And nothing here is coalesced to []. The server normalises an empty result to [] (pinned by a handler test), so a missing
+  // array means a malformed response, and "no rule matched" is the one wrong reading of it: it renders as a fleet of quiet rules,
+  // which is what gets a noisy rule promoted. Throwing routes it to the caller's unavailable path. The sibling list endpoints DO
+  // coalesce, because there an empty list is merely an empty table rather than evidence for a decision.
+  if (!Array.isArray(body.match_counts) || typeof body.days !== "number") {
+    throw new Error("malformed rule-match-counts response: match_counts must be an array and days a number");
+  }
   return { counts: body.match_counts, days: body.days };
 }
 

@@ -91,12 +91,24 @@ describe("detection-config API client", () => {
   });
 
   // The opposite of the sibling endpoints above, deliberately. There an empty list is just an empty table; here the server always
-  // normalises empty to [], so a null is a malformed response, and coalescing it to [] would render every rule as quiet, which is
-  // the reading that gets a noisy rule promoted. Rejecting sends the caller down its unavailable path instead.
-  it("listDetectionRuleMatchCounts rejects a null envelope rather than reading it as no matches", async () => {
-    stubFetch({ match_counts: null, days: 7 });
-    await expect(listDetectionRuleMatchCounts()).rejects.toThrow(/match_counts/);
-  });
+  // normalises empty to [], so a missing array is a malformed response, and coalescing it to [] would render every rule as quiet,
+  // which is the reading that gets a noisy rule promoted. Rejecting sends the caller down its unavailable path instead.
+  //
+  // Checked by shape rather than against one sentinel: an earlier version tested only for null, so an OMITTED key slipped through
+  // as undefined and threw on .map() further out, failing the whole page rather than degrading one column. Each row below is a
+  // shape that must be refused, not just the null one.
+  for (const [name, envelope] of [
+    ["null match_counts", { match_counts: null, days: 7 }],
+    ["omitted match_counts", { days: 7 }],
+    ["match_counts is not an array", { match_counts: { "0": {} }, days: 7 }],
+    ["omitted days", { match_counts: [] }],
+    ["days is not a number", { match_counts: [], days: "7" }],
+  ] as [string, unknown][]) {
+    it(`listDetectionRuleMatchCounts rejects a malformed envelope: ${name}`, async () => {
+      stubFetch(envelope);
+      await expect(listDetectionRuleMatchCounts()).rejects.toThrow(/malformed rule-match-counts/);
+    });
+  }
 
   it("createDetectionExclusion POSTs the body with the CSRF header attached", async () => {
     sessionStorage.setItem("edr_csrf_token", "csrf-123");

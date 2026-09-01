@@ -128,7 +128,7 @@ func foldTally(tally api.MonitorTally) map[matchKey]int {
 //
 // A rule that matched nothing is ABSENT rather than present with zero, and absence is NOT the same claim as zero: a rule can be
 // missing here because it was promoted out of monitor before the window opened, or because the window predates its registration.
-// Callers render the difference rather than substituting a zero (the tuning table shows a dash). Synthesising zero rows would also
+// Callers render the difference rather than substituting a zero (the tuning table spells out "not recorded"). Synthesising zero rows would also
 // mean joining against a rule list this store does not have and should not learn.
 func (s *Store) MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error) {
 	// days arrives already resolved: the handler owns the window policy, because only it knows the deployment's retention. Nothing
