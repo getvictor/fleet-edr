@@ -1,0 +1,17 @@
+{
+  "events": [
+    {"event_id": "acb-fork", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "fork",
+     "payload": {"child_pid": 4700, "parent_pid": 1}},
+    {"event_id": "acb-exec", "host_id": "fixture-host", "timestamp_ns": 1100, "event_type": "exec",
+     "payload": {"pid": 4700, "ppid": 1, "path": "/System/Applications/Calculator.app/Contents/MacOS/Calculator",
+                 "args": ["Calculator"], "uid": 501, "gid": 20}},
+    {"event_id": "acb-block", "host_id": "fixture-host", "timestamp_ns": 1200, "event_type": "application_control_block",
+     "payload": {"pid": 4700, "path": "/System/Applications/Calculator.app/Contents/MacOS/Calculator",
+                 "rule_id": "app_control:42", "rule_type": "BINARY",
+                 "identifier": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                 "severity": "high", "custom_msg": "Blocked by policy", "policy_id": 11, "policy_version": 3}}
+  ],
+  "expected_findings": [
+    {"rule_id": "app_control:42", "severity": "high", "event_ids": ["acb-block"]}
+  ]
+}

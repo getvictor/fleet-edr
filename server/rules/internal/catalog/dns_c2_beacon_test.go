@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
-	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -19,15 +18,6 @@ import (
 // spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-browser-resolving-and-connecting-to-an-ordinary-domain-does-not-fire
 // spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-suspicious-process-that-connects-to-an-address-it-never-resolved-does-not-fire
 //
-// TestDNSC2Beacon_Fixtures runs every fixture under fixtures/dns_c2_beacon/ as its own sub-test. The positive case is
-// the spec scenario above (temp-path process resolves a high-entropy domain, then connects to the resolved address);
-// the negatives pin the two non-firing scenarios (a browser-context process; a suspicious process that connects to an
-// address it never resolved). Add a case by dropping a *.json file in that directory.
-func TestDNSC2Beacon_Fixtures(t *testing.T) {
-	t.Parallel()
-	detectiontestkit.Replay(t, &DNSC2Beacon{}, "fixtures/dns_c2_beacon")
-}
-
 // TestDNSC2Beacon_TechniquesMapping pins the MITRE ATT&CK union the rule advertises. A given finding narrows this (every
 // finding carries T1071.004; only DGA-domain findings add T1568.002), but the rule-level declaration drives the catalog
 // surface and ATT&CK-Navigator export, so it is pinned here.

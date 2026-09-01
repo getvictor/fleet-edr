@@ -7,19 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
 )
-
-// TestSudoersTamper_Fixtures runs every fixture case under
-// fixtures/sudoers_tamper/ as its own sub-test.
-func TestSudoersTamper_Fixtures(t *testing.T) {
-	t.Parallel()
-	r := &SudoersTamper{Exclusions: &fakeExclusions{entries: []fakeExcl{
-		{ruleID: "sudoers_tamper", matchType: api.ExclusionMatchPathGlob, value: "/usr/local/bin/fixture-allowed-writer"},
-	}}}
-	detectiontestkit.Replay(t, r, "fixtures/sudoers_tamper")
-}
 
 // TestSudoersTamper_TechniquesMapping pins the MITRE ATT&CK mapping.
 func TestSudoersTamper_TechniquesMapping(t *testing.T) {

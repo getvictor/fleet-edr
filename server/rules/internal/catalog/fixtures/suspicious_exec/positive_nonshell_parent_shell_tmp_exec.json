@@ -1,0 +1,94 @@
+{
+  "events": [
+    {
+      "event_id": "se-py-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 5001,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "se-py-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1010000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 5001,
+        "ppid": 1,
+        "path": "/usr/bin/python3",
+        "args": [
+          "python3",
+          "-c",
+          "import subprocess; subprocess.run(['/bin/sh'])"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "se-sh-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1050000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 5002,
+        "parent_pid": 5001
+      }
+    },
+    {
+      "event_id": "se-sh-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1060000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 5002,
+        "ppid": 5001,
+        "path": "/bin/sh",
+        "args": [
+          "sh"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "se-tmp-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 5003,
+        "parent_pid": 5002
+      }
+    },
+    {
+      "event_id": "se-tmp-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1110000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 5003,
+        "ppid": 5002,
+        "path": "/tmp/payload",
+        "args": [
+          "/tmp/payload"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    }
+  ],
+  "expected_findings": [
+    {
+      "rule_id": "suspicious_exec",
+      "severity": "high",
+      "description_contains": "/usr/bin/python3 \u2192 /bin/sh \u2192 /tmp/payload"
+    }
+  ]
+}

@@ -52,17 +52,6 @@ func (stubGraphReader) GetNetworkEventsForProcess(context.Context, string, int, 
 	return nil, nil
 }
 
-// TestPrivilegeLaunchdPlistWrite_Fixtures runs every fixture case under fixtures/privilege_launchd_plist_write/ as its own sub-test.
-// Add a new case by dropping a *.json file in that directory; no Go edits needed.
-func TestPrivilegeLaunchdPlistWrite_Fixtures(t *testing.T) {
-	t.Parallel()
-	r := &PrivilegeLaunchdPlistWrite{Exclusions: &fakeExclusions{entries: []fakeExcl{
-		// Synthetic team ID used by the allowlist fixture.
-		{ruleID: "privilege_launchd_plist_write", matchType: api.ExclusionMatchTeamID, value: "FIXTURE-ALLOW"},
-	}}}
-	detectiontestkit.Replay(t, r, "fixtures/privilege_launchd_plist_write")
-}
-
 // TestPrivilegeLaunchdPlistWrite_TechniquesMapping pins the MITRE ATT&CK
 // mapping the rule reports.
 func TestPrivilegeLaunchdPlistWrite_TechniquesMapping(t *testing.T) {
