@@ -208,16 +208,23 @@ func hasPositiveFixture(t *testing.T, ruleID string) bool {
 		return false // no directory at all: uncovered, which is the coverage gate's business to report.
 	}
 	require.NoError(t, err)
+
+	// Every path is scanned rather than returning at the first positive, because the naming assertion below has to see all of
+	// them. Short-circuiting checked at most one file, so `positive_top.json` followed by `z/negative_misnamed.json` left the
+	// second one unexamined even though it expects findings.
+	found := false
 	for _, path := range paths {
 		c, err := detectiontestkit.LoadFixture(path)
 		require.NoError(t, err)
-		if len(c.ExpectedFindings) > 0 {
-			// The naming convention is not load-bearing (the assertion above is), but a positive case named negative_* is a
-			// mistake worth catching at the point where someone is most likely to make it.
-			assert.Falsef(t, strings.HasPrefix(filepath.Base(path), "negative_"),
-				"%s expects findings but is named negative_*", path)
-			return true
+		if len(c.ExpectedFindings) == 0 {
+			continue
 		}
+		found = true
+		// The naming convention is not load-bearing (the coverage assertion is), but a positive case named negative_* is a
+		// mistake worth catching at the point where someone is most likely to make it: a reader scanning the directory reads
+		// the prefix, not the JSON.
+		assert.Falsef(t, strings.HasPrefix(filepath.Base(path), "negative_"),
+			"%s expects findings but is named negative_*", path)
 	}
-	return false
+	return found
 }
