@@ -54,6 +54,14 @@
   text-transform: capitalize;
 }
 
+// The Observed caveat, rendered as visible text under the heading rather than hidden in a header tooltip.
+.detection-config__note {
+  font-size: $xx-small;
+  color: $ui-fleet-black-50;
+  margin: 0 0 $pad-small;
+  max-width: 70ch;
+}
+
 // The Observed column: the count leads, the reach and recency ride behind it at a lower weight, so the column scans by volume.
 .detection-config__observed-hosts,
 .detection-config__observed-last {

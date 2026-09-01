@@ -14,6 +14,7 @@ import {
   type RuleDocEntry,
 } from "../../api";
 import { useCan, PermissionAction } from "../../permissions-core";
+import { formatRelativeISO } from "../../time";
 import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
@@ -129,16 +130,8 @@ const MODE_COLUMN_TOOLTIP =
   "Alert raises alerts; monitor evaluates and records a signal instead; disabled emits nothing. " +
   "A rule with no setting here runs in its own default, which is alert for the rules Fleet wrote and monitor for imported ones.";
 
-// Header tooltip for the Observed column. It has to carry the caveat, because a bare number beside a promote control reads as a
-// forecast: this counts matches, and alerts deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one
-// subject would raise one alert rather than the many shown here.
-const OBSERVED_COLUMN_TOOLTIP =
-  "What each rule matched in monitor mode over the window, and on how many hosts. Approximate, and an indication of volume " +
-  "rather than of how many alerts promoting the rule would raise: repeated matches on the same process collapse into a single " +
-  "alert once a rule alerts.";
-
-// Header tooltip when the counts read failed. Says the evidence is missing rather than letting the column's normal caption imply
-// the dashes are data.
+// Shown in place of the column's normal caption when the counts read failed, so the missing evidence is stated rather than left
+// for the reader to infer from a column of dashes.
 const OBSERVED_UNAVAILABLE_TOOLTIP =
   "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
 
@@ -149,22 +142,6 @@ const matchesAbbreviationFloor = 10_000;
 function formatMatches(n: number): string {
   if (n >= matchesAbbreviationFloor) return `${String(Math.round(n / 1000))}k`;
   return n.toLocaleString();
-}
-
-// formatLastSeen renders how recently a rule last matched, which is the third signal the column carries: a rule that matched
-// heavily and has since gone quiet is a different promotion case from one still matching now, and equal totals cannot separate
-// them. Coarse on purpose (the counters are bucketed by day), and an unparseable timestamp renders nothing rather than "Invalid
-// Date".
-const millisecondsPerHour = 3_600_000;
-const hoursPerDay = 24;
-
-function formatLastSeen(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const hours = Math.floor((Date.now() - then) / millisecondsPerHour);
-  if (hours < 1) return "just now";
-  if (hours < hoursPerDay) return `${String(hours)}h ago`;
-  return `${String(Math.floor(hours / hoursPerDay))}d ago`;
 }
 
 // renderObserved draws the Observed cell for one rule.
@@ -192,12 +169,18 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
     );
   }
   const hosts = `${String(count.hosts)} host${count.hosts === 1 ? "" : "s"}`;
-  const lastSeen = formatLastSeen(count.last_seen);
+  // Recency is the third signal the column carries: a rule that matched heavily and has since gone quiet is a different promotion
+  // case from one still matching. Phrased by the shared helper rather than a local one, so this reads like the Hosts list instead
+  // of inventing a second vocabulary for the same idea.
+  const lastSeen = formatRelativeISO(count.last_seen);
   const title =
     `approximately ${count.matches.toLocaleString()} matches on ${hosts} in the last ${String(days)} days` +
     (lastSeen === "" ? "" : `, last matched ${lastSeen}`);
+  // aria-label carries the same sentence as the tooltip, because `title` alone reaches neither a screen reader reliably nor a
+  // touch user at all, and the abbreviated display ("42k") drops the exact figure. The visible text stays short; the label is
+  // what makes the precise value and the window available without a mouse.
   return (
-    <span title={title}>
+    <span title={title} aria-label={title}>
       {formatMatches(count.matches)}
       <span className="detection-config__observed-hosts"> on {hosts}</span>
       {lastSeen === "" ? null : <span className="detection-config__observed-last"> &middot; {lastSeen}</span>}
@@ -620,6 +603,18 @@ export function DetectionConfig() {
 
           <section className="detection-config__section">
             <h2 className="detection-config__heading">Rule modes</h2>
+            {/*
+              Rendered visibly rather than left in the Observed header's `title`. A native tooltip on a non-focusable th reaches
+              neither keyboard nor touch users, and this is the caveat that stops a bare number beside a promote control reading
+              as a forecast of alert volume, so it is exactly the sentence that must not be the one only some readers get.
+            */}
+            <p className="detection-config__note">
+              {observedUnavailable
+                ? OBSERVED_UNAVAILABLE_TOOLTIP
+                : `Observed counts what each rule matched in monitor mode over the last ${String(observedDays)} days. It is an ` +
+                  "indication of volume, not of how many alerts promoting the rule would raise: repeated matches on the same " +
+                  "process collapse into a single alert once a rule alerts."}
+            </p>
             <Table>
               <thead>
                 <tr>
@@ -627,7 +622,8 @@ export function DetectionConfig() {
                   <th title="The severity each rule declares in the catalog. It applies whenever no override is set below.">
                     Default severity
                   </th>
-                  <th title={observedUnavailable ? OBSERVED_UNAVAILABLE_TOOLTIP : OBSERVED_COLUMN_TOOLTIP}>Observed</th>
+                  {/* The window is in the header text, not only in each cell's hover, so every reader knows what the numbers cover. */}
+                  <th>Observed{observedUnavailable || observedDays === 0 ? "" : ` (${String(observedDays)}d)`}</th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
                     Severity override

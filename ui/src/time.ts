@@ -18,6 +18,18 @@ export function formatRelativeNs(ns: number): string {
   return `${String(Math.floor(diff / MILLISECONDS_PER_DAY))}d ago`;
 }
 
+// formatRelativeISO renders an RFC 3339 timestamp as the same compact age formatRelativeNs produces, for the surfaces whose API
+// returns a formatted timestamp rather than a nanosecond epoch (the detection-tuning match counts). It delegates rather than
+// re-buckets so the two can never drift in how they phrase recency.
+//
+// An unparseable value renders as the empty string rather than "Invalid Date", leaving the caller to omit the element instead of
+// showing a broken one.
+export function formatRelativeISO(iso: string): string {
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) return "";
+  return formatRelativeNs(ms * NANOSECONDS_PER_MILLISECOND);
+}
+
 // isOnline classifies a host by its last-seen timestamp against the shared offline threshold. One predicate for the Hosts list pill,
 // the fleet summary cards, and the host detail header, so every surface agrees on what "online" means.
 export function isOnline(lastSeenNs: number): boolean {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { formatRelativeNs } from "./time";
+import { formatRelativeISO, formatRelativeNs } from "./time";
 import {
   MILLISECONDS_PER_DAY,
   MILLISECONDS_PER_HOUR,
@@ -48,5 +48,21 @@ describe("formatRelativeNs", () => {
 
   it("formats days", () => {
     expect(formatRelativeNs(msAgoNs(2 * MILLISECONDS_PER_DAY + 12 * MILLISECONDS_PER_HOUR))).toBe("2d ago");
+  });
+});
+
+// formatRelativeISO exists so the detection-tuning match counts, whose API returns RFC 3339 rather than a nanosecond epoch, phrase
+// recency exactly as the Hosts list does. These cases pin the delegation and the one thing it adds: a bad timestamp is empty, not
+// "Invalid Date".
+describe("formatRelativeISO", () => {
+  it("phrases an ISO timestamp exactly as the nanosecond helper would", () => {
+    const when = new Date(Date.now() - 2 * MILLISECONDS_PER_DAY);
+    expect(formatRelativeISO(when.toISOString())).toBe(formatRelativeNs(when.getTime() * NANOSECONDS_PER_MILLISECOND));
+    expect(formatRelativeISO(when.toISOString())).toBe("2d ago");
+  });
+
+  it("renders an unparseable timestamp as empty rather than Invalid Date", () => {
+    expect(formatRelativeISO("not-a-date")).toBe("");
+    expect(formatRelativeISO("")).toBe("");
   });
 });

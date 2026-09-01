@@ -782,6 +782,51 @@ describe("DetectionConfig observed column", () => {
     expect(screen.queryByLabelText("match counts unavailable for suspicious_exec")).not.toBeInTheDocument();
   });
 
+  // The caveat and the window must be readable without a mouse. Both were tooltip-only, on non-focusable elements, which reaches
+  // neither keyboard nor touch users; the caveat in particular is what stops a bare number beside a promote control reading as a
+  // forecast of alert volume.
+  it("states the caveat and the window in visible text, not only in a tooltip", async () => {
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 5, hosts: 1, last_seen: new Date().toISOString() }],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/not of how many alerts promoting the rule would raise/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/over the last 7 days/)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Observed (7d)" })).toBeInTheDocument();
+  });
+
+  // The visible cell abbreviates, so the exact figure and the window have to reach assistive technology some other way.
+  it("labels the cell with the exact count and the window it covers", async () => {
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 42000, hosts: 1, last_seen: new Date().toISOString() }],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/42k/)).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/approximately 42,000 matches on 1 host in the last 7 days/)).toBeInTheDocument();
+  });
+
+  // When the read fails the visible note must say so too, not leave the normal caption implying the dashes are data.
+  it("replaces the visible caveat with the unavailable notice when the read fails", async () => {
+    stubReads({ rules: [makeRuleEntry()] });
+    vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("db down"));
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Match counts could not be loaded/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/not of how many alerts promoting the rule would raise/)).not.toBeInTheDocument();
+    // And the header must not advertise a window it cannot cover.
+    expect(screen.getByRole("columnheader", { name: "Observed" })).toBeInTheDocument();
+  });
+
   // Recency is the third signal the column promises: heavy-but-quiet and heavy-and-current are different promotion cases.
   it("shows how recently a rule last matched", async () => {
     // Plain arithmetic, flagged only because dash-lint's C-style scanner has no string-literal state: an exclusion glob near the
