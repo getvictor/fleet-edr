@@ -69,3 +69,35 @@ func TestRenderTechniqueLinks(t *testing.T) {
 	// Top-level technique: no slash translation needed.
 	assert.Contains(t, out, "https://attack.mitre.org/techniques/T1059/")
 }
+
+// TestRenderCarriesAttributionAndReferences pins that the generated reference credits every rule and cites the vendored ones
+// (issue #765).
+//
+// RuleDetail's doc promises this markdown is generated from the same Doc() definitions and therefore stays aligned with the rule
+// page. Adding references to the page and not here broke that promise silently, since nothing compared the two surfaces. Copilot
+// caught it on #824; this is what would have.
+func TestRenderCarriesAttributionAndReferences(t *testing.T) {
+	t.Parallel()
+	rs := allRegisteredRules()
+	var buf bytes.Buffer
+	require.NoError(t, render(&buf, rs))
+	out := buf.String()
+
+	var cited int
+	for _, r := range rs {
+		// Attribution is total, so every rule in the catalog names a source. An empty one would render a blank table cell.
+		assert.NotEmptyf(t, r.Origin, "rule %q reports no origin, so the generated reference credits nobody for it", r.ID)
+		assert.Containsf(t, out, "| Source | "+r.Origin+" |", "rule %q missing its Source row", r.ID)
+
+		if len(r.Doc.References) == 0 {
+			continue
+		}
+		cited++
+		for _, ref := range r.Doc.References {
+			assert.Containsf(t, out, "- "+ref, "rule %q missing citation %q", r.ID, ref)
+		}
+	}
+	// The vendored corpus is the reason references exist, so a run where nothing is cited means the parse path broke upstream of
+	// this renderer rather than that the catalog happens to cite nothing.
+	assert.Positive(t, cited, "no rule in the catalog carries a citation")
+}

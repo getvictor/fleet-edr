@@ -114,6 +114,10 @@ func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
 	writeRuleDescription(b, r.Doc)
 	writeRuleBulletSection(b, "Known false-positive sources", r.Doc.FalsePositives)
 	writeRuleBulletSection(b, "Limitations", r.Doc.Limitations)
+	// References last, mirroring the rule page's ordering. Present here and not only in the UI because RuleDetail's own doc
+	// promises this markdown is generated from the same Doc() definitions and therefore stays aligned with it; adding a section
+	// to one surface and not the other is exactly the drift that promise exists to prevent (issue #765, caught by Copilot).
+	writeRuleBulletSection(b, "References", r.Doc.References)
 }
 
 func writeRuleHeading(b *strings.Builder, id string, d rulesapi.Documentation) {
