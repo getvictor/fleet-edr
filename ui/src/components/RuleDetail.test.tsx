@@ -147,10 +147,12 @@ describe("RuleDetail monitor mode and attribution", () => {
 
     expect(await screen.findByText(/Monitor/)).toBeInTheDocument();
     expect(screen.getByText(/records what it would have fired on and raises no alert/)).toBeInTheDocument();
-    expect(screen.getByText(/That is the mode it ships in; no operator setting applies/)).toBeInTheDocument();
+    expect(screen.getByText(/This is the mode the rule declares/)).toBeInTheDocument();
     expect(screen.getByText(/Resolved at global scope/)).toBeInTheDocument();
   });
 
+  // spec:web-ui/detection-configuration-admin-views/the-rule-detail-view-reports-the-mode-a-rule-runs-in
+  //
   // The mode a rule RUNS IN is the question this page has to answer, and it is not always the mode the rule declares. A rule that
   // ships in monitor and that an operator has disabled reads as monitor if the page reports the declaration, which is the mode it
   // is not in. Reporting the source alongside is what separates the two cases the operator would act on differently.
@@ -200,14 +202,28 @@ describe("RuleDetail monitor mode and attribution", () => {
     expect(screen.getByText(/This rule is off and produces nothing/)).toBeInTheDocument();
   });
 
-  // A server that predates the resolved-mode fields still has to render, and the honest answer with no resolved mode in hand is
-  // the rule's own declaration, which is what this page reported before the fields existed.
-  it("falls back to the declared default when the server reports no resolved mode", async () => {
+  // A server that omits `mode` has not said "no configuration applies"; it has failed to answer. During a rolling deploy an older
+  // replica can report default_mode monitor for a rule whose global setting is disabled, so presenting the declaration as the mode
+  // in force would state the opposite of the truth. The row reports the declaration AS the declaration and says the server did not
+  // report the mode in force.
+  it("labels the declaration as a declaration when the server reports no resolved mode", async () => {
     mockDocs([makeEntry({ id: "vendored", default_mode: "monitor" })]);
     renderAt("vendored");
 
-    expect(await screen.findByText("Monitor")).toBeInTheDocument();
-    expect(screen.getByText(/That is the mode it ships in; no operator setting applies/)).toBeInTheDocument();
+    expect(await screen.findByText("Default mode")).toBeInTheDocument();
+    expect(screen.getByText(/This server does not report the mode in force/)).toBeInTheDocument();
+    expect(screen.queryByText("Mode")).not.toBeInTheDocument();
+  });
+
+  // `mode_source: default` means the reported MODE came from the rule's declaration. It does not mean no setting exists: a setting
+  // whose stored mode this server cannot interpret also reports `default`, and can still carry an active severity override, so
+  // claiming "no operator setting applies" would be a claim the field does not support.
+  it("attributes a default-sourced mode to the rule without claiming no setting exists", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
+    renderAt("vendored");
+
+    expect(await screen.findByText(/This is the mode the rule declares/)).toBeInTheDocument();
+    expect(screen.queryByText(/no operator setting applies/i)).not.toBeInTheDocument();
   });
 
   // A vendored rule is rendered exactly like one this project wrote, so without this an operator cannot tell whose rule they are

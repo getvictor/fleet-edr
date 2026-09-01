@@ -1225,7 +1225,7 @@ components:
 
     RuleDocEntry:
       type: object
-      required: [id, techniques, doc, default_mode]
+      required: [id, techniques, doc, default_mode, mode, mode_source]
       properties:
         id:
           type: string

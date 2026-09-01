@@ -44,3 +44,22 @@ A liveness probe passing MUST NOT be treated as proof that commands can be deliv
 - **GIVEN** an execution claim recorded by a previous run of the agent that did not complete
 - **WHEN** the command is delivered again after restart
 - **THEN** the agent terminalizes it rather than re-running the side effect, because no live attempt holds it
+
+#### Scenario: An idle connection still carries proof that the server holds it
+
+- **GIVEN** a connected host with no commands queued for it
+- **WHEN** the server's heartbeat cadence elapses
+- **THEN** the agent receives a frame carrying no command
+- **AND** the connection is not torn down for being idle
+
+#### Scenario: A connection the server no longer serves is torn down
+
+- **GIVEN** an agent holding a connection the server has forgotten, whose underlying transport remains healthy
+- **WHEN** no frame of any kind arrives for longer than the agent's deadline
+- **THEN** the agent tears the connection down and reconnects, rather than waiting on it indefinitely
+
+#### Scenario: A stalled datastore does not stop heartbeats
+
+- **GIVEN** a connected host and a datastore that has stopped answering the periodic host-liveness write
+- **WHEN** the heartbeat cadence elapses
+- **THEN** the agent still receives its heartbeat promptly, and the connection is not torn down

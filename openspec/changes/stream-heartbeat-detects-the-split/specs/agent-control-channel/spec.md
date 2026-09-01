@@ -37,3 +37,29 @@ The server SHALL therefore send the agent a frame on a bounded cadence for as lo
 - **GIVEN** a connected host and a datastore that has stopped answering the periodic host-liveness write
 - **WHEN** the heartbeat cadence elapses
 - **THEN** the agent still receives its heartbeat promptly, and the connection is not torn down
+
+#### Scenario: A connection the server has forgotten does not silence commands
+
+- **GIVEN** an agent holding a connection that the server no longer recognizes for delivery, which the agent still believes is healthy
+- **WHEN** a command is queued for that host and the floor interval elapses
+- **THEN** the agent polls for pending commands despite believing its connection is up
+- **AND** the queued command is delivered and executed, so the outage is a bounded delay rather than permanent deafness
+
+#### Scenario: A healthy connection still owns delivery
+
+- **GIVEN** an agent holding a connection that is genuinely delivering commands
+- **WHEN** commands arrive within the floor interval
+- **THEN** the agent does not poll, so the steady state remains push-driven
+
+#### Scenario: Both transports deliver one command at the same time
+
+- **GIVEN** an agent whose push transport and floor poll both receive the same queued command
+- **WHEN** they attempt it concurrently
+- **THEN** the command is executed once, and reported once through its acknowledged-then-terminal lifecycle
+- **AND** neither transport reports it failed on account of the other holding it
+
+#### Scenario: An execution claim left by a crash is still resolved
+
+- **GIVEN** an execution claim recorded by a previous run of the agent that did not complete
+- **WHEN** the command is delivered again after restart
+- **THEN** the agent terminalizes it rather than re-running the side effect, because no live attempt holds it

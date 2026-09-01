@@ -78,29 +78,36 @@ const MODE_EFFECT: Record<string, string> = {
   disabled: "This rule is off and produces nothing.",
 };
 
-// resolvedMode is the mode the rule runs in. It prefers the server's resolved `mode` and falls back to the rule's own declaration,
-// which is what this page showed before a resolved mode was reported and is the right answer when there is no configuration to read.
-function resolvedMode(entry: RuleDocEntry): string {
-  return entry.mode ?? entry.default_mode ?? "alert";
-}
-
-// showsMode reports whether the mode row is worth the reader's attention: the rule does not alert, or it alerts having been moved
-// off the mode it declares. A rule that alerts because it always has says nothing a reader needs.
-function showsMode(entry: RuleDocEntry): boolean {
-  const mode = resolvedMode(entry);
-  return mode !== "alert" || mode !== (entry.default_mode ?? "alert");
-}
-
-// modeProvenance says who decided the mode. The distinction is the point of reporting a source at all: a rule sitting in monitor
-// because that is how it shipped is waiting to be reviewed, while one an operator moved there is a decision already taken.
-function modeProvenance(entry: RuleDocEntry): string {
-  if (entry.mode_source === "setting") {
-    return "An operator set this through the detection-config surface.";
+// modeRow describes the Mode row for a rule, or null when the row says nothing a reader needs.
+//
+// The two shapes exist because a response that omits `mode` is NOT a response saying "no configuration applies". It is an older
+// server that cannot answer the question: during a rolling deploy an older replica can return `default_mode: monitor` for a rule
+// whose global setting is `disabled`, and presenting the declaration as the mode in force would state the opposite of the truth.
+// So the row reports what it actually has, and says which.
+function modeRow(entry: RuleDocEntry): { heading: string; mode: string; provenance: string } | null {
+  if (entry.mode === undefined) {
+    // Legacy shape: the declaration is all there is, and it is labelled as the declaration.
+    if (!entry.default_mode || entry.default_mode === "alert") return null;
+    return {
+      heading: "Default mode",
+      mode: entry.default_mode,
+      provenance: "This server does not report the mode in force, so this is the rule's own declaration; a setting can override it.",
+    };
   }
-  if (entry.default_mode && entry.default_mode !== "alert") {
-    return "That is the mode it ships in; no operator setting applies.";
-  }
-  return "No operator setting applies.";
+  const declared = entry.default_mode ?? "alert";
+  // Worth a row when the rule does not alert, or alerts having been moved off the mode it declares.
+  if (entry.mode === "alert" && entry.mode === declared) return null;
+  return {
+    heading: "Mode",
+    mode: entry.mode,
+    provenance:
+      entry.mode_source === "setting"
+        ? "An operator set this through the detection-config surface."
+        : // Deliberately about where the MODE came from, not about whether a setting exists. A setting whose stored mode this
+          // server cannot interpret also reports source `default`, and that setting can still carry an active severity override,
+          // so "no setting applies" would be a claim this field does not support.
+          "This is the mode the rule declares.",
+  };
 }
 
 function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
@@ -123,16 +130,20 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
             rule an operator PROMOTED, since it now alerts for a reason a reader would otherwise have to guess at. A rule that
             alerts and always did stays uncluttered.
           */}
-          {showsMode(entry) && (
-            <tr>
-              <th scope="row">Mode</th>
-              <td>
-                <span className="rule-detail__mode">{MODE_LABEL[resolvedMode(entry)] ?? resolvedMode(entry)}</span>{" "}
-                {MODE_EFFECT[resolvedMode(entry)] ?? "Its mode is not one this page recognises."} {modeProvenance(entry)} Resolved at global
-                scope; a host-group setting can differ for the hosts in that group.
-              </td>
-            </tr>
-          )}
+          {(() => {
+            const row = modeRow(entry);
+            if (row === null) return null;
+            return (
+              <tr>
+                <th scope="row">{row.heading}</th>
+                <td>
+                  <span className="rule-detail__mode">{MODE_LABEL[row.mode] ?? row.mode}</span>{" "}
+                  {MODE_EFFECT[row.mode] ?? "Its mode is not one this page recognises."} {row.provenance} Resolved at global scope; a
+                  host-group setting can differ for the hosts in that group.
+                </td>
+              </tr>
+            );
+          })()}
           {entry.origin && (
             <tr>
               <th scope="row">Source</th>

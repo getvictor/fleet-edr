@@ -173,9 +173,8 @@ func TestSnapshotUninterpretableModeFallsBackToTheDeclaredDefault(t *testing.T) 
 //
 // TestSnapshotGlobalRuleMode pins the resolution behind the rule catalog's reported mode.
 //
-// Global scope is what makes this answerable without a host, and the mechanism is the empty host id: a globally scoped setting
-// applies to any host, and a group-scoped one only to a member, so nothing group-scoped can reach it. The cases below are the four
-// that differ from a per-host resolution or from each other, not a restatement of ResolveRuleMode's table.
+// Global scope is what makes this answerable without a host. The cases below are the ones that differ from a per-host resolution or
+// from each other, not a restatement of ResolveRuleMode's table.
 func TestSnapshotGlobalRuleMode(t *testing.T) {
 	t.Parallel()
 
@@ -185,8 +184,10 @@ func TestSnapshotGlobalRuleMode(t *testing.T) {
 		{RuleID: "group_only", HostGroupID: 7, Mode: api.DetectionRuleModeAlert},
 		{RuleID: "unreadable", HostGroupID: api.GlobalScope, Mode: "throttled"},
 	}
-	// Membership admits every host to every group, so group_only failing to apply is the empty host id doing the work rather than
-	// a membership function that says no to everything.
+	// Membership admits EVERY host to EVERY group, which is what gives this test its teeth. The first implementation resolved global
+	// scope by asking the per-host walk about an empty host id, on the reasoning that no host belongs to a group; that reasoning
+	// holds only for a membership function that says no, and this one says yes to everything. The group_only case below therefore
+	// fails against that implementation and passes only against one that selects on the scope directly.
 	everyHostInEveryGroup := func(string, int64) bool { return true }
 	s := detectionconfig.NewSnapshot(1, nil, settings, everyHostInEveryGroup, fixedClock(1000))
 

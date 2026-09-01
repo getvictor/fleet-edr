@@ -7,10 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestParseModifiedRequirementScenarios covers the loader behind the retired-scenario exemption: it records the scenario slugs a
+// TestParseDeltaSections_ModifiedRestatements covers the loader behind the retired-scenario exemption: it records the scenario slugs a
 // `## MODIFIED Requirements` restatement lists, per requirement, and records nothing for the sections and shapes that must not
 // grant an exemption.
-func TestParseModifiedRequirementScenarios(t *testing.T) {
+func TestParseDeltaSections_ModifiedRestatements(t *testing.T) {
 	t.Parallel()
 
 	t.Run("records the scenarios a MODIFIED restatement lists", func(t *testing.T) {
@@ -27,8 +27,7 @@ The UI SHALL offer every mode.
 #### Scenario: An operator adds an exclusion from the UI
 - **THEN** it is created
 `)
-		got, err := parseModifiedRequirementScenarios(changes)
-		require.NoError(t, err)
+		got := mustParseDeltas(t, changes).restatedScenarios()
 		require.Contains(t, got, "web-ui/detection-configuration-admin-views")
 		assert.Equal(t, map[string]struct{}{
 			"monitor-is-an-operator-selectable-mode":    {},
@@ -52,8 +51,7 @@ It SHALL be new.
 ### Requirement: Retired thing
 **Reason**: gone.
 `)
-		got, err := parseModifiedRequirementScenarios(changes)
-		require.NoError(t, err)
+		got := mustParseDeltas(t, changes).restatedScenarios()
 		assert.Empty(t, got, "only a MODIFIED restatement replaces a scenario list")
 	})
 
@@ -67,8 +65,7 @@ It SHALL be new.
 ### Requirement: Detection configuration admin views
 The UI SHALL do something.
 `)
-		got, err := parseModifiedRequirementScenarios(changes)
-		require.NoError(t, err)
+		got := mustParseDeltas(t, changes).restatedScenarios()
 		assert.Empty(t, got)
 	})
 
@@ -83,8 +80,7 @@ Prose about the change.
 #### Scenario: Something
 - **THEN** something
 `)
-		got, err := parseModifiedRequirementScenarios(changes)
-		require.NoError(t, err)
+		got := mustParseDeltas(t, changes).restatedScenarios()
 		assert.Empty(t, got)
 	})
 
@@ -109,8 +105,7 @@ The UI SHALL do another thing.
 #### Scenario: Kept by the second
 - **THEN** yes
 `)
-		got, err := parseModifiedRequirementScenarios(changes)
-		require.NoError(t, err)
+		got := mustParseDeltas(t, changes).restatedScenarios()
 		assert.Equal(t, map[string]struct{}{
 			"kept-by-the-first":  {},
 			"kept-by-the-second": {},
@@ -119,8 +114,7 @@ The UI SHALL do another thing.
 
 	t.Run("no changes tree yields an empty set rather than an error", func(t *testing.T) {
 		t.Parallel()
-		got, err := parseModifiedRequirementScenarios(t.TempDir() + "/absent")
-		require.NoError(t, err)
+		got := mustParseDeltas(t, t.TempDir()+"/absent").restatedScenarios()
 		assert.Empty(t, got)
 	})
 }

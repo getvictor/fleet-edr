@@ -41,6 +41,11 @@ Unlike `edr.alerts.created`, `edr.detection.monitor_matches` SHALL NOT be dedupl
 - **WHEN** it matches an event
 - **THEN** the counter's `severity` attribute is the overridden severity, not the rule's declared one
 
+#### Scenario: Materialization-miss batch retries are counted
+
+- **GIVEN** a detection batch that will be re-queued because a rule saw an event whose subject or flow process was not materialized yet
+- **WHEN** the retry is recorded
+- **THEN** `edr.detection.materialization_retries` is incremented
 ## ADDED Requirements
 
 ### Requirement: A per-rule span reports the alerts it raised

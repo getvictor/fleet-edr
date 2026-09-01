@@ -71,11 +71,21 @@ function isReducingMode(mode: string): mode is ReducingMode {
 // generatedReason names the transition for a change that does not prompt. Written per transition rather than interpolated, because
 // these strings are read in the audit log by someone reconstructing what happened, and "promoted from monitor to alert" says more
 // than a mechanical restatement of two enum values.
+//
+// The prior mode is only named when it is one this build recognises. modeOptions deliberately renders a stored mode we cannot read,
+// so an operator can move a rule off it, and reaching that path from an unrecognised value used to record "re-enabled" for a rule
+// that was never disabled. A neutral phrasing is worth more in an audit log than a confident wrong one.
 function generatedReason(priorMode: string, mode: string): string {
-  if (mode === "alert") {
-    return priorMode === "monitor" ? "promoted from monitor to alert via admin UI" : "re-enabled via admin UI";
+  switch (priorMode) {
+    case "monitor":
+      return mode === "alert" ? "promoted from monitor to alert via admin UI" : `mode changed from monitor to ${mode} via admin UI`;
+    case "disabled":
+      return mode === "alert" ? "re-enabled via admin UI" : "re-enabled in monitor mode via admin UI";
+    case "alert":
+      return `mode changed from alert to ${mode} via admin UI`;
+    default:
+      return `mode changed to ${mode} via admin UI`;
   }
-  return "re-enabled in monitor mode via admin UI";
 }
 
 // MODE_PROMPT is the reason-modal copy per reducing target. The modal previously hard-coded the disable wording, which was correct
@@ -85,7 +95,11 @@ const MODE_PROMPT: Record<ReducingMode, { verb: string; confirmLabel: string; de
   disabled: {
     verb: "Disable",
     confirmLabel: "Disable rule",
-    description: "The rule stays registered but stops producing alerts. This is recorded in the audit log.",
+    // Target-state wording, because this copy is also shown for monitor -> disabled. "Stops producing alerts" was accurate only
+    // from alert: a monitor rule produces none already, and what it actually loses is the recorded signal an operator would use to
+    // decide whether to promote it.
+    description:
+      "The rule stays registered but stops evaluating: it will produce neither alerts nor monitor signals. This is recorded in the audit log.",
   },
   monitor: {
     verb: "Move to monitor",

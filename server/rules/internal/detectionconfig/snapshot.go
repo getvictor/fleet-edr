@@ -133,8 +133,9 @@ func (s *Snapshot) ResolveRuleMode(ruleID, hostID string, ruleDefault api.Detect
 // GlobalRuleMode implements api.GlobalRuleModeResolver: the mode ruleID runs in at global scope, and whether a setting or the rule's
 // own declaration produced it.
 //
-// The empty host id is what makes this global rather than a per-host resolution: scopeApplies admits a globally scoped setting for
-// any host and a group-scoped one only for a member, and no host is a member of anything.
+// Global because it selects on the scope itself (see winningGlobal), not because of anything about the host argument it does not
+// take. Resolving it as "the per-host answer for an empty host" would read as equivalent and is not: that path consults the
+// membership function, which is supplied by the caller and free to admit a host id it has never seen.
 //
 // A setting whose stored mode this build cannot interpret reports source `default`, because that is where the mode being reported
 // came from. Calling it `setting` would tell an operator the mode they are looking at is one they chose, when it is the fallback

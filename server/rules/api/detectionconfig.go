@@ -266,9 +266,11 @@ type GlobalRuleMode struct {
 // than only the mode it declares. It exists because the spec requires a rule whose global mode is `disabled` to stay listed by
 // GET /api/rules "with its mode indicated", and DefaultMode is the rule's own declaration, which a setting overrides.
 //
-// Global scope is the whole question here, and it is well defined without a host: an empty host id belongs to no host group, so only
-// a globally scoped setting can apply to it. A per-host mode is a different question that a catalog listing cannot answer, since the
-// listing names no host.
+// Global scope is the whole question here, and it is what a catalog listing can answer: the listing names no host, so a per-host
+// mode is a question it cannot ask. An implementation MUST resolve it by selecting globally scoped settings directly, NOT by asking
+// a per-host resolver about an empty host id. That shortcut reads as equivalent, since no host belongs to a group, but it routes
+// the answer through whatever decides group membership, which is free to admit a host id it has never seen: a permissive one would
+// let a group-scoped setting decide a question that is supposed to be global.
 //
 // Separate from RuleModeResolver rather than a third return value on it. The mode and its source must come from ONE resolution for
 // the same reason ResolveRuleMode returns the mode and the severity override together: two calls can straddle a config reload and

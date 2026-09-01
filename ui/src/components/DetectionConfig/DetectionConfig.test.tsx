@@ -428,6 +428,39 @@ describe("DetectionConfig", () => {
     expect(upsert.mock.calls[0][0]).toMatchObject({ rule_id: "suspicious_exec", mode: "monitor", reason: "too noisy on build hosts" });
   });
 
+  // Disabling is reachable from monitor as well as from alert, so the modal cannot describe the change as "stops producing alerts":
+  // a monitor rule produces none already, and what it actually loses is the recorded signal an operator would promote it on.
+  it("describes disabling by its target state, since it is reachable from monitor too", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "monitor" })] });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("monitor");
+    });
+
+    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "disabled" } });
+    await waitFor(() => {
+      expect(screen.getByText(/Disable "Suspicious execution"/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/neither alerts nor monitor signals/)).toBeInTheDocument();
+  });
+
+  // modeOptions renders a stored mode this build cannot read so an operator can move a rule off it. Moving to alert from such a
+  // value used to record "re-enabled via admin UI", asserting the rule had been disabled when nothing knows that it had.
+  it("records a neutral reason when the prior mode is one it cannot read", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "quarantine" })] });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("quarantine");
+    });
+
+    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "alert" } });
+    await waitFor(() => {
+      expect(upsert).toHaveBeenCalledTimes(1);
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({ mode: "alert", reason: "mode changed to alert via admin UI" });
+  });
+
   // Out of disabled into monitor the rule does MORE than it did, so it applies immediately like any other restoration. Prompting
   // here would ask an operator to justify turning something back on.
   it("applies disabled to monitor immediately with a generated reason", async () => {
