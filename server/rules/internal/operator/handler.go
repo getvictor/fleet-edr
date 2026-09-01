@@ -84,6 +84,13 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		// indistinguishable from one that does. This is the rule's default, NOT a resolved per-host mode, which depends on a host.
 		// Additive field; existing consumers ignore it.
 		DefaultMode api.DetectionRuleMode `json:"default_mode"`
+		// Mode is the mode the rule RUNS IN at global scope, and ModeSource says whether a setting or the rule's own declaration
+		// produced it. The spec requires a rule an operator has disabled to stay listed here "with its mode indicated"; before
+		// these fields the response carried only what the rule declares, which a setting overrides, so a disabled rule was listed
+		// looking exactly like a rule that alerts. Global scope because the listing names no host: a per-host mode is a question
+		// this response cannot answer. Additive fields; existing consumers ignore them.
+		Mode       api.DetectionRuleMode `json:"mode"`
+		ModeSource api.RuleModeSource    `json:"mode_source"`
 		// Origin credits a vendored rule's upstream project and author, and is omitted for a rule this project wrote. The corpus
 		// is under DRL 1.1 and the rules are served unmodified, so attribution travels with the rule itself; this carries it onto
 		// the surface an operator actually reads. Additive field; existing consumers ignore it.
@@ -107,6 +114,8 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 			SupportedExclusionMatchTypes: matchTypes,
 			Platforms:                    platforms,
 			DefaultMode:                  rm.DefaultMode,
+			Mode:                         rm.Mode,
+			ModeSource:                   rm.ModeSource,
 			Origin:                       rm.Origin,
 		})
 	}

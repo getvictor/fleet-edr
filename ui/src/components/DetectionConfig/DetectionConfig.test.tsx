@@ -51,20 +51,20 @@ const makeSetting = (over: Partial<DetectionRuleSetting> = {}): DetectionRuleSet
 });
 
 // stubReads wires the three read endpoints the page loads on mount.
-function stubReads(opts: {
-  exclusions?: DetectionExclusion[];
-  rules?: RuleDocEntry[];
-  settings?: DetectionRuleSetting[];
-} = {}) {
+function stubReads(
+  opts: {
+    exclusions?: DetectionExclusion[];
+    rules?: RuleDocEntry[];
+    settings?: DetectionRuleSetting[];
+  } = {},
+) {
   vi.spyOn(api, "listDetectionExclusions").mockResolvedValue(opts.exclusions ?? []);
   vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(opts.rules ?? [makeRuleEntry()]);
   vi.spyOn(api, "listDetectionRuleSettings").mockResolvedValue(opts.settings ?? []);
 }
 
 // renderPage mounts the component under a permission set. Default grants write so affordances render; pass [read] for read-only.
-function renderPage(
-  permissions: string[] = [PermissionAction.DetectionConfigRead, PermissionAction.DetectionConfigWrite],
-) {
+function renderPage(permissions: string[] = [PermissionAction.DetectionConfigRead, PermissionAction.DetectionConfigWrite]) {
   return render(
     <MemoryRouter>
       <PermissionsProvider permissions={permissions}>
@@ -76,8 +76,12 @@ function renderPage(
 
 // jsdom doesn't implement HTMLDialogElement.showModal/close; stub them so the reason modal renders.
 beforeEach(() => {
-  HTMLDialogElement.prototype.showModal = function showModal() { this.open = true; };
-  HTMLDialogElement.prototype.close = function close() { this.open = false; };
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.open = false;
+  };
 });
 
 afterEach(() => {
@@ -114,7 +118,9 @@ describe("DetectionConfig", () => {
     });
     stubReads({ rules: [entry] });
     renderPage();
-    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
 
     const option = screen.getByRole("option", { name: "Suspicious exec chain" });
     expect(option).toHaveValue("suspicious_exec");
@@ -129,9 +135,13 @@ describe("DetectionConfig", () => {
       ],
     });
     renderPage();
-    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
 
-    const options = within(screen.getByLabelText("Rule")).getAllByRole("option").map((o) => o.textContent);
+    const options = within(screen.getByLabelText("Rule"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
     expect(options).toEqual(["Select a rule...", "Alpha rule", "Mid rule", "Zeta rule"]);
   });
 
@@ -148,12 +158,12 @@ describe("DetectionConfig", () => {
       ],
     });
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for crit_a")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for crit_a")).toBeInTheDocument();
+    });
 
     const order = screen.getAllByLabelText(/^mode for /).map((s) => s.getAttribute("aria-label"));
-    expect(order).toEqual([
-      "mode for crit_a", "mode for crit_z", "mode for high_a", "mode for low_b", "mode for unset_a",
-    ]);
+    expect(order).toEqual(["mode for crit_a", "mode for crit_z", "mode for high_a", "mode for low_b", "mode for unset_a"]);
   });
 
   it("shows an empty state when there are no exclusions", async () => {
@@ -179,7 +189,9 @@ describe("DetectionConfig", () => {
     stubReads({ rules: [makeRuleEntry()] });
     const create = vi.spyOn(api, "createDetectionExclusion").mockResolvedValue(makeExclusion());
     renderPage();
-    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "*/foo/*" } });
@@ -201,7 +213,9 @@ describe("DetectionConfig", () => {
     stubReads({ rules: [makeRuleEntry()] });
     const create = vi.spyOn(api, "createDetectionExclusion").mockResolvedValue(makeExclusion());
     renderPage();
-    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "*/foo/*" } });
@@ -217,7 +231,9 @@ describe("DetectionConfig", () => {
   it("disables Add until rule, value, and reason are filled", async () => {
     stubReads({ rules: [makeRuleEntry()] });
     renderPage();
-    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
     expect(screen.getByRole("button", { name: /add exclusion/i })).toBeDisabled();
   });
 
@@ -235,7 +251,9 @@ describe("DetectionConfig", () => {
       ],
     });
     renderPage();
-    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
 
     // Before a rule is picked the match-type select is disabled with a prompt option.
     const matchSelect = screen.getByLabelText("Match type");
@@ -243,7 +261,9 @@ describe("DetectionConfig", () => {
 
     fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
     // Options are the supported set intersected with the canonical order (parent_path_glob, team_id, cdhash), not the raw eight.
-    const options = within(screen.getByLabelText("Match type")).getAllByRole("option").map((o) => o.textContent);
+    const options = within(screen.getByLabelText("Match type"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
     expect(options).toEqual(["parent_path_glob", "team_id", "cdhash"]);
     expect(screen.getByLabelText("Match type")).not.toBeDisabled();
   });
@@ -252,22 +272,32 @@ describe("DetectionConfig", () => {
   it("resets the match-type selection when the rule changes", async () => {
     stubReads({
       rules: [
-        makeRuleEntry({ id: "suspicious_exec", doc: makeRuleDoc({ title: "Suspicious execution" }),
-          supported_exclusion_match_types: ["parent_path_glob", "team_id"] }),
-        makeRuleEntry({ id: "sudoers_tamper", doc: makeRuleDoc({ title: "Sudoers tamper" }),
-          supported_exclusion_match_types: ["path_glob"] }),
+        makeRuleEntry({
+          id: "suspicious_exec",
+          doc: makeRuleDoc({ title: "Suspicious execution" }),
+          supported_exclusion_match_types: ["parent_path_glob", "team_id"],
+        }),
+        makeRuleEntry({
+          id: "sudoers_tamper",
+          doc: makeRuleDoc({ title: "Sudoers tamper" }),
+          supported_exclusion_match_types: ["path_glob"],
+        }),
       ],
     });
     const create = vi.spyOn(api, "createDetectionExclusion").mockResolvedValue(makeExclusion());
     renderPage();
-    await waitFor(() => { expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/no exclusions configured/i)).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "suspicious_exec" } });
     expect(screen.getByLabelText("Match type")).toHaveValue("parent_path_glob");
 
     fireEvent.change(screen.getByLabelText("Rule"), { target: { value: "sudoers_tamper" } });
     expect(screen.getByLabelText("Match type")).toHaveValue("path_glob");
-    const options = within(screen.getByLabelText("Match type")).getAllByRole("option").map((o) => o.textContent);
+    const options = within(screen.getByLabelText("Match type"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
     expect(options).toEqual(["path_glob"]);
 
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "/etc/sudoers" } });
@@ -282,7 +312,9 @@ describe("DetectionConfig", () => {
     stubReads({ exclusions: [makeExclusion()] });
     const del = vi.spyOn(api, "deleteDetectionExclusion").mockResolvedValue(undefined);
     renderPage();
-    await waitFor(() => { expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument();
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => {
@@ -296,11 +328,15 @@ describe("DetectionConfig", () => {
     stubReads({ rules: [makeRuleEntry()], settings: [] });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "disabled" }));
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "disabled" } });
     // The modal opens and nothing is sent yet.
-    await waitFor(() => { expect(screen.getByText(/Disable "Suspicious execution"/)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/Disable "Suspicious execution"/)).toBeInTheDocument();
+    });
     expect(upsert).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText(/required for audit log/i), { target: { value: "noisy in the pilot fleet" } });
@@ -319,35 +355,95 @@ describe("DetectionConfig", () => {
     stubReads({ rules: [makeRuleEntry()], settings: [] });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting());
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "disabled" } });
-    await waitFor(() => { expect(screen.getByText(/Disable "Suspicious execution"/)).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText(/Disable "Suspicious execution"/)).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => { expect(screen.queryByText(/Disable "Suspicious execution"/)).not.toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.queryByText(/Disable "Suspicious execution"/)).not.toBeInTheDocument();
+    });
     expect(upsert).not.toHaveBeenCalled();
   });
 
-  // monitor is no longer operator-selectable: a rule with no persisted setting offers only alert and disabled.
-  // spec:web-ui/detection-configuration-admin-views/monitor-is-not-an-operator-selectable-mode
-  it("does not offer monitor as a selectable mode", async () => {
-    stubReads({ rules: [makeRuleEntry()], settings: [] });
+  // Every mode the server defines is selectable. Monitor was left out while it was a legacy value on a handful of rows; with most
+  // of the catalog defaulting to it (#764), leaving it out made promotion one-way, since a rule moved to alert could not go back.
+  // spec:web-ui/detection-configuration-admin-views/monitor-is-an-operator-selectable-mode
+  it("offers all three modes, so a promoted rule can be put back in monitor", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "alert" })] });
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("alert");
+    });
 
-    const modes = within(screen.getByLabelText("mode for suspicious_exec")).getAllByRole("option").map((o) => o.textContent);
-    expect(modes).toEqual(["alert", "disabled"]);
+    const modes = within(screen.getByLabelText("mode for suspicious_exec"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(modes).toEqual(["alert", "monitor", "disabled"]);
   });
 
-  // A legacy persisted `monitor` row still displays correctly (monitor is shown so the controlled select matches), letting the
-  // operator migrate it to alert/disabled.
-  it("still displays a legacy monitor setting so it can be migrated", async () => {
-    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "monitor" })] });
+  // A stored value this build does not recognise is still shown, so the control reports what is actually persisted rather than
+  // silently displaying the first option. This is the only case modeOptions still fires on now that every real mode is listed.
+  it("displays a stored mode it does not recognise rather than showing something else", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "quarantine" })] });
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("monitor"); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("quarantine");
+    });
 
-    const modes = within(screen.getByLabelText("mode for suspicious_exec")).getAllByRole("option").map((o) => o.textContent);
-    expect(modes).toEqual(["monitor", "alert", "disabled"]);
+    const modes = within(screen.getByLabelText("mode for suspicious_exec"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(modes).toEqual(["quarantine", "alert", "monitor", "disabled"]);
+  });
+
+  // Moving a rule to monitor stops it alerting, so it prompts like disabling does. The prompt has to describe THIS change: the
+  // modal hard-coded the disable wording, which was right while disabled was the only reducing choice and would otherwise have
+  // shown an operator a "Disable rule" button for a change that disables nothing.
+  it("prompts for a reason when an alerting rule is moved to monitor, and says so", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [] });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "monitor" }));
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "monitor" } });
+    await waitFor(() => {
+      expect(screen.getByText(/Move to monitor "Suspicious execution"/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Disable "Suspicious execution"/)).not.toBeInTheDocument();
+    expect(screen.getByText(/records what it would have fired on/)).toBeInTheDocument();
+    expect(upsert).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/required for audit log/i), { target: { value: "too noisy on build hosts" } });
+    fireEvent.click(screen.getByRole("button", { name: "Move to monitor" }));
+    await waitFor(() => {
+      expect(upsert).toHaveBeenCalledTimes(1);
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({ rule_id: "suspicious_exec", mode: "monitor", reason: "too noisy on build hosts" });
+  });
+
+  // Out of disabled into monitor the rule does MORE than it did, so it applies immediately like any other restoration. Prompting
+  // here would ask an operator to justify turning something back on.
+  it("applies disabled to monitor immediately with a generated reason", async () => {
+    stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "disabled", severity_override: undefined })] });
+    const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "monitor" }));
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toHaveValue("disabled");
+    });
+
+    fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "monitor" } });
+    await waitFor(() => {
+      expect(upsert).toHaveBeenCalledTimes(1);
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({ mode: "monitor", reason: "re-enabled in monitor mode via admin UI" });
+    expect(screen.queryByRole("button", { name: "Move to monitor" })).not.toBeInTheDocument();
   });
 
   // created_by shows the server-resolved label (a user's email or a service account's name) when present, falling back to the raw
@@ -363,7 +459,9 @@ describe("DetectionConfig", () => {
       ],
     });
     renderPage();
-    await waitFor(() => { expect(screen.getByText("ops@fleetdm.com")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText("ops@fleetdm.com")).toBeInTheDocument();
+    });
     expect(screen.getByText("ci-bot")).toBeInTheDocument();
     expect(screen.getByText("usr_9")).toBeInTheDocument();
   });
@@ -372,7 +470,9 @@ describe("DetectionConfig", () => {
     stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "disabled", severity_override: undefined })] });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("mode for suspicious_exec"), { target: { value: "alert" } });
     await waitFor(() => {
@@ -390,7 +490,9 @@ describe("DetectionConfig", () => {
     stubReads({ rules: [makeRuleEntry()], settings: [makeSetting({ mode: "monitor", severity_override: undefined })] });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting());
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("severity override for suspicious_exec")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("severity override for suspicious_exec")).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("severity override for suspicious_exec"), { target: { value: "critical" } });
     await waitFor(() => {
@@ -409,15 +511,21 @@ describe("DetectionConfig", () => {
     // A deferred delete so the mutation stays in flight until we resolve it, letting us observe the disabled window.
     let resolveDelete: () => void = () => undefined;
     vi.spyOn(api, "deleteDetectionExclusion").mockReturnValue(
-      new Promise<void>((res) => { resolveDelete = res; }),
+      new Promise<void>((res) => {
+        resolveDelete = res;
+      }),
     );
     renderPage();
-    await waitFor(() => { expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument();
+    });
 
     const del = screen.getByRole("button", { name: "Delete" });
     expect(del).not.toBeDisabled();
     fireEvent.click(del);
-    await waitFor(() => { expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled(); });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+    });
 
     resolveDelete();
     await waitFor(() => {
@@ -431,7 +539,9 @@ describe("DetectionConfig", () => {
       new api.DetectionConfigApiError("detection_config.invalid_input", "reason required", 400),
     );
     renderPage();
-    await waitFor(() => { expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument();
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => {
@@ -442,7 +552,9 @@ describe("DetectionConfig", () => {
   it("hides write affordances for a read-only operator", async () => {
     stubReads({ exclusions: [makeExclusion()], rules: [makeRuleEntry()], settings: [makeSetting()] });
     renderPage([PermissionAction.DetectionConfigRead]);
-    await waitFor(() => { expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByText("*/claude/versions/*")).toBeInTheDocument();
+    });
 
     // No add form and no delete control.
     expect(screen.queryByRole("button", { name: /add exclusion/i })).not.toBeInTheDocument();
@@ -464,7 +576,9 @@ describe("DetectionConfig monitor-default rules", () => {
     });
     renderPage();
 
-    await waitFor(() => { expect(screen.getByLabelText("mode for vendored")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for vendored")).toBeInTheDocument();
+    });
     expect(screen.getByLabelText("mode for vendored")).toHaveValue("monitor");
   });
 
@@ -475,11 +589,15 @@ describe("DetectionConfig monitor-default rules", () => {
     });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "monitor" }));
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("severity override for vendored")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("severity override for vendored")).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("severity override for vendored"), { target: { value: "high" } });
 
-    await waitFor(() => { expect(upsert).toHaveBeenCalled(); });
+    await waitFor(() => {
+      expect(upsert).toHaveBeenCalled();
+    });
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ rule_id: "vendored", mode: "monitor", severity_override: "high" }));
   });
 
@@ -490,14 +608,22 @@ describe("DetectionConfig monitor-default rules", () => {
     stubReads({ rules: [makeRuleEntry({ id: "vendored", default_mode: "monitor" })], settings: [] });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for vendored")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for vendored")).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("mode for vendored"), { target: { value: "alert" } });
 
-    await waitFor(() => { expect(upsert).toHaveBeenCalled(); });
-    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
-      rule_id: "vendored", mode: "alert", reason: "promoted from monitor to alert via admin UI",
-    }));
+    await waitFor(() => {
+      expect(upsert).toHaveBeenCalled();
+    });
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rule_id: "vendored",
+        mode: "alert",
+        reason: "promoted from monitor to alert via admin UI",
+      }),
+    );
   });
 
   it("still records a disabled-to-alert change as a re-enable", async () => {
@@ -507,11 +633,15 @@ describe("DetectionConfig monitor-default rules", () => {
     });
     const upsert = vi.spyOn(api, "upsertDetectionRuleSetting").mockResolvedValue(makeSetting({ mode: "alert" }));
     renderPage();
-    await waitFor(() => { expect(screen.getByLabelText("mode for ours")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for ours")).toBeInTheDocument();
+    });
 
     fireEvent.change(screen.getByLabelText("mode for ours"), { target: { value: "alert" } });
 
-    await waitFor(() => { expect(upsert).toHaveBeenCalled(); });
+    await waitFor(() => {
+      expect(upsert).toHaveBeenCalled();
+    });
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({ rule_id: "ours", reason: "re-enabled via admin UI" }));
   });
 
@@ -520,7 +650,9 @@ describe("DetectionConfig monitor-default rules", () => {
     stubReads({ rules: [makeRuleEntry({ id: "ours" })], settings: [] });
     renderPage();
 
-    await waitFor(() => { expect(screen.getByLabelText("mode for ours")).toBeInTheDocument(); });
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for ours")).toBeInTheDocument();
+    });
     expect(screen.getByLabelText("mode for ours")).toHaveValue("alert");
   });
 });

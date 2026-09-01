@@ -33,8 +33,9 @@ type Service struct {
 }
 
 var (
-	_ api.ExclusionResolver = (*Service)(nil)
-	_ api.RuleModeResolver  = (*Service)(nil)
+	_ api.ExclusionResolver      = (*Service)(nil)
+	_ api.RuleModeResolver       = (*Service)(nil)
+	_ api.GlobalRuleModeResolver = (*Service)(nil)
 )
 
 // NewService builds a Service seeded with an empty snapshot so the resolver is safe to consult before the first Reload. An empty
@@ -268,4 +269,10 @@ func (s *Service) Excluded(ruleID string, matchType api.ExclusionMatchType, valu
 // consistent (mode, severity) pair even if a reload swaps the snapshot concurrently.
 func (s *Service) ResolveRuleMode(ruleID, hostID string, ruleDefault api.DetectionRuleMode) (api.DetectionRuleMode, string) {
 	return s.snap.Load().ResolveRuleMode(ruleID, hostID, ruleDefault)
+}
+
+// GlobalRuleMode implements api.GlobalRuleModeResolver against the current snapshot. The single snap.Load() is what keeps the mode
+// and its source from being read out of two different snapshots, which is a listing that contradicts itself.
+func (s *Service) GlobalRuleMode(ruleID string, ruleDefault api.DetectionRuleMode) api.GlobalRuleMode {
+	return s.snap.Load().GlobalRuleMode(ruleID, ruleDefault)
 }

@@ -58,65 +58,21 @@ func TestEngine_RegisterAccumulates(t *testing.T) {
 	e := New(nil, nil)
 	e.Register(&stubRule{id: "a"})
 	e.Register(&stubRule{id: "b", techniques: []string{"T1"}})
-	cat := e.Catalog()
-	assert.Len(t, cat, 2)
-	ids := []string{cat[0].ID, cat[1].ID}
-	assert.Equal(t, []string{"a", "b"}, ids,
-		"Catalog returns rules in registration order")
-	assert.Equal(t, []string{"T1"}, cat[1].Techniques)
+	require.Len(t, e.rules, 2)
+	assert.Equal(t, []string{"a", "b"}, ruleIDs(e.rules), "Register keeps rules in registration order")
+	assert.Equal(t, []string{"T1"}, e.rules[1].Techniques())
 }
 
-// TestEngine_CatalogAlwaysCarriesAMode pins RuleMetadata.DefaultMode's contract on this builder too.
-//
-// The field documents itself as always holding a mode rather than sometimes the empty string, so a consumer never has to know what
-// the server's default is to read it. Two builders produce RuleMetadata, and a contract that holds in only one of them is not a
-// contract: this one omitted the field and handed back entries whose mode read as "".
-func TestEngine_CatalogAlwaysCarriesAMode(t *testing.T) {
-	t.Parallel()
-
-	e := New(nil, discardLogger())
-	e.Register(&stubRule{id: "silent"})
-	e.Register(&modeDeclaringStub{
-		stubRuleWithFindings: stubRuleWithFindings{stubRule: stubRule{id: "declaring"}},
-		mode:                 rulesapi.DetectionRuleModeMonitor,
-	})
-
-	got := map[string]rulesapi.DetectionRuleMode{}
-	for _, rm := range e.Catalog() {
-		got[rm.ID] = rm.DefaultMode
+// ruleIDs projects a rule set to its ids, for the order assertions. These read e.rules rather than a metadata builder: the ordering
+// is a property of the rule slice itself, and going through a projection meant the projection had to exist for the tests alone.
+func ruleIDs(rules []rulesapi.Rule) []string {
+	ids := make([]string, len(rules))
+	for i, r := range rules {
+		ids[i] = r.ID()
 	}
-
-	assert.Equal(t, rulesapi.DetectionRuleModeAlert, got["silent"], "a rule declaring nothing reports alert, not the zero value")
-	assert.Equal(t, rulesapi.DetectionRuleModeMonitor, got["declaring"])
+	return ids
 }
 
-// TestEngine_CatalogCreditsAVendoredRule pins the same property for Origin, on the same builder and for the same reason.
-//
-// An empty origin means "this project wrote it", so a builder that never populates the field reports every vendored rule as ours.
-// That is the second field this builder has silently dropped; the first was DefaultMode, caught in review on #811.
-func TestEngine_CatalogCreditsAVendoredRule(t *testing.T) {
-	t.Parallel()
-
-	e := New(nil, discardLogger())
-	e.Register(&stubRule{id: "ours"})
-	e.Register(&originStub{stubRule: stubRule{id: "vendored"}})
-
-	got := map[string]string{}
-	for _, rm := range e.Catalog() {
-		got[rm.ID] = rm.Origin
-	}
-
-	assert.Equal(t, "Upstream, by Someone", got["vendored"])
-	assert.Empty(t, got["ours"], "a rule this project wrote announces no origin")
-}
-
-// originStub is a stubRule that names an upstream source.
-type originStub struct{ stubRule }
-
-func (originStub) Origin() string { return "Upstream, by Someone" }
-
-// TestEngine_LoadActiveReplacesRuleSet pins the replace (not append) semantics: a hot-reload caller can invoke LoadActive repeatedly
-// without the engine accumulating duplicates.
 func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
 	t.Parallel()
 	e := New(nil, nil)
@@ -125,9 +81,8 @@ func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
 
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "new"}}})
 
-	cat := e.Catalog()
-	assert.Len(t, cat, 1, "LoadActive replaces, never appends")
-	assert.Equal(t, "new", cat[0].ID)
+	require.Len(t, e.rules, 1, "LoadActive replaces, never appends")
+	assert.Equal(t, "new", e.rules[0].ID())
 }
 
 // stubProvider satisfies the inline interface LoadActive consumes.

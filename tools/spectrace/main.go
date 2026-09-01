@@ -142,6 +142,26 @@ func runCheck(args []string) int {
 		scenarios = kept
 	}
 
+	// The same exemption one level down: a change that keeps a requirement but retires one of its SCENARIOS restates the
+	// requirement under `## MODIFIED Requirements` without it, and the archive will replace the canonical scenario list with
+	// that restatement. Until then the retired scenario sits in openspec/specs describing behaviour the merged change reverses,
+	// and demanding a marker for it can only be satisfied by a test asserting the old behaviour, which is the "reads as covered
+	// but is not" failure issue #810 was filed about.
+	modifiedReqScenarios, err := parseModifiedRequirementScenarios(*changesDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "spectrace: parse modified requirements:", err)
+		return 2
+	}
+	kept, retired := filterOutRetiredScenarios(scenarios, modifiedReqScenarios)
+	if len(retired) > 0 {
+		fmt.Printf("spectrace: %d canonical scenarios exempted (retired by a MODIFIED requirement in an in-flight change):\n",
+			len(retired))
+		for _, id := range retired {
+			fmt.Printf("  %s\n", id)
+		}
+		scenarios = kept
+	}
+
 	// A marker is a valid reference when its ID is in referenceValid (live specs ∪ in-flight proposals); only then does it
 	// count toward `covered`. A live scenario it points at is covered; a WIP-only ID resolves without error but covers no
 	// gated scenario (WIP scenarios are not in `scenarios`, so splitUncovered + --strict ignore them).

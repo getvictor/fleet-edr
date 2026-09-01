@@ -22,6 +22,12 @@ Unlike `edr.alerts.created`, `edr.detection.monitor_matches` SHALL NOT be dedupl
 - **WHEN** evaluation produces a newly-created alert
 - **THEN** `edr.alerts.created` is incremented with `rule_id` and `severity` attributes
 
+#### Scenario: Already-delivered queue trim is distinguishable from data loss
+
+- **GIVEN** the agent queue drops events
+- **WHEN** the dropped events were already delivered (lossless trim) or had not yet been delivered (lossy drop)
+- **THEN** `edr.agent.queue.dropped` is incremented with a `lossy` boolean attribute reflecting which case applied
+
 #### Scenario: A suppressed match is counted rather than only logged
 
 - **GIVEN** a rule whose resolved mode is monitor

@@ -55,7 +55,7 @@ func TestList_OmitsNonDetections(t *testing.T) {
 		stubRule{id: "detection_second"},
 		stubHealth{stubRule{id: "a_health_signal"}},
 	}
-	svc := New(rules, nil)
+	svc := New(rules, nil, nil)
 
 	assert.Equal(t, []string{"detection_first", "detection_second"}, ids(svc.List()),
 		"List must carry detections only, in registration order")
@@ -74,7 +74,7 @@ func TestList_OmitsNonDetections(t *testing.T) {
 func TestList_AllDetections(t *testing.T) {
 	t.Parallel()
 
-	svc := New([]api.Rule{stubRule{id: "one"}, stubRule{id: "two"}}, nil)
+	svc := New([]api.Rule{stubRule{id: "one"}, stubRule{id: "two"}}, nil, nil)
 	assert.Equal(t, []string{"one", "two"}, ids(svc.List()))
 }
 
@@ -86,12 +86,12 @@ func TestList_EmptyCatalogs(t *testing.T) {
 
 	t.Run("no rules", func(t *testing.T) {
 		t.Parallel()
-		assert.Empty(t, New(nil, nil).List())
+		assert.Empty(t, New(nil, nil, nil).List())
 	})
 
 	t.Run("only non-detections", func(t *testing.T) {
 		t.Parallel()
-		svc := New([]api.Rule{stubProjection{stubRule{id: "p"}}, stubHealth{stubRule{id: "h"}}}, nil)
+		svc := New([]api.Rule{stubProjection{stubRule{id: "p"}}, stubHealth{stubRule{id: "h"}}}, nil, nil)
 		assert.Empty(t, svc.List(), "a catalog of only non-detections lists nothing")
 		require.Len(t, svc.ActiveRules(), 2, "but both still evaluate")
 	})
@@ -102,7 +102,7 @@ func TestList_EmptyCatalogs(t *testing.T) {
 func TestList_CarriesFullMetadata(t *testing.T) {
 	t.Parallel()
 
-	got := New([]api.Rule{stubRule{id: "r"}}, nil).List()
+	got := New([]api.Rule{stubRule{id: "r"}}, nil, nil).List()
 	require.Len(t, got, 1)
 	assert.Equal(t, "r", got[0].ID)
 	assert.Equal(t, []string{"T1059"}, got[0].Techniques)
@@ -122,7 +122,7 @@ func TestList_CarriesFullMetadata(t *testing.T) {
 func TestList_MirrorsADeclaredDefaultMode(t *testing.T) {
 	t.Parallel()
 
-	got := New([]api.Rule{monitorStubRule{stubRule{id: "imported"}}}, nil).List()
+	got := New([]api.Rule{monitorStubRule{stubRule{id: "imported"}}}, nil, nil).List()
 	require.Len(t, got, 1)
 	assert.Equal(t, api.DetectionRuleModeMonitor, got[0].DefaultMode)
 }
@@ -131,6 +131,71 @@ func TestList_MirrorsADeclaredDefaultMode(t *testing.T) {
 type monitorStubRule struct{ stubRule }
 
 func (monitorStubRule) DefaultMode() api.DetectionRuleMode { return api.DetectionRuleModeMonitor }
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/the-catalog-reports-the-mode-a-rule-runs-in-not-only-the-one-it-declares
+//
+// TestList_ReportsTheModeInForceAndItsSource pins that the catalog reports the mode a rule RUNS IN, not only the one it declares.
+//
+// The spec requires a rule an operator has disabled to stay listed "with its mode indicated", and a declaration is not that: a
+// setting overrides it, so a disabled rule was listed looking exactly like one that alerts. Reporting the source alongside is what
+// separates a rule sitting in monitor because that is how it shipped from one an operator moved there.
+func TestList_ReportsTheModeInForceAndItsSource(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name         string
+		rule         api.Rule
+		resolver     api.GlobalRuleModeResolver
+		wantMode     api.DetectionRuleMode
+		wantSource   api.RuleModeSource
+		wantDeclared api.DetectionRuleMode
+	}{
+		{
+			name:         "a setting overrides the rule's declaration",
+			rule:         monitorStubRule{stubRule{id: "imported"}},
+			resolver:     stubGlobalModes{"imported": {Mode: api.DetectionRuleModeDisabled, Source: api.RuleModeSourceSetting}},
+			wantMode:     api.DetectionRuleModeDisabled,
+			wantSource:   api.RuleModeSourceSetting,
+			wantDeclared: api.DetectionRuleModeMonitor,
+		},
+		{
+			name:         "no setting leaves the rule in its declared mode",
+			rule:         monitorStubRule{stubRule{id: "imported"}},
+			resolver:     stubGlobalModes{},
+			wantMode:     api.DetectionRuleModeMonitor,
+			wantSource:   api.RuleModeSourceDefault,
+			wantDeclared: api.DetectionRuleModeMonitor,
+		},
+		{
+			name:         "no resolver at all reports the declaration, which is the docs-generator path",
+			rule:         monitorStubRule{stubRule{id: "imported"}},
+			resolver:     nil,
+			wantMode:     api.DetectionRuleModeMonitor,
+			wantSource:   api.RuleModeSourceDefault,
+			wantDeclared: api.DetectionRuleModeMonitor,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := New([]api.Rule{tc.rule}, tc.resolver, nil).List()
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.wantMode, got[0].Mode)
+			assert.Equal(t, tc.wantSource, got[0].ModeSource)
+			assert.Equal(t, tc.wantDeclared, got[0].DefaultMode,
+				"the declaration is reported alongside the mode in force, not replaced by it")
+		})
+	}
+}
+
+// stubGlobalModes resolves a canned global mode per rule id, and reports the rule's own default for any id it does not name.
+type stubGlobalModes map[string]api.GlobalRuleMode
+
+func (m stubGlobalModes) GlobalRuleMode(ruleID string, ruleDefault api.DetectionRuleMode) api.GlobalRuleMode {
+	if got, ok := m[ruleID]; ok {
+		return got
+	}
+	return api.GlobalRuleMode{Mode: ruleDefault, Source: api.RuleModeSourceDefault}
+}
 
 // spec:server-detection-rules-engine/the-vendored-upstream-corpus-is-registered-and-does-not-alert-until-promoted/a-vendored-rule-is-attributed-on-the-operator-facing-catalog
 //
@@ -142,7 +207,7 @@ func (monitorStubRule) DefaultMode() api.DetectionRuleMode { return api.Detectio
 func TestList_CreditsAVendoredRulesSource(t *testing.T) {
 	t.Parallel()
 
-	got := New([]api.Rule{vendoredStubRule{stubRule{id: "vendored"}}, stubRule{id: "ours"}}, nil).List()
+	got := New([]api.Rule{vendoredStubRule{stubRule{id: "vendored"}}, stubRule{id: "ours"}}, nil, nil).List()
 	require.Len(t, got, 2)
 	assert.Equal(t, "Upstream, by Someone", got[0].Origin)
 	assert.Empty(t, got[1].Origin, "a rule this project wrote announces no origin")

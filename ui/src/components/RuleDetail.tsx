@@ -25,17 +25,18 @@ export function RuleDetail() {
   useEffect(() => {
     let cancelled = false;
     fetchRuleDocs()
-      .then((rs) => { if (!cancelled) setEntries(rs); })
+      .then((rs) => {
+        if (!cancelled) setEntries(rs);
+      })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load rule docs");
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const entry = useMemo(
-    () => entries?.find((e) => e.id === ruleId) ?? null,
-    [entries, ruleId],
-  );
+  const entry = useMemo(() => entries?.find((e) => e.id === ruleId) ?? null, [entries, ruleId]);
 
   return (
     <>
@@ -44,7 +45,11 @@ export function RuleDetail() {
         subtitle={entry ? <code className="rule-detail__id">{entry.id}</code> : ruleId}
       />
 
-      {error && <div className="form-error" role="alert">Error: {error}</div>}
+      {error && (
+        <div className="form-error" role="alert">
+          Error: {error}
+        </div>
+      )}
       {!error && entries === null && <EmptyState>Loading rule documentation...</EmptyState>}
 
       {!error && entries !== null && !entry && (
@@ -58,6 +63,46 @@ export function RuleDetail() {
   );
 }
 
+// MODE_LABEL and MODE_EFFECT render a resolved mode for a reader. Held as maps rather than nested ternaries because there are three
+// modes and two independent questions about them (what it is called, what it does), and a fourth mode would otherwise mean editing
+// two conditionals in the markup.
+const MODE_LABEL: Record<string, string> = {
+  alert: "Alert",
+  monitor: "Monitor",
+  disabled: "Disabled",
+};
+
+const MODE_EFFECT: Record<string, string> = {
+  alert: "This rule raises alerts as normal.",
+  monitor: "This rule records what it would have fired on and raises no alert.",
+  disabled: "This rule is off and produces nothing.",
+};
+
+// resolvedMode is the mode the rule runs in. It prefers the server's resolved `mode` and falls back to the rule's own declaration,
+// which is what this page showed before a resolved mode was reported and is the right answer when there is no configuration to read.
+function resolvedMode(entry: RuleDocEntry): string {
+  return entry.mode ?? entry.default_mode ?? "alert";
+}
+
+// showsMode reports whether the mode row is worth the reader's attention: the rule does not alert, or it alerts having been moved
+// off the mode it declares. A rule that alerts because it always has says nothing a reader needs.
+function showsMode(entry: RuleDocEntry): boolean {
+  const mode = resolvedMode(entry);
+  return mode !== "alert" || mode !== (entry.default_mode ?? "alert");
+}
+
+// modeProvenance says who decided the mode. The distinction is the point of reporting a source at all: a rule sitting in monitor
+// because that is how it shipped is waiting to be reviewed, while one an operator moved there is a decision already taken.
+function modeProvenance(entry: RuleDocEntry): string {
+  if (entry.mode_source === "setting") {
+    return "An operator set this through the detection-config surface.";
+  }
+  if (entry.default_mode && entry.default_mode !== "alert") {
+    return "That is the mode it ships in; no operator setting applies.";
+  }
+  return "No operator setting applies.";
+}
+
 function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
   const { doc, techniques } = entry;
   return (
@@ -68,26 +113,23 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
         <tbody>
           <tr>
             <th scope="row">Severity</th>
-            <td><SeverityBadge severity={doc.severity} /></td>
+            <td>
+              <SeverityBadge severity={doc.severity} />
+            </td>
           </tr>
           {/*
-            Monitor-mode rules record what they would have fired on and raise nothing until promoted (issue #764). Shown next to
-            severity because severity alone reads as a promise the rule does not make: "high" on a rule that never alerts is the
-            most misleading pair on this page. Rendered only when the server says monitor, so a rule that alerts stays uncluttered
-            and an older server that omits the field keeps its previous appearance.
+            A rule that does not alert is shown next to severity, because severity alone reads as a promise the rule does not make:
+            "high" on a rule that never alerts is the most misleading pair on this page (issue #764). The row also appears for a
+            rule an operator PROMOTED, since it now alerts for a reason a reader would otherwise have to guess at. A rule that
+            alerts and always did stays uncluttered.
           */}
-          {entry.default_mode && entry.default_mode !== "alert" && (
+          {showsMode(entry) && (
             <tr>
-              <th scope="row">Default mode</th>
+              <th scope="row">Mode</th>
               <td>
-                <span className="rule-detail__mode">
-                  {entry.default_mode === "monitor" ? "Monitor" : "Disabled"}
-                </span>{" "}
-                {entry.default_mode === "monitor"
-                  ? "By default this rule records matches without raising an alert."
-                  : "By default this rule is off and produces nothing."}{" "}
-                A per-rule setting overrides that; this page shows the rule&apos;s own default, not the mode in force for a given
-                host.
+                <span className="rule-detail__mode">{MODE_LABEL[resolvedMode(entry)] ?? resolvedMode(entry)}</span>{" "}
+                {MODE_EFFECT[resolvedMode(entry)] ?? "Its mode is not one this page recognises."} {modeProvenance(entry)} Resolved at global
+                scope; a host-group setting can differ for the hosts in that group.
               </td>
             </tr>
           )}
@@ -100,24 +142,22 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
           <tr>
             <th scope="row">ATT&amp;CK</th>
             <td>
-              {techniques.length === 0
-                ? <span className="rule-detail__muted">no mapping</span>
+              {techniques.length === 0 ? (
+                <span className="rule-detail__muted">no mapping</span>
+              ) : (
                 // Composite key (value + index) defends against an upstream
                 // API ever returning a duplicate technique ID by accident -
                 // React would otherwise reuse one DOM node for both entries
                 // and confuse its reconciler.
-                : techniques.map((t, i) => (
-                    <span key={`${t}-${String(i)}`}>
-                      {i > 0 && ", "}
-                      <a
-                        href={`https://attack.mitre.org/techniques/${t.replace(".", "/")}/`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <code>{t}</code>
-                      </a>
-                    </span>
-                  ))}
+                techniques.map((t, i) => (
+                  <span key={`${t}-${String(i)}`}>
+                    {i > 0 && ", "}
+                    <a href={`https://attack.mitre.org/techniques/${t.replace(".", "/")}/`} target="_blank" rel="noopener noreferrer">
+                      <code>{t}</code>
+                    </a>
+                  </span>
+                ))
+              )}
             </td>
           </tr>
           <tr>
@@ -141,14 +181,18 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
           (e.g. the numbered list in suspicious_exec's description) survive
           rather than collapsing the way HTML normally would. */}
       {doc.description.split("\n\n").map((para, i) => (
-        <p key={`${entry.id}-p${String(i)}`} className="rule-detail__para">{para}</p>
+        <p key={`${entry.id}-p${String(i)}`} className="rule-detail__para">
+          {para}
+        </p>
       ))}
 
       {doc.false_positives && doc.false_positives.length > 0 && (
         <>
           <h2>Known false-positive sources</h2>
           <ul className="rule-detail__list">
-            {doc.false_positives.map((fp, i) => <li key={`${fp}-${String(i)}`}>{fp}</li>)}
+            {doc.false_positives.map((fp, i) => (
+              <li key={`${fp}-${String(i)}`}>{fp}</li>
+            ))}
           </ul>
         </>
       )}
@@ -157,7 +201,9 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
         <>
           <h2>Limitations</h2>
           <ul className="rule-detail__list">
-            {doc.limitations.map((l, i) => <li key={`${l}-${String(i)}`}>{l}</li>)}
+            {doc.limitations.map((l, i) => (
+              <li key={`${l}-${String(i)}`}>{l}</li>
+            ))}
           </ul>
         </>
       )}
@@ -174,7 +220,7 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
 // typescript:S6749 / S7924). Anything outside this allowlist falls back to
 // the unstyled neutral pill.
 const KNOWN_SEVERITIES = ["low", "medium", "high", "critical"] as const;
-type KnownSeverity = typeof KNOWN_SEVERITIES[number];
+type KnownSeverity = (typeof KNOWN_SEVERITIES)[number];
 function isKnownSeverity(s: string): s is KnownSeverity {
   return (KNOWN_SEVERITIES as readonly string[]).includes(s);
 }

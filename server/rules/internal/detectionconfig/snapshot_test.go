@@ -168,3 +168,79 @@ func TestSnapshotUninterpretableModeFallsBackToTheDeclaredDefault(t *testing.T) 
 	mode, _ = s.ResolveRuleMode("written_by_a_newer_build", "host-a", api.DetectionRuleModeAlert)
 	assert.Equal(t, api.DetectionRuleModeAlert, mode)
 }
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/the-catalog-reports-the-mode-a-rule-runs-in-not-only-the-one-it-declares
+//
+// TestSnapshotGlobalRuleMode pins the resolution behind the rule catalog's reported mode.
+//
+// Global scope is what makes this answerable without a host, and the mechanism is the empty host id: a globally scoped setting
+// applies to any host, and a group-scoped one only to a member, so nothing group-scoped can reach it. The cases below are the four
+// that differ from a per-host resolution or from each other, not a restatement of ResolveRuleMode's table.
+func TestSnapshotGlobalRuleMode(t *testing.T) {
+	t.Parallel()
+
+	settings := []api.DetectionRuleSetting{
+		{RuleID: "silenced", HostGroupID: api.GlobalScope, Mode: api.DetectionRuleModeDisabled},
+		{RuleID: "promoted", HostGroupID: api.GlobalScope, Mode: api.DetectionRuleModeAlert},
+		{RuleID: "group_only", HostGroupID: 7, Mode: api.DetectionRuleModeAlert},
+		{RuleID: "unreadable", HostGroupID: api.GlobalScope, Mode: "throttled"},
+	}
+	// Membership admits every host to every group, so group_only failing to apply is the empty host id doing the work rather than
+	// a membership function that says no to everything.
+	everyHostInEveryGroup := func(string, int64) bool { return true }
+	s := detectionconfig.NewSnapshot(1, nil, settings, everyHostInEveryGroup, fixedClock(1000))
+
+	for _, tc := range []struct {
+		name        string
+		ruleID      string
+		ruleDefault api.DetectionRuleMode
+		wantMode    api.DetectionRuleMode
+		wantSource  api.RuleModeSource
+	}{
+		{
+			name:   "a global setting is the mode in force, and says so",
+			ruleID: "silenced", ruleDefault: api.DetectionRuleModeAlert,
+			wantMode: api.DetectionRuleModeDisabled, wantSource: api.RuleModeSourceSetting,
+		},
+		{
+			name:   "a global setting that promotes reports setting too, not default",
+			ruleID: "promoted", ruleDefault: api.DetectionRuleModeMonitor,
+			wantMode: api.DetectionRuleModeAlert, wantSource: api.RuleModeSourceSetting,
+		},
+		{
+			name:   "no setting leaves the rule in its declared mode, attributed to the rule",
+			ruleID: "unconfigured", ruleDefault: api.DetectionRuleModeMonitor,
+			wantMode: api.DetectionRuleModeMonitor, wantSource: api.RuleModeSourceDefault,
+		},
+		{
+			name:   "a group-scoped setting cannot reach global scope, however permissive membership is",
+			ruleID: "group_only", ruleDefault: api.DetectionRuleModeMonitor,
+			wantMode: api.DetectionRuleModeMonitor, wantSource: api.RuleModeSourceDefault,
+		},
+		{
+			// The subtle one. A setting exists, so "is there a setting" answers yes, but the mode being REPORTED came from the
+			// fallback. Calling that `setting` would tell an operator the mode they are looking at is one they chose.
+			name:   "a setting whose mode is unreadable reports the default it fell back to",
+			ruleID: "unreadable", ruleDefault: api.DetectionRuleModeMonitor,
+			wantMode: api.DetectionRuleModeMonitor, wantSource: api.RuleModeSourceDefault,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := s.GlobalRuleMode(tc.ruleID, tc.ruleDefault)
+			assert.Equal(t, tc.wantMode, got.Mode)
+			assert.Equal(t, tc.wantSource, got.Source)
+		})
+	}
+}
+
+// TestGlobalRuleModeOfWithoutAResolver pins the nil-resolver path, which is how the docs generator lists the catalog with no
+// database behind it. Reporting the declared default there is right rather than merely safe: with no configuration to read, the
+// rule's own declaration IS the mode it runs in.
+func TestGlobalRuleModeOfWithoutAResolver(t *testing.T) {
+	t.Parallel()
+
+	got := api.GlobalRuleModeOf(nil, "any", api.DetectionRuleModeMonitor)
+	assert.Equal(t, api.DetectionRuleModeMonitor, got.Mode)
+	assert.Equal(t, api.RuleModeSourceDefault, got.Source)
+}

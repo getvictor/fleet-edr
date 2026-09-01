@@ -2,7 +2,7 @@
 // findings as alerts.
 //
 // engine.go owns Engine plus its public API: Register, LoadActive,
-// Evaluate, Catalog. SetMetrics installs the OTel counter hook.
+// Evaluate. SetMetrics installs the OTel counter hook.
 // filter.go holds the snapshot-event filter (issue #11): exec events
 // flagged `snapshot=true` represent ESF baseline enumeration and
 // are dropped before rule evaluation so dyld_insert etc. don't

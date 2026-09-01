@@ -24,18 +24,81 @@ import "./DetectionConfig.scss";
 // rule's supported_exclusion_match_types on GET /api/rules.
 const MATCH_TYPES = ["path_glob", "parent_path_glob", "team_id", "signing_id", "cdhash", "sha256", "command_substring", "domain"] as const;
 
-// The per-rule modes an operator can select: alert and disabled (emit nothing). Monitor is not selectable here, per the
-// detection-tuning-author-and-modes openspec change, on the grounds that it had no review surface.
+// The per-rule modes an operator can select. Monitor was excluded here by the detection-tuning-author-and-modes change, on the
+// grounds that it had no review surface and was a legacy value on a handful of rows.
 //
-// That reasoning is now partly overtaken: issue #764 ships sixty-six imported rules whose DEFAULT is monitor, so monitor is no
-// longer a legacy value on a handful of rows but the mode most of the catalog runs in. modeOptions still renders it for such a row,
-// so those rules display correctly and can be promoted; what an operator cannot yet do is put a promoted rule back. Making monitor
-// first-class belongs with the promotion surface that issue asks for, not here.
-const MODES = ["alert", "disabled"] as const;
+// Issue #764 overturned both halves of that. Sixty-six imported rules now DEFAULT to monitor, so it is the mode most of the catalog
+// runs in rather than a legacy value, and the surface that reviews them is the point of the mode. Leaving it unselectable made
+// promotion a one-way door: modeOptions renders monitor for a rule sitting in it, so such a rule could be promoted to alert, and
+// then nothing could put it back. An operator who promotes a noisy rule and wants to undo that is exactly the case monitor exists
+// for, and it was the one case the control could not express.
+//
+// Order is alert, monitor, disabled: increasing restriction, which is the order the modes are explained in everywhere else.
+const MODES = ["alert", "monitor", "disabled"] as const;
 
-// modeOptions returns the modes shown for a row. It prepends the row's current mode when that mode is not operator-selectable, so
-// the controlled <select> renders a matching option and the operator can move it to alert/disabled. That path now carries the
-// imported corpus as well as the legacy rows it was written for.
+// modeReach ranks the modes by how much a rule does in them: alert raises, monitor records, disabled produces nothing. The rank
+// decides whether a change needs an operator's reason. Reducing what a rule does is a decision someone should justify in the audit
+// trail; restoring it is not, which is the principle the surface already applied to alert-versus-disabled and which now has to hold
+// for the four transitions monitor adds.
+//
+// A mode this build does not recognise ranks as alert, so a stored value we cannot read is treated as the most capable state and
+// moving away from it still asks for a reason.
+function modeReach(mode: string): number {
+  switch (mode) {
+    case "disabled":
+      return 0;
+    case "monitor":
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+// reducesReach reports whether moving from priorMode to mode makes the rule do less.
+function reducesReach(priorMode: string, mode: string): boolean {
+  return modeReach(mode) < modeReach(priorMode);
+}
+
+// ReducingMode is the set of modes a rule can be moved INTO that make it do less, which is exactly the set that opens the reason
+// modal. Typing it means MODE_PROMPT below cannot be missing an entry, so the modal needs no fallback copy for a mode that cannot
+// reach it.
+type ReducingMode = "monitor" | "disabled";
+
+function isReducingMode(mode: string): mode is ReducingMode {
+  return mode === "monitor" || mode === "disabled";
+}
+
+// generatedReason names the transition for a change that does not prompt. Written per transition rather than interpolated, because
+// these strings are read in the audit log by someone reconstructing what happened, and "promoted from monitor to alert" says more
+// than a mechanical restatement of two enum values.
+function generatedReason(priorMode: string, mode: string): string {
+  if (mode === "alert") {
+    return priorMode === "monitor" ? "promoted from monitor to alert via admin UI" : "re-enabled via admin UI";
+  }
+  return "re-enabled in monitor mode via admin UI";
+}
+
+// MODE_PROMPT is the reason-modal copy per reducing target. The modal previously hard-coded the disable wording, which was correct
+// while disabled was the only reducing choice: offering monitor without this would have shown an operator a "Disable rule" button
+// for a change that disables nothing.
+const MODE_PROMPT: Record<ReducingMode, { verb: string; confirmLabel: string; description: string }> = {
+  disabled: {
+    verb: "Disable",
+    confirmLabel: "Disable rule",
+    description: "The rule stays registered but stops producing alerts. This is recorded in the audit log.",
+  },
+  monitor: {
+    verb: "Move to monitor",
+    confirmLabel: "Move to monitor",
+    description:
+      "The rule keeps evaluating and records what it would have fired on, but stops raising alerts. This is recorded in the audit log.",
+  },
+};
+
+// modeOptions returns the modes shown for a row. It prepends the row's current mode when that mode is not one of MODES, so the
+// controlled <select> renders a matching option instead of silently displaying the first one. Every mode the server defines is now
+// selectable, so this only fires on a stored value this build does not recognise, where showing the operator what is actually
+// persisted beats showing them something else.
 function modeOptions(current: string): readonly string[] {
   return (MODES as readonly string[]).includes(current) ? MODES : [current, ...MODES];
 }
@@ -106,7 +169,7 @@ export function DetectionConfig() {
 
   // pendingMode holds a not-yet-applied disable (the alerting-reducing change) while the reason modal collects an operator
   // justification. modalError surfaces a failed confirm inside the modal so it stays open for a retry.
-  const [pendingMode, setPendingMode] = useState<{ ruleID: string; ruleTitle: string; mode: string; severity: string } | null>(null);
+  const [pendingMode, setPendingMode] = useState<{ ruleID: string; ruleTitle: string; mode: ReducingMode; severity: string } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
 
   // The exclusion picker lists rules alphabetically by their canonical title so an operator can scan to the rule they want. Titles
@@ -207,8 +270,10 @@ export function DetectionConfig() {
     [runMutation],
   );
 
-  // handleModeChange splits on whether the new mode reduces alerting. Moving a rule to `alert` is applied immediately with a
-  // generated reason; reducing it first opens the reason modal so the operator's justification is audited.
+  // handleModeChange splits on whether the new mode makes the rule do LESS (see reducesReach). A change that restores or increases
+  // what the rule does is applied immediately with a generated reason; one that reduces it first opens the reason modal so the
+  // operator's justification is audited. Before monitor was selectable this read as "to alert applies, anything else prompts",
+  // which happened to be the same rule while disabled was the only alternative.
   //
   // The generated reason distinguishes the two ways a rule reaches `alert`, because the audit row is read later by someone asking
   // what happened. A rule coming back from `disabled` was off and is being re-enabled. A rule coming from `monitor` was never off:
@@ -216,14 +281,16 @@ export function DetectionConfig() {
   // misdescribe the commonest transition in the catalog now that most rules default to monitor (issue #764).
   const handleModeChange = useCallback(
     (ruleID: string, ruleTitle: string, mode: string, severity: string, priorMode: string) => {
-      if (mode === "alert") {
-        const reason = priorMode === "monitor" ? "promoted from monitor to alert via admin UI" : "re-enabled via admin UI";
+      // isReducingMode narrows the string to the union MODE_PROMPT is keyed by. It cannot be false when reducesReach is true, since
+      // monitor and disabled are the only modes ranked below alert; the compiler needs it said anyway, and it is what makes a
+      // fourth mode below alert a compile error here rather than a modal with no copy.
+      if (!reducesReach(priorMode, mode) || !isReducingMode(mode)) {
         runMutation(() =>
           upsertDetectionRuleSetting({
             rule_id: ruleID,
             mode,
             severity_override: severity || undefined,
-            reason,
+            reason: generatedReason(priorMode, mode),
           }),
         ).catch(() => {
           /* surfaced via actionError */
@@ -514,9 +581,9 @@ export function DetectionConfig() {
 
       {pendingMode && (
         <ReasonModal
-          title={`Disable "${pendingMode.ruleTitle}"?`}
-          description="The rule stays registered but stops producing alerts. This is recorded in the audit log."
-          confirmLabel="Disable rule"
+          title={`${MODE_PROMPT[pendingMode.mode].verb} "${pendingMode.ruleTitle}"?`}
+          description={MODE_PROMPT[pendingMode.mode].description}
+          confirmLabel={MODE_PROMPT[pendingMode.mode].confirmLabel}
           confirmVariant="alert"
           busy={mutating}
           error={modalError}

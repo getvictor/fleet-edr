@@ -561,6 +561,12 @@ export interface RuleDocEntry {
   // promotes it. Imported rules outnumber ours, so do not read the absence of this field as "rare".
   // Optional so an older server response that predates the field degrades to "assume it alerts", which was true before the field.
   default_mode?: string;
+  // The mode the rule RUNS IN at global scope, and where that mode came from ("default" = the rule's own declaration, "setting" =
+  // an operator's globally scoped setting). `mode` is what the rule is doing; `default_mode` above is what it was written to do,
+  // and they differ exactly when someone has changed something. Optional so a server that predates the fields degrades to reading
+  // the declared default, which is what this page showed before they existed.
+  mode?: string;
+  mode_source?: string;
   // Where the rule came from: absent for one this project wrote, and the upstream project plus that rule's author for a vendored
   // one. Shown so an operator can tell whose rule they are reading.
   origin?: string;
