@@ -271,6 +271,56 @@ type MonitorMatch struct {
 // confined to a crash between two adjacent statements.
 type MonitorTally []MonitorMatch
 
+// EffectiveMatchCountCap is the furthest back a read can honestly reach in a deployment retaining retentionDays days of counters.
+//
+// MaxMatchCountWindow alone is NOT that answer. The counters are pruned with the deployment's own EDR_RETENTION_DAYS, which
+// defaults to 30 but is 7 in the quickstart compose, so a fixed 30-day cap would report a 30-day window over whatever survived a
+// 7-day prune. That is the same misreport the echoed window exists to prevent, just sourced from configuration instead of from a
+// clamp: the caller is told a period the data does not cover.
+//
+// retentionDays <= 0 disables pruning, so counters accumulate indefinitely and the only remaining bound is MaxMatchCountWindow.
+// That bound stays: a promotion decision does not need more than a month of history, and an unbounded GROUP BY over an unpruned
+// table is a cost with no reader.
+func EffectiveMatchCountCap(retentionDays int) MatchCountWindow {
+	if retentionDays <= 0 || MatchCountWindow(retentionDays) > MaxMatchCountWindow {
+		return MaxMatchCountWindow
+	}
+	return MatchCountWindow(retentionDays)
+}
+
+// RuleMatchCount is what a rule has been doing in monitor mode over a window: how much, how widely, and how recently.
+//
+// Three numbers rather than one because they answer different halves of the promotion question. Matches alone cannot separate a
+// rule that is noisy on one machine, which wants an exclusion, from one that is too broad everywhere, which wants leaving in
+// monitor. And a rule that matched heavily last month and nothing since is a different decision again, which is what LastSeen is
+// for.
+// Carries `db` tags alongside `json` for the same reason DetectionRuleSetting does: the aggregate is read straight into this shape
+// by the rules store and served in it, and an intermediate row struct would exist only to be copied field for field.
+type RuleMatchCount struct {
+	RuleID string `db:"rule_id" json:"rule_id"`
+	// Matches is the total over the window. It counts MATCHES, not the alerts promotion would raise: alerts deduplicate on
+	// (host, rule, subject) permanently, so a rule that keeps matching one subject counts here every time and would raise one
+	// alert. Biased upward by that and downward by the recorder's documented losses, so it is an approximation.
+	Matches int64 `db:"matches" json:"matches"`
+	// Hosts is how many distinct hosts contributed, which is the "how widely" half.
+	Hosts int64 `db:"hosts" json:"hosts"`
+	// LastSeen is the most recent match in the window. Always set: a rule with no matches is absent from the result rather than
+	// present with a zero row, so there is no "has none" case to represent here.
+	LastSeen time.Time `db:"last_seen" json:"last_seen"`
+}
+
+// MatchCountWindow is how far back a match-count read looks, in days.
+type MatchCountWindow int
+
+const (
+	// DefaultMatchCountWindow is a week: long enough that a rule firing on a weekday pattern is visible, short enough that the
+	// number describes what the rule is doing now rather than what it did before the last tuning change.
+	DefaultMatchCountWindow MatchCountWindow = 7
+	// MaxMatchCountWindow caps the request so a reader cannot ask for a window the retention sweep has already emptied and read
+	// the resulting silence as a quiet rule.
+	MaxMatchCountWindow MatchCountWindow = 30
+)
+
 // MonitorMatchRecorder is the narrow write surface the detection pipeline uses to persist a batch's monitor matches once the batch
 // is acknowledged. A nil recorder records nothing, which is the correct behaviour for a deployment or a test with no rules-context
 // store wired: monitor mode still suppresses the alert and still emits its observability signal.

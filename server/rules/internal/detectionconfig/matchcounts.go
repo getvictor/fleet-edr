@@ -117,6 +117,40 @@ func foldTally(tally api.MonitorTally) map[matchKey]int {
 	return folded
 }
 
+// MatchCounts reports what each rule has matched in monitor mode over the last `days` days, one row per rule that matched at all.
+//
+// `days` is the ALREADY-RESOLVED window, not a raw request: the operator handler bounds it with api.EffectiveMatchCountCap before
+// calling, because only that layer knows the deployment's retention.
+//
+// Aggregated in SQL rather than by reading rows and folding them in Go: the table is keyed (rule_id, day, host_id), so the leading
+// (rule_id, day) prefix serves this GROUP BY directly, and the alternative would carry every host row for every rule across the
+// window to the application to add them up.
+//
+// A rule that matched nothing is ABSENT rather than present with zero, and absence is NOT the same claim as zero: a rule can be
+// missing here because it was promoted out of monitor before the window opened, or because the window predates its registration.
+// Callers render the difference rather than substituting a zero (the tuning table spells out "not recorded"). Synthesising zero rows would also
+// mean joining against a rule list this store does not have and should not learn.
+func (s *Store) MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error) {
+	// days arrives already resolved: the handler owns the window policy, because only it knows the deployment's retention. Nothing
+	// is re-clamped here (validate at the boundary, trust the types inward).
+	cutoff := time.Now().UTC().AddDate(0, 0, -int(days)+1).Format(time.DateOnly)
+
+	var rows []api.RuleMatchCount
+	err := s.db.SelectContext(ctx, &rows, `
+		SELECT rule_id,
+		       SUM(match_count)        AS matches,
+		       COUNT(DISTINCT host_id) AS hosts,
+		       MAX(last_seen)          AS last_seen
+		FROM detection_rule_match_counts
+		WHERE day >= ?
+		GROUP BY rule_id
+		ORDER BY matches DESC, rule_id`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("read monitor match counts: %w", err)
+	}
+	return rows, nil
+}
+
 // PruneMatchCounts deletes counter rows for days older than retentionDays, and reports how many it removed.
 //
 // Called on a plain ticker from every replica rather than from a leader-gated sweep. Each RunIfLeader loop holds its advisory lock,

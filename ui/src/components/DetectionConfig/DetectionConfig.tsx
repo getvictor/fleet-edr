@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
   upsertDetectionRuleSetting,
@@ -9,9 +10,11 @@ import {
   DetectionConfigApiError,
   type DetectionExclusion,
   type DetectionRuleSetting,
+  type RuleMatchCount,
   type RuleDocEntry,
 } from "../../api";
 import { useCan, PermissionAction } from "../../permissions-core";
+import { formatRelativeISO } from "../../time";
 import { PageHeader } from "../ui/PageHeader";
 import { Table, EmptyState } from "../ui/Table";
 import { Button } from "../ui/Button";
@@ -127,6 +130,66 @@ const MODE_COLUMN_TOOLTIP =
   "Alert raises alerts; monitor evaluates and records a signal instead; disabled emits nothing. " +
   "A rule with no setting here runs in its own default, which is alert for the rules Fleet wrote and monitor for imported ones.";
 
+// Shown in place of the column's normal caption when the counts read failed, so the missing evidence is stated rather than left
+// for the reader to infer from a column that says nothing was recorded.
+const OBSERVED_UNAVAILABLE_TOOLTIP =
+  "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
+
+// formatMatches keeps large counts readable at a glance, since the difference that matters when scanning this column is between
+// tens and thousands rather than between 4,102 and 4,140.
+const matchesAbbreviationFloor = 10_000;
+
+function formatMatches(n: number): string {
+  if (n >= matchesAbbreviationFloor) return `${String(Math.round(n / 1000))}k`;
+  return n.toLocaleString();
+}
+
+// renderObserved draws the Observed cell for one rule.
+//
+// Three states, deliberately distinct. A failed read reads UNAVAILABLE, not "not recorded": the spec requires a read failure be reported as
+// an error rather than as an empty result, because an empty result reads as a quiet rule and a quiet rule is what gets promoted.
+// Rendering a failure as absence would invert the meaning of the column at exactly the moment it is least reliable.
+//
+// A rule with nothing recorded reads "not recorded" rather than "0". Zero is a claim that the rule was watched and did nothing;
+// absence can equally mean it was promoted before the window opened, or that the window predates its registration. Spelled out
+// rather than drawn as a dash glyph, both because the repo forbids the character in user-facing text and because the words say
+// the distinction the glyph only implies.
+function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days: number, unavailable: boolean) {
+  if (unavailable) {
+    return (
+      <span className="detection-config__observed-unavailable" aria-label={`match counts unavailable for ${ruleID}`}>
+        unavailable
+      </span>
+    );
+  }
+  if (count === undefined) {
+    return (
+      <span className="detection-config__observed-none" aria-label={`no matches recorded for ${ruleID}`}>
+        not recorded
+      </span>
+    );
+  }
+  const hosts = `${String(count.hosts)} host${count.hosts === 1 ? "" : "s"}`;
+  // Recency is the third signal the column carries: a rule that matched heavily and has since gone quiet is a different promotion
+  // case from one still matching. Phrased by the shared helper rather than a local one, so this reads like the Hosts list instead
+  // of inventing a second vocabulary for the same idea.
+  const lastSeen = formatRelativeISO(count.last_seen);
+  const matches = `${count.matches.toLocaleString()} match${count.matches === 1 ? "" : "es"}`;
+  const title =
+    `approximately ${matches} on ${hosts} in the last ${String(days)} days` +
+    (lastSeen === "" ? "" : `, last matched ${lastSeen}`);
+  // aria-label carries the same sentence as the tooltip, because `title` alone reaches neither a screen reader reliably nor a
+  // touch user at all, and the abbreviated display ("42k") drops the exact figure. The visible text stays short; the label is
+  // what makes the precise value and the window available without a mouse.
+  return (
+    <span title={title} aria-label={title}>
+      {formatMatches(count.matches)}
+      <span className="detection-config__observed-hosts"> on {hosts}</span>
+      {lastSeen === "" ? null : <span className="detection-config__observed-last"> &middot; {lastSeen}</span>}
+    </span>
+  );
+}
+
 // SEVERITY_ORDER lists declared severities most- to least-severe; the rule-modes table sorts by it (ascending rank = critical first).
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
 
@@ -159,6 +222,16 @@ export function DetectionConfig() {
   const [exclusions, setExclusions] = useState<DetectionExclusion[]>([]);
   const [rules, setRules] = useState<RuleDocEntry[]>([]);
   const [settings, setSettings] = useState<DetectionRuleSetting[]>([]);
+  // Keyed by rule id, holding only rules that matched: a rule absent here has nothing recorded, which the table spells out as
+  // "not recorded" rather than showing a zero (see the cell).
+  // Possibly-undefined per key on purpose: a rule with nothing recorded is ABSENT from the response rather than present with a
+  // zero, so the lookup genuinely can miss and the guard below is a real one rather than a formality.
+  const [observed, setObserved] = useState<Record<string, RuleMatchCount | undefined>>({});
+  const [observedDays, setObservedDays] = useState<number>(0);
+  // observedUnavailable records that the counts read FAILED, which is a different claim from "no rule matched". Without it every
+  // cell would read "not recorded", i.e. as evidence that every rule is quiet, which is the reading that gets a noisy rule
+  // promoted; with it they read "unavailable" instead.
+  const [observedUnavailable, setObservedUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -214,11 +287,23 @@ export function DetectionConfig() {
   );
 
   const reload = useCallback(async (): Promise<void> => {
-    const [excl, ruleDocs, ruleSettings] = await Promise.all([listDetectionExclusions(), fetchRuleDocs(), listDetectionRuleSettings()]);
+    const [excl, ruleDocs, ruleSettings, matchCounts] = await Promise.all([
+      listDetectionExclusions(),
+      fetchRuleDocs(),
+      listDetectionRuleSettings(),
+      // Recovered rather than fatal: the counts are evidence for a decision, and losing them should grey out one column, not
+      // stop an operator reaching the mode control on a page whose other three reads succeeded.
+      listDetectionRuleMatchCounts().catch(() => null),
+    ]);
     if (!mountedRef.current) return;
     setExclusions(excl);
     setRules(ruleDocs);
     setSettings(ruleSettings);
+    setObservedUnavailable(matchCounts === null);
+    if (matchCounts !== null) {
+      setObserved(Object.fromEntries(matchCounts.counts.map((c) => [c.rule_id, c])));
+      setObservedDays(matchCounts.days);
+    }
   }, []);
 
   useEffect(() => {
@@ -520,6 +605,18 @@ export function DetectionConfig() {
 
           <section className="detection-config__section">
             <h2 className="detection-config__heading">Rule modes</h2>
+            {/*
+              Rendered visibly rather than left in the Observed header's `title`. A native tooltip on a non-focusable th reaches
+              neither keyboard nor touch users, and this is the caveat that stops a bare number beside a promote control reading
+              as a forecast of alert volume, so it is exactly the sentence that must not be the one only some readers get.
+            */}
+            <p className="detection-config__note">
+              {observedUnavailable
+                ? OBSERVED_UNAVAILABLE_TOOLTIP
+                : `Observed counts what each rule matched in monitor mode over the last ${String(observedDays)} days. It is an ` +
+                  "indication of volume, not of how many alerts promoting the rule would raise: repeated matches on the same " +
+                  "process collapse into a single alert once a rule alerts."}
+            </p>
             <Table>
               <thead>
                 <tr>
@@ -527,6 +624,8 @@ export function DetectionConfig() {
                   <th title="The severity each rule declares in the catalog. It applies whenever no override is set below.">
                     Default severity
                   </th>
+                  {/* The window is in the header text, not only in each cell's hover, so every reader knows what the numbers cover. */}
+                  <th>Observed{observedUnavailable || observedDays === 0 ? "" : ` (${String(observedDays)}d)`}</th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
                     Severity override
@@ -549,6 +648,9 @@ export function DetectionConfig() {
                         <code className="detection-config__rule-id">{r.id}</code>
                       </td>
                       <td className="detection-config__default-severity">{r.doc.severity || "(unspecified)"}</td>
+                      <td className="detection-config__observed">
+                        {renderObserved(observed[r.id], r.id, observedDays, observedUnavailable)}
+                      </td>
                       <td>
                         <Select
                           label=""

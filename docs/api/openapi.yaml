@@ -869,6 +869,74 @@ paths:
               schema:
                 $ref: "#/components/schemas/DetectionConfigError"
 
+  /api/v1/detection-config/rule-match-counts:
+    get:
+      tags: [Detection tuning]
+      summary: List monitor-mode match counts per rule
+      description: |
+        Returns what each rule matched in monitor mode over a window: total
+        matches, how many distinct hosts contributed, and when it last
+        matched. This is the evidence for deciding whether to promote a rule
+        from `monitor` to `alert`.
+
+        A rule that matched nothing in the window is ABSENT rather than
+        present with a zero, because absence and zero are different claims:
+        a rule may have been promoted before the window opened.
+
+        The figure is an APPROXIMATION of volume, not a forecast of alerts.
+        It counts matches, while alerts deduplicate on
+        `(host, rule, subject)` permanently, so it is biased upward by
+        repeated subjects and downward by the recorder's documented losses.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          description: |
+            Window in whole days. Defaults to 7. Capped at the deployment's
+            own counter retention (`EDR_RETENTION_DAYS`), and never more than
+            30 days even where retention is longer or disabled, because the
+            counters older than retention have already been pruned. The
+            default is capped by the same bound. A request above the cap is
+            served at the cap, and the `days` field in the response reports
+            the window actually covered, which may be narrower than the one
+            requested. `?days=` (supplied but empty) is rejected, like any
+            other value that is not a positive whole number.
+          schema:
+            type: integer
+            minimum: 1
+            default: 7
+      responses:
+        "200":
+          description: Per-rule match counts, most matches first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [match_counts, days]
+                properties:
+                  match_counts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuleMatchCount"
+                  days:
+                    type: integer
+                    description: The window actually covered, after the cap is applied.
+                    example: 7
+        "400":
+          description: "`days` is not a positive whole number"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+        "403":
+          description: Caller lacks detection_config.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionConfigError"
+
 components:
   securitySchemes:
     HostToken:
@@ -1373,6 +1441,28 @@ components:
           description: Reserved for per-rule typed settings; absent until a rule declares a config schema.
         updated_by: {type: string, example: "user:42"}
         updated_at: {type: string, format: date-time}
+
+    RuleMatchCount:
+      type: object
+      required: [rule_id, matches, hosts, last_seen]
+      properties:
+        rule_id: {type: string, example: proc_creation_macos_applescript}
+        matches:
+          type: integer
+          format: int64
+          description: |
+            Total monitor-mode matches in the window. Approximate: it counts
+            matches, not the alerts a promotion would raise.
+          example: 90
+        hosts:
+          type: integer
+          format: int64
+          description: |
+            Distinct hosts that contributed. The same total means opposite
+            things at one host (an exclusion candidate) and at many (the rule
+            is too broad).
+          example: 3
+        last_seen: {type: string, format: date-time}
 
     CreateDetectionExclusionRequest:
       type: object

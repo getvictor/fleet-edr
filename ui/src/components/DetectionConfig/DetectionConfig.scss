@@ -54,6 +54,34 @@
   text-transform: capitalize;
 }
 
+// The Observed caveat, rendered as visible text under the heading rather than hidden in a header tooltip.
+.detection-config__note {
+  font-size: $xx-small;
+  color: $ui-fleet-black-50;
+  margin: 0 0 $pad-small;
+  max-width: 70ch;
+}
+
+// The Observed column: the count leads, the reach and recency ride behind it at a lower weight, so the column scans by volume.
+.detection-config__observed-hosts,
+.detection-config__observed-last {
+  font-size: $xxx-small;
+  color: $ui-fleet-black-50;
+}
+
+// A rule with nothing recorded, muted so it does not read as a value.
+.detection-config__observed-none {
+  color: $ui-fleet-black-50;
+}
+
+// A FAILED read, which must not look like the dash above: absence of evidence and absence of the read are different claims, and
+// only one of them is a reason to promote a rule.
+.detection-config__observed-unavailable {
+  font-size: $xxx-small;
+  font-style: italic;
+  color: $core-vibrant-red;
+}
+
 .dc-reason-modal {
   border: none;
   border-radius: 8px;

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/fleetdm/edr/server/httpserver"
@@ -39,6 +40,7 @@ const (
 type detectionConfigService interface {
 	ListExclusions(ctx context.Context) ([]api.DetectionExclusion, error)
 	ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSetting, error)
+	MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error)
 	CreateExclusion(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.CreateExclusionInput) (api.DetectionExclusion, error)
 	DeleteExclusion(ctx context.Context, actor *identityapi.Actor, reason string, id int64) error
 	UpsertRuleSetting(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.UpsertSettingInput) (api.DetectionRuleSetting, error)
@@ -58,6 +60,12 @@ type DetectionConfigHandler struct {
 	authz          identityapi.AuthZ
 	principalLabel principalLabelResolver
 	logger         *slog.Logger
+	// matchCountCap is the furthest back a match-count read may reach. Seeded with the constant maximum at construction and
+	// narrowed by SetMatchCountCap once the deployment's retention is known, so there is exactly ONE place that decides what an
+	// unconfigured or disabled retention means (api.EffectiveMatchCountCap) rather than a second fallback here that agrees with
+	// it by coincidence. Atomic because it is written during wiring and read by every request goroutine; a plain field would
+	// rest on a happens-before that is real today but invisible to the race detector.
+	matchCountCap atomic.Int64
 }
 
 // NewDetectionConfig builds the detection-config operator handler. svc + authz are required; logger defaults to slog.Default. A nil
@@ -72,7 +80,16 @@ func NewDetectionConfig(svc detectionConfigService, authz identityapi.AuthZ, log
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &DetectionConfigHandler{svc: svc, authz: authz, logger: logger}
+	h := &DetectionConfigHandler{svc: svc, authz: authz, logger: logger}
+	h.matchCountCap.Store(int64(api.MaxMatchCountWindow))
+	return h
+}
+
+// SetMatchCountCap records how many days of monitor-match counters the deployment retains, which bounds how far back a
+// rule-match-count read can honestly reach. cmd/main wires it from EDR_RETENTION_DAYS alongside the prune that enforces it.
+// Unset (or zero) leaves the constant cap in force.
+func (h *DetectionConfigHandler) SetMatchCountCap(retentionDays int) {
+	h.matchCountCap.Store(int64(api.EffectiveMatchCountCap(retentionDays)))
 }
 
 // SetPrincipalLabelResolver wires the optional directory lookup that resolves an exclusion's created_by principal id to a display
@@ -121,6 +138,7 @@ func (h *DetectionConfigHandler) resolveCreatedByLabels(ctx context.Context, exc
 //	DELETE /api/v1/detection-config/exclusions/{id}
 //	GET    /api/v1/detection-config/rule-settings
 //	PUT    /api/v1/detection-config/rule-settings
+//	GET    /api/v1/detection-config/rule-match-counts
 //
 // Caller wraps in the identity Session + CSRF middleware before mounting (the session-protected allowlist auto-derives from what is
 // registered here).
@@ -129,6 +147,7 @@ func (h *DetectionConfigHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("POST /api/v1/detection-config/exclusions", h.handleCreateExclusion)
 	mux.HandleFunc("DELETE /api/v1/detection-config/exclusions/{id}", h.handleDeleteExclusion)
 	mux.HandleFunc("GET /api/v1/detection-config/rule-settings", h.handleListRuleSettings)
+	mux.HandleFunc("GET /api/v1/detection-config/rule-match-counts", h.handleListMatchCounts)
 	mux.HandleFunc("PUT /api/v1/detection-config/rule-settings", h.handleUpsertRuleSetting)
 }
 
@@ -161,6 +180,59 @@ func (h *DetectionConfigHandler) handleListRuleSettings(w http.ResponseWriter, r
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rule_settings": settings})
+}
+
+// handleListMatchCounts serves what each rule has matched in monitor mode over a window, which is the evidence an operator
+// promotes a rule against (issue #813).
+//
+// Read-gated by the same action as the rest of this surface: it describes detection configuration's effect, and anyone who can see
+// which rules are in monitor should be able to see what those rules have been doing.
+func (h *DetectionConfigHandler) handleListMatchCounts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionDetectionConfigRead, identityapi.Resource{Type: "detection_config"}) {
+		return
+	}
+	query := r.URL.Query()
+	days, ok := matchCountWindow(query.Has("days"), query.Get("days"))
+	if !ok {
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput,
+			"days must be a positive whole number")
+		return
+	}
+	// Resolved HERE, not in the store, because the number echoed below has to be the window the counts actually cover, and only
+	// this layer knows the deployment's retention. Clamping in the store alone reported the requested window over narrower data.
+	days = min(days, api.MatchCountWindow(h.matchCountCap.Load()))
+	counts, err := h.svc.MatchCounts(ctx, days)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "detectionconfig list match counts", "err", err)
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
+		return
+	}
+	if counts == nil {
+		counts = []api.RuleMatchCount{}
+	}
+	// The window echoed is the RESOLVED one: a client that asked for 90 days needs to know it is reading 30 (or 7, on a
+	// deployment that retains a week), or it will describe the number to an operator as covering a period it does not.
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"match_counts": counts, "days": days})
+}
+
+// matchCountWindow parses the `days` query parameter. Only an ABSENT parameter is the default window; anything supplied that is
+// not a positive whole number is rejected rather than silently defaulted, since a typo that reads as "the last week" when the
+// operator meant ninety days is a wrong number presented as a right one. `?days=` is supplied-and-empty, which is a malformed
+// value rather than an omission, so `present` is threaded through instead of inferring omission from the empty string.
+//
+// Values above the cap are clamped by the caller, not refused, because asking for more history than retention keeps is a
+// reasonable request with a truthful answer.
+func matchCountWindow(present bool, raw string) (api.MatchCountWindow, bool) {
+	if !present {
+		return api.DefaultMatchCountWindow, true
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days <= 0 {
+		return 0, false
+	}
+	return api.MatchCountWindow(days), true
 }
 
 // createExclusionRequest is the POST wire shape. host_group_id defaults to 0 (global). created_by + the audit actor come from the

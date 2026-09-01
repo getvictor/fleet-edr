@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
   upsertDetectionRuleSetting,
@@ -38,6 +39,9 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+// A timestamp the validator accepts, so a malformed-row case fails for its own reason rather than for its placeholder.
+const GOOD_TS = "2026-09-01T00:00:00Z";
+
 describe("detection-config API client", () => {
   it("listDetectionExclusions unwraps the envelope", async () => {
     const mock = stubFetch({
@@ -63,6 +67,89 @@ describe("detection-config API client", () => {
     stubFetch({ rule_settings: null });
     expect(await listDetectionRuleSettings()).toEqual([]);
   });
+
+  // The component tests mock this client wholesale, so the query serialisation and the envelope REJECTION below have no other
+  // coverage. Rejection, not coalescing: this endpoint deliberately refuses a malformed envelope where the sibling list endpoints
+  // above coalesce one (a null envelope crashed the exclusions page once, which is why those coalesce).
+  it("listDetectionRuleMatchCounts accepts a well-formed row", async () => {
+    const row = { rule_id: "suspicious_exec", matches: 90, hosts: 3, last_seen: "2026-09-01T00:00:00Z" };
+    stubFetch({ match_counts: [row], days: 7 });
+    expect(await listDetectionRuleMatchCounts()).toEqual({ counts: [row], days: 7 });
+  });
+
+  // Zero is allowed even though the store should never emit it: rejecting it would be the client inventing a rule the server
+  // does not promise, and a refused response renders as "unavailable", which is a worse answer than a truthful zero.
+  it("listDetectionRuleMatchCounts accepts a zero count rather than inventing a floor", async () => {
+    const row = { rule_id: "suspicious_exec", matches: 0, hosts: 0, last_seen: "2026-09-01T00:00:00Z" };
+    stubFetch({ match_counts: [row], days: 7 });
+    expect(await listDetectionRuleMatchCounts()).toEqual({ counts: [row], days: 7 });
+  });
+
+  it("listDetectionRuleMatchCounts omits the query when no window is given", async () => {
+    const mock = stubFetch({ match_counts: [], days: 7 });
+    const out = await listDetectionRuleMatchCounts();
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("/api/v1/detection-config/rule-match-counts");
+    expect(target.toString()).not.toContain("days=");
+    expect(out).toEqual({ counts: [], days: 7 });
+  });
+
+  it("listDetectionRuleMatchCounts serialises an explicit window", async () => {
+    const mock = stubFetch({ match_counts: [], days: 14 });
+    await listDetectionRuleMatchCounts(14);
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("days=14");
+  });
+
+  // The server reports the window it ACTUALLY covered, which the cap can make narrower than the one requested. The client must
+  // pass that through rather than echo the caller's argument, or the UI labels the numbers with a period they do not cover.
+  it("listDetectionRuleMatchCounts reports the server's window, not the requested one", async () => {
+    stubFetch({ match_counts: [], days: 30 });
+    expect(await listDetectionRuleMatchCounts(365)).toEqual({ counts: [], days: 30 });
+  });
+
+  // The opposite of the sibling endpoints above, deliberately. There an empty list is just an empty table; here the server always
+  // normalises empty to [], so a missing array is a malformed response, and coalescing it to [] would render every rule as quiet,
+  // which is the reading that gets a noisy rule promoted. Rejecting sends the caller down its unavailable path instead.
+  //
+  // Checked by shape rather than against one sentinel: an earlier version tested only for null, so an OMITTED key slipped through
+  // as undefined and threw on .map() further out, failing the whole page rather than degrading one column. Each row below is a
+  // shape that must be refused, not just the null one.
+  for (const [name, envelope] of [
+    ["null match_counts", { match_counts: null, days: 7 }],
+    ["omitted match_counts", { days: 7 }],
+    ["match_counts is not an array", { match_counts: { "0": {} }, days: 7 }],
+    ["omitted days", { match_counts: [] }],
+    ["days is not a number", { match_counts: [], days: "7" }],
+    ["days is zero", { match_counts: [], days: 0 }],
+    ["days is negative", { match_counts: [], days: -3 }],
+    ["days is fractional", { match_counts: [], days: 1.5 }],
+    // Each row is malformed in exactly ONE way, with every other field valid. A shared bad placeholder (last_seen: "x") made the
+    // timestamp check reject these rows before the count check ran, so breaking the count guard changed nothing and the mutant
+    // survived. A fixture that fails for the wrong reason tests the wrong guard.
+    //
+    // Row shapes. The first is the dangerous one: without a rule_id the caller keys the row under `undefined`, so every real rule
+    // falls through to "not recorded" and the whole table reads as a quiet fleet, which is misleading evidence rather than a crash.
+    ["a row with no rule_id", { match_counts: [{ matches: 1, hosts: 1, last_seen: "2026-09-01T00:00:00Z" }], days: 7 }],
+    ["a row with an empty rule_id", { match_counts: [{ rule_id: "", matches: 1, hosts: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing matches", { match_counts: [{ rule_id: "r", hosts: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing hosts", { match_counts: [{ rule_id: "r", matches: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing last_seen", { match_counts: [{ rule_id: "r", matches: 1, hosts: 1 }], days: 7 }],
+    // A complete row whose timestamp is not a date. Accepted as a string it would render the cell with recency silently absent,
+    // which no well-formed response can produce, so the reader could not tell it from a rule that has none.
+    ["a row whose last_seen is unparseable", { match_counts: [{ rule_id: "r", matches: 1, hosts: 1, last_seen: "not-a-date" }], days: 7 }],
+    ["a row whose last_seen is empty", { match_counts: [{ rule_id: "r", matches: 1, hosts: 1, last_seen: "" }], days: 7 }],
+    ["a row with a negative count", { match_counts: [{ rule_id: "r", matches: -1, hosts: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row with a fractional count", { match_counts: [{ rule_id: "r", matches: 1.5, hosts: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row that is not an object", { match_counts: ["nope"], days: 7 }],
+    ["a row that is null", { match_counts: [null], days: 7 }],
+    ["an empty row", { match_counts: [{}], days: 7 }],
+  ] as [string, unknown][]) {
+    it(`listDetectionRuleMatchCounts rejects a malformed envelope: ${name}`, async () => {
+      stubFetch(envelope);
+      await expect(listDetectionRuleMatchCounts()).rejects.toThrow(/malformed rule-match-counts/);
+    });
+  }
 
   it("createDetectionExclusion POSTs the body with the CSRF header attached", async () => {
     sessionStorage.setItem("edr_csrf_token", "csrf-123");
