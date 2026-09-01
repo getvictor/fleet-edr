@@ -178,7 +178,12 @@ const DefaultMatchCountPruneInterval = time.Hour
 // MUST be called before Run. The prune loop reads the field without synchronisation, which is safe only because starting that
 // goroutine happens-after this write; cmd/main calls this from openContexts, well before it launches Run. Calling it afterwards
 // would be a data race, and one that `go test -race` would not see unless a test happened to reproduce the ordering.
-func (r *Rules) SetRetentionDays(days int) { r.retentionDays = days }
+func (r *Rules) SetRetentionDays(days int) {
+	r.retentionDays = days
+	// The same number bounds how far back the read surface may claim to see. Pruning at 7 days while the API advertises a 30-day
+	// window would report a period the rows no longer cover, which is the misreport the echoed window exists to prevent.
+	r.detectionConfigH.SetMatchCountCap(days)
+}
 
 // pruneMatchCountsLoop prunes on a ticker until ctx is cancelled. The first pass runs immediately rather than after a full
 // interval, so a replica that restarts often still prunes; the sweep is idempotent, so an eager pass costs one no-op delete.

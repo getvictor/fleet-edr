@@ -894,10 +894,15 @@ paths:
           in: query
           required: false
           description: |
-            Window in whole days. Defaults to 7 and is capped at 30 (the
-            counter retention window). A request above the cap is served at
-            the cap, and the `days` field in the response reports the window
-            actually covered, which may be narrower than the one requested.
+            Window in whole days. Defaults to 7. Capped at the deployment's
+            own counter retention (`EDR_RETENTION_DAYS`), and never more than
+            30 days even where retention is longer or disabled, because the
+            counters older than retention have already been pruned. The
+            default is capped by the same bound. A request above the cap is
+            served at the cap, and the `days` field in the response reports
+            the window actually covered, which may be narrower than the one
+            requested. `?days=` (supplied but empty) is rejected, like any
+            other value that is not a positive whole number.
           schema:
             type: integer
             minimum: 1

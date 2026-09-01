@@ -137,6 +137,11 @@ const OBSERVED_COLUMN_TOOLTIP =
   "rather than of how many alerts promoting the rule would raise: repeated matches on the same process collapse into a single " +
   "alert once a rule alerts.";
 
+// Header tooltip when the counts read failed. Says the evidence is missing rather than letting the column's normal caption imply
+// the dashes are data.
+const OBSERVED_UNAVAILABLE_TOOLTIP =
+  "Match counts could not be loaded, so this column shows no evidence either way. Reload before reading a rule as quiet.";
+
 // formatMatches keeps large counts readable at a glance, since the difference that matters when scanning this column is between
 // tens and thousands rather than between 4,102 and 4,140.
 const matchesAbbreviationFloor = 10_000;
@@ -146,12 +151,39 @@ function formatMatches(n: number): string {
   return n.toLocaleString();
 }
 
+// formatLastSeen renders how recently a rule last matched, which is the third signal the column carries: a rule that matched
+// heavily and has since gone quiet is a different promotion case from one still matching now, and equal totals cannot separate
+// them. Coarse on purpose (the counters are bucketed by day), and an unparseable timestamp renders nothing rather than "Invalid
+// Date".
+const millisecondsPerHour = 3_600_000;
+const hoursPerDay = 24;
+
+function formatLastSeen(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const hours = Math.floor((Date.now() - then) / millisecondsPerHour);
+  if (hours < 1) return "just now";
+  if (hours < hoursPerDay) return `${String(hours)}h ago`;
+  return `${String(Math.floor(hours / hoursPerDay))}d ago`;
+}
+
 // renderObserved draws the Observed cell for one rule.
+//
+// Three states, deliberately distinct. A failed read is UNAVAILABLE, not a dash: the spec requires a read failure be reported as
+// an error rather than as an empty result, because an empty result reads as a quiet rule and a quiet rule is what gets promoted.
+// Rendering a failure as absence would invert the meaning of the column at exactly the moment it is least reliable.
 //
 // A rule with nothing recorded shows a dash rather than "0". Zero is a claim that the rule was watched and did nothing; absence can
 // equally mean it was promoted before the window opened, or that the window predates its registration. The dash says "nothing
 // recorded here", which is what the data supports.
-function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days: number) {
+function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days: number, unavailable: boolean) {
+  if (unavailable) {
+    return (
+      <span className="detection-config__observed-unavailable" aria-label={`match counts unavailable for ${ruleID}`}>
+        unavailable
+      </span>
+    );
+  }
   if (count === undefined) {
     return (
       <span className="detection-config__observed-none" aria-label={`no matches recorded for ${ruleID}`}>
@@ -160,10 +192,15 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
     );
   }
   const hosts = `${String(count.hosts)} host${count.hosts === 1 ? "" : "s"}`;
+  const lastSeen = formatLastSeen(count.last_seen);
+  const title =
+    `approximately ${count.matches.toLocaleString()} matches on ${hosts} in the last ${String(days)} days` +
+    (lastSeen === "" ? "" : `, last matched ${lastSeen}`);
   return (
-    <span title={`approximately ${count.matches.toLocaleString()} matches on ${hosts} in the last ${String(days)} days`}>
+    <span title={title}>
       {formatMatches(count.matches)}
       <span className="detection-config__observed-hosts"> on {hosts}</span>
+      {lastSeen === "" ? null : <span className="detection-config__observed-last"> &middot; {lastSeen}</span>}
     </span>
   );
 }
@@ -206,6 +243,10 @@ export function DetectionConfig() {
   // zero, so the lookup genuinely can miss and the guard below is a real one rather than a formality.
   const [observed, setObserved] = useState<Record<string, RuleMatchCount | undefined>>({});
   const [observedDays, setObservedDays] = useState<number>(0);
+  // observedUnavailable records that the counts read FAILED, which is a different claim from "no rule matched". Without it a
+  // failed read renders as a table of dashes, i.e. as evidence that every rule is quiet, which is the reading that gets a noisy
+  // rule promoted.
+  const [observedUnavailable, setObservedUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -273,6 +314,7 @@ export function DetectionConfig() {
     setExclusions(excl);
     setRules(ruleDocs);
     setSettings(ruleSettings);
+    setObservedUnavailable(matchCounts === null);
     if (matchCounts !== null) {
       setObserved(Object.fromEntries(matchCounts.counts.map((c) => [c.rule_id, c])));
       setObservedDays(matchCounts.days);
@@ -585,7 +627,7 @@ export function DetectionConfig() {
                   <th title="The severity each rule declares in the catalog. It applies whenever no override is set below.">
                     Default severity
                   </th>
-                  <th title={OBSERVED_COLUMN_TOOLTIP}>Observed</th>
+                  <th title={observedUnavailable ? OBSERVED_UNAVAILABLE_TOOLTIP : OBSERVED_COLUMN_TOOLTIP}>Observed</th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
                     Severity override
@@ -608,7 +650,9 @@ export function DetectionConfig() {
                         <code className="detection-config__rule-id">{r.id}</code>
                       </td>
                       <td className="detection-config__default-severity">{r.doc.severity || "(unspecified)"}</td>
-                      <td className="detection-config__observed">{renderObserved(observed[r.id], r.id, observedDays)}</td>
+                      <td className="detection-config__observed">
+                        {renderObserved(observed[r.id], r.id, observedDays, observedUnavailable)}
+                      </td>
                       <td>
                         <Select
                           label=""

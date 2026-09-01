@@ -119,6 +119,8 @@ func foldTally(tally api.MonitorTally) map[matchKey]int {
 
 // MatchCounts reports what each rule has matched in monitor mode over the last `days` days, one row per rule that matched at all.
 //
+// `days` is the ALREADY-RESOLVED window (see api.MatchCountWindow.ClampTo), not a raw request.
+//
 // Aggregated in SQL rather than by reading rows and folding them in Go: the table is keyed (rule_id, day, host_id), so the leading
 // (rule_id, day) prefix serves this GROUP BY directly, and the alternative would carry every host row for every rule across the
 // window to the application to add them up.
@@ -127,7 +129,9 @@ func foldTally(tally api.MonitorTally) map[matchKey]int {
 // it does not find here; inventing rows for rules that did nothing would mean joining against a rule list this store does not have
 // and should not learn.
 func (s *Store) MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error) {
-	cutoff := time.Now().UTC().AddDate(0, 0, -int(days.Clamp())+1).Format(time.DateOnly)
+	// days arrives already resolved: the handler owns the window policy, because only it knows the deployment's retention. Nothing
+	// is re-clamped here (validate at the boundary, trust the types inward).
+	cutoff := time.Now().UTC().AddDate(0, 0, -int(days)+1).Format(time.DateOnly)
 
 	var rows []api.RuleMatchCount
 	err := s.db.SelectContext(ctx, &rows, `

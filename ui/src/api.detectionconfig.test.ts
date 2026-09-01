@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
   upsertDetectionRuleSetting,
@@ -62,6 +63,36 @@ describe("detection-config API client", () => {
   it("listDetectionRuleSettings tolerates a null envelope", async () => {
     stubFetch({ rule_settings: null });
     expect(await listDetectionRuleSettings()).toEqual([]);
+  });
+
+  // The component tests mock this client wholesale, so the query serialisation and the null coalescing below have no other
+  // coverage. Both have a history here: a null envelope crashed the exclusions page once already (see above).
+  it("listDetectionRuleMatchCounts omits the query when no window is given", async () => {
+    const mock = stubFetch({ match_counts: [], days: 7 });
+    const out = await listDetectionRuleMatchCounts();
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("/api/v1/detection-config/rule-match-counts");
+    expect(target.toString()).not.toContain("days=");
+    expect(out).toEqual({ counts: [], days: 7 });
+  });
+
+  it("listDetectionRuleMatchCounts serialises an explicit window", async () => {
+    const mock = stubFetch({ match_counts: [], days: 14 });
+    await listDetectionRuleMatchCounts(14);
+    const [target] = mock.mock.calls[0] as [URL];
+    expect(target.toString()).toContain("days=14");
+  });
+
+  // The server reports the window it ACTUALLY covered, which the cap can make narrower than the one requested. The client must
+  // pass that through rather than echo the caller's argument, or the UI labels the numbers with a period they do not cover.
+  it("listDetectionRuleMatchCounts reports the server's window, not the requested one", async () => {
+    stubFetch({ match_counts: [], days: 30 });
+    expect(await listDetectionRuleMatchCounts(365)).toEqual({ counts: [], days: 30 });
+  });
+
+  it("listDetectionRuleMatchCounts tolerates a null envelope", async () => {
+    stubFetch({ match_counts: null, days: 7 });
+    expect(await listDetectionRuleMatchCounts()).toEqual({ counts: [], days: 7 });
   });
 
   it("createDetectionExclusion POSTs the body with the CSRF header attached", async () => {

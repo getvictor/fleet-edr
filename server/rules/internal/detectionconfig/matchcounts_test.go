@@ -230,22 +230,25 @@ func TestMatchCounts(t *testing.T) {
 	assert.Equal(t, int64(1), byRule["narrow"].Hosts, "one noisy host is an exclusion, not a broad rule")
 	assert.Equal(t, int64(90), byRule["broad"].Matches)
 	assert.Equal(t, int64(3), byRule["broad"].Hosts, "same volume, three hosts: the rule itself is too broad")
-	assert.False(t, byRule["broad"].LastSeen.IsZero(), "last_seen carries so a rule that went quiet is distinguishable")
+	// Pinned as the MOST RECENT contributing row, not merely "populated": broad's three rows are 1, 2 and 3 days old, so
+	// swapping MAX(last_seen) for MIN(last_seen) would still leave this non-zero. Recency is one of the three signals the
+	// endpoint promises, and "matched heavily but has since gone quiet" is the case it exists to distinguish.
+	assert.WithinDuration(t, time.Now().UTC().AddDate(0, 0, -1), byRule["broad"].LastSeen, time.Hour,
+		"last_seen is the newest contributing row, not the oldest")
+	assert.Greater(t, byRule["broad"].LastSeen.Unix(), time.Now().UTC().AddDate(0, 0, -2).Unix(),
+		"a MIN aggregate would report the three-day-old row instead")
 
 	// Ordered by volume, because the rule an operator most wants to see is the loudest one.
 	assert.Equal(t, "broad", got[0].RuleID, "ties break by rule id, so the order is stable")
 	assert.Equal(t, "narrow", got[1].RuleID)
 
-	// A longer window reaches the older rows; the cap stops a reader asking past what retention keeps.
+	// A longer window reaches the older rows. The store is handed an ALREADY-RESOLVED window (the handler owns the cap, because
+	// only it knows the deployment's retention), so this asks it to honour the window it is given rather than to clamp one.
 	wide, err := store.MatchCounts(ctx, api.MaxMatchCountWindow)
 	require.NoError(t, err)
 	assert.Len(t, wide, 3, "thirty days reaches stale but not ancient")
 
-	overCap, err := store.MatchCounts(ctx, api.MaxMatchCountWindow+90)
+	widest, err := store.MatchCounts(ctx, api.MaxMatchCountWindow+90)
 	require.NoError(t, err)
-	assert.Equal(t, wide, overCap, "a window past the cap is clamped rather than served, so ancient stays out of reach")
-
-	zero, err := store.MatchCounts(ctx, 0)
-	require.NoError(t, err)
-	assert.Len(t, zero, 2, "an unspecified window is the default week")
+	assert.Len(t, widest, 4, "a wider resolved window reaches ancient: the store honours it rather than second-guessing it")
 }

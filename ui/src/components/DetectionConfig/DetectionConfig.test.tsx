@@ -751,8 +751,66 @@ describe("DetectionConfig observed column", () => {
     await waitFor(() => {
       expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument();
     });
-    expect(screen.getByLabelText("no matches recorded for suspicious_exec")).toBeInTheDocument();
     expect(screen.queryByText(/Error:/)).not.toBeInTheDocument();
+  });
+
+  // spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/a-failed-read-is-not-presented-as-an-absence-of-matches
+  // A FAILED read must not render as absence. This test previously asserted the opposite (that the cell fell back to "no matches
+  // recorded"), which quietly turned an outage into fleet-wide evidence that every rule is quiet: the exact reading that gets a
+  // noisy rule promoted, and the reading the spec forbids.
+  it("says the counts are unavailable when the read fails, rather than showing them as absent", async () => {
+    stubReads({ rules: [makeRuleEntry()] });
+    vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("db down"));
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("match counts unavailable for suspicious_exec")).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText("no matches recorded for suspicious_exec")).not.toBeInTheDocument();
+    // And the mode control stays usable, because the counts inform the decision rather than gate it.
+    expect(screen.getByLabelText("mode for suspicious_exec")).toBeEnabled();
+  });
+
+  // A rule genuinely absent from a SUCCESSFUL read is the other case, and must keep reading as absence.
+  it("shows a dash for a rule with nothing recorded when the read succeeded", async () => {
+    stubReads({ rules: [makeRuleEntry()], matchCounts: [] });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("no matches recorded for suspicious_exec")).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText("match counts unavailable for suspicious_exec")).not.toBeInTheDocument();
+  });
+
+  // Recency is the third signal the column promises: heavy-but-quiet and heavy-and-current are different promotion cases.
+  it("shows how recently a rule last matched", async () => {
+    // Plain arithmetic, flagged only because dash-lint's C-style scanner has no string-literal state: an exclusion glob near the
+    // top of this file ends in the two characters that open a block comment, so the scanner reads much of the file as commented
+    // prose. Identical arithmetic in HostList.test.tsx passes. Issue #820.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3_600_000).toISOString(); // dash-lint:ignore
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 5, hosts: 1, last_seen: twoDaysAgo }],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/2d ago/)).toBeInTheDocument();
+    });
+  });
+
+  // An unparseable timestamp renders nothing rather than "Invalid Date", and must not take the count down with it.
+  it("still shows the count when last_seen is unparseable", async () => {
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 5, hosts: 1, last_seen: "not-a-date" }],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/on 1 host$/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
   });
 
   // Large counts abbreviate, because scanning this column is about telling tens from thousands.

@@ -2,7 +2,10 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,8 +14,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
+	"github.com/fleetdm/edr/server/rules/internal/operator"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 	"github.com/fleetdm/edr/server/testdb"
 )
@@ -166,4 +171,51 @@ func TestMonitorMatchRecorder_IsTheStore(t *testing.T) {
 	rec := r.MonitorMatchRecorder()
 	require.NotNil(t, rec, "a nil recorder would leave production emitting metrics and persisting nothing")
 	assert.Same(t, r.detectionConfigStore, rec)
+}
+
+// allowAllAuthZ lets the wiring test reach the handler; the endpoint's own authz gating is covered in the operator package.
+type allowAllAuthZ struct{}
+
+func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Resource) (identityapi.Decision, error) {
+	return identityapi.Decision{Allow: true, Reason: identityapi.ReasonGranted}, nil
+}
+
+// spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/the-cap-follows-the-deployment-s-retention
+//
+// TestSetRetentionDays_BoundsTheReadWindow pins the WIRING, which is the half the operator-package tests cannot see: they set the
+// cap on the handler directly, so they pass just as well when nothing in the server ever calls SetMatchCountCap.
+//
+// Driven through the real HTTP surface rather than by reading the handler's field, because the field is unexported in another
+// package and because what matters is the number an operator is shown, not where it is stored.
+func TestSetRetentionDays_BoundsTheReadWindow(t *testing.T) {
+	t.Parallel()
+	r, _ := newPruneHarness(t, 0)
+	r.detectionConfigH = operator.NewDetectionConfig(r.detectionConfigSvc, allowAllAuthZ{}, slog.New(slog.DiscardHandler))
+	mux := http.NewServeMux()
+	r.detectionConfigH.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	readWindow := func(t *testing.T) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+			srv.URL+"/api/v1/detection-config/rule-match-counts?days=30", nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var body struct {
+			Days int `json:"days"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		return body.Days
+	}
+
+	assert.Equal(t, 30, readWindow(t), "before retention is known the constant cap stands")
+
+	r.SetRetentionDays(7)
+
+	assert.Equal(t, 7, readWindow(t),
+		"the prune keeps 7 days, so the read surface must not claim 30: pruning and reporting share one number")
 }

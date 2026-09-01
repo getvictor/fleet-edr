@@ -418,18 +418,25 @@ var _ detectionConfigService = (*detectionconfig.Service)(nil)
 
 // spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/counts-are-readable-per-rule-over-a-window
 // spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/the-window-is-stated-and-bounded
+// spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/the-cap-follows-the-deployment-s-retention
 //
 // TestHandler_ListMatchCounts covers the endpoint an operator's promote decision reads.
 func TestHandler_ListMatchCounts(t *testing.T) {
 	t.Parallel()
 
-	newSrv := func(t *testing.T, svc *fakeDCService) *httptest.Server {
+	// newSrvWithHandler also returns the handler, so a case can set the retention-derived cap the way cmd/main does.
+	newSrvWithHandler := func(t *testing.T, svc *fakeDCService) (*httptest.Server, *DetectionConfigHandler) {
 		t.Helper()
 		h := NewDetectionConfig(svc, allowAllAuthZ{}, slog.Default())
 		mux := http.NewServeMux()
 		h.RegisterRoutes(mux)
 		srv := httptest.NewServer(mux)
 		t.Cleanup(srv.Close)
+		return srv, h
+	}
+	newSrv := func(t *testing.T, svc *fakeDCService) *httptest.Server {
+		t.Helper()
+		srv, _ := newSrvWithHandler(t, svc)
 		return srv
 	}
 	get := func(t *testing.T, srv *httptest.Server, query string) *http.Response {
@@ -479,6 +486,50 @@ func TestHandler_ListMatchCounts(t *testing.T) {
 		assert.Equal(t, api.MaxMatchCountWindow, body.Days, "and the response reports the window it actually covers")
 	})
 
+	t.Run("the cap follows the deployment's retention, not the constant", func(t *testing.T) {
+		t.Parallel()
+		// The counters are pruned with EDR_RETENTION_DAYS, which the quickstart compose sets to 7. A fixed 30-day cap would
+		// report a 30-day window over a week of surviving rows, which is the same misreport sourced from configuration.
+		for _, tc := range []struct {
+			name      string
+			retention int
+			query     string
+			want      api.MatchCountWindow
+		}{
+			{"a request past the retention is served at the retention", 7, "?days=30", 7},
+			{"the DEFAULT is capped too, not just an explicit request", 3, "", 3},
+			{"a request inside the retention is untouched", 14, "?days=10", 10},
+			{"a retention wider than the constant cap does not raise it", 365, "?days=90", api.MaxMatchCountWindow},
+			{"retention disabled leaves the constant cap in force", 0, "?days=90", api.MaxMatchCountWindow},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				svc := &fakeDCService{}
+				srv, h := newSrvWithHandler(t, svc)
+				h.SetMatchCountCap(tc.retention)
+				resp := get(t, srv, tc.query)
+				defer resp.Body.Close()
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+
+				var body struct {
+					Days api.MatchCountWindow `json:"days"`
+				}
+				require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+				assert.Equal(t, tc.want, svc.lastWindow, "the store is asked for the window retention can actually cover")
+				assert.Equal(t, tc.want, body.Days, "and the response reports the same one")
+			})
+		}
+	})
+
+	t.Run("an explicitly empty window is rejected, not defaulted", func(t *testing.T) {
+		t.Parallel()
+		// `?days=` supplied a value; it is just not a number. Inferring "omitted" from the empty string would answer a question
+		// the caller did not ask and label it with a window they never chose, which is what rejecting a typo is for.
+		resp := get(t, newSrv(t, &fakeDCService{}), "?days=")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
 	t.Run("an absent window is the default rather than zero", func(t *testing.T) {
 		t.Parallel()
 		svc := &fakeDCService{}
@@ -501,10 +552,21 @@ func TestHandler_ListMatchCounts(t *testing.T) {
 	t.Run("a nonsense window is rejected rather than silently defaulted", func(t *testing.T) {
 		t.Parallel()
 		// Defaulting a typo would answer a question the operator did not ask and label it with a period it does not cover.
-		for _, bad := range []string{"?days=0", "?days=-3", "?days=lots"} {
-			resp := get(t, newSrv(t, &fakeDCService{}), bad)
-			assert.Equal(t, http.StatusBadRequest, resp.StatusCode, bad)
-			resp.Body.Close()
+		// Named per shape rather than looped over a bare string slice: each of these fails for its own reason, and a shared
+		// parent name makes the report say only that one of four inputs was wrong.
+		for _, tc := range []struct{ name, query string }{
+			{"zero", "?days=0"},
+			{"negative", "?days=-3"},
+			{"not a number", "?days=lots"},
+			{"fractional", "?days=1.5"},
+			{"larger than an int64", "?days=99999999999999999999"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				resp := get(t, newSrv(t, &fakeDCService{}), tc.query)
+				defer resp.Body.Close()
+				assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			})
 		}
 	})
 
@@ -515,5 +577,27 @@ func TestHandler_ListMatchCounts(t *testing.T) {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
 			"an empty list would read as a quiet rule, which is the reading that gets a noisy rule promoted")
+	})
+}
+
+// FuzzMatchCountWindow pins the two properties the rest of the endpoint relies on, over the whole space of query values rather
+// than the handful the table above names: the parser never panics on an attacker-supplied string, and when it accepts a value the
+// window is strictly positive.
+//
+// The second property is the load-bearing one. The handler feeds this straight into min() against the retention cap, so a zero or
+// negative window accepted here would become a cutoff of today-or-later and silently report every rule as having matched nothing,
+// which is the "rule looks quiet" reading that gets a noisy rule promoted.
+func FuzzMatchCountWindow(f *testing.F) {
+	for _, seed := range []string{"", "7", "0", "-3", "lots", "1.5", "99999999999999999999", "+7", " 7", "٧", "7\x00"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		got, ok := matchCountWindow(true, raw)
+		if ok && got < 1 {
+			t.Fatalf("matchCountWindow(true, %q) accepted a non-positive window %d", raw, got)
+		}
+		if !ok && got != 0 {
+			t.Fatalf("matchCountWindow(true, %q) rejected but returned %d, not the zero value", raw, got)
+		}
 	})
 }

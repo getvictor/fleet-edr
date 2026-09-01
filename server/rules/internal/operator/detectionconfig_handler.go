@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/fleetdm/edr/server/httpserver"
@@ -59,6 +60,12 @@ type DetectionConfigHandler struct {
 	authz          identityapi.AuthZ
 	principalLabel principalLabelResolver
 	logger         *slog.Logger
+	// matchCountCap is the furthest back a match-count read may reach. Seeded with the constant maximum at construction and
+	// narrowed by SetMatchCountCap once the deployment's retention is known, so there is exactly ONE place that decides what an
+	// unconfigured or disabled retention means (api.EffectiveMatchCountCap) rather than a second fallback here that agrees with
+	// it by coincidence. Atomic because it is written during wiring and read by every request goroutine; a plain field would
+	// rest on a happens-before that is real today but invisible to the race detector.
+	matchCountCap atomic.Int64
 }
 
 // NewDetectionConfig builds the detection-config operator handler. svc + authz are required; logger defaults to slog.Default. A nil
@@ -73,7 +80,16 @@ func NewDetectionConfig(svc detectionConfigService, authz identityapi.AuthZ, log
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &DetectionConfigHandler{svc: svc, authz: authz, logger: logger}
+	h := &DetectionConfigHandler{svc: svc, authz: authz, logger: logger}
+	h.matchCountCap.Store(int64(api.MaxMatchCountWindow))
+	return h
+}
+
+// SetMatchCountCap records how many days of monitor-match counters the deployment retains, which bounds how far back a
+// rule-match-count read can honestly reach. cmd/main wires it from EDR_RETENTION_DAYS alongside the prune that enforces it.
+// Unset (or zero) leaves the constant cap in force.
+func (h *DetectionConfigHandler) SetMatchCountCap(retentionDays int) {
+	h.matchCountCap.Store(int64(api.EffectiveMatchCountCap(retentionDays)))
 }
 
 // SetPrincipalLabelResolver wires the optional directory lookup that resolves an exclusion's created_by principal id to a display
@@ -177,15 +193,16 @@ func (h *DetectionConfigHandler) handleListMatchCounts(w http.ResponseWriter, r 
 		identityapi.ActionDetectionConfigRead, identityapi.Resource{Type: "detection_config"}) {
 		return
 	}
-	days, ok := matchCountWindow(r.URL.Query().Get("days"))
+	query := r.URL.Query()
+	days, ok := matchCountWindow(query.Has("days"), query.Get("days"))
 	if !ok {
 		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput,
 			"days must be a positive whole number")
 		return
 	}
-	// Clamped HERE as well as in the store, because the number echoed below has to be the window the counts actually cover. The
-	// store clamping alone left this reporting the requested window over narrower data.
-	days = days.Clamp()
+	// Resolved HERE, not in the store, because the number echoed below has to be the window the counts actually cover, and only
+	// this layer knows the deployment's retention. Clamping in the store alone reported the requested window over narrower data.
+	days = min(days, api.MatchCountWindow(h.matchCountCap.Load()))
 	counts, err := h.svc.MatchCounts(ctx, days)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "detectionconfig list match counts", "err", err)
@@ -195,17 +212,20 @@ func (h *DetectionConfigHandler) handleListMatchCounts(w http.ResponseWriter, r 
 	if counts == nil {
 		counts = []api.RuleMatchCount{}
 	}
-	// The window echoed is the CLAMPED one: a client that asked for 90 days needs to know it is reading 30, or it will describe
-	// the number to an operator as covering a period it does not.
+	// The window echoed is the RESOLVED one: a client that asked for 90 days needs to know it is reading 30 (or 7, on a
+	// deployment that retains a week), or it will describe the number to an operator as covering a period it does not.
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"match_counts": counts, "days": days})
 }
 
-// matchCountWindow parses the `days` query parameter. Absent or empty is the default window; anything that is not a positive whole
-// number is rejected rather than silently defaulted, since a typo that reads as "the last week" when the operator meant ninety days
-// is a wrong number presented as a right one. Values above the cap are clamped by the store, not refused, because asking for more
-// history than retention keeps is a reasonable request with a truthful answer.
-func matchCountWindow(raw string) (api.MatchCountWindow, bool) {
-	if raw == "" {
+// matchCountWindow parses the `days` query parameter. Only an ABSENT parameter is the default window; anything supplied that is
+// not a positive whole number is rejected rather than silently defaulted, since a typo that reads as "the last week" when the
+// operator meant ninety days is a wrong number presented as a right one. `?days=` is supplied-and-empty, which is a malformed
+// value rather than an omission, so `present` is threaded through instead of inferring omission from the empty string.
+//
+// Values above the cap are clamped by the caller, not refused, because asking for more history than retention keeps is a
+// reasonable request with a truthful answer.
+func matchCountWindow(present bool, raw string) (api.MatchCountWindow, bool) {
+	if !present {
 		return api.DefaultMatchCountWindow, true
 	}
 	days, err := strconv.Atoi(raw)

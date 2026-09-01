@@ -271,20 +271,21 @@ type MonitorMatch struct {
 // confined to a crash between two adjacent statements.
 type MonitorTally []MonitorMatch
 
-// Clamp returns the window that will actually be served: the default when unspecified, the cap when the request exceeds it.
+// EffectiveMatchCountCap is the furthest back a read can honestly reach in a deployment retaining retentionDays days of counters.
 //
-// It lives on the type because two callers need the SAME answer for different reasons. The store needs it to build the query, and
-// the handler needs it to tell the client which window the numbers cover. Clamping in only the store leaves the handler echoing
-// the window that was ASKED for while serving a narrower one, which is precisely the misreport echoing the window exists to
-// prevent, and it is invisible to a handler test with a fake store because the clamp never runs.
-func (w MatchCountWindow) Clamp() MatchCountWindow {
-	if w <= 0 {
-		return DefaultMatchCountWindow
-	}
-	if w > MaxMatchCountWindow {
+// MaxMatchCountWindow alone is NOT that answer. The counters are pruned with the deployment's own EDR_RETENTION_DAYS, which
+// defaults to 30 but is 7 in the quickstart compose, so a fixed 30-day cap would report a 30-day window over whatever survived a
+// 7-day prune. That is the same misreport the echoed window exists to prevent, just sourced from configuration instead of from a
+// clamp: the caller is told a period the data does not cover.
+//
+// retentionDays <= 0 disables pruning, so counters accumulate indefinitely and the only remaining bound is MaxMatchCountWindow.
+// That bound stays: a promotion decision does not need more than a month of history, and an unbounded GROUP BY over an unpruned
+// table is a cost with no reader.
+func EffectiveMatchCountCap(retentionDays int) MatchCountWindow {
+	if retentionDays <= 0 || MatchCountWindow(retentionDays) > MaxMatchCountWindow {
 		return MaxMatchCountWindow
 	}
-	return w
+	return MatchCountWindow(retentionDays)
 }
 
 // RuleMatchCount is what a rule has been doing in monitor mode over a window: how much, how widely, and how recently.
@@ -303,7 +304,8 @@ type RuleMatchCount struct {
 	Matches int64 `db:"matches" json:"matches"`
 	// Hosts is how many distinct hosts contributed, which is the "how widely" half.
 	Hosts int64 `db:"hosts" json:"hosts"`
-	// LastSeen is the most recent match in the window, or the zero time when the rule has none.
+	// LastSeen is the most recent match in the window. Always set: a rule with no matches is absent from the result rather than
+	// present with a zero row, so there is no "has none" case to represent here.
 	LastSeen time.Time `db:"last_seen" json:"last_seen"`
 }
 
