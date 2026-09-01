@@ -379,21 +379,33 @@ func valuesOf(v any) []string {
 
 // knownLocations pins the binaries this corpus names that do NOT live in /usr/bin.
 //
-// Guessing /usr/bin for everything put ioreg, arp, tcpdump, sysadminctl and friends in the wrong directory, which matters because
-// a fixture is read as a sample of real telemetry and because agent/hostid already pins /usr/sbin/ioreg. The list covers the
-// leaves the vendored corpus actually names; anything absent falls through to the /usr/bin default, and the matcher verifies the
-// result either way, so a wrong entry is caught rather than shipped.
+// Guessing /usr/bin for everything put nineteen binaries in the wrong directory: the shells and core tools are in /bin, the
+// diagnostics in /usr/sbin, shutdown in /sbin, PlistBuddy in /usr/libexec. That matters because a fixture is read as a sample of
+// real telemetry and because agent/hostid already pins /usr/sbin/ioreg, and the MATCHER CANNOT CATCH IT: these rules are written
+// `Image|endswith`, so /usr/bin/launchctl satisfies them exactly as well as the canonical /bin/launchctl. Location fidelity is
+// the one property the oracle does not check, which is why it is pinned by hand here.
+//
+// Every entry was resolved against a real macOS host rather than recalled. Anything absent falls through to the /usr/bin default,
+// which is right for the corpus's third-party binaries (jamf, TeamViewer) that live wherever their vendor installed them.
 //
 //nolint:gosec // G101 fires on the "firmwarepasswd" entry: every value here is a binary path, not a credential.
 var knownLocations = map[string]string{
+	"PlistBuddy":      "/usr/libexec/PlistBuddy",
 	"arp":             "/usr/sbin/arp",
+	"bash":            "/bin/bash",
+	"dd":              "/bin/dd",
 	"dseditgroup":     "/usr/sbin/dseditgroup",
 	"dsenableroot":    "/usr/sbin/dsenableroot",
 	"firmwarepasswd":  "/usr/sbin/firmwarepasswd",
 	"installer":       "/usr/sbin/installer",
 	"ioreg":           "/usr/sbin/ioreg",
+	"launchctl":       "/bin/launchctl",
 	"netstat":         "/usr/sbin/netstat",
+	"rm":              "/bin/rm",
 	"screencapture":   "/usr/sbin/screencapture",
+	"sh":              "/bin/sh",
+	"shutdown":        "/sbin/shutdown",
+	"sysctl":          "/usr/sbin/sysctl",
 	"system_profiler": "/usr/sbin/system_profiler",
 	"sysadminctl":     "/usr/sbin/sysadminctl",
 	"tcpdump":         "/usr/sbin/tcpdump",
@@ -406,8 +418,11 @@ var knownLocations = map[string]string{
 // left cannot break the match; an exact match is left exactly as written.
 //
 // A name carrying a space is an application, not a command in a bin directory, so it takes the bundle layout the hand-written
-// Office fixture uses. A name that is ONLY whitespace is left to the default: space_after_filename's rule is about a path ending
-// in a space, and wrapping that in a bundle would obscure the very thing it detects.
+// Office fixture uses.
+//
+// A name that is ONLY whitespace belongs to space_after_filename, whose rule is about a masquerading executable whose path ends
+// in a space. That one goes under /tmp: the default would have produced `/usr/bin/ `, and on a sealed system volume no attacker
+// can create that file, so the sample would depict telemetry the platform cannot emit.
 func plausiblePath(value, modifier string) string {
 	extendable := strings.Contains(modifier, "endswith") || strings.Contains(modifier, "contains")
 	leaf := strings.TrimPrefix(value, "/")
@@ -419,7 +434,9 @@ func plausiblePath(value, modifier string) string {
 		return value // an exact match: extending it would break the comparison
 	case isKnown:
 		return known
-	case strings.TrimSpace(leaf) != "" && strings.Contains(leaf, " "):
+	case strings.TrimSpace(leaf) == "":
+		return "/tmp/fixture-subject" + leaf
+	case strings.Contains(leaf, " "):
 		return "/Applications/" + leaf + ".app/Contents/MacOS/" + leaf
 	case strings.HasPrefix(value, "/"):
 		return "/usr/bin" + value
