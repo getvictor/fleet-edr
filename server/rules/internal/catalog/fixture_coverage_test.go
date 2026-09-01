@@ -187,6 +187,11 @@ func TestNoOrphanFixtureDirectories(t *testing.T) {
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
+			// A JSON file sitting at the root of fixtures/ belongs to no rule, so nothing replays it, yet FixturePaths("fixtures")
+			// hands it to the dispatch-equivalence gate. That asymmetry is a place a fixture can hide: it looks like corpus, it
+			// counts as corpus for one gate, and no rule is ever asserted against it.
+			assert.NotEqualf(t, ".json", filepath.Ext(e.Name()),
+				"fixtures/%s belongs to no rule and is replayed by nothing: move it under fixtures/<rule_id>/", e.Name())
 			continue
 		}
 		assert.True(t, known[e.Name()],
@@ -217,6 +222,11 @@ func hasPositiveFixture(t *testing.T, ruleID string) bool {
 		c, err := detectiontestkit.LoadFixture(path)
 		require.NoError(t, err)
 		if len(c.ExpectedFindings) == 0 {
+			// The inverse of the check below, and the more dangerous half: a positive_* that expects nothing is silently a
+			// negative, and if the rule has another positive every gate stays green while the case that file was written to
+			// prove has quietly stopped proving it.
+			assert.Falsef(t, strings.HasPrefix(filepath.Base(path), "positive_"),
+				"%s is named positive_* but expects no findings", path)
 			continue
 		}
 		found = true
