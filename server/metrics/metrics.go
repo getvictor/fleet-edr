@@ -115,9 +115,12 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.monitorMatches, _ = meter.Int64Counter(
 		"edr.detection.monitor_matches",
 		metric.WithDescription("Rule matches suppressed because the resolved mode was monitor, by rule + severity. "+
-			"Compare against edr.alerts.created to see what promoting a rule would cost. Recorded once the batch is "+
-			"acknowledged, so a batch that is nacked and replayed is counted once rather than once per attempt; the residual "+
-			"inaccuracy is a crash between the acknowledgement and the record, which under-reports."),
+			"Counts MATCHES, not would-be alerts: edr.alerts.created counts newly created alerts, which deduplicate on "+
+			"(host, rule, subject) forever, so a rule that keeps matching one subject raises this series repeatedly and would "+
+			"raise exactly one alert. Read it as volume and reach, and treat it as an upper bound on what promotion produces. "+
+			"Recorded once the batch is acknowledged, so a nacked and replayed batch counts once rather than once per attempt; "+
+			"the residual inaccuracies are a crash between the acknowledgement and the record, which under-reports, and an "+
+			"evaluation outliving its claim lease, which can let a reclaimer count the same batch again."),
 		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(

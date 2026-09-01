@@ -8,7 +8,9 @@ The system SHALL record, durably and per rule, how many times each rule matched 
 
 A monitor match SHALL be attributed to the host it matched on and to the day it was recorded, so the record answers both questions a promotion turns on: how often the rule fires, and across how much of the fleet. Those are different decisions. A rule matching many times on one host is a candidate for an exclusion, while the same volume spread across every host means the rule itself is too broad, and a fleet-wide total alone cannot distinguish them.
 
-Counts SHALL be recorded once the batch that produced the matches is acknowledged, not while the batch is evaluated. A batch that fails is nacked and replayed whole, so a count written during evaluation is written again by every retry. The residual inaccuracy is the opposite one, a crash between the acknowledgement and the record, which under-reports; that is the safe direction for a number that gates promotion, because it makes a rule look cheaper to promote than it was.
+Counts SHALL be recorded once the batch that produced the matches is acknowledged, not while the batch is evaluated. A batch that fails is nacked and replayed whole, so a count written during evaluation is written again by every retry.
+
+Two residual inaccuracies remain and SHALL be documented rather than implied away. A crash between the acknowledgement and the record loses those counts, which under-reports; that is the safe direction for a number that gates promotion, because it makes a rule look cheaper to promote than it was. And an evaluation that outlives its claim lease can be re-offered to another worker while the first is still running: acknowledgement does not verify claim ownership, so both attempts can succeed and both can record. The recorded figure is therefore approximate, and MUST NOT be presented as an exact count of what promoting a rule would produce.
 
 A failure to record SHALL NOT fail the batch. The events are acknowledged by the time the record is attempted, and replaying real detection work to save a counter would trade the more valuable thing for the less valuable one.
 

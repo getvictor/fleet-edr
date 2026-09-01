@@ -117,9 +117,16 @@ type MetricsRecorder interface {
 	// It takes a count rather than being called per match because the caller aggregates a whole batch before recording it, and it
 	// does that because of WHEN it records: after the batch is acknowledged, not while evaluating. A nacked batch is replayed
 	// whole, so a counter incremented during evaluation counts a retried batch twice. Called after the acknowledgement, a replayed
-	// batch is counted once. The counter therefore no longer overstates under retries, which earlier versions of this comment
-	// warned it did; what it can now do instead is lose a batch to a crash between the ack and the record, which under-reports.
-	// That is the safer direction for a number that gates promoting a rule to alerting.
+	// batch is counted once.
+	//
+	// Two inaccuracies remain and a consumer has to know both. A crash between the acknowledgement and the record loses those
+	// counts, which under-reports. And an evaluation that outlives its claim lease can be re-offered to another worker while the
+	// first is still running; Ack does not verify claim ownership, so both attempts can succeed and both can record.
+	//
+	// Most importantly this counts MATCHES, not would-be alerts. AlertCreated fires only for a newly INSERTED alert, and alerts
+	// deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments this series every
+	// time and would have raised exactly one alert. The two series are comparable as volume, and this one is an upper bound on
+	// what promoting the rule would produce, not an estimate of it.
 	MonitorMatched(ctx context.Context, ruleID, severity string, n int)
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.

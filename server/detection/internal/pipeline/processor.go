@@ -434,6 +434,12 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 // counts. That is the safe direction for a number an operator uses to decide whether promoting a rule is affordable, because it
 // under-reports rather than over-reports.
 //
+// A successful Ack is NOT proof that this attempt uniquely processed the batch. Ack is an unconditional update that ignores its
+// affected-row count, and a claim expires after five minutes and is re-offered, so an evaluation that outlives its lease can be
+// running alongside its own reclaimer with both acknowledging successfully. Alert persistence is immune because it deduplicates
+// on (host, rule, subject); this additive counter is not, and can double-count that batch. Tracked as #817, which belongs in the
+// queue contract rather than here.
+//
 // A failure here cannot fail the batch: the events are already acknowledged, and re-nacking them to save a counter would replay
 // real detection work. It is logged and dropped.
 func (p *Processor) recordMonitorMatches(ctx context.Context, tally rulesapi.MonitorTally) {

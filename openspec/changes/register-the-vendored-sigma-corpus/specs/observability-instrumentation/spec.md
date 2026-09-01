@@ -8,7 +8,9 @@ The system SHALL expose the following counters with stable names so dashboards a
 
 `edr.detection.monitor_matches` SHALL carry the same `rule_id` and `severity` attributes as `edr.alerts.created`, and SHALL label a match with the severity the alert would have carried, so that the two series describe one rule identically and can be compared. Comparing them is how an operator judges what promoting a rule to alerting would produce.
 
-`edr.detection.monitor_matches` SHALL be recorded once the batch that produced the matches is acknowledged, not while the batch is evaluated, and this SHALL be documented where the counter is defined. A batch that fails is nacked and replayed whole, so a counter incremented during evaluation counts a retried batch once per attempt; recorded after the acknowledgement, a replayed batch is counted once. The residual inaccuracy is the opposite one, a crash between the acknowledgement and the record, which under-reports. That is the safe direction for a number that gates promotion, because it makes a rule look cheaper to promote than it was rather than more expensive.
+`edr.detection.monitor_matches` SHALL be recorded once the batch that produced the matches is acknowledged, not while the batch is evaluated, and this SHALL be documented where the counter is defined. A batch that fails is nacked and replayed whole, so a counter incremented during evaluation counts a retried batch once per attempt; recorded after the acknowledgement, a replayed batch is counted once.
+
+The counter SHALL be documented as counting MATCHES rather than would-be alerts. `edr.alerts.created` counts newly created alerts, which deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments the monitor series every time and would raise exactly one alert. The two are comparable as volume, and the monitor series is an upper bound on what promoting the rule produces rather than an estimate of it. Documenting that is what keeps the recommended comparison from being read as a forecast.
 
 #### Scenario: Ingested events are counted by host
 
