@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -23,10 +22,11 @@ import (
 // quietly stops matching looks exactly like a rule nothing tripped. The fixtures are what turn that silence into a failure: each
 // one is a committed event sequence with the finding it must produce, replayed through the real decode / graph / evaluate path.
 //
-// Two tests, deliberately separate, because they fail for different reasons and a reader should be able to tell which happened:
+// Three tests, deliberately separate, because they fail for different reasons and a reader should be able to tell which happened:
 //
 //   - TestEveryCatalogRuleHasARegressionFixture is the COVERAGE gate. It answers "does every rule have one".
 //   - TestCatalogFixturesStillFire is the REGRESSION gate. It answers "does every fixture still produce what it claims".
+//   - TestNoOrphanFixtureDirectories is the HYGIENE gate. It answers "does every fixture directory still name a rule".
 //
 // Folding them together would report a brand-new rule with no fixture and a shipped rule that broke as the same failure.
 
@@ -201,29 +201,16 @@ func TestNoOrphanFixtureDirectories(t *testing.T) {
 func hasPositiveFixture(t *testing.T, ruleID string) bool {
 	t.Helper()
 
-	// Walked recursively rather than globbed at the top level, because Replay walks recursively: its own doc offers
-	// `<dir>/sudoers/positive_overwrite.json` as a supported layout. A top-level glob would report a rule whose positive lives in
-	// a subdirectory as uncovered while the replay gate happily ran it, so the two gates would disagree and the only way to
-	// satisfy both would be to duplicate the fixture at the top level. Discovery has to match the thing it is gating.
-	var paths []string
-	err := filepath.WalkDir(filepath.Join("fixtures", ruleID), func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), ".json") {
-			paths = append(paths, path)
-		}
-		return nil
-	})
+	// Discovery and decoding come from the replay harness itself, so the coverage gate can only ever look at exactly the files
+	// the regression gate runs. When this walked its own way, a nested fixture was replayed while being reported as uncovered.
+	paths, err := detectiontestkit.FixturePaths(filepath.Join("fixtures", ruleID))
 	if errors.Is(err, fs.ErrNotExist) {
 		return false // no directory at all: uncovered, which is the coverage gate's business to report.
 	}
 	require.NoError(t, err)
 	for _, path := range paths {
-		raw, err := os.ReadFile(path) //nolint:gosec // fixture path built from a catalog rule id, not user input
-		require.NoErrorf(t, err, "read %s", path)
-		var c detectiontestkit.FixtureCase
-		require.NoErrorf(t, json.Unmarshal(raw, &c), "decode %s", path)
+		c, err := detectiontestkit.LoadFixture(path)
+		require.NoError(t, err)
 		if len(c.ExpectedFindings) > 0 {
 			// The naming convention is not load-bearing (the assertion above is), but a positive case named negative_* is a
 			// mistake worth catching at the point where someone is most likely to make it.

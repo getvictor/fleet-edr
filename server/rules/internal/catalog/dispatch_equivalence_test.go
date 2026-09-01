@@ -1,9 +1,7 @@
 package catalog
 
 import (
-	"encoding/json"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -13,19 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 )
 
 // loadFixtureEvents decodes one replay fixture's event batch.
 func loadFixtureEvents(t *testing.T, path string) []detectionapi.Event {
 	t.Helper()
-	raw, err := os.ReadFile(path) //nolint:gosec // fixture path from a fixed glob, not user input
+	c, err := detectiontestkit.LoadFixture(path)
 	require.NoError(t, err)
-	var fixture struct {
-		Events []detectionapi.Event `json:"events"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &fixture), "decode %s", path)
-	require.NotEmpty(t, fixture.Events, "%s carries no events", path)
-	return fixture.Events
+	require.NotEmpty(t, c.Events, "%s carries no events", path)
+	return c.Events
 }
 
 // distinctEventTypes returns the event types a batch carries, which is what the engine dispatches on.
@@ -67,7 +62,9 @@ func wouldDispatch(declared, present []string) bool {
 func TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType(t *testing.T) {
 	t.Parallel()
 
-	fixtures, err := filepath.Glob(filepath.Join("fixtures", "*", "*.json"))
+	// Recursive, via the replay harness's own discovery: a one-level glob here let a fixture in a subdirectory be replayed and
+	// counted as coverage while never reaching this gate.
+	fixtures, err := detectiontestkit.FixturePaths("fixtures")
 	require.NoError(t, err)
 	require.NotEmpty(t, fixtures, "no fixtures found, so this gate would prove nothing")
 
