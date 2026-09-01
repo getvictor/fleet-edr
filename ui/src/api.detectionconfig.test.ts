@@ -90,9 +90,12 @@ describe("detection-config API client", () => {
     expect(await listDetectionRuleMatchCounts(365)).toEqual({ counts: [], days: 30 });
   });
 
-  it("listDetectionRuleMatchCounts tolerates a null envelope", async () => {
+  // The opposite of the sibling endpoints above, deliberately. There an empty list is just an empty table; here the server always
+  // normalises empty to [], so a null is a malformed response, and coalescing it to [] would render every rule as quiet, which is
+  // the reading that gets a noisy rule promoted. Rejecting sends the caller down its unavailable path instead.
+  it("listDetectionRuleMatchCounts rejects a null envelope rather than reading it as no matches", async () => {
     stubFetch({ match_counts: null, days: 7 });
-    expect(await listDetectionRuleMatchCounts()).toEqual({ counts: [], days: 7 });
+    await expect(listDetectionRuleMatchCounts()).rejects.toThrow(/match_counts/);
   });
 
   it("createDetectionExclusion POSTs the body with the CSRF header attached", async () => {

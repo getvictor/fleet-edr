@@ -717,7 +717,7 @@ describe("DetectionConfig observed column", () => {
 
   // A rule with nothing recorded is ABSENT from the response, and absence is not the same claim as zero: the rule may have been
   // promoted before the window opened, or registered after it did.
-  it("shows a dash rather than a zero for a rule with nothing recorded", async () => {
+  it("reads \"not recorded\" rather than a zero for a rule with nothing recorded", async () => {
     stubReads({ rules: [makeRuleEntry()], matchCounts: [] });
     renderPage();
 
@@ -772,7 +772,7 @@ describe("DetectionConfig observed column", () => {
   });
 
   // A rule genuinely absent from a SUCCESSFUL read is the other case, and must keep reading as absence.
-  it("shows a dash for a rule with nothing recorded when the read succeeded", async () => {
+  it("reads \"not recorded\" for a rule absent from a SUCCESSFUL read", async () => {
     stubReads({ rules: [makeRuleEntry()], matchCounts: [] });
     renderPage();
 
@@ -813,7 +813,7 @@ describe("DetectionConfig observed column", () => {
     expect(screen.getByLabelText(/approximately 42,000 matches on 1 host in the last 7 days/)).toBeInTheDocument();
   });
 
-  // When the read fails the visible note must say so too, not leave the normal caption implying the dashes are data.
+  // When the read fails the visible note must say so too, not leave the normal caption implying the empty cells are data.
   it("replaces the visible caveat with the unavailable notice when the read fails", async () => {
     stubReads({ rules: [makeRuleEntry()] });
     vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("db down"));

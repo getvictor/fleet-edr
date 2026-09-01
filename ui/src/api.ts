@@ -1147,7 +1147,12 @@ export interface RuleMatchCount {
 export async function listDetectionRuleMatchCounts(days?: number): Promise<{ counts: RuleMatchCount[]; days: number }> {
   const query = days === undefined ? "" : `?days=${String(days)}`;
   const body = await fetchJSON<{ match_counts: RuleMatchCount[] | null; days: number }>(`/v1/detection-config/rule-match-counts${query}`);
-  return { counts: body.match_counts ?? [], days: body.days };
+  // Deliberately NOT coalesced to []. The server normalises an empty result to [] (pinned by a handler test), so a null here means
+  // a malformed response, and "no rule matched" is the one wrong reading of it: it renders as a fleet of quiet rules, which is what
+  // gets a noisy rule promoted. Throwing routes it to the caller's unavailable path instead. The sibling list endpoints DO coalesce,
+  // because there an empty list is merely an empty table rather than evidence for a decision.
+  if (body.match_counts === null) throw new Error("rule-match-counts response omitted match_counts");
+  return { counts: body.match_counts, days: body.days };
 }
 
 export async function createDetectionExclusion(

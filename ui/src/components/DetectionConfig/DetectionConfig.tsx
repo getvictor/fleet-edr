@@ -150,9 +150,10 @@ function formatMatches(n: number): string {
 // an error rather than as an empty result, because an empty result reads as a quiet rule and a quiet rule is what gets promoted.
 // Rendering a failure as absence would invert the meaning of the column at exactly the moment it is least reliable.
 //
-// A rule with nothing recorded shows a dash rather than "0". Zero is a claim that the rule was watched and did nothing; absence can
-// equally mean it was promoted before the window opened, or that the window predates its registration. The dash says "nothing
-// recorded here", which is what the data supports.
+// A rule with nothing recorded reads "not recorded" rather than "0". Zero is a claim that the rule was watched and did nothing;
+// absence can equally mean it was promoted before the window opened, or that the window predates its registration. Spelled out
+// rather than drawn as a dash glyph, both because the repo forbids the character in user-facing text and because the words say
+// the distinction the glyph only implies.
 function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days: number, unavailable: boolean) {
   if (unavailable) {
     return (
@@ -164,7 +165,7 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
   if (count === undefined) {
     return (
       <span className="detection-config__observed-none" aria-label={`no matches recorded for ${ruleID}`}>
-        &mdash;
+        not recorded
       </span>
     );
   }
