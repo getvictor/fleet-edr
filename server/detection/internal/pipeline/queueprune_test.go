@@ -78,7 +78,7 @@ type capturingRecorder struct {
 func (c *capturingRecorder) EventsIngested(context.Context, string, int)         {}
 func (c *capturingRecorder) EventsHeartbeatDropped(context.Context, string, int) {}
 func (c *capturingRecorder) AlertCreated(context.Context, string, string)        {}
-func (c *capturingRecorder) MonitorMatched(context.Context, string, string)      {}
+func (c *capturingRecorder) MonitorMatched(context.Context, string, string, int) {}
 func (c *capturingRecorder) ProcessesTTLReconciled(context.Context, int64)       {}
 func (c *capturingRecorder) ProcessRetentionRowsDeleted(context.Context, int64)  {}
 func (c *capturingRecorder) QueueRowsPruned(_ context.Context, n int64)          { c.queuePruned += n }

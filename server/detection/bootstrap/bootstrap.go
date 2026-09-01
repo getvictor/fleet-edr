@@ -364,6 +364,15 @@ func (d *Detection) SetModeResolver(m rulesapi.RuleModeResolver) {
 	}
 }
 
+// SetMonitorMatchRecorder wires the durable monitor-match counter into the pipeline AFTER construction, mirroring SetModeResolver.
+// cmd/main passes the rules context's store once both contexts are built. Skipped when there is no pipeline (ModeIntake), where
+// nothing evaluates rules and so nothing has matches to record.
+func (d *Detection) SetMonitorMatchRecorder(r rulesapi.MonitorMatchRecorder) {
+	if d.pipe != nil {
+		d.pipe.SetMonitorMatchRecorder(r)
+	}
+}
+
 // Store exposes the persistence handle. Used by cmd/main for the
 // retention DB-handle wiring (retention takes a *sqlx.DB directly).
 func (d *Detection) Store() *mysql.Store { return d.store }

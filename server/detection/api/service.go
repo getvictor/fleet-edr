@@ -108,17 +108,19 @@ type MetricsRecorder interface {
 	// processed for their freshness side effect and then dropped instead of persisted as retained event rows (issue #408).
 	EventsHeartbeatDropped(ctx context.Context, hostID string, n int)
 	AlertCreated(ctx context.Context, ruleID, severity string)
-	// MonitorMatched is called when a rule matches but its resolved mode is monitor, so no alert is persisted. It is the counted
-	// form of what used to be only a log line, and it exists because issue #764 made monitor the default for most of the catalog:
-	// a per-match log entry was reasonable when monitor was a state an operator deliberately set on one noisy rule, and is not
-	// when sixty-six rules match commonplace commands on every host. The counter is also what an operator needs in order to decide
-	// whether promoting a rule is worth it.
+	// MonitorMatched is called with the number of matches a rule made in monitor mode, so no alert was persisted. It is the
+	// counted form of what used to be only a log line, and it exists because issue #764 made monitor the default for most of the
+	// catalog: a per-match log entry was reasonable when monitor was a state an operator deliberately set on one noisy rule, and
+	// is not when sixty-six rules match commonplace commands on every host. The counter is also what an operator needs in order to
+	// decide whether promoting a rule is worth it.
 	//
-	// It is NOT deduplicated, and a consumer has to know that. An alert dedups on insert; a monitor match has nothing to insert, so
-	// a batch that is retried counts its matches again. Retries come from a materialization race rather than steady state, so this
-	// overstates occasionally and never understates, which is the safe direction for a number that gates promoting a rule to
-	// alerting. Issue #813, which turns this into an operator-facing rate, has to account for it.
-	MonitorMatched(ctx context.Context, ruleID, severity string)
+	// It takes a count rather than being called per match because the caller aggregates a whole batch before recording it, and it
+	// does that because of WHEN it records: after the batch is acknowledged, not while evaluating. A nacked batch is replayed
+	// whole, so a counter incremented during evaluation counts a retried batch twice. Called after the acknowledgement, a replayed
+	// batch is counted once. The counter therefore no longer overstates under retries, which earlier versions of this comment
+	// warned it did; what it can now do instead is lose a batch to a crash between the ack and the record, which under-reports.
+	// That is the safer direction for a number that gates promoting a rule to alerting.
+	MonitorMatched(ctx context.Context, ruleID, severity string, n int)
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.
 	ProcessesTTLReconciled(ctx context.Context, n int64)

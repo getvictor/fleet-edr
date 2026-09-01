@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -19,6 +21,42 @@ import (
 // tracerName is the instrumentation-scope name for the OTel tracer the engine opens per-rule spans on, so downstream dashboards can
 // group detection latency + alert counts by rule_id without parsing log lines. observability-instrumentation spec pins the rule_id +
 // alert_count attribute shape.
+
+// batchTally accumulates what one batch's evaluation should record ONCE THE BATCH IS ACKNOWLEDGED.
+//
+// Nothing is written while evaluating, and that is the whole design. A batch that fails is nacked and replayed whole, so a counter
+// incremented during evaluation counts a retried batch twice; #631 measured roughly 130 materialization retries a minute from one
+// host under a sustained condition, so that is not a rounding error. Handing the tally back to the caller lets it be recorded once,
+// after the acknowledgement that says the batch will not come round again.
+type batchTally struct {
+	monitor map[monitorKey]int
+}
+
+type monitorKey struct{ ruleID, hostID, severity string }
+
+// addMonitorMatch records one monitor-mode match. Severity is the RESOLVED severity, after any override, so the counter labels a
+// match with the severity the alert would have carried.
+func (t *batchTally) addMonitorMatch(ruleID, hostID, severity string) {
+	if t.monitor == nil {
+		t.monitor = make(map[monitorKey]int)
+	}
+	t.monitor[monitorKey{ruleID: ruleID, hostID: hostID, severity: severity}]++
+}
+
+// snapshot flattens the tally into the published shape, sorted so a caller's writes and logs are deterministic across runs.
+func (t *batchTally) snapshot() rulesapi.MonitorTally {
+	if len(t.monitor) == 0 {
+		return nil
+	}
+	out := make(rulesapi.MonitorTally, 0, len(t.monitor))
+	for k, count := range t.monitor {
+		out = append(out, rulesapi.MonitorMatch{RuleID: k.ruleID, HostID: k.hostID, Severity: k.severity, Count: count})
+	}
+	slices.SortFunc(out, func(a, b rulesapi.MonitorMatch) int {
+		return cmp.Or(strings.Compare(a.RuleID, b.RuleID), strings.Compare(a.HostID, b.HostID), strings.Compare(a.Severity, b.Severity))
+	})
+	return out
+}
 
 // routeOutcome is what happened to one finding once its resolved mode was applied. It exists because "not alerted" was one bucket
 // and covered two unrelated things: a mode holding the finding back, and an alert that already existed. An operator reading a
@@ -151,22 +189,26 @@ func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 // and was lost. dns_c2_beacon is registered last and carries the tightest grace, so it was the one that lost alerts (issue #661).
 // Non-retryable failures keep their existing semantics: a rule-evaluation error is logged and swallowed (per-rule isolation), and an
 // alert-persistence error aborts immediately because the batch must be retried before any more findings are written.
-func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
+func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.MonitorTally, error) {
 	live := filterSnapshotEvents(events)
 	// One scope for the whole batch, so rules deriving the same thing from the same events derive it once (issue #794). The engine
 	// never looks inside it: what a rule puts there belongs to the rules context, which owns both the store and the read. It is
 	// created unconditionally because it allocates nothing until a rule actually derives something, and it is discarded when this
 	// call returns, so concurrent batches share nothing.
 	scope := &rulesapi.BatchScope{}
+	// One tally for the batch, returned to the caller to record after the acknowledgement. See batchTally.
+	tally := &batchTally{}
 	var pendingMiss error
 	for _, i := range e.rulesFor(live) {
 		rule := e.rules[i]
-		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live, scope)
+		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live, scope, tally)
 		if err == nil {
 			continue
 		}
 		if !errors.Is(err, rulesapi.ErrRetryBatch) {
-			return err
+			// The batch will be nacked and replayed, so the tally is discarded: whatever it holds will be counted by the
+			// attempt that succeeds.
+			return nil, err
 		}
 		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
 		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
@@ -180,7 +222,12 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) error {
 			pendingMiss = err
 		}
 	}
-	return pendingMiss
+	if pendingMiss != nil {
+		// Same reasoning as the hard error above: a retryable miss nacks the batch, so this attempt's matches are not the ones
+		// to record.
+		return nil, pendingMiss
+	}
+	return tally.snapshot(), nil
 }
 
 // distinctEventTypes returns the event types a batch carries, in first-seen order.
@@ -271,7 +318,7 @@ func consumesAny(declared []string, events []api.Event) bool {
 // persistence fails or the rule reported a retryable rulesapi.ErrProcessNotYetMaterialized: other rule-evaluation errors are
 // logged + swallowed so a buggy rule doesn't block the rest.
 func (e *Engine) evaluateRule(
-	ctx context.Context, rule rulesapi.Rule, declared []string, live []api.Event, scope *rulesapi.BatchScope,
+	ctx context.Context, rule rulesapi.Rule, declared []string, live []api.Event, scope *rulesapi.BatchScope, tally *batchTally,
 ) error {
 	// Scope the batch to the rule's target platforms (ADR-0018): a macOS-only rule never sees a Windows event. Checked BEFORE the
 	// span is opened, because a rule left with nothing to evaluate did not run, and emitting a span for it reports work that never
@@ -347,7 +394,7 @@ func (e *Engine) evaluateRule(
 	// flag that already gates the alert log and edr.alerts.created, so it is correct by construction rather than by test, and that
 	// is worth knowing rather than assuming.
 	for _, f := range findings {
-		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques)
+		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques, tally)
 		if err != nil {
 			span.RecordError(err)
 			return err
@@ -390,6 +437,7 @@ func evaluate(
 // the rule returned.
 func (e *Engine) routeFinding(
 	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, f api.Finding, techniques []string,
+	tally *batchTally,
 ) (routeOutcome, error) {
 	mode, severityOverride := ruleDefault, ""
 	if e.modeResolver != nil {
@@ -411,9 +459,7 @@ func (e *Engine) routeFinding(
 		// those rules match commonplace commands, so an INFO per match is fleet-scale log amplification: every `id` on every host,
 		// re-emitted whenever a batch is retried, since only alert persistence is deduplicated. The counter is the medium built
 		// for a high-frequency per-rule signal, and it is also the one an operator needs to decide whether to promote the rule.
-		if e.metrics != nil {
-			e.metrics.MonitorMatched(ctx, ruleID, f.Severity)
-		}
+		tally.addMonitorMatch(ruleID, f.HostID, f.Severity)
 		e.logger.DebugContext(ctx, "detection rule matched in monitor mode (no alert)",
 			"rule", ruleID, "host", f.HostID, "severity", f.Severity, "title", f.Title)
 		return routeSuppressed, nil

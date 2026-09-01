@@ -115,9 +115,9 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	r.monitorMatches, _ = meter.Int64Counter(
 		"edr.detection.monitor_matches",
 		metric.WithDescription("Rule matches suppressed because the resolved mode was monitor, by rule + severity. "+
-			"Compare against edr.alerts.created to see what promoting a rule would cost. NOT deduplicated: an alert dedups on "+
-			"insert, and a monitor match has nothing to insert, so re-evaluating a retried batch counts its matches again. "+
-			"Retries are occasional rather than steady, so the series overstates slightly and never understates."),
+			"Compare against edr.alerts.created to see what promoting a rule would cost. Recorded once the batch is "+
+			"acknowledged, so a batch that is nacked and replayed is counted once rather than once per attempt; the residual "+
+			"inaccuracy is a crash between the acknowledgement and the record, which under-reports."),
 		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
@@ -226,13 +226,16 @@ func (r *Recorder) AlertCreated(ctx context.Context, ruleID, severity string) {
 	))
 }
 
-// MonitorMatched increments the monitor-match counter: a rule matched, and its resolved mode suppressed the alert. Same attribute
-// shape as AlertCreated so the two can be compared per rule, which is exactly the comparison promoting a rule turns on.
-func (r *Recorder) MonitorMatched(ctx context.Context, ruleID, severity string) {
-	if r == nil || r.monitorMatches == nil {
+// MonitorMatched adds n to the monitor-match counter: a rule matched n times, and its resolved mode suppressed the alerts. Same
+// attribute shape as AlertCreated so the two can be compared per rule, which is exactly the comparison promoting a rule turns on.
+//
+// n rather than one call per match, because the caller aggregates a batch and records it only once the batch is acknowledged. See
+// api.MetricsRecorder for why that timing is what makes the series survive a retry.
+func (r *Recorder) MonitorMatched(ctx context.Context, ruleID, severity string, n int) {
+	if r == nil || r.monitorMatches == nil || n <= 0 {
 		return
 	}
-	r.monitorMatches.Add(ctx, 1, metric.WithAttributes(
+	r.monitorMatches.Add(ctx, int64(n), metric.WithAttributes(
 		attribute.String("rule_id", ruleID),
 		attribute.String("severity", severity),
 	))

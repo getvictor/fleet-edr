@@ -316,6 +316,8 @@ func openContexts(
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
 	detectionCtx.SetModeResolver(rulesCtx.DetectionConfigModeResolver())
+	detectionCtx.SetMonitorMatchRecorder(rulesCtx.MonitorMatchRecorder())
+	rulesCtx.SetRetentionDays(cfg.RetentionDays)
 	if endpointCtx, err = openEndpoint(ctx, logger, db, cfg, identityCtx, kr.Derive(keyring.HostTokenSigningLabel)); err != nil {
 		return
 	}

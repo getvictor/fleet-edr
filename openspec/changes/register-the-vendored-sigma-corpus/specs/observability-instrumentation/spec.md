@@ -8,7 +8,7 @@ The system SHALL expose the following counters with stable names so dashboards a
 
 `edr.detection.monitor_matches` SHALL carry the same `rule_id` and `severity` attributes as `edr.alerts.created`, and SHALL label a match with the severity the alert would have carried, so that the two series describe one rule identically and can be compared. Comparing them is how an operator judges what promoting a rule to alerting would produce.
 
-Unlike `edr.alerts.created`, `edr.detection.monitor_matches` SHALL NOT be deduplicated, and this SHALL be documented where the counter is defined. An alert deduplicates when it is written and a suppressed match has nothing to write, so re-evaluating a retried batch counts its matches again. Retries arise from a materialization race rather than steady state, so the series overstates occasionally and never understates, which is the safe direction for a number that gates promotion.
+`edr.detection.monitor_matches` SHALL be recorded once the batch that produced the matches is acknowledged, not while the batch is evaluated, and this SHALL be documented where the counter is defined. A batch that fails is nacked and replayed whole, so a counter incremented during evaluation counts a retried batch once per attempt; recorded after the acknowledgement, a replayed batch is counted once. The residual inaccuracy is the opposite one, a crash between the acknowledgement and the record, which under-reports. That is the safe direction for a number that gates promotion, because it makes a rule look cheaper to promote than it was rather than more expensive.
 
 #### Scenario: Ingested events are counted by host
 
