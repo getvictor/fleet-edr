@@ -51,9 +51,14 @@ import (
 // decided what the meaningful near miss is, and a generated near miss would only ever be "the same event with one field spoiled".
 const generatedFixtureName = "positive_smoke.json"
 
+// Deliberately NOT parallel, and the paralleltest exemption is the point rather than an oversight: this writes under fixtures/,
+// which the package's coverage and replay tests read. Those two DO run in parallel, so they resume only after the sequential
+// pass finishes; staying sequential here is what guarantees the tree is complete before anything reads it. Marking this parallel
+// too would let a run of `go test -tags fixturegen ./...` without the documented -run filter race directory creation against
+// TestCatalogFixturesStillFire and report whatever it happened to see.
+//
+//nolint:paralleltest // mutates the fixtures/ tree that the package's other tests read; see above.
 func TestGenerateImportedSmokeFixtures(t *testing.T) {
-	t.Parallel()
-
 	corpus, err := sigmaFilesUnder(importedCorpus, "imported")
 	require.NoError(t, err)
 
