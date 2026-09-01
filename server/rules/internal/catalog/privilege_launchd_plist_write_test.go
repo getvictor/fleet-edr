@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
-	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
@@ -189,7 +188,3 @@ func TestBtmLaunchItemAddPayload_RoundTrip(t *testing.T) {
 		assert.Equal(rt, in, out)
 	})
 }
-
-// Compile-time check that detection/testkit is referenced (other tests in this package use Replay; the import sits at file scope
-// alongside the api import so this declaration keeps the unused-import linter happy without forcing a per-test refactor).
-var _ = detectiontestkit.Replay
