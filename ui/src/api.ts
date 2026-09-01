@@ -1141,6 +1141,25 @@ export interface RuleMatchCount {
   last_seen: string;
 }
 
+// isRuleMatchCount validates one row off the wire.
+//
+// The HTTP client is the trust boundary, so validation belongs here and belongs COMPLETE: a declared TypeScript type over a network
+// response is an assumption, not a guarantee, and fetchJSON does not check it. Validating the envelope but not its rows is the same
+// half-measure as validating null but not undefined, one level down.
+//
+// Rows matter as much as the envelope because a bad row fails SILENTLY rather than loudly. A row with no rule_id is keyed under
+// `undefined` by the caller's Object.fromEntries, so every real rule falls through to "not recorded" and the whole fleet reads as
+// quiet: the exact misreading that gets a noisy rule promoted, arriving as a full table of plausible-looking evidence.
+//
+// matches/hosts allow 0 rather than requiring 1. The store only aggregates rows that exist, so 0 should not occur, but rejecting it
+// would be this function inventing a rule the server does not promise.
+function isRuleMatchCount(row: unknown): row is RuleMatchCount {
+  if (typeof row !== "object" || row === null) return false;
+  const r = row as Record<string, unknown>;
+  const whole = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+  return typeof r.rule_id === "string" && r.rule_id !== "" && whole(r.matches) && whole(r.hosts) && typeof r.last_seen === "string";
+}
+
 // listDetectionRuleMatchCounts reads the per-rule monitor-match counts. The response states the window it actually covers, which
 // can be narrower than the one requested because the server caps it at the retention window; callers render that rather than the
 // window they asked for.
@@ -1164,8 +1183,9 @@ export async function listDetectionRuleMatchCounts(days?: number): Promise<{ cou
   // echoed window exists to prevent.
   const counts = body.match_counts;
   const served = body.days;
-  if (!Array.isArray(counts) || typeof served !== "number" || !Number.isSafeInteger(served) || served < 1) {
-    throw new Error("malformed rule-match-counts response: match_counts must be an array and days a positive whole number");
+  const validRows = Array.isArray(counts) && counts.every(isRuleMatchCount);
+  if (!validRows || typeof served !== "number" || !Number.isSafeInteger(served) || served < 1) {
+    throw new Error("malformed rule-match-counts response: match_counts must be RuleMatchCount rows and days a positive whole number");
   }
   return { counts, days: served };
 }

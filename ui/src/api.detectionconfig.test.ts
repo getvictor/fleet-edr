@@ -68,6 +68,20 @@ describe("detection-config API client", () => {
   // The component tests mock this client wholesale, so the query serialisation and the envelope REJECTION below have no other
   // coverage. Rejection, not coalescing: this endpoint deliberately refuses a malformed envelope where the sibling list endpoints
   // above coalesce one (a null envelope crashed the exclusions page once, which is why those coalesce).
+  it("listDetectionRuleMatchCounts accepts a well-formed row", async () => {
+    const row = { rule_id: "suspicious_exec", matches: 90, hosts: 3, last_seen: "2026-09-01T00:00:00Z" };
+    stubFetch({ match_counts: [row], days: 7 });
+    expect(await listDetectionRuleMatchCounts()).toEqual({ counts: [row], days: 7 });
+  });
+
+  // Zero is allowed even though the store should never emit it: rejecting it would be the client inventing a rule the server
+  // does not promise, and a refused response renders as "unavailable", which is a worse answer than a truthful zero.
+  it("listDetectionRuleMatchCounts accepts a zero count rather than inventing a floor", async () => {
+    const row = { rule_id: "suspicious_exec", matches: 0, hosts: 0, last_seen: "2026-09-01T00:00:00Z" };
+    stubFetch({ match_counts: [row], days: 7 });
+    expect(await listDetectionRuleMatchCounts()).toEqual({ counts: [row], days: 7 });
+  });
+
   it("listDetectionRuleMatchCounts omits the query when no window is given", async () => {
     const mock = stubFetch({ match_counts: [], days: 7 });
     const out = await listDetectionRuleMatchCounts();
@@ -107,6 +121,18 @@ describe("detection-config API client", () => {
     ["days is zero", { match_counts: [], days: 0 }],
     ["days is negative", { match_counts: [], days: -3 }],
     ["days is fractional", { match_counts: [], days: 1.5 }],
+    // Row shapes. The first is the dangerous one: without a rule_id the caller keys the row under `undefined`, so every real rule
+    // falls through to "not recorded" and the whole table reads as a quiet fleet, which is misleading evidence rather than a crash.
+    ["a row with no rule_id", { match_counts: [{ matches: 1, hosts: 1, last_seen: "2026-09-01T00:00:00Z" }], days: 7 }],
+    ["a row with an empty rule_id", { match_counts: [{ rule_id: "", matches: 1, hosts: 1, last_seen: "x" }], days: 7 }],
+    ["a row missing matches", { match_counts: [{ rule_id: "r", hosts: 1, last_seen: "x" }], days: 7 }],
+    ["a row missing hosts", { match_counts: [{ rule_id: "r", matches: 1, last_seen: "x" }], days: 7 }],
+    ["a row missing last_seen", { match_counts: [{ rule_id: "r", matches: 1, hosts: 1 }], days: 7 }],
+    ["a row with a negative count", { match_counts: [{ rule_id: "r", matches: -1, hosts: 1, last_seen: "x" }], days: 7 }],
+    ["a row with a fractional count", { match_counts: [{ rule_id: "r", matches: 1.5, hosts: 1, last_seen: "x" }], days: 7 }],
+    ["a row that is not an object", { match_counts: ["nope"], days: 7 }],
+    ["a row that is null", { match_counts: [null], days: 7 }],
+    ["an empty row", { match_counts: [{}], days: 7 }],
   ] as [string, unknown][]) {
     it(`listDetectionRuleMatchCounts rejects a malformed envelope: ${name}`, async () => {
       stubFetch(envelope);
