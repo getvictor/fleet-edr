@@ -402,3 +402,28 @@ describe("ProcessDetail generation addressing", () => {
     expect(api.getProcessDetail).toHaveBeenCalledTimes(2);
   });
 });
+
+// spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/an-alert-from-a-vendored-rule-credits-its-author
+//
+// Related alerts are a deliberately minimal reference list, but the Detection Rule License obligation does not bend to a
+// presentation choice: the row shows a vendored rule's title, so it displays a match and owes the credit. Found by Copilot on
+// #824, where the spec said "every surface that displays an alert" and this surface did not.
+describe("ProcessDetail related-alert attribution", () => {
+  it("credits the rule author on a related alert", async () => {
+    vi.mocked(api.listAlertsByProcessId).mockResolvedValue([
+      makeAlert({ id: 1648, title: "MacOS Scripting Interpreter AppleScript", origin: "SigmaHQ, by Someone" }),
+    ]);
+    render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
+
+    expect(await screen.findByText("SigmaHQ, by Someone")).toBeVisible();
+  });
+
+  it("shows no credit for a related alert that records none", async () => {
+    vi.mocked(api.listAlertsByProcessId).mockResolvedValue([makeAlert({ id: 1648, title: "Legacy alert" })]);
+    const { container } = render(<ProcessDetail hostId="h1" node={makeNode()} onClose={vi.fn()} />);
+
+    expect(await screen.findByText("Legacy alert")).toBeVisible();
+    expect(container.querySelector(".process-detail__alert-origin")).toBeNull();
+  });
+});
+

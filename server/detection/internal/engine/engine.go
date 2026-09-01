@@ -380,7 +380,10 @@ func (e *Engine) evaluateRule(
 	// Attribution rides the alert the rule produces (issue #765). Read from the RULE, never from the finding, so that a rule
 	// cannot credit someone else for its match or drop the credit entirely: the Detection Rule License obligation the imported
 	// corpus carries would otherwise be satisfied only by rules that chose to satisfy it.
-	origin := rulesapi.OriginOf(rule)
+	//
+	// AlertOriginOf rather than OriginOf, because a projection's findings carry a rule id that is not the projection's own and
+	// so has an author this rule cannot speak for. See its doc.
+	origin := rulesapi.AlertOriginOf(rule)
 
 	// alert_count counts findings that were ROUTED TO A NEW ALERT, not findings the rule returned. Those were the same number until
 	// the vendored corpus landed in monitor mode (issue #764); now most findings are suppressed, and counting what the rule

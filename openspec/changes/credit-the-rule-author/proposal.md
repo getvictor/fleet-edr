@@ -24,7 +24,12 @@ A rule's references are carried through to its documentation page, so the credit
 
 One existing requirement is reversed. `register-the-vendored-sigma-corpus` specified that a rule this project authored "SHALL report no attribution rather than naming this project, so the field distinguishes rather than decorates". That reasoning held while the catalog page was the only consumer, where absence reads as "we wrote it". It does not survive contact with the alert view, where absence reads as "nobody is credited" and cannot be told apart from a value that failed to arrive. The two populations stay distinguishable by the value instead, which is what the surface was going to have to read anyway.
 
-**Archive ordering.** This change MODIFIES a requirement that `register-the-vendored-sigma-corpus` ADDs and that has not been archived yet, so that change must be archived first or the modification has nothing to apply to.
+**Archive ordering, and it is load-bearing.** This change MODIFIES a requirement that `register-the-vendored-sigma-corpus` ADDs and that is not archived yet, so that change must be archived first. Both orders were rehearsed against a scratch copy of the tree rather than assumed:
+
+- Corpus change first, then this one: clean. `Totals: + 2, ~ 1`, and `openspec validate --all --strict` passes 85/85 with the amended requirement in place.
+- This one first: `openspec archive` refuses with `MODIFIED failed for header "### Requirement: The vendored upstream corpus is registered and does not alert until promoted" - not found` and changes nothing, which is the good half. The bad half is what a release engineer sees next: archiving the corpus change afterwards **succeeds**, `openspec validate --all --strict` reports **86 passed, 0 failed**, and the canonical spec silently retains the OLD wording with the amendment nowhere in the tree. Validate is not a guard against this; the only thing that catches it is the leftover `openspec/changes/credit-the-rule-author/` folder, which the release workflow's `openspec-archived` job fails a `v*` tag on.
+
+So if the archive step ever refuses this change, the fix is to archive `register-the-vendored-sigma-corpus` first and retry. It is NOT to reach for `--skip-specs`, which would drop this delta and leave the canonical spec asserting the opposite of what the code does.
 
 `alerts` gains an `origin` column (migration 00012). No backfill: every imported rule ships in monitor mode, which resolves before persistence, so no alert row raised by a vendored rule exists to credit. Rows predating the migration were all raised by rules this project wrote and keep the empty default, which is why the display surfaces still tolerate an absent credit rather than requiring one.
 

@@ -1270,7 +1270,11 @@ func TestEngine_StampsRuleAttributionOnTheAlert(t *testing.T) {
 
 	ours := &stubRule{id: "stub-ours"}
 	vendored := &vendoredStubRule{stubRule: &stubRule{id: "stub-vendored"}, origin: "Upstream, by Someone"}
-	d.LoadActive(stubProvider{rules: []rulesapi.Rule{ours, vendored}})
+	// A projection renders someone else's decision and copies THEIR rule id onto the finding, so it has no author to speak for.
+	// Present here because the engine has to choose AlertOriginOf over OriginOf, and without a projection in the batch that
+	// choice is unobservable: every other rule gets the same answer from both.
+	projection := &projectionStubRule{stubRule: &stubRule{id: "stub-projection"}}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{ours, vendored, projection}})
 	mustInsertProcess(t, ctx, d, "host-a", 100)
 
 	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
@@ -1280,12 +1284,12 @@ func TestEngine_StampsRuleAttributionOnTheAlert(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
-		return len(alerts) == 2
-	}, 5*time.Second, 50*time.Millisecond, "both rules must raise before attribution can be compared across them")
+		return len(alerts) == 3
+	}, 5*time.Second, 50*time.Millisecond, "all three rules must raise before attribution can be compared across them")
 
 	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
-	require.Len(t, alerts, 2)
+	require.Len(t, alerts, 3)
 	byRule := map[string]api.Alert{}
 	for _, a := range alerts {
 		byRule[a.RuleID] = a
@@ -1295,6 +1299,9 @@ func TestEngine_StampsRuleAttributionOnTheAlert(t *testing.T) {
 	// render attribution unconditionally instead of only when it happens to be present.
 	assert.Equal(t, rulesapi.ProjectOrigin, byRule["stub-ours"].Origin, "a rule this project wrote credits this project")
 	assert.Equal(t, "Upstream, by Someone", byRule["stub-vendored"].Origin, "a vendored rule credits its upstream and author")
+	// Empty, not "Fleet EDR": the alert's rule_id belongs to whoever configured the blocked item, so claiming authorship of it
+	// would be a false statement about a third party. Qodo caught this on #824 when the engine used OriginOf here.
+	assert.Empty(t, byRule["stub-projection"].Origin, "a projection's alert credits nobody, since its rule id is not its own")
 
 	// Attribution is captured at match time, exactly like the technique stamp above it. Re-crediting a historical alert from
 	// today's catalog is the failure mode the stored column exists to prevent, so the rule's origin is changed underneath a
@@ -1311,7 +1318,7 @@ func TestEngine_StampsRuleAttributionOnTheAlert(t *testing.T) {
 
 	alerts, err = d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
 	require.NoError(t, err)
-	require.Len(t, alerts, 2, "dedup must skip the second fire on the same (host, rule, process)")
+	require.Len(t, alerts, 3, "dedup must skip the second fire on the same (host, rule, process)")
 	for _, a := range alerts {
 		if a.RuleID == "stub-vendored" {
 			assert.Equal(t, "Upstream, by Someone", a.Origin,
@@ -1328,6 +1335,13 @@ type vendoredStubRule struct {
 }
 
 func (r *vendoredStubRule) Origin() string { return r.origin }
+
+// projectionStubRule is a stubRule that declares itself a projection, standing in for application_control_block.
+type projectionStubRule struct{ *stubRule }
+
+func (r *projectionStubRule) NonDetectionKind() rulesapi.NonDetectionKind {
+	return rulesapi.NonDetectionProjection
+}
 
 // spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/one-rule-errors-during-evaluation
 //

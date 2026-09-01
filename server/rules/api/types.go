@@ -190,6 +190,24 @@ func OriginOf(r Rule) string {
 // crediting ourselves for a rule that announced foreign provenance would be worse than admitting we cannot name the author.
 const UnknownOrigin = "unknown upstream"
 
+// AlertOriginOf returns the attribution to stamp on an alert r raises, which is NOT always r's own origin.
+//
+// A NonDetectionProjection renders a decision someone else already made, and its findings deliberately carry that other party's
+// rule id rather than the projection's own: application_control_block copies the matched app-control policy's id off the event
+// payload. Stamping this project's name onto such an alert would state that we authored an operator's blocklist entry, which is
+// false, and there is no third party to credit in its place either. So a projection's alerts carry no attribution, and the
+// display surfaces render nothing, which is the same thing they already do for an alert raised before attribution existed.
+//
+// Every other rule genuinely authors what it raises, health signals included: sensor_recovery_failed reports a failure in OUR
+// software, so crediting this project for it is accurate. This is the same Projection-not-Health split the #519 title invariant
+// makes, for the same underlying reason.
+func AlertOriginOf(r Rule) string {
+	if nd, ok := r.(NonDetection); ok && nd.NonDetectionKind() == NonDetectionProjection {
+		return ""
+	}
+	return OriginOf(r)
+}
+
 // AlgorithmNameOf returns r's declared algorithm name, or "" when the rule declares none.
 func AlgorithmNameOf(r Rule) string {
 	namer, ok := r.(AlgorithmNamer)
@@ -305,7 +323,11 @@ type Documentation struct {
 	Limitations []string `json:"limitations,omitempty"`
 	// References links the sources the rule was written from: an upstream rule's own `references` for a vendored rule, and the
 	// research a hand-written one is based on. Together with Origin this is the provenance an operator needs to judge a detection
-	// they did not write, which for the vendored corpus is most of them. Absolute URLs; the UI renders them as links.
+	// they did not write, which for the vendored corpus is most of them.
+	//
+	// Usually absolute URLs, but NOT guaranteed to be: these are copied verbatim from an upstream file that is free to cite a
+	// DOI, a book, or a sentence. A consumer must not assume every entry is linkable, and must not render one as a link without
+	// checking its scheme, since an upstream string is untrusted input and a non-http(s) scheme in an anchor is executable.
 	References []string `json:"references,omitempty"`
 }
 

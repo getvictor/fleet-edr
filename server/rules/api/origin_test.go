@@ -60,3 +60,40 @@ type creditingRule struct {
 }
 
 func (r creditingRule) Origin() string { return r.origin }
+
+// TestAlertOriginOf covers the split between a rule's OWN origin and the attribution its alerts carry (found by Qodo on #824).
+//
+// A projection copies a foreign rule id onto its findings, so crediting this project for the alert asserts authorship of
+// something an operator wrote. That is a false statement about a third party, which is worse than the absent credit a reader
+// already sees on any alert raised before attribution existed.
+func TestAlertOriginOf(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		rule api.Rule
+		want string
+	}{
+		{"an ordinary detection credits its author", creditingRule{origin: "SigmaHQ, by Someone"}, "SigmaHQ, by Someone"},
+		{"a rule we wrote credits this project", silentRule{}, api.ProjectOrigin},
+		// A projection renders someone else's decision under someone else's rule id: nobody here to credit.
+		{"a projection credits nobody", nonDetectionRule{kind: api.NonDetectionProjection}, ""},
+		// A health signal reports a failure in OUR software, so this project really is the author of what it raises.
+		{"a health signal still credits this project", nonDetectionRule{kind: api.NonDetectionHealth}, api.ProjectOrigin},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, api.AlertOriginOf(tc.rule))
+		})
+	}
+}
+
+// nonDetectionRule is a Rule that declares a NonDetection kind, standing in for the application-control projection and the
+// sensor-health signal.
+type nonDetectionRule struct {
+	api.Rule
+	kind api.NonDetectionKind
+}
+
+func (r nonDetectionRule) NonDetectionKind() api.NonDetectionKind { return r.kind }

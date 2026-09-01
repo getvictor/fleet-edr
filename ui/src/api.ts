@@ -550,8 +550,12 @@ export interface RuleDoc {
   event_types: string[];
   false_positives?: string[];
   limitations?: string[];
-  // references are the sources the rule was written from; an imported rule carries its upstream rule's own citations. Absolute
-  // URLs, rendered as links. Optional: a server predating the field omits it, and a hand-written rule may cite nothing.
+  // references are the sources the rule was written from; an imported rule carries its upstream rule's own citations.
+  //
+  // NOT guaranteed to be URLs. They are copied verbatim from an upstream file free to cite a DOI, a book, or a sentence, so a
+  // renderer must check each one (see isHTTPURL in ../urls) and show a non-URL as plain text. Linking one unchecked is a
+  // vulnerability, not a cosmetic bug: these strings are third-party input and a javascript: scheme in an anchor executes.
+  // Optional: a server predating the field omits it, and a hand-written rule may cite nothing.
   references?: string[];
 }
 

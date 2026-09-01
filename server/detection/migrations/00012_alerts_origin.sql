@@ -12,11 +12,18 @@
 -- edge case. A stored value fails safe, since the worst case is crediting the author who was named when the match happened, which
 -- is the historically accurate answer anyway.
 --
--- No backfill, and that is a property rather than an omission: every imported rule ships in monitor mode (issue #764), and monitor
--- resolution returns before persistence, so no alert row raised by an imported rule exists to credit. Rows predating this migration
--- were all raised by rules this project wrote and keep the empty default; they are the one case a reader may see uncredited, and
--- they are ours. Left empty rather than defaulted to 'Fleet EDR' so the column distinguishes "raised before attribution existed"
--- from "raised by us", which a blanket backfill would erase.
+-- No backfill. Every imported rule ships in monitor mode (issue #764) and monitor resolution returns before persistence, so a
+-- vendored rule raises nothing until an operator promotes it, and promotion only became possible in #814, which has not shipped in
+-- a release. Measured across both dev lanes before writing this: zero alert rows carry a vendored rule id. The backfill would
+-- therefore be over an empty set.
+--
+-- It is NOT empty by construction, though, and the earlier draft of this comment wrongly claimed it was. An operator who promoted
+-- a vendored rule and then upgraded keeps alerts that display no credit, which is the obligation unmet for those rows. Closing
+-- that needs a startup pass over the catalog (the attribution lives in Go, so SQL cannot do it) and is tracked separately rather
+-- than built here for a population measured at zero.
+--
+-- Rows predating this migration keep the empty default rather than being defaulted to 'Fleet EDR', so the column distinguishes
+-- "raised before attribution existed" from "raised by us"; the display surfaces render nothing for them either way.
 --
 -- Not part of uk_alerts_dedup: origin is a function of rule_id, which is already in the key, so including it could only ever split
 -- one logical alert into two rows after an upstream author change.

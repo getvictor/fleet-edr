@@ -10,4 +10,4 @@
 - [x] Describe the new `origin` and `references` fields in the OpenAPI schema and regenerate the embedded copy.
 - [x] Pin the attribution constants to their literals, since a test comparing output against the constant cannot see the constant become wrong.
 - [x] Integration test: attribution reaches the persisted alert, differs correctly between a vendored and an authored rule, and survives the rule being re-credited afterwards.
-- [ ] Confirm on a running server that a promoted vendored rule's alert displays its author end to end.
+- [x] Confirm on a running server that a promoted vendored rule's alert displays its author end to end.

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { fetchRuleDocs, type RuleDocEntry } from "../api";
+import { isHTTPURL } from "../urls";
 import { PageHeader } from "./ui/PageHeader";
 import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
@@ -272,20 +273,4 @@ function SeverityBadge({ severity }: Readonly<{ severity: string }>) {
   const variant = isKnownSeverity(severity) ? severity : "unknown";
   const klass = `rule-detail__sev rule-detail__sev--${variant}`;
   return <span className={klass}>{severity}</span>;
-}
-
-// isHTTPURL reports whether a rule reference is safe to render as a link.
-//
-// References ride in from an upstream rule file, which is content this project vendors rather than writes, so the scheme is
-// checked rather than assumed. An allowlist (http, https) rather than a denylist of the schemes known to be dangerous today:
-// a denylist has to be updated every time a browser grows a new one, and getting that wrong turns a detection rule's citation
-// into script execution.
-function isHTTPURL(raw: string): boolean {
-  try {
-    const { protocol } = new URL(raw);
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    // Not a parseable absolute URL (a bare path, a DOI, free text). Rendered as plain text by the caller.
-    return false;
-  }
 }

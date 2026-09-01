@@ -131,3 +131,33 @@ func TestBuild_roundTrip(t *testing.T) {
 		})
 	})
 }
+
+// TestBuild_carriesRuleAttribution pins that the credit rides the delivery (issue #765).
+//
+// A receiver that renders our alerts is a surface displaying a match, so the Detection Rule License obligation the vendored corpus
+// carries reaches it too. Additive: the field is omitempty and SchemaVersion is unchanged, since a consumer that does not read it
+// is unaffected by its presence, and the second case pins that an alert with no recorded credit stays absent from the wire rather
+// than serialising an empty string a receiver would have to special-case.
+func TestBuild_carriesRuleAttribution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a vendored rule's author reaches the receiver", func(t *testing.T) {
+		t.Parallel()
+		env := Build(BuildParams{
+			EventID: "whd_origin", EventType: EventAlertCreated,
+			Alert: detapi.Alert{ID: 1, HostID: "h", RuleID: "proc_creation_macos_applescript", Origin: "SigmaHQ, by Someone"},
+		})
+		assert.Equal(t, "SigmaHQ, by Someone", env.Alert.Origin)
+		assert.Equal(t, SchemaVersion, env.SchemaVersion, "adding a field is additive and does not bump the schema version")
+	})
+
+	t.Run("an alert recording no attribution omits the field", func(t *testing.T) {
+		t.Parallel()
+		env := Build(BuildParams{EventID: "whd_legacy", EventType: EventAlertCreated, Alert: detapi.Alert{ID: 2, HostID: "h"}})
+		assert.Empty(t, env.Alert.Origin)
+
+		body, err := json.Marshal(env)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), "\"origin\"", "omitempty keeps an uncredited alert off the wire entirely")
+	})
+}
