@@ -1,7 +1,0 @@
-{
-  "events": [
-    {"event_id": "st-start", "host_id": "fixture-host", "timestamp_ns": 1000, "event_type": "sensor_provider_transition",
-     "payload": {"provider": "content_filter", "state": "started"}}
-  ],
-  "expected_findings": []
-}

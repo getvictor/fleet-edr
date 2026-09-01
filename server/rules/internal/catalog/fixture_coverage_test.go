@@ -40,7 +40,7 @@ func fixtureResolver() api.ExclusionResolver {
 	return &fakeExclusions{entries: []fakeExcl{
 		// sudoers_tamper/negative_writer_allowlisted.json writes to sudoers from this path and must stay silent.
 		{ruleID: "sudoers_tamper", matchType: api.ExclusionMatchPathGlob, value: "/usr/local/bin/fixture-allowed-writer"},
-		// privilege_launchd_plist_write/negative_allowlisted_team_id.json is signed by this synthetic team.
+		// privilege_launchd_plist_write/negative_allowlisted_team.json is signed by this synthetic team.
 		{ruleID: "privilege_launchd_plist_write", matchType: api.ExclusionMatchTeamID, value: "FIXTURE-ALLOW"},
 	}}
 }
