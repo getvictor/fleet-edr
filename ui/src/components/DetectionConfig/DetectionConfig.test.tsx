@@ -56,11 +56,17 @@ function stubReads(
     exclusions?: DetectionExclusion[];
     rules?: RuleDocEntry[];
     settings?: DetectionRuleSetting[];
+    matchCounts?: api.RuleMatchCount[];
+    matchCountDays?: number;
   } = {},
 ) {
   vi.spyOn(api, "listDetectionExclusions").mockResolvedValue(opts.exclusions ?? []);
   vi.spyOn(api, "fetchRuleDocs").mockResolvedValue(opts.rules ?? [makeRuleEntry()]);
   vi.spyOn(api, "listDetectionRuleSettings").mockResolvedValue(opts.settings ?? []);
+  vi.spyOn(api, "listDetectionRuleMatchCounts").mockResolvedValue({
+    counts: opts.matchCounts ?? [],
+    days: opts.matchCountDays ?? 7,
+  });
 }
 
 // renderPage mounts the component under a permission set. Default grants write so affordances render; pass [read] for read-only.
@@ -687,5 +693,79 @@ describe("DetectionConfig monitor-default rules", () => {
       expect(screen.getByLabelText("mode for ours")).toBeInTheDocument();
     });
     expect(screen.getByLabelText("mode for ours")).toHaveValue("alert");
+  });
+});
+
+describe("DetectionConfig observed column", () => {
+  // The column exists so the evidence sits beside the control it informs (issue #813). What it must never do is read as a
+  // forecast: it counts matches, and alerts deduplicate on (host, rule, subject) permanently, so a rule matching one process
+  // repeatedly would raise a single alert.
+  it("shows the volume and the reach, and calls the number approximate", async () => {
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 4102, hosts: 3, last_seen: "2026-09-01T00:00:00Z" }],
+      matchCountDays: 7,
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("4,102")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/on 3 hosts/)).toBeInTheDocument();
+    expect(screen.getByTitle(/approximately 4,102 matches on 3 hosts in the last 7 days/)).toBeInTheDocument();
+  });
+
+  // A rule with nothing recorded is ABSENT from the response, and absence is not the same claim as zero: the rule may have been
+  // promoted before the window opened, or registered after it did.
+  it("shows a dash rather than a zero for a rule with nothing recorded", async () => {
+    stubReads({ rules: [makeRuleEntry()], matchCounts: [] });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("no matches recorded for suspicious_exec")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("0 on 0 hosts")).not.toBeInTheDocument();
+  });
+
+  // Singular host reads as "1 host", because "1 hosts" beside a promote control is the kind of detail that makes an operator
+  // trust the rest of the page less.
+  it("agrees in number for a single host", async () => {
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 5, hosts: 1, last_seen: "2026-09-01T00:00:00Z" }],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/on 1 host$/)).toBeInTheDocument();
+    });
+  });
+
+  // Losing the counts must not cost an operator the mode control. They are evidence for a decision, not a precondition for
+  // reaching it, so the column degrades and the rest of the page loads.
+  it("still renders the table when the counts cannot be read", async () => {
+    stubReads({ rules: [makeRuleEntry()] });
+    vi.spyOn(api, "listDetectionRuleMatchCounts").mockRejectedValue(new Error("db down"));
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("mode for suspicious_exec")).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("no matches recorded for suspicious_exec")).toBeInTheDocument();
+    expect(screen.queryByText(/Error:/)).not.toBeInTheDocument();
+  });
+
+  // Large counts abbreviate, because scanning this column is about telling tens from thousands.
+  it("abbreviates counts in the tens of thousands", async () => {
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 42_300, hosts: 12, last_seen: "2026-09-01T00:00:00Z" }],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("42k")).toBeInTheDocument();
+    });
+    expect(screen.getByTitle(/approximately 42,300 matches/)).toBeInTheDocument();
   });
 });

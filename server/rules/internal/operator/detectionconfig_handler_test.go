@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +41,16 @@ type fakeDCService struct {
 	upsertErr  error
 	lastReason string
 	lastActor  *identityapi.Actor
+	// matchCounts is what MatchCounts returns, and lastWindow records the window it was asked for, so a test can assert the
+	// handler parsed and forwarded the query parameter rather than quietly defaulting it.
+	matchCounts   []api.RuleMatchCount
+	matchCountErr error
+	lastWindow    api.MatchCountWindow
+}
+
+func (f *fakeDCService) MatchCounts(_ context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error) {
+	f.lastWindow = days
+	return f.matchCounts, f.matchCountErr
 }
 
 func (f *fakeDCService) ListExclusions(context.Context) ([]api.DetectionExclusion, error) {
@@ -404,3 +415,105 @@ func TestDetectionConfigHandler_ConstructorGuards(t *testing.T) {
 
 // _ ensures the concrete service satisfies the handler's narrow interface at compile time.
 var _ detectionConfigService = (*detectionconfig.Service)(nil)
+
+// spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/counts-are-readable-per-rule-over-a-window
+// spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/the-window-is-stated-and-bounded
+//
+// TestHandler_ListMatchCounts covers the endpoint an operator's promote decision reads.
+func TestHandler_ListMatchCounts(t *testing.T) {
+	t.Parallel()
+
+	newSrv := func(t *testing.T, svc *fakeDCService) *httptest.Server {
+		t.Helper()
+		h := NewDetectionConfig(svc, allowAllAuthZ{}, slog.Default())
+		mux := http.NewServeMux()
+		h.RegisterRoutes(mux)
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	get := func(t *testing.T, srv *httptest.Server, query string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+			srv.URL+"/api/v1/detection-config/rule-match-counts"+query, nil)
+		require.NoError(t, err)
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		return resp
+	}
+
+	t.Run("serves the counts and echoes the window", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeDCService{matchCounts: []api.RuleMatchCount{{RuleID: "imported", Matches: 90, Hosts: 3}}}
+		resp := get(t, newSrv(t, svc), "?days=14")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var body struct {
+			MatchCounts []api.RuleMatchCount `json:"match_counts"`
+			Days        api.MatchCountWindow `json:"days"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		require.Len(t, body.MatchCounts, 1)
+		assert.Equal(t, int64(90), body.MatchCounts[0].Matches)
+		assert.Equal(t, int64(3), body.MatchCounts[0].Hosts)
+		assert.Equal(t, api.MatchCountWindow(14), svc.lastWindow, "the requested window reaches the store")
+		assert.Equal(t, api.MatchCountWindow(14), body.Days, "and is echoed, so the reader knows what the numbers cover")
+	})
+
+	t.Run("a window past the cap is clamped and the clamped window is what is reported", func(t *testing.T) {
+		t.Parallel()
+		// Caught in manual QA against the dev server, not here: clamping lived only in the store, so the response echoed the
+		// window that had been ASKED for while serving a narrower one. Every test in this file passes a fake store, which is
+		// exactly the seam the clamp fell through. Both halves are asserted together because either alone still admits the bug.
+		svc := &fakeDCService{}
+		resp := get(t, newSrv(t, svc), "?days=365")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var body struct {
+			Days api.MatchCountWindow `json:"days"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, api.MaxMatchCountWindow, svc.lastWindow, "the store is asked for the capped window")
+		assert.Equal(t, api.MaxMatchCountWindow, body.Days, "and the response reports the window it actually covers")
+	})
+
+	t.Run("an absent window is the default rather than zero", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeDCService{}
+		resp := get(t, newSrv(t, svc), "")
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, api.DefaultMatchCountWindow, svc.lastWindow)
+	})
+
+	t.Run("no counts serialises as an empty array, never null", func(t *testing.T) {
+		t.Parallel()
+		// The UI iterates this without a nil guard, the same contract the other list surfaces here keep.
+		resp := get(t, newSrv(t, &fakeDCService{}), "")
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), `"match_counts":[]`)
+	})
+
+	t.Run("a nonsense window is rejected rather than silently defaulted", func(t *testing.T) {
+		t.Parallel()
+		// Defaulting a typo would answer a question the operator did not ask and label it with a period it does not cover.
+		for _, bad := range []string{"?days=0", "?days=-3", "?days=lots"} {
+			resp := get(t, newSrv(t, &fakeDCService{}), bad)
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode, bad)
+			resp.Body.Close()
+		}
+	})
+
+	t.Run("a store failure is a 500, not an empty list", func(t *testing.T) {
+		t.Parallel()
+		svc := &fakeDCService{matchCountErr: errors.New("db down")}
+		resp := get(t, newSrv(t, svc), "")
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+			"an empty list would read as a quiet rule, which is the reading that gets a noisy rule promoted")
+	})
+}

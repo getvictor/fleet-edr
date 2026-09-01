@@ -105,6 +105,13 @@ func (s *Service) ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSett
 	return s.store.ListRuleSettings(ctx)
 }
 
+// MatchCounts reports what each rule has matched in monitor mode over the window. Straight through to the store: unlike the
+// exclusion and setting reads there is no snapshot to consult, because these counts are written by the detection pipeline rather
+// than by this service's own mutations, so there is nothing here to keep in step with them.
+func (s *Service) MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error) {
+	return s.store.MatchCounts(ctx, days)
+}
+
 // CreateExclusion persists an exclusion, reloads this replica's snapshot so the change takes effect immediately, and records an audit
 // row. The store sets created_by from actor; reason rides the audit payload.
 func (s *Service) CreateExclusion(

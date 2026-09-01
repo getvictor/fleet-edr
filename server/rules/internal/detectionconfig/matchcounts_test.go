@@ -182,3 +182,70 @@ func countRows(ctx context.Context, t *testing.T, db *sqlx.DB) int {
 	require.NoError(t, db.GetContext(ctx, &n, `SELECT COUNT(*) FROM detection_rule_match_counts`))
 	return n
 }
+
+// spec:observability-instrumentation/recorded-monitor-match-counts-are-readable-per-rule/counts-are-readable-per-rule-over-a-window
+//
+// TestMatchCounts covers the read the promotion decision is actually made against.
+//
+// The three numbers are the point: matches alone cannot separate a rule that is noisy on one machine, which wants an exclusion,
+// from one that is too broad across the fleet, which wants leaving in monitor.
+func TestMatchCounts(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	ctx := t.Context()
+
+	day := func(daysAgo int) string { return time.Now().UTC().AddDate(0, 0, -daysAgo).Format(time.DateOnly) }
+	seed := func(ruleID, hostID string, daysAgo, count int) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `INSERT INTO detection_rule_match_counts
+			(rule_id, host_id, day, match_count, last_seen) VALUES (?, ?, ?, ?, ?)`,
+			ruleID, hostID, day(daysAgo), count, time.Now().UTC().AddDate(0, 0, -daysAgo))
+		require.NoError(t, err)
+	}
+	// "narrow" is heavy on one host; "broad" is light across three. Equal totals, opposite remedies.
+	//
+	// narrow is seeded across THREE DAYS on one host, which is what makes the host count a real assertion: with one row per host
+	// a plain COUNT(host_id) and COUNT(DISTINCT host_id) agree, so a fixture like that cannot tell the two apart.
+	seed("narrow", "host-a", 1, 30)
+	seed("narrow", "host-a", 2, 30)
+	seed("narrow", "host-a", 3, 30)
+	seed("broad", "host-a", 1, 30)
+	seed("broad", "host-b", 2, 30)
+	seed("broad", "host-c", 3, 30)
+	// Outside the default week, so it must not appear in a 7-day read.
+	seed("stale", "host-a", 20, 500)
+	// Outside the CAP, so a request for a window past the cap must not reach it. Without a row older than the cap, clamping and
+	// not clamping return the same rows and the clamp assertion below proves nothing.
+	seed("ancient", "host-a", 45, 700)
+
+	got, err := store.MatchCounts(ctx, api.DefaultMatchCountWindow)
+	require.NoError(t, err)
+	require.Len(t, got, 2, "a rule whose matches all fall outside the window is absent, not zero")
+
+	byRule := map[string]api.RuleMatchCount{}
+	for _, r := range got {
+		byRule[r.RuleID] = r
+	}
+	assert.Equal(t, int64(90), byRule["narrow"].Matches)
+	assert.Equal(t, int64(1), byRule["narrow"].Hosts, "one noisy host is an exclusion, not a broad rule")
+	assert.Equal(t, int64(90), byRule["broad"].Matches)
+	assert.Equal(t, int64(3), byRule["broad"].Hosts, "same volume, three hosts: the rule itself is too broad")
+	assert.False(t, byRule["broad"].LastSeen.IsZero(), "last_seen carries so a rule that went quiet is distinguishable")
+
+	// Ordered by volume, because the rule an operator most wants to see is the loudest one.
+	assert.Equal(t, "broad", got[0].RuleID, "ties break by rule id, so the order is stable")
+	assert.Equal(t, "narrow", got[1].RuleID)
+
+	// A longer window reaches the older rows; the cap stops a reader asking past what retention keeps.
+	wide, err := store.MatchCounts(ctx, api.MaxMatchCountWindow)
+	require.NoError(t, err)
+	assert.Len(t, wide, 3, "thirty days reaches stale but not ancient")
+
+	overCap, err := store.MatchCounts(ctx, api.MaxMatchCountWindow+90)
+	require.NoError(t, err)
+	assert.Equal(t, wide, overCap, "a window past the cap is clamped rather than served, so ancient stays out of reach")
+
+	zero, err := store.MatchCounts(ctx, 0)
+	require.NoError(t, err)
+	assert.Len(t, zero, 2, "an unspecified window is the default week")
+}

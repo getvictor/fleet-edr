@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listDetectionExclusions,
   listDetectionRuleSettings,
+  listDetectionRuleMatchCounts,
   createDetectionExclusion,
   deleteDetectionExclusion,
   upsertDetectionRuleSetting,
@@ -9,6 +10,7 @@ import {
   DetectionConfigApiError,
   type DetectionExclusion,
   type DetectionRuleSetting,
+  type RuleMatchCount,
   type RuleDocEntry,
 } from "../../api";
 import { useCan, PermissionAction } from "../../permissions-core";
@@ -127,6 +129,45 @@ const MODE_COLUMN_TOOLTIP =
   "Alert raises alerts; monitor evaluates and records a signal instead; disabled emits nothing. " +
   "A rule with no setting here runs in its own default, which is alert for the rules Fleet wrote and monitor for imported ones.";
 
+// Header tooltip for the Observed column. It has to carry the caveat, because a bare number beside a promote control reads as a
+// forecast: this counts matches, and alerts deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one
+// subject would raise one alert rather than the many shown here.
+const OBSERVED_COLUMN_TOOLTIP =
+  "What each rule matched in monitor mode over the window, and on how many hosts. Approximate, and an indication of volume " +
+  "rather than of how many alerts promoting the rule would raise: repeated matches on the same process collapse into a single " +
+  "alert once a rule alerts.";
+
+// formatMatches keeps large counts readable at a glance, since the difference that matters when scanning this column is between
+// tens and thousands rather than between 4,102 and 4,140.
+const matchesAbbreviationFloor = 10_000;
+
+function formatMatches(n: number): string {
+  if (n >= matchesAbbreviationFloor) return `${String(Math.round(n / 1000))}k`;
+  return n.toLocaleString();
+}
+
+// renderObserved draws the Observed cell for one rule.
+//
+// A rule with nothing recorded shows a dash rather than "0". Zero is a claim that the rule was watched and did nothing; absence can
+// equally mean it was promoted before the window opened, or that the window predates its registration. The dash says "nothing
+// recorded here", which is what the data supports.
+function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days: number) {
+  if (count === undefined) {
+    return (
+      <span className="detection-config__observed-none" aria-label={`no matches recorded for ${ruleID}`}>
+        &mdash;
+      </span>
+    );
+  }
+  const hosts = `${String(count.hosts)} host${count.hosts === 1 ? "" : "s"}`;
+  return (
+    <span title={`approximately ${count.matches.toLocaleString()} matches on ${hosts} in the last ${String(days)} days`}>
+      {formatMatches(count.matches)}
+      <span className="detection-config__observed-hosts"> on {hosts}</span>
+    </span>
+  );
+}
+
 // SEVERITY_ORDER lists declared severities most- to least-severe; the rule-modes table sorts by it (ascending rank = critical first).
 const SEVERITY_ORDER = ["critical", "high", "medium", "low"] as const;
 
@@ -159,6 +200,12 @@ export function DetectionConfig() {
   const [exclusions, setExclusions] = useState<DetectionExclusion[]>([]);
   const [rules, setRules] = useState<RuleDocEntry[]>([]);
   const [settings, setSettings] = useState<DetectionRuleSetting[]>([]);
+  // Keyed by rule id, holding only rules that matched: a rule absent here has nothing recorded, which the table renders as a dash
+  // rather than a zero (see the cell).
+  // Possibly-undefined per key on purpose: a rule with nothing recorded is ABSENT from the response rather than present with a
+  // zero, so the lookup genuinely can miss and the guard below is a real one rather than a formality.
+  const [observed, setObserved] = useState<Record<string, RuleMatchCount | undefined>>({});
+  const [observedDays, setObservedDays] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -214,11 +261,22 @@ export function DetectionConfig() {
   );
 
   const reload = useCallback(async (): Promise<void> => {
-    const [excl, ruleDocs, ruleSettings] = await Promise.all([listDetectionExclusions(), fetchRuleDocs(), listDetectionRuleSettings()]);
+    const [excl, ruleDocs, ruleSettings, matchCounts] = await Promise.all([
+      listDetectionExclusions(),
+      fetchRuleDocs(),
+      listDetectionRuleSettings(),
+      // Recovered rather than fatal: the counts are evidence for a decision, and losing them should grey out one column, not
+      // stop an operator reaching the mode control on a page whose other three reads succeeded.
+      listDetectionRuleMatchCounts().catch(() => null),
+    ]);
     if (!mountedRef.current) return;
     setExclusions(excl);
     setRules(ruleDocs);
     setSettings(ruleSettings);
+    if (matchCounts !== null) {
+      setObserved(Object.fromEntries(matchCounts.counts.map((c) => [c.rule_id, c])));
+      setObservedDays(matchCounts.days);
+    }
   }, []);
 
   useEffect(() => {
@@ -527,6 +585,7 @@ export function DetectionConfig() {
                   <th title="The severity each rule declares in the catalog. It applies whenever no override is set below.">
                     Default severity
                   </th>
+                  <th title={OBSERVED_COLUMN_TOOLTIP}>Observed</th>
                   <th title={MODE_COLUMN_TOOLTIP}>Mode</th>
                   <th title="Replaces the rule's default severity on every alert it raises. (none) keeps the default.">
                     Severity override
@@ -549,6 +608,7 @@ export function DetectionConfig() {
                         <code className="detection-config__rule-id">{r.id}</code>
                       </td>
                       <td className="detection-config__default-severity">{r.doc.severity || "(unspecified)"}</td>
+                      <td className="detection-config__observed">{renderObserved(observed[r.id], r.id, observedDays)}</td>
                       <td>
                         <Select
                           label=""

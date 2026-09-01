@@ -1134,6 +1134,22 @@ export async function listDetectionRuleSettings(): Promise<DetectionRuleSetting[
   return body.rule_settings ?? [];
 }
 
+export interface RuleMatchCount {
+  rule_id: string;
+  matches: number;
+  hosts: number;
+  last_seen: string;
+}
+
+// listDetectionRuleMatchCounts reads the per-rule monitor-match counts. The response states the window it actually covers, which
+// can be narrower than the one requested because the server caps it at the retention window; callers render that rather than the
+// window they asked for.
+export async function listDetectionRuleMatchCounts(days?: number): Promise<{ counts: RuleMatchCount[]; days: number }> {
+  const query = days === undefined ? "" : `?days=${String(days)}`;
+  const body = await fetchJSON<{ match_counts: RuleMatchCount[] | null; days: number }>(`/v1/detection-config/rule-match-counts${query}`);
+  return { counts: body.match_counts ?? [], days: body.days };
+}
+
 export async function createDetectionExclusion(
   req: CreateDetectionExclusionRequest,
 ): Promise<DetectionExclusion> {

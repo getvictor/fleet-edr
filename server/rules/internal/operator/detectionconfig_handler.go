@@ -39,6 +39,7 @@ const (
 type detectionConfigService interface {
 	ListExclusions(ctx context.Context) ([]api.DetectionExclusion, error)
 	ListRuleSettings(ctx context.Context) ([]api.DetectionRuleSetting, error)
+	MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]api.RuleMatchCount, error)
 	CreateExclusion(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.CreateExclusionInput) (api.DetectionExclusion, error)
 	DeleteExclusion(ctx context.Context, actor *identityapi.Actor, reason string, id int64) error
 	UpsertRuleSetting(ctx context.Context, actor *identityapi.Actor, reason string, in detectionconfig.UpsertSettingInput) (api.DetectionRuleSetting, error)
@@ -121,6 +122,7 @@ func (h *DetectionConfigHandler) resolveCreatedByLabels(ctx context.Context, exc
 //	DELETE /api/v1/detection-config/exclusions/{id}
 //	GET    /api/v1/detection-config/rule-settings
 //	PUT    /api/v1/detection-config/rule-settings
+//	GET    /api/v1/detection-config/rule-match-counts
 //
 // Caller wraps in the identity Session + CSRF middleware before mounting (the session-protected allowlist auto-derives from what is
 // registered here).
@@ -129,6 +131,7 @@ func (h *DetectionConfigHandler) RegisterRoutes(mux httpserver.Router) {
 	mux.HandleFunc("POST /api/v1/detection-config/exclusions", h.handleCreateExclusion)
 	mux.HandleFunc("DELETE /api/v1/detection-config/exclusions/{id}", h.handleDeleteExclusion)
 	mux.HandleFunc("GET /api/v1/detection-config/rule-settings", h.handleListRuleSettings)
+	mux.HandleFunc("GET /api/v1/detection-config/rule-match-counts", h.handleListMatchCounts)
 	mux.HandleFunc("PUT /api/v1/detection-config/rule-settings", h.handleUpsertRuleSetting)
 }
 
@@ -161,6 +164,55 @@ func (h *DetectionConfigHandler) handleListRuleSettings(w http.ResponseWriter, r
 		return
 	}
 	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"rule_settings": settings})
+}
+
+// handleListMatchCounts serves what each rule has matched in monitor mode over a window, which is the evidence an operator
+// promotes a rule against (issue #813).
+//
+// Read-gated by the same action as the rest of this surface: it describes detection configuration's effect, and anyone who can see
+// which rules are in monitor should be able to see what those rules have been doing.
+func (h *DetectionConfigHandler) handleListMatchCounts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !identityapi.HTTPGate(ctx, w, h.authz, h.logger,
+		identityapi.ActionDetectionConfigRead, identityapi.Resource{Type: "detection_config"}) {
+		return
+	}
+	days, ok := matchCountWindow(r.URL.Query().Get("days"))
+	if !ok {
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusBadRequest, errCodeDCInvalidInput,
+			"days must be a positive whole number")
+		return
+	}
+	// Clamped HERE as well as in the store, because the number echoed below has to be the window the counts actually cover. The
+	// store clamping alone left this reporting the requested window over narrower data.
+	days = days.Clamp()
+	counts, err := h.svc.MatchCounts(ctx, days)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "detectionconfig list match counts", "err", err)
+		writeDetectionConfigErr(ctx, h.logger, w, http.StatusInternalServerError, errCodeDCInternal, msgDCInternal)
+		return
+	}
+	if counts == nil {
+		counts = []api.RuleMatchCount{}
+	}
+	// The window echoed is the CLAMPED one: a client that asked for 90 days needs to know it is reading 30, or it will describe
+	// the number to an operator as covering a period it does not.
+	writeJSON(ctx, h.logger, w, http.StatusOK, map[string]any{"match_counts": counts, "days": days})
+}
+
+// matchCountWindow parses the `days` query parameter. Absent or empty is the default window; anything that is not a positive whole
+// number is rejected rather than silently defaulted, since a typo that reads as "the last week" when the operator meant ninety days
+// is a wrong number presented as a right one. Values above the cap are clamped by the store, not refused, because asking for more
+// history than retention keeps is a reasonable request with a truthful answer.
+func matchCountWindow(raw string) (api.MatchCountWindow, bool) {
+	if raw == "" {
+		return api.DefaultMatchCountWindow, true
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days <= 0 {
+		return 0, false
+	}
+	return api.MatchCountWindow(days), true
 }
 
 // createExclusionRequest is the POST wire shape. host_group_id defaults to 0 (global). created_by + the audit actor come from the
