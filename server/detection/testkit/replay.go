@@ -129,6 +129,10 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 	findings, err := rule.Evaluate(ctx, c.Events, mysqlStore)
 	require.NoError(t, err, "rule.Evaluate")
 
+	// Computed once per case rather than per finding: it is a property of the RULE, not of anything it produced.
+	nd, isNonDetection := rule.(rulesapi.NonDetection)
+	isProjection := isNonDetection && nd.NonDetectionKind() == rulesapi.NonDetectionProjection
+
 	require.Len(t, findings, len(c.ExpectedFindings),
 		"finding count mismatch: expected %d, got %d",
 		len(c.ExpectedFindings), len(findings))
@@ -151,13 +155,16 @@ func runCase(t *testing.T, rule rulesapi.Rule, path string) {
 		// the rule they can look up in the docs and exclusions. Asserted here for every fixture-replayed rule with no per-fixture
 		// boilerplate.
 		//
-		// Application-control blocks are a different kind of alert and are exempt: a block carries the blocking policy rule's own
-		// `app_control:<n>` id and a title computed from the application, so this invariant would be asserting a detection-rule
-		// property of something that is not one. Scoped by the finding's own Source rather than by a per-fixture override,
-		// because an override would let any fixture opt its rule out of #519, which is the opposite of what this line is for.
-		// (Previously this held by accident: the rule was table-driven only, so replay never reached it. Issue #773 gave it a
+		// A projection is exempt: it renders a decision the agent already made, so its findings carry the matched app-control
+		// rule's id and a title computed from the application, and there is no rule-level title for them to equal. Keyed off the
+		// rule's STRUCTURAL classification, matching how registry_test.go states the same exemption, and deliberately not off
+		// Finding.Source: the source is output under test, so a detection rule that stamped the app-control source would exempt
+		// itself from the very guard this line is. TestAll_NonDetectionClassification pins which rules are projections, so the
+		// exemption cannot be widened here either.
+		//
+		// (This previously held by accident: the rule was table-driven only, so replay never reached it. Issue #773 gave it a
 		// fixture, which turned that accident into a failure.)
-		if got.Source != rulesapi.AlertSourceApplicationControl {
+		if !isProjection {
 			assert.Equal(t, rule.DisplayName(), got.Title,
 				"finding[%d].title must equal the rule's canonical DisplayName (issue #519)", i)
 		}

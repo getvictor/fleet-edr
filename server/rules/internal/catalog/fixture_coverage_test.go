@@ -140,6 +140,8 @@ func TestEveryCatalogRuleHasARegressionFixture(t *testing.T) {
 }
 
 // spec:server-detection-rules-engine/a-converted-rule-carries-its-logic-in-its-file/a-converted-rule-detects-what-it-detected-before
+// spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-suspicious-process-resolves-a-domain-and-connects-to-the-resolved-address
+// spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-browser-resolving-and-connecting-to-an-ordinary-domain-does-not-fire
 // spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-suspicious-process-that-connects-to-an-address-it-never-resolved-does-not-fire
 //
 // TestCatalogFixturesStillFire is the regression half: every fixture that exists still produces exactly the findings it records.
@@ -147,10 +149,11 @@ func TestEveryCatalogRuleHasARegressionFixture(t *testing.T) {
 // Driven off the catalog rather than off the fixture directories, so a fixture directory named after a rule that no longer exists
 // is caught as a stale directory rather than silently skipped.
 //
-// The two scenario markers above moved here from per-rule replay tests this loop replaced. Both still hold, and hold wider: the
-// converted-rule scenario is now asserted for every converted rule rather than for one, and the beacon scenario is carried by
-// fixtures/dns_c2_beacon/negative_unresolved_address.json, which this loop replays. Replay lives in exactly one place so a rule
-// cannot be built two different ways against the same fixtures.
+// The scenario markers above moved here from the per-rule replay tests this loop replaced, ALL of them: leaving any behind would
+// attach a fixture scenario to whichever test happened to follow it, which for the DNS rule was its ATT&CK mapping test. Each
+// still holds, and the first holds wider, since the converted-rule scenario is now asserted for every converted rule rather than
+// for one. The three beacon scenarios are carried by the positive and two negative fixtures under fixtures/dns_c2_beacon/, which
+// this loop replays. Replay lives in exactly one place so a rule cannot be built two different ways against the same fixtures.
 func TestCatalogFixturesStillFire(t *testing.T) {
 	t.Parallel()
 

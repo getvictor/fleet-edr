@@ -14,10 +14,6 @@ import (
 	"github.com/fleetdm/edr/server/rules/api"
 )
 
-// spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-suspicious-process-resolves-a-domain-and-connects-to-the-resolved-address
-// spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-browser-resolving-and-connecting-to-an-ordinary-domain-does-not-fire
-// spec:server-detection-rules-engine/dns-correlated-c2-beacon-detection/a-suspicious-process-that-connects-to-an-address-it-never-resolved-does-not-fire
-//
 // TestDNSC2Beacon_TechniquesMapping pins the MITRE ATT&CK union the rule advertises. A given finding narrows this (every
 // finding carries T1071.004; only DGA-domain findings add T1568.002), but the rule-level declaration drives the catalog
 // surface and ATT&CK-Navigator export, so it is pinned here.

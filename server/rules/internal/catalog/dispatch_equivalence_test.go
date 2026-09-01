@@ -15,21 +15,6 @@ import (
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
 )
 
-// spec:server-detection-rules-engine/a-rule-declares-the-event-types-it-consumes/a-rule-finds-nothing-in-a-batch-of-types-it-does-not-declare
-//
-// TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType is the corpus equivalence gate for engine dispatch (issue #762).
-//
-// The engine invokes a rule only when the batch carries an event type it declares. Dispatch is therefore behaviour-preserving
-// exactly when no rule can find something in a batch carrying none of its declared types, which is what this asserts over the real
-// fixture corpus:
-//
-//	a rule produced findings from this batch  =>  the batch carried a type that rule declares
-//
-// Stated that way it needs no second engine run to compare against. Running the corpus twice, once dispatched and once not, would
-// answer the same question less directly, since the only thing dispatch can change is whether a rule is invoked at all.
-//
-// This is the gate the issue asks for, and it is stronger than the synthetic tripwire in registry_test.go because the batches are
-// real recorded telemetry with payloads that genuinely fire these rules, rather than payloads assembled to look incriminating.
 // loadFixtureEvents decodes one replay fixture's event batch.
 func loadFixtureEvents(t *testing.T, path string) []detectionapi.Event {
 	t.Helper()
@@ -64,6 +49,21 @@ func wouldDispatch(declared, present []string) bool {
 	return false
 }
 
+// spec:server-detection-rules-engine/a-rule-declares-the-event-types-it-consumes/a-rule-finds-nothing-in-a-batch-of-types-it-does-not-declare
+//
+// TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType is the corpus equivalence gate for engine dispatch (issue #762).
+//
+// The engine invokes a rule only when the batch carries an event type it declares. Dispatch is therefore behaviour-preserving
+// exactly when no rule can find something in a batch carrying none of its declared types, which is what this asserts over the real
+// fixture corpus:
+//
+//	a rule produced findings from this batch  =>  the batch carried a type that rule declares
+//
+// Stated that way it needs no second engine run to compare against. Running the corpus twice, once dispatched and once not, would
+// answer the same question less directly, since the only thing dispatch can change is whether a rule is invoked at all.
+//
+// This is the gate the issue asks for, and it is stronger than the synthetic tripwire in registry_test.go because the batches are
+// real recorded telemetry with payloads that genuinely fire these rules, rather than payloads assembled to look incriminating.
 func TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType(t *testing.T) {
 	t.Parallel()
 
@@ -82,12 +82,13 @@ func TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType(t *testing.T) {
 	// corpus has its smoke fixtures too, this list becomes exactly the catalog and should be DERIVED from New() rather than
 	// written out; it stays literal only while pendingFixtures is non-empty and some rules therefore cannot fire here.
 	//
-	// The five proc_creation_macos_* entries are vendored rules that no fixture was written for. They fire as OVERLAPS on the
-	// authored fixtures: the keychain-dump capture trips the imported credential rule, the Office fixture trips the imported
-	// office-child rule, the launchctl fixture trips the imported launchctl rule, and so on. That is worth having rather than
-	// suppressing. It is direct evidence that the vendored corpus matches the same telemetry the hand-written rules do, and
-	// because the vendored rules ship in monitor mode the overlap is exactly the recorded signal an operator compares against the
-	// alert before deciding whether promoting one would add anything.
+	// proc_creation_macos_base64_decode has a fixture of its own: it is the worked example the imported corpus's generated smoke
+	// fixtures will follow. The other four proc_creation_macos_* entries have no fixture and fire as OVERLAPS on the authored
+	// ones: the keychain-dump capture trips the imported credential rule, the Office fixture trips the imported office-child
+	// rule, the launchctl fixture trips the imported launchctl rule. Those four are worth having rather than suppressing. They
+	// are direct evidence that the vendored corpus matches the same telemetry the hand-written rules do, and because the vendored
+	// rules ship in monitor mode the overlap is exactly the recorded signal an operator compares against the alert before
+	// deciding whether promoting one would add anything.
 	coveredByCorpus := []string{
 		"application_control_block",
 		"credential_keychain_dump",
