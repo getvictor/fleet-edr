@@ -174,8 +174,9 @@ function renderObserved(count: RuleMatchCount | undefined, ruleID: string, days:
   // case from one still matching. Phrased by the shared helper rather than a local one, so this reads like the Hosts list instead
   // of inventing a second vocabulary for the same idea.
   const lastSeen = formatRelativeISO(count.last_seen);
+  const matches = `${count.matches.toLocaleString()} match${count.matches === 1 ? "" : "es"}`;
   const title =
-    `approximately ${count.matches.toLocaleString()} matches on ${hosts} in the last ${String(days)} days` +
+    `approximately ${matches} on ${hosts} in the last ${String(days)} days` +
     (lastSeen === "" ? "" : `, last matched ${lastSeen}`);
   // aria-label carries the same sentence as the tooltip, because `title` alone reaches neither a screen reader reliably nor a
   // touch user at all, and the abbreviated display ("42k") drops the exact figure. The visible text stays short; the label is

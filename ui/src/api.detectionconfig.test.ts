@@ -65,8 +65,9 @@ describe("detection-config API client", () => {
     expect(await listDetectionRuleSettings()).toEqual([]);
   });
 
-  // The component tests mock this client wholesale, so the query serialisation and the null coalescing below have no other
-  // coverage. Both have a history here: a null envelope crashed the exclusions page once already (see above).
+  // The component tests mock this client wholesale, so the query serialisation and the envelope REJECTION below have no other
+  // coverage. Rejection, not coalescing: this endpoint deliberately refuses a malformed envelope where the sibling list endpoints
+  // above coalesce one (a null envelope crashed the exclusions page once, which is why those coalesce).
   it("listDetectionRuleMatchCounts omits the query when no window is given", async () => {
     const mock = stubFetch({ match_counts: [], days: 7 });
     const out = await listDetectionRuleMatchCounts();

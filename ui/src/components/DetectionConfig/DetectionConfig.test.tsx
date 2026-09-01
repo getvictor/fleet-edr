@@ -815,6 +815,21 @@ describe("DetectionConfig observed column", () => {
     expect(screen.getByLabelText(/approximately 42,000 matches on 1 host in the last 7 days/)).toBeInTheDocument();
   });
 
+  // "approximately 1 matches" is the kind of wrong that makes a number look unread. The host noun was already pluralised; the
+  // match noun was not.
+  it("pluralises the match noun for a single match", async () => {
+    stubReads({
+      rules: [makeRuleEntry()],
+      matchCounts: [{ rule_id: "suspicious_exec", matches: 1, hosts: 1, last_seen: new Date().toISOString() }],
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/approximately 1 match on 1 host/)).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText(/1 matches/)).not.toBeInTheDocument();
+  });
+
   // When the read fails the visible note must say so too, not leave the normal caption implying the empty cells are data.
   it("replaces the visible caveat with the unavailable notice when the read fails", async () => {
     stubReads({ rules: [makeRuleEntry()] });
