@@ -105,14 +105,23 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 	// Image, so merging paired /usr/bin/file with a flag belonging to /bin/ls and matched nothing. Conditions like
 	// `selection1 and 1 of selection_cli*` need both halves: the mandatory one plus ONE of the alternatives.
 	condition, _ := block["condition"].(string)
+	// Every branch that builds is collected, then the one naming a subject binary wins. Taking the first that merely succeeds
+	// picked the command-line-only branch of `1 of selection*` rules and produced an event with no Image at all: still a match,
+	// because such a rule does not constrain the image, but useless as an illustration of what the rule is for.
 	var image, parent string
 	var args []string
 	var lastErr error
 	built := false
 	for _, group := range candidateGroups(condition, block) {
-		image, parent, args, lastErr = buildFrom(block, group)
-		if lastErr == nil {
-			built = true
+		gotImage, gotParent, gotArgs, err := buildFrom(block, group)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !built || (image == "" && gotImage != "") {
+			image, parent, args, built = gotImage, gotParent, gotArgs, true
+		}
+		if image != "" {
 			break
 		}
 	}
@@ -121,6 +130,11 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 			lastErr = errors.New("condition names no selection this generator can build from")
 		}
 		return nil, lastErr
+	}
+	if image == "" {
+		// The rule constrains only the command line or the parent, so any plausible subject satisfies it. Named rather than left
+		// empty: a fixture with no path at all reads as a broken record instead of as an event.
+		image = "/usr/bin/fixture-subject"
 	}
 
 	const childPID, parentPID = 4900, 4800
@@ -167,11 +181,11 @@ func candidateGroups(condition string, block map[string]any) [][]string {
 	}
 
 	var groups [][]string
-	for _, branch := range strings.Split(condition, " or ") {
+	for branch := range strings.SplitSeq(condition, " or ") {
 		// Each term contributes either one fixed set of names or several alternatives; the branch's candidates are the product.
 		combos := [][]string{{}}
 		usable := true
-		for _, term := range strings.Split(branch, " and ") {
+		for term := range strings.SplitSeq(branch, " and ") {
 			// Parentheses group terms rather than naming one; the corpus uses them in exactly one rule, and leaving them attached
 			// made `(ishidden_option_declaration` match no selection at all.
 			term = strings.Trim(strings.TrimSpace(term), "()")
