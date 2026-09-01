@@ -129,7 +129,7 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 
 	var best *subject
 	for _, group := range candidateGroups(names) {
-		for _, cand := range subjectsFor(block, group) {
+		for _, cand := range withSubjectFallback(subjectsFor(block, group)) {
 			if !compiled.Matches(cand) {
 				continue
 			}
@@ -151,19 +151,6 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 		return nil, errors.New("no combination of this rule's selections produced an event its own matcher accepts")
 	}
 
-	if best.image == "" {
-		// The rule constrains only the command line or the parent, so any plausible subject satisfies it. Named rather than left
-		// empty: a record with no path reads as broken rather than as an event.
-		//
-		// RE-CHECKED afterwards, because filling Image also fills argv[0] and so changes the joined command line. A candidate
-		// approved without an image is not the candidate being written, and an `Image: null` clause or an image-bearing filter
-		// can reject the filled-in one. Skipping this check would break the guarantee that nothing reaching disk fails the
-		// rule's own condition, which is the whole basis for trusting these fixtures.
-		best.image = "/usr/bin/fixture-subject"
-		if !compiled.Matches(*best) {
-			return nil, errors.New("the only candidates this rule accepts leave Image unset, and naming a subject breaks them")
-		}
-	}
 	image := best.image
 
 	const childPID, parentPID = 4900, 4800
@@ -224,6 +211,31 @@ func (s subject) Field(name string) ([]string, bool) {
 		return []string{strings.Join(s.argv(), " ")}, true
 	}
 	return nil, false
+}
+
+// fixtureSubject is the stand-in binary for a rule that constrains only the command line or the parent. Named rather than left
+// empty, because a record with no path reads as a broken row rather than as an event.
+const fixtureSubject = "/usr/bin/fixture-subject"
+
+// withSubjectFallback adds, for any candidate with no Image, the same candidate WITH the stand-in subject.
+//
+// Offered as an extra candidate rather than patched onto the winner afterwards. Filling Image also fills argv[0] and so changes
+// the joined command line, so a candidate approved without one is not the candidate that would be written: an `Image: null`
+// clause or an image-bearing filter can reject the filled-in version. Patching after the oracle had spoken produced exactly that
+// bug twice in this file's history, once here and once with the trailing operand, and each time a re-check was bolted on to
+// compensate. Enumerating the variant instead makes verification the LAST step, so the subject written out is by construction the
+// subject the matcher accepted and no re-check is needed.
+func withSubjectFallback(cands []subject) []subject {
+	out := make([]subject, 0, len(cands)*2)
+	for _, c := range cands {
+		out = append(out, c)
+		if c.image == "" {
+			withSubject := c
+			withSubject.image = fixtureSubject
+			out = append(out, withSubject)
+		}
+	}
+	return out
 }
 
 // candidateGroups enumerates the selection sets worth trying, smallest first, WITHOUT interpreting the condition.
