@@ -24,10 +24,14 @@ func newPruneHarness(t *testing.T, retentionDays int) (*Rules, *sqlx.DB) {
 	t.Helper()
 	db := testdb.Open(t)
 	require.NoError(t, runner.Up(t.Context(), db, rulesmigrations.FS, runner.Options{Context: "rules", TableName: "rules_goose_db_version"}))
+	store := detectionconfig.NewStore(db)
 	return &Rules{
-		detectionConfigStore: detectionconfig.NewStore(db),
-		retentionDays:        retentionDays,
-		logger:               slog.New(slog.DiscardHandler),
+		detectionConfigStore: store,
+		// Run fans out to the config refresh as well as the prune, so it needs a real service; the prune tests below do not touch
+		// it, and a nil one would turn a Run lifecycle test into a nil dereference rather than a test.
+		detectionConfigSvc: detectionconfig.NewService(store, nil, nil, slog.New(slog.DiscardHandler)),
+		retentionDays:      retentionDays,
+		logger:             slog.New(slog.DiscardHandler),
 	}, db
 }
 
@@ -115,4 +119,51 @@ func TestPruneMatchCountsLoop(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the loop must return when its context is cancelled")
 	}
+}
+
+// TestRun_DrivesTheMatchCountPrune covers the production entry point rather than the loop beneath it.
+//
+// Every other test here calls pruneMatchCountsLoop directly, which means deleting its call from Run would disable pruning in
+// production and leave the whole suite green. That is the failure this exists to catch: the loop is well covered and the line that
+// starts it was not covered at all.
+//
+// It also pins that Run RETURNS on cancellation. Run fans out to two goroutines under a WaitGroup, so a fan-out that forgets to
+// wait, or a loop that ignores its context, hangs shutdown rather than failing anything.
+func TestRun_DrivesTheMatchCountPrune(t *testing.T) {
+	t.Parallel()
+
+	r, db := newPruneHarness(t, 30)
+	insertCount(t, db, "old", 40)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		r.Run(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return remaining(t, db) == 0 }, 5*time.Second, 10*time.Millisecond,
+		"Run must actually start the prune, not merely be able to")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run must return once its context is cancelled, or shutdown hangs on it")
+	}
+}
+
+// TestMonitorMatchRecorder_IsTheStore covers the other end of the same wiring hop.
+//
+// cmd/main joins these two accessors: rulesCtx.MonitorMatchRecorder() into detectionCtx.SetMonitorMatchRecorder(). The Runner test
+// in the pipeline package covers the detection side; this covers the rules side, so a nil returned here cannot silently disable
+// the durable counter while every other test passes.
+func TestMonitorMatchRecorder_IsTheStore(t *testing.T) {
+	t.Parallel()
+
+	r, _ := newPruneHarness(t, 30)
+
+	rec := r.MonitorMatchRecorder()
+	require.NotNil(t, rec, "a nil recorder would leave production emitting metrics and persisting nothing")
+	assert.Same(t, r.detectionConfigStore, rec)
 }
