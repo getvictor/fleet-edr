@@ -172,12 +172,16 @@ func (r *Rules) Run(ctx context.Context) {
 // already excluded from every read by their day.
 const DefaultMatchCountPruneInterval = time.Hour
 
-// SetRetentionDays sets the age cap the match-count prune applies. Zero (the default) prunes nothing, matching how the same knob
-// disables the detection context's process-record retention runner.
+// SetRetentionDays sets the age cap the match-count prune applies AND the furthest back the read surface may claim to see. One
+// entry point for both, because they are the same fact: rows past retention are deleted, so a read window wider than retention
+// describes a period the data no longer covers. Zero (the default) prunes nothing, matching how the same knob disables the
+// detection context's process-record retention runner.
 //
-// MUST be called before Run. The prune loop reads the field without synchronisation, which is safe only because starting that
-// goroutine happens-after this write; cmd/main calls this from openContexts, well before it launches Run. Calling it afterwards
-// would be a data race, and one that `go test -race` would not see unless a test happened to reproduce the ordering.
+// MUST be called before Run, for the prune half only. That loop reads `retentionDays` without synchronisation, which is safe
+// only because starting the goroutine happens-after this write; cmd/main calls this from openContexts, well before it launches
+// Run. Calling it afterwards would be a data race, and one that `go test -race` would not see unless a test happened to
+// reproduce the ordering. The read-surface half carries no such constraint: the handler stores its cap atomically and starts at
+// the constant maximum, so a later call simply narrows it.
 func (r *Rules) SetRetentionDays(days int) {
 	r.retentionDays = days
 	// The same number bounds how far back the read surface may claim to see. Pruning at 7 days while the API advertises a 30-day
