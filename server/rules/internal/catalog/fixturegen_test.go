@@ -154,7 +154,15 @@ func candidateEvents(ruleID string, raw []byte) ([]detectionapi.Event, error) {
 	if best.image == "" {
 		// The rule constrains only the command line or the parent, so any plausible subject satisfies it. Named rather than left
 		// empty: a record with no path reads as broken rather than as an event.
+		//
+		// RE-CHECKED afterwards, because filling Image also fills argv[0] and so changes the joined command line. A candidate
+		// approved without an image is not the candidate being written, and an `Image: null` clause or an image-bearing filter
+		// can reject the filled-in one. Skipping this check would break the guarantee that nothing reaching disk fails the
+		// rule's own condition, which is the whole basis for trusting these fixtures.
 		best.image = "/usr/bin/fixture-subject"
+		if !compiled.Matches(*best) {
+			return nil, errors.New("the only candidates this rule accepts leave Image unset, and naming a subject breaks them")
+		}
 	}
 	image := best.image
 
@@ -311,11 +319,11 @@ func applyMap(base subject, m map[string]any) (subject, bool) {
 			switch field {
 			case "Image":
 				if out.image == "" {
-					out.image = realisticPath(val, modifier)
+					out.image = plausiblePath(val, modifier)
 				}
 			case "ParentImage":
 				if out.parent == "" {
-					out.parent = realisticPath(val, modifier)
+					out.parent = plausiblePath(val, modifier)
 				}
 			case "CommandLine":
 				// A corpus value is a fragment of a COMMAND LINE, not one argv entry. Emitting it whole produced
@@ -357,20 +365,54 @@ func valuesOf(v any) []string {
 	return nil
 }
 
-// realisticPath turns a bare leaf into somewhere a binary actually lives.
+// knownLocations pins the binaries this corpus names that do NOT live in /usr/bin.
 //
-// `Image|endswith: '/osascript'` is satisfied by the literal itself, but `/osascript` is not a path any macOS host would report,
-// and these fixtures are read as examples of the telemetry a rule is about. Only extended for endswith/contains, where adding to
-// the left-hand side cannot break the match; an exact match is left exactly as written. The matcher verifies the result either
-// way, so a wrong guess here is caught rather than shipped.
-func realisticPath(value, modifier string) string {
+// Guessing /usr/bin for everything put ioreg, arp, tcpdump, sysadminctl and friends in the wrong directory, which matters because
+// a fixture is read as a sample of real telemetry and because agent/hostid already pins /usr/sbin/ioreg. The list covers the
+// leaves the vendored corpus actually names; anything absent falls through to the /usr/bin default, and the matcher verifies the
+// result either way, so a wrong entry is caught rather than shipped.
+//
+//nolint:gosec // G101 fires on the "firmwarepasswd" entry: every value here is a binary path, not a credential.
+var knownLocations = map[string]string{
+	"arp":             "/usr/sbin/arp",
+	"dseditgroup":     "/usr/sbin/dseditgroup",
+	"dsenableroot":    "/usr/sbin/dsenableroot",
+	"firmwarepasswd":  "/usr/sbin/firmwarepasswd",
+	"installer":       "/usr/sbin/installer",
+	"ioreg":           "/usr/sbin/ioreg",
+	"netstat":         "/usr/sbin/netstat",
+	"screencapture":   "/usr/sbin/screencapture",
+	"system_profiler": "/usr/sbin/system_profiler",
+	"sysadminctl":     "/usr/sbin/sysadminctl",
+	"tcpdump":         "/usr/sbin/tcpdump",
+}
+
+// plausiblePath turns a bare leaf into somewhere a binary of that name actually lives.
+//
+// `Image|endswith: '/osascript'` is satisfied by the literal itself, but `/osascript` is not a path any macOS host reports, and
+// these fixtures are read as examples of the telemetry a rule is about. Extended only for endswith/contains, where adding to the
+// left cannot break the match; an exact match is left exactly as written.
+//
+// A name carrying a space is an application, not a command in a bin directory, so it takes the bundle layout the hand-written
+// Office fixture uses. A name that is ONLY whitespace is left to the default: space_after_filename's rule is about a path ending
+// in a space, and wrapping that in a bundle would obscure the very thing it detects.
+func plausiblePath(value, modifier string) string {
+	extendable := strings.Contains(modifier, "endswith") || strings.Contains(modifier, "contains")
+	leaf := strings.TrimPrefix(value, "/")
+	known, isKnown := knownLocations[leaf]
 	switch {
-	case !strings.HasPrefix(value, "/"):
-		return "/usr/bin/" + value
-	case strings.Count(value, "/") == 1 && (strings.Contains(modifier, "endswith") || strings.Contains(modifier, "contains")):
+	case strings.HasPrefix(value, "/") && strings.Count(value, "/") > 1:
+		return value // already a path, not a leaf
+	case !extendable && strings.HasPrefix(value, "/"):
+		return value // an exact match: extending it would break the comparison
+	case isKnown:
+		return known
+	case strings.TrimSpace(leaf) != "" && strings.Contains(leaf, " "):
+		return "/Applications/" + leaf + ".app/Contents/MacOS/" + leaf
+	case strings.HasPrefix(value, "/"):
 		return "/usr/bin" + value
 	default:
-		return value
+		return "/usr/bin/" + value
 	}
 }
 
