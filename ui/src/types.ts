@@ -238,11 +238,26 @@ export interface Alert {
   // source is "detection" for catalog-rule findings and
   // "application_control" for blocks emitted by the extension's
   // AUTH_EXEC decision walker. Surfaced so the UI can chip / filter
-  // alerts by origin without re-parsing rule_id.
+  // alerts by subsystem without re-parsing rule_id. Distinct from
+  // `origin` below, which names the rule's AUTHOR rather than the
+  // subsystem that raised the alert.
   source: string;
   severity: string;
   title: string;
   description: string;
+  // origin credits whoever wrote the rule that fired: "Fleet EDR" for a rule
+  // this project authored, "SigmaHQ, by <author>" for one from the imported
+  // corpus. Captured when the alert was raised rather than looked up from
+  // today's catalog, so it stays correct for a rule that has since changed or
+  // been removed.
+  //
+  // The imported corpus ships under the Detection Rule License, which requires
+  // the author be credited wherever a match is displayed, so a surface showing
+  // an alert must render this. Optional because a server predating the field
+  // omits it, and alerts raised before the column existed carry an empty
+  // string; a renderer must handle both by showing nothing rather than by
+  // inventing a credit.
+  origin?: string;
   // techniques are the MITRE ATT&CK ids the rule maps to (e.g. ["T1543.004"]). Omitted by the server when the rule
   // declares none, so optional here.
   techniques?: string[];

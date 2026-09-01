@@ -377,6 +377,10 @@ func (e *Engine) evaluateRule(
 	// Read once per rule per batch rather than per finding: it is a type assertion, but so is the reason declaredTypes is cached,
 	// and a batch can carry many findings for one rule.
 	ruleDefault := rulesapi.DefaultModeOf(rule)
+	// Attribution rides the alert the rule produces (issue #765). Read from the RULE, never from the finding, so that a rule
+	// cannot credit someone else for its match or drop the credit entirely: the Detection Rule License obligation the imported
+	// corpus carries would otherwise be satisfied only by rules that chose to satisfy it.
+	origin := rulesapi.OriginOf(rule)
 
 	// alert_count counts findings that were ROUTED TO A NEW ALERT, not findings the rule returned. Those were the same number until
 	// the vendored corpus landed in monitor mode (issue #764); now most findings are suppressed, and counting what the rule
@@ -394,7 +398,7 @@ func (e *Engine) evaluateRule(
 	// flag that already gates the alert log and edr.alerts.created, so it is correct by construction rather than by test, and that
 	// is worth knowing rather than assuming.
 	for _, f := range findings {
-		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques, tally)
+		outcome, err := e.routeFinding(ctx, rule.ID(), ruleDefault, f, techniques, origin, tally)
 		if err != nil {
 			span.RecordError(err)
 			return err
@@ -437,7 +441,7 @@ func evaluate(
 // the rule returned.
 func (e *Engine) routeFinding(
 	ctx context.Context, ruleID string, ruleDefault rulesapi.DetectionRuleMode, f api.Finding, techniques []string,
-	tally *batchTally,
+	origin string, tally *batchTally,
 ) (routeOutcome, error) {
 	mode, severityOverride := ruleDefault, ""
 	if e.modeResolver != nil {
@@ -466,7 +470,7 @@ func (e *Engine) routeFinding(
 	case rulesapi.DetectionRuleModeAlert:
 		// Fall through to the severity-override + persist path below.
 	}
-	created, err := e.persistFinding(ctx, f, techniques)
+	created, err := e.persistFinding(ctx, f, techniques, origin)
 	if err != nil {
 		return 0, err
 	}
@@ -477,7 +481,7 @@ func (e *Engine) routeFinding(
 }
 
 // persistFinding inserts a single finding as an alert, stamping it
-// with the rule's ATT&CK techniques and emitting the new-alert log
+// with the rule's ATT&CK techniques and attribution and emitting the new-alert log
 // line + metric only when the insert wasn't deduped away. Extracted
 // from Evaluate so that method stays under the project
 // cognitive-complexity cap.
@@ -487,7 +491,7 @@ func (e *Engine) routeFinding(
 // rule overrides it explicitly.
 // It reports whether an alert was newly CREATED, which is not the same as whether persistence succeeded: an alert deduplicated on
 // insert is a success that raised nothing, and a span or counter that treats the two alike reports alerts nobody received.
-func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string) (bool, error) {
+func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques []string, origin string) (bool, error) {
 	if f.Techniques == nil {
 		f.Techniques = techniques
 	}
@@ -502,6 +506,7 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 		Severity:    f.Severity,
 		Title:       f.Title,
 		Description: f.Description,
+		Origin:      origin,
 		ProcessID:   f.ProcessID,
 		Subject:     f.Subject,
 		Techniques:  f.Techniques,

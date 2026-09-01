@@ -242,3 +242,57 @@ describe("RuleDetail monitor mode and attribution", () => {
     expect(screen.queryByText("Source")).not.toBeInTheDocument();
   });
 });
+
+// Rule references (issue #765). These come from the upstream YAML of a rule this project vendored rather than wrote, so they are
+// untrusted input rendered into an anchor: the scheme guard is a security control, not formatting.
+describe("RuleDetail references", () => {
+  // spec:server-detection-rules-engine/a-detection-s-references-are-available-beside-its-attribution/an-upstream-reference-is-offered-as-a-link
+  it("renders an upstream reference as a link that opens safely", async () => {
+    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeEntry({ doc: { ...makeEntry().doc, references: ["https://redcanary.com/blog/applescript/"] } }),
+    ]);
+    renderAt("suspicious_exec");
+
+    const link = await screen.findByRole("link", { name: "https://redcanary.com/blog/applescript/" });
+    expect(link).toBeVisible();
+    expect(link).toHaveAttribute("href", "https://redcanary.com/blog/applescript/");
+    // noopener keeps the opened page from reaching back through window.opener into this session.
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+  });
+
+  // The payload is third-party content. A javascript: href is script execution on click, so the guard renders it inert. Asserted
+  // on the ABSENCE of a link rather than on the text, because the text is displayed either way and only the anchor is dangerous.
+  // spec:server-detection-rules-engine/a-detection-s-references-are-available-beside-its-attribution/a-reference-carrying-an-executable-scheme-is-displayed-but-not-followable
+  it.each([
+    ["javascript:alert(1)", "a script URL"],
+    ["data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", "a data URL"],
+    ["vbscript:msgbox(1)", "a vbscript URL"],
+  ])("renders %s as inert text rather than a link (%s)", async (ref) => {
+    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeEntry({ doc: { ...makeEntry().doc, references: [ref] } }),
+    ]);
+    renderAt("suspicious_exec");
+
+    expect(await screen.findByText(ref)).toBeVisible();
+    expect(screen.queryByRole("link", { name: ref })).toBeNull();
+  });
+
+  // Not every citation is a URL. A bare DOI or a book title should still be shown rather than dropped.
+  it("shows a non-URL citation as text", async () => {
+    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeEntry({ doc: { ...makeEntry().doc, references: ["Internal research note, 2026"] } }),
+    ]);
+    renderAt("suspicious_exec");
+
+    expect(await screen.findByText("Internal research note, 2026")).toBeVisible();
+  });
+
+  it("omits the References heading when the rule cites nothing", async () => {
+    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([makeEntry()]);
+    renderAt("suspicious_exec");
+
+    await screen.findByText("Suspicious exec");
+    expect(screen.queryByRole("heading", { name: "References" })).toBeNull();
+  });
+});
+

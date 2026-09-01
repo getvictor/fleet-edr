@@ -13,7 +13,10 @@ import { defineConfig, devices } from "@playwright/test";
 // independent (Playwright can shuffle them in any order on retries
 // or parallel workers).
 
-const PORT = 8088;
+// Lane A's dev server by default. Overridable because this repository is worked as two worktrees sharing one machine: lane B runs
+// on 8089, and a hardcoded 8088 there either drives the OTHER lane's server or races its port bind, so the suite was simply not
+// runnable from lane B. E2E_PORT=8089 points it at the lane the developer is actually in.
+const PORT = Number(process.env.E2E_PORT ?? 8088);
 
 export default defineConfig({
   testDir: "./tests",

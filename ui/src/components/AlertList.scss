@@ -55,3 +55,15 @@
     color: $ui-success;
   }
 }
+
+.alert-list {
+  // Rule attribution under the alert title. Muted and small because it is provenance rather than a finding, but it is real
+  // rendered text rather than a tooltip: the imported corpus's licence requires the credit be visible wherever a match is
+  // displayed, and hover-only text is not visible to a reader scanning the list, printing it, or using a screen reader that
+  // does not announce title attributes.
+  &__origin {
+    color: $ui-fleet-black-50;
+    font-size: $xx-small;
+    margin-top: 2px;
+  }
+}

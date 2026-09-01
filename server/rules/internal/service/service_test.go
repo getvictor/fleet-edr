@@ -207,13 +207,33 @@ func (m stubGlobalModes) GlobalRuleMode(ruleID string, ruleDefault api.Detection
 func TestList_CreditsAVendoredRulesSource(t *testing.T) {
 	t.Parallel()
 
-	got := New([]api.Rule{vendoredStubRule{stubRule{id: "vendored"}}, stubRule{id: "ours"}}, nil, nil).List()
-	require.Len(t, got, 2)
-	assert.Equal(t, "Upstream, by Someone", got[0].Origin)
-	assert.Empty(t, got[1].Origin, "a rule this project wrote announces no origin")
+	// Every rule names someone (issue #765). Attribution used to be empty for a rule this project wrote, which made "is it
+	// vendored" and "does it have an origin" the same question and left the alert view rendering credit only when it happened to
+	// be non-empty. The three cases below are the whole space: declares an upstream, declares nothing, declares an upstream but
+	// names no one.
+	rules := []api.Rule{
+		vendoredStubRule{stubRule{id: "vendored"}},
+		stubRule{id: "ours"},
+		anonymousUpstreamStubRule{stubRule{id: "anonymous"}},
+	}
+	got := New(rules, nil, nil).List()
+	require.Len(t, got, 3)
+
+	assert.Equal(t, "Upstream, by Someone", got[0].Origin, "a vendored rule credits its upstream and that rule's author")
+	assert.Equal(t, api.ProjectOrigin, got[1].Origin, "a rule this project wrote credits this project rather than nobody")
+	// Not ProjectOrigin: the rule announced it came from somewhere else, so claiming it as ours would be the one wrong answer.
+	// Admitting we cannot name the author is the honest outcome, and it keeps attribution non-empty on every surface.
+	assert.Equal(t, api.UnknownOrigin, got[2].Origin,
+		"a rule that declares an upstream but names nobody is not credited to us")
 }
 
 // vendoredStubRule is a stubRule that names an upstream source, standing in for an imported rule.
 type vendoredStubRule struct{ stubRule }
 
 func (vendoredStubRule) Origin() string { return "Upstream, by Someone" }
+
+// anonymousUpstreamStubRule declares the origin interface and returns nothing, the shape an upstream file with no `author` would
+// produce.
+type anonymousUpstreamStubRule struct{ stubRule }
+
+func (anonymousUpstreamStubRule) Origin() string { return "" }

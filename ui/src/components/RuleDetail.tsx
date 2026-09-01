@@ -223,6 +223,30 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
         </>
       )}
 
+      {doc.references && doc.references.length > 0 && (
+        <>
+          <h2>References</h2>
+          <ul className="rule-detail__list">
+            {doc.references.map((ref, i) => (
+              <li key={`${ref}-${String(i)}`}>
+                {/* A reference on an imported rule is third-party text from the upstream YAML, so it is not trusted to be a
+                    safe href: `javascript:` and `data:` URLs in an anchor are script execution on click. Anything that is not
+                    plainly http(s) is rendered as text, which still shows the operator what the rule cited while making it
+                    inert. Vetted links open in a new tab with noopener so the opened page cannot reach back through
+                    window.opener. */}
+                {isHTTPURL(ref) ? (
+                  <a href={ref} target="_blank" rel="noopener noreferrer">
+                    {ref}
+                  </a>
+                ) : (
+                  ref
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
       <p className="rule-detail__back">
         <Link to="/coverage">&larr; Back to ATT&amp;CK coverage</Link>
       </p>
@@ -248,4 +272,20 @@ function SeverityBadge({ severity }: Readonly<{ severity: string }>) {
   const variant = isKnownSeverity(severity) ? severity : "unknown";
   const klass = `rule-detail__sev rule-detail__sev--${variant}`;
   return <span className={klass}>{severity}</span>;
+}
+
+// isHTTPURL reports whether a rule reference is safe to render as a link.
+//
+// References ride in from an upstream rule file, which is content this project vendors rather than writes, so the scheme is
+// checked rather than assumed. An allowlist (http, https) rather than a denylist of the schemes known to be dangerous today:
+// a denylist has to be updated every time a browser grows a new one, and getting that wrong turns a detection rule's citation
+// into script execution.
+function isHTTPURL(raw: string): boolean {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    // Not a parseable absolute URL (a bare path, a DOI, free text). Rendered as plain text by the caller.
+    return false;
+  }
 }

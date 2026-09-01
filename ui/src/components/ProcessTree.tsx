@@ -551,6 +551,13 @@ export function ProcessTreeView({ hostId: hostIdProp, entryAlert }: ProcessTreeV
           ) : (
             <span className="alert-breadcrumb__title">{alertDetail.title}</span>
           )}
+          {/* Attribution for the rule that raised this alert. The breadcrumb is the alert's detail view, so it is a surface
+              displaying a match and carries the same licence obligation as the list. Unlike the rule link above it, this is
+              rendered for every alert that records an origin, documented rule or not: crediting the author does not depend on
+              whether we also happen to ship a doc page for their rule. Absent on alerts raised before migration 00012. */}
+          {alertDetail.origin && (
+            <span className="alert-breadcrumb__origin">{alertDetail.origin}</span>
+          )}
           <span className="alert-breadcrumb__time">
             {new Date(alertDetail.created_at).toLocaleString()}
           </span>

@@ -324,6 +324,15 @@ type Alert struct {
 	Severity    string `db:"severity" json:"severity"`
 	Title       string `db:"title" json:"title"`
 	Description string `db:"description" json:"description"`
+	// Origin credits the rule's author, and is distinct from Source above: Source says which SUBSYSTEM raised the alert
+	// (detection vs application_control), Origin says who WROTE the rule that fired. "SigmaHQ, by <author>" for a rule from
+	// the imported corpus, "Fleet EDR" for one this project wrote.
+	//
+	// Stamped by the engine from the rule (rules/api.OriginOf), never read off the Finding, so a rule cannot forge its own
+	// credit. Present because the imported corpus ships under the Detection Rule License, which requires the author be
+	// credited wherever a match is displayed; it is a licence record, not decoration. Empty only on rows raised before the
+	// column existed (migration 00012), all of which predate the imported corpus alerting.
+	Origin string `db:"origin" json:"origin"`
 	// ProcessID is the enrichment link to processes(id); 0 for process-less alerts (e.g. BTM-registration persistence,
 	// where the attacker has no live process). Reads COALESCE the nullable column back to 0.
 	ProcessID int64 `db:"process_id" json:"process_id"`

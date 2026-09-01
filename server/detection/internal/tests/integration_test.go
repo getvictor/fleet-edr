@@ -1251,6 +1251,84 @@ func TestEngine_MITRETechniqueStampingAndHistoricalPreservation(t *testing.T) {
 		"historical alert's technique stamp must not change when the rule's mapping is later refined")
 }
 
+// spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/an-alert-from-a-vendored-rule-credits-its-author
+// spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/an-alert-from-a-rule-this-project-wrote-credits-this-project
+// spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/attribution-recorded-on-an-alert-survives-the-rule-being-re-credited
+//
+// TestEngine_StampsRuleAttributionOnTheAlert pins that every alert names who wrote the rule that raised it (issue #765).
+//
+// The imported corpus ships under the Detection Rule License, which requires the author be credited wherever a match is
+// displayed, and the alert view is that surface. The credit therefore has to be ON the alert, not looked up when it is rendered:
+// a lookup fails open, since an alert whose rule has since left the catalog would render with no credit at all.
+//
+// Three properties in one test because they are one behaviour observed at three points, and splitting them would triple a
+// full-mode fixture that costs a real MySQL each time.
+func TestEngine_StampsRuleAttributionOnTheAlert(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ctx := t.Context()
+
+	ours := &stubRule{id: "stub-ours"}
+	vendored := &vendoredStubRule{stubRule: &stubRule{id: "stub-vendored"}, origin: "Upstream, by Someone"}
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{ours, vendored}})
+	mustInsertProcess(t, ctx, d, "host-a", 100)
+
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "fork-1", HostID: "host-a", TimestampNs: 1000, EventType: "fork", Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "trigger-1", HostID: "host-a", TimestampNs: 2000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+
+	require.Eventually(t, func() bool {
+		alerts, _ := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+		return len(alerts) == 2
+	}, 5*time.Second, 50*time.Millisecond, "both rules must raise before attribution can be compared across them")
+
+	alerts, err := d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 2)
+	byRule := map[string]api.Alert{}
+	for _, a := range alerts {
+		byRule[a.RuleID] = a
+	}
+
+	// A rule that declares no upstream is credited to this project rather than left blank, which is what lets the alert view
+	// render attribution unconditionally instead of only when it happens to be present.
+	assert.Equal(t, rulesapi.ProjectOrigin, byRule["stub-ours"].Origin, "a rule this project wrote credits this project")
+	assert.Equal(t, "Upstream, by Someone", byRule["stub-vendored"].Origin, "a vendored rule credits its upstream and author")
+
+	// Attribution is captured at match time, exactly like the technique stamp above it. Re-crediting a historical alert from
+	// today's catalog is the failure mode the stored column exists to prevent, so the rule's origin is changed underneath a
+	// persisted alert and the row asserted unchanged.
+	vendored.origin = "Somebody Else Entirely"
+	d.LoadActive(stubProvider{rules: []rulesapi.Rule{ours, vendored}})
+	insertEventsViaIngest(ctx, t, d, "host-a", []api.Event{
+		{EventID: "trigger-2", HostID: "host-a", TimestampNs: 3000, EventType: "trigger", Payload: json.RawMessage(`{}`)},
+	})
+	require.Eventually(t, func() bool {
+		n, err := d.Service().CountUnprocessed(ctx)
+		return err == nil && n == 0
+	}, 5*time.Second, 25*time.Millisecond, "processor must consume trigger-2 before the historical-preservation assertion")
+
+	alerts, err = d.Service().ListAlerts(ctx, api.AlertFilter{HostID: "host-a"})
+	require.NoError(t, err)
+	require.Len(t, alerts, 2, "dedup must skip the second fire on the same (host, rule, process)")
+	for _, a := range alerts {
+		if a.RuleID == "stub-vendored" {
+			assert.Equal(t, "Upstream, by Someone", a.Origin,
+				"a persisted alert keeps the attribution it was raised with when the rule is later re-credited")
+		}
+	}
+}
+
+// vendoredStubRule is a stubRule that names an upstream source, standing in for a rule from the imported corpus. The origin is a
+// field rather than a constant so a test can re-credit the rule underneath an alert already persisted from it.
+type vendoredStubRule struct {
+	*stubRule
+	origin string
+}
+
+func (r *vendoredStubRule) Origin() string { return r.origin }
+
 // spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/one-rule-errors-during-evaluation
 //
 // LoadActive with two rules: errorStub returns an error on Evaluate; stubRule fires normally. The engine's per-rule

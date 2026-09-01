@@ -1,0 +1,27 @@
+# An AppleScript one-liner run through osascript, the shape SigmaHQ's proc_creation_macos_applescript detects (MITRE T1059.002).
+#
+# Exists to give the alert-attribution spec a match from a VENDORED rule specifically. The rule credits an upstream author, which is
+# the case the Detection Rule License attaches an obligation to, and no other shared scenario fires a vendored rule. Kept minimal:
+# the fork materialises the process for the graph builder, the exec is what the rule matches on.
+#
+# The command is a `display dialog` because it is inert, unmistakably synthetic, and still satisfies the rule's ` -e ` criterion.
+name: "AppleScript one-liner via osascript"
+mitre: T1059.002
+host:
+  id: AAAA0006-0000-0000-0000-000000000006
+  hostname: lab-mac.local
+  os: macOS 14.4
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 6100
+    parent_pid: 1
+  - at: 3ms
+    type: exec
+    pid: 6100
+    ppid: 1
+    path: /usr/bin/osascript
+    args: ["osascript", "-e", "display dialog \"fixture\""]
+    cwd: /tmp
+    uid: 501
+    gid: 20

@@ -1142,6 +1142,13 @@ components:
         severity: {type: string, enum: [low, medium, high, critical]}
         title: {type: string}
         description: {type: string}
+        origin:
+          type: string
+          description: >-
+            Who wrote the rule that fired, captured when the alert was raised. `Fleet EDR` for a rule this project authored,
+            `SigmaHQ, by <author>` for one from the imported corpus. Distinct from `source`, which names the subsystem that
+            raised the alert rather than the rule's author. Empty only on alerts raised before the field existed.
+          example: SigmaHQ, by Alejandro Ortuno, oscd.community
         process_id: {type: integer, format: int64}
         status: {type: string, enum: [open, acknowledged, resolved]}
         created_at: {type: string, format: date-time}
@@ -1381,6 +1388,13 @@ components:
           items:
             type: string
           description: Coverage gaps the rule does NOT catch.
+        references:
+          type: array
+          items:
+            type: string
+          description: >-
+            Sources the rule was written from. An imported rule carries the upstream rule's own citations.
+          example: ["https://redcanary.com/blog/applescript/"]
 
     DetectionExclusion:
       type: object

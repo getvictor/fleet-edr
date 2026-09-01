@@ -550,6 +550,9 @@ export interface RuleDoc {
   event_types: string[];
   false_positives?: string[];
   limitations?: string[];
+  // references are the sources the rule was written from; an imported rule carries its upstream rule's own citations. Absolute
+  // URLs, rendered as links. Optional: a server predating the field omits it, and a hand-written rule may cite nothing.
+  references?: string[];
 }
 
 export interface RuleDocEntry {
@@ -573,8 +576,9 @@ export interface RuleDocEntry {
   // reports nothing about.
   mode?: string;
   mode_source?: string;
-  // Where the rule came from: absent for one this project wrote, and the upstream project plus that rule's author for a vendored
-  // one. Shown so an operator can tell whose rule they are reading.
+  // Where the rule came from: "Fleet EDR" for one this project wrote, and the upstream project plus that rule's author for a
+  // vendored one. Shown so an operator can tell whose rule they are reading. Since issue #765 the server names an origin for every
+  // rule, so this is absent only from a server that predates that change.
   origin?: string;
   // The exclusion match types this rule actually consults (issue #520). The detection-tuning exclusion editor offers only these for
   // the selected rule, so an operator cannot create an exclusion the rule would silently ignore. Optional so an older server response

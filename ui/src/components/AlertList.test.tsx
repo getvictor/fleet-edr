@@ -208,3 +208,73 @@ describe("AlertList host column", () => {
     expect(within(table).queryByText("AAAA-1111")).not.toBeInTheDocument();
   });
 });
+
+// Rule attribution on the alert row (issue #765).
+//
+// The imported corpus ships under the Detection Rule License, which requires the rule's author be credited wherever a match is
+// displayed. The alert list is that surface, so these are licence-compliance assertions rather than cosmetic ones, and they use
+// toBeVisible rather than toBeInTheDocument: a credit rendered into a hidden node satisfies the DOM query and not the obligation.
+describe("AlertList rule attribution", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+  });
+
+  it("credits the rule author on an alert from an imported rule", async () => {
+    vi.spyOn(api, "listAlerts").mockResolvedValue([
+      makeAlert({ id: 1, title: "AppleScript execution", origin: "SigmaHQ, by Alejandro Ortuno, oscd.community" }),
+    ]);
+    render(
+      <MemoryRouter>
+        <AlertList />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("SigmaHQ, by Alejandro Ortuno, oscd.community")).toBeVisible();
+  });
+
+  it("credits this project on an alert from a rule we wrote", async () => {
+    vi.spyOn(api, "listAlerts").mockResolvedValue([makeAlert({ id: 1, title: "Keychain dump", origin: "Fleet EDR" })]);
+    render(
+      <MemoryRouter>
+        <AlertList />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Fleet EDR")).toBeVisible();
+  });
+
+  // An alert raised before migration 00012 has no origin. Rendering a placeholder or defaulting to "Fleet EDR" would state
+  // something the row does not record, so the correct output is nothing at all.
+  // spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/an-alert-recording-no-attribution-displays-no-credit
+  it("shows no attribution line for an alert that records no origin", async () => {
+    vi.spyOn(api, "listAlerts").mockResolvedValue([makeAlert({ id: 1, title: "Legacy alert" })]);
+    const { container } = render(
+      <MemoryRouter>
+        <AlertList />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Legacy alert")).toBeVisible();
+    expect(container.querySelector(".alert-list__origin")).toBeNull();
+  });
+
+  // The table already has a "Source" column meaning the subsystem that raised the alert. Attribution is a different fact, and
+  // this pins that it is not rendered into that column: a reader comparing two rows must not see "detection" and an author name
+  // in the same place meaning different things.
+  it("keeps attribution out of the subsystem Source column", async () => {
+    vi.spyOn(api, "listAlerts").mockResolvedValue([
+      makeAlert({ id: 1, title: "AppleScript execution", source: "detection", origin: "SigmaHQ, by Someone" }),
+    ]);
+    render(
+      <MemoryRouter>
+        <AlertList />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("AppleScript execution");
+    const sourceCell = document.querySelector(".alert-source");
+    expect(sourceCell).not.toBeNull();
+    expect(sourceCell?.textContent).not.toContain("SigmaHQ");
+  });
+});
+

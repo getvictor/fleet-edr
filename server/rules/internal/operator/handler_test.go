@@ -209,18 +209,25 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	// Attribution rides the same response. A vendored rule is rendered exactly like an authored one on every surface built from
 	// this payload, so the origin is what lets a reader tell them apart, and it is how the corpus licence's attribution reaches
 	// the reader of our documentation rather than only the reader of the rule file.
-	var credited, uncredited int
+	//
+	// Asserted on the VALUE rather than on presence-vs-absence (issue #765). Attribution used to be empty for a rule we wrote, so
+	// "has an origin" and "is vendored" were the same question and a surface could answer either by testing for "". Now every rule
+	// names someone, which is what lets the alert view render credit unconditionally instead of only when it happens to be
+	// non-empty. The discriminator moved to the value, so this checks the value.
+	var credited, ours int
 	for _, r := range body.Rules {
-		if r.Origin == "" {
-			uncredited++
-			assert.Equal(t, "alert", r.DefaultMode, "rule %q names no source, so it should be one we wrote and alerts", r.ID)
+		require.NotEmptyf(t, r.Origin, "rule %q credits nobody; every rule names an origin so the alert view can render one", r.ID)
+		if r.Origin == rulesapi.ProjectOrigin {
+			ours++
+			assert.Equal(t, "alert", r.DefaultMode, "rule %q is ours, so it should alert by default", r.ID)
 			continue
 		}
 		credited++
 		assert.Contains(t, r.Origin, "SigmaHQ", "rule %q credits an unexpected source %q", r.ID, r.Origin)
+		assert.Equal(t, "monitor", r.DefaultMode, "vendored rule %q should ship in monitor mode (issue #764)", r.ID)
 	}
 	assert.Positive(t, credited, "the vendored rules credit their upstream")
-	assert.Positive(t, uncredited, "the rules this project wrote claim no upstream")
+	assert.Positive(t, ours, "the rules this project wrote credit this project")
 }
 
 // TestHandler_ExportRule serves one detection as its declarative rule file (issue #757). The response IS the artifact, so it is

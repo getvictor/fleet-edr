@@ -194,6 +194,16 @@ export function AlertList() {
                   >
                     {a.title}
                   </Link>
+                  {/* Rule attribution sits under the title rather than in a column of its own: the table already has a
+                      "Source" column meaning the SUBSYSTEM that raised the alert, and a second column of that name meaning
+                      the rule's author would be unreadable. Rendered as plain visible text, not a tooltip, because the
+                      imported corpus's licence requires the credit be shown wherever a match is displayed and a credit that
+                      appears only on hover is not shown.
+
+                      Guarded because an alert raised before the column existed carries no origin (migration 00012); those
+                      are all rules this project wrote. Showing nothing is right for them, and inventing "Fleet EDR" would
+                      assert something this row does not actually record. */}
+                  {a.origin && <div className="alert-list__origin">{a.origin}</div>}
                 </td>
                 <td>
                   {/* Host links to the host's full process tree without

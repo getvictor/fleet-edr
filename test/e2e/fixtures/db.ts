@@ -4,12 +4,17 @@ import mysql, { Connection } from "mysql2/promise";
 // Dev DB matches Taskfile's dev:server* env block: root user, empty
 // password, port 33306. Keep this constant in sync with
 // Taskfile.yml's EDR_DSN.
+//
+// The schema is overridable for the same reason playwright.config.ts's port is: this repository is worked as two worktrees on one
+// machine, and lane B runs its server on 8089 against the `edr2` schema. Pointing only the port at lane B while this stayed
+// hardcoded to `edr` would be worse than not running at all, because the suite would drive one lane's server and reset the OTHER
+// lane's auth tables. E2E_PORT and E2E_DB are meant to be set together.
 const DEV_DSN = {
   host: "127.0.0.1",
   port: 33306,
   user: "root",
   password: "",
-  database: "edr",
+  database: process.env.E2E_DB ?? "edr",
 };
 
 // Connect once per test; the connection is closed after each test via
@@ -26,7 +31,7 @@ export async function openDB(): Promise<Connection> {
 // has an empty password (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT), so no auth header is needed. database=edr selects the archive database
 // the server creates (matching EDR_CLICKHOUSE_DSN's /edr path); the connection's implicit database is `default`, where `events` does
 // not live.
-const CLICKHOUSE_HTTP = "http://127.0.0.1:18123/?database=edr";
+const CLICKHOUSE_HTTP = `http://127.0.0.1:18123/?database=${process.env.E2E_DB ?? "edr"}`;
 
 // queryClickHouse runs a read-only query against the dev ClickHouse event archive (ADR-0015: events live here, not MySQL) over its HTTP
 // interface and returns the rows as parsed objects. No extra npm dependency: the HTTP interface speaks plain SQL. count() and other
