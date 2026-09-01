@@ -1,0 +1,15 @@
+{
+  "events": [
+    {"event_id": "proc_creation_macos_susp_browser_child_process-parent-fork", "host_id": "fixture-host", "timestamp_ns": 1000000000, "event_type": "fork",
+     "payload": {"child_pid":4800,"parent_pid":1}},
+    {"event_id": "proc_creation_macos_susp_browser_child_process-parent-exec", "host_id": "fixture-host", "timestamp_ns": 1010000000, "event_type": "exec",
+     "payload": {"pid":4800,"ppid":1,"path":"/usr/bin/com.apple.WebKit.WebContent","args":["com.apple.WebKit.WebContent"],"uid":501,"gid":20}},
+    {"event_id": "proc_creation_macos_susp_browser_child_process-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
+     "payload": {"child_pid":4900,"parent_pid":4800}},
+    {"event_id": "proc_creation_macos_susp_browser_child_process-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
+     "payload": {"pid":4900,"ppid":4800,"path":"/usr/bin/bash","args":["bash"],"uid":501,"gid":20}}
+  ],
+  "expected_findings": [
+    {"rule_id": "proc_creation_macos_susp_browser_child_process", "severity": "medium"}
+  ]
+}

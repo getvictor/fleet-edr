@@ -71,40 +71,20 @@ func TestAll_ARuleThatFindsSomethingDeclaredTheBatchesEventType(t *testing.T) {
 	rules := New(nil)
 	require.NotEmpty(t, rules)
 
-	// The gate is only as good as the rules the corpus actually fires, so the covered set is asserted EXACTLY rather than as "at
-	// least one". "At least one" would stay green while some other rule's declaration silently went wrong, and it would hide the
-	// fact that part of the catalog is untested here.
+	// DERIVED from the catalog rather than written out, which issue #773 is what made possible: every rule now carries a positive
+	// fixture, so the set this corpus exercises is exactly the set of registered rules. Asserting that equality says something
+	// much stronger than the old hand-maintained list did, and says it without maintenance: EVERY rule fires somewhere in the
+	// corpus, and any rule that stops firing fails here as well as in its own replay.
 	//
-	// All twelve authored rules now carry replay fixtures (issue #773), so every one of them appears below. Once the imported
-	// corpus has its smoke fixtures too, this list becomes exactly the catalog and should be DERIVED from New() rather than
-	// written out; it stays literal only while pendingFixtures is non-empty and some rules therefore cannot fire here.
-	//
-	// proc_creation_macos_base64_decode has a fixture of its own: it is the worked example the imported corpus's generated smoke
-	// fixtures will follow. The other four proc_creation_macos_* entries have no fixture and fire as OVERLAPS on the authored
-	// ones: the keychain-dump capture trips the imported credential rule, the Office fixture trips the imported office-child
-	// rule, the launchctl fixture trips the imported launchctl rule. Those four are worth having rather than suppressing. They
-	// are direct evidence that the vendored corpus matches the same telemetry the hand-written rules do, and because the vendored
-	// rules ship in monitor mode the overlap is exactly the recorded signal an operator compares against the alert before
-	// deciding whether promoting one would add anything.
-	coveredByCorpus := []string{
-		"application_control_block",
-		"credential_keychain_dump",
-		"dns_c2_beacon",
-		"dyld_insert",
-		"osascript_network_exec",
-		"persistence_launchagent",
-		"privilege_launchd_plist_write",
-		"proc_creation_macos_applescript",
-		"proc_creation_macos_base64_decode",
-		"proc_creation_macos_creds_from_keychain",
-		"proc_creation_macos_launchctl_execution",
-		"proc_creation_macos_office_susp_child_processes",
-		"sensor_recovery_failed",
-		"sensor_tamper",
-		"shell_from_office",
-		"sudoers_tamper",
-		"suspicious_exec",
+	// A literal list was right while part of the catalog had no fixtures, because then the fired set was a genuine subset that a
+	// reader needed spelling out. It is wrong now: it would be seventy-eight lines restating New(), and every future rule would
+	// arrive as a two-place edit where one of the places is easy to forget.
+	coveredByCorpus := make([]string, 0, len(rules))
+	for _, r := range rules {
+		coveredByCorpus = append(coveredByCorpus, r.ID())
 	}
+	slices.Sort(coveredByCorpus)
+
 	var mu sync.Mutex
 	fired := map[string]int{}
 	t.Cleanup(func() {

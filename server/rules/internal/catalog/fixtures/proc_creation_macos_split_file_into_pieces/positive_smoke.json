@@ -1,0 +1,11 @@
+{
+  "events": [
+    {"event_id": "proc_creation_macos_split_file_into_pieces-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
+     "payload": {"child_pid":4900,"parent_pid":1}},
+    {"event_id": "proc_creation_macos_split_file_into_pieces-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
+     "payload": {"pid":4900,"ppid":1,"path":"/usr/bin/split","args":["split"],"uid":501,"gid":20}}
+  ],
+  "expected_findings": [
+    {"rule_id": "proc_creation_macos_split_file_into_pieces", "severity": "low"}
+  ]
+}
