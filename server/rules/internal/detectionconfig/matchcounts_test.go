@@ -70,6 +70,32 @@ func TestRecordMonitorMatches(t *testing.T) {
 	require.Len(t, folded, 1)
 	assert.Equal(t, 3, folded[0].N)
 
+	// Out-of-order writes must not narrow the recorded window. Detection runs AFTER the per-host claim lock is released, so two
+	// batches for one (rule, host) can reach this write concurrently and land in either order.
+	//
+	// Both stored timestamps are pushed into the FUTURE, which is what makes the two halves distinguishable. A write now is then
+	// earlier than both, so a correct upsert moves first_seen BACK to it (the window really did start earlier) and leaves
+	// last_seen alone (the window really did extend later). Backdating instead would leave both untouched under either rule, and
+	// the assertion would pass against an implementation that never updates first_seen at all.
+	future := time.Now().UTC().Add(2 * time.Hour)
+	_, err := db.ExecContext(ctx, `UPDATE detection_rule_match_counts
+		SET first_seen = ?, last_seen = ? WHERE rule_id = 'imported' AND host_id = 'host-a'`, future, future)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RecordMonitorMatches(ctx, api.MonitorTally{
+		{RuleID: "imported", HostID: "host-a", Severity: "high", Count: 1},
+	}))
+	var window struct {
+		First time.Time `db:"first_seen"`
+		Last  time.Time `db:"last_seen"`
+	}
+	require.NoError(t, db.GetContext(ctx, &window,
+		`SELECT first_seen, last_seen FROM detection_rule_match_counts WHERE rule_id = 'imported' AND host_id = 'host-a'`))
+	assert.Less(t, window.First, time.Now().UTC().Add(time.Hour),
+		"an earlier write widens the window backwards rather than being ignored")
+	assert.Greater(t, window.Last, time.Now().UTC().Add(time.Hour),
+		"and an earlier write must not drag last_seen back")
+
 	// An empty or degenerate tally writes nothing rather than a zero row, so a rule that matched nothing never appears as one
 	// that matched and was counted at zero.
 	before := countRows(ctx, t, db)

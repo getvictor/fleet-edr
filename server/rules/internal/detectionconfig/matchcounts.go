@@ -18,8 +18,11 @@ import (
 // which is a question about now; attributing a match to an event's own timestamp would let a host with a skewed clock, or a batch
 // replayed after a long queue backlog, write into a day the operator has already read past.
 //
-// `first_seen` is preserved on update and `last_seen` advanced, so a row records the window it covers rather than only its last
-// write. Severity is deliberately NOT part of the key: it belongs to the OTel series, where it exists to line up with
+// The timestamps are extrema, not last-write-wins, so the row records the window it covers rather than whichever call landed last.
+// That matters because these calls are NOT serialised per host: the per-host claim lock is released before detection runs, so two
+// batches for one (rule, host) can be in this write concurrently, across workers and across replicas. Under last-write-wins an
+// older call arriving second would drag `last_seen` backwards, and a newer call that inserted the row first would leave
+// `first_seen` too late, in both cases describing a narrower window than was actually observed. Severity is deliberately NOT part of the key: it belongs to the OTel series, where it exists to line up with
 // `edr.alerts.created`, whereas this table answers how often and how widely, and splitting rows by a severity that an override can
 // change mid-window would fragment both answers.
 func (s *Store) RecordMonitorMatches(ctx context.Context, tally api.MonitorTally) error {
@@ -53,7 +56,8 @@ func (s *Store) RecordMonitorMatches(ctx context.Context, tally api.MonitorTally
 		VALUES ` + strings.Join(placeholders, ", ") + `
 		ON DUPLICATE KEY UPDATE
 			match_count = match_count + VALUES(match_count),
-			last_seen   = VALUES(last_seen)`
+			first_seen  = LEAST(first_seen, VALUES(first_seen)),
+			last_seen   = GREATEST(last_seen, VALUES(last_seen))`
 	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("record monitor matches: %w", err)
 	}
