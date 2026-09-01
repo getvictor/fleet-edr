@@ -117,7 +117,7 @@ func TestEngine_Evaluate_ScopesEventsByPlatform(t *testing.T) {
 		{EventID: "w", HostID: "h", TimestampNs: 2, EventType: "exec", Platform: "windows", Payload: []byte("{}")},
 		{EventID: "legacy", HostID: "h", TimestampNs: 3, EventType: "exec", Payload: []byte("{}")}, // no platform -> darwin
 	}
-	require.NoError(t, e.Evaluate(context.Background(), batch))
+	require.NoError(t, evaluateErr(e, context.Background(), batch))
 
 	require.Equal(t, 1, darwinRule.calls)
 	assert.ElementsMatch(t, []string{"d", "legacy"}, eventIDs(darwinRule.received),
@@ -129,7 +129,7 @@ func TestEngine_Evaluate_ScopesEventsByPlatform(t *testing.T) {
 	winOnly := &stubRule{id: "win-only", platforms: []rulesapi.Platform{rulesapi.PlatformWindows}}
 	e2 := New(nil, nil)
 	e2.LoadActive(stubProvider{rules: []rulesapi.Rule{winOnly}})
-	require.NoError(t, e2.Evaluate(context.Background(), []api.Event{
+	require.NoError(t, evaluateErr(e2, context.Background(), []api.Event{
 		{EventID: "d", HostID: "h", TimestampNs: 1, EventType: "exec", Platform: "darwin", Payload: []byte("{}")},
 	}))
 	assert.Zero(t, winOnly.calls, "a rule with no matching-platform events in the batch is not evaluated")
@@ -158,7 +158,7 @@ func TestEngine_Evaluate_PerRuleSpanCarriesRuleContext(t *testing.T) {
 	// The batch has to carry an event the rule is actually handed. A rule left with nothing to evaluate no longer opens a span,
 	// because the platform scope is checked first: a span for a rule that never ran reports work that did not happen. This test is
 	// about what an emitted span carries, so it feeds one event and asserts on the span that results.
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
 
 	ended := rec.Ended()
 	require.NotEmpty(t, ended, "evaluateRule MUST end at least one span per Evaluate call")
@@ -218,7 +218,7 @@ func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
 			stubRule: stubRule{id: "racy-rule"},
 			err:      fmt.Errorf("event x references pid 7: %w", rulesapi.ErrProcessNotYetMaterialized),
 		})
-		err := e.Evaluate(t.Context(), batch)
+		_, err := e.Evaluate(t.Context(), batch)
 		require.ErrorIs(t, err, rulesapi.ErrProcessNotYetMaterialized,
 			"the sentinel must reach the processor so the batch is nacked and re-evaluated")
 	})
@@ -227,7 +227,7 @@ func TestEngine_Evaluate_PropagatesNotYetMaterialized(t *testing.T) {
 		t.Parallel()
 		e := New(nil, nil)
 		e.Register(&failingRule{stubRule: stubRule{id: "buggy-rule"}, err: errors.New("boom")})
-		require.NoError(t, e.Evaluate(t.Context(), batch),
+		require.NoError(t, evaluateErr(e, t.Context(), batch),
 			"a non-retryable rule failure keeps per-rule isolation: logged, not batch-fatal")
 	})
 }
@@ -267,7 +267,7 @@ func TestEngine_Evaluate_MaterializationMissSurvivesAGenericWait(t *testing.T) {
 			e.Register(&failingRule{stubRule: stubRule{id: "first-rule"}, err: tc.first})
 			e.Register(&failingRule{stubRule: stubRule{id: "second-rule"}, err: tc.last})
 
-			err := e.Evaluate(t.Context(), batch)
+			_, err := e.Evaluate(t.Context(), batch)
 
 			require.ErrorIs(t, err, rulesapi.ErrRetryBatch, "either cause must still nack the batch")
 			require.ErrorIs(t, err, rulesapi.ErrProcessNotYetMaterialized,
@@ -319,7 +319,7 @@ func TestEngine_Evaluate_AFailingRuleDoesNotSuppressLaterRules(t *testing.T) {
 			later := &stubRule{id: "later-rule"}
 			e.Register(later)
 
-			err := e.Evaluate(t.Context(), batch)
+			_, err := e.Evaluate(t.Context(), batch)
 
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr,
@@ -413,7 +413,7 @@ func TestEngine_Evaluate_DispatchesOnlyRulesConsumingTheBatchesEventTypes(t *tes
 				rules["exec-only"], rules["dns"], rules["open-only"], rules["multi"],
 			}})
 
-			require.NoError(t, e.Evaluate(t.Context(), tc.batch))
+			require.NoError(t, evaluateErr(e, t.Context(), tc.batch))
 
 			for _, id := range tc.want {
 				assert.Equal(t, 1, rules[id].calls, "rule %q consumes a type in the batch and must be invoked", id)
@@ -440,7 +440,7 @@ func TestEngine_Evaluate_ARuleDeclaringNoEventTypesAlwaysRuns(t *testing.T) {
 	e := New(nil, nil)
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{undeclared, declared}})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{eventOfType("dns_query")}))
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{eventOfType("dns_query")}))
 	assert.Equal(t, 1, undeclared.calls, "a rule declaring nothing must still be invoked")
 	assert.Zero(t, declared.calls, "a rule declaring only open must not be invoked for a dns_query batch")
 }
@@ -490,7 +490,7 @@ func BenchmarkEvaluate_RareTypeBatch(b *testing.B) {
 			batch := []api.Event{eventOfType("dns_query")}
 			b.ReportAllocs()
 			for b.Loop() {
-				_ = e.Evaluate(context.Background(), batch)
+				_, _ = e.Evaluate(context.Background(), batch)
 			}
 		})
 	}
@@ -506,7 +506,7 @@ func BenchmarkEvaluate_MixedBatch(b *testing.B) {
 			batch := []api.Event{eventOfType("exec"), eventOfType("dns_query")}
 			b.ReportAllocs()
 			for b.Loop() {
-				_ = e.Evaluate(context.Background(), batch)
+				_, _ = e.Evaluate(context.Background(), batch)
 			}
 		})
 	}
@@ -527,7 +527,7 @@ func TestEngine_Evaluate_ADispatchedRuleReceivesTheWholeBatch(t *testing.T) {
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{r}})
 
 	batch := []api.Event{eventOfType("exec"), eventOfType("network_connect"), eventOfType("dns_query")}
-	require.NoError(t, e.Evaluate(t.Context(), batch))
+	require.NoError(t, evaluateErr(e, t.Context(), batch))
 
 	require.Equal(t, 1, r.calls, "the batch carries network_connect, so the rule must be invoked")
 	assert.Len(t, r.received, 3, "a dispatched rule receives the whole batch, not just its trigger type")
@@ -557,7 +557,7 @@ func TestEngine_Evaluate_ASkippedRuleRecordsNoSpan(t *testing.T) {
 	e.tracer = tp.Tracer("server/detection/engine")
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{wrongPlatform, notDispatched, runs}})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{eventOfType("exec")}))
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{eventOfType("exec")}))
 
 	var sawRuleIDs []string
 	for _, sp := range rec.Ended() {
@@ -587,12 +587,12 @@ func TestEngine_Evaluate_AnEmptyBatchEvaluatesNoRule(t *testing.T) {
 	e := New(nil, nil)
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{undeclared, declared}})
 
-	require.NoError(t, e.Evaluate(t.Context(), nil))
+	require.NoError(t, evaluateErr(e, t.Context(), nil))
 	assert.Zero(t, undeclared.calls, "an empty batch has nothing to evaluate, so even an unconditional rule is not called")
 	assert.Zero(t, declared.calls)
 
 	// And a batch that is entirely plumbing reduces to the same thing.
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventType: "snapshot_heartbeat", Platform: "darwin"}}))
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventType: "snapshot_heartbeat", Platform: "darwin"}}))
 	assert.Zero(t, undeclared.calls)
 }
 
@@ -608,7 +608,7 @@ func TestEngine_Evaluate_ARuleDeclaringATypeTwiceIsEvaluatedOnce(t *testing.T) {
 	e := New(nil, nil)
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{r}})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{eventOfType("exec")}))
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{eventOfType("exec")}))
 	assert.Equal(t, 1, r.calls, "a rule declaring the same event type twice must still be evaluated once per batch")
 }
 
@@ -641,7 +641,7 @@ func TestEngine_Evaluate_MixedPlatformBatchDoesNotInvokeARuleOnEventsItCannotSee
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{macExec, macDNS}})
 
 	// The only exec is a Windows one, which no macOS rule can see; the only macOS event is a dns_query.
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{
 		{EventType: "exec", Platform: string(rulesapi.PlatformWindows)},
 		{EventType: "dns_query", Platform: string(rulesapi.PlatformDarwin)},
 	}))
@@ -681,7 +681,7 @@ func TestEngine_Evaluate_ManyDistinctEventTypesStayCorrect(t *testing.T) {
 	}
 	batch = append(batch, eventOfType("exec"), eventOfType("exec"))
 
-	require.NoError(t, e.Evaluate(t.Context(), batch))
+	require.NoError(t, evaluateErr(e, t.Context(), batch))
 	assert.Equal(t, 1, execRule.calls, "the batch carries exec, so the rule runs exactly once despite the duplicate")
 	assert.Zero(t, openRule.calls, "no open event is present, so that rule must not run")
 }
@@ -699,7 +699,7 @@ func BenchmarkEvaluate_ManyDistinctTypes(b *testing.B) {
 			}
 			b.ReportAllocs()
 			for b.Loop() {
-				_ = e.Evaluate(context.Background(), batch)
+				_, _ = e.Evaluate(context.Background(), batch)
 			}
 		})
 	}
@@ -746,7 +746,7 @@ func TestEngine_ScopedRulesShareOneBatchScope(t *testing.T) {
 	e.Register(plain)
 
 	events := []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}
-	require.NoError(t, e.Evaluate(t.Context(), events))
+	require.NoError(t, evaluateErr(e, t.Context(), events))
 
 	require.Len(t, first.scopes, 1)
 	require.Len(t, second.scopes, 1)
@@ -758,7 +758,7 @@ func TestEngine_ScopedRulesShareOneBatchScope(t *testing.T) {
 
 	// A second batch must not see the first batch's derivations: the scope is per call, which is what keeps it out of ADR-0010's
 	// cross-request state.
-	require.NoError(t, e.Evaluate(t.Context(), events))
+	require.NoError(t, evaluateErr(e, t.Context(), events))
 	require.Len(t, first.scopes, 2)
 	assert.NotSame(t, first.scopes[0], first.scopes[1], "a later batch gets its own scope")
 }
@@ -827,7 +827,7 @@ func TestEngine_ThreadsEachRulesDeclaredDefaultIntoResolution(t *testing.T) {
 	resolver := &recordingModeResolver{seen: map[string]rulesapi.DetectionRuleMode{}, answer: rulesapi.DetectionRuleModeMonitor}
 	e.SetModeResolver(resolver)
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
 
 	assert.Equal(t, rulesapi.DetectionRuleModeMonitor, resolver.seen["imported"],
 		"the declaring rule's own default reaches the resolver")
@@ -857,13 +857,15 @@ func TestEngine_HonoursADeclaredDefaultWithNoResolverWired(t *testing.T) {
 		mode: rulesapi.DetectionRuleModeMonitor,
 	})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+	tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+	require.NoError(t, err)
 
-	// Asserted on the counter rather than the log line this test originally read. The per-match log moved to DEBUG when the
-	// vendored corpus made monitor the common case, and a test that scrapes a log is hostage to its level; the counter is the
-	// signal that is meant to survive.
-	assert.Equal(t, []string{"imported"}, metrics.monitors, "the finding was routed to monitor, not persisted")
-	assert.Empty(t, metrics.alerts)
+	// Asserted on the tally rather than the log line this test originally read, or the counter it read after that. The log moved
+	// to DEBUG when the corpus made monitor the common case, and the counter moved out of the engine entirely when recording had
+	// to survive a retry (issue #813). The tally is what the engine produces now, and it is what reaches both.
+	require.Len(t, tally, 1, "the finding was routed to monitor, not persisted")
+	assert.Equal(t, "imported", tally[0].RuleID)
+	assert.Empty(t, metrics.alerts, "the nil store would have panicked on a persist, so this also pins that none was attempted")
 }
 
 // countingMetrics records the per-rule counters the engine emits, so a test can tell a suppressed match from no match at all.
@@ -877,7 +879,7 @@ func (m *countingMetrics) AlertCreated(_ context.Context, ruleID, _ string) {
 	m.alerts = append(m.alerts, ruleID)
 }
 
-func (m *countingMetrics) MonitorMatched(_ context.Context, ruleID, _ string) {
+func (m *countingMetrics) MonitorMatched(_ context.Context, ruleID, _ string, _ int) {
 	m.monitors = append(m.monitors, ruleID)
 }
 
@@ -898,14 +900,22 @@ func TestEngine_CountsAMonitorMatchRatherThanOnlyLoggingIt(t *testing.T) {
 	e.Register(&modeDeclaringStub{
 		stubRuleWithFindings: stubRuleWithFindings{
 			stubRule: stubRule{id: "imported"},
-			findings: []api.Finding{{HostID: "h1", RuleID: "imported", Severity: "high", Title: "t"}},
+			findings: []api.Finding{
+				{HostID: "h1", RuleID: "imported", Severity: "high", Title: "one"},
+				{HostID: "h1", RuleID: "imported", Severity: "high", Title: "two"},
+			},
 		},
 		mode: rulesapi.DetectionRuleModeMonitor,
 	})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+	tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+	require.NoError(t, err)
 
-	assert.Equal(t, []string{"imported"}, metrics.monitors, "the suppressed match is counted against the rule that produced it")
+	// Two findings collapse into ONE tally entry carrying a count of two, rather than two entries. That is the aggregation the
+	// caller relies on: it records a batch with one write per (rule, host) instead of one per match.
+	require.Len(t, tally, 1, "the suppressed matches are counted against the rule that produced them")
+	assert.Equal(t, "imported", tally[0].RuleID)
+	assert.Equal(t, 2, tally[0].Count)
 	assert.Empty(t, metrics.alerts, "and no alert was created, which is the point of the mode")
 }
 
@@ -921,18 +931,20 @@ func (r overridingResolver) ResolveRuleMode(_, _ string, _ rulesapi.DetectionRul
 
 // spec:observability-instrumentation/stable-counter-names/a-suppressed-match-is-labelled-with-the-severity-the-alert-would-have-carried
 //
-// TestEngine_MonitorCounterUsesTheOverriddenSeverity pins that both series describe one rule at one severity.
+// TestEngine_MonitorTallyUsesTheOverriddenSeverity pins that both series describe one rule at one severity.
 //
 // A setting can carry a severity override, and the alert path applies it before persisting. The monitor path returned before that,
 // so the same rule was counted at its declared severity while its alerts carried the overridden one. The whole reason the monitor
 // counter shares the alert counter's attribute shape is that the two are meant to be compared per rule and severity, and that
 // comparison is wrong if one series is labelled differently from the other.
-func TestEngine_MonitorCounterUsesTheOverriddenSeverity(t *testing.T) {
+//
+// Asserted on the tally rather than on a metrics fake, because the engine no longer touches the recorder: it hands the tally back
+// and the pipeline records it after acknowledging the batch (issue #813). The severity carried in the tally IS what reaches both
+// the counter and the durable row.
+func TestEngine_MonitorTallyUsesTheOverriddenSeverity(t *testing.T) {
 	t.Parallel()
 
-	metrics := &severityRecordingMetrics{}
 	e := New(nil, discardLogger())
-	e.SetMetrics(metrics)
 	e.SetModeResolver(overridingResolver{mode: rulesapi.DetectionRuleModeMonitor, severity: "critical"})
 	e.Register(&modeDeclaringStub{
 		stubRuleWithFindings: stubRuleWithFindings{
@@ -942,20 +954,15 @@ func TestEngine_MonitorCounterUsesTheOverriddenSeverity(t *testing.T) {
 		mode: rulesapi.DetectionRuleModeMonitor,
 	})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+	tally, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}})
+	require.NoError(t, err)
 
-	assert.Equal(t, []string{"critical"}, metrics.monitorSeverities,
-		"the counter labels the match with the severity the alert would have carried, not the rule's declared one")
-}
-
-// severityRecordingMetrics records the severity each counter was called with.
-type severityRecordingMetrics struct {
-	api.MetricsRecorder
-	monitorSeverities []string
-}
-
-func (m *severityRecordingMetrics) MonitorMatched(_ context.Context, _, severity string) {
-	m.monitorSeverities = append(m.monitorSeverities, severity)
+	require.Len(t, tally, 1)
+	assert.Equal(t, "critical", tally[0].Severity,
+		"the match is labelled with the severity the alert would have carried, not the rule's declared one")
+	assert.Equal(t, "imported", tally[0].RuleID)
+	assert.Equal(t, "h1", tally[0].HostID)
+	assert.Equal(t, 1, tally[0].Count)
 }
 
 // spec:observability-instrumentation/a-per-rule-span-reports-the-alerts-it-raised/a-rule-whose-findings-are-all-suppressed-reports-no-alerts
@@ -1000,7 +1007,7 @@ func TestEngine_SpanCountsAlertsRaisedNotFindingsReturned(t *testing.T) {
 				mode: tc.mode,
 			})
 
-			require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
+			require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}))
 
 			var alertCount, suppressedCount, duplicateCount int64
 			var found bool
@@ -1054,7 +1061,7 @@ func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
 	e.tracer = tp.Tracer("test")
 	e.Register(&erroringStub{stubRule: stubRule{id: "broken"}})
 
-	require.NoError(t, e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}),
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventID: "e1", HostID: "h1", EventType: "exec", Platform: "darwin"}}),
 		"a rule error is isolated, not returned")
 
 	var sawAlert, sawSuppressed, sawDuplicate bool
@@ -1076,4 +1083,12 @@ func TestEngine_SpanCountsSurviveAnEvaluationError(t *testing.T) {
 	assert.True(t, sawAlert, "alert_count must be present even when the rule failed, so aggregations do not read it as missing data")
 	assert.True(t, sawSuppressed, "and suppressed_count alongside it")
 	assert.True(t, sawDuplicate, "and duplicate_count, so the attribute set is the same on every path out")
+}
+
+// evaluateErr runs a batch and discards the monitor tally, for the many tests that assert only on whether evaluation failed.
+// Evaluate returns the tally so the pipeline can record it AFTER acknowledging the batch (issue #813); a test asserting on error
+// handling has no use for it, and threading `_, err :=` through every one of them would obscure what those tests are about.
+func evaluateErr(e *Engine, ctx context.Context, events []api.Event) error {
+	_, err := e.Evaluate(ctx, events)
+	return err
 }

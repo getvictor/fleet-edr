@@ -137,8 +137,9 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.EventsIngested(ctx, "host-a", 5)
 	r.EventsIngested(ctx, "host-b", 2)
 	r.AlertCreated(ctx, "dyld_insert", "high")
-	r.MonitorMatched(ctx, "proc_creation_macos_applescript", "medium")
-	r.MonitorMatched(ctx, "proc_creation_macos_applescript", "medium")
+	// ONE call carrying two, not two carrying one. The caller aggregates a batch before recording it, so the count parameter is
+	// the contract; two calls of one would sum to the same total and pass against an implementation that ignored n entirely.
+	r.MonitorMatched(ctx, "proc_creation_macos_applescript", "medium", 2)
 	r.ProcessRetentionRowsDeleted(ctx, 7)
 	r.QueueRowsPruned(ctx, 9)
 	r.QueueDropped(ctx, 3, false)
@@ -206,7 +207,7 @@ func TestNilRecorder_AllMethodsSafe(t *testing.T) {
 	assert.NotPanics(t, func() {
 		r.EventsIngested(ctx, "h", 1)
 		r.AlertCreated(ctx, "r", "s")
-		r.MonitorMatched(ctx, "r", "s")
+		r.MonitorMatched(ctx, "r", "s", 1)
 		r.ProcessRetentionRowsDeleted(ctx, 1)
 		r.QueueDropped(ctx, 1, false)
 		r.QueueDropped(ctx, 1, true)

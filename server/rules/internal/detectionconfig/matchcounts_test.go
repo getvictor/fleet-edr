@@ -1,0 +1,184 @@
+package detectionconfig_test
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/rules/api"
+)
+
+// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/counts-are-attributed-to-the-rule-and-the-host
+//
+// TestRecordMonitorMatches pins the attribution the promotion decision turns on.
+//
+// Per rule AND per host, because those are different remedies: a rule matching heavily on one machine wants an exclusion, while
+// the same volume spread across the fleet means the rule itself is too broad. A per-rule total alone cannot tell them apart.
+//
+// Written as sequential steps rather than subtests because each builds on the rows the previous one wrote, which is the behaviour
+// under test: counts accumulate. Subtests here would either have to be serial (and then they are steps wearing a costume) or
+// parallel (and then they race each other's rows).
+func TestRecordMonitorMatches(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, store.RecordMonitorMatches(ctx, api.MonitorTally{
+		{RuleID: "imported", HostID: "host-a", Severity: "high", Count: 3},
+		{RuleID: "imported", HostID: "host-b", Severity: "high", Count: 1},
+		{RuleID: "other", HostID: "host-a", Severity: "low", Count: 5},
+	}))
+
+	type row struct {
+		RuleID string `db:"rule_id"`
+		HostID string `db:"host_id"`
+		N      int    `db:"match_count"`
+	}
+	var rows []row
+	require.NoError(t, db.SelectContext(ctx, &rows,
+		`SELECT rule_id, host_id, match_count FROM detection_rule_match_counts ORDER BY rule_id, host_id`))
+	assert.Equal(t, []row{
+		{RuleID: "imported", HostID: "host-a", N: 3},
+		{RuleID: "imported", HostID: "host-b", N: 1},
+		{RuleID: "other", HostID: "host-a", N: 5},
+	}, rows, "one row per rule and host, so both the total and the spread are answerable")
+
+	// A second batch on the same day adds rather than replacing. Replacing would make the counter report the last batch's size
+	// instead of the day's, which is the difference between a rate and a sample.
+	require.NoError(t, store.RecordMonitorMatches(ctx, api.MonitorTally{
+		{RuleID: "imported", HostID: "host-a", Severity: "high", Count: 2},
+	}))
+	var accumulated int
+	require.NoError(t, db.GetContext(ctx, &accumulated,
+		`SELECT match_count FROM detection_rule_match_counts WHERE rule_id = 'imported' AND host_id = 'host-a'`))
+	assert.Equal(t, 5, accumulated, "counts accumulate across batches within a day")
+
+	// Severities fold into one row. Severity belongs to the OTel series, where it exists to line up with edr.alerts.created; this
+	// table answers how often and how widely, and splitting rows by a severity an override can change mid-window would fragment
+	// both answers.
+	require.NoError(t, store.RecordMonitorMatches(ctx, api.MonitorTally{
+		{RuleID: "folded", HostID: "host-a", Severity: "high", Count: 1},
+		{RuleID: "folded", HostID: "host-a", Severity: "critical", Count: 2},
+	}))
+	var folded []row
+	require.NoError(t, db.SelectContext(ctx, &folded,
+		`SELECT rule_id, host_id, match_count FROM detection_rule_match_counts WHERE rule_id = 'folded'`))
+	require.Len(t, folded, 1)
+	assert.Equal(t, 3, folded[0].N)
+
+	// Out-of-order writes must not narrow the recorded window. Detection runs AFTER the per-host claim lock is released, so two
+	// batches for one (rule, host) can reach this write concurrently and land in either order.
+	//
+	// Both stored timestamps are pushed into the FUTURE, which is what makes the two halves distinguishable. A write now is then
+	// earlier than both, so a correct upsert moves first_seen BACK to it (the window really did start earlier) and leaves
+	// last_seen alone (the window really did extend later). Backdating instead would leave both untouched under either rule, and
+	// the assertion would pass against an implementation that never updates first_seen at all.
+	future := time.Now().UTC().Add(2 * time.Hour)
+	_, err := db.ExecContext(ctx, `UPDATE detection_rule_match_counts
+		SET first_seen = ?, last_seen = ? WHERE rule_id = 'imported' AND host_id = 'host-a'`, future, future)
+	require.NoError(t, err)
+
+	require.NoError(t, store.RecordMonitorMatches(ctx, api.MonitorTally{
+		{RuleID: "imported", HostID: "host-a", Severity: "high", Count: 1},
+	}))
+	var window struct {
+		First time.Time `db:"first_seen"`
+		Last  time.Time `db:"last_seen"`
+	}
+	require.NoError(t, db.GetContext(ctx, &window,
+		`SELECT first_seen, last_seen FROM detection_rule_match_counts WHERE rule_id = 'imported' AND host_id = 'host-a'`))
+	assert.Less(t, window.First, time.Now().UTC().Add(time.Hour),
+		"an earlier write widens the window backwards rather than being ignored")
+	assert.Greater(t, window.Last, time.Now().UTC().Add(time.Hour),
+		"and an earlier write must not drag last_seen back")
+
+	// An empty or degenerate tally writes nothing rather than a zero row, so a rule that matched nothing never appears as one
+	// that matched and was counted at zero.
+	before := countRows(ctx, t, db)
+	require.NoError(t, store.RecordMonitorMatches(ctx, nil))
+	require.NoError(t, store.RecordMonitorMatches(ctx, api.MonitorTally{
+		{RuleID: "", HostID: "host-a", Count: 1},
+		{RuleID: "r", HostID: "", Count: 1},
+		{RuleID: "r", HostID: "host-a", Count: 0},
+	}))
+	assert.Equal(t, before, countRows(ctx, t, db))
+}
+
+// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/counts-older-than-the-retention-window-are-pruned
+//
+// TestPruneMatchCounts pins that the table is bounded, and that the knob's disabled value disables the prune rather than pruning
+// everything, which is the failure that would silently erase the record this feature exists to keep.
+func TestPruneMatchCounts(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	ctx := t.Context()
+
+	day := func(daysAgo int) string { return time.Now().UTC().AddDate(0, 0, -daysAgo).Format(time.DateOnly) }
+	for _, daysAgo := range []int{0, 5, 40} {
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO detection_rule_match_counts (rule_id, host_id, day, match_count) VALUES (?, 'host-a', ?, 1)`,
+			"rule-"+day(daysAgo), day(daysAgo))
+		require.NoError(t, err)
+	}
+	require.Equal(t, 3, countRows(ctx, t, db))
+
+	deleted, err := store.PruneMatchCounts(ctx, 0)
+	require.NoError(t, err)
+	assert.Zero(t, deleted)
+	assert.Equal(t, 3, countRows(ctx, t, db), "the disabled value must not be read as prune everything")
+
+	deleted, err = store.PruneMatchCounts(ctx, 30)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+	assert.Equal(t, 2, countRows(ctx, t, db), "rows past the window go, rows inside it stay")
+
+	// Idempotent, which is what lets every replica run the sweep without a leader lock: a second pass deletes what the first
+	// already did, namely nothing.
+	deleted, err = store.PruneMatchCounts(ctx, 30)
+	require.NoError(t, err)
+	assert.Zero(t, deleted)
+}
+
+// TestPruneMatchCountsBatches pins that the sweep keeps going past one batch.
+//
+// The batch bound exists so one pass cannot take an unbounded row-lock and undo-log footprint while every replica contends on the
+// same range, which is a real risk the first time a deployment lowers its retention. A loop that stopped after the first batch
+// would leave the backlog behind forever, and one that never stopped would spin: this pins the boundary by using more rows than a
+// single batch holds.
+func TestPruneMatchCountsBatches(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	ctx := t.Context()
+
+	const overOneBatch = 1001
+	old := time.Now().UTC().AddDate(0, 0, -40).Format(time.DateOnly)
+	values := make([]string, 0, overOneBatch)
+	args := make([]any, 0, overOneBatch*2)
+	for i := range overOneBatch {
+		values = append(values, "(?, ?, ?, 1)")
+		args = append(args, fmt.Sprintf("rule-%04d", i), "host-a", old)
+	}
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO detection_rule_match_counts (rule_id, host_id, day, match_count) VALUES `+strings.Join(values, ", "), args...)
+	require.NoError(t, err)
+	require.Equal(t, overOneBatch, countRows(ctx, t, db))
+
+	deleted, err := store.PruneMatchCounts(ctx, 30)
+	require.NoError(t, err)
+	assert.Equal(t, int64(overOneBatch), deleted, "the sweep continues past the first batch rather than stopping at its bound")
+	assert.Zero(t, countRows(ctx, t, db))
+}
+
+// countRows reports how many counter rows exist, which several assertions compare before and after.
+func countRows(ctx context.Context, t *testing.T, db *sqlx.DB) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.GetContext(ctx, &n, `SELECT COUNT(*) FROM detection_rule_match_counts`))
+	return n
+}

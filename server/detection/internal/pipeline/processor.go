@@ -24,8 +24,12 @@ type batchBuilder interface {
 }
 
 // batchEvaluator runs the detection rules over a materialized batch. *engine.Engine is the production implementation.
+//
+// The tally it returns is what the batch found in monitor mode, and it comes back rather than being written by the engine so this
+// processor can record it AFTER the acknowledgement. A nacked batch is replayed whole, so anything the engine wrote while
+// evaluating would be counted twice; a tally handed back is counted once, by whichever attempt succeeds.
 type batchEvaluator interface {
-	Evaluate(ctx context.Context, events []visibilityapi.Event) error
+	Evaluate(ctx context.Context, events []visibilityapi.Event) (rulesapi.MonitorTally, error)
 }
 
 // hostClaimLockPrefix namespaces the per-host advisory locks the processor serializes on, keeping them clear of the leader-election
@@ -54,11 +58,14 @@ type Processor struct {
 	detection   batchEvaluator
 	coordinator leader.Coordinator
 	metrics     api.MetricsRecorder
-	logger      *slog.Logger
-	interval    time.Duration
-	batch       int
-	concurrency int
-	clamp       *concurrencyClamp
+	// monitorMatches persists what a batch found in monitor mode, after the batch is acknowledged. Nil records nothing, which is
+	// the shape for a deployment or test with no rules-context store wired: monitor mode still suppresses the alert either way.
+	monitorMatches rulesapi.MonitorMatchRecorder
+	logger         *slog.Logger
+	interval       time.Duration
+	batch          int
+	concurrency    int
+	clamp          *concurrencyClamp
 }
 
 // ProcessorOptions configures a Processor. It is a struct rather than positional parameters because the coordinator took the
@@ -224,6 +231,11 @@ func hostClaimLockName(hostID string) string {
 // Runner.SetMetrics during cmd/main's two-phase wiring; nil-safe (an unset recorder no-ops the retry counter). Set-once before Run,
 // like the sibling runners' recorders, so the running worker loops only read it.
 func (p *Processor) SetMetrics(m api.MetricsRecorder) { p.metrics = m }
+
+// SetMonitorMatchRecorder wires the durable monitor-match counter AFTER construction, mirroring SetMetrics. cmd/main passes the
+// rules context's store once both contexts are built; the rules context owns the table, so the wiring direction matches the
+// engine's mode resolver rather than reaching across it (ADR-0004).
+func (p *Processor) SetMonitorMatchRecorder(r rulesapi.MonitorMatchRecorder) { p.monitorMatches = r }
 
 // Run fans out p.concurrency worker loops and blocks until ctx is cancelled and every worker returns. Each worker claims its own
 // disjoint batches, so the processor scales across the replica's cores the same way it scales across replicas (server-availability spec).
@@ -391,8 +403,11 @@ func eventIDsOf(events []visibilityapi.Event) []string {
 // batch was nacked or the ack failed. Split from processHost so the locked region above stays readable as claim-fold-flush.
 func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.Event, eventIDs []string) int {
 	// Run detection rules after processes are materialized.
+	var tally rulesapi.MonitorTally
 	if p.detection != nil {
-		if err := p.detection.Evaluate(ctx, events); err != nil {
+		var err error
+		tally, err = p.detection.Evaluate(ctx, events)
+		if err != nil {
 			p.logDetectionRetry(ctx, err)
 			if nackErr := p.eventLog.Nack(ctx, eventIDs); nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
@@ -408,7 +423,44 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		p.logger.ErrorContext(ctx, "ack events", "err", err)
 		return 0
 	}
+	p.recordMonitorMatches(ctx, tally)
 	return len(events)
+}
+
+// recordMonitorMatches persists and counts a batch's monitor-mode matches, AFTER the acknowledgement.
+//
+// After, so a replayed batch is counted once: everything before this point can still nack, and a nacked batch re-evaluates and
+// produces the same matches again. The cost is the opposite failure, a crash between the ack and this write, which loses those
+// counts.
+//
+// That loss is the RISK-BEARING direction and is accepted rather than preferred. A count that is too low makes a rule look quiet,
+// which is exactly what persuades an operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to
+// prevent. It is the better trade only because the alternative is systematic: counting during evaluation inflates on every
+// retry, while this loses counts only in the window between two adjacent statements.
+//
+// A successful Ack is NOT proof that this attempt uniquely processed the batch. Ack is an unconditional update that ignores its
+// affected-row count, and a claim expires after five minutes and is re-offered, so an evaluation that outlives its lease can be
+// running alongside its own reclaimer with both acknowledging successfully. Alert persistence is immune because it deduplicates
+// on (host, rule, subject); this additive counter is not, and can double-count that batch. Tracked as #817, which belongs in the
+// queue contract rather than here.
+//
+// A failure here cannot fail the batch: the events are already acknowledged, and re-nacking them to save a counter would replay
+// real detection work. It is logged and dropped.
+func (p *Processor) recordMonitorMatches(ctx context.Context, tally rulesapi.MonitorTally) {
+	if len(tally) == 0 {
+		return
+	}
+	if p.metrics != nil {
+		for _, m := range tally {
+			p.metrics.MonitorMatched(ctx, m.RuleID, m.Severity, m.Count)
+		}
+	}
+	if p.monitorMatches == nil {
+		return
+	}
+	if err := p.monitorMatches.RecordMonitorMatches(ctx, tally); err != nil {
+		p.logger.ErrorContext(ctx, "record monitor matches", "err", err, "entries", len(tally))
+	}
 }
 
 // logDetectionRetry accounts for a detection batch failure the caller is about to nack. A not-yet-materialized subject or flow

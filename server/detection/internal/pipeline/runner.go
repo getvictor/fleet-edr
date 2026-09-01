@@ -8,6 +8,7 @@ import (
 
 	"github.com/fleetdm/edr/server/coordination/leader"
 	"github.com/fleetdm/edr/server/detection/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
 // Lock names for the leader-gated periodic tasks. MySQL GET_LOCK names are server-global, so these identify each task across every
@@ -88,6 +89,14 @@ func NewRunner(opts RunnerOptions) *Runner {
 		queuePrune:      opts.QueuePrune,
 		webhookDelivery: opts.WebhookDelivery,
 		coordinator:     opts.Coordinator,
+	}
+}
+
+// SetMonitorMatchRecorder propagates the durable monitor-match counter to the processor, which writes to it after acknowledging a
+// batch (issue #813). Only the processor needs it: the periodic sweeps evaluate no rules.
+func (r *Runner) SetMonitorMatchRecorder(rec rulesapi.MonitorMatchRecorder) {
+	if r.processor != nil {
+		r.processor.SetMonitorMatchRecorder(rec)
 	}
 }
 

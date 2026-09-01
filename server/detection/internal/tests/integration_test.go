@@ -297,7 +297,7 @@ func (m *recordingMetrics) AlertCreated(_ context.Context, _, _ string) {
 
 // MonitorMatched records the suppressed twin of an alert (issue #764): the rule matched and its mode kept the alert from being
 // written. Counted separately so a test can tell "the rule did not match" from "the rule matched and was held back".
-func (m *recordingMetrics) MonitorMatched(_ context.Context, _, _ string) {
+func (m *recordingMetrics) MonitorMatched(_ context.Context, _, _ string, _ int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.monitorMatches++

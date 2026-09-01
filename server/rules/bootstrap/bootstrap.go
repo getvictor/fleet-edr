@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -61,9 +62,14 @@ type Rules struct {
 	appControlSt       *appcontrol.Store
 	appControlSvc      *appcontrol.Service
 	detectionConfigSvc *detectionconfig.Service
-	detectionConfigH   *operator.DetectionConfigHandler
-	db                 *sqlx.DB
-	logger             *slog.Logger
+	// detectionConfigStore is retained beyond the Service because the monitor-match counters are written by the detection
+	// pipeline and pruned here, neither of which goes through the config Service's snapshot machinery.
+	detectionConfigStore *detectionconfig.Store
+	detectionConfigH     *operator.DetectionConfigHandler
+	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
+	retentionDays int
+	db            *sqlx.DB
+	logger        *slog.Logger
 }
 
 // New wires the rules context. Does NOT apply the schema (call
@@ -121,15 +127,16 @@ func New(deps Deps) (*Rules, error) {
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
 	}
 	return &Rules{
-		svc:                svc,
-		operatorH:          opH,
-		appControlH:        appControlH,
-		appControlSt:       appControlStore,
-		appControlSvc:      appControlSvc,
-		detectionConfigSvc: detectionConfigSvc,
-		detectionConfigH:   detectionConfigH,
-		db:                 deps.DB,
-		logger:             logger,
+		svc:                  svc,
+		detectionConfigStore: detectionConfigStore,
+		operatorH:            opH,
+		appControlH:          appControlH,
+		appControlSt:         appControlStore,
+		appControlSvc:        appControlSvc,
+		detectionConfigSvc:   detectionConfigSvc,
+		detectionConfigH:     detectionConfigH,
+		db:                   deps.DB,
+		logger:               logger,
 	}, nil
 }
 
@@ -138,11 +145,66 @@ func New(deps Deps) (*Rules, error) {
 // indexed-row read, so a tight interval is cheap and keeps cross-replica convergence far under the alert-evaluation timescale.
 const DefaultDetectionConfigRefreshInterval = 5 * time.Second
 
-// Run drives the rules context's background workers until ctx is cancelled. Today that is just the detection-config snapshot refresh,
-// which converges this replica with config mutations made on other replicas (ADR-0010 stateless server; mutations elsewhere only bump
-// the shared version counter). cmd/main starts this in a goroutine alongside the other contexts' background loops.
+// Run drives the rules context's background workers until ctx is cancelled: the detection-config snapshot refresh, which converges
+// this replica with config mutations made on other replicas (ADR-0010 stateless server; mutations elsewhere only bump the shared
+// version counter), and the monitor-match-count prune. cmd/main starts this in a goroutine alongside the other contexts' loops.
+//
+// The prune is NOT leader-gated, unlike the detection context's sweeps. Every RunIfLeader loop holds its advisory lock, and so a
+// pooled connection, for the lifetime of the process, and the event processor sizes itself against what those loops leave behind
+// (issue #722). The delete here is idempotent and needs no coordination: replicas racing on it delete rows the others already
+// deleted, which costs one statement per replica per interval and buys back a permanently held connection.
 func (r *Rules) Run(ctx context.Context) {
-	r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
+	}()
+	go func() {
+		defer wg.Done()
+		r.pruneMatchCountsLoop(ctx, DefaultMatchCountPruneInterval)
+	}()
+	wg.Wait()
+}
+
+// DefaultMatchCountPruneInterval is how often each replica sweeps monitor-match counts past the retention window. Hourly because
+// the counters are bucketed by day: a tighter interval deletes nothing new, and a looser one only delays reclaiming rows that are
+// already excluded from every read by their day.
+const DefaultMatchCountPruneInterval = time.Hour
+
+// SetRetentionDays sets the age cap the match-count prune applies. Zero (the default) prunes nothing, matching how the same knob
+// disables the detection context's process-record retention runner.
+//
+// MUST be called before Run. The prune loop reads the field without synchronisation, which is safe only because starting that
+// goroutine happens-after this write; cmd/main calls this from openContexts, well before it launches Run. Calling it afterwards
+// would be a data race, and one that `go test -race` would not see unless a test happened to reproduce the ordering.
+func (r *Rules) SetRetentionDays(days int) { r.retentionDays = days }
+
+// pruneMatchCountsLoop prunes on a ticker until ctx is cancelled. The first pass runs immediately rather than after a full
+// interval, so a replica that restarts often still prunes; the sweep is idempotent, so an eager pass costs one no-op delete.
+func (r *Rules) pruneMatchCountsLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		r.pruneMatchCountsOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (r *Rules) pruneMatchCountsOnce(ctx context.Context) {
+	deleted, err := r.detectionConfigStore.PruneMatchCounts(ctx, r.retentionDays)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		// Shutdown cancelled the query; not a failure worth logging on the way out.
+	case err != nil:
+		r.logger.WarnContext(ctx, "rules: prune monitor match counts", "err", err)
+	case deleted > 0:
+		r.logger.InfoContext(ctx, "rules: pruned monitor match counts", "rows", deleted, "retention_days", r.retentionDays)
+	}
 }
 
 // ApplySchema applies the rules context's goose migration corpus and seeds the `Default` application control policy. Idempotent
@@ -184,6 +246,11 @@ func (r *Rules) ContentService() api.RuleProvider { return r.svc }
 // DetectionConfigModeResolver exposes the per-host rule-mode resolver the detection engine consults to route each finding
 // (alert / monitor / disabled) and apply a severity override. Backed by the live detection-config snapshot.
 func (r *Rules) DetectionConfigModeResolver() api.RuleModeResolver { return r.detectionConfigSvc }
+
+// MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to after acknowledging a batch
+// (issue #813). Same direction as the mode resolver above: the rules context owns the table, and detection consumes the narrow
+// interface rather than reaching into it (ADR-0004).
+func (r *Rules) MonitorMatchRecorder() api.MonitorMatchRecorder { return r.detectionConfigStore }
 
 // Catalog exposes the public api.Lister. The operator handler inside rules consumes this internally; nothing outside rules calls it
 // today.

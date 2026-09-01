@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"strings"
 	"time"
 )
@@ -242,6 +243,41 @@ func DefaultModeOf(r Rule) DetectionRuleMode {
 		return DetectionRuleModeAlert
 	}
 	return defaulter.DefaultMode()
+}
+
+// MonitorMatch is one rule's monitor-mode matches on one host, at one severity, within a single evaluated batch.
+//
+// Severity rides along because the counter it feeds is keyed the same way as `edr.alerts.created`, so the two series describe one
+// rule identically and can be compared. That comparison is how an operator judges what promoting a rule would produce.
+type MonitorMatch struct {
+	RuleID   string
+	HostID   string
+	Severity string
+	Count    int
+}
+
+// MonitorTally is what one batch's evaluation found in monitor mode, aggregated per (rule, host, severity) rather than reported
+// per finding.
+//
+// It is RETURNED from evaluation rather than written during it, and that is the point of the type existing. A batch that fails is
+// nacked and replayed whole, so anything counted while evaluating is counted again on the retry. Retries are not rare enough to
+// wave away: issue #631 measured roughly 130 materialization retries a minute from a single host under a sustained condition.
+// Handing the tally back lets the caller record it only once the batch is acknowledged, which counts a replayed batch once.
+//
+// The cost of that choice is the opposite failure: a crash between the acknowledgement and the write loses those counts, and that
+// is the RISK-BEARING direction, not a safe one. A number that is too low makes a rule look quiet, which is what persuades an
+// operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to prevent. It is accepted here because
+// the alternative counts a replayed batch once per attempt, which is a systematic error on every retry rather than a rare one
+// confined to a crash between two adjacent statements.
+type MonitorTally []MonitorMatch
+
+// MonitorMatchRecorder is the narrow write surface the detection pipeline uses to persist a batch's monitor matches once the batch
+// is acknowledged. A nil recorder records nothing, which is the correct behaviour for a deployment or a test with no rules-context
+// store wired: monitor mode still suppresses the alert and still emits its observability signal.
+type MonitorMatchRecorder interface {
+	// RecordMonitorMatches persists tally, adding to whatever is already recorded for each (rule, host, day). It is called after
+	// the batch is acknowledged, so it must not be able to fail the batch: the caller logs an error and moves on.
+	RecordMonitorMatches(ctx context.Context, tally MonitorTally) error
 }
 
 // RuleModeSource says where a resolved mode came from: the rule's own declaration, or a setting an operator created.

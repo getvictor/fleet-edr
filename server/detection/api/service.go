@@ -108,17 +108,35 @@ type MetricsRecorder interface {
 	// processed for their freshness side effect and then dropped instead of persisted as retained event rows (issue #408).
 	EventsHeartbeatDropped(ctx context.Context, hostID string, n int)
 	AlertCreated(ctx context.Context, ruleID, severity string)
-	// MonitorMatched is called when a rule matches but its resolved mode is monitor, so no alert is persisted. It is the counted
-	// form of what used to be only a log line, and it exists because issue #764 made monitor the default for most of the catalog:
-	// a per-match log entry was reasonable when monitor was a state an operator deliberately set on one noisy rule, and is not
-	// when sixty-six rules match commonplace commands on every host. The counter is also what an operator needs in order to decide
-	// whether promoting a rule is worth it.
+	// MonitorMatched is called with the number of matches a rule made in monitor mode, so no alert was persisted. It is the
+	// counted form of what used to be only a log line, and it exists because issue #764 made monitor the default for most of the
+	// catalog: a per-match log entry was reasonable when monitor was a state an operator deliberately set on one noisy rule, and
+	// is not when sixty-six rules match commonplace commands on every host. The counter is also what an operator needs in order to
+	// decide whether promoting a rule is worth it.
 	//
-	// It is NOT deduplicated, and a consumer has to know that. An alert dedups on insert; a monitor match has nothing to insert, so
-	// a batch that is retried counts its matches again. Retries come from a materialization race rather than steady state, so this
-	// overstates occasionally and never understates, which is the safe direction for a number that gates promoting a rule to
-	// alerting. Issue #813, which turns this into an operator-facing rate, has to account for it.
-	MonitorMatched(ctx context.Context, ruleID, severity string)
+	// It takes a count rather than being called per match because the caller aggregates a whole batch before recording it, and it
+	// does that because of WHEN it records: after the batch is acknowledged, not while evaluating. A nacked batch is replayed
+	// whole, so a counter incremented during evaluation counts a retried batch twice. Called after the acknowledgement, a replayed
+	// batch is counted once.
+	//
+	// Three inaccuracies remain and a consumer has to know all of them. A crash between the acknowledgement and the durable record
+	// loses those counts, and so does a failure of that record, which is logged and dropped rather than allowed to fail a batch
+	// that is already acknowledged. Both leave THIS counter ahead of the durable table, since it is incremented first. Losing
+	// counts is the direction that carries risk rather than the one that avoids it: a rule that looks quieter than it is gets
+	// promoted, and promoting a noisy rule is the outcome monitor mode exists to prevent. Third, an evaluation that outlives its
+	// claim lease can be re-offered to another worker while the first is still running; Ack does not verify claim ownership, so
+	// both attempts can succeed and both can record.
+	//
+	// Most importantly this counts MATCHES, not would-be alerts. AlertCreated fires only for a newly INSERTED alert, and alerts
+	// deduplicate on (host, rule, subject) permanently, so a rule that keeps matching one subject increments this series every
+	// time and would have raised exactly one alert.
+	//
+	// That biases it UPWARD against what promotion produces, and the losses above bias it DOWNWARD, so it is an approximation
+	// rather than a bound in either direction. Calling it an upper bound, as an earlier version of this comment did, contradicts
+	// the losses documented two paragraphs up: a series that can drop counts cannot promise to be above anything. The upward bias
+	// is the systematic one and the downward bias is the rare one, which is worth knowing when reading a number, but it is not a
+	// guarantee to design against.
+	MonitorMatched(ctx context.Context, ruleID, severity string, n int)
 	// ProcessesTTLReconciled is called by the pipeline's
 	// stale-process janitor on every reconciliation pass.
 	ProcessesTTLReconciled(ctx context.Context, n int64)

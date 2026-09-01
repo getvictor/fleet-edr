@@ -227,7 +227,7 @@ If your host filesystem is ZFS / Btrfs / LVM-thin, volume snapshots are faster t
 
 ## Retention tuning
 
-`EDR_RETENTION_DAYS` (default 30) prunes completed process-graph records older than the cutoff on a fixed hourly schedule; alert-referenced rows are kept. The knob lives in the server's environment; restart to take effect. Raw event history is governed separately by the ClickHouse archive's native TTL (currently a fixed 30-day expiry set in the migration, ADR-0015), not by this knob.
+`EDR_RETENTION_DAYS` (default 30) prunes, on a fixed hourly schedule, the MySQL rows the server derives and can afford to lose: completed process-graph records older than the cutoff (alert-referenced rows are kept), and the per-rule monitor-match counters that back a rule's observed fire rate. Setting it to 0 disables both. The knob lives in the server's environment; restart to take effect. Raw event history is governed separately by the ClickHouse archive's native TTL (currently a fixed 30-day expiry set in the migration, ADR-0015), not by this knob.
 
 Three common scenarios:
 

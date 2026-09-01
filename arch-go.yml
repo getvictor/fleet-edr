@@ -55,6 +55,10 @@ dependenciesRules:
         - "**.rules.testkit"
         - "**.attrkeys"
         - "**.httpserver"
+        # sqlhelpers is shared DB platform code, the same category as httpserver above, and is already allow-listed for the
+        # detection, response and visibility internals. Rules is simply the context that had not needed it until the
+        # monitor-match counters wanted the common deadlock retry (#813) rather than a fourth copy of it.
+        - "**.sqlhelpers"
         - "**.endpoint.api"
         - "**.identity.api"  # identity.api.AuditRecorder for policy.{create,update,delete} audit
         - "**.detection.api"

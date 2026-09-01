@@ -26,6 +26,8 @@ type scriptedEventLog struct {
 	nacked   []string
 	claimed  bool
 	claimReq []string // hosts ClaimForHost was asked for, in order
+	// ackErr makes Ack fail, which is the only way to exercise the branch where a batch was evaluated but NOT durably accepted.
+	ackErr error
 }
 
 func (s *scriptedEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
@@ -45,6 +47,9 @@ func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int)
 	return s.batch, nil
 }
 func (s *scriptedEventLog) Ack(_ context.Context, ids []string) error {
+	if s.ackErr != nil {
+		return s.ackErr
+	}
 	s.acked = append(s.acked, ids...)
 	return nil
 }
@@ -60,9 +65,14 @@ type stubBuilder struct{ err error }
 
 func (b stubBuilder) ProcessBatch(context.Context, []visibilityapi.Event) error { return b.err }
 
-type stubEvaluator struct{ err error }
+type stubEvaluator struct {
+	err   error
+	tally rulesapi.MonitorTally
+}
 
-func (e stubEvaluator) Evaluate(context.Context, []visibilityapi.Event) error { return e.err }
+func (e stubEvaluator) Evaluate(context.Context, []visibilityapi.Event) (rulesapi.MonitorTally, error) {
+	return e.tally, e.err
+}
 
 // capturingLogHandler records every emitted record (at any level, so a debug line is observable) for level assertions.
 type capturingLogHandler struct {
@@ -207,5 +217,125 @@ func TestProcessor_BuilderFailureAndHappyPath(t *testing.T) {
 		assert.Equal(t, []string{"evt-1"}, log.acked, "a clean batch is acked")
 		assert.Empty(t, log.nacked, "a clean batch is never nacked")
 		assert.Zero(t, rec.materializationRetries)
+	})
+}
+
+// recordingMonitorRecorder captures what the processor persists, and can be made to fail.
+type recordingMonitorRecorder struct {
+	calls []rulesapi.MonitorTally
+	err   error
+}
+
+func (r *recordingMonitorRecorder) RecordMonitorMatches(_ context.Context, tally rulesapi.MonitorTally) error {
+	r.calls = append(r.calls, tally)
+	return r.err
+}
+
+// countingMonitorMetrics sums the counts passed to MonitorMatched.
+type countingMonitorMetrics struct {
+	capturingRecorder
+	total int
+}
+
+func (m *countingMonitorMetrics) MonitorMatched(_ context.Context, _, _ string, n int) { m.total += n }
+
+// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-monitor-match-is-counted-once-for-a-batch-that-is-retried
+// spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/a-recording-failure-does-not-fail-the-batch
+//
+// TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck pins WHEN the counts are written, which is the whole reason the engine hands
+// a tally back instead of writing one itself.
+//
+// A batch that fails detection is nacked and replayed whole, so a count written during evaluation is written again by every
+// retry. Issue #631 measured roughly 130 materialization retries a minute from one host under a sustained condition, which is
+// enough to make a promotion decision read as far more expensive than it is.
+func TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck(t *testing.T) {
+	t.Parallel()
+
+	tally := rulesapi.MonitorTally{{RuleID: "imported", HostID: "host-a", Severity: "high", Count: 2}}
+
+	t.Run("a nacked batch records nothing", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		log := &scriptedEventLog{batch: oneEventBatch()}
+		// The evaluator reports a tally AND fails, which is the shape a real retryable miss takes: some rules matched before
+		// another asked for the batch to come round again.
+		eval := stubEvaluator{tally: tally, err: errors.New("persist detection alert: db down")}
+		p := newTestProcessor(t, log, stubBuilder{}, eval, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(context.Background())
+
+		assert.Empty(t, rec.calls, "the batch was nacked and will be replayed; recording now would count it twice")
+		assert.Zero(t, metrics.total, "and the counter must not move either, for the same reason")
+		assert.Equal(t, []string{"evt-1"}, log.nacked, "the batch really was nacked, so the assertions above are about that path")
+	})
+
+	t.Run("an acked batch records once", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		log := &scriptedEventLog{batch: oneEventBatch()}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(context.Background())
+
+		require.Len(t, rec.calls, 1)
+		assert.Equal(t, tally, rec.calls[0])
+		assert.Equal(t, 2, metrics.total, "the counter is added in the same place, so the two series cannot disagree")
+		assert.Equal(t, []string{"evt-1"}, log.acked)
+	})
+
+	t.Run("the counter still moves when no durable recorder is wired", func(t *testing.T) {
+		t.Parallel()
+		// Two independent consumers of the same tally. A deployment without the rules-context store (ModeIntake, or a test)
+		// still emits the OTel series, because monitor mode's observability signal is not conditional on the durable table
+		// existing. Ordering the nil check before the counter would silence it everywhere the store is absent, which is exactly
+		// the deployment least likely to notice.
+		metrics := &countingMonitorMetrics{}
+		log := &scriptedEventLog{batch: oneEventBatch()}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(context.Background())
+
+		assert.Equal(t, 2, metrics.total)
+	})
+
+	t.Run("a failed ack records nothing, in either sink", func(t *testing.T) {
+		t.Parallel()
+		// The guarantee is "recorded once the batch is ACCEPTED", and an Ack that errors means it was not: the events stay leased
+		// and will be re-served. Without this case the suite cannot tell "records after a successful ack" from "records after
+		// evaluation regardless of the ack", because the only ack in the other tests always succeeds.
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		log := &scriptedEventLog{batch: oneEventBatch(), ackErr: errors.New("queue unavailable")}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(&capturingLogHandler{}))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(context.Background())
+
+		assert.Empty(t, rec.calls, "the batch was not durably accepted, so its matches are not this attempt's to record")
+		assert.Zero(t, metrics.total, "and the counter must not move either, or the re-served batch counts twice")
+	})
+
+	t.Run("a recording failure does not nack the acked batch", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingMonitorRecorder{err: errors.New("db down")}
+		handler := &capturingLogHandler{}
+		log := &scriptedEventLog{batch: oneEventBatch()}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(handler))
+		p.SetMonitorMatchRecorder(rec)
+
+		p.ProcessOnce(context.Background())
+
+		assert.Empty(t, log.nacked,
+			"the events are already acknowledged; replaying real detection work to save a counter is the wrong trade")
+		_, logged := handler.levelOf("record monitor matches")
+		assert.True(t, logged, "the failure is dropped, but not silently")
 	})
 }
