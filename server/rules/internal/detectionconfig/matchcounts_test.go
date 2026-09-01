@@ -2,6 +2,8 @@ package detectionconfig_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +143,36 @@ func TestPruneMatchCounts(t *testing.T) {
 	deleted, err = store.PruneMatchCounts(ctx, 30)
 	require.NoError(t, err)
 	assert.Zero(t, deleted)
+}
+
+// TestPruneMatchCountsBatches pins that the sweep keeps going past one batch.
+//
+// The batch bound exists so one pass cannot take an unbounded row-lock and undo-log footprint while every replica contends on the
+// same range, which is a real risk the first time a deployment lowers its retention. A loop that stopped after the first batch
+// would leave the backlog behind forever, and one that never stopped would spin: this pins the boundary by using more rows than a
+// single batch holds.
+func TestPruneMatchCountsBatches(t *testing.T) {
+	t.Parallel()
+	store, db := openStore(t)
+	ctx := t.Context()
+
+	const overOneBatch = 1001
+	old := time.Now().UTC().AddDate(0, 0, -40).Format(time.DateOnly)
+	values := make([]string, 0, overOneBatch)
+	args := make([]any, 0, overOneBatch*2)
+	for i := range overOneBatch {
+		values = append(values, "(?, ?, ?, 1)")
+		args = append(args, fmt.Sprintf("rule-%04d", i), "host-a", old)
+	}
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO detection_rule_match_counts (rule_id, host_id, day, match_count) VALUES `+strings.Join(values, ", "), args...)
+	require.NoError(t, err)
+	require.Equal(t, overOneBatch, countRows(ctx, t, db))
+
+	deleted, err := store.PruneMatchCounts(ctx, 30)
+	require.NoError(t, err)
+	assert.Equal(t, int64(overOneBatch), deleted, "the sweep continues past the first batch rather than stopping at its bound")
+	assert.Zero(t, countRows(ctx, t, db))
 }
 
 // countRows reports how many counter rows exist, which several assertions compare before and after.
