@@ -1153,11 +1153,21 @@ export interface RuleMatchCount {
 //
 // matches/hosts allow 0 rather than requiring 1. The store only aggregates rows that exist, so 0 should not occur, but rejecting it
 // would be this function inventing a rule the server does not promise.
+//
+// last_seen is checked for PARSEABILITY, not merely for being a string. The server always sets it (a NOT NULL column, always
+// marshalled), so recency is present in every well-formed row; an unparseable one would render the cell with its recency silently
+// missing while the column still looked available, and the reader has no way to tell that from a rule that legitimately has none,
+// because no such rule exists. Losing one of the three promotion signals without saying so is the same silent degradation the
+// unavailable state exists to make visible.
+//
+// Date.parse rather than an RFC 3339 regex: Go marshals time.Time with nanosecond precision and a Z offset, which Date.parse
+// handles, and a hand-rolled pattern here would more likely reject valid server output than catch a real fault.
 function isRuleMatchCount(row: unknown): row is RuleMatchCount {
   if (typeof row !== "object" || row === null) return false;
   const r = row as Record<string, unknown>;
   const whole = (v: unknown): boolean => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
-  return typeof r.rule_id === "string" && r.rule_id !== "" && whole(r.matches) && whole(r.hosts) && typeof r.last_seen === "string";
+  const when = (v: unknown): boolean => typeof v === "string" && !Number.isNaN(Date.parse(v));
+  return typeof r.rule_id === "string" && r.rule_id !== "" && whole(r.matches) && whole(r.hosts) && when(r.last_seen);
 }
 
 // listDetectionRuleMatchCounts reads the per-rule monitor-match counts. The response states the window it actually covers, which

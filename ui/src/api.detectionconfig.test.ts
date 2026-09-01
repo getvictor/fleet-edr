@@ -39,6 +39,9 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+// A timestamp the validator accepts, so a malformed-row case fails for its own reason rather than for its placeholder.
+const GOOD_TS = "2026-09-01T00:00:00Z";
+
 describe("detection-config API client", () => {
   it("listDetectionExclusions unwraps the envelope", async () => {
     const mock = stubFetch({
@@ -121,15 +124,23 @@ describe("detection-config API client", () => {
     ["days is zero", { match_counts: [], days: 0 }],
     ["days is negative", { match_counts: [], days: -3 }],
     ["days is fractional", { match_counts: [], days: 1.5 }],
+    // Each row is malformed in exactly ONE way, with every other field valid. A shared bad placeholder (last_seen: "x") made the
+    // timestamp check reject these rows before the count check ran, so breaking the count guard changed nothing and the mutant
+    // survived. A fixture that fails for the wrong reason tests the wrong guard.
+    //
     // Row shapes. The first is the dangerous one: without a rule_id the caller keys the row under `undefined`, so every real rule
     // falls through to "not recorded" and the whole table reads as a quiet fleet, which is misleading evidence rather than a crash.
     ["a row with no rule_id", { match_counts: [{ matches: 1, hosts: 1, last_seen: "2026-09-01T00:00:00Z" }], days: 7 }],
-    ["a row with an empty rule_id", { match_counts: [{ rule_id: "", matches: 1, hosts: 1, last_seen: "x" }], days: 7 }],
-    ["a row missing matches", { match_counts: [{ rule_id: "r", hosts: 1, last_seen: "x" }], days: 7 }],
-    ["a row missing hosts", { match_counts: [{ rule_id: "r", matches: 1, last_seen: "x" }], days: 7 }],
+    ["a row with an empty rule_id", { match_counts: [{ rule_id: "", matches: 1, hosts: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing matches", { match_counts: [{ rule_id: "r", hosts: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row missing hosts", { match_counts: [{ rule_id: "r", matches: 1, last_seen: GOOD_TS }], days: 7 }],
     ["a row missing last_seen", { match_counts: [{ rule_id: "r", matches: 1, hosts: 1 }], days: 7 }],
-    ["a row with a negative count", { match_counts: [{ rule_id: "r", matches: -1, hosts: 1, last_seen: "x" }], days: 7 }],
-    ["a row with a fractional count", { match_counts: [{ rule_id: "r", matches: 1.5, hosts: 1, last_seen: "x" }], days: 7 }],
+    // A complete row whose timestamp is not a date. Accepted as a string it would render the cell with recency silently absent,
+    // which no well-formed response can produce, so the reader could not tell it from a rule that has none.
+    ["a row whose last_seen is unparseable", { match_counts: [{ rule_id: "r", matches: 1, hosts: 1, last_seen: "not-a-date" }], days: 7 }],
+    ["a row whose last_seen is empty", { match_counts: [{ rule_id: "r", matches: 1, hosts: 1, last_seen: "" }], days: 7 }],
+    ["a row with a negative count", { match_counts: [{ rule_id: "r", matches: -1, hosts: 1, last_seen: GOOD_TS }], days: 7 }],
+    ["a row with a fractional count", { match_counts: [{ rule_id: "r", matches: 1.5, hosts: 1, last_seen: GOOD_TS }], days: 7 }],
     ["a row that is not an object", { match_counts: ["nope"], days: 7 }],
     ["a row that is null", { match_counts: [null], days: 7 }],
     ["an empty row", { match_counts: [{}], days: 7 }],

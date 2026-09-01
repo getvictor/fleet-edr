@@ -861,20 +861,6 @@ describe("DetectionConfig observed column", () => {
     });
   });
 
-  // An unparseable timestamp renders nothing rather than "Invalid Date", and must not take the count down with it.
-  it("still shows the count when last_seen is unparseable", async () => {
-    stubReads({
-      rules: [makeRuleEntry()],
-      matchCounts: [{ rule_id: "suspicious_exec", matches: 5, hosts: 1, last_seen: "not-a-date" }],
-    });
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText(/on 1 host$/)).toBeInTheDocument();
-    });
-    expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
-  });
-
   // Large counts abbreviate, because scanning this column is about telling tens from thousands.
   it("abbreviates counts in the tens of thousands", async () => {
     stubReads({
