@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 
@@ -117,7 +118,7 @@ func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
 	// References last, mirroring the rule page's ordering. Present here and not only in the UI because RuleDetail's own doc
 	// promises this markdown is generated from the same Doc() definitions and therefore stays aligned with it; adding a section
 	// to one surface and not the other is exactly the drift that promise exists to prevent (issue #765, caught by Copilot).
-	writeRuleBulletSection(b, "References", r.Doc.References)
+	writeRuleReferences(b, r.Doc.References)
 }
 
 func writeRuleHeading(b *strings.Builder, id string, d rulesapi.Documentation) {
@@ -168,6 +169,61 @@ func writeRuleBulletSection(b *strings.Builder, heading string, items []string) 
 		fmt.Fprintf(b, "- %s\n", it)
 	}
 	b.WriteString("\n")
+}
+
+// writeRuleReferences renders a rule's citations, and does NOT reuse writeRuleBulletSection because these are the only strings in
+// this document that this project did not write.
+//
+// A reference is copied verbatim out of a vendored upstream file, so a value like `[citation](//attacker.example)` is markdown, not
+// text: emitted into a raw bullet it renders as a working link that an operator has every reason to trust, and an embedded newline
+// restructures the document around it. The UI already enforces the policy that only an http(s) URL becomes followable (see
+// ui/src/urls.ts); this is the same policy on the surface that had none. Found by Qodo on #824.
+func writeRuleReferences(b *strings.Builder, refs []string) {
+	if len(refs) == 0 {
+		return
+	}
+	b.WriteString("### References\n\n")
+	for _, ref := range refs {
+		fmt.Fprintf(b, "- %s\n", mdReference(ref))
+	}
+	b.WriteString("\n")
+}
+
+// mdReference renders one citation: a bare autolink when it is an absolute http(s) URL, an inert code span otherwise.
+//
+// A code span rather than backslash-escaping, because escaping means enumerating every construct a markdown dialect might honour
+// and being wrong once is enough. Inside a span the only character with meaning is the backtick, so the fence is grown past the
+// longest run in the value and the content cannot escape it.
+func mdReference(ref string) string {
+	ref = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(strings.TrimSpace(ref))
+	if u, err := url.Parse(ref); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return ref
+	}
+	if ref == "" {
+		return "``"
+	}
+	fence := strings.Repeat("`", longestBacktickRun(ref)+1)
+	// Padding only when the content touches the fence. A span whose content starts or ends with a backtick needs the spaces (the
+	// renderer strips them back off); adding them unconditionally would put visible padding inside every ordinary citation.
+	if strings.HasPrefix(ref, "`") || strings.HasSuffix(ref, "`") {
+		return fence + " " + ref + " " + fence
+	}
+	return fence + ref + fence
+}
+
+// longestBacktickRun reports the length of the longest consecutive backtick sequence in s, which is what a code-span fence has to
+// exceed to contain it.
+func longestBacktickRun(s string) int {
+	best, run := 0, 0
+	for _, c := range s {
+		if c == '`' {
+			run++
+			best = max(best, run)
+			continue
+		}
+		run = 0
+	}
+	return best
 }
 
 // mdCell escapes a string for safe insertion into a markdown table cell. Pipes have to be backslash-escaped or they end the column;

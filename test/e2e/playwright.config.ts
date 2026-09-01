@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { assertLaneEnv } from "./fixtures/db";
 
 // Playwright config for the EDR's E2E suite.
 //
@@ -17,6 +18,10 @@ import { defineConfig, devices } from "@playwright/test";
 // on 8089, and a hardcoded 8088 there either drives the OTHER lane's server or races its port bind, so the suite was simply not
 // runnable from lane B. E2E_PORT=8089 points it at the lane the developer is actually in.
 const PORT = Number(process.env.E2E_PORT ?? 8088);
+
+// Checked here as well as in fixtures/db.ts so a half-configured lane fails before Playwright boots a server or a browser, rather
+// than at the first test that happens to touch the database.
+assertLaneEnv();
 
 export default defineConfig({
   testDir: "./tests",

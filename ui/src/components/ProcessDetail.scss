@@ -141,7 +141,7 @@
   }
 
   // Rule attribution on a related-alert reference. Muted and small: the credit has to be visible, but this list is a set of
-  // pointers to alerts rather than the alerts themselves, so it must not out-weigh the titles it sits under.
+  // pointers to alerts rather than the alerts themselves, so it must not outweigh the titles it sits under.
   &__alert-origin {
     color: $ui-fleet-black-50;
     font-size: $xx-small;

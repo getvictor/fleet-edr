@@ -1504,7 +1504,7 @@ Once a connection has been started, an investigator can verify the connection de
 
 ### References
 
-- Internal Research
+- `Internal Research`
 
 ## proc_creation_macos_remote_system_discovery
 
