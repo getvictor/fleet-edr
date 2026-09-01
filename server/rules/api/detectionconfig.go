@@ -244,6 +244,57 @@ func DefaultModeOf(r Rule) DetectionRuleMode {
 	return defaulter.DefaultMode()
 }
 
+// RuleModeSource says where a resolved mode came from: the rule's own declaration, or a setting an operator created.
+//
+// It is reported alongside the mode because the two answer different questions and an operator needs both. "This rule is in monitor"
+// does not say whether that is the state it shipped in or a state someone chose, and those call for opposite actions: the first is a
+// rule waiting to be reviewed, the second is a decision already taken that somebody may want to revisit.
+type RuleModeSource string
+
+const (
+	RuleModeSourceDefault RuleModeSource = "default"
+	RuleModeSourceSetting RuleModeSource = "setting"
+)
+
+// GlobalRuleMode is a rule's mode at global scope together with where that mode came from.
+type GlobalRuleMode struct {
+	Mode   DetectionRuleMode
+	Source RuleModeSource
+}
+
+// GlobalRuleModeResolver is the narrow read surface the catalog listing consults to report the mode a rule actually runs in, rather
+// than only the mode it declares. It exists because the spec requires a rule whose global mode is `disabled` to stay listed by
+// GET /api/rules "with its mode indicated", and DefaultMode is the rule's own declaration, which a setting overrides.
+//
+// Global scope is the whole question here, and it is what a catalog listing can answer: the listing names no host, so a per-host
+// mode is a question it cannot ask. An implementation MUST resolve it by selecting globally scoped settings directly, NOT by asking
+// a per-host resolver about an empty host id. That shortcut reads as equivalent, since no host belongs to a group, but it routes
+// the answer through whatever decides group membership, which is free to admit a host id it has never seen: a permissive one would
+// let a group-scoped setting decide a question that is supposed to be global.
+//
+// Separate from RuleModeResolver rather than a third return value on it. The mode and its source must come from ONE resolution for
+// the same reason ResolveRuleMode returns the mode and the severity override together: two calls can straddle a config reload and
+// report a mode from one snapshot with a source from another, which is a listing that contradicts itself. Widening the engine's
+// interface to carry a field the engine does not read would put that cost on the hot path to serve a listing.
+type GlobalRuleModeResolver interface {
+	// GlobalRuleMode returns the globally resolved mode for ruleID and whether a setting or the rule's own default produced it.
+	//
+	// ruleDefault is the mode to apply when no setting applies, taken from the rule itself (DefaultModeOf), for the same reason
+	// ResolveRuleMode takes it: the fallback lives in one place and a caller cannot forget to apply it.
+	GlobalRuleMode(ruleID string, ruleDefault DetectionRuleMode) GlobalRuleMode
+}
+
+// GlobalRuleModeOf resolves ruleID's global mode through r, or reports the rule's own default when there is no resolver.
+//
+// A nil resolver is the docs-generator path, which renders rule documentation with no database behind it. Reporting the declared
+// default there is right rather than merely safe: with no configuration to read, the rule's own declaration IS the mode it runs in.
+func GlobalRuleModeOf(r GlobalRuleModeResolver, ruleID string, ruleDefault DetectionRuleMode) GlobalRuleMode {
+	if r == nil {
+		return GlobalRuleMode{Mode: ruleDefault, Source: RuleModeSourceDefault}
+	}
+	return r.GlobalRuleMode(ruleID, ruleDefault)
+}
+
 // RuleModeResolver is the narrow read surface the engine consults to route a finding by the resolved per-host mode and apply a
 // severity override. A nil resolver leaves every rule at its own declared default (see ModeDefaulter) with no override, which is
 // "every rule alerts" for a rule that declares nothing and therefore was the whole story before defaults existed.

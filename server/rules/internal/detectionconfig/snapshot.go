@@ -31,8 +31,9 @@ type settingEntry struct {
 	severity    string
 }
 
-// Snapshot is an immutable in-memory view of the detection configuration at a given version. It satisfies api.ExclusionResolver and
-// api.RuleModeResolver. Construct it with NewSnapshot; never mutate after construction (it is read concurrently by rule evaluation).
+// Snapshot is an immutable in-memory view of the detection configuration at a given version. It satisfies api.ExclusionResolver,
+// api.RuleModeResolver (the engine's per-host resolution) and api.GlobalRuleModeResolver (the catalog listing's global one).
+// Construct it with NewSnapshot; never mutate after construction (it is read concurrently by rule evaluation).
 type Snapshot struct {
 	version    int64
 	exclusions map[exclKey][]exclEntry
@@ -42,8 +43,9 @@ type Snapshot struct {
 }
 
 var (
-	_ api.ExclusionResolver = (*Snapshot)(nil)
-	_ api.RuleModeResolver  = (*Snapshot)(nil)
+	_ api.ExclusionResolver      = (*Snapshot)(nil)
+	_ api.RuleModeResolver       = (*Snapshot)(nil)
+	_ api.GlobalRuleModeResolver = (*Snapshot)(nil)
 )
 
 // NewSnapshot builds a snapshot from already-loaded rows. The store calls it; tests call it directly to exercise resolution without a
@@ -125,15 +127,45 @@ func (s *Snapshot) matchAny(ruleID string, matchType api.ExclusionMatchType, val
 // rule whose author declared monitor and promote it on the strength of a value we could not read, which is the one outcome the
 // declared default exists to prevent. The severity override is still honoured, because it is legible even when the mode is not.
 func (s *Snapshot) ResolveRuleMode(ruleID, hostID string, ruleDefault api.DetectionRuleMode) (api.DetectionRuleMode, string) {
+	mode, severity, _ := s.resolveMode(ruleID, hostID, ruleDefault)
+	return mode, severity
+}
+
+// GlobalRuleMode implements api.GlobalRuleModeResolver: the mode ruleID runs in at global scope, and whether a setting or the rule's
+// own declaration produced it.
+//
+// Global because it selects on the scope itself (see winningGlobal), not because of anything about the host argument it does not
+// take. Resolving it as "the per-host answer for an empty host" would read as equivalent and is not: that path consults the
+// membership function, which is supplied by the caller and free to admit a host id it has never seen.
+//
+// A setting whose stored mode this build cannot interpret reports source `default`, because that is where the mode being reported
+// came from. Calling it `setting` would tell an operator the mode they are looking at is one they chose, when it is the fallback
+// standing in for a value we could not read.
+func (s *Snapshot) GlobalRuleMode(ruleID string, ruleDefault api.DetectionRuleMode) api.GlobalRuleMode {
+	w, ok := s.winningGlobal(ruleID)
+	mode, _, source := applySetting(w, ok, ruleDefault)
+	return api.GlobalRuleMode{Mode: mode, Source: source}
+}
+
+// resolveMode resolves the mode for a HOST and reports where it came from.
+func (s *Snapshot) resolveMode(
+	ruleID, hostID string, ruleDefault api.DetectionRuleMode,
+) (api.DetectionRuleMode, string, api.RuleModeSource) {
 	w, ok := s.winning(ruleID, hostID)
+	return applySetting(w, ok, ruleDefault)
+}
+
+// applySetting is the one place the setting-versus-default fallback lives, so a per-host resolution and a global one cannot answer
+// the same question differently. It reports the winning severity override alongside, since a setting carries one even when its mode
+// is unreadable, and the source, since a caller reporting the mode to an operator has to say which of the two produced it.
+func applySetting(w settingEntry, ok bool, ruleDefault api.DetectionRuleMode) (api.DetectionRuleMode, string, api.RuleModeSource) {
 	if !ok {
-		return ruleDefault, ""
+		return ruleDefault, "", api.RuleModeSourceDefault
 	}
-	mode := w.mode
-	if !api.IsValidDetectionRuleMode(mode) {
-		mode = ruleDefault
+	if !api.IsValidDetectionRuleMode(w.mode) {
+		return ruleDefault, w.severity, api.RuleModeSourceDefault
 	}
-	return mode, w.severity
+	return w.mode, w.severity, api.RuleModeSourceSetting
 }
 
 // Mode reports the resolved mode for (ruleID, hostID) against a rule that declares no default. Retained for direct snapshot unit
@@ -165,6 +197,23 @@ func (s *Snapshot) winning(ruleID, hostID string) (settingEntry, bool) {
 		}
 	}
 	return best, found
+}
+
+// winningGlobal returns the globally scoped setting for ruleID, ignoring every group-scoped one.
+//
+// Written as its own walk rather than winning(ruleID, "") on the reasoning that no host belongs to a group. That reasoning routes
+// the answer through the membership function, which is supplied by the caller and free to say anything about a host id it has
+// never seen: a membership that admits an unknown host to a group would let a group-scoped setting decide a question that is
+// supposed to be global. Selecting on the scope itself makes it global by construction instead of by trusting a collaborator.
+//
+// The global entry is unique per rule (uk_detection_rule_settings_rule_scope), so the first match is the only one.
+func (s *Snapshot) winningGlobal(ruleID string) (settingEntry, bool) {
+	for _, e := range s.settings[ruleID] {
+		if e.hostGroupID == api.GlobalScope {
+			return e, true
+		}
+	}
+	return settingEntry{}, false
 }
 
 // moreSpecific reports whether candidate outranks current: any group scope beats global; between two group scopes the smaller id wins.

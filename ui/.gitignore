@@ -1,0 +1,3 @@
+
+# Playwright writes here when a run is invoked from ui/ rather than test/e2e/; generated, machine-specific.
+test-results/

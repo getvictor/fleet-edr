@@ -234,6 +234,15 @@ type RuleMetadata struct {
 	// be distinguishable from one that does without reading the source: the rule-settings surface lists only settings an operator
 	// created, so a rule left at its own default appears nowhere on it.
 	DefaultMode DetectionRuleMode
+	// Mode is the mode the rule actually runs in at global scope: the globally scoped setting when one applies, DefaultMode
+	// otherwise. This is the field that answers "what is this rule doing"; DefaultMode answers "what was it written to do".
+	Mode DetectionRuleMode
+	// ModeSource says which of the two produced Mode, and it is the ONLY thing that says so. Comparing Mode to DefaultMode does not:
+	// an operator can set a rule to the mode it already declared, which is what putting a promoted rule back in monitor does, and
+	// the two fields are then equal with the mode nonetheless chosen by a person. A reader needs the distinction because a rule
+	// sitting in monitor because that is how it shipped is waiting to be reviewed, while one an operator moved there is a decision
+	// already taken.
+	ModeSource RuleModeSource
 }
 
 // Documentation is the structured per-rule descriptor consumed by the

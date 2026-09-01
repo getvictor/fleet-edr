@@ -119,7 +119,7 @@ func (e *Engine) reindex() {
 // LoadActive replaces the engine's active rule set with what the
 // rules.api.RuleProvider reports as active. Replace-semantics
 // (rather than append) so a future hot-reload caller can invoke this
-// repeatedly without Catalog() and Evaluate() seeing duplicates.
+// repeatedly without Evaluate() seeing duplicates.
 //
 // Accepts an inline interface so detection/internal/engine doesn't
 // have to import rules/bootstrap; the rules.api.RuleProvider
@@ -127,29 +127,6 @@ func (e *Engine) reindex() {
 func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 	e.rules = append(e.rules[:0], cs.ActiveRules()...)
 	e.reindex()
-}
-
-// Catalog returns the metadata for every registered rule. Order matches registration order so callers can render deterministic output.
-// Production main.go now goes through rules.api.Lister instead of this method, but the method stays so existing engine tests keep
-// compiling.
-func (e *Engine) Catalog() []rulesapi.RuleMetadata {
-	out := make([]rulesapi.RuleMetadata, 0, len(e.rules))
-	for _, r := range e.rules {
-		out = append(out, rulesapi.RuleMetadata{
-			ID:         r.ID(),
-			Techniques: r.Techniques(),
-			Doc:        r.Doc(),
-			Platforms:  r.Platforms(),
-			// Populated here as well as in the rules service, unlike Algorithm and SupportedExclusionMatchTypes, because this
-			// field's contract is that it always holds a mode. Those two document themselves as empty when absent, so omitting
-			// them keeps their contract; omitting this one would break its.
-			DefaultMode: rulesapi.DefaultModeOf(r),
-			// Same reason as DefaultMode above: the field's contract is that an empty origin means this project wrote the rule,
-			// so a builder that never populates it would report every vendored rule as ours.
-			Origin: rulesapi.OriginOf(r),
-		})
-	}
-	return out
 }
 
 // Evaluate runs the rules that consume the batch's event types against it, per rulesFor: a rule is invoked only when the batch

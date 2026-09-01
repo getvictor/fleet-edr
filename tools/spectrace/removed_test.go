@@ -30,8 +30,7 @@ The server SHALL issue self-validating tokens.
 ### Requirement: Host tokens are stored and verified with a fast keyed hash
 **Reason**: Superseded by self-validating signed tokens.
 `)
-		keys, err := parseRemovedRequirementKeys(changes)
-		require.NoError(t, err)
+		keys := mustParseDeltas(t, changes).removedRequirements
 		assert.Contains(t, keys, "agent-enrollment/host-tokens-are-stored-and-verified-with-a-fast-keyed-hash")
 		assert.NotContains(t, keys, "agent-enrollment/tokens-are-self-validating", "ADDED requirements are not exemptions")
 		assert.Len(t, keys, 1)
@@ -45,8 +44,7 @@ The server SHALL issue self-validating tokens.
 ### Requirement: Should not be exempted
 **Reason**: this lives under a non-canonical REMOVED heading.
 `)
-		keys, err := parseRemovedRequirementKeys(changes)
-		require.NoError(t, err)
+		keys := mustParseDeltas(t, changes).removedRequirements
 		assert.Empty(t, keys, "only the exact '## REMOVED Requirements' heading drives exemptions")
 	})
 
@@ -62,8 +60,7 @@ The server SHALL issue self-validating tokens.
 ### Requirement: Misplaced removal
 **Reason**: not under specs/.
 `), 0o600))
-		keys, err := parseRemovedRequirementKeys(changes)
-		require.NoError(t, err)
+		keys := mustParseDeltas(t, changes).removedRequirements
 		assert.Empty(t, keys, "only spec.md under <change>/specs/<capability>/ is parsed")
 	})
 
@@ -77,19 +74,16 @@ The server SHALL issue self-validating tokens.
 ### Requirement: Old retired thing
 **Reason**: gone.
 `), 0o600))
-		keys, err := parseRemovedRequirementKeys(changes)
-		require.NoError(t, err)
+		keys := mustParseDeltas(t, changes).removedRequirements
 		assert.Empty(t, keys, "archived REMOVED requirements are already gone from live specs")
 	})
 
 	t.Run("missing or empty changes dir yields an empty set", func(t *testing.T) {
 		t.Parallel()
-		keys, err := parseRemovedRequirementKeys(filepath.Join(t.TempDir(), "nope"))
-		require.NoError(t, err)
+		keys := mustParseDeltas(t, filepath.Join(t.TempDir(), "nope")).removedRequirements
 		assert.Empty(t, keys)
 
-		keys, err = parseRemovedRequirementKeys("")
-		require.NoError(t, err)
+		keys = mustParseDeltas(t, "").removedRequirements
 		assert.Empty(t, keys)
 	})
 }

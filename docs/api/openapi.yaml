@@ -1225,7 +1225,7 @@ components:
 
     RuleDocEntry:
       type: object
-      required: [id, techniques, doc, default_mode]
+      required: [id, techniques, doc, default_mode, mode, mode_source]
       properties:
         id:
           type: string
@@ -1243,6 +1243,27 @@ components:
             `PUT /api/v1/detection-config/rule-settings` overrides it, and those settings are
             listed separately at `GET /api/v1/detection-config/rule-settings`.
           example: alert
+        mode:
+          type: string
+          enum: [alert, monitor, disabled]
+          description: |
+            The mode the rule RUNS IN at global scope: the globally scoped setting when one
+            applies, `default_mode` otherwise. This is the field that answers "what is this rule
+            doing"; `default_mode` answers "what was it written to do". A rule an operator has
+            disabled stays listed here with `mode` `disabled` rather than disappearing from the
+            catalog. Global scope because this response names no host, and a per-host mode
+            depends on one.
+          example: monitor
+        mode_source:
+          type: string
+          enum: [default, setting]
+          description: |
+            Which of the two produced `mode`: `setting` when an operator's globally scoped
+            setting applies, `default` otherwise. Without it a reader cannot tell a rule that
+            shipped in monitor from one an operator moved there, and those call for opposite
+            follow-ups. A stored setting whose mode this server cannot interpret reports
+            `default`, because the default is where the reported mode came from.
+          example: default
         origin:
           type: string
           description: |

@@ -126,19 +126,37 @@ func runCheck(args []string) int {
 		return exitCode
 	}
 
-	// Exempt canonical scenarios whose parent requirement an in-flight change marks `## REMOVED`. Archiving is batched at
-	// release time (docs/release-checklist.md), so a merged removal lives in openspec/changes until the release; for that
-	// window the requirement is still in openspec/specs but its code+tests are gone. Dropping these scenarios from the gate
-	// set (after referenceValid is built, so a stray leftover marker still validates rather than hard-failing) keeps
-	// `--strict` honest without forcing per-merge archiving. referenceValid is intentionally left intact.
-	removedReqKeys, err := parseRemovedRequirementKeys(*changesDir)
+	// Both exemptions come from one pass over the in-flight change deltas. Archiving is batched at release time
+	// (docs/release-checklist.md), so a merged change lives in openspec/changes until the release; for that whole window the
+	// canonical tree still describes the behaviour the change replaced.
+	//
+	// `## REMOVED Requirements` covers a change that retires a requirement outright: its code and tests are gone, but the
+	// requirement only leaves openspec/specs at the archive. A `## MODIFIED Requirements` restatement covers the same thing one
+	// level down, for a change that keeps a requirement and retires one of its SCENARIOS. Without the second, the only ways past
+	// `--strict` were to leave a test asserting the behaviour the change reverses, which is the "reads as covered but is not"
+	// failure issue #810 was filed about, or to retire and re-add the whole requirement to reach the first.
+	//
+	// Both drop scenarios from the gate set AFTER referenceValid is built, so a stray leftover marker still validates rather than
+	// hard-failing. referenceValid is intentionally left intact.
+	deltas, err := parseDeltaSections(*changesDir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "spectrace: parse removed requirements:", err)
+		fmt.Fprintln(os.Stderr, "spectrace: parse change deltas:", err)
 		return 2
 	}
-	if kept := filterOutRemovedRequirements(scenarios, removedReqKeys); len(kept) != len(scenarios) {
+
+	if kept := filterOutRemovedRequirements(scenarios, deltas.removedRequirements); len(kept) != len(scenarios) {
 		fmt.Printf("spectrace: %d canonical scenarios exempted (parent requirement marked REMOVED in an in-flight change)\n",
 			len(scenarios)-len(kept))
+		scenarios = kept
+	}
+
+	kept, retired := filterOutRetiredScenarios(scenarios, deltas.restatedScenarios())
+	if len(retired) > 0 {
+		fmt.Printf("spectrace: %d canonical scenarios exempted (retired by a MODIFIED requirement in an in-flight change):\n",
+			len(retired))
+		for _, id := range retired {
+			fmt.Printf("  %s\n", id)
+		}
 		scenarios = kept
 	}
 
@@ -182,23 +200,6 @@ func runCheck(args []string) int {
 	default:
 		return 0
 	}
-}
-
-// filterOutRemovedRequirements drops scenarios whose parent requirement an in-flight change marks `## REMOVED`. The match key
-// is SpecDir + "/" + slugify(Requirement), the same prefix parseSpec builds into each scenario ID, so it lines up with the
-// keys parseRemovedRequirementKeys collects from the change deltas. Returns the input unchanged when there are no removals.
-func filterOutRemovedRequirements(scenarios []Scenario, removedReqKeys map[string]struct{}) []Scenario {
-	if len(removedReqKeys) == 0 {
-		return scenarios
-	}
-	out := make([]Scenario, 0, len(scenarios))
-	for _, s := range scenarios {
-		if _, ok := removedReqKeys[s.SpecDir+"/"+slugify(s.Requirement)]; ok {
-			continue
-		}
-		out = append(out, s)
-	}
-	return out
 }
 
 // filterByIDSet keeps only scenarios whose ID is in the set. Used by --new-code to scope the gate to scenarios touched

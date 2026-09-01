@@ -47,12 +47,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const mockDocs = (entries: RuleDocEntry[]) =>
-  vi.mocked(api.fetchRuleDocs).mockResolvedValue(entries);
+const mockDocs = (entries: RuleDocEntry[]) => vi.mocked(api.fetchRuleDocs).mockResolvedValue(entries);
 
 describe("RuleDetail loading and error states", () => {
   it("shows the loading state before the docs resolve", () => {
-    vi.mocked(api.fetchRuleDocs).mockReturnValue(new Promise<RuleDocEntry[]>(() => { /* never resolves */ }));
+    vi.mocked(api.fetchRuleDocs).mockReturnValue(
+      new Promise<RuleDocEntry[]>(() => {
+        /* never resolves */
+      }),
+    );
     renderAt("suspicious_exec");
     expect(screen.getByText(/loading rule documentation/i)).toBeInTheDocument();
   });
@@ -139,38 +142,90 @@ describe("RuleDetail monitor mode and attribution", () => {
   // A monitor-mode rule records matches and raises nothing until promoted (issue #764). Severity alone reads as a promise the rule
   // does not make: "high" on a rule that never alerts is the most misleading pair on this page, so the mode has to appear beside it.
   it("says a monitor-mode rule raises no alert, next to its severity", async () => {
-    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor" })]);
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
     renderAt("vendored");
 
     expect(await screen.findByText(/Monitor/)).toBeInTheDocument();
-    expect(screen.getByText(/By default this rule records matches without raising an alert/)).toBeInTheDocument();
-    expect(screen.getByText(/not the mode in force for a given host/)).toBeInTheDocument();
+    expect(screen.getByText(/records what it would have fired on and raises no alert/)).toBeInTheDocument();
+    expect(screen.getByText(/This is the mode the rule declares/)).toBeInTheDocument();
+    expect(screen.getByText(/Resolved at global scope/)).toBeInTheDocument();
+  });
+
+  // spec:web-ui/detection-configuration-admin-views/the-rule-detail-view-reports-the-mode-a-rule-runs-in
+  //
+  // The mode a rule RUNS IN is the question this page has to answer, and it is not always the mode the rule declares. A rule that
+  // ships in monitor and that an operator has disabled reads as monitor if the page reports the declaration, which is the mode it
+  // is not in. Reporting the source alongside is what separates the two cases the operator would act on differently.
+  it("reports the mode a setting put the rule in, not the one it declares", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "disabled", mode_source: "setting" })]);
+    renderAt("vendored");
+
+    expect(await screen.findByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText(/This rule is off and produces nothing/)).toBeInTheDocument();
+    expect(screen.getByText(/An operator set this through the detection-config surface/)).toBeInTheDocument();
+  });
+
+  // A rule that alerts BECAUSE someone promoted it is worth a row, even though a rule that simply alerts is not: the reader would
+  // otherwise have no way to tell that the catalog ships this rule in monitor and that alerting is a decision someone took.
+  it("shows the row for a promoted rule, which alerts only because an operator said so", async () => {
+    mockDocs([makeEntry({ id: "promoted", default_mode: "monitor", mode: "alert", mode_source: "setting" })]);
+    renderAt("promoted");
+
+    expect(await screen.findByText("Alert")).toBeInTheDocument();
+    expect(screen.getByText(/This rule raises alerts as normal/)).toBeInTheDocument();
+    expect(screen.getByText(/An operator set this through the detection-config surface/)).toBeInTheDocument();
   });
 
   // The absence of the row is the point for an alerting rule: adding "Mode: Alert" to every rule that behaves normally is noise,
   // and an older server that omits the field must keep its previous appearance rather than claiming anything new.
   it("says nothing about mode for a rule that alerts, or for a server that omits the field", async () => {
-    mockDocs([makeEntry({ id: "alerting", default_mode: "alert" })]);
+    mockDocs([makeEntry({ id: "alerting", default_mode: "alert", mode: "alert", mode_source: "default" })]);
     const { unmount } = renderAt("alerting");
     expect(await screen.findByText("Severity")).toBeInTheDocument();
-    expect(screen.queryByText(/By default this rule records matches/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Mode")).not.toBeInTheDocument();
     unmount();
 
     mockDocs([makeEntry({ id: "legacy" })]);
     renderAt("legacy");
     expect(await screen.findByText("Severity")).toBeInTheDocument();
-    expect(screen.queryByText(/By default this rule records matches/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Mode")).not.toBeInTheDocument();
   });
 
   // Disabled is the other non-alerting default ModeDefaulter permits. Keying the row on "monitor" alone left a disabled-default
   // rule looking exactly like an alerting one, which is the case the requirement is about: distinguish every rule that does not
   // alert, not just the mode this PR happens to ship.
   it("distinguishes a disabled default too, not only monitor", async () => {
-    mockDocs([makeEntry({ id: "off", default_mode: "disabled" })]);
+    mockDocs([makeEntry({ id: "off", default_mode: "disabled", mode: "disabled", mode_source: "default" })]);
     renderAt("off");
 
     expect(await screen.findByText("Disabled")).toBeInTheDocument();
-    expect(screen.getByText(/this rule is off and produces nothing/)).toBeInTheDocument();
+    expect(screen.getByText(/This rule is off and produces nothing/)).toBeInTheDocument();
+  });
+
+  // A server that omits `mode` has not said "no configuration applies"; it has failed to answer. During a rolling deploy an older
+  // replica can report default_mode monitor for a rule whose global setting is disabled, so presenting the declaration as the mode
+  // in force would state the opposite of the truth. The row reports the declaration AS the declaration and says the server did not
+  // report the mode in force.
+  it("labels the declaration as a declaration when the server reports no resolved mode", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor" })]);
+    renderAt("vendored");
+
+    expect(await screen.findByText("Default mode")).toBeInTheDocument();
+    expect(screen.getByText(/This server does not report the mode in force/)).toBeInTheDocument();
+    expect(screen.queryByText("Mode")).not.toBeInTheDocument();
+    // Saying "resolved at global scope" one sentence after "does not report the mode in force" contradicts itself.
+    expect(screen.queryByText(/Resolved at global scope/)).not.toBeInTheDocument();
+  });
+
+  // `mode_source: default` means the reported MODE came from the rule's declaration. It does not mean no setting exists: a setting
+  // whose stored mode this server cannot interpret also reports `default`, and can still carry an active severity override, so
+  // claiming "no operator setting applies" would be a claim the field does not support.
+  it("attributes a default-sourced mode to the rule without claiming no setting exists", async () => {
+    mockDocs([makeEntry({ id: "vendored", default_mode: "monitor", mode: "monitor", mode_source: "default" })]);
+    renderAt("vendored");
+
+    expect(await screen.findByText(/This is the mode the rule declares/)).toBeInTheDocument();
+    expect(screen.queryByText(/no operator setting applies/i)).not.toBeInTheDocument();
   });
 
   // A vendored rule is rendered exactly like one this project wrote, so without this an operator cannot tell whose rule they are

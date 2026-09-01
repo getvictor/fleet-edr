@@ -88,7 +88,7 @@ func New(deps Deps) (*Rules, error) {
 	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
 
 	rules := catalog.New(detectionConfigSvc)
-	svc := service.New(rules, logger)
+	svc := service.New(rules, detectionConfigSvc, logger)
 
 	// Inject the per-rule exclusion-support map (issue #520) built from the live rule set so the create-exclusion API rejects a
 	// (rule_id, match_type) pair no rule consults, and a rule_id that names no registered rule. Single source of truth: each rule's
@@ -222,7 +222,7 @@ func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 // decides what the catalog surfaces contain. A second implementation here would have to repeat that filter, and the two would drift
 // the first time only one was updated, leaving the generated docs describing a different rule set than GET /api/rules.
 func CatalogOnly() api.Lister {
-	return service.New(catalog.New(nil), nil)
+	return service.New(catalog.New(nil), nil, nil)
 }
 
 // PackSharedListsFile names the pack file holding shared list definitions. It is authored rather than generated, so the

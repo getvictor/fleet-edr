@@ -45,7 +45,7 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 // flat test body.
 func TestHandler_ATTACKCoverage_NoRules(t *testing.T) {
 	t.Parallel()
-	svc := service.New([]rulesapi.Rule{}, slog.Default())
+	svc := service.New([]rulesapi.Rule{}, nil, slog.Default())
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -91,7 +91,7 @@ func TestHandler_ATTACKCoverage_NoRules(t *testing.T) {
 // spec:server-detection-rules-engine/durable-detection-configuration-surface/the-rule-catalog-exposes-per-rule-supported-exclusion-match-types
 func TestHandler_ListRules_SupportedExclusionMatchTypes(t *testing.T) {
 	t.Parallel()
-	svc := service.New(catalog.New(nil), slog.Default())
+	svc := service.New(catalog.New(nil), nil, slog.Default())
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -129,7 +129,7 @@ func TestHandler_ListRules_SupportedExclusionMatchTypes(t *testing.T) {
 // current catalog rule targets darwin; the field is always a JSON array (never null) so the UI can iterate without a nil guard.
 func TestHandler_ListRules_Platforms(t *testing.T) {
 	t.Parallel()
-	svc := service.New(catalog.New(nil), slog.Default())
+	svc := service.New(catalog.New(nil), nil, slog.Default())
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -169,7 +169,7 @@ func TestHandler_ListRules_Platforms(t *testing.T) {
 // exists to publish.
 func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	t.Parallel()
-	svc := service.New(catalog.New(nil), slog.Default())
+	svc := service.New(catalog.New(nil), nil, slog.Default())
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -227,7 +227,7 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 // YAML rather than a JSON envelope the caller would have to unwrap before the bytes were useful.
 func TestHandler_ExportRule(t *testing.T) {
 	t.Parallel()
-	svc := service.New(catalog.New(nil), slog.Default())
+	svc := service.New(catalog.New(nil), nil, slog.Default())
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -255,7 +255,7 @@ func TestHandler_ExportRule(t *testing.T) {
 // does not describe (#775).
 func TestHandler_ExportRule_NotFound(t *testing.T) {
 	t.Parallel()
-	svc := service.New(catalog.New(nil), slog.Default())
+	svc := service.New(catalog.New(nil), nil, slog.Default())
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -285,7 +285,7 @@ func TestHandler_ExportRule_NotFound(t *testing.T) {
 // instead, that second description would exist after all, just served rather than committed.
 func TestHandler_ExportRule_VendoredRuleServesTheUpstreamFile(t *testing.T) {
 	t.Parallel()
-	svc := service.New(catalog.New(nil), slog.Default())
+	svc := service.New(catalog.New(nil), nil, slog.Default())
 	h := New(svc, allowAllAuthZ{}, slog.Default())
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -307,4 +307,72 @@ func TestHandler_ExportRule_VendoredRuleServesTheUpstreamFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got), "the exported bytes are the vendored file, not a rendering of it")
 	assert.Contains(t, string(got), "title:", "and it is still the upstream Sigma document")
+}
+
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/an-operator-disables-a-noisy-rule-for-their-environment
+// spec:server-detection-rules-engine/operator-toggling-of-individual-rules/the-catalog-reports-the-mode-a-rule-runs-in-not-only-the-one-it-declares
+//
+// TestHandler_ListRules_ReportsTheModeInForce asserts the requirement clause that a rule an operator has disabled stays listed by
+// GET /api/rules "with its mode indicated".
+//
+// That clause read as covered and was not (issue #810): two tests carried the disable scenario's marker and neither looked at
+// /api/rules, because spectrace gates on a scenario having a marker rather than on the test exercising every clause of it. This
+// asserts the wire field, on the endpoint the clause names.
+func TestHandler_ListRules_ReportsTheModeInForce(t *testing.T) {
+	t.Parallel()
+
+	rules := catalog.New(nil)
+	require.NotEmpty(t, rules)
+	silenced := rules[0].ID()
+
+	svc := service.New(rules, stubGlobalModes{silenced: {
+		Mode: rulesapi.DetectionRuleModeDisabled, Source: rulesapi.RuleModeSourceSetting,
+	}}, slog.Default())
+	h := New(svc, allowAllAuthZ{}, slog.Default())
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/rules", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body struct {
+		Rules []struct {
+			ID          string `json:"id"`
+			Mode        string `json:"mode"`
+			ModeSource  string `json:"mode_source"`
+			DefaultMode string `json:"default_mode"`
+		} `json:"rules"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+
+	var found bool
+	for _, r := range body.Rules {
+		if r.ID != silenced {
+			assert.Equalf(t, "default", r.ModeSource, "rule %q has no setting", r.ID)
+			assert.Equalf(t, r.DefaultMode, r.Mode, "with no setting, rule %q runs in the mode it declares", r.ID)
+			continue
+		}
+		found = true
+		assert.Equal(t, "disabled", r.Mode, "the disabled rule is still listed, marked disabled")
+		assert.Equal(t, "setting", r.ModeSource)
+		assert.NotEqual(t, "disabled", r.DefaultMode,
+			"the declaration is reported alongside, so the two remain distinguishable")
+	}
+	assert.True(t, found, "a disabled rule stays in the catalog rather than being removed from it")
+}
+
+// stubGlobalModes resolves a canned global mode per rule id, and reports the rule's own default for any id it does not name.
+type stubGlobalModes map[string]rulesapi.GlobalRuleMode
+
+func (m stubGlobalModes) GlobalRuleMode(ruleID string, ruleDefault rulesapi.DetectionRuleMode) rulesapi.GlobalRuleMode {
+	if got, ok := m[ruleID]; ok {
+		return got
+	}
+	return rulesapi.GlobalRuleMode{Mode: ruleDefault, Source: rulesapi.RuleModeSourceDefault}
 }
