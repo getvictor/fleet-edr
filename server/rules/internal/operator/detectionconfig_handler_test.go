@@ -397,6 +397,9 @@ func TestDetectionConfigHandler_AuthzDenyIs403(t *testing.T) {
 	for _, ep := range []struct{ method, path, body string }{
 		{http.MethodGet, "/api/v1/detection-config/exclusions", ""},
 		{http.MethodGet, "/api/v1/detection-config/rule-settings", ""},
+		// Added with the route itself. A table like this is exactly the shape that silently omits a new endpoint: nothing fails
+		// when a row is missing, so the gate goes untested precisely for the route nobody remembered.
+		{http.MethodGet, "/api/v1/detection-config/rule-match-counts", ""},
 		{http.MethodPost, "/api/v1/detection-config/exclusions", `{}`},
 		{http.MethodDelete, "/api/v1/detection-config/exclusions/1?reason=r", ""},
 		{http.MethodPut, "/api/v1/detection-config/rule-settings", `{}`},

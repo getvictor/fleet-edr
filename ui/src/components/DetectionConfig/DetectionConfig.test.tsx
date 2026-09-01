@@ -792,11 +792,13 @@ describe("DetectionConfig observed column", () => {
     });
     renderPage();
 
+    // toBeVisible, not toBeInTheDocument: the point of this fix is that the caveat is SEEN, not merely present. A mutation that
+    // hid the note passed against toBeInTheDocument, which asserts the wrong property for a visibility requirement.
     await waitFor(() => {
-      expect(screen.getByText(/not of how many alerts promoting the rule would raise/)).toBeInTheDocument();
+      expect(screen.getByText(/not of how many alerts promoting the rule would raise/)).toBeVisible();
     });
-    expect(screen.getByText(/over the last 7 days/)).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Observed (7d)" })).toBeInTheDocument();
+    expect(screen.getByText(/over the last 7 days/)).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "Observed (7d)" })).toBeVisible();
   });
 
   // The visible cell abbreviates, so the exact figure and the window have to reach assistive technology some other way.
@@ -820,7 +822,7 @@ describe("DetectionConfig observed column", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText(/Match counts could not be loaded/)).toBeInTheDocument();
+      expect(screen.getByText(/Match counts could not be loaded/)).toBeVisible();
     });
     expect(screen.queryByText(/not of how many alerts promoting the rule would raise/)).not.toBeInTheDocument();
     // And the header must not advertise a window it cannot cover.

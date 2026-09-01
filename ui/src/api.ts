@@ -1159,10 +1159,15 @@ export async function listDetectionRuleMatchCounts(days?: number): Promise<{ cou
   // array means a malformed response, and "no rule matched" is the one wrong reading of it: it renders as a fleet of quiet rules,
   // which is what gets a noisy rule promoted. Throwing routes it to the caller's unavailable path. The sibling list endpoints DO
   // coalesce, because there an empty list is merely an empty table rather than evidence for a decision.
-  if (!Array.isArray(body.match_counts) || typeof body.days !== "number") {
-    throw new Error("malformed rule-match-counts response: match_counts must be an array and days a number");
+  // `days` is checked against the CONTRACT (a positive whole number), not merely against its type. A 0, a negative or a 1.5 would
+  // otherwise be rendered verbatim, labelling the counts with a window that cannot exist, which is the same class of misreport the
+  // echoed window exists to prevent.
+  const counts = body.match_counts;
+  const served = body.days;
+  if (!Array.isArray(counts) || typeof served !== "number" || !Number.isSafeInteger(served) || served < 1) {
+    throw new Error("malformed rule-match-counts response: match_counts must be an array and days a positive whole number");
   }
-  return { counts: body.match_counts, days: body.days };
+  return { counts, days: served };
 }
 
 export async function createDetectionExclusion(

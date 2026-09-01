@@ -103,6 +103,9 @@ describe("detection-config API client", () => {
     ["match_counts is not an array", { match_counts: { "0": {} }, days: 7 }],
     ["omitted days", { match_counts: [] }],
     ["days is not a number", { match_counts: [], days: "7" }],
+    ["days is zero", { match_counts: [], days: 0 }],
+    ["days is negative", { match_counts: [], days: -3 }],
+    ["days is fractional", { match_counts: [], days: 1.5 }],
   ] as [string, unknown][]) {
     it(`listDetectionRuleMatchCounts rejects a malformed envelope: ${name}`, async () => {
       stubFetch(envelope);
