@@ -8,7 +8,7 @@ The counter also could not be trusted as a rate. It incremented while the batch 
 
 ## What changes
 
-Monitor matches are aggregated per (rule, host, severity) while a batch evaluates, returned to the pipeline, and recorded only once the batch is acknowledged. A nacked batch is replayed and counted once by whichever attempt succeeds. The same tally drives both the durable counter and the OTel series, so the two agree rather than being two numbers of different precision for one thing.
+Monitor matches are aggregated per (rule, host, severity) while a batch evaluates, returned to the pipeline, and recorded only once the batch is acknowledged. A nacked batch is replayed and counted once by whichever attempt succeeds. The same tally drives both the durable counter and the OTel series, so neither can drift from the other by aggregating differently. They are still separate sinks and can diverge in one direction: the metric is incremented first, and a persistence failure is deliberately logged and dropped rather than failing an acknowledged batch, so the series can be ahead of the table.
 
 Durable counts live in MySQL in the rules context, keyed `(rule_id, host_id, day)`. ADR-0015 decides the store rather than convenience: it scopes ClickHouse to the raw event archive and keeps "the entire control plane", naming the rules context, in MySQL. A per-rule counter that informs a configuration decision is control-plane data. The host dimension is what lets a reader tell a rule that is noisy on one machine from one that is too broad everywhere, which are opposite remedies.
 

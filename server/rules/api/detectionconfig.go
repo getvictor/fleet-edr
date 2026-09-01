@@ -264,9 +264,11 @@ type MonitorMatch struct {
 // wave away: issue #631 measured roughly 130 materialization retries a minute from a single host under a sustained condition.
 // Handing the tally back lets the caller record it only once the batch is acknowledged, which counts a replayed batch once.
 //
-// The cost of that choice is the opposite failure: a crash between the acknowledgement and the write loses those counts. That is
-// the safe direction for a number that gates promotion, because it makes a rule look cheaper to promote than it was rather than
-// more expensive, and an operator who under-promotes reviews the rule again.
+// The cost of that choice is the opposite failure: a crash between the acknowledgement and the write loses those counts, and that
+// is the RISK-BEARING direction, not a safe one. A number that is too low makes a rule look quiet, which is what persuades an
+// operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to prevent. It is accepted here because
+// the alternative counts a replayed batch once per attempt, which is a systematic error on every retry rather than a rare one
+// confined to a crash between two adjacent statements.
 type MonitorTally []MonitorMatch
 
 // MonitorMatchRecorder is the narrow write surface the detection pipeline uses to persist a batch's monitor matches once the batch

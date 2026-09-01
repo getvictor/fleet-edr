@@ -431,8 +431,12 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 //
 // After, so a replayed batch is counted once: everything before this point can still nack, and a nacked batch re-evaluates and
 // produces the same matches again. The cost is the opposite failure, a crash between the ack and this write, which loses those
-// counts. That is the safe direction for a number an operator uses to decide whether promoting a rule is affordable, because it
-// under-reports rather than over-reports.
+// counts.
+//
+// That loss is the RISK-BEARING direction and is accepted rather than preferred. A count that is too low makes a rule look quiet,
+// which is exactly what persuades an operator to promote it, and promoting a noisy rule is the alert flood issue #764 exists to
+// prevent. It is the better trade only because the alternative is systematic: counting during evaluation inflates on every
+// retry, while this loses counts only in the window between two adjacent statements.
 //
 // A successful Ack is NOT proof that this attempt uniquely processed the batch. Ack is an unconditional update that ignores its
 // affected-row count, and a claim expires after five minutes and is re-offered, so an evaluation that outlives its lease can be

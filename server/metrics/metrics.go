@@ -119,8 +119,9 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 			"(host, rule, subject) forever, so a rule that keeps matching one subject raises this series repeatedly and would "+
 			"raise exactly one alert. Read it as volume and reach, and treat it as an upper bound on what promotion produces. "+
 			"Recorded once the batch is acknowledged, so a nacked and replayed batch counts once rather than once per attempt; "+
-			"the residual inaccuracies are a crash between the acknowledgement and the record, which under-reports, and an "+
-			"evaluation outliving its claim lease, which can let a reclaimer count the same batch again."),
+			"the residual inaccuracies are a crash between the acknowledgement and the record, which loses counts and so can "+
+			"make a noisy rule look safe to promote, and an evaluation outliving its claim lease, which can let a reclaimer "+
+			"count the same batch again."),
 		metric.WithUnit("{match}"),
 	)
 	r.processRetentionRowsDeleted, _ = meter.Int64Counter(
