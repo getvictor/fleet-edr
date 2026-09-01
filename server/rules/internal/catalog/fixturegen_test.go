@@ -14,10 +14,16 @@
 // It lives in the catalog package rather than under tools/ because the corpus is embedded in an internal package and Go's
 // visibility rule puts it out of reach from anywhere else in the tree.
 //
-// What it does NOT do is decide whether a fixture is correct. It synthesises a candidate event from the literals a rule asks for
-// and writes it out; TestCatalogFixturesStillFire is what then proves the rule actually fires on it. A rule this cannot satisfy is
-// reported by name at the end and gets a hand-written fixture instead, which is the right division: the generator handles the
-// mechanical majority and a human handles the ones that need thought.
+// Two independent things check the output, and they check different halves.
+//
+// The generator itself never writes a candidate the rule's OWN compiled detection rejects: it synthesises events from the
+// literals a rule asks for and offers each to sigma.Rule.Matches, so what lands on disk already satisfies the Sigma condition.
+// What that cannot tell you is whether the event survives the real pipeline, since the matcher sees a field lookup rather than a
+// decoded payload with a materialised process behind it. TestCatalogFixturesStillFire is what proves that half, and it has
+// rejected candidates this accepted more than once.
+//
+// A rule no combination satisfies is reported by name at the end and gets a hand-written fixture instead. That is the right
+// division: the generator handles the mechanical majority, a human handles the ones that need thought.
 package catalog
 
 import (
