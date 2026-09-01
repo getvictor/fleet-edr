@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -45,81 +44,13 @@ func fixtureResolver() api.ExclusionResolver {
 	}}
 }
 
-// pendingFixtures lists the rules that do NOT yet have a fixture, asserted as an exact set.
+// pendingFixtures is EMPTY, and that is the point of issue #773: every rule the server registers has a positive regression
+// fixture, so the acceptance criterion is now a property the gate asserts rather than a list of exceptions.
 //
-// An exact set rather than a skip: a skipped subtest is invisible in a passing run, and a list that is merely "allowed to be
-// missing" grows quietly. Asserting equality means a NEW rule without a fixture fails (it is not on the list), and a rule that
-// GAINS one also fails until it is struck off, so the list can only shrink.
-//
-// DO NOT ADD TO THIS LIST. It is the imported SigmaHQ corpus, which gets its smoke fixtures in the follow-up to #773; every entry
-// is scheduled for deletion, and a new rule belongs in fixtures/, not here.
-var pendingFixtures = []string{
-	"proc_creation_macos_applescript",
-	"proc_creation_macos_binary_padding",
-	"proc_creation_macos_change_file_time_attr",
-	"proc_creation_macos_chflags_hidden_flag",
-	"proc_creation_macos_clear_system_logs",
-	"proc_creation_macos_clipboard_access_via_osascript",
-	"proc_creation_macos_create_account",
-	"proc_creation_macos_create_hidden_account",
-	"proc_creation_macos_creds_from_keychain",
-	"proc_creation_macos_csrutil_disable",
-	"proc_creation_macos_csrutil_status",
-	"proc_creation_macos_disable_security_tools",
-	"proc_creation_macos_dscl_add_user_to_admin_group",
-	"proc_creation_macos_dseditgroup_add_to_admin_group",
-	"proc_creation_macos_dsenableroot_enable_root_account",
-	"proc_creation_macos_file_and_directory_discovery",
-	"proc_creation_macos_find_cred_in_files",
-	"proc_creation_macos_gui_input_capture",
-	"proc_creation_macos_hdiutil_create",
-	"proc_creation_macos_hdiutil_mount",
-	"proc_creation_macos_installer_susp_child_process",
-	"proc_creation_macos_ioreg_discovery",
-	"proc_creation_macos_jamf_susp_child",
-	"proc_creation_macos_jamf_usage",
-	"proc_creation_macos_jxa_in_memory_execution",
-	"proc_creation_macos_launchctl_execution",
-	"proc_creation_macos_local_account",
-	"proc_creation_macos_local_groups",
-	"proc_creation_macos_network_service_scanning",
-	"proc_creation_macos_network_sniffing",
-	"proc_creation_macos_nscurl_usage",
-	"proc_creation_macos_office_susp_child_processes",
-	"proc_creation_macos_osacompile_runonly_execution",
-	"proc_creation_macos_payload_decoded_and_decrypted",
-	"proc_creation_macos_persistence_via_plistbuddy",
-	"proc_creation_macos_remote_access_tools_meshagent_arguments",
-	"proc_creation_macos_remote_access_tools_teamviewer_incoming_connection",
-	"proc_creation_macos_remote_system_discovery",
-	"proc_creation_macos_schedule_task_job_cron",
-	"proc_creation_macos_screencapture",
-	"proc_creation_macos_security_software_discovery",
-	"proc_creation_macos_space_after_filename",
-	"proc_creation_macos_split_file_into_pieces",
-	"proc_creation_macos_susp_browser_child_process",
-	"proc_creation_macos_susp_execution_macos_script_editor",
-	"proc_creation_macos_susp_find_execution",
-	"proc_creation_macos_susp_histfile_operations",
-	"proc_creation_macos_susp_in_memory_download_and_compile",
-	"proc_creation_macos_susp_macos_firmware_activity",
-	"proc_creation_macos_susp_system_network_discovery",
-	"proc_creation_macos_suspicious_applet_behaviour",
-	"proc_creation_macos_swvers_discovery",
-	"proc_creation_macos_sysadminctl_add_user_to_admin_group",
-	"proc_creation_macos_sysadminctl_enable_guest_account",
-	"proc_creation_macos_sysctl_discovery",
-	"proc_creation_macos_system_network_connections_discovery",
-	"proc_creation_macos_system_profiler_discovery",
-	"proc_creation_macos_system_shutdown_reboot",
-	"proc_creation_macos_tail_base64_decode_from_image",
-	"proc_creation_macos_tmutil_delete_backup",
-	"proc_creation_macos_tmutil_disable_backup",
-	"proc_creation_macos_tmutil_exclude_file_from_backup",
-	"proc_creation_macos_wizardupdate_malware_infection",
-	"proc_creation_macos_xattr_gatekeeper_bypass",
-	"proc_creation_macos_xcsset_malware_infection",
-}
+// It is kept as an empty slice rather than deleted so the gate below keeps the same shape: if a rule ever has to be exempted, the
+// exemption is a visible entry in a list that CI compares exactly, not a skip nobody sees. Adding one should be argued for in the
+// PR that does it.
+var pendingFixtures = []string{}
 
 // TestEveryCatalogRuleHasARegressionFixture is the coverage half: every rule the server registers carries at least one fixture
 // that says it fires, or is on the shrinking pending list.
@@ -132,11 +63,10 @@ func TestEveryCatalogRuleHasARegressionFixture(t *testing.T) {
 			missing = append(missing, r.ID())
 		}
 	}
-	slices.Sort(missing)
-
-	want := slices.Clone(pendingFixtures)
-	slices.Sort(want)
-	assert.Equal(t, want, missing,
+	// ElementsMatch rather than Equal, because Equal separates a nil slice from an empty one: with the list emptied, a run where
+	// nothing is missing produced nil and failed against []string{}. A gate that only works while it still has exceptions in it
+	// would have broken for whoever struck off the last rule, which is the moment it most needs to keep working.
+	assert.ElementsMatch(t, pendingFixtures, missing,
 		"rules without a positive regression fixture changed. A rule ADDED here needs fixtures/<rule_id>/positive_*.json; a rule "+
 			"REMOVED from the pending list needs striking off it. Do not grow the list.")
 }
