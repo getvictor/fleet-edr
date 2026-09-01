@@ -220,7 +220,7 @@ func (s subject) Field(name string) ([]string, bool) {
 
 // fixtureSubject is the stand-in binary for a rule that constrains only the command line or the parent. Named rather than left
 // empty, because a record with no path reads as a broken row rather than as an event.
-const fixtureSubject = "/usr/bin/fixture-subject"
+const fixtureSubject = "/tmp/fixture-subject"
 
 // withSubjectFallback adds, for any candidate with no Image, the same candidate WITH the stand-in subject.
 //
@@ -382,39 +382,77 @@ func valuesOf(v any) []string {
 	return nil
 }
 
-// knownLocations pins the binaries this corpus names that do NOT live in /usr/bin.
+// systemBinaries maps every binary the vendored corpus names to where macOS actually keeps it.
 //
-// Guessing /usr/bin for everything put nineteen binaries in the wrong directory: the shells and core tools are in /bin, the
-// diagnostics in /usr/sbin, shutdown in /sbin, PlistBuddy in /usr/libexec. That matters because a fixture is read as a sample of
-// real telemetry and because agent/hostid already pins /usr/sbin/ioreg, and the MATCHER CANNOT CATCH IT: these rules are written
-// `Image|endswith`, so /usr/bin/launchctl satisfies them exactly as well as the canonical /bin/launchctl. Location fidelity is
-// the one property the oracle does not check, which is why it is pinned by hand here.
-//
-// Every entry was resolved against a real macOS host rather than recalled. Anything absent falls through to the /usr/bin default,
-// which is right for the corpus's third-party binaries (jamf, TeamViewer) that live wherever their vendor installed them.
+// Resolved against a real macOS filesystem rather than recalled, and pinned rather than guessed, because THE MATCHER CANNOT CHECK
+// THIS: the rules are written `Image|endswith`, so /usr/bin/launchctl satisfies them exactly as well as the canonical
+// /bin/launchctl. Location is the one property the oracle does not verify.
 //
 //nolint:gosec // G101 fires on the "firmwarepasswd" entry: every value here is a binary path, not a credential.
-var knownLocations = map[string]string{
+var systemBinaries = map[string]string{
 	"PlistBuddy":      "/usr/libexec/PlistBuddy",
 	"arp":             "/usr/sbin/arp",
+	"base64":          "/usr/bin/base64",
 	"bash":            "/bin/bash",
+	"chflags":         "/usr/bin/chflags",
+	"crontab":         "/usr/bin/crontab",
+	"csrutil":         "/usr/bin/csrutil",
+	"curl":            "/usr/bin/curl",
 	"dd":              "/bin/dd",
+	"dscacheutil":     "/usr/bin/dscacheutil",
+	"dscl":            "/usr/bin/dscl",
 	"dseditgroup":     "/usr/sbin/dseditgroup",
 	"dsenableroot":    "/usr/sbin/dsenableroot",
+	"find":            "/usr/bin/find",
 	"firmwarepasswd":  "/usr/sbin/firmwarepasswd",
-	"installer":       "/usr/sbin/installer",
+	"grep":            "/usr/bin/grep",
+	"hdiutil":         "/usr/bin/hdiutil",
 	"ioreg":           "/usr/sbin/ioreg",
 	"launchctl":       "/bin/launchctl",
-	"netstat":         "/usr/sbin/netstat",
+	"nc":              "/usr/bin/nc",
+	"nscurl":          "/usr/bin/nscurl",
+	"openssl":         "/usr/bin/openssl",
+	"osacompile":      "/usr/bin/osacompile",
+	"osascript":       "/usr/bin/osascript",
 	"rm":              "/bin/rm",
 	"screencapture":   "/usr/sbin/screencapture",
+	"security":        "/usr/bin/security",
 	"sh":              "/bin/sh",
 	"shutdown":        "/sbin/shutdown",
+	"spctl":           "/usr/sbin/spctl",
+	"split":           "/usr/bin/split",
+	"sw_vers":         "/usr/bin/sw_vers",
+	"sysadminctl":     "/usr/sbin/sysadminctl",
 	"sysctl":          "/usr/sbin/sysctl",
 	"system_profiler": "/usr/sbin/system_profiler",
-	"sysadminctl":     "/usr/sbin/sysadminctl",
 	"tcpdump":         "/usr/sbin/tcpdump",
+	"tmutil":          "/usr/bin/tmutil",
+	"touch":           "/usr/bin/touch",
+	"who":             "/usr/bin/who",
+	"xattr":           "/usr/bin/xattr",
 }
+
+// vendorBinaries maps the non-Apple and helper binaries the corpus names to where their installers actually put them.
+//
+// Separate from systemBinaries because these cannot be resolved against a developer's host: the point is that they are NOT part
+// of macOS. Left to a generic bin directory they produced /usr/bin/jamf and /usr/bin/TeamViewer_Service, which no host can emit.
+var vendorBinaries = map[string]string{
+	"TeamViewer_Desktop": "/Applications/TeamViewer.app/Contents/MacOS/TeamViewer_Desktop",
+	"TeamViewer_Service": "/Applications/TeamViewer.app/Contents/MacOS/TeamViewer_Service",
+	"applet":             "/Applications/fixture-applet.app/Contents/MacOS/applet",
+	"com.apple.WebKit.WebContent": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/" +
+		"com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+	"jamf":                   "/usr/local/bin/jamf",
+	"package_script_service": "/System/Library/PrivateFrameworks/PackageKit.framework/Resources/package_script_service",
+}
+
+// genericBinDir is where an UNRECOGNISED binary is placed.
+//
+// /usr/local/bin, not /usr/bin: the system volume is sealed on supported macOS, so nothing new appears in /usr/bin and a fixture
+// putting a vendor binary there depicts telemetry no host can produce. /usr/local/bin is writable and is where third-party
+// installers actually put things, so a rule vendored in future that names a binary this file has never seen still lands
+// somewhere possible.
+const genericBinDir = "/usr/local/bin"
 
 // plausiblePath turns a bare leaf into somewhere a binary of that name actually lives.
 //
@@ -431,7 +469,10 @@ var knownLocations = map[string]string{
 func plausiblePath(value, modifier string) string {
 	extendable := strings.Contains(modifier, "endswith") || strings.Contains(modifier, "contains")
 	leaf := strings.TrimPrefix(value, "/")
-	known, isKnown := knownLocations[leaf]
+	known, isKnown := systemBinaries[leaf]
+	if vendor, ok := vendorBinaries[leaf]; ok {
+		known, isKnown = vendor, true
+	}
 	switch {
 	case strings.HasPrefix(value, "/") && strings.Count(value, "/") > 1:
 		return value // already a path, not a leaf
@@ -444,9 +485,9 @@ func plausiblePath(value, modifier string) string {
 	case strings.Contains(leaf, " "):
 		return "/Applications/" + leaf + ".app/Contents/MacOS/" + leaf
 	case strings.HasPrefix(value, "/"):
-		return "/usr/bin" + value
+		return genericBinDir + value
 	default:
-		return "/usr/bin/" + value
+		return genericBinDir + "/" + value
 	}
 }
 

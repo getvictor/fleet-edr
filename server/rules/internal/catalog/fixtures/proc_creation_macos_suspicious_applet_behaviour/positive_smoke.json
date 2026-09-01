@@ -3,11 +3,11 @@
     {"event_id": "proc_creation_macos_suspicious_applet_behaviour-parent-fork", "host_id": "fixture-host", "timestamp_ns": 1000000000, "event_type": "fork",
      "payload": {"child_pid":4800,"parent_pid":1}},
     {"event_id": "proc_creation_macos_suspicious_applet_behaviour-parent-exec", "host_id": "fixture-host", "timestamp_ns": 1010000000, "event_type": "exec",
-     "payload": {"pid":4800,"ppid":1,"path":"/usr/bin/applet","args":["applet"],"uid":501,"gid":20}},
+     "payload": {"pid":4800,"ppid":1,"path":"/Applications/fixture-applet.app/Contents/MacOS/applet","args":["applet"],"uid":501,"gid":20}},
     {"event_id": "proc_creation_macos_suspicious_applet_behaviour-fork", "host_id": "fixture-host", "timestamp_ns": 1020000000, "event_type": "fork",
      "payload": {"child_pid":4900,"parent_pid":4800}},
     {"event_id": "proc_creation_macos_suspicious_applet_behaviour-exec", "host_id": "fixture-host", "timestamp_ns": 1030000000, "event_type": "exec",
-     "payload": {"pid":4900,"ppid":4800,"path":"/usr/bin/fixture-subject","args":["fixture-subject","osacompile"],"uid":501,"gid":20}}
+     "payload": {"pid":4900,"ppid":4800,"path":"/tmp/fixture-subject","args":["fixture-subject","osacompile"],"uid":501,"gid":20}}
   ],
   "expected_findings": [
     {"rule_id": "proc_creation_macos_suspicious_applet_behaviour", "severity": "medium"}
