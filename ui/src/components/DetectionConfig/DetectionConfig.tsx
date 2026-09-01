@@ -99,7 +99,8 @@ const MODE_PROMPT: Record<ReducingMode, { verb: string; confirmLabel: string; de
     // from alert: a monitor rule produces none already, and what it actually loses is the recorded signal an operator would use to
     // decide whether to promote it.
     description:
-      "The rule stays registered but stops evaluating: it will produce neither alerts nor monitor signals. This is recorded in the audit log.",
+      "The rule stays registered but stops evaluating: it will produce neither alerts nor monitor signals. " +
+      "This is recorded in the audit log.",
   },
   monitor: {
     verb: "Move to monitor",
