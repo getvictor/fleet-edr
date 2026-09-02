@@ -61,4 +61,4 @@ The pack loader's guard is reachable today without qualification: `x-engine.rule
 
 ## Not in this change
 
-The unbounded nack loop is a separate defect and is filed separately. Any deterministic persistence failure wedges a host's queue with no attempt cap and nothing that surfaces it as stuck; this change removes one cause, not the class. Fixing queue semantics belongs with the queue contract rather than riding along here.
+The unbounded nack loop is a separate defect, filed as #836. Any deterministic persistence failure wedges a host's queue with no attempt cap and nothing that surfaces it as stuck; this change removes one cause, not the class. Fixing queue semantics belongs with the queue contract rather than riding along here.

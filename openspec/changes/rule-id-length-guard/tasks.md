@@ -9,4 +9,4 @@
 - [x] Integration test reproducing the outage: promote the 70-character rule, assert the alert persists AND the queue is acknowledged.
 - [x] Mutation-test each guard (four caught; one inert version rewritten until it bit).
 - [x] Live QA: both migrations applied to a dev database holding 61 alert rows, and the promoted rule alerted end to end.
-- [ ] File the unbounded-nack-loop defect separately.
+- [x] File the unbounded-nack-loop defect separately (#836).
