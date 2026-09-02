@@ -214,6 +214,8 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	// "has an origin" and "is vendored" were the same question and a surface could answer either by testing for "". Now every rule
 	// names someone, which is what lets the alert view render credit unconditionally instead of only when it happens to be
 	// non-empty. The discriminator moved to the value, so this checks the value.
+	// spec:server-detection-rules-engine/independently-tunable-chain-shapes-are-separate-rules/a-rule-separated-out-of-another-ships-in-monitor
+	//
 	// Authored rules ship in alert with named exceptions, rather than "ours implies alert" flatly. That flat form held until issue
 	// #776 split suspicious_exec and deliberately shipped the new arm in monitor: it carries no saved exclusions, so promoting it
 	// before its own false-positive rate is observed would re-raise every FP the merged rule had already been tuned for. Keeping

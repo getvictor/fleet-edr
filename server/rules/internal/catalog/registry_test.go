@@ -224,7 +224,7 @@ func TestAll_DetectionsClaimTechniques(t *testing.T) {
 	}
 }
 
-// TestAll_DetectionsNameTheirAlgorithm pins that every detection declares the evaluator that decides it (issue #757).
+// TestAll_DetectionsSayWhatDecidesThem pins that every detection declares the evaluator that decides it (issue #757).
 //
 // A Go-implemented rule is only inspectable if its file says which procedure runs it; without that, the exported file documents
 // what the rule is for and stays silent on what it actually does. The check is scoped to detections because a non-detection is

@@ -60,6 +60,17 @@ func TestShellNetworkConnectDetectsShellWithOutboundConnection(t *testing.T) {
 	assert.Contains(t, f.EventIDs, "net-curl")
 }
 
+// TestShellNetworkConnect_ParentAllowlistGlobMatching covers the version-agnostic parent exclusion: a glob entry suppresses a
+// version-stamped developer-tool parent (the issue #391 noise), while a literal entry keeps exact-match semantics. The glob
+// matching itself lives in the resolver (api.GlobMatch / api.MatchExclusionValue) and is unit-tested in the rules/api package;
+// this test pins the rule -> resolver wiring end to end.
+//
+// The markers moved here with the test (issue #776). They were left behind in suspicious_exec_test.go, where they dangled at the
+// end of the file under a comment describing a function that was no longer there. spectrace stayed green throughout, because it
+// checks that a marker RESOLVES and not that it is attached to anything: an orphaned marker is invisible to it.
+//
+// spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-glob-allowlist-entry-suppresses-a-version-stamped-parent
+// spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-literal-allowlist-entry-still-matches-exactly
 func TestShellNetworkConnect_ParentAllowlistGlobMatching(t *testing.T) {
 	t.Parallel()
 
@@ -137,7 +148,7 @@ func TestShellNetworkConnect_ParentAllowlistGlobMatching(t *testing.T) {
 	})
 }
 
-// TestSuspiciousExec_LocalResolverDNSDeNoising covers the network-arm DNS de-noising: an outbound DNS lookup to the host's
+// TestShellNetworkConnect_LocalResolverDNSDeNoising covers this rule's DNS de-noising: an outbound DNS lookup to the host's
 // local-resolver-class address (the Tailscale MagicDNS case from issue #391) is not a triggering connection, while a DNS lookup to a
 // publicly routable resolver still fires.
 //

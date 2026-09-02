@@ -14,6 +14,8 @@ Where one attribution chain exhibits the signals of more than one rule, each rul
 
 An exclusion SHALL apply only to the rule it names. Two rules covering related shapes therefore carry separate exclusion sets, and an operator who has silenced one has not silenced the other.
 
+A rule separated out of an existing rule SHALL default to `monitor`. It inherits none of the exclusions operators saved against the rule it came from, so it begins unfiltered where that rule had been tuned; defaulting it to alert would re-raise every false positive its predecessor had already absorbed, on upgrade, with no operator action. It is promoted once its own false-positive rate has been observed.
+
 #### Scenario: A chain exhibiting both signals raises one alert per rule
 
 - **GIVEN** a non-shell process that spawns a shell which both execs from a world-writable directory and opens an outbound connection within the window, and both rules resolved to alert
@@ -25,6 +27,12 @@ An exclusion SHALL apply only to the rule it names. Two rules covering related s
 - **GIVEN** an exclusion naming the temp-exec rule and matching the chain's non-shell parent
 - **WHEN** a chain exhibiting both signals is evaluated
 - **THEN** the temp-exec rule raises nothing and the outbound-connect rule still raises its finding
+
+#### Scenario: A rule separated out of another ships in monitor
+
+- **GIVEN** a rule separated out of an existing rule, carrying none of that rule's saved exclusions
+- **WHEN** its default mode is inspected
+- **THEN** it reports `monitor`, so it raises no alert until an operator promotes it
 
 #### Scenario: A rule correlating one chain across several event types is unaffected
 
@@ -74,7 +82,7 @@ A rule's non-shell parent exclusions SHALL match an entry against the candidate 
 - **WHEN** the engine evaluates the rule against the batch
 - **THEN** the engine produces no `shell_network_connect` finding, because the literal entry matches the parent path exactly
 
-### Requirement: Local-resolver DNS suppression for the outbound-connect rule
+### Requirement: Local-resolver DNS suppression for the network arm
 
 The `shell_network_connect` rule MUST NOT treat an outbound `network_connect` event to remote port 53 as a triggering outbound connection when the event's `remote_address` parses as a local-resolver-class IP address: an IPv4 or IPv6 loopback address, an RFC1918 private address, an IPv4 link-local address, an address in the CGNAT range `100.64.0.0/10`, an IPv6 unique-local address, or an IPv6 link-local address. An outbound connection to port 53 whose `remote_address` is any other (publicly routable) address MUST still be eligible to trigger the rule. The suppression is scoped to this rule; `suspicious_exec` is unaffected.
 

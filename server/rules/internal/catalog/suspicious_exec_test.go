@@ -539,14 +539,3 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	assert.Contains(t, findings2[0].Description, "/bin/sh")
 	assert.Contains(t, findings2[0].Description, "/tmp/payload")
 }
-
-// TestGlobMatch pins the wildcard matcher behind the version-agnostic parent allowlist. `*` matches any run of characters INCLUDING
-// the path separator (unlike a shell glob), and a pattern with no `*` is exact equality. The evidence-host patterns from issue #391
-// (`*/claude/versions/*`, `*/lefthook_*`, the Homebrew Cellar git path) are pinned as named cases.
-// TestSuspiciousExec_ParentAllowlistGlobMatching covers the version-agnostic parent exclusion: a glob entry suppresses a
-// version-stamped developer-tool parent (the issue #391 noise), while a literal entry keeps exact-match semantics. The glob
-// matching itself lives in the resolver (api.GlobMatch / api.MatchExclusionValue) and is unit-tested in the rules/api package; this
-// test pins the rule -> resolver wiring end to end.
-//
-// spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-glob-allowlist-entry-suppresses-a-version-stamped-parent
-// spec:server-detection-rules-engine/version-agnostic-parent-allowlist-matching/a-literal-allowlist-entry-still-matches-exactly
