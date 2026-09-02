@@ -1147,7 +1147,8 @@ components:
           description: >-
             Who wrote the rule that fired, captured when the alert was raised. `Fleet EDR` for a rule this project authored,
             `SigmaHQ, by <author>` for one from the imported corpus. Distinct from `source`, which names the subsystem that
-            raised the alert rather than the rule's author. Empty only on alerts raised before the field existed.
+            raised the alert rather than the rule's author. Empty in two cases: an alert raised before the field existed, and an
+            application-control block, whose rule id is the operator's own policy rather than a detection with an author.
           example: SigmaHQ, by Alejandro Ortuno, oscd.community
         process_id: {type: integer, format: int64}
         status: {type: string, enum: [open, acknowledged, resolved]}
@@ -1342,9 +1343,10 @@ components:
         origin:
           type: string
           description: |
-            Where the rule came from. Absent for a rule written for this engine. For a rule vendored from an
-            upstream corpus, names that project and the rule's own author, which is the attribution the corpus
-            licence carries; those rules are shipped and exported unmodified.
+            Where the rule came from. `Fleet EDR` for a rule written for this engine; for a rule vendored from an
+            upstream corpus, that project and the rule's own author, which is the attribution the corpus licence
+            carries (those rules are shipped and exported unmodified). Always present on this endpoint, so a
+            reader tells the two apart by the value rather than by its absence.
           example: "SigmaHQ, by Daniil Yugoslavskiy, oscd.community"
         techniques:
           type: array

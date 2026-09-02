@@ -3,8 +3,10 @@
 -- crediting the rule's author wherever a match is displayed, and the surface that displays matches is the alert view.
 --
 --   origin: who the rule came from, as of the moment the alert was raised. "SigmaHQ, by <author>" for an imported rule, "Fleet EDR"
---     for one this project wrote. The engine stamps it from the rule (rulesapi.OriginOf); it is never taken from the finding, so a
---     rule cannot forge, reassign or suppress its own credit.
+--     for one this project wrote, and EMPTY for a non-detection projection such as an application-control block, whose alert
+--     carries the operator's own policy rule id and therefore has no author this project can speak for. The engine stamps it from
+--     the rule (rulesapi.AlertOriginOf); it is never taken from the finding, so a rule cannot forge, reassign or suppress its own
+--     credit. An empty value is consequently NOT by itself a failed attribution: see the two cases below.
 --
 -- Denormalized rather than joined from the catalog at read time, which is the same choice already made for title, description and
 -- severity. A join fails OPEN for the obligation this column exists to meet: an alert whose rule has since left the catalog would
@@ -23,7 +25,8 @@
 -- than built here for a population measured at zero.
 --
 -- Rows predating this migration keep the empty default rather than being defaulted to 'Fleet EDR', so the column distinguishes
--- "raised before attribution existed" from "raised by us"; the display surfaces render nothing for them either way.
+-- "raised before attribution existed" from "raised by us"; the display surfaces render nothing for them either way. That makes two
+-- legitimate reasons for an empty origin, the pre-migration row and the projection, and neither is a defect to go hunting for.
 --
 -- Not part of uk_alerts_dedup: origin is a function of rule_id, which is already in the key, so including it could only ever split
 -- one logical alert into two rows after an upstream author change.

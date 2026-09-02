@@ -139,7 +139,18 @@ func TestMDReference(t *testing.T) {
 		{"markdown trailing a valid URL prefix is encoded, not echoed",
 			"https://safe.example/a ![pixel](https://attacker.example/p)",
 			"<https://safe.example/a%20%21%5Bpixel%5D%28https://attacker.example/p%29>"},
-		{"angle brackets in a URL cannot break the autolink", "https://safe.example/a<b>c", "<https://safe.example/a%3Cb%3Ec>"},
+		{"angle brackets in a URL path cannot break the autolink", "https://safe.example/a<b>c", "<https://safe.example/a%3Cb%3Ec>"},
+		// The reason the check is on the OUTPUT and not on the parse: url.URL.String() percent-encodes the path and the fragment
+		// but emits RawQuery verbatim, so this `>` survives re-serialisation and would close the autolink from inside. It has to
+		// come out as an inert span instead, even though it is a syntactically valid https URL.
+		{"a terminator surviving in the query demotes the link to an inert span",
+			"https://safe.example/?q=>[x](https://attacker.example)",
+			"`https://safe.example/?q=>[x](https://attacker.example)`"},
+		{"a query with no terminator still links", "https://safe.example/ok?a=1&b=2#frag", "<https://safe.example/ok?a=1&b=2#frag>"},
+		// A literal space also survives RawQuery, where the same space in the path or fragment is percent-encoded. Without this
+		// case the whitespace half of the gate is unguarded, since every other whitespace input either gets encoded or throws.
+		{"a space surviving in the query demotes the link too",
+			"https://safe.example/?q=a b", "`https://safe.example/?q=a b`"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

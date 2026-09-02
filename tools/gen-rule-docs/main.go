@@ -197,13 +197,20 @@ func writeRuleReferences(b *strings.Builder, refs []string) {
 func mdReference(ref string) string {
 	ref = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(strings.TrimSpace(ref))
 	if u, err := url.Parse(ref); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
-		// The RE-SERIALISED url, wrapped as an explicit autolink, never the caller's string. Go's parser is lenient enough to
-		// accept trailing junk after a valid prefix, so `https://safe.example/a ![pixel](https://attacker.example/pixel)` reports
-		// scheme https and host safe.example and would pass this branch; echoing the input back then renders the attacker's image.
-		// String() percent-encodes the space, brackets, parens, backticks and angle brackets, which is what makes the payload
-		// inert, and the <> form cannot then be broken because none of its terminators survive that encoding. Measured against the
-		// shipped corpus: 138 citations, and the only URL this alters is one carrying a trailing empty fragment.
-		return "<" + u.String() + ">"
+		// The RE-SERIALISED url, and only if the bytes about to be written cannot themselves break the autolink.
+		//
+		// Two things force this shape. Go's parser accepts trailing junk after a valid prefix, so
+		// `https://safe.example/a ![pixel](https://attacker.example/p)` reports scheme https and host safe.example: echoing the
+		// caller's string back renders the attacker's image. And String() does NOT re-encode uniformly. Measured: the path and
+		// the fragment are percent-encoded, but RawQuery is emitted verbatim, so `https://safe.example/?q=>[x](...)` keeps its
+		// `>` and closes the autolink from inside.
+		//
+		// Hence the final check is on the OUTPUT rather than on the input or the parse. Anything that could terminate the form
+		// (an angle bracket, whitespace, a control byte) means this value does not get to be a link, whichever component it came
+		// from and whichever components a future Go release decides to encode differently.
+		if s := u.String(); !breaksAutolink(s) {
+			return "<" + s + ">"
+		}
 	}
 	if ref == "" {
 		return "``"
@@ -215,6 +222,24 @@ func mdReference(ref string) string {
 		return fence + " " + ref + " " + fence
 	}
 	return fence + ref + fence
+}
+
+// breaksAutolink reports whether s contains a byte that would terminate a markdown autolink from inside it.
+//
+// CommonMark defines an autolink as `<`, an absolute URI, `>`, where the URI contains no whitespace and no angle bracket. So this
+// is the complete set: anything here means the `<...>` wrapper cannot safely hold s, and the caller falls back to an inert span.
+//
+// Both reachable halves are exercised by the tests, and each is reachable only through RawQuery, which String() emits verbatim
+// while it percent-encodes the same byte in the path or the fragment: `?q=>x` keeps its angle bracket and `?q=a b` keeps its
+// space. Control bytes below 0x20 are covered by the same comparison but are unreachable in practice, since url.Parse rejects
+// them outright; they cost nothing to include and remove a thing to be wrong about later.
+func breaksAutolink(s string) bool {
+	for _, c := range s {
+		if c == '<' || c == '>' || c <= ' ' {
+			return true
+		}
+	}
+	return false
 }
 
 // longestBacktickRun reports the length of the longest consecutive backtick sequence in s, which is what a code-span fence has to
