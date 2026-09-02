@@ -16,6 +16,64 @@ import "context"
 // batches get different scopes.
 type BatchScope struct {
 	derived map[string]any
+
+	// ancestryIncomplete counts, per rule id, the DISTINCT shells a rule declined because an ancestor they needed had no record,
+	// and declinedShells is the dedup set that makes them distinct.
+	//
+	// Unlike `derived` above, the engine DOES read this, which the opacity note does not forbid: what it cannot do is name a type
+	// that lives inside the rules context. A count keyed by a rule id is primitive on both sides, so it crosses the boundary with
+	// no adapter and no cycle.
+	//
+	// It exists because the decline is otherwise invisible (issue #829). A rule that silently reports nothing looks identical to a
+	// rule with nothing to report, which is the documented way detections rot unnoticed, so the engine publishes this as a
+	// per-attempt span attribute an operator can compare against the rule's alert volume. Not a metric counter: see the engine's
+	// note at the annotation for why, and for what the per-attempt framing does and does not let you conclude.
+	ancestryIncomplete map[string]int
+	declinedShells     map[declinedShell]struct{}
+}
+
+// declinedShell identifies one declined shell within a batch, so a rule reached by several trigger events on the same chain counts
+// it once. Findings are deduped per shell for the same reason, and the count is specified to be read against the rule's alert
+// volume, so counting per trigger event where alerts count per shell would make the two sides of that comparison disagree: several
+// temp execs or outbound connections from one unresolved chain would report several declines against at most one lost alert.
+type declinedShell struct {
+	ruleID   string
+	shellPID int
+}
+
+// RecordAncestryIncomplete notes that ruleID declined the shell at shellPID because an ancestor it needed was absent from the
+// graph. Idempotent per rule and shell within the batch: several trigger events reaching one unresolved chain count once.
+//
+// Nil-safe for the same reason Derive is: the replay harness and direct callers evaluate rules without a scope, and recording an
+// observation must never be the thing that makes them behave differently from the engine.
+func (s *BatchScope) RecordAncestryIncomplete(ruleID string, shellPID int) {
+	if s == nil {
+		return
+	}
+	if s.declinedShells == nil {
+		s.declinedShells = make(map[declinedShell]struct{}, 1)
+	}
+	key := declinedShell{ruleID: ruleID, shellPID: shellPID}
+	if _, dupe := s.declinedShells[key]; dupe {
+		return
+	}
+	s.declinedShells[key] = struct{}{}
+	if s.ancestryIncomplete == nil {
+		s.ancestryIncomplete = make(map[string]int, 1)
+	}
+	s.ancestryIncomplete[ruleID]++
+}
+
+// AncestryIncompleteCounts returns the per-rule counts recorded during this batch, or nil when nothing was declined. The engine
+// reads it once the batch is settled and records it; nothing else should consume it, and it is not a rule-visible signal.
+//
+// The live map is returned, not a copy. A copy would allocate on a path walked once per rule per batch to guard a mutation no
+// caller performs, and the only consumer is the engine's span annotation, which reads one key. Do not write to it.
+func (s *BatchScope) AncestryIncompleteCounts() map[string]int {
+	if s == nil {
+		return nil
+	}
+	return s.ancestryIncomplete
 }
 
 // Derive returns the value stored under key, building it with build the first time this batch asks for it.

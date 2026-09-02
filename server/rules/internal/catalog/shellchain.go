@@ -59,16 +59,21 @@ func shouldFire(
 //
 // The chain is nil for a PID that never re-exec'd, which is nearly all of them, so this costs a field check on the hot path and
 // only walks where a chain exists.
+// The third return distinguishes "no shell on this chain" from "a shell was there and was declined because its parent had no
+// record", and in the latter case names the shell so the caller can count DISTINCT declined shells rather than one per trigger
+// event. Only the caller knows which rule it is speaking for, so the reason is reported rather than counted here, which also keeps
+// this walk free of any observability dependency. A pointer rather than a bool because the identity is what makes the count
+// comparable to alert volume, which is deduped per shell (issue #830 review).
 func findShellOnExecChain(
 	ctx context.Context, s api.GraphReader, hostID string, conn *api.Process,
-) (*api.Process, *api.Process, error) {
+) (shell, parent, declined *api.Process, err error) {
 	chain, err := s.GetExecChain(ctx, *conn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("walk exec chain pid %d: %w", conn.PID, err)
+		return nil, nil, nil, fmt.Errorf("walk exec chain pid %d: %w", conn.PID, err)
 	}
 	// A PID that never re-exec'd has no chain, which is nearly all of them, so this is the hot path and it exits here.
 	if len(chain) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	// Newest generation first. GetExecChain returns the chain OLDEST-first (it recurses backwards through previous_exec_id and
 	// orders by descending depth), and the shell that ran this payload is the one closest to it, not the first one this PID ever
@@ -85,24 +90,29 @@ func findShellOnExecChain(
 		// and its PID was reused before the connection, the old form attributed the chain to the unrelated replacement.
 		priorParent, err := lookupParentOf(ctx, s, hostID, prior)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		// Ancestry incomplete: the shell claims a parent that is not in the graph yet, so defer rather than fire. Firing here would
-		// report a finding whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was
-		// never resolved, so the alert would slip past a rule the operator had deliberately configured. The PPID walk defers on the
-		// same condition and for the same reason. A shell parented at launchd (PPID <= 1) is a genuine no-parent case, not a
-		// missing record, and still counts.
+		// Ancestry incomplete: the shell claims a parent with no record, so report nothing. Firing here would produce a finding
+		// whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was never resolved, so
+		// the alert would recur past a rule they had deliberately configured, with no way to silence it short of disabling the
+		// rule. Giving up this one class of chain keeps the rest tunable.
+		//
+		// This DROPS the chain; it does not defer it. Ancestor and parent-chain lookups keep skip semantics by design (the
+		// canonical retry contract covers the pid an event is ABOUT, not its ancestry), so returning nil here acknowledges the
+		// batch and no later parent record brings the detection back. Earlier wording here said "defer", which read as
+		// recoverable and is not (issue #829 review). A shell parented at launchd (PPID <= 1) is a genuine no-parent case rather
+		// than a missing record, and still counts.
 		if priorParent == nil && prior.PPID > 1 {
-			return nil, nil, nil
+			return nil, nil, prior, nil
 		}
 		// A shell whose own parent is a shell is shell-to-shell layering, not the boundary this rule fires on; keep walking the
 		// chain for one whose parent is not a shell, exactly as the exec arm does.
 		if priorParent != nil && shellPaths()[priorParent.Path] {
 			continue
 		}
-		return prior, priorParent, nil
+		return prior, priorParent, nil, nil
 	}
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
 // findShellWithNonShellAncestor walks the PPID chain inclusively starting at
@@ -110,7 +120,7 @@ func findShellOnExecChain(
 // the matched shell and its non-shell parent. The parent return value is nil
 // only when the shell's parent is launchd (PPID <= 1): that still counts as
 // a match because launchd is structurally non-shell. PPID > 1 with a missing
-// parent record means "ancestry incomplete, defer rather than fire". This
+// parent record means "ancestry incomplete, report nothing". This
 // keeps the rule from alerting on partial data and, in particular, keeps the
 // parent exclusion effective when the entry-point process
 // hasn't been materialised yet.
@@ -139,7 +149,7 @@ func findShellWithNonShellAncestor(
 //     ancestor to examine.
 //   - (nil, nil, nil, nil) means terminate without a match: ran out of
 //     ancestry (PPID<=1 with no shell yet) or the parent record is
-//     missing (defer rather than alert on incomplete data).
+//     missing (report nothing rather than alert on incomplete data).
 //
 // Splitting this out keeps findShellWithNonShellAncestor's loop body small
 // enough that gocognit / Sonar's cognitive-complexity gates stay green.
@@ -157,7 +167,7 @@ func examineCandidate(
 		}
 		return nil, nil, next, nil
 	}
-	// `current` is a shell. Distinguish "launchd parent" (match) from "parent record missing" (defer) from "non-shell parent" (match) from
+	// `current` is a shell. Distinguish "launchd parent" (match) from "parent record missing" (no report) from "non-shell parent" (match) from
 	// "shell parent" (continue walking up).
 	if current.PPID <= 1 {
 		return current, nil, nil, nil
@@ -288,11 +298,16 @@ func shellWithinWindow(r shellChainRule, shell *api.Process, triggerTS int64) bo
 	return triggerTS >= anchor-agentStampSkewPadNs && triggerTS <= anchor+r.window()
 }
 
-// findShellExecEventID scans the current batch for an exec event matching the shell's PID and host so the finding's EventIDs can
-// include the shell-stage event when it happens to be in the same batch as the trigger. Best-effort: when the shell exec is in an
-// earlier batch it isn't findable here and EventIDs simply omits it. The trigger's own event ID is excluded to avoid duplicates in the
-// arm-2 (re-exec) case where shell and temp share a PID.
-func findShellExecEventID(events []api.Event, hostID string, shellPID int, excludeEventID string) string {
+// findShellExecEventID scans the current batch for an exec event matching the shell's PID, host and PATH so the finding's EventIDs
+// can include the shell-stage event when it happens to be in the same batch as the trigger. Best-effort: when the shell exec is in
+// an earlier batch it isn't findable here and EventIDs simply omits it. The trigger's own event ID is excluded to avoid duplicates
+// in the arm-2 (re-exec) case where shell and temp share a PID.
+//
+// Matching the PATH and not merely "is this a shell" is load-bearing once the walk prefers the newest generation on the chain. For
+// `zsh -c 'bash -c ...'` both shells exec in place at ONE pid, so a PID-only match returns whichever appeared first in the batch,
+// which is the zsh generation, while the finding names bash. The alert then described one shell and cited the other's event, which
+// sends an investigation to the wrong exec (issue #830 review). shellPath comes from the generation the walk actually chose.
+func findShellExecEventID(events []api.Event, hostID string, shellPID int, shellPath, excludeEventID string) string {
 	for _, e := range events {
 		if e.EventType != "exec" || e.HostID != hostID || e.EventID == excludeEventID {
 			continue
@@ -304,7 +319,8 @@ func findShellExecEventID(events []api.Event, hostID string, shellPID int, exclu
 		if p.PID != shellPID {
 			continue
 		}
-		if !shellPaths()[p.Path] {
+		// The chosen generation's exact path, not any shell: see the doc above for the re-exec case this gets wrong otherwise.
+		if p.Path != shellPath {
 			continue
 		}
 		return e.EventID

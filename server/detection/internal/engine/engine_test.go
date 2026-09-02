@@ -1092,3 +1092,87 @@ func evaluateErr(e *Engine, ctx context.Context, events []api.Event) error {
 	_, err := e.Evaluate(ctx, events)
 	return err
 }
+
+// decliningRule is a stub that declines the configured number of candidate chains for incomplete ancestry, so a test can pin what
+// the engine publishes without needing the real exec-chain walk or a materialized process graph.
+//
+// It implements ScopedRule, which is the interface the engine reaches for; the embedded stubRule's plain Evaluate stays available
+// and records nothing, which is what makes the two entry points distinguishable below.
+type decliningRule struct {
+	stubRule
+	declines int
+}
+
+func (r *decliningRule) EvaluateScoped(
+	_ context.Context, scope *rulesapi.BatchScope, events []api.Event, _ rulesapi.GraphReader,
+) ([]api.Finding, error) {
+	r.calls++
+	r.received = events
+	// Distinct shell pids, because the scope counts each declined shell once per rule: repeating one pid would collapse to a
+	// single decline and the test would assert the wrong number for reasons unrelated to what it is checking.
+	for i := range r.declines {
+		scope.RecordAncestryIncomplete(r.ID(), 100+i)
+	}
+	return nil, nil
+}
+
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-declined-chain-is-counted-against-the-rule-that-declined-it
+//
+// TestEngine_Evaluate_PerRuleSpanCarriesAncestryDeclines pins that the decline actually reaches a span, and reaches the RIGHT one.
+//
+// Everything else asserting this behaviour stops at the BatchScope: the rules record into it and the tests read it back. That
+// leaves the publishing step untested, and it is the step whose failure is silent in the worst way, because the deliberate
+// detection drop would go back to being invisible while every rule-level test still passed. Exactly the regression the count was
+// added to prevent.
+//
+// Two rules share the batch and therefore share one scope, which is the case worth pinning: the scope accumulates across rules, so
+// a span that reported the batch total rather than its own rule's entry would show the second rule carrying the first rule's
+// declines, and an operator comparing the number against that rule's alert volume would draw the wrong conclusion about a rule
+// that declined nothing.
+func TestEngine_Evaluate_PerRuleSpanCarriesAncestryDeclines(t *testing.T) {
+	t.Parallel()
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	// A local tracer on this Engine instance, not otel.SetTracerProvider, for the same reason the sibling test above avoids it.
+	e := New(nil, nil)
+	e.tracer = tp.Tracer("server/detection/engine")
+	// Two declines on one rule and none on the other. Distinct non-zero and zero values, so a mutant that hardcodes either, or
+	// that pools the counts, produces a different answer on at least one of the two spans.
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&decliningRule{stubRule: stubRule{id: "declines-two"}, declines: 2},
+		&decliningRule{stubRule: stubRule{id: "declines-none"}},
+	}})
+
+	require.NoError(t, evaluateErr(e, t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
+
+	got := map[string]int64{}
+	for _, sp := range rec.Ended() {
+		var ruleID string
+		var declines int64
+		var sawAttr bool
+		for _, a := range sp.Attributes() {
+			switch a.Key {
+			case attribute.Key("rule_id"):
+				ruleID = a.Value.AsString()
+			case attribute.Key("ancestry_incomplete_count"):
+				declines = a.Value.AsInt64()
+				sawAttr = true
+			}
+		}
+		if ruleID == "" {
+			continue
+		}
+		assert.Truef(t, sawAttr,
+			"span for %q carries no ancestry_incomplete_count; a rule declining every chain would then look identical to a "+
+				"rule with nothing to report, which is what the attribute exists to prevent", ruleID)
+		got[ruleID] = declines
+	}
+
+	// Asserted as a whole map rather than key by key, so a span appearing for a rule that should not have one, or a missing span,
+	// fails rather than being skipped by a loop that only checks what it finds.
+	assert.Equal(t, map[string]int64{"declines-two": 2, "declines-none": 0}, got,
+		"each rule's span MUST carry its own declines: the shared scope accumulates across rules, and a batch total would "+
+			"attribute one rule's declines to another")
+}

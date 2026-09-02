@@ -191,8 +191,10 @@ func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 // alert-persistence error aborts immediately because the batch must be retried before any more findings are written.
 func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.MonitorTally, error) {
 	live := filterSnapshotEvents(events)
-	// One scope for the whole batch, so rules deriving the same thing from the same events derive it once (issue #794). The engine
-	// never looks inside it: what a rule puts there belongs to the rules context, which owns both the store and the read. It is
+	// One scope for the whole batch, so rules deriving the same thing from the same events derive it once (issue #794). What a rule
+	// DERIVES stays opaque to the engine: that belongs to the rules context, which owns both the store and the read. The one thing
+	// the engine does read back is the per-rule count of chains declined for incomplete ancestry, which is a map of primitives and
+	// so crosses the context boundary without naming a rules-owned type (issue #829). It is
 	// created unconditionally because it allocates nothing until a rule actually derives something, and it is discarded when this
 	// call returns, so concurrent batches share nothing.
 	scope := &rulesapi.BatchScope{}
@@ -348,11 +350,33 @@ func (e *Engine) evaluateRule(
 	// from the trace at exactly the moment someone would be reading it. The counters start at zero, which is the honest answer
 	// for a rule that produced nothing.
 	var alerted, suppressed, duplicates int
+	// Chains this rule declined because an ancestor had no record, counted as the delta across its own evaluation so a
+	// batch-wide scope still reports per-rule (issue #829). Without it the decline is invisible: a rule that reports nothing
+	// because ancestry was incomplete looks exactly like a rule with nothing to report, which is the documented way a detection
+	// rots unnoticed. Read here rather than at the call site because this span is already labelled with rule_id.
+	//
+	// A SPAN attribute and not a metric counter, deliberately, and it is worth being precise about what that costs. A nacked
+	// batch is replayed whole, so a chain declined in an attempt that is later nacked is recorded again on the next attempt's
+	// span; issue #631 measured roughly 130 retries a minute from one host under a sustained condition, so the absolute count of
+	// declines across spans can exceed the number of chains actually given up. A cumulative metric would have the same problem,
+	// which is why MonitorTally is handed back to be recorded only after the acknowledgement.
+	//
+	// What makes the per-attempt form sufficient here is that the requirement asks for this to be measurable against the rule's
+	// OWN alert volume, and alert_count below is measured on this same span, under the identical retry semantics. Both numbers
+	// inflate by the same replay factor, so the ratio an operator actually reads is unaffected even though neither absolute is a
+	// count of distinct events. Read as a rate against alert_count it answers the question; read as "chains lost today" it does
+	// not, and that is the reason it is an attribute on a span an operator already reads next to those counts rather than a
+	// standalone total presented as authoritative.
+	//
+	// The scope is shared by every rule in the batch, so this reads the entry for THIS rule rather than a batch total. No delta
+	// against a pre-evaluation reading is needed: rulesFor sorts and Compacts its indices, so a rule is evaluated exactly once
+	// per batch and its entry cannot already hold another of its own declines.
 	defer func() {
 		span.SetAttributes(
 			attribute.Int("alert_count", alerted),
 			attribute.Int("suppressed_count", suppressed),
 			attribute.Int("duplicate_count", duplicates),
+			attribute.Int("ancestry_incomplete_count", scope.AncestryIncompleteCounts()[rule.ID()]),
 		)
 	}()
 

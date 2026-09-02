@@ -109,6 +109,7 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		Limitations: []string{
 			"The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.",
+			"A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. A shell started directly by launchd has no parent to name, so those alerts still read `(unknown)` and still fire. Skipped chains are counted per rule on the server's detection traces.",
 		},
 	}
 }
@@ -132,6 +133,14 @@ type execPayload struct {
 }
 
 func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
+}
+
+// EvaluateScoped implements api.ScopedRule. The scope carries nothing this rule derives; it is here so a chain declined for
+// incomplete ancestry is counted rather than silently dropped (issue #829).
+func (r *SuspiciousExec) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	seenShell := map[int]struct{}{}
 	var findings []api.Finding
 	// One event whose process row is still missing defers the batch without ending the pass, so it cannot mask a finding another
@@ -146,7 +155,7 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 		if evt.EventType != "exec" {
 			continue
 		}
-		f, shellPID, err := r.evalExec(ctx, evt, s, events, seenShell)
+		f, shellPID, err := r.evalExec(ctx, scope, evt, s, events, seenShell)
 		if fatal := miss.absorb(err); fatal != nil {
 			return nil, fatal
 		}
@@ -162,7 +171,7 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 // ancestor. The caller uses it for batch-level dedupe so multiple temp-exec children of one shell produce one finding rather than one
 // per child.
 func (r *SuspiciousExec) evalExec(
-	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
 ) (*api.Finding, int, error) {
 	var p execPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
@@ -184,7 +193,8 @@ func (r *SuspiciousExec) evalExec(
 	}
 
 	in := &execMatchInputs{
-		evt: evt, batch: batch, seenShell: seenShell, p: p,
+		scope: scope,
+		evt:   evt, batch: batch, seenShell: seenShell, p: p,
 		tempProc: tempProc, tempPath: tempPath,
 	}
 	if f, shellPID, err := r.evalExecArm1(ctx, s, in); err != nil || f != nil {
@@ -203,6 +213,9 @@ type execMatchInputs struct {
 	p         execPayload
 	tempProc  *api.Process
 	tempPath  string
+	// scope carries the batch's observation sink, so arm 2 can report a chain it declined for incomplete ancestry (issue #829).
+	// Nil-safe on the receiving side, so a caller that builds these inputs without one still works.
+	scope *api.BatchScope
 }
 
 // evalExecArm1 handles the canonical fork+exec dropper shape: the temp-binary is a SEPARATE process from the shell, so the shell
@@ -232,35 +245,33 @@ func (r *SuspiciousExec) evalExecArm1(
 func (r *SuspiciousExec) evalExecArm2(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
 ) (*api.Finding, int, error) {
-	chain, err := s.GetExecChain(ctx, *in.tempProc)
+	// One walk, shared with the outbound-connect rule (issue #829). This used to be a second copy, and the copies had diverged in
+	// two ways that both mattered.
+	//
+	// It walked the chain OLDEST-first. For `zsh -c 'bash -c "..."'`, where both shells exec in place at one PID, the oldest
+	// generation is the one most likely to sit outside the window, so the arm gave up on a chain whose newer shell would have
+	// matched. And it fired on a shell whose parent was absent from the graph, producing an alert whose parent reads "(unknown)":
+	// a parent exclusion matches on the parent's PATH, so an operator who had correctly configured one still received that alert,
+	// every time, with no way to suppress it short of disabling the rule.
+	//
+	// The shared walk takes the newest suitable generation and DROPS a chain with incomplete ancestry. Both are the connect arm's
+	// existing behaviour; this arm simply stops disagreeing with it.
+	prior, priorParent, declined, err := findShellOnExecChain(ctx, s, in.evt.HostID, in.tempProc)
 	if err != nil {
-		return nil, 0, fmt.Errorf("walk exec chain pid %d: %w", in.p.PID, err)
+		return nil, 0, err
 	}
-	for i := range chain {
-		prior := &chain[i]
-		if !shellPaths()[prior.Path] {
-			continue
-		}
-		// Fork-time, not trigger-time: see lookupParentOf's doc. Resolving this edge at the temp exec's timestamp asks who holds
-		// the PPID now, and a recycled PID then answers as the shell's parent.
-		priorParent, err := lookupParentOf(ctx, s, in.evt.HostID, prior)
-		if err != nil {
-			return nil, 0, err
-		}
-		if priorParent != nil && shellPaths()[priorParent.Path] {
-			continue
-		}
-		// KNOWN ASYMMETRY (issue #829), left as-is rather than silently changed here. The connect arm's equivalent walk DEFERS
-		// when a shell claims a parent absent from the graph; this one fires with a nil parent, producing an alert whose parent
-		// reads "(unknown)" and which the operator's parent exclusion therefore cannot suppress. The connect arm's reasoning
-		// applies here too, but adopting it changes which chains this rule reports, so it wants its own test rather than a
-		// drive-by in the change that happened to move the code.
-		if !shouldFire(r, in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
-			return nil, 0, nil
-		}
-		return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
+	// Counted against the DECLINED SHELL, not per trigger event, so several triggers on one unresolved chain count once
+	// and the number stays comparable to this rule's alert volume, which is deduped per shell.
+	if declined != nil {
+		in.scope.RecordAncestryIncomplete(r.ID(), declined.PID)
 	}
-	return nil, 0, nil
+	if prior == nil {
+		return nil, 0, nil
+	}
+	if !shouldFire(r, in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
+		return nil, 0, nil
+	}
+	return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
 }
 
 // makeExecFinding builds the temp-path finding shared by arm 1 and arm 2. In the arm-2 re-exec case tempProc and shell share a PID;
@@ -274,7 +285,7 @@ func (r *SuspiciousExec) makeExecFinding(
 		parentPath = parent.Path
 	}
 	eventIDs := []string{evt.EventID}
-	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, evt.EventID); shellEventID != "" {
+	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)
 	}
 	return &api.Finding{

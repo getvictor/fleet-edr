@@ -539,3 +539,175 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	assert.Contains(t, findings2[0].Description, "/bin/sh")
 	assert.Contains(t, findings2[0].Description, "/tmp/payload")
 }
+
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/the-newest-suitable-generation-on-the-chain-is-preferred
+//
+// TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow is the first of the two behaviour changes in issue #829.
+//
+// The temp arm used to walk the exec chain oldest-first, take the first suitable shell it found, and give up if that one failed
+// the window. For `zsh -c 'bash -c "/tmp/payload"'`, where both shells exec in place at one PID, the oldest generation is exactly
+// the one most likely to be stale, so a chain whose newer shell was well inside the window reported nothing. The shared walk the
+// connect arm already used takes the newest suitable generation, and this arm now uses it.
+func TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	const sec = int64(1_000_000_000)
+	base := 100 * sec
+	events := []api.Event{
+		{EventID: "nw-fork-py", HostID: "host-a", TimestampNs: base, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "nw-exec-py", HostID: "host-a", TimestampNs: base + sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "nw-fork-shell", HostID: "host-a", TimestampNs: base + 2*sec, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		// The OLDEST generation on the chain, 90 seconds before the trigger and so far outside the 30-second window.
+		{EventID: "nw-exec-zsh", HostID: "host-a", TimestampNs: base + 3*sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/zsh","args":["zsh","-c","bash -c /tmp/payload"],"uid":501,"gid":20}`)},
+		// The NEWEST generation, five seconds before the trigger and comfortably inside it.
+		{EventID: "nw-exec-bash", HostID: "host-a", TimestampNs: base + 88*sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/bash","args":["bash","-c","/tmp/payload"],"uid":501,"gid":20}`)},
+		{EventID: "nw-exec-payload", HostID: "host-a", TimestampNs: base + 93*sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "the newest shell on the chain is inside the window, so the chain must be reported")
+	assert.Contains(t, findings[0].Description, "/bin/bash",
+		"the finding names the generation that actually ran the payload, not the stalest one on the chain")
+	// The cited events must agree with the description. Both generations exec at PID 100, so a lookup matching only the pid
+	// returns whichever came first in the batch, which is zsh, and the alert then describes bash while pointing an investigation
+	// at the zsh exec (issue #830 review). Asserting the presence of one and the absence of the other, because a citation list
+	// containing both would satisfy a Contains check while still being wrong.
+	assert.Contains(t, findings[0].EventIDs, "nw-exec-bash",
+		"the cited shell event must be the generation the finding names")
+	assert.NotContains(t, findings[0].EventIDs, "nw-exec-zsh",
+		"citing the older generation sends an investigation to an exec the alert is not about")
+}
+
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-chain-declined-for-any-other-reason-is-not-counted-as-incomplete-ancestry
+//
+// TestSuspiciousExecDoesNotCountAWindowDeclineAsIncompleteAncestry keeps the two reasons a chain is declined from being conflated.
+//
+// The count exists to answer one question: is requiring resolved ancestry costing this fleet real detections often enough to
+// revisit the trade. A chain declined because the shell is simply too old to attribute says nothing about ancestry, and counting
+// it would inflate the number with the rule's ordinary, intended behaviour, which is the fastest way to make an observability
+// signal useless: it would read as "ancestry is a problem here" on every host that runs long-lived shells.
+//
+// The shell's parent resolves fine here. What fails is the window, and this pins that the walk reports a shell it found while the
+// scope stays empty.
+func TestSuspiciousExecDoesNotCountAWindowDeclineAsIncompleteAncestry(t *testing.T) {
+	t.Parallel()
+
+	const hourNs = int64(3600) * 1e9
+	// The two cases differ in ONE value, the payload exec's offset from the shell. That is what makes the second case worth
+	// anything: an assertion that the scope is empty passes just as well when the walk never found the shell in the first place,
+	// so the near case is a control proving this chain IS discoverable and does fire, leaving the window as the only difference.
+	for _, tc := range []struct {
+		name        string
+		payloadOff  int64
+		wantFinding bool
+	}{
+		{name: "payload right after the shell fires", payloadOff: 100, wantFinding: true},
+		{name: "payload an hour later is declined on the window", payloadOff: hourNs, wantFinding: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCatalogStore(t)
+			ctx := t.Context()
+
+			// python3 is a real recorded parent of the shell, so the ancestry half genuinely succeeds rather than succeeding by
+			// accident, and any decline below is attributable to the window alone.
+			events := []api.Event{
+				{EventID: "win-fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+					Payload: json.RawMessage(`{"child_pid":200,"parent_pid":1}`)},
+				{EventID: "win-exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+					Payload: json.RawMessage(`{"pid":200,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+				{EventID: "win-fork-shell", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+					Payload: json.RawMessage(`{"child_pid":300,"parent_pid":200}`)},
+				{EventID: "win-exec-zsh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+					Payload: json.RawMessage(`{"pid":300,"ppid":200,"path":"/bin/zsh","args":["zsh","-c","/tmp/payload"],` +
+						`"uid":501,"gid":20}`)},
+				{EventID: "win-exec-payload", HostID: "host-a", TimestampNs: 2100 + tc.payloadOff, EventType: "exec",
+					Payload: json.RawMessage(`{"pid":300,"ppid":200,"path":"/tmp/payload","args":["/tmp/payload"],` +
+						`"uid":501,"gid":20}`)},
+			}
+			require.NoError(t, s.InsertEvents(ctx, events))
+			materialize(t, s, events)
+
+			scope := &api.BatchScope{}
+			findings, err := (&SuspiciousExec{}).EvaluateScoped(ctx, scope, events, s.GraphReader())
+			require.NoError(t, err)
+			if tc.wantFinding {
+				require.Len(t, findings, 1, "control: this chain must be discoverable, or the other case proves nothing")
+			} else {
+				assert.Empty(t, findings, "the shell is an hour older than the payload, so the window declines it")
+			}
+			// Empty in BOTH cases. The parent resolved either way, and counting a window decline would inflate the signal with
+			// the rule's ordinary intended behaviour, which would read as "ancestry is a problem here" on every host running
+			// long-lived shells.
+			assert.Empty(t, scope.AncestryIncompleteCounts(), "the shell's parent resolved, so no ancestry decline happened")
+		})
+	}
+}
+
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-shell-whose-parent-is-absent-from-the-graph-is-not-reported
+//
+// TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent is the second behaviour change in issue #829, and it COSTS a detection
+// on purpose.
+//
+// The temp arm used to fire on a shell whose claimed parent was not in the graph, producing an alert whose parent reads
+// "(unknown)". A parent exclusion matches on the parent's PATH, so an operator who had correctly configured one received that
+// alert anyway, every time, with no way to suppress it short of disabling the rule.
+//
+// The chain is DROPPED, not retried, and the trade has to be stated that way: ancestor and parent-chain lookups keep skip
+// semantics by design (see the canonical retry requirement), so no later parent record recovers it. What justifies the drop is
+// that an alert nobody can silence drives an operator to disable the rule, which loses every detection it makes rather than
+// this one. The connect arm already made the same trade.
+func TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	// PID 999 is never forked or exec'd, so the shell's claimed parent has no record. PPID > 1, so this is incomplete ancestry
+	// rather than the genuine launchd-parented case, which still counts.
+	events := []api.Event{
+		{EventID: "ab-fork-shell", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":999}`)},
+		{EventID: "ab-exec-zsh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/bin/zsh","args":["zsh","-c","/tmp/payload"],"uid":501,"gid":20}`)},
+		{EventID: "ab-exec-payload", HostID: "host-a", TimestampNs: 2200, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, findings,
+		"a finding here could only name an unresolved parent, which no parent exclusion can suppress")
+
+	// The decline is RECORDED, which is the difference between a considered trade and a silent hole. A rule that reports nothing
+	// because ancestry was incomplete is indistinguishable from a rule with nothing to report, and industry detection-engineering
+	// practice names that as how coverage rots unnoticed (issue #829 review). The engine turns this into an attribute on the
+	// per-rule span it already labels with rule_id.
+	scope := &api.BatchScope{}
+	scoped, err := (&SuspiciousExec{}).EvaluateScoped(ctx, scope, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, scoped, "same outcome through the scoped entry point")
+	assert.Equal(t, map[string]int{"suspicious_exec": 1}, scope.AncestryIncompleteCounts(),
+		"the declined chain is counted against this rule, so the drop is measurable rather than invisible")
+
+	// A plain nil error, NOT the retryable class, which is the whole difference between a skip and a deferral: a nil error lets
+	// the processor acknowledge the batch, so the event is never evaluated again and a parent record arriving later does not
+	// recover the chain. Asserted rather than assumed, because an earlier draft of this change described it as a recoverable
+	// deferral and both review bots caught that it is not (issue #829 review). If a future change makes ancestry retryable, this
+	// line is where that decision has to be made deliberately.
+	require.NoError(t, err)
+	assert.NotErrorIs(t, err, api.ErrRetryBatch,
+		"parent-chain lookups keep skip semantics; the retryable class covers the pid an event is about, not its ancestry")
+}

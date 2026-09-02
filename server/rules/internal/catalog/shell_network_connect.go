@@ -105,6 +105,14 @@ func (r *ShellNetworkConnect) window() int64 { return shellNetworkConnectWindow(
 // Evaluate walks every outbound connection in the batch. One pass, unlike the merged rule's two: there is only one trigger shape
 // left, and the cross-arm precedence the second pass existed to preserve is exactly what the split gives up.
 func (r *ShellNetworkConnect) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
+}
+
+// EvaluateScoped implements api.ScopedRule. The scope carries nothing this rule derives; it is here so a chain declined for
+// incomplete ancestry is counted rather than silently dropped (issue #829).
+func (r *ShellNetworkConnect) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	seenShell := map[int]struct{}{}
 	var findings []api.Finding
 	// One event whose process row is still missing defers the batch without ending the pass, so it cannot mask a finding another
@@ -115,7 +123,7 @@ func (r *ShellNetworkConnect) Evaluate(ctx context.Context, events []api.Event, 
 		if evt.EventType != "network_connect" {
 			continue
 		}
-		f, shellPID, err := r.evalNetwork(ctx, evt, s, events, seenShell)
+		f, shellPID, err := r.evalNetwork(ctx, scope, evt, s, events, seenShell)
 		if fatal := miss.absorb(err); fatal != nil {
 			return nil, fatal
 		}
@@ -131,7 +139,7 @@ func (r *ShellNetworkConnect) Evaluate(ctx context.Context, events []api.Event, 
 // parent is non-shell. The connecting process itself can be the shell (curl|sh case) or any descendant of it (shell spawned curl);
 // the inclusive walk handles both.
 func (r *ShellNetworkConnect) evalNetwork(
-	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
 ) (*api.Finding, int, error) {
 	var c networkConnectPayload
 	if err := json.Unmarshal(evt.Payload, &c); err != nil {
@@ -174,7 +182,7 @@ func (r *ShellNetworkConnect) evalNetwork(
 	// exclusions, or the per-batch dedup. The check is nested rather than repeated once at the end because shouldFire unmarshals the
 	// parent's code-signing record, and this is a per-network_connect path: evaluating it twice for the same shell is measurable
 	// work for an answer that cannot have changed.
-	shell, parent, err := r.networkShell(ctx, s, evt, conn, seenShell)
+	shell, parent, err := r.networkShell(ctx, scope, s, evt, conn, seenShell)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -186,7 +194,7 @@ func (r *ShellNetworkConnect) evalNetwork(
 		parentPath = parent.Path
 	}
 	eventIDs := []string{evt.EventID}
-	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, evt.EventID); shellEventID != "" {
+	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)
 	}
 	return &api.Finding{
@@ -209,7 +217,7 @@ func (r *ShellNetworkConnect) evalNetwork(
 // a per-network_connect path that matters. Returning the decision rather than making it at the call site is also what lets the caller
 // nil-check once, which keeps the nil-safety analysis provable.
 func (r *ShellNetworkConnect) networkShell(
-	ctx context.Context, s api.GraphReader, evt api.Event, conn *api.Process, seenShell map[int]struct{},
+	ctx context.Context, scope *api.BatchScope, s api.GraphReader, evt api.Event, conn *api.Process, seenShell map[int]struct{},
 ) (*api.Process, *api.Process, error) {
 	shell, parent, err := findShellFromResolvedProcess(ctx, s, evt.HostID, conn)
 	if err != nil {
@@ -218,9 +226,14 @@ func (r *ShellNetworkConnect) networkShell(
 	if shell != nil && shouldFire(r, seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		return shell, parent, nil
 	}
-	shell, parent, err = findShellOnExecChain(ctx, s, evt.HostID, conn)
+	shell, parent, declined, err := findShellOnExecChain(ctx, s, evt.HostID, conn)
 	if err != nil {
 		return nil, nil, err
+	}
+	// Counted against the DECLINED SHELL, not per trigger event, so several triggers on one unresolved chain count once
+	// and the number stays comparable to this rule's alert volume, which is deduped per shell.
+	if declined != nil {
+		scope.RecordAncestryIncomplete(r.ID(), declined.PID)
 	}
 	if shell != nil && shouldFire(r, seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		return shell, parent, nil
