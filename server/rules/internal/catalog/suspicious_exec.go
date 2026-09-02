@@ -232,35 +232,28 @@ func (r *SuspiciousExec) evalExecArm1(
 func (r *SuspiciousExec) evalExecArm2(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
 ) (*api.Finding, int, error) {
-	chain, err := s.GetExecChain(ctx, *in.tempProc)
+	// One walk, shared with the outbound-connect rule (issue #829). This used to be a second copy, and the copies had diverged in
+	// two ways that both mattered.
+	//
+	// It walked the chain OLDEST-first. For `zsh -c 'bash -c "..."'`, where both shells exec in place at one PID, the oldest
+	// generation is the one most likely to sit outside the window, so the arm gave up on a chain whose newer shell would have
+	// matched. And it fired on a shell whose parent was absent from the graph, producing an alert whose parent reads "(unknown)":
+	// a parent exclusion matches on the parent's PATH, so an operator who had correctly configured one still received that alert,
+	// every time, with no way to suppress it short of disabling the rule.
+	//
+	// The shared walk takes the newest suitable generation and defers on incomplete ancestry. Both changes are the connect arm's
+	// existing behaviour; this arm simply stops disagreeing with it.
+	prior, priorParent, err := findShellOnExecChain(ctx, s, in.evt.HostID, in.tempProc)
 	if err != nil {
-		return nil, 0, fmt.Errorf("walk exec chain pid %d: %w", in.p.PID, err)
+		return nil, 0, err
 	}
-	for i := range chain {
-		prior := &chain[i]
-		if !shellPaths()[prior.Path] {
-			continue
-		}
-		// Fork-time, not trigger-time: see lookupParentOf's doc. Resolving this edge at the temp exec's timestamp asks who holds
-		// the PPID now, and a recycled PID then answers as the shell's parent.
-		priorParent, err := lookupParentOf(ctx, s, in.evt.HostID, prior)
-		if err != nil {
-			return nil, 0, err
-		}
-		if priorParent != nil && shellPaths()[priorParent.Path] {
-			continue
-		}
-		// KNOWN ASYMMETRY (issue #829), left as-is rather than silently changed here. The connect arm's equivalent walk DEFERS
-		// when a shell claims a parent absent from the graph; this one fires with a nil parent, producing an alert whose parent
-		// reads "(unknown)" and which the operator's parent exclusion therefore cannot suppress. The connect arm's reasoning
-		// applies here too, but adopting it changes which chains this rule reports, so it wants its own test rather than a
-		// drive-by in the change that happened to move the code.
-		if !shouldFire(r, in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
-			return nil, 0, nil
-		}
-		return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
+	if prior == nil {
+		return nil, 0, nil
 	}
-	return nil, 0, nil
+	if !shouldFire(r, in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
+		return nil, 0, nil
+	}
+	return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
 }
 
 // makeExecFinding builds the temp-path finding shared by arm 1 and arm 2. In the arm-2 re-exec case tempProc and shell share a PID;

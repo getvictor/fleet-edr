@@ -539,3 +539,78 @@ func TestSuspiciousExec_CrossBatchTempExec(t *testing.T) {
 	assert.Contains(t, findings2[0].Description, "/bin/sh")
 	assert.Contains(t, findings2[0].Description, "/tmp/payload")
 }
+
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/the-newest-suitable-generation-on-the-chain-is-preferred
+//
+// TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow is the first of the two behaviour changes in issue #829.
+//
+// The temp arm used to walk the exec chain oldest-first, take the first suitable shell it found, and give up if that one failed
+// the window. For `zsh -c 'bash -c "/tmp/payload"'`, where both shells exec in place at one PID, the oldest generation is exactly
+// the one most likely to be stale, so a chain whose newer shell was well inside the window reported nothing. The shared walk the
+// connect arm already used takes the newest suitable generation, and this arm now uses it.
+func TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	const sec = int64(1_000_000_000)
+	base := 100 * sec
+	events := []api.Event{
+		{EventID: "nw-fork-py", HostID: "host-a", TimestampNs: base, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "nw-exec-py", HostID: "host-a", TimestampNs: base + sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "nw-fork-shell", HostID: "host-a", TimestampNs: base + 2*sec, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		// The OLDEST generation on the chain, 90 seconds before the trigger and so far outside the 30-second window.
+		{EventID: "nw-exec-zsh", HostID: "host-a", TimestampNs: base + 3*sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/zsh","args":["zsh","-c","bash -c /tmp/payload"],"uid":501,"gid":20}`)},
+		// The NEWEST generation, five seconds before the trigger and comfortably inside it.
+		{EventID: "nw-exec-bash", HostID: "host-a", TimestampNs: base + 88*sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/bash","args":["bash","-c","/tmp/payload"],"uid":501,"gid":20}`)},
+		{EventID: "nw-exec-payload", HostID: "host-a", TimestampNs: base + 93*sec, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "the newest shell on the chain is inside the window, so the chain must be reported")
+	assert.Contains(t, findings[0].Description, "/bin/bash",
+		"the finding names the generation that actually ran the payload, not the stalest one on the chain")
+}
+
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-shell-whose-parent-is-absent-from-the-graph-defers
+//
+// TestSuspiciousExecDefersWhenTheChainShellsParentIsAbsent is the second behaviour change in issue #829, and it COSTS a detection
+// on purpose.
+//
+// The temp arm used to fire on a shell whose claimed parent was not in the graph, producing an alert whose parent reads
+// "(unknown)". A parent exclusion matches on the parent's PATH, so an operator who had correctly configured one received that
+// alert anyway, every time, with no way to suppress it short of disabling the rule. An unsuppressable false positive is worse
+// than a deferred detection: the deferral is recoverable when the parent's record lands, and the connect arm already made this
+// trade for the same reason.
+func TestSuspiciousExecDefersWhenTheChainShellsParentIsAbsent(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	// PID 999 is never forked or exec'd, so the shell's claimed parent has no record. PPID > 1, so this is incomplete ancestry
+	// rather than the genuine launchd-parented case, which still counts.
+	events := []api.Event{
+		{EventID: "ab-fork-shell", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":999}`)},
+		{EventID: "ab-exec-zsh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/bin/zsh","args":["zsh","-c","/tmp/payload"],"uid":501,"gid":20}`)},
+		{EventID: "ab-exec-payload", HostID: "host-a", TimestampNs: 2200, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, findings,
+		"a finding here could only name an unresolved parent, which no parent exclusion can suppress")
+}
