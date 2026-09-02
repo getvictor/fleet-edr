@@ -15,11 +15,33 @@ func TestBatchScopeRecordsDeclinesPerRule(t *testing.T) {
 	t.Parallel()
 
 	var s BatchScope
-	s.RecordAncestryIncomplete("suspicious_exec")
-	s.RecordAncestryIncomplete("shell_network_connect")
-	s.RecordAncestryIncomplete("suspicious_exec")
+	// Distinct shells, so nothing here is absorbed by the per-shell dedup the test below covers.
+	s.RecordAncestryIncomplete("suspicious_exec", 100)
+	s.RecordAncestryIncomplete("shell_network_connect", 100)
+	s.RecordAncestryIncomplete("suspicious_exec", 200)
 
 	assert.Equal(t, map[string]int{"suspicious_exec": 2, "shell_network_connect": 1}, s.AncestryIncompleteCounts())
+}
+
+// TestBatchScopeCountsEachDeclinedShellOnce pins the dedup that keeps the count comparable to alert volume.
+//
+// Findings are deduped per shell, so one unresolved chain costs at most one alert no matter how many trigger events reach it. The
+// count is specified to be read against that alert volume, so counting once per trigger event instead would report several
+// declines against at most one lost alert: a shell that a batch happened to touch five times would read as five lost detections.
+// Note the same shell pid IS counted separately per rule, because the two rules decline independently and each is compared against
+// its own alerts.
+func TestBatchScopeCountsEachDeclinedShellOnce(t *testing.T) {
+	t.Parallel()
+
+	var s BatchScope
+	for range 5 {
+		s.RecordAncestryIncomplete("suspicious_exec", 100)
+	}
+	s.RecordAncestryIncomplete("suspicious_exec", 101)
+	s.RecordAncestryIncomplete("shell_network_connect", 100)
+
+	assert.Equal(t, map[string]int{"suspicious_exec": 2, "shell_network_connect": 1}, s.AncestryIncompleteCounts(),
+		"five triggers on shell 100 count once; shell 101 is a second distinct chain; the other rule counts its own")
 }
 
 // TestBatchScopeIsNilSafe pins the nil-receiver contract both methods document.
@@ -32,7 +54,7 @@ func TestBatchScopeIsNilSafe(t *testing.T) {
 	t.Parallel()
 
 	var s *BatchScope
-	assert.NotPanics(t, func() { s.RecordAncestryIncomplete("suspicious_exec") })
+	assert.NotPanics(t, func() { s.RecordAncestryIncomplete("suspicious_exec", 100) })
 	assert.Nil(t, s.AncestryIncompleteCounts(), "nothing was recorded, so there is nothing to report")
 }
 

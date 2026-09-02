@@ -139,7 +139,7 @@ Until issue #776 this rule also fired on the same chain making an outbound conne
 
 - The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
 - Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.
-- A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not retried when that parent is recorded later. A finding naming an unresolved parent cannot be suppressed by a parent exclusion, and an alert nobody can silence tends to get the whole rule disabled, so this one class of chain is given up to keep the rest tunable. A shell started directly by launchd is a genuine no-parent case and still alerts.
+- A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. A shell started directly by launchd has no parent to name, so those alerts still read `(unknown)` and still fire. Skipped chains are counted per rule on the server's detection traces.
 
 ## shell_network_connect
 

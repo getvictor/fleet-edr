@@ -30,11 +30,11 @@ func TestFindShellOnExecChainDoesNotReportAFailedLookupAsAbsentAncestry(t *testi
 	s := &recordingGraphReader{errByPID: boom}
 	conn := &api.Process{PID: 100, PPID: 500, Path: "/bin/zsh"}
 
-	shell, parent, incomplete, err := findShellOnExecChain(t.Context(), s, "host-a", conn)
+	shell, parent, declined, err := findShellOnExecChain(t.Context(), s, "host-a", conn)
 
 	require.ErrorIs(t, err, boom, "a failed parent lookup must surface so the batch is nacked and replayed")
-	assert.False(t, incomplete,
-		"a lookup that FAILED is not a parent resolved as absent: reporting it as incomplete ancestry would turn an outage into "+
+	assert.Nil(t, declined,
+		"a lookup that FAILED is not a parent resolved as absent: reporting it as a declined chain would turn an outage into "+
 			"a silent stream of declines and acknowledge events that were never evaluated")
 	assert.Nil(t, shell)
 	assert.Nil(t, parent)

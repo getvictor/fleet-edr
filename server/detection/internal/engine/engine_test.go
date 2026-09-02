@@ -1108,8 +1108,10 @@ func (r *decliningRule) EvaluateScoped(
 ) ([]api.Finding, error) {
 	r.calls++
 	r.received = events
-	for range r.declines {
-		scope.RecordAncestryIncomplete(r.ID())
+	// Distinct shell pids, because the scope counts each declined shell once per rule: repeating one pid would collapse to a
+	// single decline and the test would assert the wrong number for reasons unrelated to what it is checking.
+	for i := range r.declines {
+		scope.RecordAncestryIncomplete(r.ID(), 100+i)
 	}
 	return nil, nil
 }

@@ -194,7 +194,7 @@ func (r *ShellNetworkConnect) evalNetwork(
 		parentPath = parent.Path
 	}
 	eventIDs := []string{evt.EventID}
-	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, evt.EventID); shellEventID != "" {
+	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)
 	}
 	return &api.Finding{
@@ -226,12 +226,14 @@ func (r *ShellNetworkConnect) networkShell(
 	if shell != nil && shouldFire(r, seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		return shell, parent, nil
 	}
-	shell, parent, incomplete, err := findShellOnExecChain(ctx, s, evt.HostID, conn)
+	shell, parent, declined, err := findShellOnExecChain(ctx, s, evt.HostID, conn)
 	if err != nil {
 		return nil, nil, err
 	}
-	if incomplete {
-		scope.RecordAncestryIncomplete(r.ID())
+	// Counted against the DECLINED SHELL, not per trigger event, so several triggers on one unresolved chain count once
+	// and the number stays comparable to this rule's alert volume, which is deduped per shell.
+	if declined != nil {
+		scope.RecordAncestryIncomplete(r.ID(), declined.PID)
 	}
 	if shell != nil && shouldFire(r, seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		return shell, parent, nil

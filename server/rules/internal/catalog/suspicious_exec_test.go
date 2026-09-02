@@ -579,6 +579,14 @@ func TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow(t *testi
 	require.Len(t, findings, 1, "the newest shell on the chain is inside the window, so the chain must be reported")
 	assert.Contains(t, findings[0].Description, "/bin/bash",
 		"the finding names the generation that actually ran the payload, not the stalest one on the chain")
+	// The cited events must agree with the description. Both generations exec at PID 100, so a lookup matching only the pid
+	// returns whichever came first in the batch, which is zsh, and the alert then describes bash while pointing an investigation
+	// at the zsh exec (issue #830 review). Asserting the presence of one and the absence of the other, because a citation list
+	// containing both would satisfy a Contains check while still being wrong.
+	assert.Contains(t, findings[0].EventIDs, "nw-exec-bash",
+		"the cited shell event must be the generation the finding names")
+	assert.NotContains(t, findings[0].EventIDs, "nw-exec-zsh",
+		"citing the older generation sends an investigation to an exec the alert is not about")
 }
 
 // spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-chain-declined-for-any-other-reason-is-not-counted-as-incomplete-ancestry
