@@ -96,7 +96,8 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 			"flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the " +
 			"time the trigger event lands.\n\n" +
 			"Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now " +
-			"`shell_network_connect`, so a chain doing both raises one alert per rule.\n\n" +
+			"`shell_network_connect`, which ships in monitor: a chain doing both raises one alert here and records a match " +
+			"there, and raises one alert per rule once that rule is promoted.\n\n" +
 			"30 seconds is the temporal cap between the shell exec and the temp exec.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"exec"},
@@ -240,7 +241,9 @@ func (r *SuspiciousExec) evalExecArm2(
 		if !shellPaths()[prior.Path] {
 			continue
 		}
-		priorParent, err := lookupAncestor(ctx, s, in.evt.HostID, prior.PPID, in.evt.TimestampNs)
+		// Fork-time, not trigger-time: see lookupParentOf's doc. Resolving this edge at the temp exec's timestamp asks who holds
+		// the PPID now, and a recycled PID then answers as the shell's parent.
+		priorParent, err := lookupParentOf(ctx, s, in.evt.HostID, prior)
 		if err != nil {
 			return nil, 0, err
 		}

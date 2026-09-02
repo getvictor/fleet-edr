@@ -895,3 +895,50 @@ func TestSplitRulesDeclareOneEventTypeEach(t *testing.T) {
 	assert.Equal(t, []string{"network_connect"}, (&ShellNetworkConnect{}).Doc().EventTypes,
 		"shell_network_connect triggers on an outbound connection and nothing else")
 }
+
+// TestShellNetworkConnectResolvesTheChainShellsParentAtForkTime pins the invariant lookupParentOf documents, at the one call site
+// that used to break it (found by Copilot on #776).
+//
+// The exec-chain fallback resolved the re-exec'd shell's parent at the TRIGGER timestamp, which asks "who holds this PID now".
+// PIDs are reused, so when the real parent had exited and something else had taken its PID by the time the connection happened,
+// the rule read the replacement as the shell's parent. Here the replacement is itself a shell, so the walk treated the chain as
+// shell-to-shell layering and returned nothing: a missed detection, not merely a mislabelled one.
+func TestShellNetworkConnectResolvesTheChainShellsParentAtForkTime(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	events := []api.Event{
+		// The real, non-shell parent forks the shell stage.
+		{EventID: "rt-fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "rt-exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "rt-fork-zsh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+		{EventID: "rt-exec-zsh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/bin/zsh","args":["/bin/zsh","-c","curl ..."],"uid":501,"gid":20}`)},
+		// The shell replaces itself with the payload, at its own pid. This is what hides it from the PPID walk (#713).
+		{EventID: "rt-exec-curl", HostID: "host-a", TimestampNs: 2200, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","https://198.51.100.9/"],"uid":501,"gid":20}`)},
+		// The real parent exits, and its PID is recycled by an unrelated SHELL before the connection happens. A shell
+		// specifically, because the walk skips a shell-parented candidate as layering: the misattribution silences the rule
+		// rather than merely renaming the parent on the alert.
+		{EventID: "rt-exit-py", HostID: "host-a", TimestampNs: 2300, EventType: "exit",
+			Payload: json.RawMessage(`{"pid":100,"exit_code":0}`)},
+		{EventID: "rt-fork-reuse", HostID: "host-a", TimestampNs: 2400, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "rt-exec-reuse", HostID: "host-a", TimestampNs: 2500, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":1,"path":"/bin/bash","args":["-bash"],"uid":501,"gid":20}`)},
+		{EventID: "rt-net", HostID: "host-a", TimestampNs: 2600, EventType: "network_connect",
+			Payload: json.RawMessage(`{"pid":200,"protocol":"tcp","direction":"outbound","remote_address":"198.51.100.9","remote_port":443}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	findings, err := (&ShellNetworkConnect{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
+	require.Len(t, findings, 1, "the chain must still be attributed to the parent that forked the shell, not to whatever later took its pid")
+	assert.Contains(t, findings[0].Description, "/usr/bin/python3",
+		"the finding names the real non-shell parent; naming the recycled /bin/bash would mean the edge was resolved at the wrong instant")
+}

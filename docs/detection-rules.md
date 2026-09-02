@@ -125,7 +125,7 @@ Detects the chain shape: non-shell parent → shell child → temp-directory exe
 
 The rule fires on the LAST link of the chain (the temp exec) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
 
-Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now `shell_network_connect`, so a chain doing both raises one alert per rule.
+Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now `shell_network_connect`, which ships in monitor: a chain doing both raises one alert here and records a match there, and raises one alert per rule once that rule is promoted.
 
 30 seconds is the temporal cap between the shell exec and the temp exec.
 
@@ -161,7 +161,7 @@ Detects the chain shape: non-shell parent → shell child → outbound network_c
 
 The rule fires on the LAST link (the connection) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain completing in ~150ms but straddling a 1-second flush boundary still resolves, because the whole ancestor chain has been ingested by the time the trigger lands.
 
-Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-directory exec. A chain doing both now raises one alert per rule.
+Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-directory exec. At this rule's monitor default a chain doing both raises one `suspicious_exec` alert and records a match here; once this rule is promoted the same chain raises one alert per rule.
 
 30 seconds is the temporal cap between the shell exec and the connection.
 

@@ -187,6 +187,16 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	require.NoError(t, rulesCtx.ApplySchema(ctx), "seed rules default policy")
 
 	detectionCtx.LoadActive(rulesCtx.ContentService())
+	// Wire the mode resolver and the monitor-match recorder, exactly as cmd/main does. Without them the engine has no resolver
+	// and every rule runs at its DECLARED default, so a per-rule setting written to the database has no effect on an integration
+	// test at all. That silently limited what these stacks could exercise: since issue #764 put sixty-six of seventy-eight rules
+	// in monitor, any test wanting a monitor-default rule to alert had no way to ask for it, and the L6 efficacy corpus could
+	// only ever cover the twelve that default to alert.
+	//
+	// Behaviour-preserving for existing tests: with no rows in detection_rule_settings the resolver returns the same declared
+	// default the engine was already falling back to.
+	detectionCtx.SetModeResolver(rulesCtx.DetectionConfigModeResolver())
+	detectionCtx.SetMonitorMatchRecorder(rulesCtx.MonitorMatchRecorder())
 
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,

@@ -36,7 +36,7 @@ The change from the prior requirement is that the catalog an operator inspects r
 
 - **GIVEN** a running detection engine in its default configuration
 - **WHEN** an operator inspects the catalog of registered rules
-- **THEN** the catalog includes `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, and `sensor_tamper`
+- **THEN** the catalog includes `suspicious_exec`, `shell_network_connect`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, and `sensor_tamper`
 
 #### Scenario: Rule metadata reports target platforms
 

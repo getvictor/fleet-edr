@@ -60,7 +60,7 @@ func shouldFire(
 // The chain is nil for a PID that never re-exec'd, which is nearly all of them, so this costs a field check on the hot path and
 // only walks where a chain exists.
 func findShellOnExecChain(
-	ctx context.Context, s api.GraphReader, hostID string, conn *api.Process, asOfNs int64,
+	ctx context.Context, s api.GraphReader, hostID string, conn *api.Process,
 ) (*api.Process, *api.Process, error) {
 	chain, err := s.GetExecChain(ctx, *conn)
 	if err != nil {
@@ -79,7 +79,11 @@ func findShellOnExecChain(
 		if !shellPaths()[prior.Path] {
 			continue
 		}
-		priorParent, err := lookupAncestor(ctx, s, hostID, prior.PPID, asOfNs)
+		// lookupParentOf, not lookupAncestor at the trigger timestamp. Its own doc a few functions below states the invariant
+		// this used to break: a parent edge has an answer only at the instant the child forked, and resolving it at "the
+		// timestamp of a network flow made much later by a descendant" asks who holds that PID NOW. If the real parent exited
+		// and its PID was reused before the connection, the old form attributed the chain to the unrelated replacement.
+		priorParent, err := lookupParentOf(ctx, s, hostID, prior)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -172,21 +176,10 @@ func examineCandidate(
 	return nil, nil, candidate, nil
 }
 
-// lookupAncestor returns nil for PIDs at or below launchd (PPID 1) and
-// passes through to GetProcessByPID otherwise.
-func lookupAncestor(
-	ctx context.Context, s api.GraphReader, hostID string, pid int, asOfNs int64,
-) (*api.Process, error) {
-	if pid <= 1 {
-		return nil, nil
-	}
-	p, err := s.GetProcessByPID(ctx, hostID, pid, asOfNs)
-	if err != nil {
-		return nil, fmt.Errorf("get pid %d: %w", pid, err)
-	}
-	return p, nil
-}
-
+// lookupParentOf is the ONLY parent-edge lookup in this file. There used to be a second, lookupAncestor, taking an arbitrary
+// `asOf` instant, and both of its callers passed the trigger timestamp: exactly the misuse the paragraph below forbids. It was
+// removed with those call sites (issue #776 review) rather than left available, so the wrong instant is no longer reachable.
+//
 // lookupParentOf resolves the generation that held child's PPID when CHILD FORKED, which is the only instant at which that question
 // has an answer. Resolving a parent edge at an unrelated instant, such as the timestamp of a network flow made much later by a
 // descendant, asks "who holds this PID now", and PIDs are reused.

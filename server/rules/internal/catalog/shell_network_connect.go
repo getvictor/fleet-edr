@@ -78,8 +78,9 @@ func (r *ShellNetworkConnect) Doc() api.Documentation {
 			"The rule fires on the LAST link (the connection) rather than the shell's exec. That makes it race-immune " +
 			"across the agent's flush boundaries: a chain completing in ~150ms but straddling a 1-second flush boundary " +
 			"still resolves, because the whole ancestor chain has been ingested by the time the trigger lands.\n\n" +
-			"Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-directory exec. A chain doing " +
-			"both now raises one alert per rule.\n\n" +
+			"Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-directory exec. At this rule's " +
+			"monitor default a chain doing both raises one `suspicious_exec` alert and records a match here; once this rule " +
+			"is promoted the same chain raises one alert per rule.\n\n" +
 			"30 seconds is the temporal cap between the shell exec and the connection.",
 		Severity:   api.SeverityHigh,
 		EventTypes: []string{"network_connect"},
@@ -217,7 +218,7 @@ func (r *ShellNetworkConnect) networkShell(
 	if shell != nil && shouldFire(r, seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
 		return shell, parent, nil
 	}
-	shell, parent, err = findShellOnExecChain(ctx, s, evt.HostID, conn, evt.TimestampNs)
+	shell, parent, err = findShellOnExecChain(ctx, s, evt.HostID, conn)
 	if err != nil {
 		return nil, nil, err
 	}
