@@ -18,11 +18,24 @@
  * or promotes the first path segment (`http:///a/b` parses to host `a`). Measured, not assumed. Do not re-add it.
  */
 export function isHTTPURL(raw: string): boolean {
+  return vettedHTTPURL(raw) !== null;
+}
+
+/**
+ * vettedHTTPURL returns the value a caller should actually USE, or null when raw is not an http(s) URL.
+ *
+ * Separate from isHTTPURL because validating one string and then using a different one is its own bug: the check trims, so a
+ * citation carrying a leading non-breaking space passes, and an `href` built from the untrimmed original is then a same-origin
+ * relative URL rather than the vetted citation. The browser does not strip U+00A0 the way it strips ASCII whitespace, so that
+ * mismatch is silent. Any caller putting the result somewhere that resolves it must use this and render what it returns.
+ */
+export function vettedHTTPURL(raw: string): string | null {
+  const trimmed = raw.trim();
   try {
-    const { protocol } = new URL(raw.trim());
-    return protocol === "http:" || protocol === "https:";
+    const { protocol } = new URL(trimmed);
+    return protocol === "http:" || protocol === "https:" ? trimmed : null;
   } catch {
     // Not a parseable absolute URL: a bare path, a DOI, free text. Callers render it as plain text.
-    return false;
+    return null;
   }
 }

@@ -55,6 +55,7 @@ Each request body is a versioned JSON envelope. Example of an `alert.created` de
     "title": "Credential access via LSASS",
     "description": "...",
     "rule_id": "cred_access_lsass",
+    "origin": "SigmaHQ, by Alejandro Ortuno, oscd.community",
     "techniques": ["T1003.001"],
     "created_at": "2026-07-01T18:22:03.400Z",
     "updated_at": "2026-07-01T18:22:03.400Z"
@@ -66,6 +67,8 @@ Each request body is a versioned JSON envelope. Example of an `alert.created` de
 ```
 
 An `alert.status_changed` delivery additionally carries `alert.previous_status`. The payload never contains any signing secret. `event_id` is stable across retries of the same delivery; deduplicate on it.
+
+`alert.origin` names the author of the rule that fired: `Fleet EDR` for a rule this project wrote, and the upstream project plus that rule's own author for a rule vendored from an external corpus. The vendored rules ship under the [Detection Rule License](https://github.com/SigmaHQ/Detection-Rule-License), which requires the author be credited wherever a match is displayed, so a receiver that renders these alerts to people should carry the credit through. The field is omitted rather than empty in two cases: an alert raised before the field existed, and an application-control block, whose `rule_id` is the operator's own policy rather than a detection with an author. Its addition did not change `schema_version`, since a consumer that ignores it is unaffected.
 
 ## Verifying a delivery
 

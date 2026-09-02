@@ -113,11 +113,14 @@ func TestBuild_roundTrip(t *testing.T) {
 					Severity:    rapid.SampledFrom([]string{"low", "medium", "high", "critical"}).Draw(rt, "sev"),
 					Title:       rapid.String().Draw(rt, "title"),
 					Description: rapid.String().Draw(rt, "desc"),
-					Techniques:  detapi.JSONStringSlice(rapid.SliceOf(rapid.String()).Draw(rt, "techs")),
-					Status:      detapi.AlertStatus(rapid.SampledFrom([]string{"open", "acknowledged", "resolved"}).Draw(rt, "status")),
-					CreatedAt:   utcTime("created"),
-					UpdatedAt:   utcTime("updated"),
-					ResolvedAt:  resolved,
+					// Both forms are drawn, because Origin is `omitempty`: the empty one exercises the field's ABSENCE from the
+					// wire, which is a different document shape and the only one this generator produced before (issue #765).
+					Origin:     rapid.SampledFrom([]string{"", "Fleet EDR", "SigmaHQ, by Someone"}).Draw(rt, "origin"),
+					Techniques: detapi.JSONStringSlice(rapid.SliceOf(rapid.String()).Draw(rt, "techs")),
+					Status:     detapi.AlertStatus(rapid.SampledFrom([]string{"open", "acknowledged", "resolved"}).Draw(rt, "status")),
+					CreatedAt:  utcTime("created"),
+					UpdatedAt:  utcTime("updated"),
+					ResolvedAt: resolved,
 				},
 			})
 

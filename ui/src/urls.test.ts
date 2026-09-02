@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isHTTPURL } from "./urls";
+import { isHTTPURL, vettedHTTPURL } from "./urls";
 
 // isHTTPURL gates whether untrusted text becomes a followable link, so these are security assertions rather than parsing ones.
 // It was extracted from two components that each had their own copy under the SAME name with different behaviour (issue #765
@@ -27,5 +27,27 @@ describe("isHTTPURL", () => {
     ["", false, "empty"],
   ])("%s -> %s (%s)", (input, want) => {
     expect(isHTTPURL(input)).toBe(want);
+  });
+});
+
+// vettedHTTPURL is what callers must use anywhere the result is resolved (an href, a fetch), because isHTTPURL answers a question
+// about the NORMALIZED value and returning the caller's original would approve one string and use another.
+describe("vettedHTTPURL", () => {
+  const cases: [string, string | null, string][] = [
+    ["https://example.com/x", "https://example.com/x", "an ordinary URL is returned unchanged"],
+    ["  https://example.com/x  ", "https://example.com/x", "ASCII whitespace is stripped from the result"],
+    ["\u00A0https://example.com/x\u00A0", "https://example.com/x", "a non-breaking space is stripped from the result"],
+    ["javascript:alert(1)", null, "a rejected scheme returns null rather than a string"],
+    ["Internal research note", null, "free text returns null"],
+  ];
+  it.each(cases)("%s -> %s (%s)", (input, want) => {
+    expect(vettedHTTPURL(input)).toBe(want);
+  });
+
+  // The two must never disagree, or a caller that checks one and uses the other reintroduces the bug this pair exists to prevent.
+  it("agrees with isHTTPURL on every case", () => {
+    for (const s of ["https://a.example/x", "\u00A0https://a.example/x", "javascript:alert(1)", "", "not a url"]) {
+      expect(isHTTPURL(s)).toBe(vettedHTTPURL(s) !== null);
+    }
   });
 });

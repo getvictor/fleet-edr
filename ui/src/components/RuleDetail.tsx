@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { fetchRuleDocs, type RuleDocEntry } from "../api";
-import { isHTTPURL } from "../urls";
+import { vettedHTTPURL } from "../urls";
 import { PageHeader } from "./ui/PageHeader";
 import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
@@ -235,13 +235,16 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
                     plainly http(s) is rendered as text, which still shows the operator what the rule cited while making it
                     inert. Vetted links open in a new tab with noopener so the opened page cannot reach back through
                     window.opener. */}
-                {isHTTPURL(ref) ? (
-                  <a href={ref} target="_blank" rel="noopener noreferrer">
-                    {ref}
-                  </a>
-                ) : (
-                  ref
-                )}
+                {((vetted) =>
+                  vetted !== null ? (
+                    // The VETTED value in both the href and the label, never the raw one: the check normalises before parsing,
+                    // so an href built from the original would not be the string that was approved.
+                    <a href={vetted} target="_blank" rel="noopener noreferrer">
+                      {vetted}
+                    </a>
+                  ) : (
+                    ref
+                  ))(vettedHTTPURL(ref))}
               </li>
             ))}
           </ul>

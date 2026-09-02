@@ -20,12 +20,30 @@ import mysql, { Connection } from "mysql2/promise";
 export function assertLaneEnv(): void {
   const port = process.env.E2E_PORT;
   const db = process.env.E2E_DB;
-  if (Boolean(port) === Boolean(db)) return;
-  throw new Error(
-    `E2E_PORT and E2E_DB must be set together (got E2E_PORT=${port ?? "unset"}, E2E_DB=${db ?? "unset"}). ` +
-      "Setting only one drives one worktree's server while resetting the other worktree's auth tables. " +
-      "For lane B use: E2E_PORT=8089 E2E_DB=edr2",
-  );
+  const advice = "For lane B use: E2E_PORT=8089 E2E_DB=edr2";
+
+  // Defined-ness, not truthiness. `E2E_PORT=""` is falsy but not nullish, so a truthiness pair-check passed it while the `??`
+  // defaults below did NOT apply, leaving port 0 and an empty schema. Both are "the variable is set", so both must be validated.
+  const portSet = port !== undefined;
+  const dbSet = db !== undefined;
+  if (portSet !== dbSet) {
+    throw new Error(
+      `E2E_PORT and E2E_DB must be set together (got E2E_PORT=${port ?? "unset"}, E2E_DB=${db ?? "unset"}). ` +
+        "Setting only one drives one worktree's server while resetting the other worktree's auth tables. " +
+        advice,
+    );
+  }
+  if (!portSet) return;
+
+  // Paired but invalid is the other half of the same hazard, and quieter: a non-numeric port becomes `https://localhost:NaN` and
+  // an empty schema becomes a connection to the server's default, both of which fail in ways that look like anything but a typo.
+  const parsed = Number(port);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error(`E2E_PORT must be an integer port between 1 and 65535 (got ${JSON.stringify(port)}). ${advice}`);
+  }
+  if (db === "") {
+    throw new Error(`E2E_DB must name a schema (got an empty string). ${advice}`);
+  }
 }
 
 assertLaneEnv();

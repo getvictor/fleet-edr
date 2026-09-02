@@ -328,10 +328,13 @@ type Alert struct {
 	// (detection vs application_control), Origin says who WROTE the rule that fired. "SigmaHQ, by <author>" for a rule from
 	// the imported corpus, "Fleet EDR" for one this project wrote.
 	//
-	// Stamped by the engine from the rule (rules/api.OriginOf), never read off the Finding, so a rule cannot forge its own
-	// credit. Present because the imported corpus ships under the Detection Rule License, which requires the author be
-	// credited wherever a match is displayed; it is a licence record, not decoration. Empty only on rows raised before the
-	// column existed (migration 00012), all of which predate the imported corpus alerting.
+	// Stamped by the engine from the rule (rules/api.AlertOriginOf), never read off the Finding, so a rule cannot forge its
+	// own credit. Present because the imported corpus ships under the Detection Rule License, which requires the author be
+	// credited wherever a match is displayed; it is a licence record, not decoration.
+	//
+	// Empty has TWO legitimate meanings, and a consumer must treat neither as a defect: a row raised before the column existed
+	// (migration 00012), and a non-detection projection such as an application-control block, whose rule id is the operator's
+	// own policy rather than a detection this project can name an author for. Render nothing in both cases.
 	Origin string `db:"origin" json:"origin"`
 	// ProcessID is the enrichment link to processes(id); 0 for process-less alerts (e.g. BTM-registration persistence,
 	// where the attacker has no live process). Reads COALESCE the nullable column back to 0.

@@ -277,6 +277,19 @@ describe("RuleDetail references", () => {
     expect(screen.queryByRole("link", { name: ref })).toBeNull();
   });
 
+  // The bug this pins: isHTTPURL trims before parsing, so a citation with a leading non-breaking space is accepted, and an href
+  // built from the untrimmed original resolves as a same-origin relative URL because the browser does not strip U+00A0. The href
+  // must therefore be the value that was validated, not the value that was supplied. Found by Copilot on #824.
+  it("links the normalized value, not the raw one, for a citation carrying a non-breaking space", async () => {
+    (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeEntry({ doc: { ...makeEntry().doc, references: ["\u00A0https://redcanary.com/blog/x\u00A0"] } }),
+    ]);
+    renderAt("suspicious_exec");
+
+    const link = await screen.findByRole("link", { name: "https://redcanary.com/blog/x" });
+    expect(link).toHaveAttribute("href", "https://redcanary.com/blog/x");
+  });
+
   // Not every citation is a URL. A bare DOI or a book title should still be shown rather than dropped.
   it("shows a non-URL citation as text", async () => {
     (api.fetchRuleDocs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
