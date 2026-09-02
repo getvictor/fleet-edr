@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -197,4 +199,79 @@ func TestFirstDivergence(t *testing.T) {
 	assert.Equal(t, 3, line)
 	assert.Empty(t, a, "the shorter side has no line there")
 	assert.Equal(t, "three", b)
+}
+
+// writeFile writes one file, creating its parents. Local to this test because the runCheck test needs a specs tree, a marker
+// source and a changes tree, and the existing helpers each build only one of those.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+}
+
+// TestRunCheck_FailsOnDivergentRestatementsRegardlessOfStrict covers the WIRING, not the detector.
+//
+// Every other test here calls findRestatementConflicts directly, which proves the detector works and nothing about whether
+// runCheck consults it. Removing the switch case, or gating it on --strict, would leave all of those green while restoring the
+// release-corruption path this change exists to close (issue #838 review). This is the third time in this area that a helper was
+// tested and its call site was not, so it is worth the fixture.
+//
+// Non-strict is the assertion that matters. A divergent restatement is not a coverage bar the tree has not reached, it is text the
+// archive will discard, so it must fail a plain run.
+func TestRunCheck_FailsOnDivergentRestatementsRegardlessOfStrict(t *testing.T) {
+	t.Parallel()
+
+	const bodyA = "The system SHALL expose `edr.events.ingested`."
+	const bodyB = "The system SHALL expose `edr.events.ingested` and one more."
+
+	// A canonical spec whose scenario is covered by a marker, so --strict has nothing else to fail on and an exit code can only
+	// be about the restatements.
+	setup := func(t *testing.T, restatements map[string]string) (specs, changes, root string) {
+		t.Helper()
+		base := t.TempDir()
+		specs = filepath.Join(base, "openspec", "specs")
+		changes = filepath.Join(base, "openspec", "changes")
+		root = filepath.Join(base, "src")
+		writeFile(t, filepath.Join(specs, "observability-instrumentation", "spec.md"),
+			"# Observability\n\n### Requirement: Stable counter names\n\nThe system SHALL expose counters.\n\n"+
+				"#### Scenario: Ingested events are counted by host\n\n- **THEN** the counter is incremented\n")
+		writeFile(t, filepath.Join(root, "covered_test.go"),
+			"package x\n\n// spec:observability-instrumentation/stable-counter-names/ingested-events-are-counted-by-host\n"+
+				"func TestCovered(t *testing.T) {}\n")
+		for change, body := range restatements {
+			writeChangeSpec(t, changes, change, "observability-instrumentation", requirementBlock(body, ""))
+		}
+		return specs, changes, root
+	}
+
+	run := func(t *testing.T, specs, changes, root string, strict bool) int {
+		t.Helper()
+		args := []string{"--specs-dir", specs, "--changes-dir", changes, "--root", root}
+		if strict {
+			args = append(args, "--strict")
+		}
+		return runCheck(args)
+	}
+
+	t.Run("divergent restatements fail without --strict", func(t *testing.T) {
+		t.Parallel()
+		specs, changes, root := setup(t, map[string]string{"change-one": bodyA, "change-two": bodyB})
+		assert.Equal(t, 1, run(t, specs, changes, root, false),
+			"a divergent restatement is text the archive will discard, so it must fail a plain run and not wait for --strict")
+	})
+
+	t.Run("divergent restatements fail with --strict", func(t *testing.T) {
+		t.Parallel()
+		specs, changes, root := setup(t, map[string]string{"change-one": bodyA, "change-two": bodyB})
+		assert.Equal(t, 1, run(t, specs, changes, root, true))
+	})
+
+	// The control. Without it an exit of 1 above could be coming from anything in runCheck, and the test would pass even if the
+	// conflict check were never consulted.
+	t.Run("identical restatements pass in both modes", func(t *testing.T) {
+		t.Parallel()
+		specs, changes, root := setup(t, map[string]string{"change-one": bodyA, "change-two": bodyA})
+		assert.Equal(t, 0, run(t, specs, changes, root, false), "control: this fixture is otherwise clean")
+		assert.Equal(t, 0, run(t, specs, changes, root, true))
+	})
 }

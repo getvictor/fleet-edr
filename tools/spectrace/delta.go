@@ -28,20 +28,25 @@ type deltaSections struct {
 // The lines are kept because the scenario list alone cannot detect the divergence that matters. `openspec archive` replaces a
 // requirement WHOLE, so two changes agreeing on scenario headings while disagreeing on the requirement's normative text still lose
 // one of those texts at release. Reconciling only the headings would make a gate PASS over that state, which is worse than leaving
-// it visibly broken (issue #815, and the argument review made on #814).
+// it visibly broken (issue #815, and the argument review made on #814). findRestatementConflicts is what consumes them.
 type restatement struct {
 	scenarios map[string]struct{}
 	// lines are the entry's own lines, from its `### Requirement:` heading up to whatever ends it, verbatim.
 	lines []string
 }
 
-// restatedScenarios collapses modifiedScenarios to one scenario set per requirement, which is what the exemption filter consumes.
+// restatedScenarios collapses modifiedRestatements to one scenario set per requirement, which is what the exemption filter
+// consumes.
 //
 // The sets are unioned, which keeps a scenario gated for as long as ANY in-flight change still lists it. That is the conservative
 // direction for an exemption, and it is deliberately not the archive's behaviour: the archive replaces a requirement WHOLE and
 // applies changes in sequence, so where two changes restate one requirement differently the last to archive discards the other's
-// scenarios AND its wording. This union does not fix that and does not detect it; #815 tracks it, with a reproduction and the
-// three requirements in this repository it currently affects.
+// scenarios AND its wording.
+//
+// The union is not what protects against that, and must not be read as though it were. findRestatementConflicts does, by refusing
+// concurrent restatements that are not identical (issue #815), and it runs BEFORE these exemptions are applied for a reason: this
+// union will happily exempt a scenario that only the restatement destined to lose still mentions, so its output is only
+// trustworthy once the restatements agree.
 func (d *deltaSections) restatedScenarios() map[string]map[string]struct{} {
 	out := make(map[string]map[string]struct{}, len(d.modifiedRestatements))
 	for requirement, byChange := range d.modifiedRestatements {
