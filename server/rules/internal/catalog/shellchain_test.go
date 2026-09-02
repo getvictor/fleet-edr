@@ -15,7 +15,7 @@ import (
 //
 // findShellOnExecChain reports two different kinds of nothing: "no shell on this chain" and "a shell was there, and its parent had
 // no record". A THIRD thing can happen, which is that the parent lookup fails outright, and that is not a resolved absence: the
-// parent may well exist. Folding it into incompleteAncestry would silently convert a datastore outage into a stream of "chain
+// parent may well exist. Reporting it as a declined chain would silently convert a datastore outage into a stream of "chain
 // declined" observations while the error that should have nacked the batch disappeared, so the rule would acknowledge events it
 // never actually evaluated.
 //

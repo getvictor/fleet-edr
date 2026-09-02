@@ -254,7 +254,7 @@ func (r *SuspiciousExec) evalExecArm2(
 	// a parent exclusion matches on the parent's PATH, so an operator who had correctly configured one still received that alert,
 	// every time, with no way to suppress it short of disabling the rule.
 	//
-	// The shared walk takes the newest suitable generation and defers on incomplete ancestry. Both changes are the connect arm's
+	// The shared walk takes the newest suitable generation and DROPS a chain with incomplete ancestry. Both are the connect arm's
 	// existing behaviour; this arm simply stops disagreeing with it.
 	prior, priorParent, declined, err := findShellOnExecChain(ctx, s, in.evt.HostID, in.tempProc)
 	if err != nil {
