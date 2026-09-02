@@ -87,11 +87,16 @@ func findShellOnExecChain(
 		if err != nil {
 			return nil, nil, err
 		}
-		// Ancestry incomplete: the shell claims a parent that is not in the graph yet, so defer rather than fire. Firing here would
-		// report a finding whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was
-		// never resolved, so the alert would slip past a rule the operator had deliberately configured. The PPID walk defers on the
-		// same condition and for the same reason. A shell parented at launchd (PPID <= 1) is a genuine no-parent case, not a
-		// missing record, and still counts.
+		// Ancestry incomplete: the shell claims a parent with no record, so report nothing. Firing here would produce a finding
+		// whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was never resolved, so
+		// the alert would recur past a rule they had deliberately configured, with no way to silence it short of disabling the
+		// rule. Giving up this one class of chain keeps the rest tunable.
+		//
+		// This DROPS the chain; it does not defer it. Ancestor and parent-chain lookups keep skip semantics by design (the
+		// canonical retry contract covers the pid an event is ABOUT, not its ancestry), so returning nil here acknowledges the
+		// batch and no later parent record brings the detection back. Earlier wording here said "defer", which read as
+		// recoverable and is not (issue #829 review). A shell parented at launchd (PPID <= 1) is a genuine no-parent case rather
+		// than a missing record, and still counts.
 		if priorParent == nil && prior.PPID > 1 {
 			return nil, nil, nil
 		}
@@ -110,7 +115,7 @@ func findShellOnExecChain(
 // the matched shell and its non-shell parent. The parent return value is nil
 // only when the shell's parent is launchd (PPID <= 1): that still counts as
 // a match because launchd is structurally non-shell. PPID > 1 with a missing
-// parent record means "ancestry incomplete, defer rather than fire". This
+// parent record means "ancestry incomplete, report nothing". This
 // keeps the rule from alerting on partial data and, in particular, keeps the
 // parent exclusion effective when the entry-point process
 // hasn't been materialised yet.
@@ -139,7 +144,7 @@ func findShellWithNonShellAncestor(
 //     ancestor to examine.
 //   - (nil, nil, nil, nil) means terminate without a match: ran out of
 //     ancestry (PPID<=1 with no shell yet) or the parent record is
-//     missing (defer rather than alert on incomplete data).
+//     missing (report nothing rather than alert on incomplete data).
 //
 // Splitting this out keeps findShellWithNonShellAncestor's loop body small
 // enough that gocognit / Sonar's cognitive-complexity gates stay green.
@@ -157,7 +162,7 @@ func examineCandidate(
 		}
 		return nil, nil, next, nil
 	}
-	// `current` is a shell. Distinguish "launchd parent" (match) from "parent record missing" (defer) from "non-shell parent" (match) from
+	// `current` is a shell. Distinguish "launchd parent" (match) from "parent record missing" (no report) from "non-shell parent" (match) from
 	// "shell parent" (continue walking up).
 	if current.PPID <= 1 {
 		return current, nil, nil, nil

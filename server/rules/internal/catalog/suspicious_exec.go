@@ -109,7 +109,7 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		Limitations: []string{
 			"The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.",
-			"A chain whose shell claims a parent that is not in the recorded process tree is held back rather than alerted on: a finding naming an unresolved parent cannot be suppressed by a parent exclusion, so an alert an operator has no way to silence is the worse outcome. A shell started directly by launchd is a genuine no-parent case and still alerts.",
+			"A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not retried when that parent is recorded later. A finding naming an unresolved parent cannot be suppressed by a parent exclusion, and an alert nobody can silence tends to get the whole rule disabled, so this one class of chain is given up to keep the rest tunable. A shell started directly by launchd is a genuine no-parent case and still alerts.",
 		},
 	}
 }

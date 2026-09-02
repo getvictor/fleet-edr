@@ -581,17 +581,20 @@ func TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow(t *testi
 		"the finding names the generation that actually ran the payload, not the stalest one on the chain")
 }
 
-// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-shell-whose-parent-is-absent-from-the-graph-defers
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-shell-whose-parent-is-absent-from-the-graph-is-not-reported
 //
-// TestSuspiciousExecDefersWhenTheChainShellsParentIsAbsent is the second behaviour change in issue #829, and it COSTS a detection
+// TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent is the second behaviour change in issue #829, and it COSTS a detection
 // on purpose.
 //
 // The temp arm used to fire on a shell whose claimed parent was not in the graph, producing an alert whose parent reads
 // "(unknown)". A parent exclusion matches on the parent's PATH, so an operator who had correctly configured one received that
-// alert anyway, every time, with no way to suppress it short of disabling the rule. An unsuppressable false positive is worse
-// than a deferred detection: the deferral is recoverable when the parent's record lands, and the connect arm already made this
-// trade for the same reason.
-func TestSuspiciousExecDefersWhenTheChainShellsParentIsAbsent(t *testing.T) {
+// alert anyway, every time, with no way to suppress it short of disabling the rule.
+//
+// The chain is DROPPED, not retried, and the trade has to be stated that way: ancestor and parent-chain lookups keep skip
+// semantics by design (see the canonical retry requirement), so no later parent record recovers it. What justifies the drop is
+// that an alert nobody can silence drives an operator to disable the rule, which loses every detection it makes rather than
+// this one. The connect arm already made the same trade.
+func TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent(t *testing.T) {
 	t.Parallel()
 	s := openCatalogStore(t)
 	ctx := t.Context()
@@ -610,7 +613,15 @@ func TestSuspiciousExecDefersWhenTheChainShellsParentIsAbsent(t *testing.T) {
 	materialize(t, s, events)
 
 	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
-	require.NoError(t, err)
 	assert.Empty(t, findings,
 		"a finding here could only name an unresolved parent, which no parent exclusion can suppress")
+
+	// A plain nil error, NOT the retryable class, which is the whole difference between a skip and a deferral: a nil error lets
+	// the processor acknowledge the batch, so the event is never evaluated again and a parent record arriving later does not
+	// recover the chain. Asserted rather than assumed, because an earlier draft of this change described it as a recoverable
+	// deferral and both review bots caught that it is not (issue #829 review). If a future change makes ancestry retryable, this
+	// line is where that decision has to be made deliberately.
+	require.NoError(t, err)
+	assert.NotErrorIs(t, err, api.ErrRetryBatch,
+		"parent-chain lookups keep skip semantics; the retryable class covers the pid an event is about, not its ancestry")
 }
