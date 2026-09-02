@@ -28,6 +28,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 | Rule ID | Title | Severity | Default mode | ATT&CK |
 | --- | --- | --- | --- | --- |
 | [`suspicious_exec`](#suspicious_exec) | Suspicious exec chain | high | alert | T1059, T1105 |
+| [`shell_network_connect`](#shell_network_connect) | Shell outbound connection | high | monitor | T1059, T1105 |
 | [`persistence_launchagent`](#persistence_launchagent) | LaunchAgent persistence | high | alert | T1543.001 |
 | [`dyld_insert`](#dyld_insert) | DYLD injection on exec | high | alert | T1574.006 |
 | [`shell_from_office`](#shell_from_office) | Shell spawned by Microsoft Office | high | alert | T1566.001, T1059.004 |
@@ -107,7 +108,7 @@ These rules are carried in the vendored upstream corpus but are not registered, 
 ## suspicious_exec
 
 **Suspicious exec chain**  
-Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.
+Flags a non-shell process that spawns a shell which, within 30 seconds, execs a binary from a world-writable directory.
 
 | | |
 | --- | --- |
@@ -116,30 +117,64 @@ Flags a non-shell process that spawns a shell which, within 30 seconds, execs fr
 | Default mode | `alert` |
 | Source | Fleet EDR |
 | ATT&CK | [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
-| Event types | `exec`, `network_connect` |
+| Event types | `exec` |
 
 ### Description
 
-Detects two related chain shapes that share a single attribution chain:
+Detects the chain shape: non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`).
 
-1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)
-2. non-shell parent → shell child → outbound network_connect
+The rule fires on the LAST link of the chain (the temp exec) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
 
-The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
+Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now `shell_network_connect`, which ships in monitor: a chain doing both raises one alert here and records a match there, and raises one alert per rule once that rule is promoted.
 
-30 seconds is the temporal cap between the shell exec and the trigger event.
+30 seconds is the temporal cap between the shell exec and the temp exec.
 
 ### Known false-positive sources
 
-- Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.
-- Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
+- Interactive SSH where an admin runs a script from /tmp. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.
+- Developer tooling that shells out to a versioned install (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
 - Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.
 
 ### Limitations
 
-- The window bounds how long after the shell exec a trigger still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
-- A parent-path-glob exclusion silences BOTH arms of the rule for that parent.
-- An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.
+- The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
+- Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.
+
+## shell_network_connect
+
+**Shell outbound connection**  
+Flags a non-shell process that spawns a shell which, within 30 seconds, makes an outbound network connection.
+
+| | |
+| --- | --- |
+| Rule ID | `shell_network_connect` |
+| Severity | `high` |
+| Default mode | `monitor` |
+| Source | Fleet EDR |
+| | This rule records what it would have fired on and raises **no alert** until an operator promotes it. |
+| ATT&CK | [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
+| Event types | `network_connect` |
+
+### Description
+
+Detects the chain shape: non-shell parent → shell child → outbound network_connect.
+
+The rule fires on the LAST link (the connection) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain completing in ~150ms but straddling a 1-second flush boundary still resolves, because the whole ancestor chain has been ingested by the time the trigger lands.
+
+Split from `suspicious_exec` (issue #776), which fired on this shape or a temp-directory exec. At this rule's monitor default a chain doing both raises one `suspicious_exec` alert and records a match here; once this rule is promoted the same chain raises one alert per rule.
+
+30 seconds is the temporal cap between the shell exec and the connection.
+
+### Known false-positive sources
+
+- Interactive SSH where an admin curls a tool. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that is a routine workflow on the host class.
+- Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` that survives upgrades.
+
+### Limitations
+
+- The window bounds how long after the shell exec a connection still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
+- An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not fire; a lookup to a publicly routable resolver still does.
+- Exclusions saved against `suspicious_exec` before the split (issue #776) do not apply here, because exclusions are keyed by rule id. Re-add any that should silence this shape too.
 
 ## persistence_launchagent
 

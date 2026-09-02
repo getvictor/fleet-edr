@@ -1,0 +1,63 @@
+# A chain that exhibits BOTH shell-chain signals: python3 spawns a shell, the shell execs a payload out of /tmp, and that payload
+# connects outbound. Before issue #776 this raised ONE alert, because suspicious_exec preferred the temp-path arm and suppressed
+# its own connect arm through a seenShell shared across two passes.
+#
+# Replayed at DEFAULT modes it raises one suspicious_exec alert and records one shell_network_connect monitor match, because that
+# rule ships in monitor. Promote shell_network_connect to see the two-alert outcome the split produces; the scenario cannot
+# produce it on its own, and saying otherwise would make this fixture promise a result a reader could not reproduce.
+#
+# Exists to make that outcome reproducible on a live server, not only in a unit test: the two-alert behaviour is the accepted cost
+# of the split and the baseline #777 has to change, so it is worth being able to see it end to end.
+name: "Shell chain exhibiting both signals"
+mitre: T1059
+host:
+  id: AAAA0007-0000-0000-0000-000000000007
+  hostname: lab-mac.local
+  os: macOS 14.4
+timeline:
+  - at: 0ms
+    type: fork
+    child_pid: 7001
+    parent_pid: 1
+  - at: 5ms
+    type: exec
+    pid: 7001
+    ppid: 1
+    path: /usr/bin/python3
+    args: ["python3", "-c", "import subprocess; subprocess.run(['/bin/sh'])"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+  - at: 40ms
+    type: fork
+    child_pid: 7002
+    parent_pid: 7001
+  - at: 45ms
+    type: exec
+    pid: 7002
+    ppid: 7001
+    path: /bin/sh
+    args: ["sh"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+  - at: 80ms
+    type: fork
+    child_pid: 7003
+    parent_pid: 7002
+  - at: 85ms
+    type: exec
+    pid: 7003
+    ppid: 7002
+    path: /tmp/payload
+    args: ["/tmp/payload"]
+    cwd: /tmp
+    uid: 501
+    gid: 20
+  - at: 120ms
+    type: network_connect
+    pid: 7003
+    protocol: tcp
+    direction: outbound
+    remote_address: 198.51.100.42
+    remote_port: 443

@@ -126,7 +126,9 @@ const (
 	dgaEntropyBitsPerChar = 3.5
 )
 
-// networkConnectPayload is declared in suspicious_exec.go (PID, Direction, RemoteAddress, RemotePort); reused here.
+// networkConnectPayload is declared in shell_network_connect.go (PID, Direction, RemoteAddress, RemotePort); reused here. It
+// moved there with the outbound-connect arm (issue #776) and is left beside its main consumer rather than hoisted to a
+// neutral file, since a third reader is one cross-reference, and one that is now correct.
 
 type dnsQueryPayload struct {
 	PID               int      `json:"pid"`

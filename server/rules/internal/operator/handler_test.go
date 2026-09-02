@@ -214,12 +214,27 @@ func TestHandler_ListRules_DefaultMode(t *testing.T) {
 	// "has an origin" and "is vendored" were the same question and a surface could answer either by testing for "". Now every rule
 	// names someone, which is what lets the alert view render credit unconditionally instead of only when it happens to be
 	// non-empty. The discriminator moved to the value, so this checks the value.
+	// spec:server-detection-rules-engine/independently-tunable-chain-shapes-are-separate-rules/a-rule-separated-out-of-another-ships-in-monitor
+	//
+	// Authored rules ship in alert with named exceptions, rather than "ours implies alert" flatly. That flat form held until issue
+	// #776 split suspicious_exec and deliberately shipped the new arm in monitor: it carries no saved exclusions, so promoting it
+	// before its own false-positive rate is observed would re-raise every FP the merged rule had already been tuned for. Keeping
+	// this as an explicit list rather than dropping the assertion means a rule that quietly defaults to monitor is still caught,
+	// and the reason for each exception is written down where the next reader will look.
+	authoredMonitorByDesign := map[string]string{
+		"shell_network_connect": "issue #776: split from suspicious_exec with no inherited exclusions; promoted once its own FP rate is seen",
+	}
+
 	var credited, ours int
 	for _, r := range body.Rules {
 		require.NotEmptyf(t, r.Origin, "rule %q credits nobody; every rule names an origin so the alert view can render one", r.ID)
 		if r.Origin == rulesapi.ProjectOrigin {
 			ours++
-			assert.Equal(t, "alert", r.DefaultMode, "rule %q is ours, so it should alert by default", r.ID)
+			if reason, exempt := authoredMonitorByDesign[r.ID]; exempt {
+				assert.Equalf(t, "monitor", r.DefaultMode, "rule %q is listed as monitor-by-design (%s) but does not ship in monitor", r.ID, reason)
+				continue
+			}
+			assert.Equal(t, "alert", r.DefaultMode, "rule %q is ours and not listed as monitor-by-design, so it should alert", r.ID)
 			continue
 		}
 		credited++

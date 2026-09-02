@@ -55,6 +55,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	detectionapi "github.com/fleetdm/edr/server/detection/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/test/fakeagent"
 	"github.com/fleetdm/edr/test/integration"
 )
@@ -117,6 +118,13 @@ func TestL6_DetectionEfficacy(t *testing.T) {
 
 	require.NotEmpty(t, attacks, "no attack scenarios discovered under corpus/")
 	require.NotEmpty(t, noise, "no noise scenarios discovered under noise/")
+
+	// L6 asks whether the sensor DETECTS each attack, which is a question about the detection logic rather than about the mode a
+	// rule happens to ship in: a rule in monitor detects the same chain and simply does not raise an alert. Promoting up front is
+	// what lets the corpus cover rules that default to monitor, which since issue #764 is sixty-six of the seventy-eight
+	// registered, and it became load-bearing with issue #776: the scenario guarding #713's exec-chain walk now targets a rule
+	// that ships in monitor. Done once for the whole run rather than per scenario, so the convergence wait is paid once.
+	promoteExpectedRules(t, stack, attacks)
 
 	var (
 		results       []result
@@ -257,6 +265,7 @@ func runAttack(t *testing.T, stack *integration.Stack, entry scenarioEntry) resu
 
 	hostID := entry.Scenario.Host.ID
 	ctx := t.Context()
+
 	token, err := enroll(ctx, stack, hostID, entry.Name)
 	if err != nil {
 		t.Errorf("enroll: %v", err)
@@ -304,6 +313,60 @@ func runAttack(t *testing.T, stack *integration.Stack, entry scenarioEntry) resu
 		}
 	}
 	return res
+}
+
+// promoteExpectedRules puts every rule a scenario expects into alert mode for the run.
+//
+// Written straight to detection_rule_settings rather than through the REST surface because the promotion is a PRECONDITION of the
+// measurement, not part of it: routing it through the API would make a detection failure indistinguishable from a configuration
+// failure. The version bump is not optional bookkeeping, it is the cache-invalidation signal: a replica reloads its config
+// snapshot only when detection_config_meta.version moves, so a settings row written without it is invisible to the running server
+// forever rather than merely until the next refresh tick.
+func promoteExpectedRules(t *testing.T, stack *integration.Stack, attacks []scenarioEntry) {
+	t.Helper()
+	ctx := t.Context()
+
+	ids := map[string]struct{}{}
+	for _, a := range attacks {
+		for _, r := range a.Expected.Rules {
+			ids[r.RuleID] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	for id := range ids {
+		_, err := stack.DB.ExecContext(ctx, `
+			INSERT INTO detection_rule_settings (rule_id, host_group_id, mode, updated_by)
+			VALUES (?, 0, 'alert', 'efficacy-harness')
+			ON DUPLICATE KEY UPDATE mode = VALUES(mode)`, id)
+		require.NoErrorf(t, err, "promote %s", id)
+	}
+	// Bumping the version is the cache-invalidation signal, not bookkeeping: a replica reloads its config snapshot only when
+	// detection_config_meta.version moves, so rows written without it are invisible to the running server forever rather than
+	// until the next tick.
+	_, err := stack.DB.ExecContext(ctx, `UPDATE detection_config_meta SET version = version + 1 WHERE id = 1`)
+	require.NoError(t, err, "bump detection config version")
+
+	// The rules context's background loop is what converges the snapshot, and integration.Setup does not start it: it starts the
+	// detection and identity loops only, so in every other integration test the detection config is frozen at whatever boot
+	// loaded. Start it here, which is also what production does (cmd/main runs it), so this harness evaluates against a config
+	// that can actually change. t.Context cancels it when the test ends.
+	go stack.Rules.Run(t.Context())
+
+	// Then WAIT for the snapshot to converge before any scenario posts. The refresh is a poll, so the write alone does not make
+	// the mode current, and a scenario that posts first evaluates its rule in the old mode and fails on a thirty-second timeout
+	// that looks like a detection miss rather than a race.
+	resolver := stack.Rules.DetectionConfigModeResolver()
+	require.Eventuallyf(t, func() bool {
+		for id := range ids {
+			mode, _ := resolver.ResolveRuleMode(id, "any-host", rulesapi.DetectionRuleModeMonitor)
+			if mode != rulesapi.DetectionRuleModeAlert {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 250*time.Millisecond, "promoted rules never reached the server's config snapshot")
 }
 
 // runNoise drives one noise scenario and returns whether the host stayed

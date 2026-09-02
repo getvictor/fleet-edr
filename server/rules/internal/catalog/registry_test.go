@@ -37,6 +37,7 @@ func TestAll_RegisterEveryShippedRule(t *testing.T) {
 	}
 	wantIDs := []string{
 		"suspicious_exec",
+		"shell_network_connect",
 		"persistence_launchagent",
 		"dyld_insert",
 		"shell_from_office",
@@ -223,7 +224,7 @@ func TestAll_DetectionsClaimTechniques(t *testing.T) {
 	}
 }
 
-// TestAll_DetectionsNameTheirAlgorithm pins that every detection declares the evaluator that decides it (issue #757).
+// TestAll_DetectionsSayWhatDecidesThem pins that every detection declares the evaluator that decides it (issue #757).
 //
 // A Go-implemented rule is only inspectable if its file says which procedure runs it; without that, the exported file documents
 // what the rule is for and stays silent on what it actually does. The check is scoped to detections because a non-detection is
@@ -238,10 +239,13 @@ func TestAll_DetectionsSayWhatDecidesThem(t *testing.T) {
 	// code that no longer decides anything; naming neither leaves an exported file that cannot say what the rule does.
 	known := map[string]struct{}{
 		"ancestor_walk_path_prefix": {},
-		"descendant_within_window":  {},
-		"dns_resolve_then_connect":  {},
-		"absence_within_window":     {},
-		"btm_item_signing_verdict":  {},
+		// The connect half of the split (issue #776). A distinct name, not a reuse: the walk is shared but the trigger and the
+		// match are not, and a rule whose algorithm name lies about what decides it is exactly what this table exists to catch.
+		"ancestor_walk_outbound_connect": {},
+		"descendant_within_window":       {},
+		"dns_resolve_then_connect":       {},
+		"absence_within_window":          {},
+		"btm_item_signing_verdict":       {},
 	}
 
 	seen := map[string]struct{}{}

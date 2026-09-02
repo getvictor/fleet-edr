@@ -147,6 +147,8 @@ func TestCatalog_ListShape(t *testing.T) {
 	full := r.Catalog().List()
 	wantIDs := []string{
 		"suspicious_exec",
+		// Registered immediately after the rule it was split from (issue #776), which is also the order the catalog reports.
+		"shell_network_connect",
 		"persistence_launchagent",
 		"dyld_insert",
 		"shell_from_office",

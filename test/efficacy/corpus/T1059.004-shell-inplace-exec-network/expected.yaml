@@ -1,11 +1,18 @@
 # Expected detection assertions for the in-place shell exec scenario. Before issue #713 this
 # produced NO alert while the fork-shaped equivalent produced one, so a regression here means the
-# network arm has stopped consulting the connecting pid's exec chain and zsh payloads are invisible
-# again.
+# exec-chain walk has stopped consulting the connecting pid's own chain and zsh payloads are
+# invisible again.
+#
+# Retargeted from suspicious_exec by issue #776, which moved the outbound-connect shape to its own
+# rule. The chain this scenario replays ends in a network_connect, so suspicious_exec no longer sees
+# it at all; leaving the old id here would have failed nightly rather than at review time.
+#
+# shell_network_connect ships in monitor, and the harness promotes every rule named here before
+# posting: L6 asks whether the sensor detects the attack, which a rule in monitor does.
 scenario_id: T1059.004-shell-inplace-exec-network
 mitre: T1059.004 + T1105
 within_seconds: 30
 rules:
-  - rule_id: suspicious_exec
+  - rule_id: shell_network_connect
     severity: high
     expect: alert

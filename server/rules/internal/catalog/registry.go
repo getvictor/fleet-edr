@@ -21,6 +21,7 @@ func New(resolver api.ExclusionResolver) []api.Rule {
 
 	rules := []api.Rule{
 		&SuspiciousExec{Exclusions: resolver},
+		&ShellNetworkConnect{Exclusions: resolver},
 		&PersistenceLaunchAgent{Exclusions: resolver},
 		&DyldInsert{},
 		&ShellFromOffice{},
