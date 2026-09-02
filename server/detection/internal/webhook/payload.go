@@ -52,7 +52,10 @@ type AlertBody struct {
 	// Origin credits the author of the rule that fired, mirroring detection/api.Alert.Origin. Carried into the delivery because a
 	// receiver that renders our alerts is a surface displaying a match, and the vendored corpus's licence attaches the same
 	// attribution requirement there as in our own UI. Additive: SchemaVersion is unchanged, since a consumer that does not read
-	// the field is unaffected by its presence. Empty only for alerts raised before migration 00012 added the column.
+	// the field is unaffected by its presence.
+	//
+	// Omitted in two cases, neither of them a fault: an alert raised before migration 00012 added the column, and an
+	// application-control block, whose rule id is the operator's own policy rather than a detection with an author.
 	Origin     string     `json:"origin,omitempty"`
 	Techniques []string   `json:"techniques,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`

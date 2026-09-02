@@ -8,6 +8,9 @@ describe("isHTTPURL", () => {
   it.each([
     ["https://redcanary.com/blog/applescript/", true, "an ordinary https URL"],
     ["http://example.com/x", true, "http is allowed too; these are citations, not credentials"],
+    // Schemes are case-insensitive and the URL API normalises them. Pinned on both surfaces so the markdown generator and this
+    // renderer cannot drift on which citations are followable.
+    ["HTTPS://example.com/x", true, "an uppercase scheme is normalised, not rejected"],
     // ASCII spaces are stripped by the URL parser itself, so this case does NOT exercise the trim.
     ["  https://example.com/x  ", true, "surrounding ASCII whitespace"],
     // This one does. The parser strips only C0 controls and space, while String.trim also strips Unicode whitespace, so a

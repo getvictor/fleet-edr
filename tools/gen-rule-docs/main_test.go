@@ -121,6 +121,10 @@ func TestMDReference(t *testing.T) {
 	}{
 		{"an https URL becomes an explicit autolink", "https://redcanary.com/blog/x", "<https://redcanary.com/blog/x>"},
 		{"an http URL becomes an explicit autolink", "http://example.com/a", "<http://example.com/a>"},
+		// URI schemes are case-insensitive and url.Parse normalises them, so the lowercase comparison is correct rather than
+		// lucky. Pinned because a reviewer read it as a rejection of uppercase schemes, and because the browser-side renderer
+		// normalises the same way: the two surfaces have to keep agreeing on which citations are followable.
+		{"an uppercase scheme is normalised, not rejected", "HTTPS://example.com/source", "<https://example.com/source>"},
 		{"a markdown link is neutralised", "[citation](//attacker.example)", "`[citation](//attacker.example)`"},
 		{"a javascript URL is not followable", "javascript:alert(1)", "`javascript:alert(1)`"},
 		{"free text is inert", "Internal research note, 2026", "`Internal research note, 2026`"},
