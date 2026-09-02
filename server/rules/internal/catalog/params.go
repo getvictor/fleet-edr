@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 
@@ -196,10 +197,15 @@ func validateRuleID(name, id string) error {
 // re-claimed, and nothing caps the attempts: one such rule matching on a host stops that host's queue draining at all, ending
 // detection for the host rather than for the rule (issue #832).
 func checkRuleIDLength(name, id string) error {
-	if len(id) > api.MaxRuleIDLen {
+	// RUNES, not len(). The limit is a character count because that is what VARCHAR(n) counts, and len() counts UTF-8 bytes: a
+	// 255-character identifier of multibyte characters is up to 1020 bytes, so a byte comparison would refuse an identifier every
+	// target column can store, and refuse it by failing the load. An earlier version of this reasoned that rule identifiers are
+	// ASCII by convention so the two coincide; nothing enforces that convention, and "it does not matter in practice" is not a
+	// property (issue #835 review).
+	if n := utf8.RuneCountInString(id); n > api.MaxRuleIDLen {
 		return fmt.Errorf("%s: rule id %q is %d characters, over the %d-character limit; it cannot be stored, and a rule whose "+
 			"alerts cannot be persisted wedges the event queue of any host it matches on",
-			name, id, len(id), api.MaxRuleIDLen)
+			name, id, n, api.MaxRuleIDLen)
 	}
 	return nil
 }

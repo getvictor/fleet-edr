@@ -112,6 +112,35 @@ func TestRecordMonitorMatches(t *testing.T) {
 
 // spec:observability-instrumentation/monitor-mode-matches-are-recorded-durably-per-rule/counts-older-than-the-retention-window-are-pruned
 //
+// TestRecordMonitorMatchesAcceptsTheLongestShippedRuleID is the regression for the half of issue #832 that was already losing
+// data, rather than the half that was waiting for someone to promote a rule.
+//
+// A monitor-mode match writes this table, and the recorder logs and drops a failure by design so the batch is unaffected. So with
+// a 70-character identifier against a VARCHAR(64) column, the count was silently absent for exactly the rule an operator was
+// trying to judge before promoting it, and the tuning table showed it as never having fired.
+//
+// Every other test here uses short identifiers, and the end-to-end test promotes the rule so it never writes this table at all.
+// Removing the ALTER for this column therefore left the entire suite green while monitor evidence was still dropped (issue #835
+// review).
+func TestRecordMonitorMatchesAcceptsTheLongestShippedRuleID(t *testing.T) {
+	t.Parallel()
+	store, _ := openStore(t)
+	ctx := t.Context()
+
+	const longest = "proc_creation_macos_remote_access_tools_teamviewer_incoming_connection"
+	require.Greater(t, len(longest), 64, "the point of this test is an identifier over the width the column used to have")
+
+	require.NoError(t, store.RecordMonitorMatches(ctx, api.MonitorTally{
+		{RuleID: longest, HostID: "host-a", Severity: "low", Count: 2},
+	}))
+
+	rows, err := store.MatchCounts(ctx, api.DefaultMatchCountWindow)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, longest, rows[0].RuleID, "stored and read back whole, not truncated")
+	assert.EqualValues(t, 2, rows[0].Matches, "and the count an operator judges the rule by is the one recorded")
+}
+
 // TestPruneMatchCounts pins that the table is bounded, and that the knob's disabled value disables the prune rather than pruning
 // everything, which is the failure that would silently erase the record this feature exists to keep.
 func TestPruneMatchCounts(t *testing.T) {

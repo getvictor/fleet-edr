@@ -52,8 +52,10 @@ type (
 // utf8mb4 columns on InnoDB's two-byte length prefix, which is what makes widening the existing tables an in-place operation
 // rather than a table rebuild.
 //
-// It is a CHARACTER count, matching how VARCHAR(n) is declared and how the loader measures. Rule identifiers are ASCII
-// snake_case by convention, so characters and bytes coincide in practice; the column has room for 4-byte runes regardless.
+// It is a CHARACTER count, matching how VARCHAR(n) is declared, and the loader measures runes rather than bytes to agree with it.
+// Those differ: 255 multibyte characters is up to 1020 bytes, so comparing len() against this would refuse an identifier the
+// columns can store. Rule identifiers are ASCII snake_case by convention, but nothing enforces that, and a convention is not a
+// reason to measure the wrong thing.
 const MaxRuleIDLen = 255
 
 // Severity levels aligned with industry standards (CrowdStrike, MITRE).

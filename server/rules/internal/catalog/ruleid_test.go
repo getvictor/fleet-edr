@@ -37,26 +37,6 @@ func TestEveryShippedRuleIDIsStorable(t *testing.T) {
 	}
 }
 
-// TestShippedRuleIDsStillExceedTheOldWidth pins WHY the columns are wider than 64, so the reason survives the person who found it.
-//
-// Without this, the four widened columns look like arbitrary generosity, and a later tidying pass could narrow them back with
-// every other test still green: the catalog gate above would pass at any width above 70, and nothing else measures the corpus.
-// This fails if the long rule is renamed, which is the right moment to re-examine the width rather than discover it later.
-func TestShippedRuleIDsStillExceedTheOldWidth(t *testing.T) {
-	t.Parallel()
-
-	longest := ""
-	for _, r := range New(nil) {
-		if len(r.ID()) > len(longest) {
-			longest = r.ID()
-		}
-	}
-	assert.Greater(t, len(longest), 64,
-		"the catalog no longer ships an identifier over 64 characters (longest is %q); the widened rule_id columns and this "+
-			"guard were added for exactly that case, so re-check them deliberately rather than assuming they are still needed",
-		longest)
-}
-
 // spec:server-detection-rules-engine/a-rule-whose-identifier-cannot-be-persisted-is-refused-at-load/an-over-long-identifier-is-refused-when-the-rule-set-loads
 //
 // TestLoadImported_RefusesAnOverLongRuleID drives the IMPORTED LOADER, not the helper it calls.
@@ -90,6 +70,66 @@ func TestLoadImported_RefusesAnOverLongRuleID(t *testing.T) {
 	assert.Contains(t, err.Error(), "over the", "the message must say the identifier is over the limit")
 	assert.Contains(t, err.Error(), "wedges the event queue",
 		"and must say what it costs, because the consequence is not guessable from a length error")
+}
+
+// TestLoadPack_RefusesAnOverLongRuleID drives the PACK loaders, not the helper they call.
+//
+// The same inert-guard problem the imported-loader test above was written for: asserting validateRuleID rejects a long id proves
+// nothing about whether loadPackParams or loadPackDetections calls it, and removing either call left the suite green (issue #835
+// review). Both are driven, because they are separate loaders over the same files and either one registering a rule the other
+// refused would be worse than neither refusing.
+//
+// A pack identifier is arbitrary YAML text rather than a filename, so unlike the imported path this refusal is reachable with no
+// qualification about filesystem limits.
+func TestLoadPack_RefusesAnOverLongRuleID(t *testing.T) {
+	t.Parallel()
+
+	tooLong := strings.Repeat("p", api.MaxRuleIDLen+1)
+	body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection: {sel: {Image: x}, condition: sel}\n" +
+		"x-engine:\n  rule_id: " + tooLong + "\n  algorithm: ancestor_walk_temp_exec\n")
+	fsys := fstest.MapFS{"pack/over_long.yml": &fstest.MapFile{Data: body}}
+
+	for _, tc := range []struct {
+		name string
+		load func() error
+	}{
+		{name: "params loader", load: func() error { _, err := loadPack(fsys); return err }},
+		{name: "detections loader", load: func() error { _, err := loadDetections(fsys); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.load()
+			require.Error(t, err, "a pack rule whose identifier cannot be stored must not load")
+			assert.Contains(t, err.Error(), "over the", "the message must say the identifier is over the limit")
+		})
+	}
+}
+
+// TestLoadImported_RefusesAnOverLongRuleIDEvenWhenTheRuleIsOtherwiseRejected pins that the refusal is a PREFLIGHT.
+//
+// It was not, and that was a defect. parseImported returns SOFT rejections for a rule using a field the binder cannot map, and
+// those are recorded and skipped rather than failing the load, so an over-long filename whose rule also used an unsupported field
+// exited at that earlier return and loadImported SUCCEEDED. The hard refusal the requirement asks for simply did not happen
+// (issue #835 review).
+//
+// The file here is both: an unstorable name AND a rule the binder cannot map. Before the fix this loaded with a soft rejection;
+// now the name is refused before anything is parsed.
+func TestLoadImported_RefusesAnOverLongRuleIDEvenWhenTheRuleIsOtherwiseRejected(t *testing.T) {
+	t.Parallel()
+
+	// A field with no mapping, so parseImported would reject this file softly if it ever got that far.
+	body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection: {sel: {ThisFieldHasNoMapping: x}, condition: sel}\n")
+	stem := strings.Repeat("s", api.MaxRuleIDLen+1)
+	fsys := fstest.MapFS{"process_creation/" + stem + ".yml": &fstest.MapFile{Data: body}}
+
+	_, rejected, err := loadImported(fsys, ".")
+
+	require.Error(t, err,
+		"an unstorable identifier must FAIL the load, not be recorded as a soft rejection alongside unmappable rules")
+	assert.Contains(t, err.Error(), "over the")
+	assert.Empty(t, rejected, "the load failed, so nothing should have been parsed far enough to be softly rejected")
 }
 
 // TestCheckRuleIDLengthIsSharedByEveryLoader pins that the length refusal covers the IMPORTED path, not just the pack loaders.
@@ -130,6 +170,12 @@ func TestValidateRuleID(t *testing.T) {
 		{name: "exactly at the limit", id: strings.Repeat("a", api.MaxRuleIDLen)},
 		{name: "one over the limit", id: strings.Repeat("a", api.MaxRuleIDLen+1), wantErr: "over the"},
 		{name: "empty", id: "", wantErr: "is empty"},
+		// The limit counts CHARACTERS because VARCHAR(n) does. These two are the boundary that separates a character count from
+		// a byte count: 255 three-byte runes is 765 bytes, so a byte comparison refuses an identifier every column can store,
+		// and 256 of them must still be refused. An identifier this shape is not idiomatic, but nothing enforces ASCII and a
+		// convention is not a reason to measure the wrong thing (issue #835 review).
+		{name: "multibyte, exactly at the limit", id: strings.Repeat("日", api.MaxRuleIDLen)},
+		{name: "multibyte, one over the limit", id: strings.Repeat("日", api.MaxRuleIDLen+1), wantErr: "over the"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
