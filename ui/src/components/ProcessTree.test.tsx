@@ -611,3 +611,41 @@ describe("ProcessTreeView alert title link", () => {
     expect(screen.queryByRole("link", { name: launchDaemonAlert.title })).not.toBeInTheDocument();
   });
 });
+
+// Rule attribution on the alert breadcrumb (issue #765). The breadcrumb is the alert's detail view, so it displays a match and
+// carries the same Detection Rule License obligation as the alert list.
+describe("ProcessTreeView alert attribution", () => {
+  it("credits the rule author on the alert breadcrumb", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({
+      ...launchDaemonAlert,
+      origin: "SigmaHQ, by Alejandro Ortuno, oscd.community",
+    });
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText("SigmaHQ, by Alejandro Ortuno, oscd.community")).toBeVisible();
+  });
+
+  // The rule link above the credit is rendered only for a rule the catalog documents. Attribution must not inherit that
+  // condition: whether we ship a doc page for someone's rule has nothing to do with whether we owe them credit for it. This
+  // alert's rule is deliberately one with no catalog doc.
+  it("credits the author even when the rule has no documentation page to link", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue({
+      ...launchDaemonAlert,
+      rule_id: "undocumented_upstream_rule",
+      origin: "SigmaHQ, by Someone",
+    });
+    renderTree("?alert=7&process=0&at=1750248000000");
+
+    expect(await screen.findByText("SigmaHQ, by Someone")).toBeVisible();
+    expect(screen.queryByRole("link", { name: /Open documentation for the undocumented_upstream_rule rule/i })).toBeNull();
+  });
+
+  it("shows no attribution for an alert raised before the field existed", async () => {
+    vi.spyOn(api, "getAlertDetail").mockResolvedValue(launchDaemonAlert);
+    const { container } = renderTree("?alert=7&process=0&at=1750248000000");
+
+    await screen.findByText(/registered as system LaunchDaemon/i);
+    expect(container.querySelector(".alert-breadcrumb__origin")).toBeNull();
+  });
+});
+

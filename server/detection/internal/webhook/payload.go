@@ -41,18 +41,26 @@ type Envelope struct {
 
 // AlertBody is the alert projection carried in the envelope. PreviousStatus is populated only for status-change events.
 type AlertBody struct {
-	ID             int64      `json:"id"`
-	Status         string     `json:"status"`
-	PreviousStatus string     `json:"previous_status,omitempty"`
-	Severity       string     `json:"severity"`
-	Source         string     `json:"source"`
-	Title          string     `json:"title"`
-	Description    string     `json:"description"`
-	RuleID         string     `json:"rule_id"`
-	Techniques     []string   `json:"techniques,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	ID             int64  `json:"id"`
+	Status         string `json:"status"`
+	PreviousStatus string `json:"previous_status,omitempty"`
+	Severity       string `json:"severity"`
+	Source         string `json:"source"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	RuleID         string `json:"rule_id"`
+	// Origin credits the author of the rule that fired, mirroring detection/api.Alert.Origin. Carried into the delivery because a
+	// receiver that renders our alerts is a surface displaying a match, and the vendored corpus's licence attaches the same
+	// attribution requirement there as in our own UI. Additive: SchemaVersion is unchanged, since a consumer that does not read
+	// the field is unaffected by its presence.
+	//
+	// Omitted in two cases, neither of them a fault: an alert raised before migration 00012 added the column, and an
+	// application-control block, whose rule id is the operator's own policy rather than a detection with an author.
+	Origin     string     `json:"origin,omitempty"`
+	Techniques []string   `json:"techniques,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 
 // HostBody is the triggering host context. Only the stable host id is carried; richer host enrichment is a documented follow-up.
@@ -98,6 +106,7 @@ func Build(p BuildParams) Envelope {
 			Source:         p.Alert.Source,
 			Title:          p.Alert.Title,
 			Description:    p.Alert.Description,
+			Origin:         p.Alert.Origin,
 			RuleID:         p.Alert.RuleID,
 			Techniques:     []string(p.Alert.Techniques),
 			CreatedAt:      p.Alert.CreatedAt,

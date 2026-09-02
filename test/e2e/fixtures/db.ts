@@ -4,12 +4,56 @@ import mysql, { Connection } from "mysql2/promise";
 // Dev DB matches Taskfile's dev:server* env block: root user, empty
 // password, port 33306. Keep this constant in sync with
 // Taskfile.yml's EDR_DSN.
+//
+// The schema is overridable for the same reason playwright.config.ts's port is: this repository is worked as two worktrees on one
+// machine, and lane B runs its server on 8089 against the `edr2` schema. Pointing only the port at lane B while this stayed
+// hardcoded to `edr` would be worse than not running at all, because the suite would drive one lane's server and reset the OTHER
+// lane's auth tables. E2E_PORT and E2E_DB must therefore be set together, which assertLaneEnv below enforces rather than requests.
+/**
+ * assertLaneEnv refuses a half-configured lane override.
+ *
+ * Setting only E2E_PORT points the browser at one worktree's server while resetDB deletes the OTHER worktree's sessions, users and
+ * audit rows: a destructive cross-lane action that looks like an ordinary test run. Setting only E2E_DB is the mirror image and is
+ * merely wrong rather than destructive, but it is rejected too, because a suite reading one lane and driving another produces
+ * failures that take far longer to understand than this error does. Documented as a required pair before; enforced now.
+ */
+export function assertLaneEnv(): void {
+  const port = process.env.E2E_PORT;
+  const db = process.env.E2E_DB;
+  const advice = "For lane B use: E2E_PORT=8089 E2E_DB=edr2";
+
+  // Defined-ness, not truthiness. `E2E_PORT=""` is falsy but not nullish, so a truthiness pair-check passed it while the `??`
+  // defaults below did NOT apply, leaving port 0 and an empty schema. Both are "the variable is set", so both must be validated.
+  const portSet = port !== undefined;
+  const dbSet = db !== undefined;
+  if (portSet !== dbSet) {
+    throw new Error(
+      `E2E_PORT and E2E_DB must be set together (got E2E_PORT=${port ?? "unset"}, E2E_DB=${db ?? "unset"}). ` +
+        "Setting only one drives one worktree's server while resetting the other worktree's auth tables. " +
+        advice,
+    );
+  }
+  if (!portSet) return;
+
+  // Paired but invalid is the other half of the same hazard, and quieter: a non-numeric port becomes `https://localhost:NaN` and
+  // an empty schema becomes a connection to the server's default, both of which fail in ways that look like anything but a typo.
+  const parsed = Number(port);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error(`E2E_PORT must be an integer port between 1 and 65535 (got ${JSON.stringify(port)}). ${advice}`);
+  }
+  if (db === "") {
+    throw new Error(`E2E_DB must name a schema (got an empty string). ${advice}`);
+  }
+}
+
+assertLaneEnv();
+
 const DEV_DSN = {
   host: "127.0.0.1",
   port: 33306,
   user: "root",
   password: "",
-  database: "edr",
+  database: process.env.E2E_DB ?? "edr",
 };
 
 // Connect once per test; the connection is closed after each test via
@@ -26,7 +70,7 @@ export async function openDB(): Promise<Connection> {
 // has an empty password (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT), so no auth header is needed. database=edr selects the archive database
 // the server creates (matching EDR_CLICKHOUSE_DSN's /edr path); the connection's implicit database is `default`, where `events` does
 // not live.
-const CLICKHOUSE_HTTP = "http://127.0.0.1:18123/?database=edr";
+const CLICKHOUSE_HTTP = `http://127.0.0.1:18123/?database=${process.env.E2E_DB ?? "edr"}`;
 
 // queryClickHouse runs a read-only query against the dev ClickHouse event archive (ADR-0015: events live here, not MySQL) over its HTTP
 // interface and returns the rows as parsed objects. No extra npm dependency: the HTTP interface speaks plain SQL. count() and other

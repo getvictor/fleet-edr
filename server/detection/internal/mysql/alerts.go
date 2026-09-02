@@ -78,10 +78,10 @@ func (s *Store) InsertAlert(ctx context.Context, a api.Alert, eventIDs []string)
 	// rowsAffected == 1; this holds because no DSN enables clientFoundRows (which would make a match report 1 as "found").
 	// Keeps the single-statement, race-safe dedup the insert-and-catch path gave us across replicas (ADR-0010), span-free.
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, process_id, subject, techniques)
-		VALUES (?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)
+		INSERT INTO alerts (host_id, rule_id, source, severity, title, description, origin, process_id, subject, techniques)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, 0), ?, ?)
 		ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = updated_at`,
-		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.ProcessID, a.Subject, a.Techniques,
+		a.HostID, a.RuleID, a.Source, a.Severity, a.Title, a.Description, a.Origin, a.ProcessID, a.Subject, a.Techniques,
 	)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert alert: %w", err)
@@ -181,7 +181,7 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 		limit = 100
 	}
 
-	query := `SELECT id, host_id, rule_id, source, severity, title, description, COALESCE(process_id, 0) AS process_id,
+	query := `SELECT id, host_id, rule_id, source, severity, title, description, origin, COALESCE(process_id, 0) AS process_id,
 	          techniques, status, created_at, updated_at, resolved_at, updated_by
 	          FROM alerts WHERE 1=1`
 	var args []any
@@ -222,7 +222,7 @@ func (s *Store) ListAlerts(ctx context.Context, f api.AlertFilter) ([]api.Alert,
 func (s *Store) GetAlert(ctx context.Context, id int64) (api.Alert, error) {
 	var a api.Alert
 	err := s.db.GetContext(ctx, &a,
-		`SELECT id, host_id, rule_id, source, severity, title, description, COALESCE(process_id, 0) AS process_id,
+		`SELECT id, host_id, rule_id, source, severity, title, description, origin, COALESCE(process_id, 0) AS process_id,
 		        techniques, status, created_at, updated_at, resolved_at, updated_by
 		 FROM alerts WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {

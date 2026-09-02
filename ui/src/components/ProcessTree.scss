@@ -330,6 +330,13 @@
     font-size: $xx-small;
   }
 
+  // Rule attribution. Muted like the timestamp beside it, but proportional rather than monospace: it is a person's name, not a
+  // machine value, and monospacing it would read as an identifier.
+  &__origin {
+    color: $ui-fleet-black-50;
+    font-size: $xx-small;
+  }
+
   &__spacer {
     flex: 1;
   }

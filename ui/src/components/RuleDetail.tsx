@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { fetchRuleDocs, type RuleDocEntry } from "../api";
+import { vettedHTTPURL } from "../urls";
 import { PageHeader } from "./ui/PageHeader";
 import { Table, EmptyState } from "./ui/Table";
 import "./RuleDetail.scss";
@@ -218,6 +219,33 @@ function RuleBody({ entry }: Readonly<{ entry: RuleDocEntry }>) {
           <ul className="rule-detail__list">
             {doc.limitations.map((l, i) => (
               <li key={`${l}-${String(i)}`}>{l}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {doc.references && doc.references.length > 0 && (
+        <>
+          <h2>References</h2>
+          <ul className="rule-detail__list">
+            {doc.references.map((ref, i) => (
+              <li key={`${ref}-${String(i)}`}>
+                {/* A reference on an imported rule is third-party text from the upstream YAML, so it is not trusted to be a
+                    safe href: `javascript:` and `data:` URLs in an anchor are script execution on click. Anything that is not
+                    plainly http(s) is rendered as text, which still shows the operator what the rule cited while making it
+                    inert. Vetted links open in a new tab with noopener so the opened page cannot reach back through
+                    window.opener. */}
+                {((vetted) =>
+                  vetted !== null ? (
+                    // The VETTED value in both the href and the label, never the raw one: the check normalises before parsing,
+                    // so an href built from the original would not be the string that was approved.
+                    <a href={vetted} target="_blank" rel="noopener noreferrer">
+                      {vetted}
+                    </a>
+                  ) : (
+                    ref
+                  ))(vettedHTTPURL(ref))}
+              </li>
             ))}
           </ul>
         </>

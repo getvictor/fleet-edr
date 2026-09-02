@@ -429,6 +429,11 @@ export function ProcessDetail({ hostId, node, onClose, currentAlertId }: Props) 
                   <span className={`status-text status-text--${a.status}`}>{a.status}</span>
                 </Link>
                 <TechniqueTags techniques={a.techniques} ruleId={a.rule_id} className="process-detail__alert-techniques" />
+                {/* Attribution rides even this reference list (issue #765). The list is deliberately minimal, but "minimal" is a
+                    presentation choice and the Detection Rule License obligation is not: the row shows a vendored rule's title,
+                    which is that rule's output, so it is a surface displaying a match and owes the credit. Absent on alerts
+                    raised before the column existed, which render without it. */}
+                {a.origin && <div className="process-detail__alert-origin">{a.origin}</div>}
               </li>
             ))}
           </ul>

@@ -68,6 +68,10 @@ func highAlert(subject string) detapi.Alert {
 	return detapi.Alert{
 		HostID: "host-1", RuleID: "cred_access_lsass", Source: detapi.AlertSourceDetection,
 		Severity: detapi.SeverityHigh, Title: "LSASS access", Description: "d", ProcessID: 0, Subject: subject,
+		// Non-empty so the queued payload actually exercises the attribution column (issue #765). With every fixture leaving
+		// Origin blank, dropping `origin` from the delivery projection or from the envelope mapping produced an identical
+		// payload and the suite stayed green, which is how the field reached a receiver untested. Found by Copilot on #824.
+		Origin: "SigmaHQ, by Someone",
 	}
 }
 
@@ -81,6 +85,7 @@ func TestWebhookEnqueue_CreatedFanout(t *testing.T) {
 	makeDest(t, store, "disabled", detapi.SeverityLow, false, detapi.WebhookEventAlertCreated)         // disabled: filtered out
 	makeDest(t, store, "status-only", detapi.SeverityLow, true, detapi.WebhookEventAlertStatusChanged) // wrong event: filtered out
 
+	// spec:alert-webhook-delivery/deliveries-carry-a-signed-versioned-payload/a-delivery-credits-the-author-of-the-rule-that-fired
 	t.Run("spec:alert-webhook-delivery/alert-lifecycle-events-durably-enqueue-a-delivery-per-matching-destination/a-new-alert-with-a-matching-destination-queues-one-delivery", func(t *testing.T) {
 		alertID, created, err := store.InsertAlert(ctx, highAlert("test:1"), nil)
 		require.NoError(t, err)
@@ -100,6 +105,9 @@ func TestWebhookEnqueue_CreatedFanout(t *testing.T) {
 		alert, ok := env["alert"].(map[string]any)
 		require.True(t, ok)
 		assert.EqualValues(t, alertID, alert["id"])
+		// The credit has to survive the DB projection AND the envelope mapping to reach a receiver, and this is the only
+		// assertion that spans both: alertEnvelopeCols reads the row back inside the enqueue transaction, and Build maps it.
+		assert.Equal(t, "SigmaHQ, by Someone", alert["origin"], "the rule's author reaches the webhook consumer")
 	})
 
 	t.Run("spec:alert-webhook-delivery/alert-lifecycle-events-durably-enqueue-a-delivery-per-matching-destination/a-deduplicated-alert-does-not-double-queue", func(t *testing.T) {

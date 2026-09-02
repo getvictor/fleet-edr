@@ -1,6 +1,6 @@
 # Detection rules
 
-Rules marked with a **Source** carry that source's attribution and are reproduced unmodified. The upstream macOS corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the [Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License); each rule names its own author.
+Every rule names a **Source**. `Fleet EDR` marks a rule this project wrote; any other value credits an upstream project and that rule's own author, and those rules are reproduced unmodified. The upstream macOS corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the [Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License).
 
 This page is generated from `tools/gen-rule-docs` by reading the
 `rulesapi.RuleMetadata.Doc` field on every rule registered in
@@ -114,6 +114,7 @@ Flags a non-shell process that spawns a shell which, within 30 seconds, execs fr
 | Rule ID | `suspicious_exec` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1059`](https://attack.mitre.org/techniques/T1059/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
 | Event types | `exec`, `network_connect` |
 
@@ -150,6 +151,7 @@ Flags `launchctl load` / `launchctl bootstrap` of a plist under ~/Library/Launch
 | Rule ID | `persistence_launchagent` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1543.001`](https://attack.mitre.org/techniques/T1543/001/) |
 | Event types | `exec` |
 
@@ -179,6 +181,7 @@ Flags exec where DYLD_INSERT_LIBRARIES or DYLD_LIBRARY_PATH is set in argv (shel
 | Rule ID | `dyld_insert` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1574.006`](https://attack.mitre.org/techniques/T1574/006/) |
 | Event types | `exec` |
 
@@ -208,6 +211,7 @@ Flags any /bin/sh, /bin/bash, /bin/zsh (etc.) whose parent is Word, Excel, Power
 | Rule ID | `shell_from_office` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1566.001`](https://attack.mitre.org/techniques/T1566/001/), [`T1059.004`](https://attack.mitre.org/techniques/T1059/004/) |
 | Event types | `exec` |
 
@@ -237,6 +241,7 @@ Critical-severity catch on the canonical macOS commodity-dropper chain: osascrip
 | Rule ID | `osascript_network_exec` |
 | Severity | `critical` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1059.002`](https://attack.mitre.org/techniques/T1059/002/), [`T1105`](https://attack.mitre.org/techniques/T1105/) |
 | Event types | `exec` |
 
@@ -267,6 +272,7 @@ Flags exec of /usr/bin/security dump-keychain: the canonical macOS Keychain expo
 | Rule ID | `credential_keychain_dump` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1555.001`](https://attack.mitre.org/techniques/T1555/001/) |
 | Event types | `exec` |
 
@@ -295,6 +301,7 @@ Flags a system-domain LaunchDaemon whose registered executable is not an Apple p
 | Rule ID | `privilege_launchd_plist_write` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1543.004`](https://attack.mitre.org/techniques/T1543/004/) |
 | Event types | `btm_launch_item_add` |
 
@@ -328,6 +335,7 @@ Flags any non-allowlisted writer that opens /etc/sudoers or /etc/sudoers.d/* in 
 | Rule ID | `sudoers_tamper` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1548.003`](https://attack.mitre.org/techniques/T1548/003/) |
 | Event types | `open` |
 
@@ -357,6 +365,7 @@ Flags a program that looks up a domain name and then connects to the address tha
 | Rule ID | `dns_c2_beacon` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1071.004`](https://attack.mitre.org/techniques/T1071/004/), [`T1568.002`](https://attack.mitre.org/techniques/T1568/002/) |
 | Event types | `network_connect`, `dns_query`, `exec` |
 
@@ -388,6 +397,7 @@ Flags one of the EDR's own capture providers stopping without coming back within
 | Rule ID | `sensor_tamper` |
 | Severity | `high` |
 | Default mode | `alert` |
+| Source | Fleet EDR |
 | ATT&CK | [`T1562.001`](https://attack.mitre.org/techniques/T1562/001/) |
 | Event types | `sensor_provider_transition` |
 
@@ -433,6 +443,11 @@ Detects execution of AppleScript of the macOS scripting language AppleScript.
 
 - Application installers might contain scripts as part of the installation process.
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1059.002/T1059.002.md>
+- <https://redcanary.com/blog/applescript/>
+
 ## proc_creation_macos_base64_decode
 
 **Decode Base64 Encoded Text -MacOs**  
@@ -455,6 +470,10 @@ Detects usage of base64 utility to decode arbitrary base64-encoded text
 ### Known false-positive sources
 
 - Legitimate activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1027/T1027.md>
 
 ## proc_creation_macos_binary_padding
 
@@ -479,6 +498,12 @@ Adversaries may use binary padding to add junk data and change the on-disk repre
 
 - Legitimate script work
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1027.001/T1027.001.md>
+- <https://linux.die.net/man/1/truncate>
+- <https://linux.die.net/man/1/dd>
+
 ## proc_creation_macos_change_file_time_attr
 
 **File Time Attribute Change**  
@@ -501,6 +526,10 @@ Detect file time attribute change to hide new or changes to existing files
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1070.006/T1070.006.md>
 
 ## proc_creation_macos_chflags_hidden_flag
 
@@ -527,6 +556,13 @@ When a file or directory has this hidden flag set, it becomes invisible to the d
 
 - Legitimate usage of chflags by administrators and users.
 
+### References
+
+- <https://www.sentinelone.com/labs/apt32-multi-stage-macos-trojan-innovates-on-crimeware-scripting-technique/>
+- <https://www.welivesecurity.com/2019/04/09/oceanlotus-macos-malware-update/>
+- <https://www.paloaltonetworks.com/content/dam/pan/en_US/assets/pdf/reports/Unit_42/unit42-wirelurker.pdf>
+- <https://ss64.com/mac/chflags.html>
+
 ## proc_creation_macos_clear_system_logs
 
 **Indicator Removal on Host - Clear Mac System Logs**  
@@ -549,6 +585,10 @@ Detects deletion of local audit logs
 ### Known false-positive sources
 
 - Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1070.002/T1070.002.md>
 
 ## proc_creation_macos_clipboard_access_via_osascript
 
@@ -574,6 +614,10 @@ Detects access to clipboard content via osascript, which may be used for data co
 - Legitimate clipboard utilities and automation scripts that read or write clipboard content
 - Developer tools and IDEs that use osascript for clipboard integration
 
+### References
+
+- <https://www.sentinelone.com/blog/how-offensive-actors-use-applescript-for-attacking-macos/>
+
 ## proc_creation_macos_create_account
 
 **Creation Of A Local User Account**  
@@ -596,6 +640,11 @@ Detects the creation of a new user account. Such accounts may be used for persis
 ### Known false-positive sources
 
 - Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1136.001/T1136.001.md>
+- <https://ss64.com/osx/sysadminctl.html>
 
 ## proc_creation_macos_create_hidden_account
 
@@ -620,6 +669,10 @@ Detects creation of a hidden user account on macOS (UserID < 500) or with IsHidd
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1564.002/T1564.002.md>
+
 ## proc_creation_macos_creds_from_keychain
 
 **Credentials from Password Stores - Keychain**  
@@ -642,6 +695,11 @@ Detects passwords dumps from Keychain
 ### Known false-positive sources
 
 - Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1555.001/T1555.001.md>
+- <https://gist.github.com/Capybara/6228955>
 
 ## proc_creation_macos_csrutil_disable
 
@@ -667,6 +725,13 @@ Detects the use of csrutil to disable the Configure System Integrity Protection 
 
 - Unknown
 
+### References
+
+- <https://ss64.com/osx/csrutil.html>
+- <https://objective-see.org/blog/blog_0x6D.html>
+- <https://www.welivesecurity.com/2017/10/20/osx-proton-supply-chain-attack-elmedia/>
+- <https://www.virustotal.com/gui/file/05a2adb266ec6c0ba9ed176d87d8530e71e845348c13caf9f60049760c312cd3/behavior>
+
 ## proc_creation_macos_csrutil_status
 
 **System Integrity Protection (SIP) Enumeration**  
@@ -691,6 +756,13 @@ Detects the use of csrutil to view the Configure System Integrity Protection (SI
 
 - Legitimate administration activities
 
+### References
+
+- <https://ss64.com/osx/csrutil.html>
+- <https://objective-see.org/blog/blog_0x6D.html>
+- <https://www.welivesecurity.com/2017/10/20/osx-proton-supply-chain-attack-elmedia/>
+- <https://www.virustotal.com/gui/file/05a2adb266ec6c0ba9ed176d87d8530e71e845348c13caf9f60049760c312cd3/behavior>
+
 ## proc_creation_macos_disable_security_tools
 
 **Disable Security Tools**  
@@ -713,6 +785,10 @@ Detects disabling security tools
 ### Known false-positive sources
 
 - Legitimate activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1562.001/T1562.001.md>
 
 ## proc_creation_macos_dscl_add_user_to_admin_group
 
@@ -737,6 +813,11 @@ Detects attempts to create and add an account to the admin group via "dscl"
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1078.003/T1078.003.md#atomic-test-2---create-local-account-with-admin-privileges---macos>
+- <https://ss64.com/osx/dscl.html>
+
 ## proc_creation_macos_dseditgroup_add_to_admin_group
 
 **User Added To Admin Group Via DseditGroup**  
@@ -759,6 +840,11 @@ Detects attempts to create and/or add an account to the admin group, thus granti
 ### Known false-positive sources
 
 - Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1078.003/T1078.003.md#atomic-test-5---add-a-newexisting-user-to-the-admin-group-using-dseditgroup-utility---macos>
+- <https://ss64.com/osx/dseditgroup.html>
 
 ## proc_creation_macos_dsenableroot_enable_root_account
 
@@ -783,6 +869,12 @@ Detects attempts to enable the root account via "dsenableroot"
 
 - Unknown
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/b27a3cb25025161d49ac861cb216db68c46a3537/atomics/T1078.003/T1078.003.md>
+- <https://github.com/elastic/detection-rules/blob/4312d8c9583be524578a14fe6295c3370b9a9307/rules/macos/persistence_enable_root_account.toml>
+- <https://ss64.com/osx/dsenableroot.html>
+
 ## proc_creation_macos_file_and_directory_discovery
 
 **File and Directory Discovery - MacOS**  
@@ -805,6 +897,10 @@ Detects usage of system utilities to discover files and directories
 ### Known false-positive sources
 
 - Legitimate activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1083/T1083.md>
 
 ## proc_creation_macos_find_cred_in_files
 
@@ -829,6 +925,10 @@ Detecting attempts to extract passwords with grep and laZagne
 
 - Unknown
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1552.001/T1552.001.md>
+
 ## proc_creation_macos_gui_input_capture
 
 **GUI Input Capture - macOS**  
@@ -852,6 +952,11 @@ Detects attempts to use system dialog prompts to capture user credentials
 
 - Legitimate administration tools and activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1056.002/T1056.002.md>
+- <https://scriptingosx.com/2018/08/user-interaction-from-bash-scripts/>
+
 ## proc_creation_macos_hdiutil_create
 
 **Disk Image Creation Via Hdiutil - MacOS**  
@@ -873,6 +978,12 @@ Detects the execution of the hdiutil utility in order to create a disk image.
 ### Known false-positive sources
 
 - Legitimate usage of hdiutil by administrators and users.
+
+### References
+
+- <https://www.loobins.io/binaries/hdiutil/>
+- <https://www.sentinelone.com/blog/from-the-front-linesunsigned-macos-orat-malware-gambles-for-the-win/>
+- <https://ss64.com/mac/hdiutil.html>
 
 ## proc_creation_macos_hdiutil_mount
 
@@ -897,6 +1008,12 @@ Detects the execution of the hdiutil utility in order to mount disk images.
 
 - Legitimate usage of hdiutil by administrators and users.
 
+### References
+
+- <https://www.loobins.io/binaries/hdiutil/>
+- <https://www.sentinelone.com/blog/from-the-front-linesunsigned-macos-orat-malware-gambles-for-the-win/>
+- <https://ss64.com/mac/hdiutil.html>
+
 ## proc_creation_macos_installer_susp_child_process
 
 **Suspicious Installer Package Child Process**  
@@ -919,6 +1036,11 @@ Detects the execution of suspicious child processes from macOS installer package
 ### Known false-positive sources
 
 - Legitimate software uses the scripts (preinstall, postinstall)
+
+### References
+
+- <https://redcanary.com/blog/clipping-silver-sparrows-wings/>
+- <https://github.com/elastic/detection-rules/blob/4312d8c9583be524578a14fe6295c3370b9a9307/rules/macos/execution_installer_package_spawned_network_event.toml>
 
 ## proc_creation_macos_ioreg_discovery
 
@@ -946,6 +1068,13 @@ It has been observed in-the-wild by calling this process directly or using bash 
 
 - Legitimate administrative activities
 
+### References
+
+- <https://www.virustotal.com/gui/file/0373d78db6c3c0f6f6dcc409821bf89e1ad8c165d6f95c5c80ecdce2219627d7/behavior>
+- <https://www.virustotal.com/gui/file/4ffdc72d1ff1ee8228e31691020fc275afd1baee5a985403a71ca8c7bd36e2e4/behavior>
+- <https://www.virustotal.com/gui/file/5907d59ec1303cfb5c0a0f4aaca3efc0830707d86c732ba6b9e842b5730b95dc/behavior>
+- <https://www.trendmicro.com/en_ph/research/20/k/new-macos-backdoor-connected-to-oceanlotus-surfaces.html>
+
 ## proc_creation_macos_jamf_susp_child
 
 **JAMF MDM Potential Suspicious Child Process**  
@@ -967,6 +1096,12 @@ Detects potential suspicious child processes of "jamf". Could be a sign of poten
 ### Known false-positive sources
 
 - Legitimate execution of custom scripts or commands by Jamf administrators. Apply additional filters accordingly
+
+### References
+
+- <https://github.com/MythicAgents/typhon/>
+- <https://www.zoocoup.org/casper/jamf_cheatsheet.pdf>
+- <https://docs.jamf.com/10.30.0/jamf-pro/administrator-guide/Components_Installed_on_Managed_Computers.html>
 
 ## proc_creation_macos_jamf_usage
 
@@ -991,6 +1126,12 @@ Detects execution of the "jamf" binary to create user accounts and run commands.
 
 - Legitimate use of the JAMF CLI tool by IT support and administrators
 
+### References
+
+- <https://github.com/MythicAgents/typhon/>
+- <https://www.zoocoup.org/casper/jamf_cheatsheet.pdf>
+- <https://docs.jamf.com/10.30.0/jamf-pro/administrator-guide/Components_Installed_on_Managed_Computers.html>
+
 ## proc_creation_macos_jxa_in_memory_execution
 
 **JXA In-memory Execution Via OSAScript**  
@@ -1014,6 +1155,10 @@ Detects possible malicious execution of JXA in-memory via OSAScript
 
 - Unknown
 
+### References
+
+- <https://redcanary.com/blog/applescript/>
+
 ## proc_creation_macos_launchctl_execution
 
 **Launch Agent/Daemon Execution Via Launchctl**  
@@ -1036,6 +1181,14 @@ Detects the execution of programs as Launch Agents or Launch Daemons using launc
 ### Known false-positive sources
 
 - Legitimate administration activities is expected to trigger false positives. Investigate the command line being passed to determine if the service or launch agent are suspicious.
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1569.001/T1569.001.md>
+- <https://www.sentinelone.com/labs/20-common-tools-techniques-used-by-macos-threat-actors-malware/>
+- <https://www.welivesecurity.com/2020/07/16/mac-cryptocurrency-trading-application-rebranded-bundled-malware/>
+- <https://www.trendmicro.com/en_us/research/18/d/new-macos-backdoor-linked-to-oceanlotus-found.html>
+- <https://www.loobins.io/binaries/launchctl/>
 
 ## proc_creation_macos_local_account
 
@@ -1062,6 +1215,12 @@ This can be used by attackers to identify accounts for lateral movement or privi
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1087.001/T1087.001.md>
+- <https://ss64.com/osx/dscl.html>
+- <https://ss64.com/mac/dscacheutil.html>
+
 ## proc_creation_macos_local_groups
 
 **Local Groups Discovery - MacOs**  
@@ -1085,6 +1244,10 @@ Detects enumeration of local system groups
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1069.001/T1069.001.md>
+
 ## proc_creation_macos_network_service_scanning
 
 **MacOS Network Service Scanning**  
@@ -1107,6 +1270,10 @@ Detects enumeration of local or remote network services.
 ### Known false-positive sources
 
 - Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1046/T1046.md>
 
 ## proc_creation_macos_network_sniffing
 
@@ -1133,6 +1300,10 @@ An adversary may place a network interface into promiscuous mode to passively ac
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1040/T1040.md>
+
 ## proc_creation_macos_nscurl_usage
 
 **File Download Via Nscurl - MacOS**  
@@ -1155,6 +1326,12 @@ Detects the execution of the nscurl utility in order to download files.
 ### Known false-positive sources
 
 - Legitimate usage of nscurl by administrators and users.
+
+### References
+
+- <https://www.loobins.io/binaries/nscurl/>
+- <https://www.agnosticdev.com/content/how-diagnose-app-transport-security-issues-using-nscurl-and-openssl>
+- <https://gist.github.com/nasbench/ca6ef95db04ae04ffd1e0b1ce709cadd>
 
 ## proc_creation_macos_office_susp_child_processes
 
@@ -1179,6 +1356,11 @@ Detects suspicious child processes spawning from microsoft office suite applicat
 
 - Unknown
 
+### References
+
+- <https://redcanary.com/blog/applescript/>
+- <https://objective-see.org/blog/blog_0x4B.html>
+
 ## proc_creation_macos_osacompile_runonly_execution
 
 **OSACompile Run-Only Execution**  
@@ -1201,6 +1383,11 @@ Detects potential suspicious run-only executions compiled using OSACompile
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://redcanary.com/blog/applescript/>
+- <https://ss64.com/osx/osacompile.html>
 
 ## proc_creation_macos_payload_decoded_and_decrypted
 
@@ -1225,6 +1412,10 @@ Detects when a built-in utility is used to decode and decrypt a payload after a 
 
 - Unknown
 
+### References
+
+- <https://github.com/elastic/protections-artifacts/commit/746086721fd385d9f5c6647cada1788db4aea95f#diff-5d42c3d772e04f1e8d0eb60f5233bc79def1ea73105a2d8822f44164f77ef823>
+
 ## proc_creation_macos_persistence_via_plistbuddy
 
 **Potential Persistence Via PlistBuddy**  
@@ -1247,6 +1438,11 @@ Detects potential persistence activity using LaunchAgents or LaunchDaemons via t
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://redcanary.com/blog/clipping-silver-sparrows-wings/>
+- <https://www.manpagez.com/man/8/PlistBuddy/>
 
 ## proc_creation_macos_remote_access_tools_meshagent_arguments
 
@@ -1274,6 +1470,13 @@ Matching command lines with the '--meshServiceName' argument can indicate that t
 
 - Environments that legitimately use MeshAgent
 
+### References
+
+- <https://www.huntress.com/blog/know-thy-enemy-a-novel-november-case-on-persistent-remote-access>
+- <https://thecyberexpress.com/ukraine-hit-by-meshagent-malware-campaign/>
+- <https://wazuh.com/blog/how-to-detect-meshagent-with-wazuh/>
+- <https://www.security.com/threat-intelligence/medusa-ransomware-attacks>
+
 ## proc_creation_macos_remote_access_tools_teamviewer_incoming_connection
 
 **Remote Access Tool - Team Viewer Session Started On MacOS Host**  
@@ -1299,6 +1502,10 @@ Once a connection has been started, an investigator can verify the connection de
 
 - Legitimate usage of TeamViewer
 
+### References
+
+- `Internal Research`
+
 ## proc_creation_macos_remote_system_discovery
 
 **Macos Remote System Discovery**  
@@ -1321,6 +1528,10 @@ Detects the enumeration of other remote systems.
 ### Known false-positive sources
 
 - Legitimate administration activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1018/T1018.md>
 
 ## proc_creation_macos_schedule_task_job_cron
 
@@ -1345,6 +1556,10 @@ Detects abuse of the cron utility to perform task scheduling for initial or recu
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1053.003/T1053.003.md>
+
 ## proc_creation_macos_screencapture
 
 **Screen Capture - macOS**  
@@ -1367,6 +1582,11 @@ Detects attempts to use screencapture to collect macOS screenshots
 ### Known false-positive sources
 
 - Legitimate user activity taking screenshots
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1113/T1113.md>
+- <https://github.com/EmpireProject/Empire/blob/08cbd274bef78243d7a8ed6443b8364acd1fc48b/lib/modules/python/collection/osx/screenshot.py>
 
 ## proc_creation_macos_security_software_discovery
 
@@ -1391,6 +1611,10 @@ Detects usage of system utilities (only grep for now) to discover security softw
 
 - Legitimate activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1518.001/T1518.001.md>
+
 ## proc_creation_macos_space_after_filename
 
 **Space After Filename - macOS**  
@@ -1413,6 +1637,10 @@ Detects attempts to masquerade as legitimate files by adding a space to the end 
 ### Known false-positive sources
 
 - Mistyped commands or legitimate binaries named to match the pattern
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1036.006/T1036.006.md>
 
 ## proc_creation_macos_split_file_into_pieces
 
@@ -1437,6 +1665,10 @@ Detection use of the command "split" to split files into parts and possible tran
 
 - Legitimate administrative activity
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1030/T1030.md>
+
 ## proc_creation_macos_susp_browser_child_process
 
 **Suspicious Browser Child Process - MacOS**  
@@ -1459,6 +1691,11 @@ Detects suspicious child processes spawned from browsers. This could be a result
 ### Known false-positive sources
 
 - Legitimate browser install, update and recovery scripts
+
+### References
+
+- <https://fr.slideshare.net/codeblue_jp/cb19-recent-apt-attack-on-crypto-exchange-employees-by-heungsoo-kang>
+- <https://github.com/elastic/detection-rules/blob/4312d8c9583be524578a14fe6295c3370b9a9307/rules/macos/execution_initial_access_suspicious_browser_childproc.toml>
 
 ## proc_creation_macos_susp_execution_macos_script_editor
 
@@ -1483,6 +1720,11 @@ Detects when the macOS Script Editor utility spawns an unusual child process.
 
 - Unknown
 
+### References
+
+- <https://github.com/elastic/protections-artifacts/commit/746086721fd385d9f5c6647cada1788db4aea95f#diff-7f541fbc4a4a28a92970e8bf53effea5bd934604429112c920affb457f5b2685>
+- <https://wojciechregula.blog/post/macos-red-teaming-initial-access-via-applescript-url/>
+
 ## proc_creation_macos_susp_find_execution
 
 **Potential Discovery Activity Using Find - MacOS**  
@@ -1505,6 +1747,10 @@ Detects usage of "find" binary in a suspicious manner to perform discovery
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://github.com/SaiSathvik1/Linux-Privilege-Escalation-Notes>
 
 ## proc_creation_macos_susp_histfile_operations
 
@@ -1530,6 +1776,10 @@ Detects commandline operations on shell history files
 - Legitimate administrative activity
 - Legitimate software, cleaning hist file
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1552.003/T1552.003.md>
+
 ## proc_creation_macos_susp_in_memory_download_and_compile
 
 **Potential In-Memory Download And Compile Of Payloads**  
@@ -1553,6 +1803,10 @@ Detects potential in-memory downloading and compiling of applets using curl and 
 
 - Unknown
 
+### References
+
+- <https://redcanary.com/blog/mac-application-bundles/>
+
 ## proc_creation_macos_susp_macos_firmware_activity
 
 **Suspicious MacOS Firmware Activity**  
@@ -1574,6 +1828,12 @@ Detects when a user manipulates with Firmward Password on MacOS. NOTE - this com
 ### Known false-positive sources
 
 - Legitimate administration activities
+
+### References
+
+- <https://github.com/usnistgov/macos_security/blob/932a51f3e819dd3e02ebfcf3ef433cfffafbe28b/rules/os/os_firmware_password_require.yaml>
+- <https://www.manpagez.com/man/8/firmwarepasswd/>
+- <https://support.apple.com/guide/security/firmware-password-protection-sec28382c9ca/web>
 
 ## proc_creation_macos_susp_system_network_discovery
 
@@ -1598,6 +1858,10 @@ Detects enumeration of local network configuration
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1016/T1016.md>
+
 ## proc_creation_macos_suspicious_applet_behaviour
 
 **Osacompile Execution By Potentially Suspicious Applet/Osascript**  
@@ -1620,6 +1884,10 @@ Detects potential suspicious applet or osascript executing "osacompile".
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://redcanary.com/blog/mac-application-bundles/>
 
 ## proc_creation_macos_swvers_discovery
 
@@ -1644,6 +1912,12 @@ Detects the use of "sw_vers" for system information discovery
 
 - Legitimate administrative activities
 
+### References
+
+- <https://www.virustotal.com/gui/file/d3fa64f63563fe958b75238742d1e473800cb5f49f5cb79d38d4aa3c93709026/behavior>
+- <https://www.virustotal.com/gui/file/03b71eaceadea05bc0eea5cddecaa05f245126d6b16cfcd0f3ba0442ac58dab3/behavior>
+- <https://ss64.com/osx/sw_vers.html>
+
 ## proc_creation_macos_sysadminctl_add_user_to_admin_group
 
 **User Added To Admin Group Via Sysadminctl**  
@@ -1667,6 +1941,11 @@ Detects attempts to create and add an account to the admin group via "sysadminct
 
 - Legitimate administration activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1078.003/T1078.003.md#atomic-test-3---create-local-account-with-admin-privileges-using-sysadminctl-utility---macos>
+- <https://ss64.com/osx/sysadminctl.html>
+
 ## proc_creation_macos_sysadminctl_enable_guest_account
 
 **Guest Account Enabled Via Sysadminctl**  
@@ -1689,6 +1968,10 @@ Detects attempts to enable the guest account using the sysadminctl utility
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://ss64.com/osx/sysadminctl.html>
 
 ## proc_creation_macos_sysctl_discovery
 
@@ -1715,6 +1998,16 @@ This process is primarily used to detect and avoid virtualization and analysis e
 
 - Legitimate administrative activities
 
+### References
+
+- <https://www.loobins.io/binaries/sysctl/>
+- <https://evasions.checkpoint.com/techniques/macos.html>
+- <https://www.welivesecurity.com/2019/04/09/oceanlotus-macos-malware-update/>
+- <https://www.sentinelone.com/labs/20-common-tools-techniques-used-by-macos-threat-actors-malware/>
+- <https://objective-see.org/blog/blog_0x1E.html>
+- <https://www.virustotal.com/gui/file/1c547a064494a35d6b5e6b459de183ab2720a22725e082bed6f6629211f7abc1/behavior>
+- <https://www.virustotal.com/gui/file/b4b1fc65f87b3dcfa35e2dbe8e0a34ad9d8a400bec332025c0a2e200671038aa/behavior>
+
 ## proc_creation_macos_system_network_connections_discovery
 
 **System Network Connections Discovery - MacOs**  
@@ -1737,6 +2030,10 @@ Detects usage of system utilities to discover system network connections
 ### Known false-positive sources
 
 - Legitimate activities
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1049/T1049.md>
 
 ## proc_creation_macos_system_profiler_discovery
 
@@ -1763,6 +2060,15 @@ This process is primarily used for system information discovery. However, "syste
 
 - Legitimate administrative activities
 
+### References
+
+- <https://www.trendmicro.com/en_za/research/20/k/new-macos-backdoor-connected-to-oceanlotus-surfaces.html>
+- <https://www.sentinelone.com/wp-content/uploads/pdf-gen/1630910064/20-common-tools-techniques-used-by-macos-threat-actors-malware.pdf>
+- <https://ss64.com/mac/system_profiler.html>
+- <https://objective-see.org/blog/blog_0x62.html>
+- <https://www.welivesecurity.com/2019/04/09/oceanlotus-macos-malware-update/>
+- <https://gist.github.com/nasbench/9a1ba4bc7094ea1b47bc42bf172961af>
+
 ## proc_creation_macos_system_shutdown_reboot
 
 **System Shutdown/Reboot - MacOs**  
@@ -1785,6 +2091,10 @@ Adversaries may shutdown/reboot systems to interrupt access to, or aid in the de
 ### Known false-positive sources
 
 - Legitimate administrative activity
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/f339e7da7d05f6057fdfcdd3742bfcf365fee2a9/atomics/T1529/T1529.md>
 
 ## proc_creation_macos_tail_base64_decode_from_image
 
@@ -1809,6 +2119,11 @@ Detects the use of tail to extract bytes at an offset from an image and then dec
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://www.virustotal.com/gui/file/16bafdf741e7a13137c489f3c8db1334f171c7cb13b62617d691b0a64783cc48/behavior>
+- <https://www.virustotal.com/gui/file/483fafc64a2b84197e1ef6a3f51e443f84dc5742602e08b9e8ec6ad690b34ed0/behavior>
 
 ## proc_creation_macos_tmutil_delete_backup
 
@@ -1835,6 +2150,11 @@ An adversary may perform this action before launching a ransonware attack to pre
 
 - Legitimate activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1490/T1490.md#atomic-test-12---disable-time-machine>
+- <https://www.loobins.io/binaries/tmutil/>
+
 ## proc_creation_macos_tmutil_disable_backup
 
 **Time Machine Backup Disabled Via Tmutil - MacOS**  
@@ -1859,6 +2179,11 @@ An attacker can use this to prevent backups from occurring.
 ### Known false-positive sources
 
 - Legitimate administrator activity
+
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1490/T1490.md#atomic-test-12---disable-time-machine>
+- <https://www.loobins.io/binaries/tmutil/>
 
 ## proc_creation_macos_tmutil_exclude_file_from_backup
 
@@ -1885,6 +2210,11 @@ An adversary could exclude a path from Time Machine backups to prevent certain f
 
 - Legitimate administrator activity
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1490/T1490.md#atomic-test-12---disable-time-machine>
+- <https://www.loobins.io/binaries/tmutil/>
+
 ## proc_creation_macos_wizardupdate_malware_infection
 
 **Potential WizardUpdate Malware Infection**  
@@ -1906,6 +2236,12 @@ Detects the execution traces of the WizardUpdate malware. WizardUpdate is a macO
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://github.com/elastic/protections-artifacts/commit/746086721fd385d9f5c6647cada1788db4aea95f#diff-c68a1fcbf7a3f80c87225d7fdc031f691e9f3b6a14a36754be00762bfe6eae97>
+- <https://malpedia.caad.fkie.fraunhofer.de/details/osx.xcsset>
+- <https://www.microsoft.com/security/blog/2022/02/02/the-evolution-of-a-mac-trojan-updateagents-progression/>
 
 ## proc_creation_macos_xattr_gatekeeper_bypass
 
@@ -1930,6 +2266,11 @@ Detects macOS Gatekeeper bypass via xattr utility
 
 - Legitimate activities
 
+### References
+
+- <https://github.com/redcanaryco/atomic-red-team/blob/1fed40dc7e48f16ed44dcdd9c73b9222a70cca85/atomics/T1553.001/T1553.001.md>
+- <https://www.loobins.io/binaries/xattr/>
+
 ## proc_creation_macos_xcsset_malware_infection
 
 **Potential XCSSET Malware Infection**  
@@ -1951,4 +2292,9 @@ Identifies the execution traces of the XCSSET malware. XCSSET is a macOS trojan 
 ### Known false-positive sources
 
 - Unknown
+
+### References
+
+- <https://github.com/elastic/protections-artifacts/commit/746086721fd385d9f5c6647cada1788db4aea95f#diff-f5deb07688e1a8dec9530bc3071967b2da5c16b482e671812b864c37beb28f08>
+- <https://malpedia.caad.fkie.fraunhofer.de/details/osx.xcsset>
 

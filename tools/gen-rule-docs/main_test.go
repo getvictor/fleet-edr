@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,4 +70,119 @@ func TestRenderTechniqueLinks(t *testing.T) {
 	assert.Contains(t, out, "https://attack.mitre.org/techniques/T1574/006/")
 	// Top-level technique: no slash translation needed.
 	assert.Contains(t, out, "https://attack.mitre.org/techniques/T1059/")
+}
+
+// TestRenderCarriesAttributionAndReferences pins that the generated reference credits every rule and cites the vendored ones
+// (issue #765).
+//
+// RuleDetail's doc promises this markdown is generated from the same Doc() definitions and therefore stays aligned with the rule
+// page. Adding references to the page and not here broke that promise silently, since nothing compared the two surfaces. Copilot
+// caught it on #824; this is what would have.
+func TestRenderCarriesAttributionAndReferences(t *testing.T) {
+	t.Parallel()
+	rs := allRegisteredRules()
+	var buf bytes.Buffer
+	require.NoError(t, render(&buf, rs))
+	out := buf.String()
+
+	var cited int
+	for _, r := range rs {
+		// Attribution is total, so every rule in the catalog names a source. An empty one would render a blank table cell.
+		assert.NotEmptyf(t, r.Origin, "rule %q reports no origin, so the generated reference credits nobody for it", r.ID)
+		assert.Containsf(t, out, "| Source | "+r.Origin+" |", "rule %q missing its Source row", r.ID)
+
+		if len(r.Doc.References) == 0 {
+			continue
+		}
+		cited++
+		for _, ref := range r.Doc.References {
+			// The RENDERED form, not the raw string: a citation that is not an http(s) URL is deliberately emitted as an inert
+			// code span, so asserting the raw value here would forbid the safety this document depends on.
+			assert.Containsf(t, out, "- "+mdReference(ref), "rule %q missing citation %q", r.ID, ref)
+		}
+	}
+	// The vendored corpus is the reason references exist, so a run where nothing is cited means the parse path broke upstream of
+	// this renderer rather than that the catalog happens to cite nothing.
+	assert.Positive(t, cited, "no rule in the catalog carries a citation")
+}
+
+// TestMDReference pins that a citation this project did not write cannot become markdown (issue #765, found by Qodo).
+//
+// The upstream corpus is vendored verbatim, so a reference is attacker-influenceable in the same sense the UI already treats it:
+// a markdown link in a raw bullet renders as a working link inside our own operator documentation, which is a more trustworthy
+// frame than a web page. Only a complete http(s) URL is allowed to stay followable.
+func TestMDReference(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		ref  string
+		want string
+	}{
+		{"an https URL becomes an explicit autolink", "https://redcanary.com/blog/x", "<https://redcanary.com/blog/x>"},
+		{"an http URL becomes an explicit autolink", "http://example.com/a", "<http://example.com/a>"},
+		// URI schemes are case-insensitive and url.Parse normalises them, so the lowercase comparison is correct rather than
+		// lucky. Pinned because a reviewer read it as a rejection of uppercase schemes, and because the browser-side renderer
+		// normalises the same way: the two surfaces have to keep agreeing on which citations are followable.
+		{"an uppercase scheme is normalised, not rejected", "HTTPS://example.com/source", "<https://example.com/source>"},
+		{"a markdown link is neutralised", "[citation](//attacker.example)", "`[citation](//attacker.example)`"},
+		{"a javascript URL is not followable", "javascript:alert(1)", "`javascript:alert(1)`"},
+		{"free text is inert", "Internal research note, 2026", "`Internal research note, 2026`"},
+		{"a scheme-relative URL is not an absolute http URL", "//attacker.example", "`//attacker.example`"},
+		{"an embedded newline cannot restructure the document", "a\nb", "`a b`"},
+		{"a CRLF collapses too", "a\r\nb", "`a b`"},
+		// The fence has to outgrow the value or the span ends early and the tail escapes as live markdown.
+		{"a backtick in the value grows the fence", "a`b", "``a`b``"},
+		{"a double backtick grows it further", "a``b", "```a``b```"},
+		{"an empty reference renders as an empty span", "   ", "``"},
+		// Padding is required here and only here: without the spaces the content's own backtick merges with the fence.
+		{"a value ending in a backtick keeps its padding", "ab`", "`` ab` ``"},
+		// The reason the URL branch re-serialises instead of echoing: url.Parse accepts a valid prefix followed by anything, so
+		// this reports scheme https and host safe.example. Emitting the input back would render the attacker's image inside our
+		// own operator documentation. Percent-encoding is what makes it inert.
+		{"markdown trailing a valid URL prefix is encoded, not echoed",
+			"https://safe.example/a ![pixel](https://attacker.example/p)",
+			"<https://safe.example/a%20%21%5Bpixel%5D%28https://attacker.example/p%29>"},
+		{"angle brackets in a URL path cannot break the autolink", "https://safe.example/a<b>c", "<https://safe.example/a%3Cb%3Ec>"},
+		// The reason the check is on the OUTPUT and not on the parse: url.URL.String() percent-encodes the path and the fragment
+		// but emits RawQuery verbatim, so this `>` survives re-serialisation and would close the autolink from inside. It has to
+		// come out as an inert span instead, even though it is a syntactically valid https URL.
+		{"a terminator surviving in the query demotes the link to an inert span",
+			"https://safe.example/?q=>[x](https://attacker.example)",
+			"`https://safe.example/?q=>[x](https://attacker.example)`"},
+		{"a query with no terminator still links", "https://safe.example/ok?a=1&b=2#frag", "<https://safe.example/ok?a=1&b=2#frag>"},
+		// A literal space also survives RawQuery, where the same space in the path or fragment is percent-encoded. Without this
+		// case the whitespace half of the gate is unguarded, since every other whitespace input either gets encoded or throws.
+		{"a space surviving in the query demotes the link too",
+			"https://safe.example/?q=a b", "`https://safe.example/?q=a b`"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, mdReference(tc.ref))
+		})
+	}
+}
+
+// TestRenderNeverEmitsAnUnvettedLink is the whole-document check behind the unit test above: no citation in the real generated
+// reference is followable unless it is an http(s) URL.
+func TestRenderNeverEmitsAnUnvettedLink(t *testing.T) {
+	t.Parallel()
+	rs := allRegisteredRules()
+	var buf bytes.Buffer
+	require.NoError(t, render(&buf, rs))
+
+	for _, r := range rs {
+		for _, ref := range r.Doc.References {
+			rendered := mdReference(ref)
+			if strings.HasPrefix(rendered, "<") {
+				u, err := url.Parse(strings.Trim(rendered, "<>"))
+				require.NoErrorf(t, err, "rule %q citation %q renders as a link but does not parse", r.ID, ref)
+				assert.Containsf(t, []string{"http", "https"}, u.Scheme,
+					"rule %q citation %q renders as a link with scheme %q", r.ID, ref, u.Scheme)
+				continue
+			}
+			assert.Containsf(t, rendered, "`", "rule %q citation %q is neither a vetted URL nor an inert span", r.ID, ref)
+		}
+	}
 }

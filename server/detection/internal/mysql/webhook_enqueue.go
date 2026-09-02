@@ -15,7 +15,7 @@ import (
 
 // alertEnvelopeCols is the alert projection the delivery payload is built from. It mirrors GetAlert's column list (COALESCE keeps a
 // process-less alert's NULL process_id scanning into the int64 field as 0).
-const alertEnvelopeCols = `id, host_id, rule_id, source, severity, title, description, COALESCE(process_id, 0) AS process_id,
+const alertEnvelopeCols = `id, host_id, rule_id, source, severity, title, description, origin, COALESCE(process_id, 0) AS process_id,
 	techniques, status, created_at, updated_at, resolved_at, updated_by`
 
 // loadAlertTx reads the full alert row inside the caller's transaction so the delivery payload reflects the DB-populated fields

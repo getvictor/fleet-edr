@@ -154,18 +154,58 @@ type AlgorithmNamer interface {
 }
 
 // OriginNamer is an OPTIONAL interface a rule implements to say where it came from. A rule that does not implement it was written
-// for this engine, which is the common case and needs no announcement.
+// for this engine, which is the common case and is why the interface is optional rather than part of Rule: an authored rule
+// should not have to declare the obvious. It still gets credited, because OriginOf supplies ProjectOrigin in its place.
 type OriginNamer interface {
 	Origin() string
 }
 
-// OriginOf returns r's declared origin, or "" for a rule this project authored.
+// ProjectOrigin is the attribution carried by every rule this project wrote, i.e. every rule that declares no OriginNamer.
+//
+// It exists so attribution is TOTAL rather than conditional. The vendored corpus ships under the Detection Rule License, which
+// requires crediting the author wherever a match is displayed, and the surface that has to satisfy that is the alert view. A
+// surface that renders attribution only when it happens to be non-empty is one upstream rule away from displaying a match with no
+// credit at all, and it also reads as though an uncredited rule came from nowhere. Giving our own rules a real value makes the
+// presence of attribution invariant and moves the question a reader is actually asking ("whose rule is this?") onto the value.
+const ProjectOrigin = "Fleet EDR"
+
+// OriginOf returns r's declared origin, or ProjectOrigin for a rule this project authored.
+//
+// Never returns "": see ProjectOrigin. Callers may therefore render the result unconditionally, and a blank origin reaching a
+// display surface means the value was dropped in transit rather than that the rule declined to name itself.
 func OriginOf(r Rule) string {
 	namer, ok := r.(OriginNamer)
 	if !ok {
+		return ProjectOrigin
+	}
+	// A rule that implements the interface but returns nothing is still credited: the interface says "I came from somewhere
+	// else", so falling back to ProjectOrigin would credit US for someone else's work, which is the one wrong answer here.
+	if origin := namer.Origin(); origin != "" {
+		return origin
+	}
+	return UnknownOrigin
+}
+
+// UnknownOrigin is the attribution for a rule that declares an OriginNamer but names nothing. Distinct from ProjectOrigin because
+// crediting ourselves for a rule that announced foreign provenance would be worse than admitting we cannot name the author.
+const UnknownOrigin = "unknown upstream"
+
+// AlertOriginOf returns the attribution to stamp on an alert r raises, which is NOT always r's own origin.
+//
+// A NonDetectionProjection renders a decision someone else already made, and its findings deliberately carry that other party's
+// rule id rather than the projection's own: application_control_block copies the matched app-control policy's id off the event
+// payload. Stamping this project's name onto such an alert would state that we authored an operator's blocklist entry, which is
+// false, and there is no third party to credit in its place either. So a projection's alerts carry no attribution, and the
+// display surfaces render nothing, which is the same thing they already do for an alert raised before attribution existed.
+//
+// Every other rule genuinely authors what it raises, health signals included: sensor_recovery_failed reports a failure in OUR
+// software, so crediting this project for it is accurate. This is the same Projection-not-Health split the #519 title invariant
+// makes, for the same underlying reason.
+func AlertOriginOf(r Rule) string {
+	if nd, ok := r.(NonDetection); ok && nd.NonDetectionKind() == NonDetectionProjection {
 		return ""
 	}
-	return namer.Origin()
+	return OriginOf(r)
 }
 
 // AlgorithmNameOf returns r's declared algorithm name, or "" when the rule declares none.
@@ -225,9 +265,10 @@ type RuleMetadata struct {
 	// Algorithm mirrors the rule's AlgorithmName() when it declares one, and is empty otherwise. Names the evaluator that decides
 	// the rule, which is what makes a Go-implemented rule inspectable without reading the source. Consumed by the rule-file export.
 	Algorithm string
-	// Origin names where the rule came from: empty for one this project authored, and the upstream project plus that rule's own
-	// author for one it vendored. Surfaced so the operator-facing reference can credit third-party rules and so a reader can tell
-	// whose rule they are looking at, which they otherwise cannot: a vendored rule is rendered exactly like an authored one.
+	// Origin names where the rule came from: ProjectOrigin for one this project authored, and the upstream project plus that
+	// rule's own author for one it vendored. Never empty (see api.OriginOf), so a surface may render it unconditionally.
+	// Surfaced so the operator-facing reference can credit third-party rules and so a reader can tell whose rule they are looking
+	// at, which they otherwise cannot: a vendored rule is rendered exactly like an authored one.
 	Origin string
 	// DefaultMode mirrors the rule's DefaultMode() when it declares one (api.ModeDefaulter) and is DetectionRuleModeAlert otherwise,
 	// so it is always a mode rather than sometimes empty. Surfaced on GET /api/rules because a detection that does not alert has to
@@ -280,6 +321,14 @@ type Documentation struct {
 	// Limitations names known coverage gaps so an operator knows what the rule does NOT catch (atomic renames, env-inherited DYLD vars,
 	// etc.).
 	Limitations []string `json:"limitations,omitempty"`
+	// References links the sources the rule was written from: an upstream rule's own `references` for a vendored rule, and the
+	// research a hand-written one is based on. Together with Origin this is the provenance an operator needs to judge a detection
+	// they did not write, which for the vendored corpus is most of them.
+	//
+	// Usually absolute URLs, but NOT guaranteed to be: these are copied verbatim from an upstream file that is free to cite a
+	// DOI, a book, or a sentence. A consumer must not assume every entry is linkable, and must not render one as a link without
+	// checking its scheme, since an upstream string is untrusted input and a non-http(s) scheme in an anchor is executable.
+	References []string `json:"references,omitempty"`
 }
 
 // --- Application Control types -----------------------------------------------

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSSOConfig, updateSSOConfig, testSSOConnection, type SSOConfig } from "../../api";
+import { isHTTPURL } from "../../urls";
 import { PageHeader } from "../ui/PageHeader";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -24,15 +25,6 @@ function deriveRedirect(externalURL: string): string {
     return u.toString();
   } catch {
     return "";
-  }
-}
-
-function isHTTPURL(raw: string): boolean {
-  try {
-    const u = new URL(raw.trim());
-    return (u.protocol === "http:" || u.protocol === "https:") && u.host !== "";
-  } catch {
-    return false;
   }
 }
 

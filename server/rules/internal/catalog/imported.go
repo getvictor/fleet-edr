@@ -39,6 +39,10 @@ type importedRule struct {
 	// lets it travel into our documentation about the rule as well.
 	author string
 
+	// references are the upstream rule's own citations, shown beside the attribution so provenance is one story rather than a
+	// name with no way to check it.
+	references []string
+
 	// source is the vendored file's bytes, verbatim. Kept so an operator exporting this rule gets the upstream rule they can diff
 	// against SigmaHQ, rather than a re-rendering of it in this project's format. See VendoredSource.
 	source []byte
@@ -71,6 +75,7 @@ func (r *importedRule) Doc() api.Documentation {
 		Severity:       r.severity,
 		EventTypes:     r.eventTypes,
 		FalsePositives: r.falsePos,
+		References:     r.references,
 	}
 }
 
@@ -89,6 +94,9 @@ type sigmaFile struct {
 	Detection yaml.Node `yaml:"detection"`
 	// Author is the upstream rule's attribution, carried into the operator-facing reference (DRL 1.1).
 	Author string `yaml:"author"`
+	// References are the upstream rule's own citations, carried through so an operator can read what the detection was written
+	// from. All 69 files in the vendored corpus carry at least one.
+	References []string `yaml:"references"`
 }
 
 // sigmaFilesUnder lists every *.yml in the tree under dir, sorted so a load is deterministic.
@@ -282,6 +290,7 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 	return &importedRule{
 		source:      raw,
 		author:      f.Author,
+		references:  f.References,
 		id:          id,
 		title:       f.Title,
 		description: f.Description,

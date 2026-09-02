@@ -793,3 +793,48 @@ func TestImported_EveryRuleShipsInMonitorMode(t *testing.T) {
 			"imported rule %s must not alert before an operator has seen what it does", r.ID())
 	}
 }
+
+// TestLoadImported_CarriesAttributionAndReferences pins that a vendored file's provenance survives the parse (issue #765).
+//
+// Both halves were untested in Go before this: the corpus test asserted counts, and the UI tests mocked an already-populated
+// payload, so deleting either assignment in parseImported would have left every real catalog response uncredited and uncited
+// while the whole suite stayed green. Found by Copilot on #824.
+func TestLoadImported_CarriesAttributionAndReferences(t *testing.T) {
+	t.Parallel()
+
+	// A URL and a non-URL citation together, because the wire contract is that references are copied VERBATIM: an upstream file
+	// is free to cite a book, and dropping or normalising that entry would be a silent edit of someone else's rule.
+	body := []byte("title: T\nauthor: Alejandro Ortuno, oscd.community\n" +
+		"references:\n    - https://redcanary.com/blog/applescript/\n    - 'Internal research note, 2026'\n" +
+		"level: medium\nlogsource: {category: process_creation, product: macos}\ndetection: {sel: {Image: x}, condition: sel}\n")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cited.yml"), body, 0o600))
+
+	rules, rejected, err := loadImported(os.DirFS(dir), ".")
+	require.NoError(t, err)
+	assert.Empty(t, rejected)
+	require.Len(t, rules, 1)
+
+	assert.Equal(t, "SigmaHQ, by Alejandro Ortuno, oscd.community", api.OriginOf(rules[0]),
+		"the upstream author is credited, prefixed with the project the corpus came from")
+	assert.Equal(t, []string{"https://redcanary.com/blog/applescript/", "Internal research note, 2026"},
+		rules[0].Doc().References, "citations are carried verbatim and in order, URL or not")
+}
+
+// TestLoadImported_UncitedRuleCarriesNoReferences pins the absent case, so a rule that cites nothing does not acquire an empty
+// entry that a renderer would draw an empty bullet for.
+func TestLoadImported_UncitedRuleCarriesNoReferences(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("title: T\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection: {sel: {Image: x}, condition: sel}\n")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "uncited.yml"), body, 0o600))
+
+	rules, _, err := loadImported(os.DirFS(dir), ".")
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Empty(t, rules[0].Doc().References)
+	// It still names an origin: the corpus is the source even when the file names no author (see api.OriginOf).
+	assert.Contains(t, api.OriginOf(rules[0]), "SigmaHQ")
+}

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 
@@ -56,9 +57,12 @@ func generate(out string) error {
 func render(w io.Writer, rs []rulesapi.RuleMetadata) error {
 	var b strings.Builder
 	b.WriteString("# Detection rules\n\n")
-	b.WriteString("Rules marked with a **Source** carry that source's attribution and are reproduced unmodified. ")
-	b.WriteString("The upstream macOS corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the ")
-	b.WriteString("[Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License); each rule names its own author.\n\n")
+	// Every rule carries a Source row since issue #765, so this line can no longer use the row's presence to mean "vendored":
+	// it now says which VALUE means that, because "reproduced unmodified" is true of the upstream corpus and false of ours.
+	b.WriteString("Every rule names a **Source**. `Fleet EDR` marks a rule this project wrote; any other value credits an ")
+	b.WriteString("upstream project and that rule's own author, and those rules are reproduced unmodified. The upstream macOS ")
+	b.WriteString("corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the ")
+	b.WriteString("[Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License).\n\n")
 	b.WriteString("This page is generated from `tools/gen-rule-docs` by reading the\n")
 	b.WriteString("`rulesapi.RuleMetadata.Doc` field on every rule registered in\n")
 	b.WriteString("`server/cmd/fleet-edr-server/main.go`. To refresh after changing a\n")
@@ -114,6 +118,10 @@ func writeRule(b *strings.Builder, r rulesapi.RuleMetadata) {
 	writeRuleDescription(b, r.Doc)
 	writeRuleBulletSection(b, "Known false-positive sources", r.Doc.FalsePositives)
 	writeRuleBulletSection(b, "Limitations", r.Doc.Limitations)
+	// References last, mirroring the rule page's ordering. Present here and not only in the UI because RuleDetail's own doc
+	// promises this markdown is generated from the same Doc() definitions and therefore stays aligned with it; adding a section
+	// to one surface and not the other is exactly the drift that promise exists to prevent (issue #765, caught by Copilot).
+	writeRuleReferences(b, r.Doc.References)
 }
 
 func writeRuleHeading(b *strings.Builder, id string, d rulesapi.Documentation) {
@@ -164,6 +172,92 @@ func writeRuleBulletSection(b *strings.Builder, heading string, items []string) 
 		fmt.Fprintf(b, "- %s\n", it)
 	}
 	b.WriteString("\n")
+}
+
+// writeRuleReferences renders a rule's citations, and does NOT reuse writeRuleBulletSection because these are the only strings in
+// this document that this project did not write.
+//
+// A reference is copied verbatim out of a vendored upstream file, so a value like `[citation](//attacker.example)` is markdown, not
+// text: emitted into a raw bullet it renders as a working link that an operator has every reason to trust, and an embedded newline
+// restructures the document around it. The UI already enforces the policy that only an http(s) URL becomes followable (see
+// ui/src/urls.ts); this is the same policy on the surface that had none. Found by Qodo on #824.
+func writeRuleReferences(b *strings.Builder, refs []string) {
+	if len(refs) == 0 {
+		return
+	}
+	b.WriteString("### References\n\n")
+	for _, ref := range refs {
+		fmt.Fprintf(b, "- %s\n", mdReference(ref))
+	}
+	b.WriteString("\n")
+}
+
+// mdReference renders one citation: a bare autolink when it is an absolute http(s) URL, an inert code span otherwise.
+//
+// A code span rather than backslash-escaping, because escaping means enumerating every construct a markdown dialect might honour
+// and being wrong once is enough. Inside a span the only character with meaning is the backtick, so the fence is grown past the
+// longest run in the value and the content cannot escape it.
+func mdReference(ref string) string {
+	ref = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(strings.TrimSpace(ref))
+	if u, err := url.Parse(ref); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		// The RE-SERIALISED url, and only if the bytes about to be written cannot themselves break the autolink.
+		//
+		// Two things force this shape. Go's parser accepts trailing junk after a valid prefix, so
+		// `https://safe.example/a ![pixel](https://attacker.example/p)` reports scheme https and host safe.example: echoing the
+		// caller's string back renders the attacker's image. And String() does NOT re-encode uniformly. Measured: the path and
+		// the fragment are percent-encoded, but RawQuery is emitted verbatim, so `https://safe.example/?q=>[x](...)` keeps its
+		// `>` and closes the autolink from inside.
+		//
+		// Hence the final check is on the OUTPUT rather than on the input or the parse. Anything that could terminate the form
+		// (an angle bracket, whitespace, a control byte) means this value does not get to be a link, whichever component it came
+		// from and whichever components a future Go release decides to encode differently.
+		if s := u.String(); !breaksAutolink(s) {
+			return "<" + s + ">"
+		}
+	}
+	if ref == "" {
+		return "``"
+	}
+	fence := strings.Repeat("`", longestBacktickRun(ref)+1)
+	// Padding only when the content touches the fence. A span whose content starts or ends with a backtick needs the spaces (the
+	// renderer strips them back off); adding them unconditionally would put visible padding inside every ordinary citation.
+	if strings.HasPrefix(ref, "`") || strings.HasSuffix(ref, "`") {
+		return fence + " " + ref + " " + fence
+	}
+	return fence + ref + fence
+}
+
+// breaksAutolink reports whether s contains a byte that would terminate a markdown autolink from inside it.
+//
+// CommonMark defines an autolink as `<`, an absolute URI, `>`, where the URI contains no whitespace and no angle bracket. So this
+// is the complete set: anything here means the `<...>` wrapper cannot safely hold s, and the caller falls back to an inert span.
+//
+// Both reachable halves are exercised by the tests, and each is reachable only through RawQuery, which String() emits verbatim
+// while it percent-encodes the same byte in the path or the fragment: `?q=>x` keeps its angle bracket and `?q=a b` keeps its
+// space. Control bytes below 0x20 are covered by the same comparison but are unreachable in practice, since url.Parse rejects
+// them outright; they cost nothing to include and remove a thing to be wrong about later.
+func breaksAutolink(s string) bool {
+	for _, c := range s {
+		if c == '<' || c == '>' || c <= ' ' {
+			return true
+		}
+	}
+	return false
+}
+
+// longestBacktickRun reports the length of the longest consecutive backtick sequence in s, which is what a code-span fence has to
+// exceed to contain it.
+func longestBacktickRun(s string) int {
+	best, run := 0, 0
+	for _, c := range s {
+		if c == '`' {
+			run++
+			best = max(best, run)
+			continue
+		}
+		run = 0
+	}
+	return best
 }
 
 // mdCell escapes a string for safe insertion into a markdown table cell. Pipes have to be backslash-escaped or they end the column;
