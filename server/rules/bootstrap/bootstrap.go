@@ -147,7 +147,8 @@ const DefaultDetectionConfigRefreshInterval = 5 * time.Second
 
 // Run drives the rules context's background workers until ctx is cancelled: the detection-config snapshot refresh, which converges
 // this replica with config mutations made on other replicas (ADR-0010 stateless server; mutations elsewhere only bump the shared
-// version counter), and the monitor-match-count prune. cmd/main starts this in a goroutine alongside the other contexts' loops.
+// version counter), and the per-rule counter prune, which sweeps BOTH counter tables (monitor match counts and evaluation
+// statistics) in one pass. cmd/main starts this in a goroutine alongside the other contexts' loops.
 //
 // The prune is NOT leader-gated, unlike the detection context's sweeps. Every RunIfLeader loop holds its advisory lock, and so a
 // pooled connection, for the lifetime of the process, and the event processor sizes itself against what those loops leave behind
@@ -162,17 +163,20 @@ func (r *Rules) Run(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		r.pruneCountersLoop(ctx, DefaultMatchCountPruneInterval)
+		r.pruneCountersLoop(ctx, DefaultCounterPruneInterval)
 	}()
 	wg.Wait()
 }
 
-// DefaultMatchCountPruneInterval is how often each replica sweeps monitor-match counts past the retention window. Hourly because
-// the counters are bucketed by day: a tighter interval deletes nothing new, and a looser one only delays reclaiming rows that are
+// DefaultCounterPruneInterval is how often each replica sweeps the per-rule counter tables past the retention window. Hourly
+// because both are bucketed by day: a tighter interval deletes nothing new, and a looser one only delays reclaiming rows that are
 // already excluded from every read by their day.
-const DefaultMatchCountPruneInterval = time.Hour
+//
+// Named for counters rather than match counts because one sweep covers both tables. It was DefaultMatchCountPruneInterval when
+// there was only one (issue #833 review).
+const DefaultCounterPruneInterval = time.Hour
 
-// SetRetentionDays sets the age cap the match-count prune applies AND the furthest back the read surface may claim to see. One
+// SetRetentionDays sets the age cap BOTH counter prunes apply AND the furthest back the read surface may claim to see. One
 // entry point for both, because they are the same fact: rows past retention are deleted, so a read window wider than retention
 // describes a period the data no longer covers. Zero (the default) prunes nothing, matching how the same knob disables the
 // detection context's process-record retention runner.

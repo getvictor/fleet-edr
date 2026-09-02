@@ -79,12 +79,12 @@ func remaining(t *testing.T, db *sqlx.DB) int {
 	return n
 }
 
-// TestPruneMatchCountsOnce covers the sweep the rules context runs on a ticker.
+// TestPruneCountersOnce covers the sweep the rules context runs on a ticker, which prunes BOTH per-rule counter tables.
 //
 // It is the half of the retention story that is not in the store: the store knows how to delete, and this knows when to and what
 // to do when it fails. Both matter, because this loop runs on every replica with no leader lock, so a bug here is a bug everywhere
 // at once rather than on one elected node.
-func TestPruneMatchCountsOnce(t *testing.T) {
+func TestPruneCountersOnce(t *testing.T) {
 	t.Parallel()
 
 	t.Run("deletes past the window and leaves the rest", func(t *testing.T) {
@@ -127,9 +127,9 @@ func TestPruneMatchCountsOnce(t *testing.T) {
 	})
 }
 
-// TestPruneMatchCountsLoop covers the ticker wrapper: it sweeps immediately rather than after a full interval, and it stops when
+// TestPruneCountersLoop covers the ticker wrapper: it sweeps immediately rather than after a full interval, and it stops when
 // the context is cancelled rather than outliving the process it belongs to.
-func TestPruneMatchCountsLoop(t *testing.T) {
+func TestPruneCountersLoop(t *testing.T) {
 	t.Parallel()
 
 	r, db := newPruneHarness(t, 30)
@@ -157,7 +157,7 @@ func TestPruneMatchCountsLoop(t *testing.T) {
 
 // TestRun_DrivesTheMatchCountPrune covers the production entry point rather than the loop beneath it.
 //
-// Every other test here calls pruneMatchCountsLoop directly, which means deleting its call from Run would disable pruning in
+// Every other test here calls pruneCountersOnce or pruneCountersLoop directly, which means deleting its call from Run would disable pruning in
 // production and leave the whole suite green. That is the failure this exists to catch: the loop is well covered and the line that
 // starts it was not covered at all.
 //
