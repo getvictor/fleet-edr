@@ -1176,3 +1176,136 @@ func TestEngine_Evaluate_PerRuleSpanCarriesAncestryDeclines(t *testing.T) {
 		"each rule's span MUST carry its own declines: the shared scope accumulates across rules, and a batch total would "+
 			"attribute one rule's declines to another")
 }
+
+// recordingEvalStats captures what the engine hands the durable statistics sink, and can be made to fail.
+type recordingEvalStats struct {
+	calls int
+	got   rulesapi.RuleEvalStats
+	err   error
+}
+
+func (r *recordingEvalStats) RecordRuleEvalStats(_ context.Context, stats rulesapi.RuleEvalStats) error {
+	r.calls++
+	r.got = append(r.got, stats...)
+	return r.err
+}
+
+// byRule indexes the captured entries so an assertion can name a rule rather than an index into evaluation order.
+func (r *recordingEvalStats) byRule(id string) (rulesapi.RuleEvalStat, bool) {
+	for _, st := range r.got {
+		if st.RuleID == id {
+			return st, true
+		}
+	}
+	return rulesapi.RuleEvalStat{}, false
+}
+
+// spec:observability-instrumentation/per-rule-evaluation-cost-is-recorded-durably/a-replayed-batch-counts-each-attempt-and-records-the-retryable-outcome
+//
+// TestEngine_Evaluate_RecordsEveryAttemptIncludingTheNackedOne pins the counting rule that is the whole reason this type exists
+// separately from MonitorTally, and pins it on the path that would otherwise never record anything.
+//
+// A batch ending in a retryable outcome is NACKED, so the pipeline's record-after-acknowledgement step never runs for it. If the
+// statistics rode back the way the monitor tally does, the retryable-miss counter would be permanently zero: the only batches that
+// could report a miss are exactly the ones that never reach the recording step. That makes the counter worse than absent, because a
+// reader would take zero as evidence of no churn.
+//
+// Two attempts are driven through deliberately, standing in for a nack and its replay, because counting attempts rather than
+// logical batches is the property under test. Asserting one attempt would pass equally for either design.
+func TestEngine_Evaluate_RecordsEveryAttemptIncludingTheNackedOne(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{}
+	e := New(nil, nil)
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&failingRule{stubRule: stubRule{id: "missing-subject"}, err: rulesapi.ErrProcessNotYetMaterialized},
+	}})
+
+	batch := []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}
+	// The nack, then the replay. Both must be counted.
+	require.ErrorIs(t, evaluateErr(e, t.Context(), batch), rulesapi.ErrProcessNotYetMaterialized)
+	require.ErrorIs(t, evaluateErr(e, t.Context(), batch), rulesapi.ErrProcessNotYetMaterialized)
+
+	assert.Equal(t, 2, rec.calls, "statistics are recorded once per attempt, including the attempt that nacks")
+	st, ok := rec.byRule("missing-subject")
+	require.True(t, ok, "the rule that evaluated must appear")
+	assert.Equal(t, int64(1), st.Evaluations, "each recorded entry describes one attempt")
+	assert.Equal(t, int64(1), st.RetryableMisses,
+		"a retryable outcome is what identifies the rule driving the replay; recording only after an acknowledgement would make "+
+			"this permanently zero, since such a batch is never acknowledged")
+	assert.Positive(t, st.EvalNs, "an attempt that cost time must report it, or the mean is meaningless")
+	assert.Equal(t, st.EvalNs, st.MaxEvalNs, "a single attempt's worst case is its own duration")
+}
+
+// spec:observability-instrumentation/per-rule-evaluation-cost-is-recorded-durably/a-rule-with-nothing-in-scope-is-not-counted-as-having-evaluated
+//
+// TestEngine_Evaluate_DoesNotCountARuleLeftWithNothingInScope pins that the counters agree with the span about what "ran" means.
+//
+// This file already decided that a rule the platform scope emptied gets no span, because a span for it reports work that never
+// happened. The same is true of the counters, and getting it wrong is quietly corrosive rather than obviously broken: a
+// cross-platform fleet would record a zero-duration evaluation for every mismatched rule on every batch, and those zeroes drag the
+// mean of exactly the figure an operator consults to find the expensive rule.
+//
+// The Windows rule here is handed a darwin-only batch. The darwin rule in the same batch is the control: without it, an assertion
+// that nothing was recorded would also pass if the recorder were simply never called.
+func TestEngine_Evaluate_DoesNotCountARuleLeftWithNothingInScope(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{}
+	e := New(nil, nil)
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&stubRule{id: "darwin-rule", platforms: []rulesapi.Platform{rulesapi.PlatformDarwin}},
+		&stubRule{id: "windows-rule", platforms: []rulesapi.Platform{rulesapi.PlatformWindows}},
+	}})
+
+	require.NoError(t, evaluateErr(e, t.Context(),
+		[]api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
+
+	_, ranDarwin := rec.byRule("darwin-rule")
+	assert.True(t, ranDarwin, "control: the in-scope rule did run and must be recorded, or this test proves nothing")
+	_, ranWindows := rec.byRule("windows-rule")
+	assert.False(t, ranWindows,
+		"a rule the platform scope left with nothing to see did not run: recording a zero-duration evaluation for it would drag "+
+			"its measured cost toward nothing on every batch of the wrong platform")
+}
+
+// spec:observability-instrumentation/per-rule-evaluation-cost-is-recorded-durably/a-recording-failure-does-not-fail-the-batch
+//
+// TestEngine_Evaluate_SurvivesAStatisticsWriteFailure pins that a counter cannot cost the batch its work.
+//
+// The recording runs from a defer on every exit path, so a store outage would otherwise turn every successful batch into a failed
+// one and replay real detection work to save a number nobody is waiting on. Both halves are asserted: the error does not surface,
+// and the batch's own result is unchanged.
+func TestEngine_Evaluate_SurvivesAStatisticsWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{err: errors.New("counter store unavailable")}
+	e := New(nil, nil)
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "unaffected"}}})
+
+	tally, err := e.Evaluate(t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}})
+
+	require.NoError(t, err, "a statistics write failure must not fail the batch")
+	assert.Empty(t, tally, "the batch's own result is whatever the rules produced, unchanged by the counter")
+	assert.Equal(t, 1, rec.calls, "the write was attempted, or the test would pass with the recorder unwired")
+}
+
+// TestEngine_Evaluate_RecordsNothingWithoutARecorder pins that the sink is optional.
+//
+// The fixture corpus and the replay harness construct engines without one, and so does any deployment with no rules-context store,
+// so making evaluation depend on it would break far more than it instrumented. Worth its own test because the guard is a nil check
+// that no other test would fail if it were removed.
+func TestEngine_Evaluate_RecordsNothingWithoutARecorder(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "no-recorder"}}})
+
+	assert.NotPanics(t, func() {
+		require.NoError(t, evaluateErr(e, t.Context(),
+			[]api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
+	})
+}

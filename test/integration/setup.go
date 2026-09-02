@@ -197,6 +197,7 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	// default the engine was already falling back to.
 	detectionCtx.SetModeResolver(rulesCtx.DetectionConfigModeResolver())
 	detectionCtx.SetMonitorMatchRecorder(rulesCtx.MonitorMatchRecorder())
+	detectionCtx.SetRuleEvalStatsRecorder(rulesCtx.RuleEvalStatsRecorder())
 
 	endpointCtx, err := endpointbootstrap.New(endpointbootstrap.Deps{
 		DB:                  db,

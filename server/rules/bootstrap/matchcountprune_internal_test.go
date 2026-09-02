@@ -71,7 +71,7 @@ func TestPruneMatchCountsOnce(t *testing.T) {
 		insertCount(t, db, "old", 40)
 		insertCount(t, db, "recent", 1)
 
-		r.pruneMatchCountsOnce(t.Context())
+		r.pruneCountersOnce(t.Context())
 
 		assert.Equal(t, 1, remaining(t, db))
 	})
@@ -81,7 +81,7 @@ func TestPruneMatchCountsOnce(t *testing.T) {
 		r, db := newPruneHarness(t, 0)
 		insertCount(t, db, "ancient", 400)
 
-		r.pruneMatchCountsOnce(t.Context())
+		r.pruneCountersOnce(t.Context())
 
 		assert.Equal(t, 1, remaining(t, db), "the disabled value must not be read as prune everything")
 	})
@@ -94,7 +94,7 @@ func TestPruneMatchCountsOnce(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		assert.NotPanics(t, func() { r.pruneMatchCountsOnce(ctx) })
+		assert.NotPanics(t, func() { r.pruneCountersOnce(ctx) })
 	})
 }
 
@@ -111,7 +111,7 @@ func TestPruneMatchCountsLoop(t *testing.T) {
 	go func() {
 		// An hour-long interval: if the first pass waited for a tick, this would hang rather than fail, and the deadline below
 		// would report it.
-		r.pruneMatchCountsLoop(ctx, time.Hour)
+		r.pruneCountersLoop(ctx, time.Hour)
 		close(done)
 	}()
 
