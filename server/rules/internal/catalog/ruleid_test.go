@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,10 +30,14 @@ func TestEveryShippedRuleIDIsStorable(t *testing.T) {
 
 	for _, r := range rules {
 		id := r.ID()
-		assert.LessOrEqualf(t, len(id), api.MaxRuleIDLen,
+		// Runes, matching the validator and the column. Counting bytes here would fail a shipped identifier of at most 255
+		// multibyte characters that the loaders accept and every column stores, which is the same confusion the validator had
+		// (issue #835 review). Every shipped id is ASCII today, so this is agreement rather than a live difference, and a gate
+		// that measures something other than what it guards stops being a gate the moment that changes.
+		assert.LessOrEqualf(t, utf8.RuneCountInString(id), api.MaxRuleIDLen,
 			"rule %q has a %d-character identifier, over the %d-character limit: it cannot be stored, and a rule whose alerts "+
 				"cannot be persisted wedges the event queue of any host it matches on",
-			id, len(id), api.MaxRuleIDLen)
+			id, utf8.RuneCountInString(id), api.MaxRuleIDLen)
 		assert.NotEmptyf(t, id, "a rule with no identifier collides with every other rule that has none")
 	}
 }
