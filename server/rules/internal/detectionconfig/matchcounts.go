@@ -164,17 +164,34 @@ func (s *Store) MatchCounts(ctx context.Context, days api.MatchCountWindow) ([]a
 //
 // retentionDays <= 0 prunes nothing, matching how the same knob disables the process-record retention runner.
 func (s *Store) PruneMatchCounts(ctx context.Context, retentionDays int) (int64, error) {
+	total, err := s.pruneDailyCounters(ctx, "detection_rule_match_counts", retentionDays)
+	if err != nil {
+		return total, fmt.Errorf("prune monitor match counts: %w", err)
+	}
+	return total, nil
+}
+
+// pruneDailyCounters deletes rows older than retentionDays from a table keyed by a `day` column, and reports how many it removed.
+//
+// Shared by both per-rule counter tables. They had the same retention cutoff, the same batched delete, the same deadlock retry and
+// the same termination condition, and keeping two copies means a fix to the boundary or the retry lands on one table and silently
+// misses the other. That is the drift issue #829 was filed for, one directory over (issue #833 review).
+//
+// table is interpolated into the statement, which is safe here and nowhere else: the only call sites pass string constants naming
+// tables in this package's own migration corpus. It is not reachable from a request.
+func (s *Store) pruneDailyCounters(ctx context.Context, table string, retentionDays int) (int64, error) {
+	// retentionDays <= 0 prunes nothing, matching how the same knob disables the process-record retention runner.
 	if retentionDays <= 0 {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.DateOnly)
+	// ORDER BY day so concurrent replicas walk the range the same way rather than meeting in the middle of it.
+	query := `DELETE FROM ` + table + ` WHERE day < ? ORDER BY day LIMIT ?`
 	var total int64
 	for {
 		var deleted int64
 		err := sqlhelpers.WithDeadlockRetry(ctx, matchCountDeadlockAttempts, matchCountDeadlockStep, func() error {
-			// ORDER BY day so concurrent replicas walk the range the same way rather than meeting in the middle of it.
-			res, execErr := s.db.ExecContext(ctx,
-				`DELETE FROM detection_rule_match_counts WHERE day < ? ORDER BY day LIMIT ?`, cutoff, matchCountPruneBatch)
+			res, execErr := s.db.ExecContext(ctx, query, cutoff, matchCountPruneBatch)
 			if execErr != nil {
 				return execErr
 			}
@@ -182,7 +199,7 @@ func (s *Store) PruneMatchCounts(ctx context.Context, retentionDays int) (int64,
 			return execErr
 		})
 		if err != nil {
-			return total, fmt.Errorf("prune monitor match counts: %w", err)
+			return total, err
 		}
 		total += deleted
 		if deleted < matchCountPruneBatch {

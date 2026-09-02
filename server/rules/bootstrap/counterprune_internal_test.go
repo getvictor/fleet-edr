@@ -49,6 +49,28 @@ func insertCount(t *testing.T, db *sqlx.DB, ruleID string, daysAgo int) {
 	require.NoError(t, err)
 }
 
+// insertEvalStat writes one evaluation-statistics row on a given day.
+//
+// The sweep prunes BOTH counter tables in one pass, so a test that seeds only the match counts leaves the eval-stats call
+// untested: deleting it would keep every assertion here green, because that table's prune is otherwise exercised only in
+// isolation in the store's own package (issue #833 review).
+func insertEvalStat(t *testing.T, db *sqlx.DB, ruleID string, daysAgo int) {
+	t.Helper()
+	day := time.Now().UTC().AddDate(0, 0, -daysAgo).Format(time.DateOnly)
+	_, err := db.ExecContext(t.Context(),
+		`INSERT INTO detection_rule_eval_stats (rule_id, day, evaluations, eval_ns_sum, eval_ns_max)
+		 VALUES (?, ?, 1, 10, 10)`, ruleID, day)
+	require.NoError(t, err)
+}
+
+func remainingEvalStats(t *testing.T, db *sqlx.DB) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.GetContext(t.Context(), &n,
+		`SELECT COUNT(*) FROM detection_rule_eval_stats`))
+	return n
+}
+
 func remaining(t *testing.T, db *sqlx.DB) int {
 	t.Helper()
 	var n int
@@ -57,12 +79,12 @@ func remaining(t *testing.T, db *sqlx.DB) int {
 	return n
 }
 
-// TestPruneMatchCountsOnce covers the sweep the rules context runs on a ticker.
+// TestPruneCountersOnce covers the sweep the rules context runs on a ticker, which prunes BOTH per-rule counter tables.
 //
 // It is the half of the retention story that is not in the store: the store knows how to delete, and this knows when to and what
 // to do when it fails. Both matter, because this loop runs on every replica with no leader lock, so a bug here is a bug everywhere
 // at once rather than on one elected node.
-func TestPruneMatchCountsOnce(t *testing.T) {
+func TestPruneCountersOnce(t *testing.T) {
 	t.Parallel()
 
 	t.Run("deletes past the window and leaves the rest", func(t *testing.T) {
@@ -70,20 +92,27 @@ func TestPruneMatchCountsOnce(t *testing.T) {
 		r, db := newPruneHarness(t, 30)
 		insertCount(t, db, "old", 40)
 		insertCount(t, db, "recent", 1)
+		// Seeded in BOTH tables, because one sweep prunes both and seeding only one leaves the other's call unasserted.
+		insertEvalStat(t, db, "old", 40)
+		insertEvalStat(t, db, "recent", 1)
 
-		r.pruneMatchCountsOnce(t.Context())
+		r.pruneCountersOnce(t.Context())
 
 		assert.Equal(t, 1, remaining(t, db))
+		assert.Equal(t, 1, remainingEvalStats(t, db),
+			"the same sweep prunes the eval-stats table: without this, removing that call keeps every other assertion green")
 	})
 
 	t.Run("retention of zero prunes nothing", func(t *testing.T) {
 		t.Parallel()
 		r, db := newPruneHarness(t, 0)
 		insertCount(t, db, "ancient", 400)
+		insertEvalStat(t, db, "ancient", 400)
 
-		r.pruneMatchCountsOnce(t.Context())
+		r.pruneCountersOnce(t.Context())
 
 		assert.Equal(t, 1, remaining(t, db), "the disabled value must not be read as prune everything")
+		assert.Equal(t, 1, remainingEvalStats(t, db), "and the same for the table sharing the sweep")
 	})
 
 	t.Run("a cancelled context is not logged as a failure", func(t *testing.T) {
@@ -94,13 +123,13 @@ func TestPruneMatchCountsOnce(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		assert.NotPanics(t, func() { r.pruneMatchCountsOnce(ctx) })
+		assert.NotPanics(t, func() { r.pruneCountersOnce(ctx) })
 	})
 }
 
-// TestPruneMatchCountsLoop covers the ticker wrapper: it sweeps immediately rather than after a full interval, and it stops when
+// TestPruneCountersLoop covers the ticker wrapper: it sweeps immediately rather than after a full interval, and it stops when
 // the context is cancelled rather than outliving the process it belongs to.
-func TestPruneMatchCountsLoop(t *testing.T) {
+func TestPruneCountersLoop(t *testing.T) {
 	t.Parallel()
 
 	r, db := newPruneHarness(t, 30)
@@ -111,7 +140,7 @@ func TestPruneMatchCountsLoop(t *testing.T) {
 	go func() {
 		// An hour-long interval: if the first pass waited for a tick, this would hang rather than fail, and the deadline below
 		// would report it.
-		r.pruneMatchCountsLoop(ctx, time.Hour)
+		r.pruneCountersLoop(ctx, time.Hour)
 		close(done)
 	}()
 
@@ -128,7 +157,7 @@ func TestPruneMatchCountsLoop(t *testing.T) {
 
 // TestRun_DrivesTheMatchCountPrune covers the production entry point rather than the loop beneath it.
 //
-// Every other test here calls pruneMatchCountsLoop directly, which means deleting its call from Run would disable pruning in
+// Every other test here calls pruneCountersOnce or pruneCountersLoop directly, which means deleting its call from Run would disable pruning in
 // production and leave the whole suite green. That is the failure this exists to catch: the loop is well covered and the line that
 // starts it was not covered at all.
 //

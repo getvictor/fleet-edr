@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -92,6 +93,8 @@ type Engine struct {
 	logger        *slog.Logger
 	metrics       api.MetricsRecorder
 	modeResolver  rulesapi.RuleModeResolver
+	// evalStats is the durable sink for per-rule evaluation statistics (issue #774). Optional: nil records nothing.
+	evalStats rulesapi.RuleEvalStatsRecorder
 	// tracer is per-Engine rather than a package global so a test can install its own tracer on its own Engine instance without a data
 	// race against another parallel test (a package-level var mutated by one test is read by evaluateRule in another). Production always
 	// gets the same named tracer via New.
@@ -200,10 +203,17 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	scope := &rulesapi.BatchScope{}
 	// One tally for the batch, returned to the caller to record after the acknowledgement. See batchTally.
 	tally := &batchTally{}
+	// One statistics accumulator for the batch, recorded from a defer so every exit path reports the work it did: a hard error
+	// mid-loop, a retryable miss after the loop, and success. Recorded HERE rather than handed back like the tally, because
+	// unlike a monitor match an evaluation is not something a replay must avoid counting twice; see RuleEvalStat's doc. Handing
+	// it back would also lose it on exactly the path it matters most, since a batch ending in a retryable miss is never
+	// acknowledged and the caller's record-after-ack step never runs.
+	var stats rulesapi.RuleEvalStats
+	defer func() { e.recordEvalStats(ctx, stats) }()
 	var pendingMiss error
 	for _, i := range e.rulesFor(live) {
 		rule := e.rules[i]
-		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live, scope, tally)
+		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live, scope, tally, &stats)
 		if err == nil {
 			continue
 		}
@@ -321,7 +331,8 @@ func consumesAny(declared []string, events []api.Event) bool {
 // logged + swallowed so a buggy rule doesn't block the rest.
 func (e *Engine) evaluateRule(
 	ctx context.Context, rule rulesapi.Rule, declared []string, live []api.Event, scope *rulesapi.BatchScope, tally *batchTally,
-) error {
+	stats *rulesapi.RuleEvalStats,
+) (err error) {
 	// Scope the batch to the rule's target platforms (ADR-0018): a macOS-only rule never sees a Windows event. Checked BEFORE the
 	// span is opened, because a rule left with nothing to evaluate did not run, and emitting a span for it reports work that never
 	// happened and inflates per-rule span volume by the whole cross-platform mismatch.
@@ -342,6 +353,34 @@ func (e *Engine) evaluateRule(
 	ctx, span := e.tracer.Start(ctx, "detection.rule.evaluate",
 		trace.WithAttributes(attribute.String("rule_id", rule.ID())))
 	defer span.End()
+
+	// Counted from HERE, not from the caller's loop, so the durable statistics and the span agree by construction on what "this
+	// rule ran" means. The two early returns above are the reason: a rule the platform scope left with nothing to see did not run,
+	// and this file already decided that such a rule gets no span. Timing it in the loop instead would count those as
+	// zero-duration evaluations and drag every cross-platform rule's mean toward nothing, which is precisely backwards for a
+	// figure whose job is to find the expensive rule. Duplicating the scope check in the loop would work and would be a second
+	// copy of a decision that has already drifted once (issue #829).
+	start := time.Now()
+	// Set where the engine decides this evaluation was retryable, and read by the defer below. NOT derived from the named return:
+	// a rule may report a retryable miss ALONGSIDE findings it did resolve (see rulesapi.Rule.Evaluate's contract), those findings
+	// are still persisted, and a persistence failure then overwrites the named err with its own error. Classifying that would
+	// record zero misses for an evaluation that genuinely missed, and the miss is the counter an operator reads to find the rule
+	// driving the retries (issue #833 review).
+	var evalRetryable bool
+	defer func() {
+		elapsed := time.Since(start).Nanoseconds()
+		// One entry per rule per batch, appended rather than merged, because rulesFor sorts and compacts its indices so a rule
+		// is evaluated exactly once per batch.
+		*stats = append(*stats, rulesapi.RuleEvalStat{
+			RuleID:      rule.ID(),
+			Evaluations: 1,
+			EvalNs:      elapsed,
+			MaxEvalNs:   elapsed,
+			// A retryable outcome is an attempt that cost its time and could not decide, and it drives the replay this counter
+			// exists to attribute to a rule.
+			RetryableMisses: boolToCount(evalRetryable),
+		})
+	}()
 
 	// Stamped from a defer, so every path reports what it did rather than only the paths that reach the end. Dashboards grouping
 	// by rule_id need a consistent attribute set, and there are three ways out of this function: a rule error, a persistence
@@ -396,6 +435,9 @@ func (e *Engine) evaluateRule(
 		// batch so the processor nacks it and re-evaluates once the row lands. Alert dedup makes the re-run idempotent, and
 		// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
 		retryableMiss = fmt.Errorf("rule %s: %w", rule.ID(), err)
+		// The single point where the engine judges an evaluation retryable, which is why the statistics read it from here rather
+		// than re-deriving it from a return value that later code reassigns.
+		evalRetryable = true
 	}
 	techniques := rule.Techniques()
 	// Read once per rule per batch rather than per finding: it is a type assertion, but so is the reason declaredTypes is cached,
@@ -551,4 +593,33 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 		e.metrics.AlertCreated(ctx, f.RuleID, f.Severity)
 	}
 	return true, nil
+}
+
+// boolToCount renders a per-attempt flag as the additive count the statistics carry.
+//
+// A rule that was NOT retryable contributes 0 rather than being absent, so the stored evaluations and retryable_misses stay
+// directly comparable: the ratio between them is the churn rate an operator reads.
+func boolToCount(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// SetRuleEvalStatsRecorder installs the durable sink for per-rule evaluation statistics. Unset records nothing, which is what the
+// fixture corpus, the replay harness and any deployment without a rules-context store want.
+func (e *Engine) SetRuleEvalStatsRecorder(r rulesapi.RuleEvalStatsRecorder) { e.evalStats = r }
+
+// recordEvalStats persists a batch's per-rule statistics, and swallows any failure.
+//
+// It cannot fail the batch and must not try. This runs from a defer on every exit path, including the ones that have already
+// decided to nack, and the batch's real work is the detection: replaying it to save a counter would cost more than the counter is
+// worth. A nil recorder is the normal case in tests.
+func (e *Engine) recordEvalStats(ctx context.Context, stats rulesapi.RuleEvalStats) {
+	if e.evalStats == nil || len(stats) == 0 {
+		return
+	}
+	if err := e.evalStats.RecordRuleEvalStats(ctx, stats); err != nil {
+		e.logger.ErrorContext(ctx, "record rule eval stats", "err", err, "rules", len(stats))
+	}
 }

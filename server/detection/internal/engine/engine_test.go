@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1175,4 +1176,232 @@ func TestEngine_Evaluate_PerRuleSpanCarriesAncestryDeclines(t *testing.T) {
 	assert.Equal(t, map[string]int64{"declines-two": 2, "declines-none": 0}, got,
 		"each rule's span MUST carry its own declines: the shared scope accumulates across rules, and a batch total would "+
 			"attribute one rule's declines to another")
+}
+
+// recordingEvalStats captures what the engine hands the durable statistics sink, and can be made to fail.
+type recordingEvalStats struct {
+	calls int
+	got   rulesapi.RuleEvalStats
+	err   error
+}
+
+func (r *recordingEvalStats) RecordRuleEvalStats(_ context.Context, stats rulesapi.RuleEvalStats) error {
+	r.calls++
+	r.got = append(r.got, stats...)
+	return r.err
+}
+
+// byRule indexes the captured entries so an assertion can name a rule rather than an index into evaluation order.
+func (r *recordingEvalStats) byRule(id string) (rulesapi.RuleEvalStat, bool) {
+	for _, st := range r.got {
+		if st.RuleID == id {
+			return st, true
+		}
+	}
+	return rulesapi.RuleEvalStat{}, false
+}
+
+// spec:observability-instrumentation/per-rule-evaluation-cost-is-recorded-durably/a-replayed-batch-counts-each-attempt-and-records-the-retryable-outcome
+//
+// TestEngine_Evaluate_RecordsEveryAttemptIncludingTheNackedOne pins the counting rule that is the whole reason this type exists
+// separately from MonitorTally, and pins it on the path that would otherwise never record anything.
+//
+// A batch ending in a retryable outcome is NACKED, so the pipeline's record-after-acknowledgement step never runs for it. If the
+// statistics rode back the way the monitor tally does, the retryable-miss counter would be permanently zero: the only batches that
+// could report a miss are exactly the ones that never reach the recording step. That makes the counter worse than absent, because a
+// reader would take zero as evidence of no churn.
+//
+// Two attempts are driven through deliberately, standing in for a nack and its replay, because counting attempts rather than
+// logical batches is the property under test. Asserting one attempt would pass equally for either design.
+func TestEngine_Evaluate_RecordsEveryAttemptIncludingTheNackedOne(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{}
+	e := New(nil, nil)
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&failingRule{stubRule: stubRule{id: "missing-subject"}, err: rulesapi.ErrProcessNotYetMaterialized},
+	}})
+
+	batch := []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}
+	// The nack, then the replay. Both must be counted.
+	require.ErrorIs(t, evaluateErr(e, t.Context(), batch), rulesapi.ErrProcessNotYetMaterialized)
+	require.ErrorIs(t, evaluateErr(e, t.Context(), batch), rulesapi.ErrProcessNotYetMaterialized)
+
+	assert.Equal(t, 2, rec.calls, "statistics are recorded once per attempt, including the attempt that nacks")
+	st, ok := rec.byRule("missing-subject")
+	require.True(t, ok, "the rule that evaluated must appear")
+	assert.Equal(t, int64(1), st.Evaluations, "each recorded entry describes one attempt")
+	assert.Equal(t, int64(1), st.RetryableMisses,
+		"a retryable outcome is what identifies the rule driving the replay; recording only after an acknowledgement would make "+
+			"this permanently zero, since such a batch is never acknowledged")
+	assert.Positive(t, st.EvalNs, "an attempt that cost time must report it, or the mean is meaningless")
+	assert.Equal(t, st.EvalNs, st.MaxEvalNs, "a single attempt's worst case is its own duration")
+}
+
+// spec:observability-instrumentation/per-rule-evaluation-cost-is-recorded-durably/a-rule-with-nothing-in-scope-is-not-counted-as-having-evaluated
+//
+// TestEngine_Evaluate_DoesNotCountARuleLeftWithNothingInScope pins that the counters agree with the span about what "ran" means.
+//
+// This file already decided that a rule the platform scope emptied gets no span, because a span for it reports work that never
+// happened. The same is true of the counters, and getting it wrong is quietly corrosive rather than obviously broken: a
+// cross-platform fleet would record a zero-duration evaluation for every mismatched rule on every batch, and those zeroes drag the
+// mean of exactly the figure an operator consults to find the expensive rule.
+//
+// The Windows rule here is handed a darwin-only batch. The darwin rule in the same batch is the control: without it, an assertion
+// that nothing was recorded would also pass if the recorder were simply never called.
+func TestEngine_Evaluate_DoesNotCountARuleLeftWithNothingInScope(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{}
+	e := New(nil, nil)
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&stubRule{id: "darwin-rule", platforms: []rulesapi.Platform{rulesapi.PlatformDarwin}},
+		&stubRule{id: "windows-rule", platforms: []rulesapi.Platform{rulesapi.PlatformWindows}},
+	}})
+
+	require.NoError(t, evaluateErr(e, t.Context(),
+		[]api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
+
+	_, ranDarwin := rec.byRule("darwin-rule")
+	assert.True(t, ranDarwin, "control: the in-scope rule did run and must be recorded, or this test proves nothing")
+	_, ranWindows := rec.byRule("windows-rule")
+	assert.False(t, ranWindows,
+		"a rule the platform scope left with nothing to see did not run: recording a zero-duration evaluation for it would drag "+
+			"its measured cost toward nothing on every batch of the wrong platform")
+}
+
+// spec:observability-instrumentation/per-rule-evaluation-cost-is-recorded-durably/a-recording-failure-does-not-fail-the-batch
+//
+// TestEngine_Evaluate_SurvivesAStatisticsWriteFailure pins that a counter cannot cost the batch its work.
+//
+// The recording runs from a defer on every exit path, so a store outage would otherwise turn every successful batch into a failed
+// one and replay real detection work to save a number nobody is waiting on. Both halves are asserted: the error does not surface,
+// and the batch's own result is unchanged.
+func TestEngine_Evaluate_SurvivesAStatisticsWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{err: errors.New("counter store unavailable")}
+	var logged bytes.Buffer
+	e := New(nil, slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError})))
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "unaffected"}}})
+
+	tally, err := e.Evaluate(t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}})
+
+	require.NoError(t, err, "a statistics write failure must not fail the batch")
+	assert.Empty(t, tally, "the batch's own result is whatever the rules produced, unchanged by the counter")
+	assert.Equal(t, 1, rec.calls, "the write was attempted, or the test would pass with the recorder unwired")
+	// The scenario requires the failure to be LOGGED, and swallowing it silently is the failure mode that matters: a counter-store
+	// outage would then look exactly like a fleet whose rules cost nothing. Without this assertion, deleting the log call keeps
+	// the marked scenario green (issue #833 review).
+	assert.Contains(t, logged.String(), "record rule eval stats",
+		"a swallowed write failure must still be visible, or a counter-store outage is indistinguishable from healthy silence")
+	assert.Contains(t, logged.String(), "counter store unavailable", "the underlying error has to reach the log, not just a label")
+}
+
+// TestEngine_Evaluate_RecordsNothingWithoutARecorder pins that the sink is optional.
+//
+// The fixture corpus and the replay harness construct engines without one, and so does any deployment with no rules-context store,
+// so making evaluation depend on it would break far more than it instrumented. Worth its own test because the guard is a nil check
+// that no other test would fail if it were removed.
+func TestEngine_Evaluate_RecordsNothingWithoutARecorder(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "no-recorder"}}})
+
+	assert.NotPanics(t, func() {
+		require.NoError(t, evaluateErr(e, t.Context(),
+			[]api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
+	})
+}
+
+// missingSubjectWithFindings returns findings AND a retryable miss, which is the shape rulesapi.Rule.Evaluate's contract requires
+// of a rule that resolved part of a batch and could not resolve the rest.
+type missingSubjectWithFindings struct {
+	stubRule
+	findings []api.Finding
+}
+
+func (r *missingSubjectWithFindings) Evaluate(
+	_ context.Context, events []api.Event, _ rulesapi.GraphReader,
+) ([]api.Finding, error) {
+	r.calls++
+	r.received = events
+	return r.findings, rulesapi.ErrProcessNotYetMaterialized
+}
+
+// TestEngine_Evaluate_CountsTheGenericRetrySentinelToo pins that the counter is not narrowed to the materialization case.
+//
+// The classifier keys on the general retry sentinel, and it must: a rule can be deliberately WAITING rather than missing data.
+// sensor_tamper reports the generic form while waiting out a recovery window, and it nacks the batch exactly like a
+// materialization miss does, so it drives the same replay this counter attributes to a rule.
+//
+// Worth its own case because every other test here uses ErrProcessNotYetMaterialized, which WRAPS the generic sentinel. Narrowing
+// the classifier to the specific one would keep all of them green while every genuinely-waiting rule silently recorded zero
+// (issue #833 review).
+func TestEngine_Evaluate_CountsTheGenericRetrySentinelToo(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "bare sentinel", err: rulesapi.ErrRetryBatch},
+		{name: "wrapped sentinel", err: fmt.Errorf("waiting on recovery window: %w", rulesapi.ErrRetryBatch)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &recordingEvalStats{}
+			e := New(nil, discardLogger())
+			e.SetRuleEvalStatsRecorder(rec)
+			e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+				&failingRule{stubRule: stubRule{id: "waiting"}, err: tc.err},
+			}})
+
+			require.ErrorIs(t, evaluateErr(e, t.Context(),
+				[]api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}), rulesapi.ErrRetryBatch)
+
+			st, ok := rec.byRule("waiting")
+			require.True(t, ok)
+			assert.Equal(t, int64(1), st.RetryableMisses,
+				"a rule waiting on the generic sentinel nacks the batch just as a materialization miss does, so it counts")
+		})
+	}
+}
+
+// TestEngine_Evaluate_ClassifiesTheEvaluationNotThePersistenceError pins where the retryable-miss count comes from.
+//
+// The contract lets a rule report a retryable miss alongside findings it DID resolve, and the engine persists those findings
+// rather than discarding them. So the named error return does not describe the evaluation: if persisting one of those findings
+// fails, it is reassigned to the persistence error on the way out. Classifying that would record zero misses for an evaluation
+// that genuinely missed, and it would do so precisely when the system is already in trouble, which is when an operator is looking
+// (issue #833 review).
+//
+// The nil store is what makes the persistence path fail here without a fixture: a rule in alert mode with a finding to route
+// reaches the store, and there is none. That is a real persistence failure rather than a simulated one.
+func TestEngine_Evaluate_ClassifiesTheEvaluationNotThePersistenceError(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{}
+	e := New(nil, discardLogger())
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&missingSubjectWithFindings{
+			stubRule: stubRule{id: "missed-and-found"},
+			findings: []api.Finding{{RuleID: "missed-and-found", HostID: "host-a", Title: "t"}},
+		},
+	}})
+
+	err := evaluateErr(e, t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}})
+	// Which error surfaces is not this test's subject; that the ATTEMPT is classified by its evaluation is.
+	require.Error(t, err, "control: persisting a finding with no store must fail, or the overwrite this test guards cannot happen")
+
+	st, ok := rec.byRule("missed-and-found")
+	require.True(t, ok)
+	assert.Equal(t, int64(1), st.Evaluations)
+	assert.Equal(t, int64(1), st.RetryableMisses,
+		"the evaluation missed, so it counts as a miss even though a later persistence failure replaced the returned error")
 }

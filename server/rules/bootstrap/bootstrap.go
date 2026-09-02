@@ -147,7 +147,8 @@ const DefaultDetectionConfigRefreshInterval = 5 * time.Second
 
 // Run drives the rules context's background workers until ctx is cancelled: the detection-config snapshot refresh, which converges
 // this replica with config mutations made on other replicas (ADR-0010 stateless server; mutations elsewhere only bump the shared
-// version counter), and the monitor-match-count prune. cmd/main starts this in a goroutine alongside the other contexts' loops.
+// version counter), and the per-rule counter prune, which sweeps BOTH counter tables (monitor match counts and evaluation
+// statistics) in one pass. cmd/main starts this in a goroutine alongside the other contexts' loops.
 //
 // The prune is NOT leader-gated, unlike the detection context's sweeps. Every RunIfLeader loop holds its advisory lock, and so a
 // pooled connection, for the lifetime of the process, and the event processor sizes itself against what those loops leave behind
@@ -162,17 +163,20 @@ func (r *Rules) Run(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		r.pruneMatchCountsLoop(ctx, DefaultMatchCountPruneInterval)
+		r.pruneCountersLoop(ctx, DefaultCounterPruneInterval)
 	}()
 	wg.Wait()
 }
 
-// DefaultMatchCountPruneInterval is how often each replica sweeps monitor-match counts past the retention window. Hourly because
-// the counters are bucketed by day: a tighter interval deletes nothing new, and a looser one only delays reclaiming rows that are
+// DefaultCounterPruneInterval is how often each replica sweeps the per-rule counter tables past the retention window. Hourly
+// because both are bucketed by day: a tighter interval deletes nothing new, and a looser one only delays reclaiming rows that are
 // already excluded from every read by their day.
-const DefaultMatchCountPruneInterval = time.Hour
+//
+// Named for counters rather than match counts because one sweep covers both tables. It was DefaultMatchCountPruneInterval when
+// there was only one (issue #833 review).
+const DefaultCounterPruneInterval = time.Hour
 
-// SetRetentionDays sets the age cap the match-count prune applies AND the furthest back the read surface may claim to see. One
+// SetRetentionDays sets the age cap BOTH counter prunes apply AND the furthest back the read surface may claim to see. One
 // entry point for both, because they are the same fact: rows past retention are deleted, so a read window wider than retention
 // describes a period the data no longer covers. Zero (the default) prunes nothing, matching how the same knob disables the
 // detection context's process-record retention runner.
@@ -189,13 +193,14 @@ func (r *Rules) SetRetentionDays(days int) {
 	r.detectionConfigH.SetMatchCountCap(days)
 }
 
-// pruneMatchCountsLoop prunes on a ticker until ctx is cancelled. The first pass runs immediately rather than after a full
-// interval, so a replica that restarts often still prunes; the sweep is idempotent, so an eager pass costs one no-op delete.
-func (r *Rules) pruneMatchCountsLoop(ctx context.Context, interval time.Duration) {
+// pruneCountersLoop prunes the per-rule counter tables on a ticker until ctx is cancelled. The first pass runs immediately rather
+// than after a full interval, so a replica that restarts often still prunes; the sweep is idempotent, so an eager pass costs one
+// no-op delete per table.
+func (r *Rules) pruneCountersLoop(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		r.pruneMatchCountsOnce(ctx)
+		r.pruneCountersOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -204,15 +209,27 @@ func (r *Rules) pruneMatchCountsLoop(ctx context.Context, interval time.Duration
 	}
 }
 
-func (r *Rules) pruneMatchCountsOnce(ctx context.Context) {
-	deleted, err := r.detectionConfigStore.PruneMatchCounts(ctx, r.retentionDays)
+// pruneCountersOnce prunes both per-rule counter tables in one pass.
+//
+// One sweep for both rather than a ticker each: they are pruned by the same retention knob at the same cadence, and both deletes
+// are idempotent, so a second goroutine and a second ticker would buy nothing but another permanently parked goroutine per
+// replica. They are reported separately because a failure on one says nothing about the other.
+func (r *Rules) pruneCountersOnce(ctx context.Context) {
+	r.pruneOnce(ctx, "monitor match counts", r.detectionConfigStore.PruneMatchCounts)
+	r.pruneOnce(ctx, "rule eval stats", r.detectionConfigStore.PruneRuleEvalStats)
+}
+
+// pruneOnce runs one table's prune and reports it. what names the table in the log, so an operator reading a warning knows which
+// sweep failed.
+func (r *Rules) pruneOnce(ctx context.Context, what string, prune func(context.Context, int) (int64, error)) {
+	deleted, err := prune(ctx, r.retentionDays)
 	switch {
 	case err != nil && ctx.Err() != nil:
 		// Shutdown cancelled the query; not a failure worth logging on the way out.
 	case err != nil:
-		r.logger.WarnContext(ctx, "rules: prune monitor match counts", "err", err)
+		r.logger.WarnContext(ctx, "rules: prune "+what, "err", err)
 	case deleted > 0:
-		r.logger.InfoContext(ctx, "rules: pruned monitor match counts", "rows", deleted, "retention_days", r.retentionDays)
+		r.logger.InfoContext(ctx, "rules: pruned "+what, "rows", deleted, "retention_days", r.retentionDays)
 	}
 }
 
@@ -255,6 +272,13 @@ func (r *Rules) ContentService() api.RuleProvider { return r.svc }
 // DetectionConfigModeResolver exposes the per-host rule-mode resolver the detection engine consults to route each finding
 // (alert / monitor / disabled) and apply a severity override. Backed by the live detection-config snapshot.
 func (r *Rules) DetectionConfigModeResolver() api.RuleModeResolver { return r.detectionConfigSvc }
+
+// RuleEvalStatsRecorder exposes the durable per-rule evaluation-statistics sink the detection engine writes to (issue #774).
+//
+// Separate from MonitorMatchRecorder, and consumed by the ENGINE rather than the pipeline, because the two obey opposite recording
+// rules: monitor matches are written only after the batch is acknowledged so a replay cannot count them twice, while evaluation
+// statistics count every attempt and must be written even when the batch is nacked. See api.RuleEvalStat for the full reasoning.
+func (r *Rules) RuleEvalStatsRecorder() api.RuleEvalStatsRecorder { return r.detectionConfigStore }
 
 // MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to after acknowledging a batch
 // (issue #813). Same direction as the mode resolver above: the rules context owns the table, and detection consumes the narrow
