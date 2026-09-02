@@ -1333,6 +1333,45 @@ func (r *missingSubjectWithFindings) Evaluate(
 	return r.findings, rulesapi.ErrProcessNotYetMaterialized
 }
 
+// TestEngine_Evaluate_CountsTheGenericRetrySentinelToo pins that the counter is not narrowed to the materialization case.
+//
+// The classifier keys on the general retry sentinel, and it must: a rule can be deliberately WAITING rather than missing data.
+// sensor_tamper reports the generic form while waiting out a recovery window, and it nacks the batch exactly like a
+// materialization miss does, so it drives the same replay this counter attributes to a rule.
+//
+// Worth its own case because every other test here uses ErrProcessNotYetMaterialized, which WRAPS the generic sentinel. Narrowing
+// the classifier to the specific one would keep all of them green while every genuinely-waiting rule silently recorded zero
+// (issue #833 review).
+func TestEngine_Evaluate_CountsTheGenericRetrySentinelToo(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "bare sentinel", err: rulesapi.ErrRetryBatch},
+		{name: "wrapped sentinel", err: fmt.Errorf("waiting on recovery window: %w", rulesapi.ErrRetryBatch)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &recordingEvalStats{}
+			e := New(nil, discardLogger())
+			e.SetRuleEvalStatsRecorder(rec)
+			e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+				&failingRule{stubRule: stubRule{id: "waiting"}, err: tc.err},
+			}})
+
+			require.ErrorIs(t, evaluateErr(e, t.Context(),
+				[]api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}), rulesapi.ErrRetryBatch)
+
+			st, ok := rec.byRule("waiting")
+			require.True(t, ok)
+			assert.Equal(t, int64(1), st.RetryableMisses,
+				"a rule waiting on the generic sentinel nacks the batch just as a materialization miss does, so it counts")
+		})
+	}
+}
+
 // TestEngine_Evaluate_ClassifiesTheEvaluationNotThePersistenceError pins where the retryable-miss count comes from.
 //
 // The contract lets a rule report a retryable miss alongside findings it DID resolve, and the engine persists those findings

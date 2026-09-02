@@ -27,25 +27,32 @@ import (
 // this rule costing lately", a question about now, and attributing work to an event's own timestamp would let a skewed host clock
 // or a long queue backlog write into a day the operator has already read past.
 //
-// This write sits on the drain path, before Evaluate returns, and every host's batch on every worker and replica targets the SAME
-// (rule_id, day) rows, because the key carries no host dimension. That is worth measuring rather than assuming, since the
-// sibling table's host dimension spreads its writes and this one deliberately does not (issue #833 review).
+// This write is synchronous on the drain path, and every batch upserts rows keyed only by rule and day, so the review asked
+// whether it creates ingestion backpressure. Measured per call on the test MySQL for one 73-rule batch, which is what the dev
+// server dispatches:
 //
-// Measured against the test MySQL, one 73-rule batch (what the dev server actually dispatches):
+//	writers   p50        p95        throughput
+//	1         1.47ms     1.82ms     638/s
+//	8         3.37ms     7.78ms     1837/s
+//	32        11.22ms    41.56ms    1863/s
 //
-//	serial                1.60ms per upsert
-//	4 concurrent writers   606us per upsert, 1651/s
-//	16 concurrent writers  547us per upsert, 1828/s
-//	32 concurrent writers  545us per upsert, 1834/s, no deadlock retries
+// Latency does climb with concurrency and throughput saturates near 1800/s. A replica runs six workers (a 25-connection pool, two
+// per worker, halved so workers cannot starve the request path), so a two or three replica deployment sits around twelve to
+// eighteen concurrent writers and pays a few milliseconds per batch.
 //
-// It does not serialise: throughput RISES with concurrency and plateaus near 1800 upserts a second, and per-operation latency
-// falls below the serial figure rather than climbing, because InnoDB holds these row locks only for the statement and group commit
-// amortises the fsync across concurrent writers. A serialising write would have shown throughput flat at ~600/s and latency
-// climbing linearly with worker count.
+// CORRECTION, recorded because the first pass here got it wrong: an earlier version of this comment reported wall-clock divided by
+// operation count as if it were latency. That is reciprocal throughput, and it made a saturating write look like one that got
+// FASTER under load. The numbers above are per-call timings with real percentiles (issue #833 review).
 //
-// So the ceiling this adds is on the order of 1800 batches a second, which is far above the ingest rate of the fleet sizes this
-// product targets. If a deployment ever approaches it, the fix is a shard column in the key rather than making this asynchronous:
-// sharding keeps the write durable and on the same path, where losing counters to a buffer flush would not.
+// Row-lock contention is NOT the mechanism, which was tested rather than assumed. Adding a host-derived shard column to spread the
+// writes and re-running the same measurement moved p50 not at all (3.58ms against 3.98ms at eight writers, 12.54ms against 12.74ms
+// at thirty-two) and left throughput unchanged; only the p95 tail at thirty-two writers improved. So the cost is the write itself
+// against a saturating MySQL, not writers colliding on rows, and the shard was reverted rather than kept for a mechanism the data
+// refuses. Do not re-add it without a measurement that shows something different.
+//
+// If the per-batch cost ever does matter, the lever is to stop doing this once per batch: aggregate per replica and flush on a
+// ticker, as a documented per-replica cache whose loss is acceptable for a cost metric. That trades a bounded loss window for the
+// drain-path cost, which is a real trade; sharding is not, because it was measured and does nothing.
 //
 // eval_ns_max is a MAX rather than last-write-wins, and the timestamps are extrema, because these calls are not serialised: the
 // per-host claim lock is released before detection runs, so two batches can be in this write concurrently across workers and

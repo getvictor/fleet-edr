@@ -37,8 +37,15 @@ CREATE TABLE IF NOT EXISTS detection_rule_eval_stats (
 	-- to this. That is the opposite of the match-counts rule and is deliberate: see the store's doc comment for why, and note that
 	-- eval_ns_sum inflates by the same replay factor, so the mean the two produce together is unaffected.
 	evaluations      BIGINT      NOT NULL DEFAULT 0,
-	-- Attempts that ended in a retryable miss (the subject process was not yet materialized). Recorded even though such a batch is
-	-- never acknowledged, because identifying the rule driving the retry churn is the point of the counter.
+	-- Attempts that ended in ANY retryable outcome, not just an unmaterialized subject process. The engine counts every error
+	-- wrapping the retry sentinel, which includes a rule deliberately waiting rather than missing data: sensor_tamper waits out a
+	-- recovery window and reports the generic form. So this is "could not decide, batch will be replayed", which is the quantity
+	-- an operator wants when asking which rule drives the churn; reading it as a per-rule materialization counter would
+	-- misattribute a rule that is working as designed (issue #833 review).
+	--
+	-- Recorded even though such a batch is never acknowledged, which is exactly why: gating on the acknowledgement would leave
+	-- this column permanently zero, since the only batches that could report a retryable outcome are the ones that never reach an
+	-- acknowledgement.
 	retryable_misses BIGINT      NOT NULL DEFAULT 0,
 	-- Total and worst-case wall time across those attempts, in nanoseconds. BIGINT holds ~292 years of nanoseconds, so a day's
 	-- accumulation cannot approach it.
