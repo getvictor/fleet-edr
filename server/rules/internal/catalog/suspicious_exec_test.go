@@ -594,6 +594,8 @@ func TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow(t *testi
 // semantics by design (see the canonical retry requirement), so no later parent record recovers it. What justifies the drop is
 // that an alert nobody can silence drives an operator to disable the rule, which loses every detection it makes rather than
 // this one. The connect arm already made the same trade.
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-chain-declined-for-any-other-reason-is-not-counted-as-incomplete-ancestry
+//
 // TestSuspiciousExecDoesNotCountAWindowDeclineAsIncompleteAncestry keeps the two reasons a chain is declined from being conflated.
 //
 // The count exists to answer one question: is requiring resolved ancestry costing this fleet real detections often enough to

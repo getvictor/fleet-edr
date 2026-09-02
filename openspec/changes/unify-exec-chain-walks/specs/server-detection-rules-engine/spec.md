@@ -10,7 +10,7 @@ The walk SHALL prefer the newest suitable generation on the chain. Where a shell
 
 The walk SHALL NOT report a shell whose claimed parent is absent from the graph. Exclusions match on the parent's path, so a finding naming an unresolved parent cannot be suppressed by an exclusion an operator has configured for it, and an alert that recurs with no way to silence it drives an operator to disable the rule entirely, losing every detection it makes rather than this one. A shell parented at the init process is a genuine no-parent case, not incomplete ancestry, and still counts.
 
-A declined chain SHALL be observable per rule. A rule that reports nothing because an ancestor was missing is otherwise indistinguishable from a rule with nothing to report, which is how detection coverage rots without anyone noticing; the trade this requirement makes has to be measurable against the rule's own alert volume, or there is no evidence on which to revisit it.
+A declined chain SHALL be observable per rule. A rule that reports nothing because an ancestor was missing is otherwise indistinguishable from a rule with nothing to report, which is how detection coverage rots without anyone noticing; the trade this requirement makes has to be measurable against the rule's own alert volume, or there is no evidence on which to revisit it. The count SHALL reflect only chains declined for missing ancestry: a chain the rule declines for any other reason is its ordinary intended behaviour, and counting it would report ancestry as a problem on every host that merely runs long-lived shells.
 
 The chain is DROPPED, not retried. This is the skip semantics the "Retryable evaluation on unmaterialized subject process" requirement already specifies for ancestor and parent-chain lookups: the retryable class covers the pid an event is about, not its ancestry. A parent record arriving later does not recover the detection, and the requirement here does not promise that it will.
 
@@ -25,6 +25,12 @@ The chain is DROPPED, not retried. This is the skip semantics the "Retryable eva
 - **GIVEN** two rules sharing one exec-chain walk, one of which declines a chain for incomplete ancestry
 - **WHEN** the batch is evaluated
 - **THEN** the decline is recorded against that rule's own identity, and not against the rule it shares the walk with
+
+#### Scenario: A chain declined for any other reason is not counted as incomplete ancestry
+
+- **GIVEN** a chain whose shell resolves its parent, but which the rule declines for an unrelated reason such as the shell falling outside the window
+- **WHEN** the batch is evaluated
+- **THEN** no ancestry decline is recorded, so the count reflects only what requiring resolved ancestry costs
 
 #### Scenario: A shell whose parent is absent from the graph is not reported
 
