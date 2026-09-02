@@ -80,8 +80,8 @@ func loadDetections(fsys fs.FS) (map[string]*detection, error) {
 		if f.Detection.Kind == 0 {
 			continue
 		}
-		if f.Engine.RuleID == "" {
-			return nil, fmt.Errorf("%s: x-engine.rule_id is empty", name)
+		if err := validateRuleID(name, f.Engine.RuleID); err != nil {
+			return nil, err
 		}
 		// A rule says what decides it exactly once. Carrying both would leave a reader, and the exported file, unable to tell
 		// which one actually runs, and would point maintenance at a Go evaluator the engine no longer consults.

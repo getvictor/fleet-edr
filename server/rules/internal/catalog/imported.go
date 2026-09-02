@@ -286,6 +286,12 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 		// and per-host settings all key on the id.
 		return nil, fmt.Errorf("%s: no filename stem, so the rule has no identifier", name)
 	}
+	// The identifier here is an UPSTREAM filename, not anything this repo chose, which is exactly how issue #832 arrived: a
+	// re-sync can introduce a name longer than any column that stores it, and refusing at load is what keeps such a rule from
+	// being offered to an operator as promotable.
+	if err := checkRuleIDLength(name, id); err != nil {
+		return nil, err
+	}
 
 	return &importedRule{
 		source:      raw,
