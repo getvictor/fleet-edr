@@ -355,11 +355,18 @@ func (e *Engine) evaluateRule(
 	// because ancestry was incomplete looks exactly like a rule with nothing to report, which is the documented way a detection
 	// rots unnoticed. Read here rather than at the call site because this span is already labelled with rule_id.
 	//
-	// A SPAN attribute and not a counter, deliberately. A nacked batch is replayed whole, so anything counted during evaluation
-	// is counted again on every retry, and issue #631 measured roughly 130 retries a minute from one host under a sustained
-	// condition; that is why MonitorTally is handed back to be recorded after the acknowledgement instead. A span is per-attempt
-	// by nature, so a replay produces a second span rather than inflating a total, and the question this needs to answer, is
-	// declining common enough on real fleets to revisit the drop, is answerable from a rate.
+	// A SPAN attribute and not a metric counter, deliberately, and it is worth being precise about what that costs. A nacked
+	// batch is replayed whole, so a chain declined in an attempt that is later nacked is recorded again on the next attempt's
+	// span; issue #631 measured roughly 130 retries a minute from one host under a sustained condition, so the absolute count of
+	// declines across spans can exceed the number of chains actually given up. A cumulative metric would have the same problem,
+	// which is why MonitorTally is handed back to be recorded only after the acknowledgement.
+	//
+	// What makes the per-attempt form sufficient here is that the requirement asks for this to be measurable against the rule's
+	// OWN alert volume, and alert_count below is measured on this same span, under the identical retry semantics. Both numbers
+	// inflate by the same replay factor, so the ratio an operator actually reads is unaffected even though neither absolute is a
+	// count of distinct events. Read as a rate against alert_count it answers the question; read as "chains lost today" it does
+	// not, and that is the reason it is an attribute on a span an operator already reads next to those counts rather than a
+	// standalone total presented as authoritative.
 	//
 	// The scope is shared by every rule in the batch, so this reads the entry for THIS rule rather than a batch total. No delta
 	// against a pre-evaluation reading is needed: rulesFor sorts and Compacts its indices, so a rule is evaluated exactly once

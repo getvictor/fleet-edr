@@ -581,19 +581,6 @@ func TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow(t *testi
 		"the finding names the generation that actually ran the payload, not the stalest one on the chain")
 }
 
-// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-shell-whose-parent-is-absent-from-the-graph-is-not-reported
-//
-// TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent is the second behaviour change in issue #829, and it COSTS a detection
-// on purpose.
-//
-// The temp arm used to fire on a shell whose claimed parent was not in the graph, producing an alert whose parent reads
-// "(unknown)". A parent exclusion matches on the parent's PATH, so an operator who had correctly configured one received that
-// alert anyway, every time, with no way to suppress it short of disabling the rule.
-//
-// The chain is DROPPED, not retried, and the trade has to be stated that way: ancestor and parent-chain lookups keep skip
-// semantics by design (see the canonical retry requirement), so no later parent record recovers it. What justifies the drop is
-// that an alert nobody can silence drives an operator to disable the rule, which loses every detection it makes rather than
-// this one. The connect arm already made the same trade.
 // spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-chain-declined-for-any-other-reason-is-not-counted-as-incomplete-ancestry
 //
 // TestSuspiciousExecDoesNotCountAWindowDeclineAsIncompleteAncestry keeps the two reasons a chain is declined from being conflated.
@@ -660,6 +647,19 @@ func TestSuspiciousExecDoesNotCountAWindowDeclineAsIncompleteAncestry(t *testing
 	}
 }
 
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-shell-whose-parent-is-absent-from-the-graph-is-not-reported
+//
+// TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent is the second behaviour change in issue #829, and it COSTS a detection
+// on purpose.
+//
+// The temp arm used to fire on a shell whose claimed parent was not in the graph, producing an alert whose parent reads
+// "(unknown)". A parent exclusion matches on the parent's PATH, so an operator who had correctly configured one received that
+// alert anyway, every time, with no way to suppress it short of disabling the rule.
+//
+// The chain is DROPPED, not retried, and the trade has to be stated that way: ancestor and parent-chain lookups keep skip
+// semantics by design (see the canonical retry requirement), so no later parent record recovers it. What justifies the drop is
+// that an alert nobody can silence drives an operator to disable the rule, which loses every detection it makes rather than
+// this one. The connect arm already made the same trade.
 func TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent(t *testing.T) {
 	t.Parallel()
 	s := openCatalogStore(t)

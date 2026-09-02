@@ -24,8 +24,9 @@ type BatchScope struct {
 	// no adapter and no cycle.
 	//
 	// It exists because the decline is otherwise invisible (issue #829). A rule that silently reports nothing looks identical to a
-	// rule with nothing to report, which is the documented way detections rot unnoticed, so the engine turns this into a counter
-	// an operator can query and compare against the rule's alert volume.
+	// rule with nothing to report, which is the documented way detections rot unnoticed, so the engine publishes this as a
+	// per-attempt span attribute an operator can compare against the rule's alert volume. Not a metric counter: see the engine's
+	// note at the annotation for why, and for what the per-attempt framing does and does not let you conclude.
 	ancestryIncomplete map[string]int
 }
 
