@@ -212,9 +212,9 @@ func lookupParentOf(
 // The first hop no longer re-resolves what the caller just resolved, and it starts from the generation the caller identified, which
 // for a flow carrying a pidversion is an exact identity match rather than a time-window guess.
 //
-// The ancestors above it are still resolved by time, and those lookups tolerate the same stamp skew. A parent whose exec is recorded
-// after its own child's network connection brackets to no row at the raw timestamp, which ends the walk at the very first step and
-// reports nothing (issue #710).
+// The ancestors above it are resolved by lookupParentOf, at each child's own fork time rather than at the trigger, so PID reuse
+// cannot substitute a later generation for a real parent. That lookup takes no skew pad, deliberately: see its doc for why a pad
+// would be actively harmful on a parent edge. A parent genuinely absent from the graph ends the walk and reports nothing (#710).
 func findShellFromResolvedProcess(
 	ctx context.Context, s api.GraphReader, hostID string, start *api.Process,
 ) (*api.Process, *api.Process, error) {
@@ -269,9 +269,12 @@ func parentExcluded(r shellChainRule, parent *api.Process, hostID string) bool {
 // the shell's exec_time_ns when set (preferred: that's the kernel's actual exec moment) and falls back to fork_time_ns otherwise
 // (defensive: should always be set for a fully-materialised process).
 //
-// The window is deliberately asymmetric. It runs suspiciousExecWindowNs FORWARD from the shell, which is the real limit on how long
-// after a shell the rule still attributes activity to it, and agentStampSkewPadNs BACKWARD, which is not a limit but an allowance for
-// the shell's own stamp arriving late (see agentStampSkewPadNs).
+// The window is deliberately asymmetric. It runs the CALLING RULE's own window forward from the shell, which is the real limit on
+// how long after a shell that rule still attributes activity to it, and agentStampSkewPadNs backward, which is not a limit but an
+// allowance for the shell's own stamp arriving late (see agentStampSkewPadNs).
+//
+// The forward bound comes from r.window() rather than a package constant because the two rules sharing this walk tune separately
+// (issue #776); naming one rule's constant here would have re-coupled them through the helper they share.
 func shellWithinWindow(r shellChainRule, shell *api.Process, triggerTS int64) bool {
 	anchor := shell.ForkTimeNs
 	if shell.ExecTimeNs != nil {

@@ -777,7 +777,7 @@ func (r *parentErrReader) GetProcessByPID(ctx context.Context, hostID string, pi
 	return &api.Process{ID: 5, HostID: hostID, PID: pid, PPID: r.failPID, Path: "/usr/bin/curl", ForkTimeNs: atNs - 1}, nil
 }
 
-// spec:server-detection-rules-engine/one-chain-shape-per-rule/a-chain-exhibiting-both-signals-raises-one-alert-per-rule
+// spec:server-detection-rules-engine/independently-tunable-chain-shapes-are-separate-rules/a-chain-exhibiting-both-signals-raises-one-alert-per-rule
 //
 // TestSplitRulesBothFireOnAChainDoingBoth replaces TestSuspiciousExecPrefersSuspiciousPathOverNetwork, which pinned the opposite
 // behaviour: the merged rule preferred the path-based finding and suppressed the connect one, through a seenShell shared across
@@ -828,7 +828,7 @@ func TestSplitRulesBothFireOnAChainDoingBoth(t *testing.T) {
 	assert.NotEqual(t, tempFindings[0].RuleID, connectFindings[0].RuleID)
 }
 
-// spec:server-detection-rules-engine/one-chain-shape-per-rule/an-exclusion-saved-against-one-arm-does-not-silence-the-other
+// spec:server-detection-rules-engine/independently-tunable-chain-shapes-are-separate-rules/an-exclusion-saved-against-one-arm-does-not-silence-the-other
 //
 // TestExclusionsDoNotLeakBetweenTheSplitRules is the criterion the split was actually for. Under the merged rule a
 // parent-path-glob exclusion added to quiet a noisy CI shell on the connect arm also blinded the temp arm, because one rule id
@@ -881,6 +881,8 @@ func TestExclusionsDoNotLeakBetweenTheSplitRules(t *testing.T) {
 	assert.Len(t, tempStillFires, 1, "a shell_network_connect exclusion must not silence suspicious_exec either")
 }
 
+// spec:server-detection-rules-engine/independently-tunable-chain-shapes-are-separate-rules/a-rule-correlating-one-chain-across-several-event-types-is-unaffected
+//
 // TestSplitRulesDeclareOneEventTypeEach pins what the merge cost and the split recovers.
 //
 // suspicious_exec declared [exec, network_connect] only because one rule carried two trigger shapes. That matters beyond tidiness:
@@ -894,6 +896,19 @@ func TestSplitRulesDeclareOneEventTypeEach(t *testing.T) {
 		"suspicious_exec triggers on a temp-path exec and nothing else since issue #776")
 	assert.Equal(t, []string{"network_connect"}, (&ShellNetworkConnect{}).Doc().EventTypes,
 		"shell_network_connect triggers on an outbound connection and nothing else")
+
+	// The requirement is about independently tunable SHAPES, not about a one-type-per-rule cap. dns_c2_beacon correlates a single
+	// chain across three kinds of event and is correct to declare all three; a requirement phrased as "one event type per rule"
+	// would have made a shipped rule noncompliant, which is what an earlier draft of the delta did.
+	var beacon api.Rule
+	for _, r := range New(nil) {
+		if r.ID() == "dns_c2_beacon" {
+			beacon = r
+		}
+	}
+	require.NotNil(t, beacon, "dns_c2_beacon must be registered for this assertion to mean anything")
+	assert.ElementsMatch(t, []string{"network_connect", "dns_query", "exec"}, beacon.Doc().EventTypes,
+		"a rule correlating one chain across several event types declares all of them and is not required to be split")
 }
 
 // TestShellNetworkConnectResolvesTheChainShellsParentAtForkTime pins the invariant lookupParentOf documents, at the one call site

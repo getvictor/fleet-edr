@@ -250,6 +250,11 @@ func (r *SuspiciousExec) evalExecArm2(
 		if priorParent != nil && shellPaths()[priorParent.Path] {
 			continue
 		}
+		// KNOWN ASYMMETRY (issue #829), left as-is rather than silently changed here. The connect arm's equivalent walk DEFERS
+		// when a shell claims a parent absent from the graph; this one fires with a nil parent, producing an alert whose parent
+		// reads "(unknown)" and which the operator's parent exclusion therefore cannot suppress. The connect arm's reasoning
+		// applies here too, but adopting it changes which chains this rule reports, so it wants its own test rather than a
+		// drive-by in the change that happened to move the code.
 		if !shouldFire(r, in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
 			return nil, 0, nil
 		}

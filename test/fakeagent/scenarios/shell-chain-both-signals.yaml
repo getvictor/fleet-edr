@@ -1,6 +1,10 @@
 # A chain that exhibits BOTH shell-chain signals: python3 spawns a shell, the shell execs a payload out of /tmp, and that payload
 # connects outbound. Before issue #776 this raised ONE alert, because suspicious_exec preferred the temp-path arm and suppressed
-# its own connect arm through a seenShell shared across two passes. It now raises two, one per rule.
+# its own connect arm through a seenShell shared across two passes.
+#
+# Replayed at DEFAULT modes it raises one suspicious_exec alert and records one shell_network_connect monitor match, because that
+# rule ships in monitor. Promote shell_network_connect to see the two-alert outcome the split produces; the scenario cannot
+# produce it on its own, and saying otherwise would make this fixture promise a result a reader could not reproduce.
 #
 # Exists to make that outcome reproducible on a live server, not only in a unit test: the two-alert behaviour is the accepted cost
 # of the split and the baseline #777 has to change, so it is worth being able to see it end to end.
