@@ -93,8 +93,13 @@ See docs/testing-strategy.md for the marker syntax and rollout plan.
 // runCheck loads every scenario from --specs-dir, every marker from --root, and reports the coverage diff. Exit codes:
 //
 //	0 = clean (or only advisory issues without --strict)
-//	1 = invalid references present, OR --strict and uncovered SHALL/MUST scenarios in the gated set
+//	1 = a requirement is restated differently by concurrent in-flight changes, OR invalid references are present, OR --strict and
+//	    uncovered SHALL/MUST scenarios in the gated set
 //	2 = usage / IO error
+//
+// The first of those does not wait for --strict, and neither does the second. Both describe something already wrong in the tree
+// rather than a coverage bar the tree has not yet reached: a divergent restatement is text the release archive will silently
+// discard (issue #815), and an invalid reference is a marker pointing at nothing.
 //
 // --new-code restricts the gated SHALL/MUST set to scenarios added or modified in the current branch relative to
 // --base-ref (default origin/main). The framing matches SonarCloud's "new code" gate: an unfixed legacy gap doesn't
