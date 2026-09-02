@@ -39,6 +39,25 @@ type (
 	NullRawJSON = detectionapi.NullRawJSON
 )
 
+// MaxRuleIDLen is the longest rule identifier the system accepts, and the width every column that stores one is declared at.
+//
+// ONE definition on purpose. Before this existed, four independent VARCHAR(64) literals in two contexts were the only statement of
+// the limit and nothing validated against them, so when #764 imported a corpus whose identifiers come from upstream filenames, the
+// 70-character proc_creation_macos_remote_access_tools_teamviewer_incoming_connection was storable nowhere and refused nothing
+// (issue #832). Adding a fifth literal would have repeated the mistake.
+//
+// 255 rather than the 70 that would just fit today. These identifiers come from a corpus whose naming is not ours to control, so
+// the width needs headroom a future import will not exhaust, and the load-time refusal is what catches anything past it. 255 is
+// also already this schema's convention for a bounded external string (host_id), and it is the largest width that still keeps
+// utf8mb4 columns on InnoDB's two-byte length prefix, which is what makes widening the existing tables an in-place operation
+// rather than a table rebuild.
+//
+// It is a CHARACTER count, matching how VARCHAR(n) is declared, and the loader measures runes rather than bytes to agree with it.
+// Those differ: 255 multibyte characters is up to 1020 bytes, so comparing len() against this would refuse an identifier the
+// columns can store. Rule identifiers are ASCII snake_case by convention, but nothing enforces that, and a convention is not a
+// reason to measure the wrong thing.
+const MaxRuleIDLen = 255
+
 // Severity levels aligned with industry standards (CrowdStrike, MITRE).
 // Same constant set as detection/api.Severity*.
 const (

@@ -128,6 +128,21 @@ func sigmaFilesUnder(fsys fs.FS, dir string) ([]string, error) {
 //
 // The id is the filename stem, so this is reachable only because the import walks a tree. Whichever file loaded second would
 // otherwise win silently, and which rule an operator gets would depend on directory order.
+// checkStemLengths refuses any filename whose stem cannot be stored as a rule identifier, before a single file is parsed.
+//
+// A preflight rather than a per-file check, because the per-file position made the refusal conditional on the file being otherwise
+// valid: a rule using an unsupported field is a SOFT rejection, recorded and skipped, and an over-long name reached that exit
+// first. The identifier here is an upstream filename, so this is the path a corpus re-sync introduces the problem through.
+func checkStemLengths(names []string) error {
+	for _, name := range names {
+		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+		if err := checkRuleIDLength(name, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func checkDuplicateStems(names []string) error {
 	seen := make(map[string]string, len(names))
 	for _, name := range names {
@@ -166,6 +181,14 @@ func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
 	// Stems are checked BEFORE anything is parsed. Recording an id only after a successful parse would let a rejected file leave
 	// its id unclaimed, so a second file with the same stem would import and the collision would go unreported.
 	if err := checkDuplicateStems(names); err != nil {
+		return nil, nil, err
+	}
+	// Length is a preflight for the same reason, and it was NOT one at first, which was a defect. parseImported returns soft
+	// rejections for a rule using a field the binder cannot map, and those are recorded and skipped rather than failing the load.
+	// So an over-long filename whose rule also used an unsupported field exited early as a soft rejection, and the hard refusal
+	// this is meant to be never happened (issue #835 review). Checking the names up front means the refusal does not depend on
+	// what else is wrong with the file.
+	if err := checkStemLengths(names); err != nil {
 		return nil, nil, err
 	}
 

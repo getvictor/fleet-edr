@@ -9,8 +9,11 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/fleetdm/edr/server/rules/api"
 )
 
 // packFS is the rule pack: one declarative file per detection.
@@ -160,6 +163,53 @@ func (p *Params) Duration(name string) time.Duration {
 
 // packFile is the subset of a rule file the loader reads. Everything else in the file is generated from Doc() and is of no
 // interest here.
+// validateRuleID refuses an identifier a pack file cannot legally declare, at LOAD time.
+//
+// Two conditions, both of which make the rule unusable rather than merely odd:
+//
+// Empty, because everything downstream keys on the identifier: settings, exclusions, counters, alert dedup. A rule with no
+// identifier collides with every other rule that has none.
+//
+// Longer than api.MaxRuleIDLen, because it cannot be stored. That one is not cosmetic and it does not degrade gracefully (issue
+// #832). Alert persistence is deliberately not isolated per rule, so an over-long identifier makes the insert fail, the failure
+// fails the batch, the batch is nacked and re-claimed, and nothing caps the attempts: one such rule matching on a host stops that
+// host's queue draining at all, ending detection for the host rather than for the rule. Refusing here means such a rule is never
+// registered and so is never offered to an operator as something they can promote, which is the action that would trigger it.
+//
+// Loud rather than skipped, matching the duplicate-identifier and both-deciders refusals alongside it: a rule silently dropped
+// from the catalog is a detection missing with nothing to say so, which is worse than a server that will not start.
+func validateRuleID(name, id string) error {
+	if id == "" {
+		return fmt.Errorf("%s: x-engine.rule_id is empty", name)
+	}
+	return checkRuleIDLength(name, id)
+}
+
+// checkRuleIDLength refuses an identifier too long to store, and is the ONE definition of that refusal.
+//
+// Shared by the pack loaders and the imported-rule loader rather than written three times beside their three empty-id checks. The
+// empty-id messages differ by path and usefully so (a pack file declares x-engine.rule_id; an imported file has only a filename
+// stem), but the length limit is the consequential one and must not drift: the imported path is where the defect came from, since
+// those identifiers are upstream filenames rather than anything this repo chooses.
+//
+// The consequence is in the message because it is not guessable from the error. An identifier over the limit cannot be stored, and
+// alert persistence is deliberately not isolated per rule, so the failed insert fails the batch, the batch is nacked and
+// re-claimed, and nothing caps the attempts: one such rule matching on a host stops that host's queue draining at all, ending
+// detection for the host rather than for the rule (issue #832).
+func checkRuleIDLength(name, id string) error {
+	// RUNES, not len(). The limit is a character count because that is what VARCHAR(n) counts, and len() counts UTF-8 bytes: a
+	// 255-character identifier of multibyte characters is up to 1020 bytes, so a byte comparison would refuse an identifier every
+	// target column can store, and refuse it by failing the load. An earlier version of this reasoned that rule identifiers are
+	// ASCII by convention so the two coincide; nothing enforces that convention, and "it does not matter in practice" is not a
+	// property (issue #835 review).
+	if n := utf8.RuneCountInString(id); n > api.MaxRuleIDLen {
+		return fmt.Errorf("%s: rule id %q is %d characters, over the %d-character limit; it cannot be stored, and a rule whose "+
+			"alerts cannot be persisted wedges the event queue of any host it matches on",
+			name, id, n, api.MaxRuleIDLen)
+	}
+	return nil
+}
+
 type packFile struct {
 	Engine struct {
 		RuleID    string `yaml:"rule_id"`
@@ -274,8 +324,8 @@ func loadPack(fsys fs.FS) (map[string]*Params, error) {
 		if err := yaml.Unmarshal(body, &f); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", name, err)
 		}
-		if f.Engine.RuleID == "" {
-			return nil, fmt.Errorf("%s: x-engine.rule_id is empty", name)
+		if err := validateRuleID(name, f.Engine.RuleID); err != nil {
+			return nil, err
 		}
 		p, err := bindParams(f.Engine.RuleID, f.Engine.Algorithm, &f.Engine.Params)
 		if err != nil {
