@@ -75,6 +75,12 @@ var algorithmParams = map[string]map[string]paramSpec{
 	"ancestor_walk_path_prefix": {
 		"window": {kind: kindDuration},
 	},
+	// The outbound-connection half of the former suspicious_exec (issue #776). Its own algorithm name, not a reuse of
+	// ancestor_walk_path_prefix, because the walk is the same but the trigger and the match are not: this one ends at a
+	// connection rather than a world-writable path, and registering it separately is what keeps each rule's window its own.
+	"ancestor_walk_outbound_connect": {
+		"window": {kind: kindDuration},
+	},
 	"descendant_within_window": {
 		// Rule identity: changing what counts as osascript, or which shells the kernel exec()s for a shebang, does not tune this
 		// rule. Readable, not writable.

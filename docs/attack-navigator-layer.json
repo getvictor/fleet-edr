@@ -83,7 +83,7 @@
       "techniqueID": "T1059",
       "score": 1,
       "color": "#31a354",
-      "comment": "Covered by: proc_creation_macos_installer_susp_child_process, proc_creation_macos_payload_decoded_and_decrypted, proc_creation_macos_susp_browser_child_process, proc_creation_macos_susp_execution_macos_script_editor, suspicious_exec"
+      "comment": "Covered by: proc_creation_macos_installer_susp_child_process, proc_creation_macos_payload_decoded_and_decrypted, proc_creation_macos_susp_browser_child_process, proc_creation_macos_susp_execution_macos_script_editor, shell_network_connect, suspicious_exec"
     },
     {
       "techniqueID": "T1059.002",
@@ -173,7 +173,7 @@
       "techniqueID": "T1105",
       "score": 1,
       "color": "#31a354",
-      "comment": "Covered by: osascript_network_exec, proc_creation_macos_chflags_hidden_flag, proc_creation_macos_nscurl_usage, proc_creation_macos_susp_in_memory_download_and_compile, suspicious_exec"
+      "comment": "Covered by: osascript_network_exec, proc_creation_macos_chflags_hidden_flag, proc_creation_macos_nscurl_usage, proc_creation_macos_susp_in_memory_download_and_compile, shell_network_connect, suspicious_exec"
     },
     {
       "techniqueID": "T1113",

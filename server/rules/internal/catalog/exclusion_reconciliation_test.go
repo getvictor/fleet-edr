@@ -26,6 +26,12 @@ func TestExclusionMatchTypes_Reconciled(t *testing.T) {
 		"suspicious_exec": {
 			api.ExclusionMatchParentPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchCDHash,
 		},
+		// Identical to suspicious_exec's, because the two rules share one ancestor walk and one parentExcluded (issue #776 split
+		// the arms, not the code). The set being the same is not the same as the exclusions being shared: they are keyed by rule
+		// id, so an operator who tuned suspicious_exec has to re-add anything that should silence this shape too.
+		"shell_network_connect": {
+			api.ExclusionMatchParentPathGlob, api.ExclusionMatchTeamID, api.ExclusionMatchSigningID, api.ExclusionMatchCDHash,
+		},
 		"persistence_launchagent":       {api.ExclusionMatchPathGlob},
 		"sudoers_tamper":                {api.ExclusionMatchPathGlob},
 		"privilege_launchd_plist_write": {api.ExclusionMatchTeamID},

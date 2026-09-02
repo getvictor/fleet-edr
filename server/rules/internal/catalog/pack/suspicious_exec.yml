@@ -7,16 +7,15 @@ title: Suspicious exec chain
 id: 84a2309d-9c77-54c8-8b29-e7d484e890dd
 status: stable
 description: |-
-  Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.
+  Flags a non-shell process that spawns a shell which, within 30 seconds, execs a binary from a world-writable directory.
 
-  Detects two related chain shapes that share a single attribution chain:
+  Detects the chain shape: non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`).
 
-  1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)
-  2. non-shell parent → shell child → outbound network_connect
+  The rule fires on the LAST link of the chain (the temp exec) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
 
-  The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the time the trigger event lands.
+  Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now `shell_network_connect`, so a chain doing both raises one alert per rule.
 
-  30 seconds is the temporal cap between the shell exec and the trigger event.
+  30 seconds is the temporal cap between the shell exec and the temp exec.
 author: Fleet EDR
 level: high
 tags:
@@ -26,8 +25,8 @@ logsource:
   product: macos
   category: process_creation
 falsepositives:
-  - Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.
-  - Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
+  - Interactive SSH where an admin runs a script from /tmp. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.
+  - Developer tooling that shells out to a versioned install (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.
   - Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.
 x-engine:
   rule_id: suspicious_exec
@@ -36,7 +35,6 @@ x-engine:
   portability_note: The rule's logic is a Go implementation named by x-engine.algorithm, not a declarative detection block, so there is nothing here for another engine to evaluate. Rules whose logic can be expressed in Sigma are being converted separately; until a rule's logic lives in its file, this stays the honest answer.
   event_types:
     - exec
-    - network_connect
   algorithm: ancestor_walk_path_prefix
   params:
     # Maximum time between the shell exec and the trigger event (a temp-path exec or an outbound connect). Real chains complete
@@ -48,6 +46,5 @@ x-engine:
     - signing_id
     - cdhash
   limitations:
-    - The window bounds how long after the shell exec a trigger still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
-    - A parent-path-glob exclusion silences BOTH arms of the rule for that parent.
-    - An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.
+    - The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.
+    - 'Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.'

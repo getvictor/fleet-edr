@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"strings"
 	"sync"
 
@@ -72,6 +71,13 @@ func (r *SuspiciousExec) SupportedExclusionMatchTypes() []api.ExclusionMatchType
 // alert maps 1:1 to the one rule an operator can look up (SIEM/Sigma catalog convention) rather than forking into two titles.
 func (r *SuspiciousExec) DisplayName() string { return "Suspicious exec chain" }
 
+// exclusionResolver and window satisfy shellChainRule, which is how the shared ancestor walk in shellchain.go reaches this rule's
+// resolver and its own tuning. Keyed on this rule's id, so the exclusions operators saved before issue #776 split the rules keep
+// applying to this arm and do not leak onto shell_network_connect.
+func (r *SuspiciousExec) exclusionResolver() api.ExclusionResolver { return r.Exclusions }
+
+func (r *SuspiciousExec) window() int64 { return suspiciousExecWindow() }
+
 // Techniques returns the MITRE ATT&CK IDs this rule covers: T1059
 // (Command and Scripting Interpreter) + T1105 (Ingress Tool Transfer).
 func (r *SuspiciousExec) Techniques() []string {
@@ -83,26 +89,25 @@ func (r *SuspiciousExec) Techniques() []string {
 func (r *SuspiciousExec) Doc() api.Documentation {
 	return api.Documentation{
 		Title:   r.DisplayName(),
-		Summary: "Flags a non-shell process that spawns a shell which, within 30 seconds, execs from /tmp or makes an outbound network connection.",
-		Description: "Detects two related chain shapes that share a single attribution chain:\n\n" +
-			"1. non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`)\n" +
-			"2. non-shell parent → shell child → outbound network_connect\n\n" +
-			"The rule fires on the LAST link of the chain (the temp-exec or the network_connect) rather than the " +
-			"shell's exec. That makes it race-immune across the agent's flush boundaries: a chain that completes " +
-			"in ~150ms but straddles a 1-second flush boundary still resolves cleanly because the entire ancestor " +
-			"chain has already been ingested by the time the trigger event lands.\n\n" +
-			"30 seconds is the temporal cap between the shell exec and the trigger event.",
+		Summary: "Flags a non-shell process that spawns a shell which, within 30 seconds, execs a binary from a world-writable directory.",
+		Description: "Detects the chain shape: non-shell parent → shell child → temp-directory exec (e.g. `/tmp/payload`).\n\n" +
+			"The rule fires on the LAST link of the chain (the temp exec) rather than the shell's exec. That makes it " +
+			"race-immune across the agent's flush boundaries: a chain that completes in ~150ms but straddles a 1-second " +
+			"flush boundary still resolves cleanly because the entire ancestor chain has already been ingested by the " +
+			"time the trigger event lands.\n\n" +
+			"Until issue #776 this rule also fired on the same chain making an outbound connection. That shape is now " +
+			"`shell_network_connect`, so a chain doing both raises one alert per rule.\n\n" +
+			"30 seconds is the temporal cap between the shell exec and the temp exec.",
 		Severity:   api.SeverityHigh,
-		EventTypes: []string{"exec", "network_connect"},
+		EventTypes: []string{"exec"},
 		FalsePositives: []string{
-			"Interactive SSH where an admin runs a script from /tmp and/or curls a tool. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.",
-			"Developer tooling that shells out and connects (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.",
+			"Interactive SSH where an admin runs a script from /tmp. Add a parent-path-glob exclusion for `/usr/libexec/sshd-session` via the detection-config surface if that's a routine workflow on the host class.",
+			"Developer tooling that shells out to a versioned install (Claude Code, lefthook git hooks, git, IDEs). These install under version-stamped paths, so add a parent-path-glob exclusion such as `*/claude/versions/*` or `*/lefthook_*` that survives upgrades.",
 			"Some Apple-signed installer-postflight scripts shell out to /tmp/ during package install.",
 		},
 		Limitations: []string{
-			"The window bounds how long after the shell exec a trigger still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
-			"A parent-path-glob exclusion silences BOTH arms of the rule for that parent.",
-			"An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not trigger the network arm; a DNS lookup to a publicly routable resolver still fires.",
+			"The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
+			"Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.",
 		},
 	}
 }
@@ -125,29 +130,17 @@ type execPayload struct {
 	Args []string `json:"args"`
 }
 
-// networkConnectPayload is the subset of network_connect event fields needed for detection. PID identifies the process making the
-// connection. The rule walks UP from there looking for a shell ancestor with a non-shell parent.
-type networkConnectPayload struct {
-	PID           int    `json:"pid"`
-	Direction     string `json:"direction"`
-	RemoteAddress string `json:"remote_address"`
-	RemotePort    int    `json:"remote_port"`
-	// PIDVersion is the source process's kernel PID generation (audit_token_to_pidversion), when the agent provided it. Lets a
-	// correlation rule resolve the connecting process by exact (host, pid, pidversion) identity instead of a time window. Nil for
-	// legacy agents or flows whose audit token was unavailable (issue #403).
-	PIDVersion *uint32 `json:"pidversion"`
-}
-
 func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
-	// Two-pass evaluation. Pass 1 handles temp-exec triggers (preferred); Pass 2 handles outbound network_connect triggers as a fallback.
-	// Splitting the passes preserves the original rule's "prefer the path-based finding when both signals exist for the same shell"
-	// semantics, which would otherwise be order-dependent on event arrival within a single pass.
 	seenShell := map[int]struct{}{}
 	var findings []api.Finding
-	// One event whose process row is still missing defers the batch without ending either pass, so it cannot mask a finding another
-	// event in the same batch would produce (issue #661). The miss spans both passes: it is reported once, after pass 2.
+	// One event whose process row is still missing defers the batch without ending the pass, so it cannot mask a finding another
+	// event in the same batch would produce (issue #661).
 	var miss pendingMiss
 
+	// One pass. This was two until issue #776, the second handling outbound connections as a fallback so that a shell exhibiting
+	// both signals produced the path-based finding rather than whichever event happened to arrive first. That precedence lived in
+	// a seenShell shared across the passes, and it is exactly what the split gives up: shell_network_connect now owns the connect
+	// shape and carries its own dedup, so a chain doing both raises one alert per rule.
 	for _, evt := range events {
 		if evt.EventType != "exec" {
 			continue
@@ -161,46 +154,7 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 			seenShell[shellPID] = struct{}{}
 		}
 	}
-
-	for _, evt := range events {
-		if evt.EventType != "network_connect" {
-			continue
-		}
-		f, shellPID, err := r.evalNetwork(ctx, evt, s, events, seenShell)
-		if fatal := miss.absorb(err); fatal != nil {
-			return nil, fatal
-		}
-		if f != nil {
-			findings = append(findings, *f)
-			seenShell[shellPID] = struct{}{}
-		}
-	}
-
 	return findings, miss.err
-}
-
-// findShellExecEventID scans the current batch for an exec event matching the shell's PID and host so the finding's EventIDs can
-// include the shell-stage event when it happens to be in the same batch as the trigger. Best-effort: when the shell exec is in an
-// earlier batch it isn't findable here and EventIDs simply omits it. The trigger's own event ID is excluded to avoid duplicates in the
-// arm-2 (re-exec) case where shell and temp share a PID.
-func findShellExecEventID(events []api.Event, hostID string, shellPID int, excludeEventID string) string {
-	for _, e := range events {
-		if e.EventType != "exec" || e.HostID != hostID || e.EventID == excludeEventID {
-			continue
-		}
-		var p execPayload
-		if err := json.Unmarshal(e.Payload, &p); err != nil {
-			continue
-		}
-		if p.PID != shellPID {
-			continue
-		}
-		if !shellPaths()[p.Path] {
-			continue
-		}
-		return e.EventID
-	}
-	return ""
 }
 
 // evalExec inspects a single exec event. Returns (finding, shellPID, err) on a match. The shellPID is the PID of the attributed shell
@@ -256,14 +210,14 @@ type execMatchInputs struct {
 func (r *SuspiciousExec) evalExecArm1(
 	ctx context.Context, s api.GraphReader, in *execMatchInputs,
 ) (*api.Finding, int, error) {
-	shell, parent, err := r.findShellWithNonShellAncestor(ctx, s, in.evt.HostID, in.p.PID, in.evt.TimestampNs)
+	shell, parent, err := findShellWithNonShellAncestor(ctx, s, in.evt.HostID, in.p.PID, in.evt.TimestampNs)
 	if err != nil {
 		return nil, 0, err
 	}
 	if shell == nil {
 		return nil, 0, nil
 	}
-	if !r.shouldFire(in.seenShell, shell, parent, in.evt.TimestampNs, in.evt.HostID) {
+	if !shouldFire(r, in.seenShell, shell, parent, in.evt.TimestampNs, in.evt.HostID) {
 		return nil, 0, nil
 	}
 	return r.makeExecFinding(in.evt, parent, shell, in.tempProc, in.tempPath, in.batch), shell.PID, nil
@@ -286,354 +240,19 @@ func (r *SuspiciousExec) evalExecArm2(
 		if !shellPaths()[prior.Path] {
 			continue
 		}
-		priorParent, err := r.lookupAncestor(ctx, s, in.evt.HostID, prior.PPID, in.evt.TimestampNs)
+		priorParent, err := lookupAncestor(ctx, s, in.evt.HostID, prior.PPID, in.evt.TimestampNs)
 		if err != nil {
 			return nil, 0, err
 		}
 		if priorParent != nil && shellPaths()[priorParent.Path] {
 			continue
 		}
-		if !r.shouldFire(in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
+		if !shouldFire(r, in.seenShell, prior, priorParent, in.evt.TimestampNs, in.evt.HostID) {
 			return nil, 0, nil
 		}
 		return r.makeExecFinding(in.evt, priorParent, prior, in.tempProc, in.tempPath, in.batch), prior.PID, nil
 	}
 	return nil, 0, nil
-}
-
-// shouldFire is the common gate shared by both exec arms (and evalNetwork): a candidate shell only produces a finding when (a) we
-// haven't already fired on it in this batch, (b) the trigger event falls within the shell's 30-second window, and (c) the shell's
-// non-shell parent isn't excluded for hostID. Returning false means "skip this candidate, continue / give up"; the callers handle
-// the `nil, 0, nil` reply.
-func (r *SuspiciousExec) shouldFire(
-	seenShell map[int]struct{}, shell, parent *api.Process, triggerTS int64, hostID string,
-) bool {
-	if _, dupe := seenShell[shell.PID]; dupe {
-		return false
-	}
-	if !shellWithinWindow(shell, triggerTS) {
-		return false
-	}
-	if r.parentExcluded(parent, hostID) {
-		return false
-	}
-	return true
-}
-
-// evalNetwork inspects an outbound network_connect event and walks UP from the connecting process looking for a shell ancestor whose
-// parent is non-shell. The connecting process itself can be the shell (curl|sh case) or any descendant of it (shell spawned curl);
-// the inclusive walk handles both.
-func (r *SuspiciousExec) evalNetwork(
-	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
-) (*api.Finding, int, error) {
-	var c networkConnectPayload
-	if err := json.Unmarshal(evt.Payload, &c); err != nil {
-		return nil, 0, nil
-	}
-	if c.Direction != "outbound" {
-		return nil, 0, nil
-	}
-	// DNS de-noising: a name-resolution lookup to the host's own resolver is not a meaningful "outbound network connection"
-	// for this rule. The meaningful signal is the connection to the RESOLVED address that follows, which this arm still sees.
-	// Gate on destination CLASS (port 53 to a local-resolver-class address), never on a specific resolver IP, so a DNS query to
-	// a publicly routable resolver on :53 (potential DNS tunnelling) still fires. Arm-scoped: the temp-exec arm is untouched.
-	if isLocalResolverDest(c.RemoteAddress, c.RemotePort) {
-		return nil, 0, nil
-	}
-
-	// Resolve the connecting process so the finding links there rather than at the shell. That's what an analyst clicking the
-	// alert wants to land on. Prefer exact (host, pid, pidversion) identity when the flow carried a pidversion so the finding
-	// attributes to the right generation across PID reuse, falling back to the event-time window otherwise (issue #403). The
-	// ancestor walk above still uses the window for shell/parent generations; making parent edges identity-aware is out of scope.
-	//
-	// This runs before the no-shell exit because the re-exec arm below needs the connecting generation to walk from. It costs one
-	// lookup on every outbound flow that has no shell ancestor, where before it cost none. That is the price of seeing a whole
-	// class of payload at all (issue #713), and it is one indexed read against the two to four the ancestor walk above already
-	// does.
-	conn, err := resolveFlowProcess(ctx, s, evt.HostID, c.PID, c.PIDVersion, evt.TimestampNs)
-	if err != nil {
-		return nil, 0, fmt.Errorf("get conn pid %d: %w", c.PID, err)
-	}
-	if conn == nil {
-		return nil, 0, nil
-	}
-	// Fall through to the exec chain when the PPID walk yields nothing this arm can fire on. "Nothing usable" rather than "nothing
-	// found" is the load-bearing part: where a shell exec'd its payload in place, the walk does not come back empty, it comes back
-	// with the wrong shell. The re-exec closed the real shell's generation at this PID, so the walk steps over it and returns the
-	// interactive login shell above, which then fails the window because its own exec is minutes or hours old. Gating the chain on
-	// shell == nil alone would therefore never reach it, which is how issue #713 stayed open behind a walk that looked like it had
-	// searched.
-	// Each arm's candidate is gated before it can produce a finding, so neither can grow a way past the window, the parent
-	// exclusions, or the per-batch dedup. The check is nested rather than repeated once at the end because shouldFire unmarshals the
-	// parent's code-signing record, and this is a per-network_connect path: evaluating it twice for the same shell is measurable
-	// work for an answer that cannot have changed.
-	shell, parent, err := r.networkShell(ctx, s, evt, conn, seenShell)
-	if err != nil {
-		return nil, 0, err
-	}
-	if shell == nil {
-		return nil, 0, nil
-	}
-	parentPath := "(unknown)"
-	if parent != nil {
-		parentPath = parent.Path
-	}
-	eventIDs := []string{evt.EventID}
-	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, evt.EventID); shellEventID != "" {
-		eventIDs = append([]string{shellEventID}, eventIDs...)
-	}
-	return &api.Finding{
-		HostID:      evt.HostID,
-		RuleID:      r.ID(),
-		Severity:    api.SeverityHigh,
-		Title:       r.DisplayName(),
-		Description: fmt.Sprintf("%s → %s → outbound %s:%d", parentPath, shell.Path, c.RemoteAddress, c.RemotePort),
-		ProcessID:   conn.ID,
-		EventIDs:    eventIDs,
-	}, shell.PID, nil
-}
-
-// networkShell picks the shell this arm will report, or nil when there is none it can fire on. Both places a shell can live are
-// tried in order: the connecting process's PPID chain, then that PID's own exec chain for a shell that replaced itself with the
-// payload (issue #713).
-//
-// Every candidate passes shouldFire before it is returned, so neither source can grow a way past the window, the parent exclusions,
-// or the per-batch dedup, and each candidate is evaluated exactly once. shouldFire unmarshals the parent's code-signing record, so on
-// a per-network_connect path that matters. Returning the decision rather than making it at the call site is also what lets the caller
-// nil-check once, which keeps the nil-safety analysis provable.
-func (r *SuspiciousExec) networkShell(
-	ctx context.Context, s api.GraphReader, evt api.Event, conn *api.Process, seenShell map[int]struct{},
-) (*api.Process, *api.Process, error) {
-	shell, parent, err := r.findShellFromResolvedProcess(ctx, s, evt.HostID, conn, evt.TimestampNs)
-	if err != nil {
-		return nil, nil, err
-	}
-	if shell != nil && r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
-		return shell, parent, nil
-	}
-	shell, parent, err = r.findShellOnExecChain(ctx, s, evt.HostID, conn, evt.TimestampNs)
-	if err != nil {
-		return nil, nil, err
-	}
-	if shell != nil && r.shouldFire(seenShell, shell, parent, evt.TimestampNs, evt.HostID) {
-		return shell, parent, nil
-	}
-	return nil, nil, nil
-}
-
-// findShellOnExecChain looks for the shell on the connecting PID's own exec chain, which is where it lives when the shell exec'd its
-// payload in place rather than forking it. It is the network arm's counterpart to evalExecArm2, and its absence was issue #713.
-//
-// A same-PID re-exec closes the prior generation (insertReExec stamps its exit at the re-exec instant), and GetProcessByPID brackets
-// on that exit, so at the flow's timestamp the shell generation is simply not visible by PID. The PPID walk therefore steps straight
-// past it to whatever is above, usually the interactive login shell, whose own exec is minutes or hours old and so fails the window.
-// The rule then reported nothing, and which shell the attacker picked decided whether the payload was seen at all: measured on macOS
-// 26.6.1, zsh replaces itself with the payload while bash and sh fork it, so `zsh -c 'curl ...'` was invisible and the identical bash
-// form was detected.
-//
-// The chain is nil for a PID that never re-exec'd, which is nearly all of them, so this costs a field check on the hot path and
-// only walks where a chain exists.
-func (r *SuspiciousExec) findShellOnExecChain(
-	ctx context.Context, s api.GraphReader, hostID string, conn *api.Process, asOfNs int64,
-) (*api.Process, *api.Process, error) {
-	chain, err := s.GetExecChain(ctx, *conn)
-	if err != nil {
-		return nil, nil, fmt.Errorf("walk exec chain pid %d: %w", conn.PID, err)
-	}
-	// A PID that never re-exec'd has no chain, which is nearly all of them, so this is the hot path and it exits here.
-	if len(chain) == 0 {
-		return nil, nil, nil
-	}
-	// Newest generation first. GetExecChain returns the chain OLDEST-first (it recurses backwards through previous_exec_id and
-	// orders by descending depth), and the shell that ran this payload is the one closest to it, not the first one this PID ever
-	// held. Walking forward would hand back the stalest shell in the chain, and for `zsh -c 'bash -c "curl ..."'`, where both
-	// shells exec in place at one PID, that is the one most likely to fail the window and drop the alert.
-	for i := len(chain) - 1; i >= 0; i-- {
-		prior := &chain[i]
-		if !shellPaths()[prior.Path] {
-			continue
-		}
-		priorParent, err := r.lookupAncestor(ctx, s, hostID, prior.PPID, asOfNs)
-		if err != nil {
-			return nil, nil, err
-		}
-		// Ancestry incomplete: the shell claims a parent that is not in the graph yet, so defer rather than fire. Firing here would
-		// report a finding whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was
-		// never resolved, so the alert would slip past a rule the operator had deliberately configured. The PPID walk defers on the
-		// same condition and for the same reason. A shell parented at launchd (PPID <= 1) is a genuine no-parent case, not a
-		// missing record, and still counts.
-		if priorParent == nil && prior.PPID > 1 {
-			return nil, nil, nil
-		}
-		// A shell whose own parent is a shell is shell-to-shell layering, not the boundary this rule fires on; keep walking the
-		// chain for one whose parent is not a shell, exactly as the exec arm does.
-		if priorParent != nil && shellPaths()[priorParent.Path] {
-			continue
-		}
-		return prior, priorParent, nil
-	}
-	return nil, nil, nil
-}
-
-// findShellWithNonShellAncestor walks the PPID chain inclusively starting at
-// startPID looking for a shell process whose own parent is non-shell. Returns
-// the matched shell and its non-shell parent. The parent return value is nil
-// only when the shell's parent is launchd (PPID <= 1): that still counts as
-// a match because launchd is structurally non-shell. PPID > 1 with a missing
-// parent record means "ancestry incomplete, defer rather than fire". This
-// keeps the rule from alerting on partial data and, in particular, keeps the
-// parent exclusion effective when the entry-point process
-// hasn't been materialised yet.
-//
-// The walk is "inclusive": startPID itself is the first candidate. Callers
-// that pass the temp-exec's own PID get the trivial first-iteration skip
-// (temp-binary fails shellPaths) and the walk proceeds to the actual
-// candidate parent on the next step.
-func (r *SuspiciousExec) findShellWithNonShellAncestor(
-	ctx context.Context, s api.GraphReader, hostID string, startPID int, asOfNs int64,
-) (*api.Process, *api.Process, error) {
-	current, err := s.GetProcessByPID(ctx, hostID, startPID, asOfNs)
-	if err != nil {
-		return nil, nil, fmt.Errorf("get pid %d: %w", startPID, err)
-	}
-	return r.findShellFromResolvedProcess(ctx, s, hostID, current, asOfNs)
-}
-
-// examineCandidate is the per-step decision for findShellWithNonShellAncestor.
-// It returns one of three terminal shapes:
-//
-//   - (shell, parent, nil, nil) means match: `current` is a shell whose own
-//     parent is non-shell (parent==nil means "shell parented at launchd",
-//     which counts as a match).
-//   - (nil, nil, advance, nil) means keep walking; `advance` is the next
-//     ancestor to examine.
-//   - (nil, nil, nil, nil) means terminate without a match: ran out of
-//     ancestry (PPID<=1 with no shell yet) or the parent record is
-//     missing (defer rather than alert on incomplete data).
-//
-// Splitting this out keeps findShellWithNonShellAncestor's loop body small
-// enough that gocognit / Sonar's cognitive-complexity gates stay green.
-func (r *SuspiciousExec) examineCandidate(
-	ctx context.Context, s api.GraphReader, hostID string, current *api.Process, asOfNs int64,
-) (shell, parent, advance *api.Process, err error) {
-	if !shellPaths()[current.Path] {
-		// Not a shell. Walk up if there's an ancestor to walk to.
-		if current.PPID <= 1 {
-			return nil, nil, nil, nil
-		}
-		next, err := r.lookupParentOf(ctx, s, hostID, current)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		return nil, nil, next, nil
-	}
-	// `current` is a shell. Distinguish "launchd parent" (match) from "parent record missing" (defer) from "non-shell parent" (match) from
-	// "shell parent" (continue walking up).
-	if current.PPID <= 1 {
-		return current, nil, nil, nil
-	}
-	candidate, err := r.lookupParentOf(ctx, s, hostID, current)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if candidate == nil {
-		return nil, nil, nil, nil
-	}
-	if !shellPaths()[candidate.Path] {
-		return current, candidate, nil, nil
-	}
-	// Shell-to-shell layering (sudo bash, su -c bash, ...). Keep climbing.
-	return nil, nil, candidate, nil
-}
-
-// lookupAncestor returns nil for PIDs at or below launchd (PPID 1) and
-// passes through to GetProcessByPID otherwise.
-func (r *SuspiciousExec) lookupAncestor(
-	ctx context.Context, s api.GraphReader, hostID string, pid int, asOfNs int64,
-) (*api.Process, error) {
-	if pid <= 1 {
-		return nil, nil
-	}
-	p, err := s.GetProcessByPID(ctx, hostID, pid, asOfNs)
-	if err != nil {
-		return nil, fmt.Errorf("get pid %d: %w", pid, err)
-	}
-	return p, nil
-}
-
-// lookupParentOf resolves the generation that held child's PPID when CHILD FORKED, which is the only instant at which that question
-// has an answer. Resolving a parent edge at an unrelated instant, such as the timestamp of a network flow made much later by a
-// descendant, asks "who holds this PID now", and PIDs are reused.
-//
-// This is deliberately NOT skew-padded, and the pad would be actively harmful here. A parent may legitimately have exited before its
-// descendant connected, so a miss at the child's fork time is not evidence of a late stamp, and widening the bound forward would let a
-// generation that forked AFTER the child answer as its parent, fabricating an ancestor chain out of a recycled PID. The store
-// documents the same rule for the inherited-path lookup (issue #714).
-//
-// The pad is not needed either, because both timestamps come from the same event stream: a child's fork and its parent's fork are both
-// stamped by the agent's process-event path, so they run late together and their ORDER survives. The skew this rule has to absorb is
-// between that stream and the network flow that triggers it, which is why the tolerance belongs at the trigger comparison rather than
-// on the edges of the ancestry.
-func (r *SuspiciousExec) lookupParentOf(
-	ctx context.Context, s api.GraphReader, hostID string, child *api.Process,
-) (*api.Process, error) {
-	if child.PPID <= 1 {
-		return nil, nil
-	}
-	p, err := s.GetProcessByPID(ctx, hostID, child.PPID, child.ForkTimeNs)
-	if err != nil {
-		return nil, fmt.Errorf("get ppid %d: %w", child.PPID, err)
-	}
-	return p, nil
-}
-
-// shellWithinWindow reports whether the trigger event's timestamp falls inside the rule's window around the shell's exec. Anchored on
-// the shell's exec_time_ns when set (preferred: that's the kernel's actual exec moment) and falls back to fork_time_ns otherwise
-// (defensive: should always be set for a fully-materialised process).
-//
-// The window is deliberately asymmetric. It runs suspiciousExecWindowNs FORWARD from the shell, which is the real limit on how long
-// after a shell the rule still attributes activity to it, and agentStampSkewPadNs BACKWARD, which is not a limit but an allowance for
-// the shell's own stamp arriving late (see agentStampSkewPadNs).
-func shellWithinWindow(shell *api.Process, triggerTS int64) bool {
-	anchor := shell.ForkTimeNs
-	if shell.ExecTimeNs != nil {
-		anchor = *shell.ExecTimeNs
-	}
-	// The lower bound is padded because a trigger CANNOT causally precede the shell that produced it, so a small negative delta is
-	// evidence of a late stamp rather than of no relationship. An agent that stamps at handler time rather than kernel time records
-	// an exec after its own child's network connection, measured at 701ms on a busy host (issue #710), and an unpadded lower bound
-	// reads that as "the trigger came first" and drops the finding. The upper bound is not padded: that direction is a real
-	// temporal limit on how long after a shell the rule still attributes activity to it.
-	return triggerTS >= anchor-agentStampSkewPadNs && triggerTS <= anchor+suspiciousExecWindow()
-}
-
-// findShellFromResolvedProcess walks up from a connecting process that has ALREADY been resolved, rather than resolving its PID again
-// at the raw event timestamp. Two things follow from that.
-//
-// The first hop no longer re-resolves what the caller just resolved, and it starts from the generation the caller identified, which
-// for a flow carrying a pidversion is an exact identity match rather than a time-window guess.
-//
-// The ancestors above it are still resolved by time, and those lookups tolerate the same stamp skew. A parent whose exec is recorded
-// after its own child's network connection brackets to no row at the raw timestamp, which ends the walk at the very first step and
-// reports nothing (issue #710).
-func (r *SuspiciousExec) findShellFromResolvedProcess(
-	ctx context.Context, s api.GraphReader, hostID string, start *api.Process, asOfNs int64,
-) (*api.Process, *api.Process, error) {
-	current := start
-	for steps := 0; current != nil && steps < maxSuspiciousAncestorWalkSteps; steps++ {
-		shell, parent, advance, err := r.examineCandidate(ctx, s, hostID, current, asOfNs)
-		if err != nil {
-			return nil, nil, err
-		}
-		if shell != nil {
-			return shell, parent, nil
-		}
-		if advance == nil {
-			return nil, nil, nil
-		}
-		current = advance
-	}
-	return nil, nil, nil
 }
 
 // makeExecFinding builds the temp-path finding shared by arm 1 and arm 2. In the arm-2 re-exec case tempProc and shell share a PID;
@@ -659,73 +278,6 @@ func (r *SuspiciousExec) makeExecFinding(
 		ProcessID:   tempProc.ID,
 		EventIDs:    eventIDs,
 	}
-}
-
-// parentExcluded reports whether the given non-shell parent process is excluded for hostID. It matches four dimensions of the parent
-// (issue #520): the path glob (match type parent_path_glob) and the parent's already-persisted code-signing identity (team_id,
-// signing_id, cdhash). The signature dimensions let an operator exclude a benign signed parent (e.g. a Developer-ID developer tool
-// such as Claude Code) by a non-spoofable identifier rather than a path glob an attacker who can write to /tmp can land inside. A nil
-// parent (shell parented at launchd, or parent not yet materialised) never matches: those are the cases the rule must continue to
-// flag because there's no human-attested entry point. Glob semantics live in the resolver (api.GlobMatch).
-func (r *SuspiciousExec) parentExcluded(parent *api.Process, hostID string) bool {
-	if r.Exclusions == nil || parent == nil {
-		return false
-	}
-	if r.Exclusions.Excluded(r.ID(), api.ExclusionMatchParentPathGlob, parent.Path, hostID) {
-		return true
-	}
-	if len(parent.CodeSigning) > 0 {
-		var cs codeSigningJSON
-		// A malformed blob is unexpected (the agent writes it), so a decode error just means "no signature to match on" rather than a
-		// rule failure: fall through to the cdhash check.
-		if err := json.Unmarshal(parent.CodeSigning, &cs); err == nil {
-			if cs.TeamID != "" && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchTeamID, cs.TeamID, hostID) {
-				return true
-			}
-			if cs.SigningID != "" && r.Exclusions.Excluded(r.ID(), api.ExclusionMatchSigningID, cs.SigningID, hostID) {
-				return true
-			}
-		}
-	}
-	return parent.CDHash != nil && *parent.CDHash != "" &&
-		r.Exclusions.Excluded(r.ID(), api.ExclusionMatchCDHash, *parent.CDHash, hostID)
-}
-
-// dnsPort is the well-known DNS port. An outbound connection to it to a local-resolver-class address is name resolution against the
-// host's own resolver, which the network arm de-noises (see isLocalResolverDest).
-const dnsPort = 53
-
-// cgnatPrefix is the RFC 6598 carrier-grade-NAT shared address space (100.64.0.0/10). netip.Addr.IsPrivate does NOT cover it (it is
-// RFC1918 + IPv6 ULA only), but it is not publicly routable, and Tailscale's MagicDNS resolver lives inside it, so a local-resolver
-// classifier must include it explicitly. Built from octets rather than a string literal: this is a fixed reserved range, not
-// configurable infrastructure, and the octet form keeps S1313 from misreading the constant as a hardcoded endpoint.
-var cgnatPrefix = netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, 0, 0}), 10)
-
-// isLocalResolverDest reports whether an outbound connection targets the host's own DNS resolver: port 53 to a local-resolver-class
-// address. Such a lookup is not a meaningful "outbound network connection" for suspicious_exec; the connection to the resolved address
-// that follows is what the rule cares about. A connection to port 53 at a publicly routable address is NOT local-resolver traffic and
-// stays eligible to trigger (it can be DNS tunnelling to an external resolver).
-func isLocalResolverDest(remoteAddress string, remotePort int) bool {
-	return remotePort == dnsPort && isLocalResolverIP(remoteAddress)
-}
-
-// isLocalResolverIP reports whether addr parses as a non-publicly-routable address of the class a host's local resolver uses: loopback,
-// RFC1918 private (and IPv6 ULA, both via IsPrivate), IPv4/IPv6 link-local, or the CGNAT range Tailscale MagicDNS occupies. A value
-// that does not parse as an IP (a hostname, an empty string) is not classifiable as local and returns false so the rule still fires.
-//
-// netip.ParseAddr (not net.ParseIP) is deliberate: the agent's network telemetry carries scoped IPv6 literals with a zone suffix
-// (e.g. `fe80::1%en0`, present in the demo corpus for mDNS on :53), which net.ParseIP rejects but netip.ParseAddr accepts. Without zone
-// support those link-local DNS lookups would slip past the de-noiser and re-fire the network arm. The CGNAT membership test is IPv4
-// only, so a zoned IPv6 address never reaches it; the link-local branch covers the zoned case.
-func isLocalResolverIP(addr string) bool {
-	ip, err := netip.ParseAddr(addr)
-	if err != nil {
-		return false
-	}
-	return ip.IsLoopback() ||
-		ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() ||
-		cgnatPrefix.Contains(ip)
 }
 
 func isSuspiciousPath(path string) bool {
