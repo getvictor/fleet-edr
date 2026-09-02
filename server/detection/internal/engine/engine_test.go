@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1282,7 +1283,8 @@ func TestEngine_Evaluate_SurvivesAStatisticsWriteFailure(t *testing.T) {
 	t.Parallel()
 
 	rec := &recordingEvalStats{err: errors.New("counter store unavailable")}
-	e := New(nil, nil)
+	var logged bytes.Buffer
+	e := New(nil, slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelError})))
 	e.SetRuleEvalStatsRecorder(rec)
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "unaffected"}}})
 
@@ -1291,6 +1293,12 @@ func TestEngine_Evaluate_SurvivesAStatisticsWriteFailure(t *testing.T) {
 	require.NoError(t, err, "a statistics write failure must not fail the batch")
 	assert.Empty(t, tally, "the batch's own result is whatever the rules produced, unchanged by the counter")
 	assert.Equal(t, 1, rec.calls, "the write was attempted, or the test would pass with the recorder unwired")
+	// The scenario requires the failure to be LOGGED, and swallowing it silently is the failure mode that matters: a counter-store
+	// outage would then look exactly like a fleet whose rules cost nothing. Without this assertion, deleting the log call keeps
+	// the marked scenario green (issue #833 review).
+	assert.Contains(t, logged.String(), "record rule eval stats",
+		"a swallowed write failure must still be visible, or a counter-store outage is indistinguishable from healthy silence")
+	assert.Contains(t, logged.String(), "counter store unavailable", "the underlying error has to reach the log, not just a label")
 }
 
 // TestEngine_Evaluate_RecordsNothingWithoutARecorder pins that the sink is optional.
@@ -1308,4 +1316,53 @@ func TestEngine_Evaluate_RecordsNothingWithoutARecorder(t *testing.T) {
 		require.NoError(t, evaluateErr(e, t.Context(),
 			[]api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}}))
 	})
+}
+
+// missingSubjectWithFindings returns findings AND a retryable miss, which is the shape rulesapi.Rule.Evaluate's contract requires
+// of a rule that resolved part of a batch and could not resolve the rest.
+type missingSubjectWithFindings struct {
+	stubRule
+	findings []api.Finding
+}
+
+func (r *missingSubjectWithFindings) Evaluate(
+	_ context.Context, events []api.Event, _ rulesapi.GraphReader,
+) ([]api.Finding, error) {
+	r.calls++
+	r.received = events
+	return r.findings, rulesapi.ErrProcessNotYetMaterialized
+}
+
+// TestEngine_Evaluate_ClassifiesTheEvaluationNotThePersistenceError pins where the retryable-miss count comes from.
+//
+// The contract lets a rule report a retryable miss alongside findings it DID resolve, and the engine persists those findings
+// rather than discarding them. So the named error return does not describe the evaluation: if persisting one of those findings
+// fails, it is reassigned to the persistence error on the way out. Classifying that would record zero misses for an evaluation
+// that genuinely missed, and it would do so precisely when the system is already in trouble, which is when an operator is looking
+// (issue #833 review).
+//
+// The nil store is what makes the persistence path fail here without a fixture: a rule in alert mode with a finding to route
+// reaches the store, and there is none. That is a real persistence failure rather than a simulated one.
+func TestEngine_Evaluate_ClassifiesTheEvaluationNotThePersistenceError(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingEvalStats{}
+	e := New(nil, discardLogger())
+	e.SetRuleEvalStatsRecorder(rec)
+	e.LoadActive(stubProvider{rules: []rulesapi.Rule{
+		&missingSubjectWithFindings{
+			stubRule: stubRule{id: "missed-and-found"},
+			findings: []api.Finding{{RuleID: "missed-and-found", HostID: "host-a", Title: "t"}},
+		},
+	}})
+
+	err := evaluateErr(e, t.Context(), []api.Event{{EventType: "exec", Platform: string(rulesapi.PlatformDarwin)}})
+	// Which error surfaces is not this test's subject; that the ATTEMPT is classified by its evaluation is.
+	require.Error(t, err, "control: persisting a finding with no store must fail, or the overwrite this test guards cannot happen")
+
+	st, ok := rec.byRule("missed-and-found")
+	require.True(t, ok)
+	assert.Equal(t, int64(1), st.Evaluations)
+	assert.Equal(t, int64(1), st.RetryableMisses,
+		"the evaluation missed, so it counts as a miss even though a later persistence failure replaced the returned error")
 }

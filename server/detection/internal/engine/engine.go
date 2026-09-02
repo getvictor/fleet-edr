@@ -361,6 +361,12 @@ func (e *Engine) evaluateRule(
 	// figure whose job is to find the expensive rule. Duplicating the scope check in the loop would work and would be a second
 	// copy of a decision that has already drifted once (issue #829).
 	start := time.Now()
+	// Set where the engine decides this evaluation was retryable, and read by the defer below. NOT derived from the named return:
+	// a rule may report a retryable miss ALONGSIDE findings it did resolve (see rulesapi.Rule.Evaluate's contract), those findings
+	// are still persisted, and a persistence failure then overwrites the named err with its own error. Classifying that would
+	// record zero misses for an evaluation that genuinely missed, and the miss is the counter an operator reads to find the rule
+	// driving the retries (issue #833 review).
+	var evalRetryable bool
 	defer func() {
 		elapsed := time.Since(start).Nanoseconds()
 		// One entry per rule per batch, appended rather than merged, because rulesFor sorts and compacts its indices so a rule
@@ -370,9 +376,9 @@ func (e *Engine) evaluateRule(
 			Evaluations: 1,
 			EvalNs:      elapsed,
 			MaxEvalNs:   elapsed,
-			// A retryable outcome is an attempt that cost its time and could not decide. Both classes count: the caller nacks
-			// the batch for either, so both drive the replay this counter exists to attribute to a rule.
-			RetryableMisses: retryableMisses(err),
+			// A retryable outcome is an attempt that cost its time and could not decide, and it drives the replay this counter
+			// exists to attribute to a rule.
+			RetryableMisses: boolToCount(evalRetryable),
 		})
 	}()
 
@@ -429,6 +435,9 @@ func (e *Engine) evaluateRule(
 		// batch so the processor nacks it and re-evaluates once the row lands. Alert dedup makes the re-run idempotent, and
 		// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
 		retryableMiss = fmt.Errorf("rule %s: %w", rule.ID(), err)
+		// The single point where the engine judges an evaluation retryable, which is why the statistics read it from here rather
+		// than re-deriving it from a return value that later code reassigns.
+		evalRetryable = true
 	}
 	techniques := rule.Techniques()
 	// Read once per rule per batch rather than per finding: it is a type assertion, but so is the reason declaredTypes is cached,
@@ -586,17 +595,12 @@ func (e *Engine) persistFinding(ctx context.Context, f api.Finding, techniques [
 	return true, nil
 }
 
-// retryableMisses reports 1 when err is an outcome that nacks the batch rather than deciding it, and 0 otherwise.
+// boolToCount renders a per-attempt flag as the additive count the statistics carry.
 //
-// Both retryable classes count. ErrProcessNotYetMaterialized is the specific "the subject process has not landed yet" case and
-// ErrRetryBatch is the general one, and the caller nacks for either, so both produce the replay this counter exists to attribute
-// to a rule. Splitting them into two columns would invite a reader to treat one as benign; neither is, and the fleet-wide
-// edr.detection.materialization_retries counter already separates them for anyone who needs that.
-//
-// A non-retryable rule error returns 0: that rule is broken rather than waiting, it is logged and swallowed by per-rule isolation,
-// and counting it here would put a permanently failing rule at the top of a list meant to identify retry churn.
-func retryableMisses(err error) int64 {
-	if errors.Is(err, rulesapi.ErrProcessNotYetMaterialized) || errors.Is(err, rulesapi.ErrRetryBatch) {
+// A rule that was NOT retryable contributes 0 rather than being absent, so the stored evaluations and retryable_misses stay
+// directly comparable: the ratio between them is the churn rate an operator reads.
+func boolToCount(b bool) int64 {
+	if b {
 		return 1
 	}
 	return 0

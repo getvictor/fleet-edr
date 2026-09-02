@@ -4,9 +4,11 @@
 
 ### Requirement: Per-rule evaluation cost is recorded durably
 
-The system SHALL record, durably and per rule, how many times each rule evaluated, how long those evaluations took, and how many ended in a retryable outcome rather than a decision, so that an operator can find the expensive rule and the churning rule in the product rather than only in a metrics backend.
+The system SHALL record, durably and per rule, how many times each rule evaluated, how long those evaluations took, and how many ended in a retryable outcome rather than a decision.
 
-This is a different question from how often a rule matches, and a rule's match count cannot answer it: a rule can be perfectly quiet and still be the one holding up the drain loop. The existing per-rule latency lives only on the evaluation span, which is exactly the backend an operator should not have to query, and the retry counter is fleet-wide and so cannot name the rule responsible.
+This requirement covers the DURABLE RECORD only. Presenting these figures to an operator is a separate requirement that ships with the surface that presents them; a record no interface reads satisfies nothing on its own, and claiming the operator-facing outcome here would let this requirement pass while the thing an operator needs is still missing.
+
+The record exists because a rule's match count cannot answer this question: a rule can be perfectly quiet and still be the one holding up the drain loop. The figures that could answer it are not durable today. Per-rule latency lives only on the evaluation span, and the retry counter is fleet-wide and so cannot name the rule responsible.
 
 Recording SHALL count evaluation ATTEMPTS, and SHALL happen whether or not the batch is acknowledged.
 

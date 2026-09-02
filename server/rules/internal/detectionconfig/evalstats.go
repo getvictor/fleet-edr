@@ -27,6 +27,26 @@ import (
 // this rule costing lately", a question about now, and attributing work to an event's own timestamp would let a skewed host clock
 // or a long queue backlog write into a day the operator has already read past.
 //
+// This write sits on the drain path, before Evaluate returns, and every host's batch on every worker and replica targets the SAME
+// (rule_id, day) rows, because the key carries no host dimension. That is worth measuring rather than assuming, since the
+// sibling table's host dimension spreads its writes and this one deliberately does not (issue #833 review).
+//
+// Measured against the test MySQL, one 73-rule batch (what the dev server actually dispatches):
+//
+//	serial                1.60ms per upsert
+//	4 concurrent writers   606us per upsert, 1651/s
+//	16 concurrent writers  547us per upsert, 1828/s
+//	32 concurrent writers  545us per upsert, 1834/s, no deadlock retries
+//
+// It does not serialise: throughput RISES with concurrency and plateaus near 1800 upserts a second, and per-operation latency
+// falls below the serial figure rather than climbing, because InnoDB holds these row locks only for the statement and group commit
+// amortises the fsync across concurrent writers. A serialising write would have shown throughput flat at ~600/s and latency
+// climbing linearly with worker count.
+//
+// So the ceiling this adds is on the order of 1800 batches a second, which is far above the ingest rate of the fleet sizes this
+// product targets. If a deployment ever approaches it, the fix is a shard column in the key rather than making this asynchronous:
+// sharding keeps the write durable and on the same path, where losing counters to a buffer flush would not.
+//
 // eval_ns_max is a MAX rather than last-write-wins, and the timestamps are extrema, because these calls are not serialised: the
 // per-host claim lock is released before detection runs, so two batches can be in this write concurrently across workers and
 // across replicas. Under last-write-wins a slower attempt arriving first would be overwritten by a faster one and the worst case,
@@ -138,35 +158,13 @@ func (s *Store) EvalStats(ctx context.Context, days api.EvalStatsWindow) ([]api.
 
 // PruneRuleEvalStats deletes statistic rows for days older than retentionDays, and reports how many it removed.
 //
-// Same shape and same reasoning as PruneMatchCounts: run from every replica on a plain ticker rather than behind a leader lock,
-// because each RunIfLeader loop holds a pooled connection for the life of the process and paying that to serialise an idempotent
-// DELETE would be the wrong trade. Batched so one pass after a retention reduction cannot hold a large row-lock and undo-log
-// footprint while every replica contends on the same range.
-//
-// retentionDays <= 0 prunes nothing, matching the sibling and the process-record retention runner.
+// Delegates to pruneDailyCounters, which the sibling table's prune also uses: the cutoff, the batching, the deadlock retry and the
+// termination condition are identical, and two copies of them is how a boundary fix lands on one table and misses the other. See
+// that helper for why the sweep runs from every replica rather than behind a leader lock.
 func (s *Store) PruneRuleEvalStats(ctx context.Context, retentionDays int) (int64, error) {
-	if retentionDays <= 0 {
-		return 0, nil
+	total, err := s.pruneDailyCounters(ctx, "detection_rule_eval_stats", retentionDays)
+	if err != nil {
+		return total, fmt.Errorf("prune rule eval stats: %w", err)
 	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.DateOnly)
-	var total int64
-	for {
-		var deleted int64
-		err := sqlhelpers.WithDeadlockRetry(ctx, matchCountDeadlockAttempts, matchCountDeadlockStep, func() error {
-			res, execErr := s.db.ExecContext(ctx,
-				`DELETE FROM detection_rule_eval_stats WHERE day < ? ORDER BY day LIMIT ?`, cutoff, matchCountPruneBatch)
-			if execErr != nil {
-				return execErr
-			}
-			deleted, execErr = res.RowsAffected()
-			return execErr
-		})
-		if err != nil {
-			return total, fmt.Errorf("prune rule eval stats: %w", err)
-		}
-		total += deleted
-		if deleted < matchCountPruneBatch {
-			return total, nil
-		}
-	}
+	return total, nil
 }

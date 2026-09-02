@@ -16,7 +16,7 @@ A sibling table to the one #813 established, rather than a second pattern.
 
 Columns: `evaluations`, `retryable_misses`, `eval_ns_sum`, `eval_ns_max`. Sum with count gives the mean and max gives the worst case, which is what finding a slow rule needs. Deliberately no buckets for percentiles: the spans already in the tracing backend answer p99 properly, and a second, worse histogram in MySQL is not worth the write cost on a path that runs once per rule per batch.
 
-The engine accumulates one batch's figures in a local map and hands them to a recorder once per batch, so the write is a single multi-row upsert rather than a statement per rule. The map is per-call and discarded, so nothing shared is held between requests (ADR-0010).
+The engine appends one entry per rule to a per-call slice (a rule is evaluated exactly once per batch, so nothing needs merging there) and hands it to the recorder once per batch. The store folds that slice to one row per rule before the statement, since a fold is where the worst case has to be combined with a max rather than a sum. The result is a single multi-row upsert rather than a statement per rule, and the slice is per-call and discarded, so nothing shared is held between requests (ADR-0010).
 
 ## The counting rule, which is the opposite of the monitor-match rule
 
@@ -25,6 +25,10 @@ Monitor matches are recorded only after the batch is acknowledged, because a nac
 A monitor match is a fact about the world. This rule matched this host on this day, and a replay must not make it two. An evaluation is a fact about work the server performed, and a replayed batch genuinely did evaluate again. Counting attempts also keeps the derived numbers honest: total time and attempt count inflate by the same replay factor, so the mean is unaffected, which is the same ratio argument that justified the per-attempt span attribute in #830.
 
 Recording only after acknowledgement would also put the retryable-miss count out of reach, because a batch that ends in a retryable miss is never acknowledged. That counter is the point of this half of the issue: it is what identifies the rule whose misses are driving the retry churn.
+
+## Scope of the requirement
+
+The delta's requirement covers the durable record only, not presenting it to an operator. #774's acceptance criterion is about the UI, and this change ships no UI, so a requirement claiming the operator-facing outcome would be satisfiable while the operator still has nothing to read. The surfacing requirement and its scenario ship with the consumer change.
 
 ## Where the requirement lives
 
