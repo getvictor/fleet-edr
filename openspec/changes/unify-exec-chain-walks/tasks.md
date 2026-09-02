@@ -7,3 +7,6 @@
 - [x] Correct the third divergence claimed on #829, which does not exist.
 - [x] Confirm on a running server that the temp arm still reports the ordinary re-exec chain.
 - [x] State the drop accurately everywhere: it is a skip, not a retry, per the canonical ancestor-lookup contract.
+- [x] Report the decline from the walk, record it per rule, and put the per-rule count on the engine's existing span.
+- [x] Adopt ScopedRule on both rules, with Evaluate delegating, and pin that both entry points behave identically.
+

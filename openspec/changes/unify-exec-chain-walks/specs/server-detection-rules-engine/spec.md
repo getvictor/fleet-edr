@@ -10,6 +10,8 @@ The walk SHALL prefer the newest suitable generation on the chain. Where a shell
 
 The walk SHALL NOT report a shell whose claimed parent is absent from the graph. Exclusions match on the parent's path, so a finding naming an unresolved parent cannot be suppressed by an exclusion an operator has configured for it, and an alert that recurs with no way to silence it drives an operator to disable the rule entirely, losing every detection it makes rather than this one. A shell parented at the init process is a genuine no-parent case, not incomplete ancestry, and still counts.
 
+A declined chain SHALL be observable per rule. A rule that reports nothing because an ancestor was missing is otherwise indistinguishable from a rule with nothing to report, which is how detection coverage rots without anyone noticing; the trade this requirement makes has to be measurable against the rule's own alert volume, or there is no evidence on which to revisit it.
+
 The chain is DROPPED, not retried. This is the skip semantics the "Retryable evaluation on unmaterialized subject process" requirement already specifies for ancestor and parent-chain lookups: the retryable class covers the pid an event is about, not its ancestry. A parent record arriving later does not recover the detection, and the requirement here does not promise that it will.
 
 #### Scenario: The newest suitable generation on the chain is preferred
@@ -17,6 +19,12 @@ The chain is DROPPED, not retried. This is the skip semantics the "Retryable eva
 - **GIVEN** a chain where a shell replaced itself twice before running a payload, the older generation outside the window and the newer inside it
 - **WHEN** the batch is evaluated
 - **THEN** the chain is reported, and the finding names the newer generation
+
+#### Scenario: A declined chain is counted against the rule that declined it
+
+- **GIVEN** two rules sharing one exec-chain walk, one of which declines a chain for incomplete ancestry
+- **WHEN** the batch is evaluated
+- **THEN** the decline is recorded against that rule's own identity, and not against the rule it shares the walk with
 
 #### Scenario: A shell whose parent is absent from the graph is not reported
 

@@ -968,3 +968,85 @@ func TestShellNetworkConnectResolvesTheChainShellsParentAtForkTime(t *testing.T)
 	assert.Contains(t, findings[0].Description, "/usr/bin/python3",
 		"the finding names the real non-shell parent; naming the recycled /bin/bash would mean the edge was resolved at the wrong instant")
 }
+
+// spec:server-detection-rules-engine/one-exec-chain-walk-for-both-shell-chain-rules/a-declined-chain-is-counted-against-the-rule-that-declined-it
+//
+// TestShellNetworkConnectRecordsAnIncompleteAncestryDecline is the connect arm's half of the observability #829's review asked
+// for. Both rules drive the same walk, so both must report a decline; a counter wired on one side only would make the shared
+// behaviour look like it happens half as often as it does.
+func TestShellNetworkConnectRecordsAnIncompleteAncestryDecline(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	// PID 999 has no record, so the shell on the connecting pid's exec chain claims a parent the graph cannot resolve.
+	events := []api.Event{
+		{EventID: "ia-fork-shell", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":999}`)},
+		{EventID: "ia-exec-zsh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/bin/zsh","args":["zsh","-c","curl ..."],"uid":501,"gid":20}`)},
+		{EventID: "ia-exec-curl", HostID: "host-a", TimestampNs: 2200, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":999,"path":"/usr/bin/curl","args":["curl","https://198.51.100.9/"],"uid":501,"gid":20}`)},
+		{EventID: "ia-net", HostID: "host-a", TimestampNs: 2300, EventType: "network_connect",
+			Payload: json.RawMessage(`{"pid":100,"protocol":"tcp","direction":"outbound","remote_address":"198.51.100.9","remote_port":443}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	scope := &api.BatchScope{}
+	findings, err := (&ShellNetworkConnect{}).EvaluateScoped(ctx, scope, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, findings, "an unresolved parent means no finding, the same as the temp arm")
+	assert.Equal(t, map[string]int{"shell_network_connect": 1}, scope.AncestryIncompleteCounts(),
+		"counted against the connect rule's own id, not the rule it shares the walk with")
+}
+
+// TestBothRulesEvaluateIdenticallyScopedOrNot pins the ScopedRule contract both rules just adopted: "An implementation MUST behave
+// identically either way." Evaluate is what the replay harness and the fixtures use, so a rule whose scoped path diverged would be
+// tested through one entry point and shipped through the other.
+func TestBothRulesEvaluateIdenticallyScopedOrNot(t *testing.T) {
+	t.Parallel()
+	s := openCatalogStore(t)
+	ctx := t.Context()
+
+	events := []api.Event{
+		{EventID: "id-fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":50,"parent_pid":1}`)},
+		{EventID: "id-exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":50,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+		{EventID: "id-fork-sh", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":50}`)},
+		{EventID: "id-exec-sh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":50,"path":"/bin/sh","args":["sh"],"uid":501,"gid":20}`)},
+		{EventID: "id-fork-payload", HostID: "host-a", TimestampNs: 3000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+		{EventID: "id-exec-payload", HostID: "host-a", TimestampNs: 3100, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/tmp/payload","args":["/tmp/payload"],"uid":501,"gid":20}`)},
+		{EventID: "id-net", HostID: "host-a", TimestampNs: 3500, EventType: "network_connect",
+			Payload: json.RawMessage(`{"pid":200,"protocol":"tcp","direction":"outbound","remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	for _, tc := range []struct {
+		name string
+		rule api.Rule
+	}{
+		{"suspicious_exec", &SuspiciousExec{}},
+		{"shell_network_connect", &ShellNetworkConnect{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			plain, err := tc.rule.Evaluate(ctx, events, s.GraphReader())
+			require.NoError(t, err)
+			scopedRule, ok := tc.rule.(api.ScopedRule)
+			require.True(t, ok, "%s must implement ScopedRule to be reached through the engine's scoped path", tc.name)
+			scoped, err := scopedRule.EvaluateScoped(ctx, &api.BatchScope{}, events, s.GraphReader())
+			require.NoError(t, err)
+			require.Len(t, plain, 1)
+			require.Len(t, scoped, 1)
+			assert.Equal(t, plain[0].RuleID, scoped[0].RuleID)
+			assert.Equal(t, plain[0].Description, scoped[0].Description)
+		})
+	}
+}

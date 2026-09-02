@@ -16,6 +16,40 @@ import "context"
 // batches get different scopes.
 type BatchScope struct {
 	derived map[string]any
+
+	// ancestryIncomplete counts, per rule id, the candidate chains a rule declined because an ancestor it needed had no record.
+	//
+	// Unlike `derived` above, the engine DOES read this, which the opacity note does not forbid: what it cannot do is name a type
+	// that lives inside the rules context. A count keyed by a rule id is primitive on both sides, so it crosses the boundary with
+	// no adapter and no cycle.
+	//
+	// It exists because the decline is otherwise invisible (issue #829). A rule that silently reports nothing looks identical to a
+	// rule with nothing to report, which is the documented way detections rot unnoticed, so the engine turns this into a counter
+	// an operator can query and compare against the rule's alert volume.
+	ancestryIncomplete map[string]int
+}
+
+// RecordAncestryIncomplete notes that ruleID declined a candidate because an ancestor it needed was absent from the graph.
+//
+// Nil-safe for the same reason Derive is: the replay harness and direct callers evaluate rules without a scope, and recording an
+// observation must never be the thing that makes them behave differently from the engine.
+func (s *BatchScope) RecordAncestryIncomplete(ruleID string) {
+	if s == nil {
+		return
+	}
+	if s.ancestryIncomplete == nil {
+		s.ancestryIncomplete = make(map[string]int, 1)
+	}
+	s.ancestryIncomplete[ruleID]++
+}
+
+// AncestryIncompleteCounts returns the per-rule counts recorded during this batch, or nil when nothing was declined. The engine
+// reads it once the batch is settled and records it; nothing else should consume it, and it is not a rule-visible signal.
+func (s *BatchScope) AncestryIncompleteCounts() map[string]int {
+	if s == nil {
+		return nil
+	}
+	return s.ancestryIncomplete
 }
 
 // Derive returns the value stored under key, building it with build the first time this batch asks for it.

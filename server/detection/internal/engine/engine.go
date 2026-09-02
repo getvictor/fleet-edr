@@ -348,11 +348,23 @@ func (e *Engine) evaluateRule(
 	// from the trace at exactly the moment someone would be reading it. The counters start at zero, which is the honest answer
 	// for a rule that produced nothing.
 	var alerted, suppressed, duplicates int
+	// Chains this rule declined because an ancestor had no record, counted as the delta across its own evaluation so a
+	// batch-wide scope still reports per-rule (issue #829). Without it the decline is invisible: a rule that reports nothing
+	// because ancestry was incomplete looks exactly like a rule with nothing to report, which is the documented way a detection
+	// rots unnoticed. Read here rather than at the call site because this span is already labelled with rule_id.
+	//
+	// A SPAN attribute and not a counter, deliberately. A nacked batch is replayed whole, so anything counted during evaluation
+	// is counted again on every retry, and issue #631 measured roughly 130 retries a minute from one host under a sustained
+	// condition; that is why MonitorTally is handed back to be recorded after the acknowledgement instead. A span is per-attempt
+	// by nature, so a replay produces a second span rather than inflating a total, and the question this needs to answer, is
+	// declining common enough on real fleets to revisit the drop, is answerable from a rate.
+	declinedBefore := scope.AncestryIncompleteCounts()[rule.ID()]
 	defer func() {
 		span.SetAttributes(
 			attribute.Int("alert_count", alerted),
 			attribute.Int("suppressed_count", suppressed),
 			attribute.Int("duplicate_count", duplicates),
+			attribute.Int("ancestry_incomplete_count", scope.AncestryIncompleteCounts()[rule.ID()]-declinedBefore),
 		)
 	}()
 

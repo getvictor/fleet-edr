@@ -59,16 +59,19 @@ func shouldFire(
 //
 // The chain is nil for a PID that never re-exec'd, which is nearly all of them, so this costs a field check on the hot path and
 // only walks where a chain exists.
+// The third return distinguishes "no shell on this chain" from "a shell was there and was declined because its parent had no
+// record". Only the caller knows which rule it is speaking for, so the reason is reported rather than counted here, which also
+// keeps this walk free of any observability dependency.
 func findShellOnExecChain(
 	ctx context.Context, s api.GraphReader, hostID string, conn *api.Process,
-) (*api.Process, *api.Process, error) {
+) (shell, parent *api.Process, incompleteAncestry bool, err error) {
 	chain, err := s.GetExecChain(ctx, *conn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("walk exec chain pid %d: %w", conn.PID, err)
+		return nil, nil, false, fmt.Errorf("walk exec chain pid %d: %w", conn.PID, err)
 	}
 	// A PID that never re-exec'd has no chain, which is nearly all of them, so this is the hot path and it exits here.
 	if len(chain) == 0 {
-		return nil, nil, nil
+		return nil, nil, false, nil
 	}
 	// Newest generation first. GetExecChain returns the chain OLDEST-first (it recurses backwards through previous_exec_id and
 	// orders by descending depth), and the shell that ran this payload is the one closest to it, not the first one this PID ever
@@ -85,7 +88,7 @@ func findShellOnExecChain(
 		// and its PID was reused before the connection, the old form attributed the chain to the unrelated replacement.
 		priorParent, err := lookupParentOf(ctx, s, hostID, prior)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		// Ancestry incomplete: the shell claims a parent with no record, so report nothing. Firing here would produce a finding
 		// whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was never resolved, so
@@ -98,16 +101,16 @@ func findShellOnExecChain(
 		// recoverable and is not (issue #829 review). A shell parented at launchd (PPID <= 1) is a genuine no-parent case rather
 		// than a missing record, and still counts.
 		if priorParent == nil && prior.PPID > 1 {
-			return nil, nil, nil
+			return nil, nil, true, nil
 		}
 		// A shell whose own parent is a shell is shell-to-shell layering, not the boundary this rule fires on; keep walking the
 		// chain for one whose parent is not a shell, exactly as the exec arm does.
 		if priorParent != nil && shellPaths()[priorParent.Path] {
 			continue
 		}
-		return prior, priorParent, nil
+		return prior, priorParent, false, nil
 	}
-	return nil, nil, nil
+	return nil, nil, false, nil
 }
 
 // findShellWithNonShellAncestor walks the PPID chain inclusively starting at

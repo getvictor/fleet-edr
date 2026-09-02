@@ -133,6 +133,14 @@ type execPayload struct {
 }
 
 func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api.GraphReader) ([]api.Finding, error) {
+	return r.EvaluateScoped(ctx, &api.BatchScope{}, events, s)
+}
+
+// EvaluateScoped implements api.ScopedRule. The scope carries nothing this rule derives; it is here so a chain declined for
+// incomplete ancestry is counted rather than silently dropped (issue #829).
+func (r *SuspiciousExec) EvaluateScoped(
+	ctx context.Context, scope *api.BatchScope, events []api.Event, s api.GraphReader,
+) ([]api.Finding, error) {
 	seenShell := map[int]struct{}{}
 	var findings []api.Finding
 	// One event whose process row is still missing defers the batch without ending the pass, so it cannot mask a finding another
@@ -147,7 +155,7 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 		if evt.EventType != "exec" {
 			continue
 		}
-		f, shellPID, err := r.evalExec(ctx, evt, s, events, seenShell)
+		f, shellPID, err := r.evalExec(ctx, scope, evt, s, events, seenShell)
 		if fatal := miss.absorb(err); fatal != nil {
 			return nil, fatal
 		}
@@ -163,7 +171,7 @@ func (r *SuspiciousExec) Evaluate(ctx context.Context, events []api.Event, s api
 // ancestor. The caller uses it for batch-level dedupe so multiple temp-exec children of one shell produce one finding rather than one
 // per child.
 func (r *SuspiciousExec) evalExec(
-	ctx context.Context, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
+	ctx context.Context, scope *api.BatchScope, evt api.Event, s api.GraphReader, batch []api.Event, seenShell map[int]struct{},
 ) (*api.Finding, int, error) {
 	var p execPayload
 	if err := json.Unmarshal(evt.Payload, &p); err != nil {
@@ -185,7 +193,8 @@ func (r *SuspiciousExec) evalExec(
 	}
 
 	in := &execMatchInputs{
-		evt: evt, batch: batch, seenShell: seenShell, p: p,
+		scope: scope,
+		evt:   evt, batch: batch, seenShell: seenShell, p: p,
 		tempProc: tempProc, tempPath: tempPath,
 	}
 	if f, shellPID, err := r.evalExecArm1(ctx, s, in); err != nil || f != nil {
@@ -204,6 +213,9 @@ type execMatchInputs struct {
 	p         execPayload
 	tempProc  *api.Process
 	tempPath  string
+	// scope carries the batch's observation sink, so arm 2 can report a chain it declined for incomplete ancestry (issue #829).
+	// Nil-safe on the receiving side, so a caller that builds these inputs without one still works.
+	scope *api.BatchScope
 }
 
 // evalExecArm1 handles the canonical fork+exec dropper shape: the temp-binary is a SEPARATE process from the shell, so the shell
@@ -244,9 +256,12 @@ func (r *SuspiciousExec) evalExecArm2(
 	//
 	// The shared walk takes the newest suitable generation and defers on incomplete ancestry. Both changes are the connect arm's
 	// existing behaviour; this arm simply stops disagreeing with it.
-	prior, priorParent, err := findShellOnExecChain(ctx, s, in.evt.HostID, in.tempProc)
+	prior, priorParent, incomplete, err := findShellOnExecChain(ctx, s, in.evt.HostID, in.tempProc)
 	if err != nil {
 		return nil, 0, err
+	}
+	if incomplete {
+		in.scope.RecordAncestryIncomplete(r.ID())
 	}
 	if prior == nil {
 		return nil, 0, nil

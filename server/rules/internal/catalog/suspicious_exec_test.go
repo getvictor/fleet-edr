@@ -613,8 +613,20 @@ func TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent(t *testing
 	materialize(t, s, events)
 
 	findings, err := (&SuspiciousExec{}).Evaluate(ctx, events, s.GraphReader())
+	require.NoError(t, err)
 	assert.Empty(t, findings,
 		"a finding here could only name an unresolved parent, which no parent exclusion can suppress")
+
+	// The decline is RECORDED, which is the difference between a considered trade and a silent hole. A rule that reports nothing
+	// because ancestry was incomplete is indistinguishable from a rule with nothing to report, and industry detection-engineering
+	// practice names that as how coverage rots unnoticed (issue #829 review). The engine turns this into an attribute on the
+	// per-rule span it already labels with rule_id.
+	scope := &api.BatchScope{}
+	scoped, err := (&SuspiciousExec{}).EvaluateScoped(ctx, scope, events, s.GraphReader())
+	require.NoError(t, err)
+	assert.Empty(t, scoped, "same outcome through the scoped entry point")
+	assert.Equal(t, map[string]int{"suspicious_exec": 1}, scope.AncestryIncompleteCounts(),
+		"the declined chain is counted against this rule, so the drop is measurable rather than invisible")
 
 	// A plain nil error, NOT the retryable class, which is the whole difference between a skip and a deferral: a nil error lets
 	// the processor acknowledge the batch, so the event is never evaluated again and a parent record arriving later does not

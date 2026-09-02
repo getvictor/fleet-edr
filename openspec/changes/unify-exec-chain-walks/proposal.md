@@ -21,6 +21,14 @@ Both are behaviour changes to `suspicious_exec`, in opposite directions, and eac
 - A chain whose newest shell is in-window and whose oldest is not now reports; before, it did not.
 - A chain whose shell has no resolvable parent now reports nothing; before, it raised an unsuppressable alert.
 
+## Making the drop measurable
+
+Checking industry practice on the drop turned up the thing this change was actually missing. Requiring resolved ancestry at the detection layer is conventional: Elastic's macOS installer-to-shell-to-network rule, the same shape as ours, requires `process.parent.name` to be in a named set, and an EQL `sequence` cannot match with an ancestor absent. Elastic's "treat recovery as unresolved, not benign" guidance is triage advice for an alert that already fired, not an argument for firing without ancestry.
+
+What practice does warn about is the silent version. A rule reporting nothing because ancestry was incomplete is indistinguishable from a rule with nothing to report, and that is the documented way coverage rots: a source stops shipping, a field is renamed, and the dashboard stays green. The drop as first written was exactly that shape, with no counter, log or signal anywhere.
+
+The walk now reports WHY it found nothing, each rule records the decline against its own id, and the engine puts the per-rule count on the span it already labels with `rule_id`. A span attribute rather than a counter, because a nacked batch is replayed whole and anything counted during evaluation is counted again on every retry, which is why `MonitorTally` is handed back to be recorded after the acknowledgement; a span is per-attempt by nature, and a rate answers the question this needs to answer.
+
 ## Impact
 
 The first change can only add detections. The second removes one class permanently: a chain whose shell's parent is genuinely missing from the graph. That is the trade the connect arm already made, and it is made here for the same reason. It is a real cost, not a deferral.
