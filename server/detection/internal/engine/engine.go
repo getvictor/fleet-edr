@@ -191,8 +191,10 @@ func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 // alert-persistence error aborts immediately because the batch must be retried before any more findings are written.
 func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.MonitorTally, error) {
 	live := filterSnapshotEvents(events)
-	// One scope for the whole batch, so rules deriving the same thing from the same events derive it once (issue #794). The engine
-	// never looks inside it: what a rule puts there belongs to the rules context, which owns both the store and the read. It is
+	// One scope for the whole batch, so rules deriving the same thing from the same events derive it once (issue #794). What a rule
+	// DERIVES stays opaque to the engine: that belongs to the rules context, which owns both the store and the read. The one thing
+	// the engine does read back is the per-rule count of chains declined for incomplete ancestry, which is a map of primitives and
+	// so crosses the context boundary without naming a rules-owned type (issue #829). It is
 	// created unconditionally because it allocates nothing until a rule actually derives something, and it is discarded when this
 	// call returns, so concurrent batches share nothing.
 	scope := &rulesapi.BatchScope{}
@@ -358,13 +360,16 @@ func (e *Engine) evaluateRule(
 	// condition; that is why MonitorTally is handed back to be recorded after the acknowledgement instead. A span is per-attempt
 	// by nature, so a replay produces a second span rather than inflating a total, and the question this needs to answer, is
 	// declining common enough on real fleets to revisit the drop, is answerable from a rate.
-	declinedBefore := scope.AncestryIncompleteCounts()[rule.ID()]
+	//
+	// The scope is shared by every rule in the batch, so this reads the entry for THIS rule rather than a batch total. No delta
+	// against a pre-evaluation reading is needed: rulesFor sorts and Compacts its indices, so a rule is evaluated exactly once
+	// per batch and its entry cannot already hold another of its own declines.
 	defer func() {
 		span.SetAttributes(
 			attribute.Int("alert_count", alerted),
 			attribute.Int("suppressed_count", suppressed),
 			attribute.Int("duplicate_count", duplicates),
-			attribute.Int("ancestry_incomplete_count", scope.AncestryIncompleteCounts()[rule.ID()]-declinedBefore),
+			attribute.Int("ancestry_incomplete_count", scope.AncestryIncompleteCounts()[rule.ID()]),
 		)
 	}()
 

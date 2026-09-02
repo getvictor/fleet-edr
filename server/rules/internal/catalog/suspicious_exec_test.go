@@ -594,6 +594,70 @@ func TestSuspiciousExecPrefersTheNewestShellWhenTheOldestIsOutTheWindow(t *testi
 // semantics by design (see the canonical retry requirement), so no later parent record recovers it. What justifies the drop is
 // that an alert nobody can silence drives an operator to disable the rule, which loses every detection it makes rather than
 // this one. The connect arm already made the same trade.
+// TestSuspiciousExecDoesNotCountAWindowDeclineAsIncompleteAncestry keeps the two reasons a chain is declined from being conflated.
+//
+// The count exists to answer one question: is requiring resolved ancestry costing this fleet real detections often enough to
+// revisit the trade. A chain declined because the shell is simply too old to attribute says nothing about ancestry, and counting
+// it would inflate the number with the rule's ordinary, intended behaviour, which is the fastest way to make an observability
+// signal useless: it would read as "ancestry is a problem here" on every host that runs long-lived shells.
+//
+// The shell's parent resolves fine here. What fails is the window, and this pins that the walk reports a shell it found while the
+// scope stays empty.
+func TestSuspiciousExecDoesNotCountAWindowDeclineAsIncompleteAncestry(t *testing.T) {
+	t.Parallel()
+
+	const hourNs = int64(3600) * 1e9
+	// The two cases differ in ONE value, the payload exec's offset from the shell. That is what makes the second case worth
+	// anything: an assertion that the scope is empty passes just as well when the walk never found the shell in the first place,
+	// so the near case is a control proving this chain IS discoverable and does fire, leaving the window as the only difference.
+	for _, tc := range []struct {
+		name        string
+		payloadOff  int64
+		wantFinding bool
+	}{
+		{name: "payload right after the shell fires", payloadOff: 100, wantFinding: true},
+		{name: "payload an hour later is declined on the window", payloadOff: hourNs, wantFinding: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openCatalogStore(t)
+			ctx := t.Context()
+
+			// python3 is a real recorded parent of the shell, so the ancestry half genuinely succeeds rather than succeeding by
+			// accident, and any decline below is attributable to the window alone.
+			events := []api.Event{
+				{EventID: "win-fork-py", HostID: "host-a", TimestampNs: 1000, EventType: "fork",
+					Payload: json.RawMessage(`{"child_pid":200,"parent_pid":1}`)},
+				{EventID: "win-exec-py", HostID: "host-a", TimestampNs: 1100, EventType: "exec",
+					Payload: json.RawMessage(`{"pid":200,"ppid":1,"path":"/usr/bin/python3","args":["python3"],"uid":501,"gid":20}`)},
+				{EventID: "win-fork-shell", HostID: "host-a", TimestampNs: 2000, EventType: "fork",
+					Payload: json.RawMessage(`{"child_pid":300,"parent_pid":200}`)},
+				{EventID: "win-exec-zsh", HostID: "host-a", TimestampNs: 2100, EventType: "exec",
+					Payload: json.RawMessage(`{"pid":300,"ppid":200,"path":"/bin/zsh","args":["zsh","-c","/tmp/payload"],` +
+						`"uid":501,"gid":20}`)},
+				{EventID: "win-exec-payload", HostID: "host-a", TimestampNs: 2100 + tc.payloadOff, EventType: "exec",
+					Payload: json.RawMessage(`{"pid":300,"ppid":200,"path":"/tmp/payload","args":["/tmp/payload"],` +
+						`"uid":501,"gid":20}`)},
+			}
+			require.NoError(t, s.InsertEvents(ctx, events))
+			materialize(t, s, events)
+
+			scope := &api.BatchScope{}
+			findings, err := (&SuspiciousExec{}).EvaluateScoped(ctx, scope, events, s.GraphReader())
+			require.NoError(t, err)
+			if tc.wantFinding {
+				require.Len(t, findings, 1, "control: this chain must be discoverable, or the other case proves nothing")
+			} else {
+				assert.Empty(t, findings, "the shell is an hour older than the payload, so the window declines it")
+			}
+			// Empty in BOTH cases. The parent resolved either way, and counting a window decline would inflate the signal with
+			// the rule's ordinary intended behaviour, which would read as "ancestry is a problem here" on every host running
+			// long-lived shells.
+			assert.Empty(t, scope.AncestryIncompleteCounts(), "the shell's parent resolved, so no ancestry decline happened")
+		})
+	}
+}
+
 func TestSuspiciousExecReportsNothingWhenTheChainShellsParentIsAbsent(t *testing.T) {
 	t.Parallel()
 	s := openCatalogStore(t)

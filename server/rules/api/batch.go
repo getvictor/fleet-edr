@@ -45,6 +45,9 @@ func (s *BatchScope) RecordAncestryIncomplete(ruleID string) {
 
 // AncestryIncompleteCounts returns the per-rule counts recorded during this batch, or nil when nothing was declined. The engine
 // reads it once the batch is settled and records it; nothing else should consume it, and it is not a rule-visible signal.
+//
+// The live map is returned, not a copy. A copy would allocate on a path walked once per rule per batch to guard a mutation no
+// caller performs, and the only consumer is the engine's span annotation, which reads one key. Do not write to it.
 func (s *BatchScope) AncestryIncompleteCounts() map[string]int {
 	if s == nil {
 		return nil
