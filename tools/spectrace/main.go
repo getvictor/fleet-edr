@@ -144,6 +144,15 @@ func runCheck(args []string) int {
 		return 2
 	}
 
+	// Checked before the exemptions are applied, because a divergent restatement makes the exemption input itself untrustworthy:
+	// restatedScenarios unions the scenario lists, so it happily exempts a scenario that only the restatement destined to LOSE
+	// still mentions. Reported and gated unconditionally rather than under --strict, for the same reason an invalid marker is: this
+	// is data the release will corrupt, not a coverage gap that a legacy backlog might excuse.
+	restatementConflicts := findRestatementConflicts(deltas)
+	if len(restatementConflicts) > 0 {
+		printRestatementConflicts(restatementConflicts)
+	}
+
 	if kept := filterOutRemovedRequirements(scenarios, deltas.removedRequirements); len(kept) != len(scenarios) {
 		fmt.Printf("spectrace: %d canonical scenarios exempted (parent requirement marked REMOVED in an in-flight change)\n",
 			len(scenarios)-len(kept))
@@ -193,6 +202,8 @@ func runCheck(args []string) int {
 	}
 
 	switch {
+	case len(restatementConflicts) > 0:
+		return 1
 	case len(invalid) > 0:
 		return 1
 	case *strict && len(gatedNormative) > 0:

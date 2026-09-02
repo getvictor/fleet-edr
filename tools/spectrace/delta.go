@@ -22,9 +22,17 @@ type deltaSections struct {
 	modifiedRestatements map[string]map[string]restatement
 }
 
-// restatement is the scenario slugs one change's `## MODIFIED Requirements` entry lists for one requirement.
+// restatement is what one change's `## MODIFIED Requirements` entry says about one requirement: the scenario slugs it lists, and
+// the verbatim lines of the whole entry.
+//
+// The lines are kept because the scenario list alone cannot detect the divergence that matters. `openspec archive` replaces a
+// requirement WHOLE, so two changes agreeing on scenario headings while disagreeing on the requirement's normative text still lose
+// one of those texts at release. Reconciling only the headings would make a gate PASS over that state, which is worse than leaving
+// it visibly broken (issue #815, and the argument review made on #814).
 type restatement struct {
 	scenarios map[string]struct{}
+	// lines are the entry's own lines, from its `### Requirement:` heading up to whatever ends it, verbatim.
+	lines []string
 }
 
 // restatedScenarios collapses modifiedScenarios to one scenario set per requirement, which is what the exemption filter consumes.
@@ -118,15 +126,16 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 	section := sectionOther
 	current := ""
 	var scenarios map[string]struct{}
+	var lines []string
 	flush := func() {
 		// Recorded on leaving the requirement rather than on entering it, so the "no scenarios listed" case never reaches the map.
 		if current != "" && len(scenarios) > 0 {
 			if d.modifiedRestatements[current] == nil {
 				d.modifiedRestatements[current] = make(map[string]restatement)
 			}
-			d.modifiedRestatements[current][change] = restatement{scenarios: scenarios}
+			d.modifiedRestatements[current][change] = restatement{scenarios: scenarios, lines: lines}
 		}
-		current, scenarios = "", nil
+		current, scenarios, lines = "", nil, nil
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -147,8 +156,16 @@ func (d *deltaSections) scan(r io.Reader, change, capability string) error {
 			flush()
 			current = capability + "/" + requirementSlug(line)
 			scenarios = make(map[string]struct{})
+			lines = []string{line}
 		case section == sectionModified && current != "" && strings.HasPrefix(line, "#### Scenario:"):
 			scenarios[slugify(strings.TrimSpace(strings.TrimPrefix(line, "#### Scenario:")))] = struct{}{}
+			lines = append(lines, line)
+		default:
+			// Everything else inside a MODIFIED requirement: its normative prose, scenario bullets and blank lines. Captured
+			// because the archive replaces the requirement whole, so the prose is as much at risk as the headings.
+			if section == sectionModified && current != "" {
+				lines = append(lines, line)
+			}
 		}
 	}
 	flush()

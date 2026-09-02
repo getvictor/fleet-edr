@@ -4,15 +4,17 @@
 
 ### Requirement: Registered rule catalog
 
-The system SHALL register the following named rules at startup so each becomes evaluable against every batch of its target platform: `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, `sensor_tamper`, and `sensor_recovery_failed`. The registered-rule metadata SHALL report each rule's target platforms.
+The system SHALL register the following named rules at startup so each becomes evaluable against every batch of its target platform: `suspicious_exec`, `shell_network_connect`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, `sensor_tamper`, `application_control_block`, and `sensor_recovery_failed`. The registered-rule metadata SHALL report each rule's target platforms.
 
-The change from the prior requirement is the addition of `sensor_recovery_failed`, the second rule whose subject is the EDR itself.
+The operator-facing catalog SHALL report the registered rules that are detections. Registration and evaluation are unchanged for the rest: a registered rule that is not a detection is still evaluated against every batch of its target platform and still persists its findings as alerts.
+
+The changes from the prior requirement are the addition of `sensor_tamper` and `sensor_recovery_failed`, the first two rules whose subject is the EDR itself rather than the host it watches; the addition of `shell_network_connect`, the outbound-connection shape separated from `suspicious_exec` so each can be tuned and promoted on its own; the addition of `application_control_block`, which was registered and evaluated all along but was never named here; and that the operator-facing catalog now reports the registered rules that are detections rather than every registered rule. Naming `application_control_block` matters because of that last change: while registration and the catalog were the same thing, leaving it out was harmless, and now it would let the spec permit dropping its alerts entirely.
 
 #### Scenario: The engine reports its rule catalog
 
 - **GIVEN** a running detection engine in its default configuration
 - **WHEN** an operator inspects the catalog of registered rules
-- **THEN** the catalog includes `suspicious_exec`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, `sensor_tamper`, and `sensor_recovery_failed`
+- **THEN** the catalog includes `suspicious_exec`, `shell_network_connect`, `shell_from_office`, `osascript_network_exec`, `persistence_launchagent`, `dyld_insert`, `credential_keychain_dump`, `privilege_launchd_plist_write`, `sudoers_tamper`, `dns_c2_beacon`, and `sensor_tamper`
 
 #### Scenario: Rule metadata reports target platforms
 
