@@ -54,6 +54,24 @@ func (p *pendingMiss) absorb(err error) error {
 	return err
 }
 
+// fatalResult is the pair a per-event loop returns when absorb reports a fatal error. Every such loop MUST return through this
+// rather than deciding for itself.
+//
+// The policy is one line and lives in one place because there are nine of these loops and they were identical in getting it wrong.
+// A RETRYABLE fatal (a dependency that is unavailable) keeps the findings the rule already resolved from earlier events: the
+// engine persists those alongside the error and still retries the batch, so discarding them loses detections outright once a
+// permanently failing batch is set aside, because nothing re-derives them. Only a NON-retryable fatal discards, and for a reason
+// that does not apply to the other case: that path means the rule itself misbehaved, so its output is not trustworthy.
+//
+// A loop that writes `return nil, fatal` by hand reintroduces the bug for its own rule alone, which is how this was missed the
+// first time: the shared helper was fixed and the eight custom loops were not (issue #798).
+func fatalResult(findings []api.Finding, fatal error) ([]api.Finding, error) {
+	if errors.Is(fatal, api.ErrRetryBatch) {
+		return findings, fatal
+	}
+	return nil, fatal
+}
+
 // evalEachScopedEvent is evalEachEvent for a rule that reads Sigma fields, threading the batch scope to its evaluator so the
 // decode and the graph lookups are shared with the batch's other Sigma-backed rules (issue #794).
 //
@@ -88,14 +106,7 @@ func evalEachEvent(
 	for _, evt := range events {
 		f, err := eval(ctx, evt, s)
 		if fatal := miss.absorb(err); fatal != nil {
-			// A RETRYABLE fatal (an unavailable dependency) keeps the findings already resolved, per this function's contract:
-			// the engine persists them and still retries the batch. Discarding them would lose valid detections outright once
-			// the queue sets a permanently failing batch aside, since nothing re-derives them. A non-retryable fatal still
-			// discards, because that path means the rule itself misbehaved and its output is not trustworthy.
-			if errors.Is(fatal, api.ErrRetryBatch) {
-				return findings, fatal
-			}
-			return nil, fatal
+			return fatalResult(findings, fatal)
 		}
 		if f != nil {
 			findings = append(findings, *f)

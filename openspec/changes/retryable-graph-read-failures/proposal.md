@@ -57,6 +57,8 @@ Two of those three fixes were then over-corrections, and review caught both:
 
 Propagating also had to stop discarding the findings a rule had already resolved from earlier events, which is what `evalEachEvent`'s contract promises and what the engine persists alongside a retryable error. Discarding them loses detections outright once a permanently failing batch is set aside, since nothing re-derives them.
 
+That fix then had to be applied nine times, not once. Eight rules hand-roll their own per-event loop and each returned `nil` on the fatal path, so fixing the shared helper left every one of them discarding its own findings. The policy now lives in a single `fatalResult` and every loop returns through it, guarded by a test that reads the package's own source and fails if any loop decides locally again. A behavioural test per rule would be nine setups that each have to reach a graph read past that rule's gating, and would still not fail when a tenth rule is added.
+
 The sentinel is named for the READ rather than for a store, for the same reason: naming "the process graph" would tell an operator the wrong thing whenever it is the archive that is down.
 
 ## Distinguishing a failed read from an empty one

@@ -458,7 +458,7 @@ func (r *importedRule) EvaluateScoped(
 		}
 		finding, err := r.evalEvent(ctx, scope, evt, s)
 		if fatal := miss.absorb(err); fatal != nil {
-			return nil, fatal
+			return fatalResult(findings, fatal)
 		}
 		if finding != nil {
 			findings = append(findings, *finding)

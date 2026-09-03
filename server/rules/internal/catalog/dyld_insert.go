@@ -106,7 +106,7 @@ func (r *DyldInsert) EvaluateScoped(
 
 		proc, err := view.Subject()
 		if fatal := miss.absorb(err); fatal != nil {
-			return nil, fatal
+			return fatalResult(findings, fatal)
 		}
 		if proc == nil {
 			continue

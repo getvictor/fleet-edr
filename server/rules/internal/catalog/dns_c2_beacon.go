@@ -149,7 +149,7 @@ func (r *DNSC2Beacon) Evaluate(ctx context.Context, events []api.Event, s api.Gr
 	for _, evt := range events {
 		f, pid, err := r.evalEvent(ctx, evt, s, seenPID)
 		if fatal := miss.absorb(err); fatal != nil {
-			return nil, fatal
+			return fatalResult(findings, fatal)
 		}
 		if f != nil {
 			findings = append(findings, *f)
