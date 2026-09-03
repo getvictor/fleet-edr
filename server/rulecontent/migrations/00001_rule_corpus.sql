@@ -11,9 +11,15 @@
 -- under that, a rule file is operator- and community-authored content whose size this schema should not be the thing to bound.
 -- Bounding it is a validation concern with a policy behind it (issue #767), not a column width chosen by accident.
 
+-- path carries a BINARY collation, not the table default. The default here is utf8mb4_0900_ai_ci, which is case- and
+-- accent-insensitive, and a path is neither: it is an fs.FS identity, compared and ordered bytewise by both the filesystem and the
+-- loader. Under the insensitive default, `imported/Foo.yml` and `imported/foo.yml` collide on this primary key, so a corpus holding
+-- both fails to store at all, and because a replace is all-or-nothing that takes the whole corpus down to the embedded fallback.
+-- The ordering diverges too: the loader sorts bytewise, so a mixed-case corpus would load in a different order from storage than
+-- from the build, and registration order is observable in the operator catalog and the generated reference.
 -- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS rule_corpus_documents (
-	path       VARCHAR(255) NOT NULL,
+	path       VARCHAR(255) COLLATE utf8mb4_0900_bin NOT NULL,
 	content    MEDIUMTEXT   NOT NULL,
 	updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 	PRIMARY KEY (path)

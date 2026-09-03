@@ -4,6 +4,7 @@
 package tests
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,51 @@ func TestCorpus_DocumentsAreOrderedByPath(t *testing.T) {
 	assert.Equal(t, "imported/a.yml", docs[0].Path)
 	assert.Equal(t, "imported/m.yml", docs[1].Path)
 	assert.Equal(t, "imported/z.yml", docs[2].Path)
+}
+
+// TestCorpus_PathsAreBytewiseIdentities pins that a path is compared and ordered the way a filesystem does it.
+//
+// The table's default collation is case- and accent-insensitive, and a path is neither. Under the default, two documents whose
+// paths differ only by case COLLIDE on the primary key, so a corpus holding both fails to store at all; because a replace is
+// all-or-nothing that takes the whole corpus down to the embedded fallback, over a distinction the filesystem and the loader both
+// consider meaningful. Ordering diverges for the same reason: the loader sorts bytewise, so a mixed-case corpus would load in a
+// different order from storage than from the build, and registration order is observable.
+//
+// Latent today, because the vendored corpus is all lowercase. It stops being latent the moment an operator authors a rule (#767),
+// which is a bad time to discover the corpus silently will not load.
+func TestCorpus_PathsAreBytewiseIdentities(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	// Bytewise, uppercase sorts before lowercase, which an insensitive collation does not reproduce.
+	_, err := s.Replace(ctx, []api.Document{
+		{Path: "imported/case_rule.yml", Content: []byte("lower")},
+		{Path: "imported/Case_rule.yml", Content: []byte("upper")},
+		{Path: "imported/naive_rule.yml", Content: []byte("ascii")},
+		{Path: "imported/na\u00efve_rule.yml", Content: []byte("accented")},
+	})
+	require.NoError(t, err, "paths differing only by case or accent are distinct files, so storing them must not collide")
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	require.Len(t, docs, 4, "all four are distinct identities")
+
+	paths := make([]string, 0, len(docs))
+	for _, d := range docs {
+		paths = append(paths, d.Path)
+	}
+	sorted := slices.Clone(paths)
+	slices.Sort(sorted)
+	assert.Equal(t, sorted, paths,
+		"storage must order paths exactly as Go does, since that is the order the loader builds the rule set in")
+
+	byPath := map[string]string{}
+	for _, d := range docs {
+		byPath[d.Path] = string(d.Content)
+	}
+	assert.Equal(t, "lower", byPath["imported/case_rule.yml"])
+	assert.Equal(t, "upper", byPath["imported/Case_rule.yml"], "and neither may overwrite the other")
 }
 
 // spec:rule-content/rule-content-is-stored-and-is-the-source-the-catalog-loads-from/the-version-is-readable-without-reading-the-content
