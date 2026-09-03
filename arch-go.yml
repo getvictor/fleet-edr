@@ -42,6 +42,21 @@ dependenciesRules:
         - "**.identity.api"  # identity.api.AuditRecorder for enrollment.revoke audit
         - "**.testdb"
 
+  # rulecontent context internals (ADR-0021). The eighth context, carved out of rules at issue #766 because rule content acquired
+  # its own storage and stopped being a projection of the catalog.
+  #
+  # Deliberately the NARROWEST allow-list of any context: rulecontent produces rule definitions and evaluates nothing, so it needs
+  # no other context's api at all. If an entry ever has to be added here, that is worth reading as a signal that evaluation is
+  # leaking back into content rather than as a missing permission.
+  - package: "**.rulecontent.internal.**"
+    shouldOnlyDependsOn:
+      internal:
+        - "**.rulecontent.api"
+        - "**.rulecontent.api.**"
+        - "**.rulecontent.internal.**"
+        - "**.sqlhelpers"
+        - "**.testdb"
+
   # rules context internals. Cross-context test allowance is
   # **.detection.testkit (and only testkit); a transitional
   # **.detection.bootstrap + **.detection.testharness pair existed in
@@ -64,6 +79,10 @@ dependenciesRules:
         - "**.detection.api"
         - "**.detection.api.**"
         - "**.detection.testkit"
+        # rulecontent.api is the supplier seam ADR-0021 defines: rulecontent produces rule definitions, rules consumes and
+        # evaluates them, exactly as rules already consumes detection.api's GraphReader.
+        - "**.rulecontent.api"
+        - "**.rulecontent.api.**"
         - "**.testdb"
 
   # response context internals.

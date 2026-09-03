@@ -38,6 +38,7 @@ import (
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	responseapi "github.com/fleetdm/edr/server/response/api"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
+	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
 	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
@@ -162,9 +163,20 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	})
 	require.NoError(t, err, "open response")
 
-	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
+	// rulecontent before rules, wired exactly as cmd/main does it (ADR-0021). Without this the stack would build Rules with no
+	// corpus supplier, loadCorpus would silently fall back to the embedded corpus, and the cross-context tests could not detect a
+	// break in the production persisted-corpus wiring or its schema: the very thing they exist to catch.
+	require.NoError(t, rulecontentbootstrap.ApplySchema(t.Context(), db), "apply rulecontent schema")
+	ruleContentCtx, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: logger})
+	require.NoError(t, err, "open rulecontent")
+	_, err = ruleContentCtx.SeedFrom(t.Context(), rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
+		rulesbootstrap.EmbeddedCorpusIncludes)
+	require.NoError(t, err, "seed rule corpus")
+
+	rulesCtx, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               logger,
+		Corpus:               ruleContentCtx.Corpus(),
 		AuthZ:                identityCtx.AuthZ(),
 		Audit:                identityCtx.AuditRecorder(),
 		CommandBatchInserter: responseCtx.Service().InsertBatch,

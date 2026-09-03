@@ -30,7 +30,7 @@ func newAppControlStore(t *testing.T) (api.ApplicationControlStore, *rulesbootst
 		Logger: slog.Default(),
 		AuthZ:  allowAllAuthZ{},
 	}
-	r, err := rulesbootstrap.New(deps)
+	r, err := rulesbootstrap.New(t.Context(), deps)
 	require.NoError(t, err)
 	require.NoError(t, r.ApplySchema(t.Context()))
 	return r.ApplicationControlStore(), r

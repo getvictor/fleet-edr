@@ -34,6 +34,7 @@ import (
 	identitytestkit "github.com/fleetdm/edr/server/identity/testkit"
 	observabilitytestkit "github.com/fleetdm/edr/server/observability/testkit"
 	responsetestkit "github.com/fleetdm/edr/server/response/testkit"
+	rulecontenttestkit "github.com/fleetdm/edr/server/rulecontent/testkit"
 	rulestestkit "github.com/fleetdm/edr/server/rules/testkit"
 	"github.com/fleetdm/edr/server/testdb"
 	visibilitytestkit "github.com/fleetdm/edr/server/visibility/testkit"
@@ -61,6 +62,9 @@ func applySchemas(ctx context.Context, db *sqlx.DB) error {
 	}{
 		{"identity", identitytestkit.ApplySchema},
 		{"endpoint", endpointtestkit.ApplySchema},
+		// rulecontent before rules, matching cmd/main and the standalone migrator: it supplies the definitions rules evaluates
+		// (ADR-0021). No FK between them, so the order is for consistency rather than correctness.
+		{"rulecontent", rulecontenttestkit.ApplySchema},
 		{"rules", rulestestkit.ApplySchema},
 		{"response", responsetestkit.ApplySchema},
 		{"detection", detectiontestkit.ApplySchema},
