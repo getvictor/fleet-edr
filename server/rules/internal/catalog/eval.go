@@ -65,6 +65,12 @@ func (p *pendingMiss) absorb(err error) error {
 //
 // A loop that writes `return nil, fatal` by hand reintroduces the bug for its own rule alone, which is how this was missed the
 // first time: the shared helper was fixed and the eight custom loops were not (issue #798).
+//
+// What survives here is the findings, which the engine persists as alerts. A match that is only COUNTED (the rule resolved to
+// monitor mode) rides the batch tally instead, and the engine drops that on any retryable error so a retried batch is not counted
+// twice. A batch that is ultimately set aside therefore contributes no monitor count. That is a gap in tuning telemetry rather
+// than a lost detection, since a monitor-mode match raises no alert either way, and the count is documented as an approximation.
+// Carrying the tally onto the set-aside path is issue #843.
 func fatalResult(findings []api.Finding, fatal error) ([]api.Finding, error) {
 	if errors.Is(fatal, api.ErrRetryBatch) {
 		return findings, fatal

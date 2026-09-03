@@ -61,6 +61,12 @@ That fix then had to be applied nine times, not once. Eight rules hand-roll thei
 
 The sentinel is named for the READ rather than for a store, for the same reason: naming "the process graph" would tell an operator the wrong thing whenever it is the archive that is down.
 
+## What preservation does and does not cover
+
+Preserving the findings covers the ones that raise an ALERT. A match that is only counted, because the rule resolved to monitor mode, rides the batch tally, and the engine drops that on any retryable error so a replayed batch is not counted once per attempt. A batch ultimately set aside therefore contributes no monitor count.
+
+Narrowed rather than fixed here, deliberately. It is tuning telemetry and not a detection: a monitor-mode match raises no alert whether or not it is counted, and the counter is already specified as an approximation with losses in both directions. Carrying the tally onto the set-aside path needs exactly-once recording across a store call that reports the withdrawal and an engine that holds the tally, which is failure-path plumbing worth its own change. Issue #843, and the narrowed guarantee is stated in the interface contract, in `fatalResult`, and in the delta so it cannot be read as covering both.
+
 ## Distinguishing a failed read from an empty one
 
 Only errors are wrapped. A read that legitimately matches no row returns a nil row and a nil error, which rules already treat as an answer, and that path is untouched. `resolveSubjectProcess` composes with this without change: it already passes store errors through unchanged and only synthesizes `ErrProcessNotYetMaterialized` for a MISS inside the grace window, so a read failure now arrives as retryable and a miss keeps its existing narrower contract.

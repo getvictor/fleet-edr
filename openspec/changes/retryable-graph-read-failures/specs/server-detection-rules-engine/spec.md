@@ -14,7 +14,9 @@ A failed read SHALL be distinguished from a read that legitimately finds nothing
 
 A failed read SHALL be distinguishable from a rule that is deliberately waiting. Both are retryable, and they diverge in one place: a waiting rule's error is absorbed per event so the batch continues, because one undecidable event must not mask the rest, whereas a failed read SHALL be propagated at once. The next event's read reaches the same unavailable dependency, so continuing multiplies one outage by the batch size for no gain.
 
-Propagating a failed read SHALL NOT discard the findings the rule had already resolved from earlier events in the batch. Those findings SHALL be reported alongside the retryable error and persisted, as they are for any other retryable error. A batch that keeps failing is eventually set aside and nothing re-derives them, so discarding them loses detections outright rather than delaying them.
+Propagating a failed read SHALL NOT discard the findings the rule had already resolved from earlier events in the batch. Those findings SHALL be reported alongside the retryable error, and the system SHALL persist the ones that raise an alert, as it does for any other retryable error. A batch that keeps failing is eventually set aside and nothing re-derives them, so discarding them loses detections outright rather than delaying them.
+
+This applies to findings that raise an alert. A match that is only COUNTED, because the rule resolved to monitor mode, is recorded on the attempt that is acknowledged, so a batch ultimately set aside contributes no count. That is a gap in tuning telemetry and not a lost detection: a monitor-mode match raises no alert either way, and the count is specified as an approximation. The distinction SHALL be stated wherever the preservation is described, so it is not read as a guarantee that covers both.
 
 A failed read SHALL NOT stop the batch's remaining rules. The reads a rule performs span more than one dependency: the process and exec-chain lookups and the event-archive lookups are backed independently, so one being unavailable says nothing about the other. Stopping the batch would skip rules that could have decided, and once the batch is set aside their detections are lost rather than late.
 
@@ -47,7 +49,7 @@ The retry this creates SHALL be bounded by the work queue's own bound rather tha
 
 - **GIVEN** a rule that resolved a finding from an earlier event in the batch, then hit a failed read
 - **WHEN** the failure is reported
-- **THEN** the finding is reported alongside it and persisted
+- **THEN** the finding is reported alongside it, and persisted if it raises an alert
 - **AND** a rule that failed for a reason other than a read still has its findings discarded, since its output is not trustworthy
 
 #### Scenario: A failed read does not stop the batch's other rules

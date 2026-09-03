@@ -105,16 +105,26 @@ type Rule interface {
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
 	// mutate state. Returning nil findings is the common case.
 	//
-	// The two error classes are handled differently, and the difference matters to rule authors. An ordinary error discards this
-	// rule's findings for the batch and is logged at WARN, isolating a misbehaving rule from the rest. An error wrapping
-	// ErrProcessNotYetMaterialized does NOT discard them: the engine persists whatever findings came back alongside it and still
-	// propagates the miss, so the processor retries the batch and alert dedup makes the re-run idempotent.
+	// THREE error classes are handled differently, and the differences matter to rule authors:
 	//
-	// An implementation MUST NOT abandon the rest of the batch when one event raises ErrProcessNotYetMaterialized. Finish evaluating
-	// every event, then return the findings that DID resolve together with the miss: the engine persists those findings and still
-	// retries the batch. Bailing on the first miss lets a permanently orphaned event (its fork/exec never captured, so its row never
-	// arrives) mask a real finding elsewhere in the same batch until that finding's own grace window has elapsed, at which point it
-	// degrades to the silent skip and is lost for good (issue #661). The catalog's pendingMiss helper implements this policy.
+	//  1. An ordinary error discards this rule's findings for the batch and is logged at WARN, isolating a misbehaving rule from
+	//     the rest.
+	//  2. An error wrapping ErrProcessNotYetMaterialized does NOT discard them, and the implementation MUST NOT abandon the rest
+	//     of the batch: finish every event, then return the findings that DID resolve together with the miss. Bailing on the first
+	//     miss lets a permanently orphaned event (its fork/exec never captured, so its row never arrives) mask a real finding
+	//     elsewhere in the same batch until that finding's own grace window has elapsed, at which point it degrades to the silent
+	//     skip and is lost for good (issue #661).
+	//  3. An error wrapping ErrRuleReadUnavailable also does NOT discard them, but the implementation MUST stop the batch at once
+	//     rather than finishing it. The dependency is unavailable, so the next event's read reaches the same failure; continuing
+	//     multiplies one outage by the batch size for no gain (issue #798). Return the findings resolved so far with the error.
+	//
+	// The catalog's pendingMiss and fatalResult helpers implement all three, and a per-event loop should return through them rather
+	// than deciding locally.
+	//
+	// For 2 and 3 the engine persists the returned findings and still propagates the error, so the processor retries the batch and
+	// alert dedup makes the re-run idempotent. "Persists" means the findings that raise an ALERT. A match that is only COUNTED
+	// (the rule resolved to monitor mode) is recorded on the attempt that is acknowledged, so a batch ultimately set aside
+	// contributes no count: that number is tuning telemetry and already an approximation, and no alert is lost with it.
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 	// SupportedExclusionMatchTypes returns the exclusion match types this rule consults at evaluation time, i.e. the match types it
 	// passes to the ExclusionResolver. It returns no match types (nil or an empty slice, treated alike) for a rule that consults no
