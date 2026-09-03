@@ -11,11 +11,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	detectionbootstrap "github.com/fleetdm/edr/server/detection/bootstrap"
+	detectiontestkit "github.com/fleetdm/edr/server/detection/testkit"
 	identitytestkit "github.com/fleetdm/edr/server/identity/testkit"
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/testdb/full"
+	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
 )
 
 // spec:rule-content/a-running-server-picks-up-changed-content/content-published-elsewhere-is-picked-up-without-a-restart
@@ -111,4 +115,85 @@ const (
 func oneStoredDocument(t *testing.T) []rulecontentapi.Document {
 	t.Helper()
 	return []rulecontentapi.Document{{Path: storedRuleDoc, Content: mustReadVendored(t, storedRuleDoc)}}
+}
+
+// countingProvider hands the engine the same rule set the rules context holds, and records the size of what it handed over.
+type countingProvider struct {
+	inner     interface{ ActiveRules() []rulesapi.Rule }
+	delivered *atomic.Int64
+}
+
+func (c countingProvider) ActiveRules() []rulesapi.Rule {
+	rules := c.inner.ActiveRules()
+	c.delivered.Store(int64(len(rules)))
+	return rules
+}
+
+// spec:rule-content/a-running-server-picks-up-changed-content/the-rule-set-in-force-is-replaced-wholesale
+//
+// TestRuleCorpusReload_ThePublishReachesTheDetectionEngine closes a gap review found: every other test here installs a counter as
+// the observer, so nothing checked that a publish actually reaches the thing that evaluates rules. The engine compiles its own
+// dispatch indices and rebuilds them only when told, so a miswired observer leaves the API listing a rule the engine never runs,
+// which is the failure with the least visible symptom in this change.
+//
+// What this pins is the cross-context contract: a publish causes detection's LoadActive to be invoked, with the post-publish rule
+// set. What it does not pin is cmd/main's own closure, which nothing short of running main can; the integration stack now carries
+// the same wiring so the two cannot drift silently.
+func TestRuleCorpusReload_ThePublishReachesTheDetectionEngine(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	ctx := t.Context()
+	logger := slog.New(slog.DiscardHandler)
+
+	ruleContentCtx, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: logger})
+	require.NoError(t, err)
+	seeded, err := ruleContentCtx.SeedFrom(ctx, rulesbootstrap.EmbeddedCorpusFS(),
+		rulesbootstrap.EmbeddedCorpusRoot, rulesbootstrap.EmbeddedCorpusIncludes)
+	require.NoError(t, err)
+	require.True(t, seeded)
+
+	rulesCtx, err := rulesbootstrap.New(ctx, rulesbootstrap.Deps{
+		DB: db, Logger: logger, AuthZ: identitytestkit.AllowAllAuthZ{},
+		Corpus: ruleContentCtx.Corpus(),
+	})
+	require.NoError(t, err)
+
+	// Detection needs a real event log to construct. Nothing here feeds it events: the assertion is about what the engine is
+	// HANDED on a publish, not about what it does with a batch afterwards.
+	visibilityCtx, err := visibilitybootstrap.New(visibilitybootstrap.Deps{DB: db, Logger: logger})
+	require.NoError(t, err)
+	detectionCtx, err := detectionbootstrap.New(detectionbootstrap.Deps{
+		DB:           db,
+		Logger:       logger,
+		Mode:         detectionbootstrap.ModeFull,
+		AuthZ:        identitytestkit.AllowAllAuthZ{},
+		EventLog:     visibilityCtx.EventLog(),
+		EventArchive: detectiontestkit.NewMemArchive(),
+	})
+	require.NoError(t, err)
+
+	// Wired the way cmd/main wires it, with a counter in the middle recording what the engine was actually handed.
+	var delivered atomic.Int64
+	rulesCtx.SetRuleSetObserver(func() {
+		detectionCtx.LoadActive(countingProvider{inner: rulesCtx.ContentService(), delivered: &delivered})
+	})
+
+	fromCorpus := corpusRuleIDs(t)
+	full := len(filterCorpusIDs(fromCorpus, rulesCtx.ContentService().ActiveRules()))
+	require.Greater(t, full, 10)
+	require.Zero(t, delivered.Load(), "nothing has been published yet, so the engine has not been told anything")
+
+	_, err = ruleContentCtx.Replace(ctx, oneStoredDocument(t))
+	require.NoError(t, err)
+
+	go rulesCtx.CorpusRefreshLoop(ctx, 10*time.Millisecond)
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Positive(c, delivered.Load(), "the engine must be handed a rule set after a publish")
+		assert.Equal(c, int64(len(rulesCtx.ContentService().ActiveRules())), delivered.Load(),
+			"and it must be the set in force after the publish, not the one from before")
+	}, 10*time.Second, 20*time.Millisecond)
+
+	assert.Less(t, delivered.Load(), int64(full),
+		"the published corpus is smaller than the seeded one, so a delivery of the old size means the engine kept the old set")
 }

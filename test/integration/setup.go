@@ -199,6 +199,10 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	require.NoError(t, rulesCtx.ApplySchema(ctx), "seed rules default policy")
 
 	detectionCtx.LoadActive(rulesCtx.ContentService())
+	// Mirrors cmd/main: content published on another replica is picked up by rules' corpus refresh loop, and the engine holds its
+	// own compiled copy, so it has to be told to rebuild. Wired here so this stack matches production rather than only resembling
+	// it; a stack missing it would let a test pass while the engine evaluated a withdrawn rule set.
+	rulesCtx.SetRuleSetObserver(func() { detectionCtx.LoadActive(rulesCtx.ContentService()) })
 	// Wire the mode resolver and the monitor-match recorder, exactly as cmd/main does. Without them the engine has no resolver
 	// and every rule runs at its DECLARED default, so a per-rule setting written to the database has no effect on an integration
 	// test at all. That silently limited what these stacks could exercise: since issue #764 put sixty-six of seventy-eight rules

@@ -319,32 +319,33 @@ func (r *Rules) Reload(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("read rule corpus: %w", err)
 	}
 
-	// Everything below is a DETERMINATE state: the store was read, and what it holds yields no runnable rules. Every replica
-	// reading it must therefore reach the same rule set, so each of these installs the corpus built into the binary and records the
-	// version, exactly as a replica starting from scratch against the same store would (see loadCorpus).
+	// Content the store HOLDS but that yields no runnable rules leaves the set in force alone, which is issue #766's stated
+	// contract: "a malformed pack is rejected wholesale; the running set is untouched". The version is deliberately not recorded,
+	// so the poll keeps seeing a difference and adopts the content as soon as it is fixed.
 	//
-	// Keeping the set already in force here was the first version and review was right that it cannot work: it makes the running
-	// rule set a function of a replica's HISTORY rather than of stored content, so a replica that restarts lands somewhere else and
-	// the recorded version never moves to reconcile them. Permanent divergence across the fleet, from one bad publish.
+	// This costs a real divergence, and it is worth naming rather than hiding. A replica that RESTARTS while unusable content is
+	// stored has no set in force to keep, so it falls back to the corpus in its binary (loadCorpus) and runs something different
+	// from its peers until the content is corrected. An earlier revision of this PR tried to close that by having everyone adopt
+	// the binary's corpus and recording the version; review showed that is worse, because replicas mid-rolling-deployment embed
+	// DIFFERENT corpora and would then stamp them with the same version, reporting convergence while running different rules. It
+	// also silently replaces content an operator published.
 	//
-	// The two read failures above are different in kind and are the only ones that keep history: there the stored state is unknown,
-	// so the set in force is the best available answer and the next tick retries.
+	// The real remedy is upstream: content that cannot run should never reach the store, which is what publish-time validation in
+	// #767 is for. Until then the conservative choice is the contract, and issue #851 carries the cross-replica question.
 	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
 	switch {
 	case len(docs) == 0:
-		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; using the corpus embedded in this build", "version", version)
-		loaded, rejected = catalog.MustLoadImported(), nil
+		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; keeping the rule set already in force", "version", version)
+		return 0, nil
 	case err != nil:
-		r.logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
-			"version", version, "documents", len(docs), "err", err)
-		loaded, rejected = catalog.MustLoadImported(), nil
+		return 0, fmt.Errorf("load rule corpus: %w", err)
 	case len(loaded) == 0:
 		// The loader refuses a rule it cannot run individually and reports that as success with nothing loaded, not as an error, so
 		// this arrives on the happy path. Without it, publishing a corpus whose every document is refused would drop every corpus
 		// detection while logging like an ordinary reload.
-		r.logger.WarnContext(ctx, "rules: no document in the stored rule corpus could be loaded; using the corpus embedded in this build",
+		r.logger.WarnContext(ctx, "rules: no document in the stored rule corpus could be loaded; keeping the rule set already in force",
 			"version", version, "documents", len(docs), "refused", len(rejected))
-		loaded, rejected = catalog.MustLoadImported(), nil
+		return 0, nil
 	}
 
 	n := r.installRuleSet(catalog.NewWithCorpus(r.detectionConfigSvc, loaded), version)

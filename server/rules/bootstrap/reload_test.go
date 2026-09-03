@@ -15,7 +15,6 @@ import (
 
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	"github.com/fleetdm/edr/server/rules/api"
-	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 	"github.com/fleetdm/edr/server/testdb"
@@ -107,28 +106,25 @@ func TestReload_KeepsTheSetInForceWhenTheStoreCannotBeRead(t *testing.T) {
 	}
 }
 
-// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/unusable-stored-content-converges-on-the-build-s-corpus
+// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/unusable-stored-content-leaves-the-running-set-alone
 //
-// TestReload_ConvergesOnTheBuildsCorpusWhenContentIsUnusable is the anti-divergence property, and it replaced the behaviour I
-// shipped first.
+// TestReload_LeavesTheRunningSetAloneWhenContentIsUnusable holds issue #766's contract: "a malformed pack is rejected wholesale;
+// the running set is untouched".
 //
-// Keeping the set already in force for these cases seemed obviously right and cannot work. All three are DETERMINATE: the store
-// was read, and what it holds yields no runnable rules. Keeping the running set makes the rule set a function of a replica's
-// history rather than of stored content, so a replica that restarts against the same store lands somewhere else, and because
-// neither records the version nothing ever reconciles them. One bad publish would split the fleet permanently.
+// The version is deliberately NOT recorded, which is the half worth asserting. Recording it would stop the poll re-reading, and
+// with it the only mechanism that adopts the content once an operator fixes it.
 //
-// So each of these installs the corpus built into the binary and RECORDS the version, which is what a replica starting from
-// scratch does with the same store. The recorded version is the assertion that matters: without it the poll re-reads forever and
-// the divergence is merely slower.
-func TestReload_ConvergesOnTheBuildsCorpusWhenContentIsUnusable(t *testing.T) {
+// This leaves a divergence, tracked in #851: a replica that RESTARTS while unusable content is stored has no set in force to keep
+// and falls back to the corpus in its binary. An earlier revision of this PR had every replica adopt the binary's corpus and
+// record the version to close that; review showed it is worse, because replicas mid-rolling-deployment embed different corpora and
+// would stamp them with one version, claiming convergence while running different rules.
+func TestReload_LeavesTheRunningSetAloneWhenContentIsUnusable(t *testing.T) {
 	t.Parallel()
 
-	fromBuild := len(catalog.NewWithCorpus(nil, catalog.MustLoadImported()))
-	require.Greater(t, fromBuild, 10, "the build's corpus must be substantial, or these assertions say little")
-
 	cases := []struct {
-		name   string
-		corpus rulecontentapi.Corpus
+		name    string
+		corpus  rulecontentapi.Corpus
+		wantErr bool
 	}{
 		{
 			name:   "the corpus was emptied",
@@ -139,6 +135,7 @@ func TestReload_ConvergesOnTheBuildsCorpusWhenContentIsUnusable(t *testing.T) {
 			corpus: fakeCorpus{version: 9, docs: []rulecontentapi.Document{
 				{Path: "imported/broken.yml", Content: []byte("{{ not sigma")},
 			}},
+			wantErr: true,
 		},
 		{
 			// The loader refuses a rule it cannot run individually and reports that as success with nothing loaded, NOT as an
@@ -159,13 +156,17 @@ func TestReload_ConvergesOnTheBuildsCorpusWhenContentIsUnusable(t *testing.T) {
 			r.installRuleSet([]api.Rule{stubRule{id: "already-running"}}, 3)
 
 			_, err := r.Reload(t.Context())
-			require.NoError(t, err, "a determinate state is not a failure to report; it is a state to converge on")
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.True(t, logged.warned, "keeping the running set instead of what was published has to be said out loud")
+			}
 
-			assert.Len(t, r.svc.ActiveRules(), fromBuild,
-				"every replica reading this store must reach the same set, which is the one built into the binary")
-			assert.Equal(t, int64(9), r.svc.ActiveVersion(),
-				"and the version must be RECORDED, or the poll re-reads forever and replicas never agree they are done")
-			assert.True(t, logged.warned, "silently replacing an operator's content with the build's is not acceptable")
+			require.Len(t, r.svc.ActiveRules(), 1, "the running set must survive content that cannot be used")
+			assert.Equal(t, "already-running", r.svc.ActiveRules()[0].ID())
+			assert.Equal(t, int64(3), r.svc.ActiveVersion(),
+				"and the version must NOT advance, or the poll stops looking and the fix is never adopted")
 		})
 	}
 }

@@ -82,6 +82,7 @@ func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *capturingHandler) WithGroup(string) slog.Handler      { return h }
 
+// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/a-system-starting-up-has-no-running-set-to-keep
 // spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/an-unseeded-store-is-not-an-error
 // spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/content-that-fails-to-load-does-not-stop-detection
 //

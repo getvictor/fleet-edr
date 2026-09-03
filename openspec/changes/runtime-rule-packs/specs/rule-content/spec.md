@@ -38,9 +38,9 @@ The stored content SHALL be read back byte-identically, under the same identity 
 
 The system SHALL continue evaluating detections when the stored content cannot be used, and SHALL fall back to the content compiled into the build, which is the same content the store would have been seeded with.
 
-The fallback SHALL depend only on what the store holds, never on what a replica happened to load previously. Two cases have to be distinguished for that to hold. A read that FAILS leaves the stored state unknown, so the set already in force is the best available answer and the attempt is retried. Content that was read successfully and yields no runnable rules is a KNOWN state, so every replica reading it SHALL reach the same rule set, which means the build's corpus rather than whatever each replica loaded before.
+A system that is already evaluating content SHALL keep evaluating it when new content cannot be used, and SHALL NOT record that content's version. Not recording it is what lets the system adopt the content as soon as it is corrected, since the poll keeps seeing a difference.
 
-Keeping the running set for that second case is the intuitive choice and does not work. It makes the rule set a function of a replica's history, so a replica that restarts against the same store lands somewhere else, and with no version recorded nothing reconciles them: one bad publish divides the fleet permanently. Recording the version is part of the requirement rather than an optimisation, because without it the poll re-reads the same unusable content forever.
+This leaves a divergence that is stated here rather than hidden. A replica that RESTARTS while unusable content is stored has no set in force to keep, so it falls back to the content compiled into its build and evaluates something different from its peers until the content is corrected. Making every replica adopt its build's content instead does not fix this and makes it worse: replicas part-way through a rolling deployment carry DIFFERENT built-in content, so they would record one version against different rules and report agreement they do not have. The condition is prevented upstream, by refusing content that cannot run before it is stored, rather than reconciled afterwards.
 
 A deployment whose store is empty, unreachable, or holding content that fails to load SHALL therefore behave as it did before rule content was stored. The alternative is a server that starts with no detections because of a storage problem, which trades a bounded loss of the ability to change rules for an unbounded loss of the rules themselves.
 
@@ -67,13 +67,20 @@ Falling back for a REASON SHALL be reported. An empty store SHALL NOT be reporte
 - **THEN** the rule set already in force continues to be evaluated, unchanged
 - **AND** the version it was built from is not advanced, so the next attempt retries
 
-#### Scenario: Unusable stored content converges on the build's corpus
+#### Scenario: Unusable stored content leaves the running set alone
 
-- **GIVEN** stored content that was read successfully and yields no runnable rules, whether because it is empty, because it does not parse, or because every rule in it is refused
-- **WHEN** the rule set is built, on a running system or on one starting up
-- **THEN** both evaluate the content compiled into the build
-- **AND** the version is recorded, so a replica does not re-read the same unusable content indefinitely
-- **AND** the substitution is reported
+- **GIVEN** a running system evaluating content it loaded successfully
+- **WHEN** stored content is read successfully but yields no runnable rules, whether because it is empty, because it does not parse, or because every rule in it is refused
+- **THEN** the rule set already in force continues to be evaluated
+- **AND** that content's version is NOT recorded, so the corrected content is adopted when it arrives
+- **AND** the condition is reported
+
+#### Scenario: A system starting up has no running set to keep
+
+- **GIVEN** stored content that yields no runnable rules, and a system with nothing yet loaded
+- **WHEN** it builds its rule set
+- **THEN** it evaluates the content compiled into the build, whether the content is empty or every rule in it is refused
+- **AND** the two cases behave identically, because they are the same condition reached by different routes
 
 ### Requirement: Seeding never overwrites content that is already there
 
