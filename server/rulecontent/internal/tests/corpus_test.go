@@ -100,8 +100,8 @@ func TestCorpus_PathsAreBytewiseIdentities(t *testing.T) {
 
 	// Bytewise, uppercase sorts before lowercase, which an insensitive collation does not reproduce.
 	_, err := s.Replace(ctx, []api.Document{
-		{Path: "imported/case_rule.yml", Content: []byte("lower")},
-		{Path: "imported/Case_rule.yml", Content: []byte("upper")},
+		{Path: "imported/case_test.yml", Content: []byte("lower")},
+		{Path: "imported/Case_test.yml", Content: []byte("upper")},
 		{Path: "imported/naive_rule.yml", Content: []byte("ascii")},
 		{Path: "imported/na\u00efve_rule.yml", Content: []byte("accented")},
 	})
@@ -124,8 +124,8 @@ func TestCorpus_PathsAreBytewiseIdentities(t *testing.T) {
 	for _, d := range docs {
 		byPath[d.Path] = string(d.Content)
 	}
-	assert.Equal(t, "lower", byPath["imported/case_rule.yml"])
-	assert.Equal(t, "upper", byPath["imported/Case_rule.yml"], "and neither may overwrite the other")
+	assert.Equal(t, "lower", byPath["imported/case_test.yml"])
+	assert.Equal(t, "upper", byPath["imported/Case_test.yml"], "and neither may overwrite the other")
 }
 
 // spec:rule-content/rule-content-is-stored-and-is-the-source-the-catalog-loads-from/the-version-is-readable-without-reading-the-content
