@@ -513,7 +513,8 @@ func openRuleContent(ctx context.Context, logger *slog.Logger, db *sqlx.DB) (*ru
 	if err != nil {
 		return nil, fmt.Errorf("open rulecontent: %w", err)
 	}
-	if _, err := rcCtx.SeedFrom(ctx, rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot, rulesbootstrap.EmbeddedCorpusIncludes); err != nil {
+	if _, err := rcCtx.SeedFrom(ctx, rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
+		rulesbootstrap.EmbeddedCorpusIncludes); err != nil {
 		// Not fatal: the catalog falls back to the corpus embedded in this build, so a seed failure costs the ability to change
 		// detections without a release, not the detections themselves.
 		logger.WarnContext(ctx, "rulecontent: corpus seed failed; the catalog will use the corpus embedded in this build",

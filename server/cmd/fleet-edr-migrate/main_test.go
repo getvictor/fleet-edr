@@ -32,8 +32,13 @@ func TestApplyAll(t *testing.T) {
 	// (the `events` table is dropped by the ClickHouse cutover, ADR-0015); visibility's is the `event_queue` work queue.
 	for _, table := range []string{
 		"users", "enrollments", "app_control_policies", "commands", "alerts", "event_queue",
+		// rulecontent's corpus store (ADR-0021). Listed because a context absent from migrations() makes this CLI report
+		// success while creating nothing, and the server's own boot-time apply would then be the only thing that ever
+		// created the tables, which defeats having a standalone migrator at all.
+		"rule_corpus_documents",
 		"identity_goose_db_version", "endpoint_goose_db_version", "rules_goose_db_version",
 		"response_goose_db_version", "detection_goose_db_version", "visibility_goose_db_version",
+		"rulecontent_goose_db_version",
 	} {
 		assert.Truef(t, tableExists(t, db, table), "table %q must exist after applyAll", table)
 	}

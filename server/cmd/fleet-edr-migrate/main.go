@@ -22,6 +22,7 @@ import (
 	endpointbootstrap "github.com/fleetdm/edr/server/endpoint/bootstrap"
 	identitybootstrap "github.com/fleetdm/edr/server/identity/bootstrap"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
+	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	visibilitybootstrap "github.com/fleetdm/edr/server/visibility/bootstrap"
 )
@@ -37,6 +38,9 @@ func migrations() []migration {
 	return []migration{
 		{"identity", identitybootstrap.ApplySchema},
 		{"endpoint", endpointbootstrap.ApplySchema},
+		// rulecontent before rules, matching the server's own order: it supplies the rule definitions rules evaluates (ADR-0021).
+		// There is no FK between them, so the order is for readability rather than correctness.
+		{"rulecontent", rulecontentbootstrap.ApplySchema},
 		{"rules", rulesbootstrap.ApplySchema},
 		{"response", responsebootstrap.ApplySchema},
 		{"detection", detectionbootstrap.ApplySchema},
