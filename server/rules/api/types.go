@@ -268,6 +268,29 @@ var ErrRetryBatch = errors.New("rules: batch not yet decidable")
 // materialization counter and its log line) still distinguishes this specific cause.
 var ErrProcessNotYetMaterialized = fmt.Errorf("%w: subject process not yet materialized", ErrRetryBatch)
 
+// ErrGraphUnavailable signals that a read of the process graph FAILED, as opposed to answering that nothing matched. The engine
+// wraps every graph read a rule performs, so no rule has to classify its own read failures (issue #798).
+//
+// It wraps ErrRetryBatch because the batch must be retried rather than acked: the rule is not broken, its dependency is
+// unavailable, the events are still in the work queue, and swallowing the error costs the detections for every event in flight.
+//
+// It is a DISTINCT sentinel rather than the bare ErrRetryBatch because the two behave oppositely in three places, and using the
+// generic one silently got all three wrong:
+//
+//  1. A per-event loop ABSORBS a retryable miss and continues the batch (issue #661: one orphaned event must not mask the rest).
+//     A failed read is not a per-event condition. Every remaining read in that batch will fail the same way, so continuing turns
+//     one outage into hundreds of doomed queries against a database that is already struggling.
+//  2. The same holds across RULES: once the graph is unavailable, evaluating the batch's other graph-reading rules cannot decide
+//     anything either.
+//  3. The processor logs a generic retryable wait at DEBUG on purpose, so a rule that deliberately waits (sensor_tamper's recovery
+//     window) cannot flood the logs. A dependency outage is not a wait, and DEBUG is usually not emitted in production at all, so
+//     it must be louder than the condition that branch was written for.
+//
+// A rule raising ErrRetryBatch must bound how long it keeps raising it. This sentinel is bounded elsewhere: the work queue sets a
+// batch aside once it has exceeded both its attempt and duration bounds (issue #836), so a permanently failing read cannot hold
+// its host's queue forever.
+var ErrGraphUnavailable = fmt.Errorf("%w: process graph unavailable", ErrRetryBatch)
+
 // RuleMetadata is the per-rule descriptor the operator endpoints render. Used in two surfaces: GET /api/rules (the operator handler
 // maps the fields into a JSON-tagged ruleResponse struct, so the wire shape lives in rules/internal/operator and isn't on this
 // struct) and GET /api/attack-coverage (the handler uses ID + Techniques fields directly to build the Navigator layer). The UI's

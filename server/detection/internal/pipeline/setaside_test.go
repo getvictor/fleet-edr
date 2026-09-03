@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestReportSetAside(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-wedged", 7, "detection")
+		p.reportSetAside(t.Context(), "host-wedged", 7, "detection", errors.New("insert alert: Error 1406: Data too long"))
 
 		require.Len(t, rec.setAside, 1, "the counter is what an operator alerts on")
 		assert.Equal(t, "host-wedged", rec.setAside[0].hostID,
@@ -47,6 +48,8 @@ func TestReportSetAside(t *testing.T) {
 		out := logged.String()
 		assert.Contains(t, out, "host-wedged", "the log has to name the host, or the counter says only that it happened somewhere")
 		assert.Contains(t, out, "detection", "and the stage that failed, so there is somewhere to look")
+		assert.Contains(t, out, "Data too long",
+			"and the failure itself: the retries that led here log at DEBUG, so without this the ERROR names a gap and no cause")
 		assert.Contains(t, out, "level=ERROR",
 			"a gap in a host's process graph is not a condition to notice in aggregate later")
 	})
@@ -55,7 +58,7 @@ func TestReportSetAside(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-fine", 0, "builder")
+		p.reportSetAside(t.Context(), "host-fine", 0, "builder", errors.New("transient"))
 
 		assert.Empty(t, rec.setAside, "an ordinary retryable nack must not touch the counter")
 		assert.Empty(t, logged.String(),
@@ -69,7 +72,7 @@ func TestReportSetAside(t *testing.T) {
 
 		// The recorder is installed after construction (the two-phase setup cmd/main uses), so a nil one is a real state and not
 		// a defensive hypothetical.
-		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, "detection") })
+		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, "detection", errors.New("boom")) })
 		assert.Contains(t, logged.String(), "host-x", "the log still fires, since it is the half that needs no wiring")
 	})
 }

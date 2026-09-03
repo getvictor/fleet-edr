@@ -40,6 +40,18 @@ Making a read failure retryable means a read that fails PERMANENTLY (a schema mi
 
 That is issue #836, and it is now bounded: a batch that exceeds both the attempt bound and the duration bound is set aside so the host's queue advances. So the worst case of this change is a bounded delay and a bounded gap on one host, with a counter and an ERROR log naming it, rather than an unbounded stall. Sequencing #836 first is what makes this change's failure mode acceptable, and it is worth recording that the two issues are related that way.
 
+## A distinct sentinel, not the generic one
+
+The first cut wrapped read failures with `ErrRetryBatch` directly. That was wrong in three places at once, and wrong quietly, which is worse:
+
+- **`pendingMiss.absorb` absorbed them.** That function continues the batch past a retryable per-event miss on purpose (issue #661: one permanently orphaned event must not mask every event behind it). A failed read is not that condition. Its own doc comment already said so ("retrying the remaining events against a broken reader would just multiply the failure"); routing read failures through the generic sentinel made the code stop matching its comment, and turned one outage into a read per event per rule on every retry.
+- **The engine kept evaluating the batch's other rules**, each repeating the same doomed read.
+- **The processor logged it at DEBUG**, a branch that exists so a rule which deliberately WAITS (sensor_tamper waits out a recovery window) cannot flood the logs. DEBUG is generally not emitted in production, so an outage costing detections across every host in flight would have been visible only as an absence of alerts.
+
+`ErrGraphUnavailable` wraps `ErrRetryBatch`, so everything asking "should this batch be retried" still matches, while the three places above can tell an outage from a wait. Each divergence has a test, and each has a paired test asserting the ordinary-wait behaviour is unchanged, since over-correcting here would let one waiting rule suppress every other rule's findings.
+
+The set-aside record now carries the failure too. The retries leading to it log quietly by design, so without the cause the ERROR reported that a host had a gap and gave an operator nothing to act on.
+
 ## Distinguishing a failed read from an empty one
 
 Only errors are wrapped. A read that legitimately matches no row returns a nil row and a nil error, which rules already treat as an answer, and that path is untouched. `resolveSubjectProcess` composes with this without change: it already passes store errors through unchanged and only synthesizes `ErrProcessNotYetMaterialized` for a MISS inside the grace window, so a read failure now arrives as retryable and a miss keeps its existing narrower contract.

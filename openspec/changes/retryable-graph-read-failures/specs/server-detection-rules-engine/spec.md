@@ -12,6 +12,14 @@ A graph read failure SHALL fail the batch regardless of which rule performed the
 
 A failed read SHALL be distinguished from a read that legitimately finds nothing. An absent row is an answer, and rules already handle it; only the failure to obtain an answer is retryable.
 
+A failed graph read SHALL be distinguishable from a rule that is deliberately waiting, and SHALL NOT be handled as one. The two are both retryable and diverge everywhere else:
+
+- A per-event loop absorbs a waiting rule's error and continues the batch, so one undecidable event cannot mask the rest. A failed read SHALL instead stop the batch, because every remaining read will fail identically and continuing turns one outage into a read per event per rule, on every retry, against a dependency that is already failing.
+- The same SHALL hold across rules: once the graph is unavailable, the batch's other graph-reading rules cannot decide either.
+- A deliberate wait is logged quietly so a recurring wait cannot flood the logs. A failed read SHALL be logged at a level an operator actually sees in production, since it is costing detections across every host in flight and reporting it quietly leaves it visible only as an absence of alerts.
+
+When events are ultimately set aside, the record SHALL name the failure that caused it and not only that a gap exists. The retries leading up to it are logged quietly by design, so without the cause the operator is told a host has a gap and given nothing to act on.
+
 The retry this creates SHALL be bounded by the work queue's own bound rather than left open-ended, so that a read which fails permanently (as opposed to transiently) cannot hold its host's queue forever. The "A batch that cannot be processed does not stall its host" requirement of the server-event-ingestion capability is what supplies that bound.
 
 #### Scenario: One rule errors during evaluation
@@ -28,6 +36,21 @@ The retry this creates SHALL be bounded by the work queue's own bound rather tha
 - **THEN** evaluation fails with the retryable error class
 - **AND** the processor does not acknowledge the batch, so the events are re-evaluated on a later cycle
 - **AND** the events are not lost to a warning log
+
+#### Scenario: A graph outage stops the batch rather than repeating the failing read
+
+- **GIVEN** a batch of many events and several rules that read the process graph, while those reads fail
+- **WHEN** the first read fails
+- **THEN** the batch stops rather than repeating the read for the remaining events and rules
+- **AND** a rule that is deliberately waiting still lets the batch's other rules run, since only a failed read stops it
+
+#### Scenario: A graph outage is logged loudly, not as a routine wait
+
+- **GIVEN** rule evaluation failing because a graph read failed
+- **WHEN** the batch is returned for retry
+- **THEN** the failure is logged at a level an operator sees, distinctly from a rule that is deliberately waiting
+- **AND** it is not counted as a process-materialization retry, which is a different condition
+- **AND** if the events are eventually set aside, that record names the underlying failure
 
 #### Scenario: A read that finds nothing is not a failure
 

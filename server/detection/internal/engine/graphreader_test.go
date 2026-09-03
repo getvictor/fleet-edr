@@ -44,34 +44,40 @@ func (s stubGraphReader) GetHostEventsByType(context.Context, string, string, ap
 	return nil, s.err
 }
 
-// graphReads is every read a rule can perform, as a callable. Used twice below, once against a failing reader and once against a
-// healthy one, so each method is checked for both the wrap and the absence of it.
-func graphReads() map[string]func(context.Context, api.GraphReader) error {
-	return map[string]func(context.Context, api.GraphReader) error{
-		"GetProcessByPID": func(ctx context.Context, gr api.GraphReader) error {
+// graphRead is one read a rule can perform. A slice of these rather than a map, per the project's table-driven convention, and
+// used twice below: once against a failing reader and once against a healthy one, so each method is checked for both the wrap and
+// the absence of it.
+type graphRead struct {
+	name string
+	call func(context.Context, api.GraphReader) error
+}
+
+func graphReads() []graphRead {
+	return []graphRead{
+		{"GetProcessByPID", func(ctx context.Context, gr api.GraphReader) error {
 			_, err := gr.GetProcessByPID(ctx, "host", 1, 0)
 			return err
-		},
-		"GetProcessByPIDVersion": func(ctx context.Context, gr api.GraphReader) error {
+		}},
+		{"GetProcessByPIDVersion", func(ctx context.Context, gr api.GraphReader) error {
 			_, err := gr.GetProcessByPIDVersion(ctx, "host", 1, 1, 0)
 			return err
-		},
-		"GetChildProcesses": func(ctx context.Context, gr api.GraphReader) error {
+		}},
+		{"GetChildProcesses", func(ctx context.Context, gr api.GraphReader) error {
 			_, err := gr.GetChildProcesses(ctx, "host", 1, api.TimeRange{})
 			return err
-		},
-		"GetExecChain": func(ctx context.Context, gr api.GraphReader) error {
+		}},
+		{"GetExecChain", func(ctx context.Context, gr api.GraphReader) error {
 			_, err := gr.GetExecChain(ctx, api.Process{})
 			return err
-		},
-		"GetNetworkEventsForProcess": func(ctx context.Context, gr api.GraphReader) error {
+		}},
+		{"GetNetworkEventsForProcess", func(ctx context.Context, gr api.GraphReader) error {
 			_, err := gr.GetNetworkEventsForProcess(ctx, "host", 1, api.TimeRange{})
 			return err
-		},
-		"GetHostEventsByType": func(ctx context.Context, gr api.GraphReader) error {
+		}},
+		{"GetHostEventsByType", func(ctx context.Context, gr api.GraphReader) error {
 			_, err := gr.GetHostEventsByType(ctx, "host", "exec", api.TimeRange{})
 			return err
-		},
+		}},
 	}
 }
 
@@ -90,8 +96,8 @@ func TestGraphReads_CoversEveryReaderMethod(t *testing.T) {
 		declared = append(declared, m.Name)
 	}
 	var covered []string
-	for name := range graphReads() {
-		covered = append(covered, name)
+	for _, r := range graphReads() {
+		covered = append(covered, r.name)
 	}
 	sort.Strings(declared)
 	sort.Strings(covered)
@@ -112,15 +118,17 @@ func TestRetryableGraphReader_WrapsEveryReadFailure(t *testing.T) {
 	readErr := errors.New("dial tcp 127.0.0.1:3306: connect: connection refused")
 	reader := &retryableGraphReader{inner: stubGraphReader{err: readErr}}
 
-	for name, read := range graphReads() {
-		t.Run(name, func(t *testing.T) {
+	for _, read := range graphReads() {
+		t.Run(read.name, func(t *testing.T) {
 			t.Parallel()
-			err := read(t.Context(), reader)
+			err := read.call(t.Context(), reader)
 			require.Error(t, err)
-			require.ErrorIs(t, err, rulesapi.ErrRetryBatch,
+			require.ErrorIs(t, err, rulesapi.ErrGraphUnavailable,
 				"a read that could not be answered must fail the batch, not be isolated like a broken rule")
+			require.ErrorIs(t, err, rulesapi.ErrRetryBatch,
+				"and must still match the generic retry sentinel, which is what makes the processor nack")
 			require.ErrorIs(t, err, readErr, "and must keep the underlying cause, or the log says only that something failed")
-			assert.Contains(t, err.Error(), name, "naming the read is what makes the log actionable")
+			assert.Contains(t, err.Error(), read.name, "naming the read is what makes the log actionable")
 		})
 	}
 }
@@ -135,10 +143,10 @@ func TestRetryableGraphReader_EmptyResultIsNotAFailure(t *testing.T) {
 	t.Parallel()
 
 	reader := &retryableGraphReader{inner: stubGraphReader{err: nil}}
-	for name, read := range graphReads() {
-		t.Run(name, func(t *testing.T) {
+	for _, read := range graphReads() {
+		t.Run(read.name, func(t *testing.T) {
 			t.Parallel()
-			require.NoError(t, read(t.Context(), reader),
+			require.NoError(t, read.call(t.Context(), reader),
 				"a read that matched no row answered the question; only a read that could not answer is retryable")
 		})
 	}
@@ -176,7 +184,7 @@ func TestEngine_Evaluate_FailedGraphReadFailsTheBatch(t *testing.T) {
 	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
 
 	require.Error(t, err, "a failed graph read must reach the processor, which nacks; swallowing it acks and loses the events")
-	require.ErrorIs(t, err, rulesapi.ErrRetryBatch)
+	require.ErrorIs(t, err, rulesapi.ErrGraphUnavailable)
 	require.ErrorIs(t, err, readErr, "the cause survives the rule's own wrapping and the engine's")
 }
 
@@ -212,4 +220,49 @@ func TestEngine_HandsRulesTheRetryableReader(t *testing.T) {
 	assert.IsType(t, &retryableGraphReader{}, rule.got,
 		"rules must read through the decorator; handed the bare store, a failed read is isolated and the batch is acked (#798)")
 	assert.Same(t, e.ruleReader, rule.got, "and it must be the engine's own instance, not a fresh one built per batch")
+}
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-graph-outage-stops-the-batch-rather-than-repeating-the-failing-read
+//
+// TestEngine_Evaluate_GraphOutageStopsTheRuleLoop is the across-rules half of the amplification bound.
+//
+// A retryable per-rule wait accumulates and the loop continues, which is right: another rule may still decide. Once the graph is
+// unavailable that reasoning inverts, because every other rule that reads the graph is about to fail the same way and the batch is
+// already going to be nacked. Continuing only multiplies failing queries against a database in trouble, on every retry, for as
+// long as the queue keeps re-offering the batch.
+//
+// The rule that must not run is registered AFTER the failing one, since registration order is what the loop follows.
+func TestEngine_Evaluate_GraphOutageStopsTheRuleLoop(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	e.ruleReader = &retryableGraphReader{inner: stubGraphReader{err: errors.New("connection refused")}}
+	downstream := &readerCapturingRule{stubRule: stubRule{id: "downstream_rule"}}
+	e.Register(&readingRule{stubRule: stubRule{id: "reading_rule"}})
+	e.Register(downstream)
+
+	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
+
+	require.ErrorIs(t, err, rulesapi.ErrGraphUnavailable)
+	assert.Nil(t, downstream.got,
+		"once the graph is unavailable the batch stops; evaluating the rest only repeats the failing read against a sick database")
+}
+
+// TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop is the guard against over-correcting the test above.
+//
+// The short-circuit must apply ONLY to a failed read. A rule that is deliberately waiting (sensor_tamper waits out its recovery
+// window) still has to let the batch's other rules run, or one waiting rule suppresses every other rule's findings, which is the
+// shape of issue #661 one level up.
+func TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	downstream := &readerCapturingRule{stubRule: stubRule{id: "downstream_rule"}}
+	e.Register(&failingRule{stubRule: stubRule{id: "waiting_rule"}, err: fmt.Errorf("waiting: %w", rulesapi.ErrRetryBatch)})
+	e.Register(downstream)
+
+	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
+
+	require.ErrorIs(t, err, rulesapi.ErrRetryBatch, "the batch is still retried")
+	assert.NotNil(t, downstream.got, "but a deliberate wait must not suppress the rules registered after it")
 }

@@ -354,7 +354,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportSetAside(lockedCtx, host, setAside, "builder")
+			p.reportSetAside(lockedCtx, host, setAside, "builder", err)
 		}
 		return nil
 	}
@@ -415,7 +415,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportSetAside(ctx, hostOf(events), setAside, "detection")
+			p.reportSetAside(ctx, hostOf(events), setAside, "detection", err)
 			return 0
 		}
 	}
@@ -490,6 +490,14 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 	// upgrade cutover). Same DEBUG treatment so a recurring wait cannot flood the logs, but deliberately NOT counted on the
 	// materialization metric: that counter is how an operator detects a replica behind on graph materialization, and adding
 	// unrelated waits to it would make it report a problem that is not happening.
+	// A failed graph read is retryable, but it is a dependency OUTAGE and not a wait, so it must not inherit the DEBUG treatment
+	// above. DEBUG is generally not emitted in production, which would leave an outage that is costing detections across every
+	// host visible only as an absence. Not counted on the materialization metric either: that counter tracks a replica falling
+	// behind on graph materialization, which is a different condition with a different response (issue #798).
+	if errors.Is(err, rulesapi.ErrGraphUnavailable) {
+		p.logger.WarnContext(ctx, "process graph unavailable, will retry batch", "err", err)
+		return
+	}
 	if errors.Is(err, rulesapi.ErrRetryBatch) {
 		p.logger.DebugContext(ctx, "detection batch not yet decidable, will retry", "err", err)
 		return
@@ -507,13 +515,17 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 // Logged at ERROR rather than WARN. The consequence is a gap in one host's process tree and a set of events no rule ever saw,
 // which is not a condition to notice in aggregate later.
 //
+// The failure that caused it is carried too. Without it this line reports THAT a host has a gap and gives an operator nothing to
+// act on: the retries that led here are logged at DEBUG when the cause is retryable, so by the time the ERROR fires the evidence
+// has usually not been emitted at all. A deterministic failure repeats identically, so the last one is the representative one.
+//
 // zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
-func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string) {
+func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string, cause error) {
 	if setAside <= 0 {
 		return
 	}
 	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure; this host has a gap in its process graph",
-		"host_id", hostID, "events", setAside, "stage", stage)
+		"host_id", hostID, "events", setAside, "stage", stage, "err", cause)
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}

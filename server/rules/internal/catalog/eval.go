@@ -30,12 +30,20 @@ import (
 type pendingMiss struct{ err error }
 
 // absorb classifies a per-event evaluation error. A retryable error is remembered (first one wins, so the reported error names the
-// event that started the wait) and absorb returns nil, telling the caller to continue the batch. Any other error is
-// a genuine failure (a store error, a malformed graph read) and is returned unchanged for the caller to propagate immediately: those
-// are not per-event conditions and retrying the remaining events against a broken reader would just multiply the failure.
+// event that started the wait) and absorb returns nil, telling the caller to continue the batch. A FAILED GRAPH READ
+// (api.ErrGraphUnavailable) and any other error are returned unchanged for the caller to propagate immediately: those are not
+// per-event conditions and retrying the remaining events against a broken reader would just multiply the failure.
 func (p *pendingMiss) absorb(err error) error {
 	if err == nil {
 		return nil
+	}
+	// A failed graph read is retryable but is NOT a per-event condition, so it is propagated rather than absorbed. Absorbing it
+	// would continue the batch against a reader that has just failed, and every remaining read would fail identically: one outage
+	// becomes hundreds of doomed queries against a database already in trouble. That is the case this function's last paragraph
+	// always described; it stopped holding when graph read failures started carrying the retryable sentinel (issue #798), which is
+	// why they carry their own.
+	if errors.Is(err, api.ErrGraphUnavailable) {
+		return err
 	}
 	if errors.Is(err, api.ErrRetryBatch) {
 		if p.err == nil {

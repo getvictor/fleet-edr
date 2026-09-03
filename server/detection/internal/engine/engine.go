@@ -228,6 +228,13 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 			// attempt that succeeds.
 			return nil, err
 		}
+		// A failed graph read stops the batch here rather than accumulating like a per-rule wait. Every other rule that reads the
+		// graph is about to fail the same way, and the batch is already going to be nacked, so continuing only multiplies failing
+		// queries against a database in trouble. Rules that read nothing lose at most the sub-second until the retry, and alert
+		// dedup makes that re-run idempotent (issue #798).
+		if errors.Is(err, rulesapi.ErrGraphUnavailable) {
+			return nil, err
+		}
 		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
 		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
 		// this error to decide whether to count edr.detection.materialization_retries. Without the upgrade, a rule that is

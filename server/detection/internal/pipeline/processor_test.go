@@ -364,8 +364,8 @@ func TestProcessor_FailedGraphReadIsNackedNotAcked(t *testing.T) {
 	handler := &capturingLogHandler{}
 	rec := &capturingRecorder{}
 	// The decorator's shape (graph read <name> unavailable: <cause>: ErrRetryBatch), wrapped again by the rule and the engine.
-	readFailure := fmt.Errorf("rule dns_c2_beacon: get network events for pid 42: graph read GetNetworkEventsForProcess "+
-		"unavailable: dial tcp: connect: connection refused: %w", rulesapi.ErrRetryBatch)
+	readFailure := fmt.Errorf("rule dns_c2_beacon: get network events for pid 42: graph read GetNetworkEventsForProcess: "+
+		"dial tcp: connect: connection refused: %w", rulesapi.ErrGraphUnavailable)
 	p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: readFailure}, singleCycleOpts(handler))
 	p.SetMetrics(rec)
 
@@ -376,4 +376,35 @@ func TestProcessor_FailedGraphReadIsNackedNotAcked(t *testing.T) {
 	assert.Empty(t, log.acked, "and must never acknowledge it")
 	assert.Zero(t, rec.materializationRetries,
 		"a dependency outage is not a materialization race, and must not inflate the counter that tracks one")
+}
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-graph-outage-is-logged-loudly-not-as-a-routine-wait
+//
+// TestProcessor_GraphOutageWarnsRatherThanDebugs pins the log level a graph outage gets, which the first cut of #798 got wrong.
+//
+// Making read failures carry the generic retry sentinel silently routed them to the DEBUG branch, which exists so a rule that
+// deliberately WAITS (sensor_tamper waits out its recovery window) cannot flood the logs. DEBUG is generally not emitted in
+// production, so an outage costing detections across every host would have been visible only as an absence of alerts. A dependency
+// failure is not a wait, and it is the one thing an operator needs to see here.
+func TestProcessor_GraphOutageWarnsRatherThanDebugs(t *testing.T) {
+	t.Parallel()
+
+	log := &scriptedEventLog{batch: oneEventBatch()}
+	handler := &capturingLogHandler{}
+	rec := &capturingRecorder{}
+	readFailure := fmt.Errorf("rule dns_c2_beacon: graph read GetNetworkEventsForProcess: connection refused: %w",
+		rulesapi.ErrGraphUnavailable)
+	p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: readFailure}, singleCycleOpts(handler))
+	p.SetMetrics(rec)
+
+	p.ProcessOnce(context.Background())
+
+	lvl, ok := handler.levelOf("process graph unavailable, will retry batch")
+	require.True(t, ok, "a graph outage must be logged, not swallowed into the not-yet-decidable DEBUG line")
+	assert.Equal(t, slog.LevelWarn, lvl, "and at WARN: DEBUG is usually not emitted, which is how an outage becomes an absence")
+	_, quiet := handler.levelOf("detection batch not yet decidable, will retry")
+	assert.False(t, quiet, "it must not take the branch written for a rule that is deliberately waiting")
+	assert.Zero(t, rec.materializationRetries,
+		"and must not inflate the counter that tracks a replica behind on graph materialization")
+	assert.Equal(t, []string{"evt-1"}, log.nacked, "the batch is still nacked, which is the point of the retry class")
 }
