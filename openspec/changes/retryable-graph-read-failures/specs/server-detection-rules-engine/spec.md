@@ -12,13 +12,13 @@ A graph read failure SHALL fail the batch regardless of which rule performed the
 
 A failed read SHALL be distinguished from a read that legitimately finds nothing. An absent row is an answer, and rules already handle it; only the failure to obtain an answer is retryable.
 
-A failed graph read SHALL be distinguishable from a rule that is deliberately waiting, and SHALL NOT be handled as one. The two are both retryable and diverge everywhere else:
+A failed read SHALL be distinguishable from a rule that is deliberately waiting. Both are retryable, and they diverge in one place: a waiting rule's error is absorbed per event so the batch continues, because one undecidable event must not mask the rest, whereas a failed read SHALL be propagated at once. The next event's read reaches the same unavailable dependency, so continuing multiplies one outage by the batch size for no gain.
 
-- A per-event loop absorbs a waiting rule's error and continues the batch, so one undecidable event cannot mask the rest. A failed read SHALL instead stop the batch, because every remaining read will fail identically and continuing turns one outage into a read per event per rule, on every retry, against a dependency that is already failing.
-- The same SHALL hold across rules: once the graph is unavailable, the batch's other graph-reading rules cannot decide either.
-- A deliberate wait is logged quietly so a recurring wait cannot flood the logs. A failed read SHALL be logged at a level an operator actually sees in production, since it is costing detections across every host in flight and reporting it quietly leaves it visible only as an absence of alerts.
+Propagating a failed read SHALL NOT discard the findings the rule had already resolved from earlier events in the batch. Those findings SHALL be reported alongside the retryable error and persisted, as they are for any other retryable error. A batch that keeps failing is eventually set aside and nothing re-derives them, so discarding them loses detections outright rather than delaying them.
 
-When events are ultimately set aside, the record SHALL name the failure that caused it and not only that a gap exists. The retries leading up to it are logged quietly by design, so without the cause the operator is told a host has a gap and given nothing to act on.
+A failed read SHALL NOT stop the batch's remaining rules. The reads a rule performs span more than one dependency: the process and exec-chain lookups and the event-archive lookups are backed independently, so one being unavailable says nothing about the other. Stopping the batch would skip rules that could have decided, and once the batch is set aside their detections are lost rather than late.
+
+A failed read SHALL NOT be reported once per attempt. The processing cadence makes that a continuous stream of records for as long as the condition lasts, which is the log amplification that reporting a deliberate wait quietly already exists to avoid. It SHALL be surfaced by consequence instead: a retry that succeeds costs nothing and needs no report, and when retries are exhausted the record of the events being set aside SHALL name the failure that caused it, so the case that costs detections is both loud and diagnosable.
 
 The retry this creates SHALL be bounded by the work queue's own bound rather than left open-ended, so that a read which fails permanently (as opposed to transiently) cannot hold its host's queue forever. The "A batch that cannot be processed does not stall its host" requirement of the server-event-ingestion capability is what supplies that bound.
 
@@ -37,20 +37,33 @@ The retry this creates SHALL be bounded by the work queue's own bound rather tha
 - **AND** the processor does not acknowledge the batch, so the events are re-evaluated on a later cycle
 - **AND** the events are not lost to a warning log
 
-#### Scenario: A graph outage stops the batch rather than repeating the failing read
+#### Scenario: A failed read stops that rule's pass over the batch rather than repeating itself per event
 
-- **GIVEN** a batch of many events and several rules that read the process graph, while those reads fail
+- **GIVEN** a rule evaluating a batch of many events while its reads fail
 - **WHEN** the first read fails
-- **THEN** the batch stops rather than repeating the read for the remaining events and rules
-- **AND** a rule that is deliberately waiting still lets the batch's other rules run, since only a failed read stops it
+- **THEN** that rule stops rather than repeating the failing read for every remaining event
 
-#### Scenario: A graph outage is logged loudly, not as a routine wait
+#### Scenario: A failed read keeps the findings already resolved
 
-- **GIVEN** rule evaluation failing because a graph read failed
+- **GIVEN** a rule that resolved a finding from an earlier event in the batch, then hit a failed read
+- **WHEN** the failure is reported
+- **THEN** the finding is reported alongside it and persisted
+- **AND** a rule that failed for a reason other than a read still has its findings discarded, since its output is not trustworthy
+
+#### Scenario: A failed read does not stop the batch's other rules
+
+- **GIVEN** a batch and several rules, where one rule's read fails
+- **WHEN** evaluation continues
+- **THEN** the rules after it are still evaluated, because they may read a dependency that is healthy
+- **AND** the batch is still retried
+
+#### Scenario: A failed read is surfaced by consequence, not per attempt
+
+- **GIVEN** rule evaluation failing because a read failed
 - **WHEN** the batch is returned for retry
-- **THEN** the failure is logged at a level an operator sees, distinctly from a rule that is deliberately waiting
+- **THEN** the attempt is not reported at a level that would produce a record per retry for the duration of the condition
 - **AND** it is not counted as a process-materialization retry, which is a different condition
-- **AND** if the events are eventually set aside, that record names the underlying failure
+- **AND** when retries are exhausted, the record of the events being set aside names the underlying failure
 
 #### Scenario: A read that finds nothing is not a failure
 

@@ -268,28 +268,29 @@ var ErrRetryBatch = errors.New("rules: batch not yet decidable")
 // materialization counter and its log line) still distinguishes this specific cause.
 var ErrProcessNotYetMaterialized = fmt.Errorf("%w: subject process not yet materialized", ErrRetryBatch)
 
-// ErrGraphUnavailable signals that a read of the process graph FAILED, as opposed to answering that nothing matched. The engine
-// wraps every graph read a rule performs, so no rule has to classify its own read failures (issue #798).
+// ErrRuleReadUnavailable signals that a read a rule performed through GraphReader FAILED, as opposed to answering that nothing
+// matched. The engine wraps every such read, so no rule has to classify its own read failures (issue #798).
+//
+// Named for the READ rather than for a store, deliberately. GraphReader spans two independent dependencies: the process and
+// exec-chain lookups read MySQL, while GetNetworkEventsForProcess and GetHostEventsByType delegate to the ClickHouse event
+// archive. A sentinel or a log line naming "the process graph" would therefore tell an operator the wrong thing whenever it is the
+// archive that is down. Which read failed is carried in the wrapped error instead, where it is accurate for both.
 //
 // It wraps ErrRetryBatch because the batch must be retried rather than acked: the rule is not broken, its dependency is
 // unavailable, the events are still in the work queue, and swallowing the error costs the detections for every event in flight.
 //
-// It is a DISTINCT sentinel rather than the bare ErrRetryBatch because the two behave oppositely in three places, and using the
-// generic one silently got all three wrong:
+// It is a DISTINCT sentinel rather than the bare ErrRetryBatch because the two diverge in the per-event loops. A retryable miss is
+// ABSORBED so the batch continues (issue #661: one orphaned event must not mask the rest). A failed read is not a per-event
+// condition: the next event's read hits the same unavailable dependency, so continuing multiplies one outage by the batch size for
+// no gain. It is propagated instead, with whatever findings the rule already resolved.
 //
-//  1. A per-event loop ABSORBS a retryable miss and continues the batch (issue #661: one orphaned event must not mask the rest).
-//     A failed read is not a per-event condition. Every remaining read in that batch will fail the same way, so continuing turns
-//     one outage into hundreds of doomed queries against a database that is already struggling.
-//  2. The same holds across RULES: once the graph is unavailable, evaluating the batch's other graph-reading rules cannot decide
-//     anything either.
-//  3. The processor logs a generic retryable wait at DEBUG on purpose, so a rule that deliberately waits (sensor_tamper's recovery
-//     window) cannot flood the logs. A dependency outage is not a wait, and DEBUG is usually not emitted in production at all, so
-//     it must be louder than the condition that branch was written for.
+// It does NOT stop the batch's other RULES. That over-corrects across the split above: a ClickHouse outage would skip rules that
+// read only MySQL, and once the queue sets the batch aside those detections are gone rather than merely delayed.
 //
 // A rule raising ErrRetryBatch must bound how long it keeps raising it. This sentinel is bounded elsewhere: the work queue sets a
 // batch aside once it has exceeded both its attempt and duration bounds (issue #836), so a permanently failing read cannot hold
 // its host's queue forever.
-var ErrGraphUnavailable = fmt.Errorf("%w: process graph unavailable", ErrRetryBatch)
+var ErrRuleReadUnavailable = fmt.Errorf("%w: rule data read unavailable", ErrRetryBatch)
 
 // RuleMetadata is the per-rule descriptor the operator endpoints render. Used in two surfaces: GET /api/rules (the operator handler
 // maps the fields into a JSON-tagged ruleResponse struct, so the wire shape lives in rules/internal/operator and isn't on this

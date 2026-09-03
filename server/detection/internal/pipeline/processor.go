@@ -490,12 +490,21 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 	// upgrade cutover). Same DEBUG treatment so a recurring wait cannot flood the logs, but deliberately NOT counted on the
 	// materialization metric: that counter is how an operator detects a replica behind on graph materialization, and adding
 	// unrelated waits to it would make it report a problem that is not happening.
-	// A failed graph read is retryable, but it is a dependency OUTAGE and not a wait, so it must not inherit the DEBUG treatment
-	// above. DEBUG is generally not emitted in production, which would leave an outage that is costing detections across every
-	// host visible only as an absence. Not counted on the materialization metric either: that counter tracks a replica falling
-	// behind on graph materialization, which is a different condition with a different response (issue #798).
-	if errors.Is(err, rulesapi.ErrGraphUnavailable) {
-		p.logger.WarnContext(ctx, "process graph unavailable, will retry batch", "err", err)
+	// A failed read logs at DEBUG like the waits below, and is surfaced by CONSEQUENCE rather than per attempt. Warning on every
+	// retry was the first attempt at this and it recreated precisely what these branches exist to prevent: at the 500ms cadence a
+	// sustained outage is ~120 lines a minute per affected host for the whole fifteen minutes before the queue sets the batch
+	// aside, which is the amplification measured at ~130/min from one host.
+	//
+	// Nothing louder is needed, because a retry that succeeds has cost nothing: the detections are preserved, which is the whole
+	// point of classifying the failure as retryable (issue #798). When retries do NOT succeed, the queue sets the batch aside and
+	// that record is at ERROR, names the host, and carries this error as its cause, alongside the per-host edr.events.set_aside
+	// counter that dashboards alert on. So the transient case is silent because it is harmless, and the case that costs
+	// detections is loud and diagnosable, without a line per poll in between.
+	//
+	// Given its own branch rather than falling through to the next one only to keep it out of the materialization counter, which
+	// tracks a replica behind on graph materialization: a different condition with a different response.
+	if errors.Is(err, rulesapi.ErrRuleReadUnavailable) {
+		p.logger.DebugContext(ctx, "rule data read unavailable, will retry batch", "err", err)
 		return
 	}
 	if errors.Is(err, rulesapi.ErrRetryBatch) {

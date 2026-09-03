@@ -31,7 +31,7 @@ type pendingMiss struct{ err error }
 
 // absorb classifies a per-event evaluation error. A retryable error is remembered (first one wins, so the reported error names the
 // event that started the wait) and absorb returns nil, telling the caller to continue the batch. A FAILED GRAPH READ
-// (api.ErrGraphUnavailable) and any other error are returned unchanged for the caller to propagate immediately: those are not
+// (api.ErrRuleReadUnavailable) and any other error are returned unchanged for the caller to propagate immediately: those are not
 // per-event conditions and retrying the remaining events against a broken reader would just multiply the failure.
 func (p *pendingMiss) absorb(err error) error {
 	if err == nil {
@@ -42,7 +42,7 @@ func (p *pendingMiss) absorb(err error) error {
 	// becomes hundreds of doomed queries against a database already in trouble. That is the case this function's last paragraph
 	// always described; it stopped holding when graph read failures started carrying the retryable sentinel (issue #798), which is
 	// why they carry their own.
-	if errors.Is(err, api.ErrGraphUnavailable) {
+	if errors.Is(err, api.ErrRuleReadUnavailable) {
 		return err
 	}
 	if errors.Is(err, api.ErrRetryBatch) {
@@ -88,6 +88,13 @@ func evalEachEvent(
 	for _, evt := range events {
 		f, err := eval(ctx, evt, s)
 		if fatal := miss.absorb(err); fatal != nil {
+			// A RETRYABLE fatal (an unavailable dependency) keeps the findings already resolved, per this function's contract:
+			// the engine persists them and still retries the batch. Discarding them would lose valid detections outright once
+			// the queue sets a permanently failing batch aside, since nothing re-derives them. A non-retryable fatal still
+			// discards, because that path means the rule itself misbehaved and its output is not trustworthy.
+			if errors.Is(fatal, api.ErrRetryBatch) {
+				return findings, fatal
+			}
 			return nil, fatal
 		}
 		if f != nil {

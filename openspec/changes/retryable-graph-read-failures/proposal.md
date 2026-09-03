@@ -48,9 +48,16 @@ The first cut wrapped read failures with `ErrRetryBatch` directly. That was wron
 - **The engine kept evaluating the batch's other rules**, each repeating the same doomed read.
 - **The processor logged it at DEBUG**, a branch that exists so a rule which deliberately WAITS (sensor_tamper waits out a recovery window) cannot flood the logs. DEBUG is generally not emitted in production, so an outage costing detections across every host in flight would have been visible only as an absence of alerts.
 
-`ErrGraphUnavailable` wraps `ErrRetryBatch`, so everything asking "should this batch be retried" still matches, while the three places above can tell an outage from a wait. Each divergence has a test, and each has a paired test asserting the ordinary-wait behaviour is unchanged, since over-correcting here would let one waiting rule suppress every other rule's findings.
+`ErrRuleReadUnavailable` wraps `ErrRetryBatch`, so everything asking "should this batch be retried" still matches, while the per-event loops can tell a failed read from a wait.
 
-The set-aside record now carries the failure too. The retries leading to it log quietly by design, so without the cause the ERROR reported that a host had a gap and gave an operator nothing to act on.
+Two of those three fixes were then over-corrections, and review caught both:
+
+- **Stopping the batch's other rules was wrong**, because the reads do not share one dependency. The process and exec-chain lookups read MySQL; the event lookups delegate to the ClickHouse archive. An archive outage would have skipped every rule that reads only MySQL, and once the queue sets the batch aside those detections are lost rather than late. Only the per-event multiplier is removed now, which is where the batch-size factor actually lives.
+- **Warning per attempt was wrong**, because at the processing cadence that is a continuous stream for as long as the condition lasts, which is the amplification the quiet treatment of deliberate waits already exists to avoid. It is surfaced by consequence instead: a retry that succeeds costs nothing and needs no line, and when retries are exhausted the set-aside record is at ERROR and now carries the failure as its cause.
+
+Propagating also had to stop discarding the findings a rule had already resolved from earlier events, which is what `evalEachEvent`'s contract promises and what the engine persists alongside a retryable error. Discarding them loses detections outright once a permanently failing batch is set aside, since nothing re-derives them.
+
+The sentinel is named for the READ rather than for a store, for the same reason: naming "the process graph" would tell an operator the wrong thing whenever it is the archive that is down.
 
 ## Distinguishing a failed read from an empty one
 

@@ -123,7 +123,7 @@ func TestRetryableGraphReader_WrapsEveryReadFailure(t *testing.T) {
 			t.Parallel()
 			err := read.call(t.Context(), reader)
 			require.Error(t, err)
-			require.ErrorIs(t, err, rulesapi.ErrGraphUnavailable,
+			require.ErrorIs(t, err, rulesapi.ErrRuleReadUnavailable,
 				"a read that could not be answered must fail the batch, not be isolated like a broken rule")
 			require.ErrorIs(t, err, rulesapi.ErrRetryBatch,
 				"and must still match the generic retry sentinel, which is what makes the processor nack")
@@ -184,7 +184,7 @@ func TestEngine_Evaluate_FailedGraphReadFailsTheBatch(t *testing.T) {
 	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
 
 	require.Error(t, err, "a failed graph read must reach the processor, which nacks; swallowing it acks and loses the events")
-	require.ErrorIs(t, err, rulesapi.ErrGraphUnavailable)
+	require.ErrorIs(t, err, rulesapi.ErrRuleReadUnavailable)
 	require.ErrorIs(t, err, readErr, "the cause survives the rule's own wrapping and the engine's")
 }
 
@@ -222,17 +222,18 @@ func TestEngine_HandsRulesTheRetryableReader(t *testing.T) {
 	assert.Same(t, e.ruleReader, rule.got, "and it must be the engine's own instance, not a fresh one built per batch")
 }
 
-// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-graph-outage-stops-the-batch-rather-than-repeating-the-failing-read
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-failed-read-does-not-stop-the-batch-s-other-rules
 //
-// TestEngine_Evaluate_GraphOutageStopsTheRuleLoop is the across-rules half of the amplification bound.
+// TestEngine_Evaluate_FailedReadStillRunsLaterRules pins the limit of the amplification fix, which the first cut overshot.
 //
-// A retryable per-rule wait accumulates and the loop continues, which is right: another rule may still decide. Once the graph is
-// unavailable that reasoning inverts, because every other rule that reads the graph is about to fail the same way and the batch is
-// already going to be nacked. Continuing only multiplies failing queries against a database in trouble, on every retry, for as
-// long as the queue keeps re-offering the batch.
+// Stopping the whole batch on the first failed read looks right and is wrong, because GraphReader is not one dependency.
+// GetNetworkEventsForProcess and GetHostEventsByType delegate to the ClickHouse event archive; the process and exec-chain lookups
+// read MySQL. So an archive outage would have skipped every rule that reads only MySQL, and those rules could have decided
+// perfectly well. Delay would have been the least of it: once the queue sets a permanently failing batch aside, the skipped rules'
+// detections are gone rather than late.
 //
-// The rule that must not run is registered AFTER the failing one, since registration order is what the loop follows.
-func TestEngine_Evaluate_GraphOutageStopsTheRuleLoop(t *testing.T) {
+// The expensive factor is removed in the per-event loops instead, which is where the batch-size multiplier lives.
+func TestEngine_Evaluate_FailedReadStillRunsLaterRules(t *testing.T) {
 	t.Parallel()
 
 	e := New(nil, nil)
@@ -243,16 +244,16 @@ func TestEngine_Evaluate_GraphOutageStopsTheRuleLoop(t *testing.T) {
 
 	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
 
-	require.ErrorIs(t, err, rulesapi.ErrGraphUnavailable)
-	assert.Nil(t, downstream.got,
-		"once the graph is unavailable the batch stops; evaluating the rest only repeats the failing read against a sick database")
+	require.ErrorIs(t, err, rulesapi.ErrRuleReadUnavailable, "the batch is still retried")
+	assert.NotNil(t, downstream.got,
+		"but a rule registered after the failing one still runs: it may read the other dependency, which is healthy")
 }
 
-// TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop is the guard against over-correcting the test above.
+// TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop is the sibling case, kept because the two must not diverge here.
 //
-// The short-circuit must apply ONLY to a failed read. A rule that is deliberately waiting (sensor_tamper waits out its recovery
-// window) still has to let the batch's other rules run, or one waiting rule suppresses every other rule's findings, which is the
-// shape of issue #661 one level up.
+// A rule that is deliberately waiting (sensor_tamper waits out its recovery window) must let the batch's other rules run, or one
+// waiting rule suppresses every other rule's findings, which is issue #661 one level up. A failed read must too, for the separate
+// reason in the test above. Asserting both keeps a future change from re-introducing a stop on either path.
 func TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop(t *testing.T) {
 	t.Parallel()
 

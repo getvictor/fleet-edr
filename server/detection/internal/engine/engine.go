@@ -76,8 +76,9 @@ const (
 )
 const tracerName = "server/detection/engine"
 
-// Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
-// api.GraphReader through the same interface and dispatch stays non-allocating.
+// Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) for the
+// engine's own reads and writes; rules are handed ruleReader, which is that store wrapped so a failed read is retryable rather
+// than isolated like a broken rule (issue #798). The wrapper is built once, so dispatch stays non-allocating.
 type Engine struct {
 	rules []rulesapi.Rule
 	// dispatch maps an agent event type to the indices into rules of the rules that consume it, ascending. Rebuilt whenever the
@@ -228,13 +229,11 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 			// attempt that succeeds.
 			return nil, err
 		}
-		// A failed graph read stops the batch here rather than accumulating like a per-rule wait. Every other rule that reads the
-		// graph is about to fail the same way, and the batch is already going to be nacked, so continuing only multiplies failing
-		// queries against a database in trouble. Rules that read nothing lose at most the sub-second until the retry, and alert
-		// dedup makes that re-run idempotent (issue #798).
-		if errors.Is(err, rulesapi.ErrGraphUnavailable) {
-			return nil, err
-		}
+		// A failed read deliberately does NOT stop the batch's remaining rules, even though it is the same condition for all of
+		// them within one rule. GraphReader spans two independent dependencies (MySQL for the process and chain lookups, the
+		// ClickHouse archive for the event lookups), so stopping here would let an archive outage skip every rule that reads only
+		// MySQL, and once the queue sets the batch aside those detections are lost rather than delayed. The per-event loops
+		// already remove the expensive factor by not re-reading a failed dependency for every event in the batch (issue #798).
 		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
 		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
 		// this error to decide whether to count edr.detection.materialization_retries. Without the upgrade, a rule that is
