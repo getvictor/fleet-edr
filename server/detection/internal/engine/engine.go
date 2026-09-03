@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -79,17 +80,10 @@ const tracerName = "server/detection/engine"
 // Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
 // api.GraphReader through the same interface and dispatch stays non-allocating.
 type Engine struct {
-	rules []rulesapi.Rule
-	// dispatch maps an agent event type to the indices into rules of the rules that consume it, ascending. Rebuilt whenever the
-	// rule set changes; read-only during Evaluate, which the processor may call concurrently.
-	dispatch map[string][]int
-	// always holds the indices of rules that declare no event types at all. They are invoked for every batch, because dispatch is
-	// an optimisation and over-invoking a rule costs time while under-invoking it loses detections.
-	always []int
-	// declaredTypes is each rule's declared event types, by the same index as rules. Cached here because Doc() builds a fresh
-	// Documentation (slice included) on every call, which is fine at load and wasteful per batch.
-	declaredTypes [][]string
-	store         *mysql.Store
+	// active is the rule set Evaluate runs, held as one immutable value so replacing it is a single store rather than four
+	// separate writes to fields a concurrent Evaluate is reading (issue #766). Never nil: New seeds it empty.
+	active atomic.Pointer[ruleSet]
+	store  *mysql.Store
 	// ruleReader is what RULES read the graph through: the store, wrapped so a failed read is retryable rather than isolated like
 	// a broken rule (issue #798). The engine's own reads (alert persistence, dedup) use store directly, since a failure there is
 	// already surfaced to the caller and must not acquire a rules-context sentinel.
@@ -112,7 +106,11 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 	}
 	// Built once here, not per batch: it is one interface value with no per-call allocation, which keeps the non-allocating
 	// dispatch the concrete store handle exists for.
-	return &Engine{store: s, ruleReader: &retryableGraphReader{inner: s}, logger: logger, tracer: otel.Tracer(tracerName)}
+	e := &Engine{store: s, ruleReader: &retryableGraphReader{inner: s}, logger: logger, tracer: otel.Tracer(tracerName)}
+	// Seeded rather than left nil so Evaluate needs no nil check on the hot path and a batch arriving before the first load
+	// simply matches nothing.
+	e.active.Store(newRuleSet(nil))
+	return e
 }
 
 // SetMetrics installs the OTel counter hook. Safe to call after New.
@@ -129,38 +127,63 @@ func (e *Engine) SetModeResolver(m rulesapi.RuleModeResolver) { e.modeResolver =
 
 // Register adds a detection rule to the engine.
 func (e *Engine) Register(r rulesapi.Rule) {
-	e.rules = append(e.rules, r)
-	e.reindex()
+	// Copied rather than appended in place: the current set may be held by an Evaluate in flight, and appending could write into
+	// the backing array it is iterating.
+	current := e.active.Load().rules
+	next := make([]rulesapi.Rule, len(current), len(current)+1)
+	copy(next, current)
+	e.active.Store(newRuleSet(append(next, r)))
 }
 
-// reindex rebuilds the event-type dispatch index from the current rule set.
+// ruleSet is the engine's active rules together with the indices derived from them, immutable once built.
+//
+// One value rather than four fields because Evaluate reads them TOGETHER: it picks indices out of dispatch and always, then uses
+// those indices against rules and declaredTypes. Held separately, a replacement landing between those two reads would hand an
+// evaluation indices built for a set it is no longer holding, which does not crash: it invokes the wrong rules, or skips a rule
+// that should have run (issue #766).
+type ruleSet struct {
+	rules []rulesapi.Rule
+	// dispatch maps an agent event type to the indices into rules of the rules that consume it, ascending.
+	dispatch map[string][]int
+	// always holds the indices of rules that declare no event types at all. They are invoked for every batch, because dispatch is
+	// an optimisation and over-invoking a rule costs time while under-invoking it loses detections.
+	always []int
+	// declaredTypes is each rule's declared event types, by the same index as rules. Cached here because Doc() builds a fresh
+	// Documentation (slice included) on every call, which is fine at load and wasteful per batch.
+	declaredTypes [][]string
+}
+
+// newRuleSet builds the dispatch indices for rules and returns the finished, immutable set.
 //
 // Built eagerly on every rule-set change rather than lazily on first Evaluate, because the processor calls Evaluate from concurrent
-// workers (issue #535) and a lazily-populated map would be a data race. Register and LoadActive run at bootstrap, before serving,
-// so this stays on the cold path.
+// workers (issue #535) and a lazily-populated map would be a data race. It runs on the cold path: at bootstrap, and thereafter only
+// when a pack is loaded.
 //
-// The index is derived state: a pure function of the registered rules, rebuilt from them on load. It holds nothing a peer replica
-// would need to serve the next request, so it is a per-replica cache in ADR-0010's sense and safe to lose.
-func (e *Engine) reindex() {
-	e.dispatch = make(map[string][]int, len(e.rules))
-	e.always = e.always[:0]
-	e.declaredTypes = make([][]string, len(e.rules))
-	for i, r := range e.rules {
+// The indices are derived state, a pure function of the rules, so they hold nothing a peer replica would need to serve the next
+// request: a per-replica cache in ADR-0010's sense, rebuilt on load rather than shared.
+func newRuleSet(rules []rulesapi.Rule) *ruleSet {
+	rs := &ruleSet{
+		rules:         rules,
+		dispatch:      make(map[string][]int, len(rules)),
+		declaredTypes: make([][]string, len(rules)),
+	}
+	for i, r := range rules {
 		types := r.Doc().EventTypes
-		e.declaredTypes[i] = types
+		rs.declaredTypes[i] = types
 		if len(types) == 0 {
 			// A rule that declares nothing is invoked unconditionally. See the `always` field for why this fails open.
-			e.always = append(e.always, i)
+			rs.always = append(rs.always, i)
 			continue
 		}
 		for _, t := range types {
 			// A rule declaring the same type twice must not be evaluated twice for one batch.
-			if idx := e.dispatch[t]; len(idx) > 0 && idx[len(idx)-1] == i {
+			if idx := rs.dispatch[t]; len(idx) > 0 && idx[len(idx)-1] == i {
 				continue
 			}
-			e.dispatch[t] = append(e.dispatch[t], i)
+			rs.dispatch[t] = append(rs.dispatch[t], i)
 		}
 	}
+	return rs
 }
 
 // LoadActive replaces the engine's active rule set with what the
@@ -172,8 +195,11 @@ func (e *Engine) reindex() {
 // have to import rules/bootstrap; the rules.api.RuleProvider
 // interface is the canonical implementation.
 func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
-	e.rules = append(e.rules[:0], cs.ActiveRules()...)
-	e.reindex()
+	// The provider's slice is copied so a later mutation of it cannot reach into a set an Evaluate is holding.
+	active := cs.ActiveRules()
+	next := make([]rulesapi.Rule, len(active))
+	copy(next, active)
+	e.active.Store(newRuleSet(next))
 }
 
 // Evaluate runs the rules that consume the batch's event types against it, per rulesFor: a rule is invoked only when the batch
@@ -217,9 +243,12 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	var stats rulesapi.RuleEvalStats
 	defer func() { e.recordEvalStats(ctx, stats) }()
 	var pendingMiss error
-	for _, i := range e.rulesFor(live) {
-		rule := e.rules[i]
-		err := e.evaluateRule(ctx, rule, e.declaredTypes[i], live, scope, tally, &stats)
+	// Loaded ONCE for the whole batch. Re-reading it per rule, or reading the indices from one set and the rules from another,
+	// is the mismatch this snapshot exists to make impossible (issue #766).
+	rs := e.active.Load()
+	for _, i := range rs.rulesFor(live) {
+		rule := rs.rules[i]
+		err := e.evaluateRule(ctx, rule, rs.declaredTypes[i], live, scope, tally, &stats)
 		if err == nil {
 			continue
 		}
@@ -291,24 +320,24 @@ func distinctEventTypes(events []api.Event, present []string) []string {
 //
 // Cost is proportional to the number of MATCHING rules rather than to the catalog size, which is what keeps a batch of a rarely
 // consumed type cheap however many rules are registered.
-func (e *Engine) rulesFor(live []api.Event) []int {
+func (rs *ruleSet) rulesFor(live []api.Event) []int {
 	var scratch [16]string
 	present := distinctEventTypes(live, scratch[:0])
 
 	switch {
 	case len(present) == 0:
 		// An empty batch (or one that was entirely plumbing) can produce no findings, so only the unconditional rules run.
-		return e.always
-	case len(present) == 1 && len(e.always) == 0:
+		return rs.always
+	case len(present) == 1 && len(rs.always) == 0:
 		// The common single-type batch: the index entry is already ascending and duplicate-free, so hand it back as-is and
 		// allocate nothing.
-		return e.dispatch[present[0]]
+		return rs.dispatch[present[0]]
 	}
 
-	matched := make([]int, 0, len(e.always)+len(e.dispatch[present[0]]))
-	matched = append(matched, e.always...)
+	matched := make([]int, 0, len(rs.always)+len(rs.dispatch[present[0]]))
+	matched = append(matched, rs.always...)
 	for _, t := range present {
-		matched = append(matched, e.dispatch[t]...)
+		matched = append(matched, rs.dispatch[t]...)
 	}
 	// A rule consuming two types both present in the batch appears twice; sorting restores registration order and Compact drops
 	// the duplicates, so it is still evaluated exactly once.

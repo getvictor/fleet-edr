@@ -59,12 +59,13 @@ func TestEngine_RegisterAccumulates(t *testing.T) {
 	e := New(nil, nil)
 	e.Register(&stubRule{id: "a"})
 	e.Register(&stubRule{id: "b", techniques: []string{"T1"}})
-	require.Len(t, e.rules, 2)
-	assert.Equal(t, []string{"a", "b"}, ruleIDs(e.rules), "Register keeps rules in registration order")
-	assert.Equal(t, []string{"T1"}, e.rules[1].Techniques())
+	active := e.active.Load().rules
+	require.Len(t, active, 2)
+	assert.Equal(t, []string{"a", "b"}, ruleIDs(active), "Register keeps rules in registration order")
+	assert.Equal(t, []string{"T1"}, active[1].Techniques())
 }
 
-// ruleIDs projects a rule set to its ids, for the order assertions. These read e.rules rather than a metadata builder: the ordering
+// ruleIDs projects a rule set to its ids, for the order assertions. These read the active set rather than a metadata builder: the ordering
 // is a property of the rule slice itself, and going through a projection meant the projection had to exist for the tests alone.
 func ruleIDs(rules []rulesapi.Rule) []string {
 	ids := make([]string, len(rules))
@@ -82,8 +83,9 @@ func TestEngine_LoadActiveReplacesRuleSet(t *testing.T) {
 
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{&stubRule{id: "new"}}})
 
-	require.Len(t, e.rules, 1, "LoadActive replaces, never appends")
-	assert.Equal(t, "new", e.rules[0].ID())
+	loaded := e.active.Load().rules
+	require.Len(t, loaded, 1, "LoadActive replaces, never appends")
+	assert.Equal(t, "new", loaded[0].ID())
 }
 
 // stubProvider satisfies the inline interface LoadActive consumes.
@@ -463,8 +465,9 @@ func TestEngine_Evaluate_DispatchPreservesRegistrationOrder(t *testing.T) {
 	e.LoadActive(stubProvider{rules: []rulesapi.Rule{first, second, third}})
 
 	// A batch carrying BOTH types every rule declares, so each appears twice in the pre-merge candidate list.
-	for _, i := range e.rulesFor([]api.Event{eventOfType("dns_query"), eventOfType("exec")}) {
-		order = append(order, e.rules[i].ID())
+	rs := e.active.Load()
+	for _, i := range rs.rulesFor([]api.Event{eventOfType("dns_query"), eventOfType("exec")}) {
+		order = append(order, rs.rules[i].ID())
 	}
 	assert.Equal(t, []string{"first", "second", "third"}, order,
 		"dispatch must return registration order, and must not repeat a rule that declares two present types")
