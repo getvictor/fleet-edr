@@ -21,7 +21,6 @@ import (
 func newContext(t *testing.T) (*rulecontentbootstrap.RuleContent, *rulecontentmysql.Store) {
 	t.Helper()
 	db := full.Open(t)
-	require.NoError(t, rulecontentbootstrap.ApplySchema(t.Context(), db))
 	rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: slog.New(slog.DiscardHandler)})
 	require.NoError(t, err)
 	return rc, rulecontentmysql.New(db)

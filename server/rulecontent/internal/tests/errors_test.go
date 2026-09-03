@@ -32,7 +32,6 @@ import (
 func TestStore_UnreachableStoreReportsAnErrorNotAnEmptyCorpus(t *testing.T) {
 	t.Parallel()
 	db := full.Open(t)
-	require.NoError(t, rulecontentbootstrap.ApplySchema(t.Context(), db))
 	s := rulecontentmysql.New(db)
 	require.NoError(t, db.Close())
 
@@ -133,7 +132,6 @@ func TestBootstrap_RejectsAMissingHandle(t *testing.T) {
 func TestBootstrap_CorpusAccessorReturnsTheStore(t *testing.T) {
 	t.Parallel()
 	db := full.Open(t)
-	require.NoError(t, rulecontentbootstrap.ApplySchema(t.Context(), db))
 	rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: slog.New(slog.DiscardHandler)})
 	require.NoError(t, err)
 
@@ -206,8 +204,6 @@ func TestCorpus_ReplaceReportsADocumentItCannotStore(t *testing.T) {
 func TestBootstrap_DefaultsTheLogger(t *testing.T) {
 	t.Parallel()
 	db := full.Open(t)
-	require.NoError(t, rulecontentbootstrap.ApplySchema(t.Context(), db))
-
 	rc, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db})
 	require.NoError(t, err, "a missing logger must not prevent construction")
 

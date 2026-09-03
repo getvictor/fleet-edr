@@ -11,16 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fleetdm/edr/server/rulecontent/api"
-	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulecontentmysql "github.com/fleetdm/edr/server/rulecontent/internal/mysql"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
 func newStore(t *testing.T) *rulecontentmysql.Store {
 	t.Helper()
-	db := full.Open(t)
-	require.NoError(t, rulecontentbootstrap.ApplySchema(t.Context(), db))
-	return rulecontentmysql.New(db)
+	// full.Open applies every context's schema, rulecontent's included, so there is nothing to hand-apply here.
+	return rulecontentmysql.New(full.Open(t))
 }
 
 // spec:rule-content/rule-content-is-stored-and-is-the-source-the-catalog-loads-from/replacing-content-removes-what-is-no-longer-in-it
