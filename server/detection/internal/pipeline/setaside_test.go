@@ -17,7 +17,7 @@ import (
 // TestReportSetAside covers the visibility half of issue #836, which is the half that was unambiguously wrong before.
 //
 // Bounding the retries stops a host stalling forever; it does not tell anyone it happened. Without a counter and a log, a host with
-// a gap in its process graph is indistinguishable from a quiet host, the backlog gauge does not separate them, and the only symptom
+// events withdrawn is indistinguishable from a quiet host, the backlog gauge does not separate them, and the only symptom
 // is an absence of detections nobody is watching for.
 //
 // The zero case is asserted as carefully as the non-zero one. Every ordinary retryable nack passes through here, so a report that
@@ -48,6 +48,10 @@ func TestReportSetAside(t *testing.T) {
 		out := logged.String()
 		assert.Contains(t, out, "host-wedged", "the log has to name the host, or the counter says only that it happened somewhere")
 		assert.Contains(t, out, "detection", "and the stage that failed, so there is somewhere to look")
+		assert.Contains(t, out, "never evaluated by detection rules",
+			"and what that stage actually cost: the builder already folded these events in, so claiming a graph gap is false")
+		assert.NotContains(t, out, "gap in its process graph",
+			"the graph-gap consequence belongs to a builder-stage withdrawal only")
 		assert.Contains(t, out, "Data too long",
 			"and the failure itself: the retries that led here log at DEBUG, so without this the ERROR names a gap and no cause")
 		assert.Contains(t, out, "level=ERROR",

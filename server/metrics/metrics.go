@@ -158,9 +158,9 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// rules had not already finished when the batch failed, which for a batch withdrawn at the builder stage is all of them.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
-		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). The host in `host_id` "+
-			"has a gap in its process graph. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
-			"condition never clears once it fires."),
+		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). Alert on a "+
+			"non-zero increase, per host: the counter is cumulative, so an absolute-value condition never clears once it fires. The "+
+			"paired ERROR log names the host and what the withdrawal cost, which differs by the stage that failed."),
 		metric.WithUnit(unitEvent),
 	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,

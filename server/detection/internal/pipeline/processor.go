@@ -354,7 +354,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportSetAside(lockedCtx, host, setAside, "builder", err)
+			p.reportSetAside(lockedCtx, host, setAside, stageBuilder, err)
 		}
 		return nil
 	}
@@ -415,7 +415,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportSetAside(ctx, hostOf(events), setAside, "detection", err)
+			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection, err)
 			return 0
 		}
 	}
@@ -514,6 +514,27 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 	p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
 }
 
+// The two stages a batch can be withdrawn at. Constants rather than literals at the call sites because the stage now SELECTS the
+// consequence reported below, so a typo would quietly report the wrong one.
+const (
+	stageBuilder   = "builder"
+	stageDetection = "detection"
+)
+
+// consequenceOf names what withdrawing a batch actually costs at each stage. They are not the same, and reporting the wrong one
+// sends an operator looking in the wrong place.
+//
+// A batch withdrawn at the BUILDER stage never reached the process graph, so that host's tree has a hole. A batch withdrawn at the
+// DETECTION stage was already folded in by ProcessBatch before evaluation ran (evaluateAndAck operates on an already-materialized
+// batch), so the graph is intact and what was lost is the rule evaluation of those events. Reporting a graph gap there is simply
+// false, and it was false for the alert-persistence path before this too.
+func consequenceOf(stage string) string {
+	if stage == stageBuilder {
+		return "this host has a gap in its process graph"
+	}
+	return "these events were never evaluated by detection rules"
+}
+
 // reportSetAside surfaces events the queue withdrew from processing after repeated failure.
 //
 // This is the whole visibility half of issue #836. Until now a host whose batch failed the same way every time was
@@ -533,8 +554,8 @@ func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside 
 	if setAside <= 0 {
 		return
 	}
-	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure; this host has a gap in its process graph",
-		"host_id", hostID, "events", setAside, "stage", stage, "err", cause)
+	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure",
+		"host_id", hostID, "events", setAside, "stage", stage, "consequence", consequenceOf(stage), "err", cause)
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}
