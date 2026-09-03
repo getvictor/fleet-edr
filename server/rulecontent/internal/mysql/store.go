@@ -49,6 +49,12 @@ func (s *Store) Version(ctx context.Context) (int64, error) {
 
 // Replace writes docs as the entire corpus and bumps the version, in one transaction.
 //
+// No production caller yet: the seed goes through ReplaceIfEmpty, and the surface that replaces a corpus deliberately is the
+// operator authoring work (issue #767). It is kept rather than inlined because it is the primitive ReplaceIfEmpty is built from,
+// so the two cannot disagree about what replacing means, and because tests need it to arrange a non-empty corpus. An unconditional
+// replace with an empty slice EMPTIES the corpus, which is correct for a caller that means it and a trap for one that does not;
+// #767's surface has to decide that deliberately rather than inherit it.
+//
 // Whole-corpus replacement rather than per-document upserts, because a corpus is the unit that is valid or not: a rule removed
 // upstream has to disappear, and a partially applied corpus is a state no reader should be able to observe. The version bump is
 // inside the transaction for the same reason, so a replica that sees the new version can only ever read the documents that go
@@ -102,21 +108,12 @@ func replaceWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document) (int64
 	return version, nil
 }
 
-// IsEmpty reports whether the corpus holds no documents.
-func (s *Store) IsEmpty(ctx context.Context) (bool, error) {
-	var count int64
-	if err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM rule_corpus_documents"); err != nil {
-		return false, fmt.Errorf("count rule corpus documents: %w", err)
-	}
-	return count == 0, nil
-}
-
 // ReplaceIfEmpty writes docs as the corpus only if the corpus is currently empty, and reports whether it wrote.
 //
-// The check and the write are ONE transaction, which is the whole point of the method existing rather than the caller doing
-// IsEmpty followed by Replace. Separately they are a check-then-act: content committed between them is deleted, so a replica that
-// read "empty" and then wrote would discard a rule authored in that window. The window is narrow at startup and the consequence
-// is losing an operator's content, which is not a trade worth taking for one fewer method.
+// The check and the write are ONE transaction, which is the whole reason this exists as a method rather than as a caller that
+// reads emptiness and then replaces. Done separately those two steps are a check-then-act: content committed between them is
+// deleted, so a replica that read "empty" and then wrote would discard a rule authored in that window. The window is narrow at
+// startup, and losing an operator's content is not a consequence worth a narrow window.
 //
 // The meta row is locked first, and locking THAT row rather than the documents is deliberate: an empty table has no rows for
 // SELECT ... FOR UPDATE to lock, so a concurrent seeder would not be serialized by locking what is not there. The counter row

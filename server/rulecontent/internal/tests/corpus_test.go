@@ -144,7 +144,7 @@ func TestCorpus_VersionStartsSeeded(t *testing.T) {
 	require.NoError(t, err, "the counter row must exist on a fresh schema")
 	assert.Zero(t, version)
 
-	empty, err := s.IsEmpty(t.Context())
+	docs, err := s.Documents(t.Context())
 	require.NoError(t, err)
-	assert.True(t, empty, "and a fresh corpus is empty, which is what the seed keys on")
+	assert.Empty(t, docs, "and a fresh corpus is empty, which is what the seed's guard keys on")
 }

@@ -52,11 +52,6 @@ func TestStore_UnreachableStoreReportsAnErrorNotAnEmptyCorpus(t *testing.T) {
 			why:  "the version a replica polls must fail loudly rather than read as zero",
 		},
 		{
-			name: "IsEmpty",
-			call: func(ctx context.Context) error { _, err := s.IsEmpty(ctx); return err },
-			why:  "concluding the corpus is empty when the store is unreachable is the worst available answer",
-		},
-		{
 			name: "Replace",
 			call: func(ctx context.Context) error { _, err := s.Replace(ctx, nil); return err },
 			why:  "a replace must fail rather than report a version it did not write",
@@ -167,9 +162,9 @@ func TestSeed_SourceWithNoRuleDocuments(t *testing.T) {
 	require.NoError(t, err, "nothing to seed is not a failure")
 	assert.False(t, seeded)
 
-	empty, err := store.IsEmpty(ctx)
+	docs, err := store.Documents(ctx)
 	require.NoError(t, err)
-	assert.True(t, empty, "and the corpus is left empty rather than half-written")
+	assert.Empty(t, docs, "and the corpus is left empty rather than half-written")
 }
 
 // TestSeed_UnreadableSourceIsReported covers the walk's error path.
