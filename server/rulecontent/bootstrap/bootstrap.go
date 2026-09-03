@@ -42,6 +42,24 @@ func New(deps Deps) (*RuleContent, error) {
 // Corpus exposes the published read surface consumers hold.
 func (r *RuleContent) Corpus() api.Corpus { return r.store }
 
+// Replace installs a corpus wholesale, returning the version it now carries.
+//
+// Unlike SeedFrom this OVERWRITES whatever is stored, which is what publishing content means: the caller has decided what the
+// corpus should be. The write and the version bump are one transaction, so a reader either sees the whole previous corpus or the
+// whole new one, and a consumer polling the version cannot read documents from one generation under the other's number.
+//
+// This is the seam the import and authoring paths (issues #767, #768) write through. It exists here rather than on the store so
+// that a caller outside this context can publish content without reaching into its internals.
+func (r *RuleContent) Replace(ctx context.Context, docs []api.Document) (int64, error) {
+	api.SortDocuments(docs)
+	version, err := r.store.Replace(ctx, docs)
+	if err != nil {
+		return 0, err
+	}
+	r.logger.InfoContext(ctx, "rulecontent: corpus replaced", "documents", len(docs), "version", version)
+	return version, nil
+}
+
 // ApplySchema applies the rulecontent migrations. Idempotent (goose skips applied versions).
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 	if db == nil {

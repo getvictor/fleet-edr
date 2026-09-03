@@ -39,8 +39,29 @@ parameters without the code that reads them delivers no new detection.
 - Moving `rules/internal/export` into `rulecontent` (also assigned by the ADR). Unrelated to storage.
 - Untrusted-content validation. Belongs with #767, where untrusted input actually arrives; the seeded corpus is vendored.
 
-## 3. Reload and convergence (final PR)
+## 3. Reload and convergence (this PR)
 
-- [ ] `Reload` plus a `RefreshLoop` on the cheap version counter, following `detectionconfig`.
-- [ ] A load failure keeps the previous good set.
-- [ ] Active version surfaced for operators; two replicas converge, proven by integration test.
+- [x] `Reload` plus a `CorpusRefreshLoop` gated on the cheap version counter, following `detectionconfig`. Third loop in `Rules.Run`.
+- [x] A load failure keeps the previous good set, which is where reload deliberately differs from startup: startup falls back to the
+      corpus embedded in the build because there is nothing else to run, whereas here that would discard working content because a
+      database blinked.
+- [x] The version is read BEFORE the documents. The two reads cannot be atomic, and the reverse order pairs older content with the
+      newer version, which the next poll reads as current and never corrects. Asserted directly, since it is a silent permanent
+      staleness bug rather than a preference.
+- [x] The install fans out to all THREE consumers that derive from the rule set, through one definition shared by startup and
+      reload. The second one had no symptom of its own and was found by reading rather than from the plan: the exclusion-support map
+      the create-exclusion API validates against is built from the rule set, so a stale map rejects an exclusion for a rule that now
+      exists.
+- [x] Making that map reloadable made it racy. It carried a comment saying it was written once during wiring and needed no
+      synchronization, which reloading falsified; reinstating the plain field reports four data races under `-race`.
+- [x] `rulecontent.Replace` as the publish seam, which #767's import path writes through.
+- [x] Two replicas converge, proven by integration test over one database, including a SECOND publish. The first reload happens
+      regardless of the counter (a fresh replica stamps its set as not-from-storage), so only a subsequent publish exercises the gate.
+- [x] Mutation-tested: dropping either half of the fan-out, reversing the two reads, flipping the gate polarity, a non-bumping
+      replace, and a loop that never polls. Each compiles and each fails its own test.
+
+## Deferred from section 3, with reasons
+
+- An operator-facing surface for the active corpus version. The version is used by the gate and logged on every reload, so it is
+  diagnosable today, but putting it on an API or in the UI wants a place to show it, which arrives with #767's authoring views. Not
+  worth an endpoint of its own first.

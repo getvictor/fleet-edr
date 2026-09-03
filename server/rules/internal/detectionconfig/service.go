@@ -27,9 +27,11 @@ type Service struct {
 	snap       atomic.Pointer[Snapshot]
 	// ruleExclusionSupport maps each registered rule id to the exclusion match types it consults (issue #520), injected by bootstrap
 	// from the live rule set via SetRuleExclusionSupport. CreateExclusion validates the (rule_id, match_type) pair against it. Nil when
-	// unset (non-production constructors / tests), in which case the validation is skipped. Set once during wiring, then read-only, so
-	// it needs no synchronization (same posture as audit / membership).
-	ruleExclusionSupport map[string][]api.ExclusionMatchType
+	// unset (non-production constructors / tests), in which case the validation is skipped.
+	//
+	// Atomic because it is no longer written once during wiring. Rule content is reloadable while the server runs (issue #766), and
+	// every reload rebuilds this map from the new rule set, so it is written on a background loop while request handlers read it.
+	ruleExclusionSupport atomic.Pointer[map[string][]api.ExclusionMatchType]
 }
 
 var (
@@ -62,18 +64,22 @@ func NewService(store *Store, membership Membership, audit identityapi.AuditReco
 // a rule would silently ignore, and so a rule_id that names no registered rule is rejected. Set post-construction (mirrors
 // SetPrincipalLabelResolver / SetAudit); when left unset the validation is skipped, keeping non-production constructors and the
 // store-level tests working. Production always wires it.
+//
+// Called again on every rule-set reload, because the rules a deployment runs can change while it runs and a map built from the
+// previous set would reject an exclusion for a rule that now exists and accept one naming a rule that no longer does.
 func (s *Service) SetRuleExclusionSupport(support map[string][]api.ExclusionMatchType) {
-	s.ruleExclusionSupport = support
+	s.ruleExclusionSupport.Store(&support)
 }
 
 // validateExclusionSupport rejects a create-exclusion request whose rule_id names no registered rule, or whose match_type the target
 // rule does not consult (issue #520). A nil support map (never wired) skips the check. Returns ErrInvalidRequest so the handler maps
 // it to HTTP 400.
 func (s *Service) validateExclusionSupport(in CreateExclusionInput) error {
-	if s.ruleExclusionSupport == nil {
+	support := s.ruleExclusionSupport.Load()
+	if support == nil {
 		return nil
 	}
-	supported, ok := s.ruleExclusionSupport[in.RuleID]
+	supported, ok := (*support)[in.RuleID]
 	if !ok {
 		return fmt.Errorf("%w: rule_id %q does not name a registered rule", ErrInvalidRequest, in.RuleID)
 	}

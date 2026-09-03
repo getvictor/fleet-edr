@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -77,6 +78,17 @@ type Rules struct {
 	retentionDays int
 	db            *sqlx.DB
 	logger        *slog.Logger
+
+	// corpus supplies rule definitions from rulecontent (ADR-0021). Nil when the deployment runs the corpus embedded in the
+	// build, in which case there is no stored content to poll and the refresh loop does not run.
+	corpus rulecontentapi.Corpus
+	// ruleSetObserver is notified after each successful rule-set install, so a consumer holding its own derived view of the rules
+	// can rebuild it. cmd/main wires the detection engine's LoadActive here; keeping it a plain func leaves this context free of a
+	// detection import (ADR-0004), the same posture as the PrincipalLabel and CommandBatchInserter deps.
+	//
+	// Atomic because it is installed AFTER Run has already started: cmd/main launches this context's loops before it wires the
+	// engine's initial load, so a plain field would be written while the refresh goroutine reads it.
+	ruleSetObserver atomic.Pointer[func()]
 }
 
 // New wires the rules context. Does NOT apply the schema (call
@@ -100,17 +112,10 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	detectionConfigStore := detectionconfig.NewStore(deps.DB)
 	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
 
-	rules := catalog.NewWithCorpus(detectionConfigSvc, loadCorpus(ctx, deps.Corpus, logger))
-	svc := service.New(rules, detectionConfigSvc, logger)
-
-	// Inject the per-rule exclusion-support map (issue #520) built from the live rule set so the create-exclusion API rejects a
-	// (rule_id, match_type) pair no rule consults, and a rule_id that names no registered rule. Single source of truth: each rule's
-	// SupportedExclusionMatchTypes(), the same set GET /api/rules surfaces to the admin UI.
-	exclusionSupport := make(map[string][]api.ExclusionMatchType, len(rules))
-	for _, r := range rules {
-		exclusionSupport[r.ID()] = r.SupportedExclusionMatchTypes()
-	}
-	detectionConfigSvc.SetRuleExclusionSupport(exclusionSupport)
+	// Built empty and filled below by installRuleSet, so the initial load and every later reload go through ONE definition of what
+	// installing a rule set means. Three consumers derive from it and each goes stale silently on its own, which is not a fan-out
+	// worth having two copies of.
+	svc := service.New(nil, detectionConfigSvc, logger)
 
 	opH := operator.New(svc, deps.AuthZ, logger)
 	opH.SetAudit(deps.Audit)
@@ -133,7 +138,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		})
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
 	}
-	return &Rules{
+	r := &Rules{
 		svc:                  svc,
 		detectionConfigStore: detectionConfigStore,
 		operatorH:            opH,
@@ -144,7 +149,51 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		detectionConfigH:     detectionConfigH,
 		db:                   deps.DB,
 		logger:               logger,
-	}, nil
+		corpus:               deps.Corpus,
+	}
+
+	// Version 0: the initial set is stamped as not-from-storage even when it came from the store, because the version that produced
+	// it has not been read yet and claiming one would be a guess. The first refresh tick reads the real version and, finding it
+	// different, adopts the stored generation and stamps it correctly. One redundant load on the cold path buys an honest stamp.
+	r.installRuleSet(catalog.NewWithCorpus(detectionConfigSvc, loadCorpus(ctx, deps.Corpus, logger)), 0)
+	return r, nil
+}
+
+// installRuleSet puts a rule set in force and brings every consumer that derives from it along.
+//
+// There are THREE, and a miss in any one of them is silent, which is why they live here together rather than at each call site:
+//
+//  1. The service's own set, which GET /api/rules and the engine's loader read.
+//  2. The exclusion-support map the detection-config service validates against. A stale map rejects a (rule_id, match_type) pair
+//     for a rule that now exists, and accepts one naming a rule that no longer does.
+//  3. Any observer, which is how the detection engine's derived dispatch indices get rebuilt.
+//
+// Returns the number of rules installed.
+func (r *Rules) installRuleSet(rules []api.Rule, version int64) int {
+	n := r.svc.Swap(rules, version)
+
+	// Issue #520: built from the live rule set so the create-exclusion API rejects a (rule_id, match_type) pair no rule consults,
+	// and a rule_id that names no registered rule. Single source of truth: each rule's SupportedExclusionMatchTypes(), the same set
+	// GET /api/rules surfaces to the admin UI.
+	exclusionSupport := make(map[string][]api.ExclusionMatchType, len(rules))
+	for _, rule := range rules {
+		exclusionSupport[rule.ID()] = rule.SupportedExclusionMatchTypes()
+	}
+	r.detectionConfigSvc.SetRuleExclusionSupport(exclusionSupport)
+
+	if observer := r.ruleSetObserver.Load(); observer != nil {
+		(*observer)()
+	}
+	return n
+}
+
+// SetRuleSetObserver registers a callback invoked after each rule-set install, for a consumer that keeps its own view derived from
+// the rules. cmd/main wires the detection engine's LoadActive.
+//
+// The callback runs synchronously on the refresh loop's goroutine, so it must not block: it is meant for rebuilding an in-memory
+// index, which is what the engine does with it.
+func (r *Rules) SetRuleSetObserver(observe func()) {
+	r.ruleSetObserver.Store(&observe)
 }
 
 // DefaultDetectionConfigRefreshInterval is how often a replica polls the detection-config version counter to pick up a config edit
@@ -163,7 +212,7 @@ const DefaultDetectionConfigRefreshInterval = 5 * time.Second
 // deleted, which costs one statement per replica per interval and buys back a permanently held connection.
 func (r *Rules) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
@@ -172,7 +221,114 @@ func (r *Rules) Run(ctx context.Context) {
 		defer wg.Done()
 		r.pruneCountersLoop(ctx, DefaultCounterPruneInterval)
 	}()
+	go func() {
+		defer wg.Done()
+		r.CorpusRefreshLoop(ctx, DefaultCorpusRefreshInterval)
+	}()
 	wg.Wait()
+}
+
+// DefaultCorpusRefreshInterval is how often a replica polls the rule-corpus version counter to pick up content published on
+// another replica, or by an operator between this replica's restarts.
+//
+// Longer than the detection-config cadence because the two answer different questions. A config edit retunes a rule an operator is
+// watching right now and they expect the next alert to reflect it; publishing content is a deliberate change to what the fleet
+// detects, where seconds of skew across replicas costs nothing and the reload rebuilds every rule and its indices rather than
+// re-reading a settings snapshot.
+const DefaultCorpusRefreshInterval = 30 * time.Second
+
+// CorpusRefreshLoop converges this replica's rule set with content published elsewhere, following the detection-config snapshot
+// pattern (ADR-0010: the compiled rule set is a per-replica cache, so a peer's publish is invisible here until we re-read).
+//
+// Each tick reads only the cheap version counter; the corpus itself is read, parsed and compiled only when the stored version
+// differs from the one the loaded set was built from. Returns immediately when the deployment has no stored content to poll.
+// Blocks until ctx is cancelled.
+func (r *Rules) CorpusRefreshLoop(ctx context.Context, interval time.Duration) {
+	if r.corpus == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if r.corpusRefreshTick(ctx) {
+				return
+			}
+		}
+	}
+}
+
+// corpusRefreshTick performs one convergence poll. Returns true to stop (ctx cancelled).
+func (r *Rules) corpusRefreshTick(ctx context.Context) (stop bool) {
+	current, err := r.corpus.Version(ctx)
+	if err != nil {
+		return r.handleCorpusRefreshErr(ctx, "version poll", err)
+	}
+	if current == r.svc.ActiveVersion() {
+		return false
+	}
+	if _, err := r.Reload(ctx); err != nil {
+		return r.handleCorpusRefreshErr(ctx, "reload", err)
+	}
+	return false
+}
+
+// handleCorpusRefreshErr decides what a refresh error means: a cancelled context is shutdown racing the poll, so the error is
+// expected and the loop stops silently; otherwise the previous good rule set stays in force and the next tick retries.
+func (r *Rules) handleCorpusRefreshErr(ctx context.Context, op string, err error) (stop bool) {
+	if ctx.Err() != nil {
+		return true
+	}
+	r.logger.WarnContext(ctx, "rules: rule-corpus "+op+" failed; keeping the rule set already in force", "err", err)
+	return false
+}
+
+// Reload rebuilds the rule set from stored content and puts it in force, reporting how many rules are now active.
+//
+// On any failure the rule set already in force is LEFT ALONE and the error is returned. This is the one place the reload path
+// deliberately differs from the startup path: at startup there is no previous set, so unusable content falls back to the corpus
+// embedded in the build, whereas here that fallback would discard working content in favour of older content on a transient
+// database error.
+//
+// Content that loads to nothing installs nothing, for the same reason: an operator who empties the corpus is not asking for a
+// server with no detections. The loaded version is left unadvanced in that case, so the poll keeps re-reading while the corpus is
+// empty, which is a rare and deliberate state rather than a steady one.
+func (r *Rules) Reload(ctx context.Context) (int, error) {
+	if r.corpus == nil {
+		return 0, errors.New("rules: no rule corpus is configured")
+	}
+
+	// Version BEFORE documents, and the order is load-bearing. Two reads cannot be atomic across this interface, so a publish
+	// landing between them yields a mismatched pair either way. Reading the version first pairs NEWER documents with an OLDER
+	// version, so the next tick sees a difference and converges. The reverse order pairs older documents with the newer version,
+	// which matches on the next tick and leaves the stale content in force indefinitely.
+	version, err := r.corpus.Version(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read rule corpus version: %w", err)
+	}
+	docs, err := r.corpus.Documents(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read rule corpus: %w", err)
+	}
+	if len(docs) == 0 {
+		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; keeping the rule set already in force")
+		return 0, nil
+	}
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	if err != nil {
+		return 0, fmt.Errorf("load rule corpus: %w", err)
+	}
+
+	n := r.installRuleSet(catalog.NewWithCorpus(r.detectionConfigSvc, loaded), version)
+	// `rules` counts what came out of the corpus, matching the startup line so the two are comparable; `active` is the whole set in
+	// force, which also carries the rules written natively. Reporting the total under the name the startup line uses for the corpus
+	// count made the rule count appear to jump on the first reload with no content change, which live QA caught.
+	r.logger.InfoContext(ctx, "rules: reloaded the rule corpus from storage",
+		"version", version, "documents", len(docs), "rules", len(loaded), "refused", len(rejected), "active", n)
+	return n, nil
 }
 
 // DefaultCounterPruneInterval is how often each replica sweeps the per-rule counter tables past the retention window. Hourly

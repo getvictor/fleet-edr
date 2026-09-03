@@ -56,6 +56,20 @@ Falling back for a REASON SHALL be reported. An empty store SHALL NOT be reporte
 - **THEN** the rules compiled into the build are evaluated
 - **AND** nothing is reported as wrong
 
+#### Scenario: A failed reload keeps the set already in force
+
+- **GIVEN** a running system evaluating content it loaded successfully
+- **WHEN** a later attempt to re-read that content fails, or the content it reads cannot be loaded
+- **THEN** the rule set already in force continues to be evaluated, unchanged
+- **AND** the content compiled into the build is NOT substituted for it
+
+#### Scenario: Content that loads to nothing installs nothing
+
+- **GIVEN** a running system evaluating content it loaded successfully
+- **WHEN** the stored content is emptied
+- **THEN** the rule set already in force continues to be evaluated
+- **AND** the condition is reported
+
 ### Requirement: Seeding never overwrites content that is already there
 
 The system SHALL seed the store from the content compiled into the build only when the store holds no content. It SHALL NOT seed based on a comparison between the build's content and the stored content.
@@ -75,3 +89,51 @@ Seeding SHALL be safe to attempt on every start and on every replica, and a fail
 - **GIVEN** a store holding content that differs from the build's
 - **WHEN** the system starts again
 - **THEN** the stored content is unchanged
+
+### Requirement: A running server picks up changed content
+
+The system SHALL adopt content published while it is running, without a restart. Each replica SHALL converge on the published content on its own, and SHALL do so by polling a version counter rather than by re-reading the content itself.
+
+Polling the counter is what makes this affordable. The compiled rule set is derived state that every replica builds for itself, so a publish on one replica is invisible to its peers until each re-reads (ADR-0010), and a poll that re-read, parsed and compiled the whole corpus every interval would spend the cost of a publish on every replica continuously. Reading a single-row counter and comparing it against the version the loaded set was built from confines that cost to an actual change.
+
+The version SHALL be read BEFORE the content, and the ordering is a correctness requirement rather than a preference. The two reads cannot be made atomic, so a publish landing between them yields a mismatched pair either way. Reading the version first pairs newer content with an older version, which the next poll sees as a difference and corrects. The reverse pairs older content with the newer version, which the next poll reads as current, leaving content in force that the system believes is up to date and nothing to correct it.
+
+Adopting content SHALL bring every consumer derived from the rule set with it. The rule set has more than one consumer: the operator-facing catalog, the validation that rejects an exclusion naming a rule that does not exist, and the evaluation engine's own compiled indices. A consumer left holding a set built from withdrawn content produces no error of its own, so this is stated as a requirement rather than left to each call site: the catalog would list rules that are never evaluated, and the validation would reject an exclusion for a rule that now exists.
+
+Replacing the content SHALL advance the version counter in the same transaction that writes the content, so that no reader can observe one generation's content under another generation's number.
+
+A replica that has just started SHALL NOT assume the set it built is current. It has content but not the version that produced it, so its first poll SHALL adopt the stored generation and record its version, rather than treating an unknown version as a match. Assuming currency would leave a replica that started during a publish serving the older content until the NEXT publish, which is indistinguishable from working correctly.
+
+#### Scenario: Content published elsewhere is picked up without a restart
+
+- **GIVEN** two replicas evaluating the same stored content
+- **WHEN** one of them publishes different content
+- **THEN** the other adopts it without being restarted
+- **AND** the replica that has not yet re-read continues to evaluate what it loaded, because the compiled set is per-replica
+
+#### Scenario: An unchanged version does not re-read the content
+
+- **GIVEN** a replica whose loaded content is current
+- **WHEN** it polls for changes
+- **THEN** it reads only the version counter
+- **AND** the content is neither re-read nor recompiled
+
+#### Scenario: The version is read before the content
+
+- **GIVEN** content being adopted
+- **WHEN** the version and the content are read
+- **THEN** the version is read first, so that content newer than the version it is stamped with is corrected by the next poll
+
+#### Scenario: A replica adopts stored content on its first poll
+
+- **GIVEN** a replica that has just started and built a rule set
+- **WHEN** it polls for changes for the first time
+- **THEN** it adopts the stored content and records the version that produced it
+- **AND** it does not treat the set it started with as already current
+
+#### Scenario: The rule set in force is replaced wholesale
+
+- **GIVEN** a rule set being adopted
+- **WHEN** it is put in force
+- **THEN** every consumer derived from the rule set is rebuilt from it
+- **AND** no consumer continues to answer from the previous set

@@ -322,6 +322,11 @@ func openContexts(
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
+	// Keep the engine's rule set following the rules context's. Content published on another replica is picked up by rules'
+	// corpus refresh loop, and the engine holds its own compiled copy with derived dispatch indices, so it has to be told to
+	// rebuild (issue #766). Registered after the initial load above rather than before, so the two cannot disagree about which
+	// generation is first.
+	rulesCtx.SetRuleSetObserver(func() { detectionCtx.LoadActive(rulesCtx.ContentService()) })
 	detectionCtx.SetModeResolver(rulesCtx.DetectionConfigModeResolver())
 	detectionCtx.SetMonitorMatchRecorder(rulesCtx.MonitorMatchRecorder())
 	detectionCtx.SetRuleEvalStatsRecorder(rulesCtx.RuleEvalStatsRecorder())

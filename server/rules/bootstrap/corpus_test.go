@@ -15,15 +15,36 @@ import (
 )
 
 // fakeCorpus is a scripted rulecontent supplier.
+//
+// err applies to both reads, which is the shape of an unreachable store; versionErr narrows a failure to the version counter
+// alone, so the reload path's two reads can fail independently. calls records each read in order when non-nil, which is how the
+// version-before-documents ordering is asserted.
 type fakeCorpus struct {
-	docs []rulecontentapi.Document
-	err  error
+	docs       []rulecontentapi.Document
+	err        error
+	version    int64
+	versionErr error
+	calls      *[]string
 }
 
 func (f fakeCorpus) Documents(context.Context) ([]rulecontentapi.Document, error) {
+	f.record("documents")
 	return f.docs, f.err
 }
-func (f fakeCorpus) Version(context.Context) (int64, error) { return 1, f.err }
+
+func (f fakeCorpus) Version(context.Context) (int64, error) {
+	f.record("version")
+	if f.versionErr != nil {
+		return 0, f.versionErr
+	}
+	return f.version, f.err
+}
+
+func (f fakeCorpus) record(op string) {
+	if f.calls != nil {
+		*f.calls = append(*f.calls, op)
+	}
+}
 
 // embeddedCorpus presents the vendored corpus as storage-shaped documents, so the good case exercises the real parse path over
 // the same content the seed would have written rather than a fixture that only resembles it.
