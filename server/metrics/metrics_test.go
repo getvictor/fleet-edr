@@ -116,15 +116,17 @@ func (s stubGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
 // spec:observability-instrumentation/stable-counter-names/alerts-are-counted-only-on-creation
 // spec:observability-instrumentation/stable-counter-names/already-delivered-queue-trim-is-distinguishable-from-data-loss
 // spec:observability-instrumentation/stable-counter-names/materialization-miss-batch-retries-are-counted
+// spec:observability-instrumentation/stable-counter-names/events-withdrawn-from-processing-are-counted-per-host
 // spec:observability-instrumentation/observable-host-fleet-gauges/gauges-evaluate-on-the-reader-cadence
 //
-// Five scenarios share this test because they describe the same observation from different angles: every
+// Six scenarios share this test because they describe the same observation from different angles: every
 // counter / gauge that the spec names is fired once by Recorder methods and then collected via the
 // ManualReader. The asserts pin (a) host_id attr on edr.events.ingested, (b) rule_id+severity attrs on
 // edr.alerts.created, (c) the lossy=true vs lossy=false distinction on edr.agent.queue.dropped
 // (server-side mirror of the agent-side TestRecorder_QueueDropped), (d) that collect() drives the
-// gauge callbacks and observes their values (stubGauges feeds enrolled=3, offline=1), and (e) the
-// attribute-free edr.detection.materialization_retries counter sums both fired retries.
+// gauge callbacks and observes their values (stubGauges feeds enrolled=3, offline=1), (e) the
+// attribute-free edr.detection.materialization_retries counter sums both fired retries, and (f) the
+// host_id attr and count on edr.events.set_aside, which nothing else collects.
 //
 // spec:observability-instrumentation/aggregate-latency-and-alerting-derive-from-metrics-not-sampled-spans/event-counts-are-unaffected-by-the-sample-ratio
 // The recorder counts every ingested event with no reference to the trace sampler, so counts are authoritative regardless of the
@@ -146,6 +148,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.QueueDropped(ctx, 5, true)
 	r.DetectionMaterializationRetry(ctx)
 	r.DetectionMaterializationRetry(ctx)
+	r.EventsSetAside(ctx, "host-wedged", 4)
 
 	rm := collect()
 
@@ -162,6 +165,11 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	assert.Equal(t, int64(3), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": false}))
 	assert.Equal(t, int64(5), findSum(t, rm, "edr.agent.queue.dropped", map[string]any{"lossy": true}))
 	assert.Equal(t, int64(2), findSum(t, rm, "edr.detection.materialization_retries", nil))
+	// Asserted against the concrete recorder, not just a fake, for the same reason edr.detection.monitor_matches is: the
+	// pipeline test proves the processor forwards a count to whatever recorder it holds, which a misspelled instrument name
+	// or a missing registration passes just as happily. This is the only place the name and the host_id attribute are
+	// pinned, and an operator alert authored against the wrong name reports a stalled host as silence (issue #836).
+	assert.Equal(t, int64(4), findSum(t, rm, "edr.events.set_aside", map[string]any{"host_id": "host-wedged"}))
 	assert.Equal(t, int64(3), findGauge(t, rm, "edr.enrolled.hosts"))
 	assert.Equal(t, int64(1), findGauge(t, rm, "edr.offline.hosts"))
 }

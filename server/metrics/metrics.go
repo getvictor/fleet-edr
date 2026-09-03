@@ -63,6 +63,7 @@ type Recorder struct {
 	processesReconciled             metric.Int64Counter
 	queueDropped                    metric.Int64Counter
 	detectionMaterializationRetries metric.Int64Counter
+	eventsSetAside                  metric.Int64Counter
 	httpRequestDuration             metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
@@ -150,6 +151,18 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		metric.WithDescription("Detection batches re-queued because an event's subject or flow process was not materialized yet (a transient ordering race). A sustained non-zero rate means a replica is behind on graph materialization or agents are dropping fork/exec."),
 		metric.WithUnit("{retry}"),
 	)
+	// The description stays short because it renders as dashboard metadata beside the counter, where it competes with the chart for
+	// the reader's attention; the reasoning a maintainer needs lives here instead. Setting events aside is NOT data loss: ingest
+	// writes the archive before the work queue and retains it on its own window (ADR-0015), so the events stay available to hunting
+	// queries and alert evidence. What is given up is their contribution to the process graph and their evaluation by whichever
+	// rules had not already finished when the batch failed, which for a batch withdrawn at the builder stage is all of them.
+	r.eventsSetAside, _ = meter.Int64Counter(
+		"edr.events.set_aside",
+		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). The host in `host_id` "+
+			"has a gap in its process graph. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
+			"condition never clears once it fires."),
+		metric.WithUnit(unitEvent),
+	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
 	// recognizes http.server.request.duration and its standard attributes. The histogram's count gives request rate, a status-code
 	// filter gives the error rate, and the buckets give latency quantiles, so this one instrument covers the full RED picture.
@@ -206,6 +219,18 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 		return
 	}
 	r.eventsIngested.Add(ctx, int64(n), metric.WithAttributes(attribute.String("host_id", hostID)))
+}
+
+// EventsSetAside increments the set-aside counter by n for a host. Called by the processor when a nack withdraws events from
+// processing rather than returning them, which happens only once a batch has passed both retry bounds.
+//
+// Attributed per host deliberately: the question this answers is which host stopped contributing to the graph, and a fleet-wide
+// total cannot answer it.
+func (r *Recorder) EventsSetAside(ctx context.Context, hostID string, n int64) {
+	if r == nil || r.eventsSetAside == nil || n <= 0 {
+		return
+	}
+	r.eventsSetAside.Add(ctx, n, metric.WithAttributes(attribute.String("host_id", hostID)))
 }
 
 // EventsHeartbeatDropped increments the heartbeat-dropped counter by n for a host. Called per-batch by the ingest handler with the

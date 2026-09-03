@@ -295,27 +295,122 @@ func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
 	return nil
 }
 
-// Nack returns claimed events to the not-yet-processed state for an immediate later ClaimForHost, clearing the claim timestamp. It is
-// scoped to processed = 2 so it only reverts in-flight rows and never resurrects an already-acknowledged event.
-func (s *Store) Nack(ctx context.Context, eventIDs []string) error {
+// The `processed` column carries four states, written as literals in the SQL below and named here rather than as constants, which
+// would be identifiers no Go expression reads:
+//
+//	0 = pending, claimable
+//	1 = acknowledged, terminal, deleted by PruneProcessed
+//	2 = claimed, with claimed_at_ns; re-offered once the lease expires
+//	3 = SET ASIDE, withdrawn from processing after repeated failure (issue #836), stamped set_aside_at_ns, deleted by
+//	    PruneSetAside once that stamp is older than the retention window
+//
+// Only 0 and a lease-expired 2 are claimable, so 3 is excluded from ClaimForHost by the predicate that was already there.
+
+// setAsideAttempts and setAsideWindow are the two bounds a batch must BOTH exceed before its events are set aside.
+//
+// Both, because one cannot tell the two failure shapes apart. At the 500ms processor tick a failing batch is attempted roughly 120
+// times a minute, so an attempt bound alone would set aside anything that failed for ten seconds. A duration bound alone would set
+// aside a batch that failed once and then sat for a long time because its host went quiet, since its second attempt would already
+// be outside the window.
+//
+// Twenty attempts is reached in about ten seconds and exists only to rule out that second shape. Fifteen minutes is the bound that
+// does the work: no condition shorter than that sets anything aside, a host stalls for at most about that long rather than
+// indefinitely, and it is three claim leases, which is the other timescale in this subsystem.
+//
+// Not configurable. They are constants with their reasoning attached, and can become configuration when a deployment needs
+// different values rather than in anticipation of one.
+const (
+	setAsideAttempts = 20
+	setAsideWindow   = 15 * time.Minute
+)
+
+// Nack returns claimed events to the not-yet-processed state for an immediate later ClaimForHost, clearing the claim timestamp, and
+// counts the attempt. It reports how many events it SET ASIDE instead of returning, which is zero on all but the failing case.
+//
+// Scoped to processed = 2 so it only reverts in-flight rows and never resurrects an already-acknowledged event.
+//
+// The count and the set-aside are what keep a deterministically failing batch from stalling its host forever. The claim selects a
+// host's work in timestamp order, so a nacked batch is that host's oldest pending work and the next claim takes it again; without a
+// bound, nothing newer for that host is ever claimed and the host stops contributing to the graph and raising detections entirely
+// (issue #836). Setting the events aside is not data loss: the archive is written before the queue and retained on its own window,
+// so what is given up is those events' contribution to the graph and their evaluation by rules.
+//
+// A claim is identified here by state alone, not by owner, which leaves one window this does not close: a worker whose fold outran
+// the 5-minute claim lease nacks rows a replacement worker has since re-claimed, resetting that claim and counting an attempt
+// against it. The window is narrow by construction, since a live claim is refused to every other claimer by both the claimable
+// predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease. It is also pre-existing and bounded:
+// the replacement's Ack still lands and the event is still processed, so the cost is an inflated attempt count rather than lost
+// work, and a spurious set-aside would need that to recur twenty times across fifteen minutes on one batch. Closing it properly
+// means carrying the claim stamp back to the caller and making Nack and Ack conditional on still owning it, which changes a
+// cross-context interface and fixes a different defect (the same stale nack can also let two workers process one event). Tracked
+// as issue #840 rather than folded in here.
+func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, err error) {
 	if len(eventIDs) == 0 {
-		return nil
+		return 0, nil
 	}
-	query, args, err := sqlx.In("UPDATE event_queue SET processed = 0, claimed_at_ns = 0 WHERE processed = 2 AND event_id IN (?)", eventIDs)
+	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return fmt.Errorf("nack build query: %w", err)
+		return 0, fmt.Errorf("begin tx for nack: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("nack: %w", err)
+	defer tx.Rollback() //nolint:errcheck
+
+	now := time.Now().UnixNano()
+	query, args, err := sqlx.In(`
+		UPDATE event_queue
+		SET attempts = attempts + 1,
+		    first_failed_at_ns = IF(first_failed_at_ns = 0, ?, first_failed_at_ns),
+		    processed = 0,
+		    claimed_at_ns = 0
+		WHERE processed = 2 AND event_id IN (?)`, now, eventIDs)
+	if err != nil {
+		return 0, fmt.Errorf("nack build query: %w", err)
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return 0, fmt.Errorf("nack: %w", err)
+	}
+
+	// The processed = 0 guard restricts this to rows the statement above actually reset, and so keeps a row that was NOT in flight
+	// out of state 3: an event id in this batch that another worker already acked (1), or that an earlier failure already set aside
+	// (3), does not match and is left alone. It is NOT protection against a concurrent claimer. The statement above holds an
+	// exclusive lock on every row it modified until this transaction commits, and the claim's SELECT ... FOR UPDATE SKIP LOCKED
+	// skips locked rows, so no other worker can take these rows between the two statements. (A row can still be reset by a worker
+	// whose claim lease expired, which is the ownership limitation documented on Nack above and tracked as issue #840; the guard
+	// here neither causes nor prevents that.)
+	//
+	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
+	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
+	// hyphen in prose reads SQL subtraction the same way, which is a nudge worth taking rather than suppressing.
+	failingSince := now - setAsideWindow.Nanoseconds()
+	query, args, err = sqlx.In(`
+		UPDATE event_queue
+		SET processed = 3, set_aside_at_ns = ?
+		WHERE processed = 0 AND event_id IN (?) AND attempts >= ? AND first_failed_at_ns <= ?`,
+		now, eventIDs, setAsideAttempts, failingSince)
+	if err != nil {
+		return 0, fmt.Errorf("nack set-aside build query: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("nack set aside: %w", err)
+	}
+	setAside, err = res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("nack set-aside rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit nack: %w", err)
+	}
+	return setAside, nil
 }
 
-// CountPending counts events not yet acknowledged (processed != 1): the waiting-plus-in-flight backlog. Backs the processor-backlog
-// gauge.
+// CountPending counts events still waiting to be processed or in flight (processed 0 or 2). Backs the processor-backlog gauge.
+//
+// Set-aside rows (3) are excluded deliberately. They are not waiting for anything, so counting them would leave the backlog gauge
+// permanently elevated by a number that never drains, which is the shape an operator reads as a processor falling behind. The
+// separate edr.events.set_aside counter is what reports them.
 func (s *Store) CountPending(ctx context.Context) (int64, error) {
 	var count int64
-	if err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM event_queue WHERE processed != 1"); err != nil {
+	if err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM event_queue WHERE processed IN (0, 2)"); err != nil {
 		return 0, fmt.Errorf("count pending: %w", err)
 	}
 	return count, nil
@@ -331,6 +426,47 @@ const defaultPruneBatch = 10_000
 // deadlock-retried since concurrent claims take gap locks on the same index. processed = 1 is terminal (Nack only reverts processed = 2),
 // so a row selected here is never concurrently resurrected.
 func (s *Store) PruneProcessed(ctx context.Context, batchSize int) (int64, error) {
+	total, err := s.pruneBatched(ctx, batchSize,
+		"DELETE FROM event_queue WHERE processed = 1 ORDER BY host_id, timestamp_ns LIMIT ?")
+	if err != nil {
+		return total, fmt.Errorf("prune processed event_queue: %w", err)
+	}
+	return total, nil
+}
+
+// PruneSetAside deletes set-aside rows (processed = 3) withdrawn longer ago than retentionDays, returning the total removed.
+//
+// Needed because PruneProcessed only deletes acked rows, so without this a set-aside row would sit in the work queue for the life
+// of the deployment. Retaining them at all is deliberate: the row names the exact events a host stopped contributing, which the
+// counter cannot. Retaining them forever is not, so the retention window doubles as the period an operator has to look.
+//
+// Aged on set_aside_at_ns, when the entry was WITHDRAWN, not on first_failed_at_ns and not on the event's own timestamp. The three
+// diverge without bound: attempts accrue only while a host is online, so a batch can first fail, wait out an offline stretch longer
+// than the whole retention window, and only then reach the attempt bound. Ageing on first failure would withdraw that batch and
+// sweep it on the next tick, leaving no window to inspect it in, which is the opposite of what the window is for.
+func (s *Store) PruneSetAside(ctx context.Context, retentionDays, batchSize int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).UnixNano()
+	total, err := s.pruneBatched(ctx, batchSize,
+		"DELETE FROM event_queue WHERE processed = 3 AND set_aside_at_ns < ? ORDER BY set_aside_at_ns LIMIT ?", cutoff)
+	if err != nil {
+		return total, fmt.Errorf("prune set-aside event_queue: %w", err)
+	}
+	return total, nil
+}
+
+// pruneBatched runs one DELETE repeatedly until a batch comes back short, and reports the total.
+//
+// Shared by the two prune methods above rather than written twice. The batch bound, the deadlock retry and the
+// stop-when-short-batch loop are identical for both and are the parts that are easy to get subtly different; only the predicate
+// differs, and it is a caller-supplied constant rather than anything built from input. The query MUST end in `LIMIT ?`, since the
+// batch size is appended as the final argument.
+//
+// This deliberately does not reach across packages: issue #818 tracks the same loop appearing in three prune paths in different
+// packages, and unifying those is its own change. This keeps THIS file from becoming a fourth copy.
+func (s *Store) pruneBatched(ctx context.Context, batchSize int, query string, args ...any) (int64, error) {
 	if batchSize <= 0 {
 		batchSize = defaultPruneBatch
 	}
@@ -338,15 +474,14 @@ func (s *Store) PruneProcessed(ctx context.Context, batchSize int) (int64, error
 	for {
 		var affected int64
 		if err := sqlhelpers.WithDeadlockRetry(ctx, deadlockMaxAttempts, deadlockBackoffStep, func() error {
-			res, err := s.db.ExecContext(ctx,
-				"DELETE FROM event_queue WHERE processed = 1 ORDER BY host_id, timestamp_ns LIMIT ?", batchSize)
+			res, err := s.db.ExecContext(ctx, query, append(append([]any(nil), args...), batchSize)...)
 			if err != nil {
 				return err
 			}
 			affected, err = res.RowsAffected()
 			return err
 		}); err != nil {
-			return total, fmt.Errorf("prune processed event_queue: %w", err)
+			return total, err
 		}
 		total += affected
 		if affected < int64(batchSize) {

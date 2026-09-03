@@ -18,12 +18,19 @@ import (
 // swept even when age-based retention is disabled, and on a shorter cadence (the queue grows at the ingest rate, not the retention
 // window), so it is its own runner rather than folded into RetentionRunner. The durable history lives in the archive, so a pruned row
 // is never needed again.
+//
+// It also sweeps SET-ASIDE rows (processed = 3, issue #836), and those DO age on the retention window, which is the one place this
+// runner is not retention-independent. The distinction is deliberate. An acked row is finished and worth nothing, so it goes
+// whatever retention says. A set-aside row is the only record of which events a host stopped contributing to its process graph, so
+// it is kept for as long as the deployment keeps anything, and kept indefinitely when retention is disabled, which is what
+// disabling retention means everywhere else.
 type QueuePruneRunner struct {
-	eventLog  visibilityapi.EventLog
-	interval  time.Duration
-	batchSize int
-	logger    *slog.Logger
-	metrics   api.MetricsRecorder
+	eventLog      visibilityapi.EventLog
+	interval      time.Duration
+	batchSize     int
+	retentionDays int
+	logger        *slog.Logger
+	metrics       api.MetricsRecorder
 }
 
 // QueuePruneOptions tune the queue-prune sweep.
@@ -34,8 +41,11 @@ type QueuePruneOptions struct {
 	// BatchSize is the per-statement DELETE cap. Zero lets the EventLog apply its own default, keeping that default in one place
 	// (eventlog.Store owns it) rather than restating it here where the two could drift.
 	BatchSize int
-	Logger    *slog.Logger
-	Metrics   api.MetricsRecorder
+	// RetentionDays bounds how long a SET-ASIDE row is kept. Zero or negative keeps them indefinitely, matching what a disabled
+	// retention window means for every other store. It does not affect the acked-row sweep, which runs regardless.
+	RetentionDays int
+	Logger        *slog.Logger
+	Metrics       api.MetricsRecorder
 }
 
 // NewQueuePrune builds a QueuePruneRunner over the given EventLog.
@@ -47,11 +57,12 @@ func NewQueuePrune(eventLog visibilityapi.EventLog, opts QueuePruneOptions) *Que
 		opts.Logger = slog.Default()
 	}
 	return &QueuePruneRunner{
-		eventLog:  eventLog,
-		interval:  opts.Interval,
-		batchSize: opts.BatchSize,
-		logger:    opts.Logger,
-		metrics:   opts.Metrics,
+		eventLog:      eventLog,
+		interval:      opts.Interval,
+		batchSize:     opts.BatchSize,
+		retentionDays: opts.RetentionDays,
+		logger:        opts.Logger,
+		metrics:       opts.Metrics,
 	}
 }
 
@@ -75,6 +86,14 @@ func (r *QueuePruneRunner) Run(ctx context.Context) (int64, error) {
 	}
 	if err != nil {
 		return pruned, err
+	}
+	// Swept after the acked rows and reported separately, because the two mean different things: acked rows draining is routine,
+	// and set-aside rows draining means the window to inspect a host's gap has closed.
+	if setAside, sErr := r.eventLog.PruneSetAside(ctx, r.retentionDays, r.batchSize); sErr != nil {
+		r.logger.WarnContext(ctx, "prune set-aside events from the queue", "err", sErr)
+	} else if setAside > 0 {
+		r.logger.InfoContext(ctx, "pruned set-aside events past the retention window", "rows", setAside,
+			"retention_days", r.retentionDays)
 	}
 	if pruned > 0 {
 		r.logger.InfoContext(ctx, "pruned acked events from the queue", "rows", pruned)

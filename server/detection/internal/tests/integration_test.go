@@ -270,6 +270,8 @@ func (r *execFiringStub) Platforms() []rulesapi.Platform {
 // recordingMetrics captures every hook invocation so tests can assert
 // observability survived the phase-5 wiring rewrite.
 type recordingMetrics struct {
+	setAside            int64
+	setAsideHost        string
 	mu                  sync.Mutex
 	eventsIngested      int
 	heartbeatsDropped   int
@@ -277,6 +279,13 @@ type recordingMetrics struct {
 	monitorMatches      int
 	processesReconciled int64
 	processRowsDeleted  int64
+}
+
+func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setAsideHost = hostID
+	m.setAside += n
 }
 
 func (m *recordingMetrics) EventsIngested(_ context.Context, _ string, n int) {

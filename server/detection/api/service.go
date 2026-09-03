@@ -45,8 +45,9 @@ type Service interface {
 	// the threshold. Used by the OTel offline-hosts gauge.
 	CountOfflineHosts(ctx context.Context, threshold time.Duration) (int, error)
 
-	// CountUnprocessed counts events with processed != 1. Used by the OTel unprocessed-events gauge so SOC dashboards can alert on
-	// stuck-processor fleets.
+	// CountUnprocessed counts events still waiting to be processed or in flight (queue states pending and claimed). Used by the OTel
+	// unprocessed-events gauge so SOC dashboards can alert on stuck-processor fleets. Events SET ASIDE after repeated failure are
+	// excluded: they are not waiting for anything, so counting them would hold the gauge up by a number that never drains (#836).
 	CountUnprocessed(ctx context.Context) (int64, error)
 
 	// IngestHandler returns the POST /api/events handler. Returned as an http.Handler rather than registered via a separate route method
@@ -104,6 +105,9 @@ type GraphReader interface {
 // metrics.Recorder; tests pass nil.
 type MetricsRecorder interface {
 	EventsIngested(ctx context.Context, hostID string, n int)
+	// EventsSetAside counts events the queue withdrew from processing after a batch failed repeatedly. Per host, because the
+	// question is which host has a gap in its process graph (issue #836).
+	EventsSetAside(ctx context.Context, hostID string, n int64)
 	// EventsHeartbeatDropped is called per-batch by the ingest handler with the number of snapshot_heartbeat events that were
 	// processed for their freshness side effect and then dropped instead of persisted as retained event rows (issue #408).
 	EventsHeartbeatDropped(ctx context.Context, hostID string, n int)

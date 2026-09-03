@@ -71,7 +71,9 @@ type Deps struct {
 	RetentionDays        int
 	RetentionInterval    time.Duration
 	// QueuePruneInterval is the cadence of the visibility event-queue sweep that removes acked rows (ADR-0015). Zero uses the
-	// pipeline default (1 minute). Independent of RetentionDays: the queue is swept even when age-based retention is disabled.
+	// pipeline default (1 minute). The ACKED-row sweep is independent of RetentionDays and runs even when age-based retention is
+	// disabled; the same sweep's set-aside half does honour RetentionDays, because a set-aside row is the only record of which
+	// events a host stopped contributing and is kept as long as the deployment keeps anything (issue #836).
 	QueuePruneInterval time.Duration
 
 	// Cross-context inputs (Full mode only).
@@ -241,7 +243,10 @@ func (d *Detection) wireFullMode(deps Deps, store *mysql.Store, intakeH *intake.
 	})
 	queuePrune := pipeline.NewQueuePrune(deps.EventLog, pipeline.QueuePruneOptions{
 		Interval: deps.QueuePruneInterval,
-		Logger:   logger,
+		// Passed even though the acked-row sweep ignores it: the same sweep ages SET-ASIDE rows out on this window (issue #836),
+		// and without it here that half is silently dead and those rows accumulate for the life of the deployment.
+		RetentionDays: deps.RetentionDays,
+		Logger:        logger,
 	})
 
 	// Outbound webhook (issue #496): wire the sealer into the store and build the delivery worker (both only when a root secret

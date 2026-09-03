@@ -14,10 +14,11 @@ import (
 // fakeEventLog records the batchSize PruneProcessed was called with and returns a scripted (count, err). The other EventLog methods are
 // unused by QueuePruneRunner, so they are inert.
 type fakeEventLog struct {
-	pruneN      int64
-	pruneErr    error
-	gotBatch    int
-	pruneCalled int
+	setAsidePruned []int
+	pruneN         int64
+	pruneErr       error
+	gotBatch       int
+	pruneCalled    int
 }
 
 func (f *fakeEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
@@ -25,13 +26,20 @@ func (f *fakeEventLog) PendingHosts(context.Context, int) ([]string, error) { re
 func (f *fakeEventLog) ClaimForHost(context.Context, string, int) ([]visibilityapi.Event, error) {
 	return nil, nil
 }
-func (f *fakeEventLog) Ack(context.Context, []string) error         { return nil }
-func (f *fakeEventLog) Nack(context.Context, []string) error        { return nil }
-func (f *fakeEventLog) CountPending(context.Context) (int64, error) { return 0, nil }
+func (f *fakeEventLog) Ack(context.Context, []string) error           { return nil }
+func (f *fakeEventLog) Nack(context.Context, []string) (int64, error) { return 0, nil }
+func (f *fakeEventLog) CountPending(context.Context) (int64, error)   { return 0, nil }
 func (f *fakeEventLog) PruneProcessed(_ context.Context, batchSize int) (int64, error) {
 	f.pruneCalled++
 	f.gotBatch = batchSize
 	return f.pruneN, f.pruneErr
+}
+
+// PruneSetAside records the retention window it was handed, so a test can assert the sweep passes the deployment's window through
+// rather than a zero that would keep set-aside rows forever.
+func (f *fakeEventLog) PruneSetAside(_ context.Context, retentionDays, _ int) (int64, error) {
+	f.setAsidePruned = append(f.setAsidePruned, retentionDays)
+	return 0, nil
 }
 
 func TestQueuePruneRunner_Run(t *testing.T) {
@@ -70,12 +78,22 @@ func TestQueuePruneRunner_RecordsMetric(t *testing.T) {
 }
 
 // capturingRecorder is a MetricsRecorder that captures the queue-prune count and the materialization-retry count; the rest are inert.
+// setAsideCall is one EventsSetAside call, kept so a test can assert the host and count rather than only that it fired.
+type setAsideCall struct {
+	hostID string
+	n      int64
+}
+
 type capturingRecorder struct {
+	setAside               []setAsideCall
 	queuePruned            int64
 	materializationRetries int64
 }
 
-func (c *capturingRecorder) EventsIngested(context.Context, string, int)         {}
+func (c *capturingRecorder) EventsIngested(context.Context, string, int) {}
+func (c *capturingRecorder) EventsSetAside(_ context.Context, hostID string, n int64) {
+	c.setAside = append(c.setAside, setAsideCall{hostID: hostID, n: n})
+}
 func (c *capturingRecorder) EventsHeartbeatDropped(context.Context, string, int) {}
 func (c *capturingRecorder) AlertCreated(context.Context, string, string)        {}
 func (c *capturingRecorder) MonitorMatched(context.Context, string, string, int) {}
