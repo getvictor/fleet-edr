@@ -15,6 +15,10 @@ on:
       - "**/*.tsx"
       - "**/*.swift"
       - "openspec/specs/**"
+      # In-flight deltas are in scope because spectrace reads them: they exempt canonical scenarios, and the
+      # concurrent-restatement gate compares them against each other. Without this a PR that only touches a delta could
+      # introduce a divergence that no run would see until a release archive silently discarded one of them (issue #815).
+      - "openspec/changes/**"
       - "tools/spectrace/**"
       - ".github/workflows/spectrace.yml"
   pull_request:
@@ -44,7 +48,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          PATTERN='\.go$|\.ts$|\.tsx$|\.swift$|^openspec/specs/|^tools/spectrace/|^\.github/workflows/spectrace\.yml$'
+          PATTERN='\.go$|\.ts$|\.tsx$|\.swift$|^openspec/specs/|^openspec/changes/|^tools/spectrace/|^\.github/workflows/spectrace\.yml$'
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             echo "Triggered by $EVENT_NAME; running unconditionally."

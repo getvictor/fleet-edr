@@ -4,7 +4,7 @@
 
 ### Requirement: Stable counter names
 
-The system SHALL expose the following counters with stable names so dashboards and alerts can be authored against them: `edr.events.ingested` (events accepted by the ingest endpoint), `edr.alerts.created` (newly created alerts, deduplicated alerts not counted), `edr.detection.monitor_matches` (rule matches suppressed because the resolved mode was monitor), `edr.agent.queue.dropped` (events the agent queue dropped), and `edr.processes.ttl_reconciled` (processes whose exit time was synthesized by the freshness-TTL reconciler). Renaming any of these is a breaking change and MUST NOT happen silently.
+The system SHALL expose the following counters with stable names so dashboards and alerts can be authored against them: `edr.events.ingested` (events accepted by the ingest endpoint), `edr.alerts.created` (newly created alerts, deduplicated alerts not counted), `edr.detection.monitor_matches` (rule matches suppressed because the resolved mode was monitor), `edr.agent.queue.dropped` (events the agent queue dropped), `edr.processes.ttl_reconciled` (processes whose exit time was synthesized by the freshness-TTL reconciler), and `edr.detection.materialization_retries` (detection batches re-queued because an event's subject or flow process was not materialized yet). Renaming any of these is a breaking change and MUST NOT happen silently.
 
 `edr.detection.monitor_matches` SHALL carry the same `rule_id` and `severity` attributes as `edr.alerts.created`, and SHALL label a match with the severity the alert would have carried, so that the two series describe one rule identically and can be compared. Comparing them is how an operator judges what promoting a rule to alerting would produce.
 
@@ -15,7 +15,7 @@ The counter SHALL be documented as counting MATCHES rather than would-be alerts.
 #### Scenario: Ingested events are counted by host
 
 - **GIVEN** the ingest endpoint accepts a batch of events for a host
-- **WHEN** the batch is accepted
+- **WHEN** the batch is committed
 - **THEN** `edr.events.ingested` is incremented by the size of the batch with a `host_id` attribute
 
 #### Scenario: Alerts are counted only on creation
@@ -42,6 +42,12 @@ The counter SHALL be documented as counting MATCHES rather than would-be alerts.
 - **GIVEN** a rule whose resolved mode is monitor and whose setting carries a severity override
 - **WHEN** it matches an event
 - **THEN** the counter's `severity` attribute is the overridden severity, not the rule's declared one
+
+#### Scenario: Materialization-miss batch retries are counted
+
+- **GIVEN** a detection batch that will be re-queued because a rule saw an event whose subject or flow process was not materialized yet
+- **WHEN** the retry is recorded
+- **THEN** `edr.detection.materialization_retries` is incremented
 
 ## ADDED Requirements
 

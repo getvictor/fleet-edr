@@ -93,8 +93,13 @@ See docs/testing-strategy.md for the marker syntax and rollout plan.
 // runCheck loads every scenario from --specs-dir, every marker from --root, and reports the coverage diff. Exit codes:
 //
 //	0 = clean (or only advisory issues without --strict)
-//	1 = invalid references present, OR --strict and uncovered SHALL/MUST scenarios in the gated set
+//	1 = a requirement is restated differently by concurrent in-flight changes, OR invalid references are present, OR --strict and
+//	    uncovered SHALL/MUST scenarios in the gated set
 //	2 = usage / IO error
+//
+// The first of those does not wait for --strict, and neither does the second. Both describe something already wrong in the tree
+// rather than a coverage bar the tree has not yet reached: a divergent restatement is text the release archive will silently
+// discard (issue #815), and an invalid reference is a marker pointing at nothing.
 //
 // --new-code restricts the gated SHALL/MUST set to scenarios added or modified in the current branch relative to
 // --base-ref (default origin/main). The framing matches SonarCloud's "new code" gate: an unfixed legacy gap doesn't
@@ -142,6 +147,15 @@ func runCheck(args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "spectrace: parse change deltas:", err)
 		return 2
+	}
+
+	// Checked before the exemptions are applied, because a divergent restatement makes the exemption input itself untrustworthy:
+	// restatedScenarios unions the scenario lists, so it happily exempts a scenario that only the restatement destined to LOSE
+	// still mentions. Reported and gated unconditionally rather than under --strict, for the same reason an invalid marker is: this
+	// is data the release will corrupt, not a coverage gap that a legacy backlog might excuse.
+	restatementConflicts := findRestatementConflicts(deltas)
+	if len(restatementConflicts) > 0 {
+		printRestatementConflicts(restatementConflicts)
 	}
 
 	if kept := filterOutRemovedRequirements(scenarios, deltas.removedRequirements); len(kept) != len(scenarios) {
@@ -193,6 +207,8 @@ func runCheck(args []string) int {
 	}
 
 	switch {
+	case len(restatementConflicts) > 0:
+		return 1
 	case len(invalid) > 0:
 		return 1
 	case *strict && len(gatedNormative) > 0:
