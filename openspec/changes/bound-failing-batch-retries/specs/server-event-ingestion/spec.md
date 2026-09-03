@@ -16,7 +16,7 @@ The system SHALL treat the resulting gap as the lesser harm, and the reasoning S
 
 Setting events aside SHALL be observable, both as a counter that dashboards and alerts can be authored against and as a log record naming the host. A stalled host is otherwise indistinguishable from a quiet one, and the only symptom is an absence of detections that nobody is watching for.
 
-Events set aside SHALL age out under the deployment's retention window rather than accumulating in the work queue without bound.
+Events set aside SHALL age out under the deployment's retention window rather than accumulating in the work queue without bound, and that window SHALL be measured from when the events were WITHDRAWN rather than from when their batch first failed. The two diverge without bound, because attempts accrue only while a host is online: a batch that fails once, waits out an offline stretch longer than the whole retention window, and only then reaches the attempt bound would be withdrawn and swept on the next sweep, leaving no window to inspect it in. The retention window doubles as the period an operator has to look, so it SHALL start when there is something to look at.
 
 #### Scenario: A deterministically failing batch stops blocking its host
 
@@ -52,3 +52,9 @@ Events set aside SHALL age out under the deployment's retention window rather th
 - **WHEN** the queue's retention sweep runs
 - **THEN** those entries are removed
 - **AND** entries set aside inside the window are kept
+
+#### Scenario: The retention window starts when events are withdrawn
+
+- **GIVEN** an entry whose batch first failed longer ago than the retention window but which was set aside only moments ago
+- **WHEN** the queue's retention sweep runs
+- **THEN** the entry is kept, because the window measures how long it has been available to inspect

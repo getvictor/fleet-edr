@@ -37,11 +37,15 @@ That is the lesser harm by a wide margin. One host gets a gap of at most a bound
 
 `edr.events.set_aside`, carrying `host_id`, plus a log record naming the host and the batch. The counter answers "has any host stopped contributing", which is the alerting question, and the attribute is what makes it answerable per host: a fleet-wide total cannot say which host went dark.
 
+The counter's name and attribute are pinned against the concrete recorder rather than only a fake. A fake proves the processor forwards a count to whatever recorder it holds, which a misspelled instrument name or a missing registration passes just as happily, and an alert authored against a name nothing emits reports a stalled host as silence.
+
 Adding a counter means restating `Stable counter names`, and #838's gate requires every concurrent restatement of a requirement to be identical. Two in-flight changes already restate it, so this change updates all three to the same text. That is the cost that gate imposes, and this change is the first to pay it; the gate is what keeps it from being discovered at release instead.
 
 ## Bounded growth
 
 `PruneProcessed` deletes only `processed = 1`, so set-aside entries would otherwise accumulate for the life of the deployment. They age out under the deployment's retention window, which also fixes the retention window as the period an operator has to inspect them.
+
+Aged on when the entry was WITHDRAWN, stamped in its own column, not on when its batch first failed. The first version used the first-failure stamp and was wrong: attempts accrue only while a host is online, so a batch can first fail, sit through an offline stretch longer than the whole retention window, and only then reach the attempt bound, at which point it is withdrawn and swept on the next pass with no window to inspect it in. A laptop in a drawer for a month produces exactly that. The two clocks are separate columns because they answer separate questions, and the retention window is only meaningful measured from the moment there is something to look at.
 
 ## Rejected
 
@@ -50,6 +54,8 @@ Adding a counter means restating `Stable counter names`, and #838's gate require
 **Bisect the batch to find the poisonous event.** This would set aside one event rather than a batch, which is a smaller hole. It is also considerably more machinery on a failure path, and the batch is already small. Worth revisiting if the hole turns out to matter in practice; not worth it first.
 
 **An attempt bound alone.** Rejected above: at 120 attempts a minute it converts every transient blip into a set-aside.
+
+**Reusing the first-failure stamp for retention.** One fewer column, and it makes the operator's inspection window collapse to nothing for exactly the hosts most likely to need it. Covered above.
 
 ## Not in this change
 

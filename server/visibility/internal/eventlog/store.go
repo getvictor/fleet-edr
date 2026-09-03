@@ -301,7 +301,8 @@ func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
 //	0 = pending, claimable
 //	1 = acknowledged, terminal, deleted by PruneProcessed
 //	2 = claimed, with claimed_at_ns; re-offered once the lease expires
-//	3 = SET ASIDE, withdrawn from processing after repeated failure (issue #836), deleted by PruneSetAside on the retention window
+//	3 = SET ASIDE, withdrawn from processing after repeated failure (issue #836), stamped set_aside_at_ns, deleted by
+//	    PruneSetAside once that stamp is older than the retention window
 //
 // Only 0 and a lease-expired 2 are claimable, so 3 is excluded from ClaimForHost by the predicate that was already there.
 
@@ -333,6 +334,16 @@ const (
 // bound, nothing newer for that host is ever claimed and the host stops contributing to the graph and raising detections entirely
 // (issue #836). Setting the events aside is not data loss: the archive is written before the queue and retained on its own window,
 // so what is given up is those events' contribution to the graph and their evaluation by rules.
+//
+// A claim is identified here by state alone, not by owner, which leaves one window this does not close: a worker whose fold outran
+// the 5-minute claim lease nacks rows a replacement worker has since re-claimed, resetting that claim and counting an attempt
+// against it. The window is narrow by construction, since a live claim is refused to every other claimer by both the claimable
+// predicate and the in-flight floor, so reaching it needs a fold slower than the whole lease. It is also pre-existing and bounded:
+// the replacement's Ack still lands and the event is still processed, so the cost is an inflated attempt count rather than lost
+// work, and a spurious set-aside would need that to recur twenty times across fifteen minutes on one batch. Closing it properly
+// means carrying the claim stamp back to the caller and making Nack and Ack conditional on still owning it, which changes a
+// cross-context interface and fixes a different defect (the same stale nack can also let two workers process one event). Tracked
+// as issue #840 rather than folded in here.
 func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, err error) {
 	if len(eventIDs) == 0 {
 		return 0, nil
@@ -367,9 +378,9 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 	failingSince := now - setAsideWindow.Nanoseconds()
 	query, args, err = sqlx.In(`
 		UPDATE event_queue
-		SET processed = 3
+		SET processed = 3, set_aside_at_ns = ?
 		WHERE processed = 0 AND event_id IN (?) AND attempts >= ? AND first_failed_at_ns <= ?`,
-		eventIDs, setAsideAttempts, failingSince)
+		now, eventIDs, setAsideAttempts, failingSince)
 	if err != nil {
 		return 0, fmt.Errorf("nack set-aside build query: %w", err)
 	}
@@ -418,23 +429,23 @@ func (s *Store) PruneProcessed(ctx context.Context, batchSize int) (int64, error
 	return total, nil
 }
 
-// PruneSetAside deletes set-aside rows (processed = 3) whose first failure is older than retentionDays, returning the total removed.
+// PruneSetAside deletes set-aside rows (processed = 3) withdrawn longer ago than retentionDays, returning the total removed.
 //
 // Needed because PruneProcessed only deletes acked rows, so without this a set-aside row would sit in the work queue for the life
 // of the deployment. Retaining them at all is deliberate: the row names the exact events a host stopped contributing, which the
 // counter cannot. Retaining them forever is not, so the retention window doubles as the period an operator has to look.
 //
-// Aged on first_failed_at_ns rather than the row's timestamp, because that is when the events were withdrawn and so when the
-// operator's window should start. An event backlogged for a week and set aside today should be inspectable for the full window.
-//
-// retentionDays <= 0 prunes nothing, matching how the same knob disables the other retention sweeps.
+// Aged on set_aside_at_ns, when the entry was WITHDRAWN, not on first_failed_at_ns and not on the event's own timestamp. The three
+// diverge without bound: attempts accrue only while a host is online, so a batch can first fail, wait out an offline stretch longer
+// than the whole retention window, and only then reach the attempt bound. Ageing on first failure would withdraw that batch and
+// sweep it on the next tick, leaving no window to inspect it in, which is the opposite of what the window is for.
 func (s *Store) PruneSetAside(ctx context.Context, retentionDays, batchSize int) (int64, error) {
 	if retentionDays <= 0 {
 		return 0, nil
 	}
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).UnixNano()
 	total, err := s.pruneBatched(ctx, batchSize,
-		"DELETE FROM event_queue WHERE processed = 3 AND first_failed_at_ns < ? ORDER BY first_failed_at_ns LIMIT ?", cutoff)
+		"DELETE FROM event_queue WHERE processed = 3 AND set_aside_at_ns < ? ORDER BY set_aside_at_ns LIMIT ?", cutoff)
 	if err != nil {
 		return total, fmt.Errorf("prune set-aside event_queue: %w", err)
 	}

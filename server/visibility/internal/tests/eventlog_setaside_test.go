@@ -201,38 +201,65 @@ func TestSetAside_RetainsTheEntry(t *testing.T) {
 	require.Equal(t, int64(1), setAside)
 
 	var row struct {
-		Processed int    `db:"processed"`
-		Payload   string `db:"payload"`
-		Attempts  int    `db:"attempts"`
+		Processed    int    `db:"processed"`
+		Payload      string `db:"payload"`
+		Attempts     int    `db:"attempts"`
+		SetAsideAtNs int64  `db:"set_aside_at_ns"`
 	}
 	require.NoError(t, db.GetContext(t.Context(), &row,
-		"SELECT processed, payload, attempts FROM event_queue WHERE event_id = 'retained-1'"),
+		"SELECT processed, payload, attempts, set_aside_at_ns FROM event_queue WHERE event_id = 'retained-1'"),
 		"the entry must still exist, or which events were withdrawn is unrecoverable")
 	assert.Equal(t, 3, row.Processed, "set aside, which is a state and not a deletion")
 	assert.JSONEq(t, `{"pid":1}`, row.Payload, "with its payload intact")
 	assert.Positive(t, row.Attempts, "and the attempt count that explains why")
+	assert.InDelta(t, time.Now().UnixNano(), row.SetAsideAtNs, float64(time.Minute),
+		"stamped when it was withdrawn, which is the clock the retention sweep reads")
+
+	// The seam, asserted as behaviour rather than as a column value. Nack stamping the withdrawal and PruneSetAside ageing on that
+	// stamp were tested apart, and nothing joined them: the sweep test plants rows with an explicit stamp, so dropping the stamp
+	// from Nack left set_aside_at_ns at 0, read as withdrawn at the epoch, and swept every set-aside entry on the first pass. That
+	// deletes the record of every host's gap immediately, and it passed the whole file.
+	kept, err := log.PruneSetAside(t.Context(), 30, 100)
+	require.NoError(t, err)
+	assert.Zero(t, kept, "an entry withdrawn moments ago is inside any sane retention window")
+	var still int
+	require.NoError(t, db.GetContext(t.Context(), &still,
+		"SELECT COUNT(*) FROM event_queue WHERE event_id = 'retained-1'"))
+	assert.Equal(t, 1, still, "so the operator still has something to look at")
 }
 
 // spec:server-event-ingestion/a-batch-that-cannot-be-processed-does-not-stall-its-host/events-set-aside-do-not-accumulate-without-bound
+// spec:server-event-ingestion/a-batch-that-cannot-be-processed-does-not-stall-its-host/the-retention-window-starts-when-events-are-withdrawn
 //
 // TestPruneSetAside covers the retention sweep from both sides, and the disabled case.
 //
 // Both sides, because a sweep that deleted everything would pass a test that only checked the old entry was gone, and would erase
 // the window an operator has to look at a host's gap. The disabled case, because reading a zero retention as "keep nothing older
 // than now" would delete every set-aside entry on the first sweep of a deployment that asked to keep them.
+//
+// It also pins WHICH clock the sweep reads, because the obvious wrong one passes every other assertion here.
 func TestPruneSetAside(t *testing.T) {
 	t.Parallel()
 	log, db := newEventLogWithDB(t)
 	ctx := t.Context()
 
 	// Written straight to the table: the recorder always stamps "now", and this needs entries either side of a boundary.
+	// The third row is the one that separates the two clocks: withdrawn an hour ago, but first failed longer ago than the whole
+	// window, which is the shape a host that fails a batch and then goes offline for a month produces. Ageing the sweep on first
+	// failure sweeps it immediately and leaves nothing to inspect.
 	for _, tc := range []struct {
-		id  string
-		age time.Duration
-	}{{"stale-aside", 40 * 24 * time.Hour}, {"fresh-aside", 1 * time.Hour}} {
+		id             string
+		setAsideAge    time.Duration
+		firstFailedAge time.Duration
+	}{
+		{"stale-aside", 40 * 24 * time.Hour, 40 * 24 * time.Hour},
+		{"fresh-aside", 1 * time.Hour, 1 * time.Hour},
+		{"long-failing-recently-withdrawn", 1 * time.Hour, 90 * 24 * time.Hour},
+	} {
 		_, err := db.ExecContext(ctx, `
-			INSERT INTO event_queue (event_id, host_id, timestamp_ns, event_type, payload, processed, first_failed_at_ns)
-			VALUES (?, 'host-prune', 1000, 'exec', '{}', 3, ?)`, tc.id, time.Now().Add(-tc.age).UnixNano())
+			INSERT INTO event_queue (event_id, host_id, timestamp_ns, event_type, payload, processed, first_failed_at_ns, set_aside_at_ns)
+			VALUES (?, 'host-prune', 1000, 'exec', '{}', 3, ?, ?)`,
+			tc.id, time.Now().Add(-tc.firstFailedAge).UnixNano(), time.Now().Add(-tc.setAsideAge).UnixNano())
 		require.NoError(t, err)
 	}
 
@@ -243,8 +270,10 @@ func TestPruneSetAside(t *testing.T) {
 	var remaining []string
 	require.NoError(t, db.SelectContext(ctx, &remaining,
 		"SELECT event_id FROM event_queue WHERE processed = 3 ORDER BY event_id"))
-	assert.Equal(t, []string{"fresh-aside"}, remaining,
-		"the entry inside the window is kept: deleting it would close an operator's window on a host's gap")
+	assert.Equal(t, []string{"fresh-aside", "long-failing-recently-withdrawn"}, remaining,
+		"both entries inside the window are kept, including the one whose first failure predates it: the window an operator has "+
+			"to look starts when the events were withdrawn, and attempts accrue only while a host is online, so the two clocks "+
+			"diverge without bound")
 
 	t.Run("a non-positive retention keeps them indefinitely", func(t *testing.T) {
 		for _, retention := range []int{0, -1} {
