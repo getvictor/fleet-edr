@@ -344,3 +344,36 @@ func TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck(t *testing.T) {
 		assert.True(t, logged, "the failure is dropped, but not silently")
 	})
 }
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-failed-process-graph-read-retries-the-batch-instead-of-acknowledging-it
+//
+// TestProcessor_FailedGraphReadIsNackedNotAcked joins the two halves of issue #798's fix.
+//
+// The engine test proves a failed graph read comes back as a retryable error; the processor tests above prove a retryable error is
+// nacked. Nothing joined them, and "the two halves are covered separately" is exactly how #836's withdrawal stamp shipped
+// untested. This drives the error in the SHAPE the read decorator actually produces, wrapped the way a rule then wraps it, and
+// asserts the outcome that matters: the events go back on the queue instead of being acknowledged and never evaluated again.
+//
+// It also pins the classification the other way. A read failure must NOT be counted as a materialization retry: that counter is
+// how an operator spots a replica falling behind on graph materialization, and a database outage is a different condition with a
+// different response.
+func TestProcessor_FailedGraphReadIsNackedNotAcked(t *testing.T) {
+	t.Parallel()
+
+	log := &scriptedEventLog{batch: oneEventBatch()}
+	handler := &capturingLogHandler{}
+	rec := &capturingRecorder{}
+	// The decorator's shape (graph read <name> unavailable: <cause>: ErrRetryBatch), wrapped again by the rule and the engine.
+	readFailure := fmt.Errorf("rule dns_c2_beacon: get network events for pid 42: graph read GetNetworkEventsForProcess "+
+		"unavailable: dial tcp: connect: connection refused: %w", rulesapi.ErrRetryBatch)
+	p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: readFailure}, singleCycleOpts(handler))
+	p.SetMetrics(rec)
+
+	p.ProcessOnce(context.Background())
+
+	assert.Equal(t, []string{"evt-1"}, log.nacked,
+		"a failed graph read must return the batch to the queue; acking it loses the detections for every event in flight")
+	assert.Empty(t, log.acked, "and must never acknowledge it")
+	assert.Zero(t, rec.materializationRetries,
+		"a dependency outage is not a materialization race, and must not inflate the counter that tracks one")
+}
