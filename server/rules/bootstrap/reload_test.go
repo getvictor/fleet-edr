@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -72,6 +73,7 @@ func TestReload_InstallsStoredContentAndStampsItsVersion(t *testing.T) {
 }
 
 // spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/a-failed-reload-keeps-the-set-already-in-force
+// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/content-that-loads-to-nothing-installs-nothing
 //
 // TestReload_KeepsThePreviousSetWhenContentCannotBeUsed is the case that separates reload from startup.
 //
@@ -105,6 +107,20 @@ func TestReload_KeepsThePreviousSetWhenContentCannotBeUsed(t *testing.T) {
 		{
 			name:     "the corpus was emptied",
 			corpus:   fakeCorpus{version: 9, docs: nil},
+			wantErr:  false,
+			wantWarn: true,
+		},
+		{
+			// The loader refuses a rule it cannot run individually and reports that as success with nothing loaded, NOT as an
+			// error, so this arrives on the happy path. Review caught it: without a guard, publishing a corpus in which every
+			// document is refused replaces a working rule set with the natively written rules alone, which looks like an ordinary
+			// reload in the log. A file_event rule is the real refusal this sensor produces, since it reads telemetry the agent
+			// does not collect.
+			name: "every document is refused individually",
+			corpus: fakeCorpus{version: 9, docs: []rulecontentapi.Document{{
+				Path:    "imported/file_event/file_event_macos_emond_launch_daemon.yml",
+				Content: mustReadEmbedded(t, "imported/file_event/file_event_macos_emond_launch_daemon.yml"),
+			}}},
 			wantErr:  false,
 			wantWarn: true,
 		},
@@ -297,4 +313,13 @@ func TestInstallRuleSet_IsSafeUnderConcurrentReads(t *testing.T) {
 	wg.Wait()
 
 	assert.Len(t, r.svc.ActiveRules(), 1, "and the set in force after the churn is one whole generation, not a mixture")
+}
+
+// mustReadEmbedded reads one document out of the corpus built into this binary, so a fixture is real content the loader treats the
+// way it treats production content rather than a string that merely resembles a rule.
+func mustReadEmbedded(t *testing.T, docPath string) []byte {
+	t.Helper()
+	body, err := fs.ReadFile(EmbeddedCorpusFS(), docPath)
+	require.NoErrorf(t, err, "the embedded corpus must still hold %s", docPath)
+	return body
 }

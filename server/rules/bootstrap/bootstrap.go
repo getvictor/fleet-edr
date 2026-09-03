@@ -86,8 +86,10 @@ type Rules struct {
 	// can rebuild it. cmd/main wires the detection engine's LoadActive here; keeping it a plain func leaves this context free of a
 	// detection import (ADR-0004), the same posture as the PrincipalLabel and CommandBatchInserter deps.
 	//
-	// Atomic because it is installed AFTER Run has already started: cmd/main launches this context's loops before it wires the
-	// engine's initial load, so a plain field would be written while the refresh goroutine reads it.
+	// Atomic for the shape of the API rather than for a race in today's wiring. cmd/main installs the observer while wiring the
+	// contexts and starts this context's loops only afterwards, so nothing writes the field once the refresh goroutine is reading
+	// it. Nothing ENFORCES that order though: both the setter and Run are exported, and the cost of making the safe order
+	// unconditional is one pointer load per install, on a path that runs when content changes.
 	ruleSetObserver atomic.Pointer[func()]
 }
 
@@ -191,7 +193,7 @@ func (r *Rules) installRuleSet(rules []api.Rule, version int64) int {
 // the rules. cmd/main wires the detection engine's LoadActive.
 //
 // The callback runs synchronously on the refresh loop's goroutine, so it must not block: it is meant for rebuilding an in-memory
-// index, which is what the engine does with it.
+// index, which is what the engine does with it. Safe to call before or after Run.
 func (r *Rules) SetRuleSetObserver(observe func()) {
 	r.ruleSetObserver.Store(&observe)
 }
@@ -320,6 +322,14 @@ func (r *Rules) Reload(ctx context.Context) (int, error) {
 	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
 	if err != nil {
 		return 0, fmt.Errorf("load rule corpus: %w", err)
+	}
+	if len(loaded) == 0 {
+		// Every document was refused individually, which the loader reports as success with nothing loaded rather than as an error.
+		// Installing that would drop every corpus detection while looking like a normal reload, so it is treated exactly like the
+		// emptied corpus above: content that loads to nothing installs nothing.
+		r.logger.WarnContext(ctx, "rules: no document in the stored rule corpus could be loaded; keeping the rule set already in force",
+			"documents", len(docs), "refused", len(rejected))
+		return 0, nil
 	}
 
 	n := r.installRuleSet(catalog.NewWithCorpus(r.detectionConfigSvc, loaded), version)
