@@ -354,7 +354,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
-			p.reportSetAside(lockedCtx, host, setAside, stageBuilder, err)
+			p.reportSetAside(lockedCtx, host, setAside, "builder")
 		}
 		return nil
 	}
@@ -415,7 +415,7 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
-			p.reportSetAside(ctx, hostOf(events), setAside, stageDetection, err)
+			p.reportSetAside(ctx, hostOf(events), setAside, "detection")
 			return 0
 		}
 	}
@@ -490,49 +490,11 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 	// upgrade cutover). Same DEBUG treatment so a recurring wait cannot flood the logs, but deliberately NOT counted on the
 	// materialization metric: that counter is how an operator detects a replica behind on graph materialization, and adding
 	// unrelated waits to it would make it report a problem that is not happening.
-	// A failed read logs at DEBUG like the waits below, and is surfaced by CONSEQUENCE rather than per attempt. Warning on every
-	// retry was the first attempt at this and it recreated precisely what these branches exist to prevent: at the 500ms cadence a
-	// sustained outage is ~120 lines a minute per affected host for the whole fifteen minutes before the queue sets the batch
-	// aside, which is the amplification measured at ~130/min from one host.
-	//
-	// Nothing louder is needed, because a retry that succeeds has cost nothing: the detections are preserved, which is the whole
-	// point of classifying the failure as retryable (issue #798). When retries do NOT succeed, the queue sets the batch aside and
-	// that record is at ERROR, names the host, and carries this error as its cause, alongside the per-host edr.events.set_aside
-	// counter that dashboards alert on. So the transient case is silent because it is harmless, and the case that costs
-	// detections is loud and diagnosable, without a line per poll in between.
-	//
-	// Given its own branch rather than falling through to the next one only to keep it out of the materialization counter, which
-	// tracks a replica behind on graph materialization: a different condition with a different response.
-	if errors.Is(err, rulesapi.ErrRuleReadUnavailable) {
-		p.logger.DebugContext(ctx, "rule data read unavailable, will retry batch", "err", err)
-		return
-	}
 	if errors.Is(err, rulesapi.ErrRetryBatch) {
 		p.logger.DebugContext(ctx, "detection batch not yet decidable, will retry", "err", err)
 		return
 	}
 	p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
-}
-
-// The two stages a batch can be withdrawn at. Constants rather than literals at the call sites because the stage now SELECTS the
-// consequence reported below, so a typo would quietly report the wrong one.
-const (
-	stageBuilder   = "builder"
-	stageDetection = "detection"
-)
-
-// consequenceOf names what withdrawing a batch actually costs at each stage. They are not the same, and reporting the wrong one
-// sends an operator looking in the wrong place.
-//
-// A batch withdrawn at the BUILDER stage never reached the process graph, so that host's tree has a hole. A batch withdrawn at the
-// DETECTION stage was already folded in by ProcessBatch before evaluation ran (evaluateAndAck operates on an already-materialized
-// batch), so the graph is intact and what was lost is the rule evaluation of those events. Reporting a graph gap there is simply
-// false, and it was false for the alert-persistence path before this too.
-func consequenceOf(stage string) string {
-	if stage == stageBuilder {
-		return "this host has a gap in its process graph"
-	}
-	return "these events were never evaluated by detection rules"
 }
 
 // reportSetAside surfaces events the queue withdrew from processing after repeated failure.
@@ -545,17 +507,13 @@ func consequenceOf(stage string) string {
 // Logged at ERROR rather than WARN. The consequence is a gap in one host's process tree and a set of events no rule ever saw,
 // which is not a condition to notice in aggregate later.
 //
-// The failure that caused it is carried too. Without it this line reports THAT a host has a gap and gives an operator nothing to
-// act on: the retries that led here are logged at DEBUG when the cause is retryable, so by the time the ERROR fires the evidence
-// has usually not been emitted at all. A deterministic failure repeats identically, so the last one is the representative one.
-//
 // zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
-func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string, cause error) {
+func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string) {
 	if setAside <= 0 {
 		return
 	}
-	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure",
-		"host_id", hostID, "events", setAside, "stage", stage, "consequence", consequenceOf(stage), "err", cause)
+	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure; this host has a gap in its process graph",
+		"host_id", hostID, "events", setAside, "stage", stage)
 	if p.metrics != nil {
 		p.metrics.EventsSetAside(ctx, hostID, setAside)
 	}

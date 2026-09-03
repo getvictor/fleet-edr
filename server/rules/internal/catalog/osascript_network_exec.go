@@ -119,7 +119,7 @@ func (r *OsascriptNetworkExec) Evaluate(ctx context.Context, events []api.Event,
 	for _, evt := range events {
 		f, osaPID, err := r.evalEvent(ctx, evt, s, seenOsa)
 		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fatal)
+			return nil, fatal
 		}
 		if f != nil {
 			findings = append(findings, *f)

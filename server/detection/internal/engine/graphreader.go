@@ -35,12 +35,6 @@ var _ api.GraphReader = (*retryableGraphReader)(nil)
 
 // retryable marks a read failure as one the batch should be retried for. Returns nil unchanged so callers can wrap unconditionally.
 //
-// ErrRuleReadUnavailable rather than the bare ErrRetryBatch, and the distinction is not cosmetic: the generic sentinel is ABSORBED
-// by the per-event rule loops so the batch continues, which is right for an event that cannot be decided yet and wrong for a
-// failed read, where the next event's read reaches the same unavailable dependency. That is the whole divergence. It is logged the
-// same way, quietly and per attempt, and it does NOT stop the batch's other rules; both are deliberate and the sentinel's own
-// comment says why.
-//
 // The retry is not bounded here and does not need to be: a read that fails permanently rather than transiently is caught by the
 // work queue's own bound, which sets the batch aside once it has exceeded both an attempt count and a duration (issue #836). That
 // bound is what makes this classification safe, since without it a permanently failing read would hold its host's queue forever.
@@ -48,7 +42,7 @@ func retryable(err error, read string) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("graph read %s: %w: %w", read, err, rulesapi.ErrRuleReadUnavailable)
+	return fmt.Errorf("graph read %s unavailable: %w: %w", read, err, rulesapi.ErrRetryBatch)
 }
 
 func (r *retryableGraphReader) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {

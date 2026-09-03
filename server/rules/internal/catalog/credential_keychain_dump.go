@@ -105,7 +105,7 @@ func (r *CredentialKeychainDump) EvaluateScoped(
 
 		proc, err := view.Subject()
 		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fatal)
+			return nil, fatal
 		}
 		if proc == nil {
 			// The exec's own row never materialized within the grace window (a young miss raises the retryable

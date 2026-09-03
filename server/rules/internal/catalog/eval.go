@@ -30,20 +30,12 @@ import (
 type pendingMiss struct{ err error }
 
 // absorb classifies a per-event evaluation error. A retryable error is remembered (first one wins, so the reported error names the
-// event that started the wait) and absorb returns nil, telling the caller to continue the batch. A FAILED GRAPH READ
-// (api.ErrRuleReadUnavailable) and any other error are returned unchanged for the caller to propagate immediately: those are not
-// per-event conditions and retrying the remaining events against a broken reader would just multiply the failure.
+// event that started the wait) and absorb returns nil, telling the caller to continue the batch. Any other error is
+// a genuine failure (a store error, a malformed graph read) and is returned unchanged for the caller to propagate immediately: those
+// are not per-event conditions and retrying the remaining events against a broken reader would just multiply the failure.
 func (p *pendingMiss) absorb(err error) error {
 	if err == nil {
 		return nil
-	}
-	// A failed graph read is retryable but is NOT a per-event condition, so it is propagated rather than absorbed. Absorbing it
-	// would continue the batch against a reader that has just failed, and every remaining read would fail identically: one outage
-	// becomes hundreds of doomed queries against a database already in trouble. That is the case this function's last paragraph
-	// always described; it stopped holding when graph read failures started carrying the retryable sentinel (issue #798), which is
-	// why they carry their own.
-	if errors.Is(err, api.ErrRuleReadUnavailable) {
-		return err
 	}
 	if errors.Is(err, api.ErrRetryBatch) {
 		if p.err == nil {
@@ -52,30 +44,6 @@ func (p *pendingMiss) absorb(err error) error {
 		return nil
 	}
 	return err
-}
-
-// fatalResult is the pair a per-event loop returns when absorb reports a fatal error. Every such loop MUST return through this
-// rather than deciding for itself.
-//
-// The policy is one line and lives in one place because there are nine of these loops and they were identical in getting it wrong.
-// A RETRYABLE fatal (a dependency that is unavailable) keeps the findings the rule already resolved from earlier events: the
-// engine persists those alongside the error and still retries the batch, so discarding them loses detections outright once a
-// permanently failing batch is set aside, because nothing re-derives them. Only a NON-retryable fatal discards, and for a reason
-// that does not apply to the other case: that path means the rule itself misbehaved, so its output is not trustworthy.
-//
-// A loop that writes `return nil, fatal` by hand reintroduces the bug for its own rule alone, which is how this was missed the
-// first time: the shared helper was fixed and the eight custom loops were not (issue #798).
-//
-// What survives here is the findings, which the engine persists as alerts. A match that is only COUNTED (the rule resolved to
-// monitor mode) rides the batch tally instead, and the engine drops that on any retryable error so a retried batch is not counted
-// twice. A batch that is ultimately set aside therefore contributes no monitor count. That is a gap in tuning telemetry rather
-// than a lost detection, since a monitor-mode match raises no alert either way, and the count is documented as an approximation.
-// Carrying the tally onto the set-aside path is issue #843.
-func fatalResult(findings []api.Finding, fatal error) ([]api.Finding, error) {
-	if errors.Is(fatal, api.ErrRetryBatch) {
-		return findings, fatal
-	}
-	return nil, fatal
 }
 
 // evalEachScopedEvent is evalEachEvent for a rule that reads Sigma fields, threading the batch scope to its evaluator so the
@@ -112,7 +80,7 @@ func evalEachEvent(
 	for _, evt := range events {
 		f, err := eval(ctx, evt, s)
 		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fatal)
+			return nil, fatal
 		}
 		if f != nil {
 			findings = append(findings, *f)

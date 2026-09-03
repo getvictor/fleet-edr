@@ -364,8 +364,8 @@ func TestProcessor_FailedGraphReadIsNackedNotAcked(t *testing.T) {
 	handler := &capturingLogHandler{}
 	rec := &capturingRecorder{}
 	// The decorator's shape (graph read <name> unavailable: <cause>: ErrRetryBatch), wrapped again by the rule and the engine.
-	readFailure := fmt.Errorf("rule dns_c2_beacon: get network events for pid 42: graph read GetNetworkEventsForProcess: "+
-		"dial tcp: connect: connection refused: %w", rulesapi.ErrRuleReadUnavailable)
+	readFailure := fmt.Errorf("rule dns_c2_beacon: get network events for pid 42: graph read GetNetworkEventsForProcess "+
+		"unavailable: dial tcp: connect: connection refused: %w", rulesapi.ErrRetryBatch)
 	p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: readFailure}, singleCycleOpts(handler))
 	p.SetMetrics(rec)
 
@@ -376,40 +376,4 @@ func TestProcessor_FailedGraphReadIsNackedNotAcked(t *testing.T) {
 	assert.Empty(t, log.acked, "and must never acknowledge it")
 	assert.Zero(t, rec.materializationRetries,
 		"a dependency outage is not a materialization race, and must not inflate the counter that tracks one")
-}
-
-// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-failed-read-is-surfaced-by-consequence-not-per-attempt
-//
-// TestProcessor_FailedReadIsQuietPerAttemptAndLoudWhenSetAside pins how a failed read is surfaced, which took two attempts.
-//
-// The first cut logged it at WARN on the reasoning that DEBUG is generally not emitted in production. That recreated exactly what
-// this file's DEBUG branches exist to prevent: at the 500ms cadence a sustained outage is ~120 lines a minute per affected host,
-// for the fifteen minutes before the queue sets the batch aside, against an amplification this file already measured at ~130/min
-// from one host.
-//
-// The resolution is that a retry which succeeds has cost nothing, so it needs no line at all: the detections are preserved, which
-// is the point. The case that DOES cost detections is the set-aside, and that is already at ERROR with the host and now the cause.
-// So this asserts the quiet half here, and TestReportSetAside asserts the loud half.
-func TestProcessor_FailedReadIsQuietPerAttemptAndLoudWhenSetAside(t *testing.T) {
-	t.Parallel()
-
-	log := &scriptedEventLog{batch: oneEventBatch()}
-	handler := &capturingLogHandler{}
-	rec := &capturingRecorder{}
-	readFailure := fmt.Errorf("rule dns_c2_beacon: rule read GetNetworkEventsForProcess: connection refused: %w",
-		rulesapi.ErrRuleReadUnavailable)
-	p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{err: readFailure}, singleCycleOpts(handler))
-	p.SetMetrics(rec)
-
-	p.ProcessOnce(context.Background())
-
-	lvl, ok := handler.levelOf("rule data read unavailable, will retry batch")
-	require.True(t, ok, "the retry is still recorded, so a diagnosis has something to read at debug level")
-	assert.Equal(t, slog.LevelDebug, lvl,
-		"but not per attempt at warn: that is ~120 lines a minute per host for a condition that may cost nothing")
-	_, warned := handler.levelOf("detection failure, will retry batch")
-	assert.False(t, warned, "and not through the genuine-failure branch, which would be the same flood")
-	assert.Zero(t, rec.materializationRetries,
-		"a dependency outage must not inflate the counter that tracks a replica behind on graph materialization")
-	assert.Equal(t, []string{"evt-1"}, log.nacked, "the batch is still nacked, which is what preserves the detections")
 }

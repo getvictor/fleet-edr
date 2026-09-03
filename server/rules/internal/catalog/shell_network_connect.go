@@ -125,7 +125,7 @@ func (r *ShellNetworkConnect) EvaluateScoped(
 		}
 		f, shellPID, err := r.evalNetwork(ctx, scope, evt, s, events, seenShell)
 		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fatal)
+			return nil, fatal
 		}
 		if f != nil {
 			findings = append(findings, *f)

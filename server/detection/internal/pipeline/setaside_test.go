@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"bytes"
-	"errors"
 	"log/slog"
 	"testing"
 
@@ -17,7 +16,7 @@ import (
 // TestReportSetAside covers the visibility half of issue #836, which is the half that was unambiguously wrong before.
 //
 // Bounding the retries stops a host stalling forever; it does not tell anyone it happened. Without a counter and a log, a host with
-// events withdrawn is indistinguishable from a quiet host, the backlog gauge does not separate them, and the only symptom
+// a gap in its process graph is indistinguishable from a quiet host, the backlog gauge does not separate them, and the only symptom
 // is an absence of detections nobody is watching for.
 //
 // The zero case is asserted as carefully as the non-zero one. Every ordinary retryable nack passes through here, so a report that
@@ -38,7 +37,7 @@ func TestReportSetAside(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-wedged", 7, "detection", errors.New("insert alert: Error 1406: Data too long"))
+		p.reportSetAside(t.Context(), "host-wedged", 7, "detection")
 
 		require.Len(t, rec.setAside, 1, "the counter is what an operator alerts on")
 		assert.Equal(t, "host-wedged", rec.setAside[0].hostID,
@@ -48,12 +47,6 @@ func TestReportSetAside(t *testing.T) {
 		out := logged.String()
 		assert.Contains(t, out, "host-wedged", "the log has to name the host, or the counter says only that it happened somewhere")
 		assert.Contains(t, out, "detection", "and the stage that failed, so there is somewhere to look")
-		assert.Contains(t, out, "never evaluated by detection rules",
-			"and what that stage actually cost: the builder already folded these events in, so claiming a graph gap is false")
-		assert.NotContains(t, out, "gap in its process graph",
-			"the graph-gap consequence belongs to a builder-stage withdrawal only")
-		assert.Contains(t, out, "Data too long",
-			"and the failure itself: the retries that led here log at DEBUG, so without this the ERROR names a gap and no cause")
 		assert.Contains(t, out, "level=ERROR",
 			"a gap in a host's process graph is not a condition to notice in aggregate later")
 	})
@@ -62,7 +55,7 @@ func TestReportSetAside(t *testing.T) {
 		t.Parallel()
 		p, logged, rec := newProcessor()
 
-		p.reportSetAside(t.Context(), "host-fine", 0, "builder", errors.New("transient"))
+		p.reportSetAside(t.Context(), "host-fine", 0, "builder")
 
 		assert.Empty(t, rec.setAside, "an ordinary retryable nack must not touch the counter")
 		assert.Empty(t, logged.String(),
@@ -76,7 +69,7 @@ func TestReportSetAside(t *testing.T) {
 
 		// The recorder is installed after construction (the two-phase setup cmd/main uses), so a nil one is a real state and not
 		// a defensive hypothetical.
-		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, "detection", errors.New("boom")) })
+		assert.NotPanics(t, func() { p.reportSetAside(t.Context(), "host-x", 3, "detection") })
 		assert.Contains(t, logged.String(), "host-x", "the log still fires, since it is the half that needs no wiring")
 	})
 }

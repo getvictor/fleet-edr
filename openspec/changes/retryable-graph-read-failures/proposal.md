@@ -40,33 +40,6 @@ Making a read failure retryable means a read that fails PERMANENTLY (a schema mi
 
 That is issue #836, and it is now bounded: a batch that exceeds both the attempt bound and the duration bound is set aside so the host's queue advances. So the worst case of this change is a bounded delay and a bounded gap on one host, with a counter and an ERROR log naming it, rather than an unbounded stall. Sequencing #836 first is what makes this change's failure mode acceptable, and it is worth recording that the two issues are related that way.
 
-## A distinct sentinel, not the generic one
-
-The first cut wrapped read failures with `ErrRetryBatch` directly. That was wrong in three places at once, and wrong quietly, which is worse:
-
-- **`pendingMiss.absorb` absorbed them.** That function continues the batch past a retryable per-event miss on purpose (issue #661: one permanently orphaned event must not mask every event behind it). A failed read is not that condition. Its own doc comment already said so ("retrying the remaining events against a broken reader would just multiply the failure"); routing read failures through the generic sentinel made the code stop matching its comment, and turned one outage into a read per event per rule on every retry.
-- **The engine kept evaluating the batch's other rules**, each repeating the same doomed read.
-- **The processor logged it at DEBUG**, a branch that exists so a rule which deliberately WAITS (sensor_tamper waits out a recovery window) cannot flood the logs. DEBUG is generally not emitted in production, so an outage costing detections across every host in flight would have been visible only as an absence of alerts.
-
-`ErrRuleReadUnavailable` wraps `ErrRetryBatch`, so everything asking "should this batch be retried" still matches, while the per-event loops can tell a failed read from a wait.
-
-Two of those three fixes were then over-corrections, and review caught both:
-
-- **Stopping the batch's other rules was wrong**, because the reads do not share one dependency. The process and exec-chain lookups read MySQL; the event lookups delegate to the ClickHouse archive. An archive outage would have skipped every rule that reads only MySQL, and once the queue sets the batch aside those detections are lost rather than late. Only the per-event multiplier is removed now, which is where the batch-size factor actually lives.
-- **Warning per attempt was wrong**, because at the processing cadence that is a continuous stream for as long as the condition lasts, which is the amplification the quiet treatment of deliberate waits already exists to avoid. It is surfaced by consequence instead: a retry that succeeds costs nothing and needs no line, and when retries are exhausted the set-aside record is at ERROR and now carries the failure as its cause.
-
-Propagating also had to stop discarding the findings a rule had already resolved from earlier events, which is what `evalEachEvent`'s contract promises and what the engine persists alongside a retryable error. Discarding them loses detections outright once a permanently failing batch is set aside, since nothing re-derives them.
-
-That fix then had to be applied nine times, not once. Eight rules hand-roll their own per-event loop and each returned `nil` on the fatal path, so fixing the shared helper left every one of them discarding its own findings. The policy now lives in a single `fatalResult` and every loop returns through it, guarded by a test that reads the package's own source and fails if any loop decides locally again. A behavioural test per rule would be nine setups that each have to reach a graph read past that rule's gating, and would still not fail when a tenth rule is added.
-
-The sentinel is named for the READ rather than for a store, for the same reason: naming "the process graph" would tell an operator the wrong thing whenever it is the archive that is down.
-
-## What preservation does and does not cover
-
-Preserving the findings covers the ones that raise an ALERT. A match that is only counted, because the rule resolved to monitor mode, rides the batch tally, and the engine drops that on any retryable error so a replayed batch is not counted once per attempt. A batch ultimately set aside therefore contributes no monitor count.
-
-Narrowed rather than fixed here, deliberately. It is tuning telemetry and not a detection: a monitor-mode match raises no alert whether or not it is counted, and the counter is already specified as an approximation with losses in both directions. Carrying the tally onto the set-aside path needs exactly-once recording across a store call that reports the withdrawal and an engine that holds the tally, which is failure-path plumbing worth its own change. Issue #843, and the narrowed guarantee is stated in the interface contract, in `fatalResult`, and in the delta so it cannot be read as covering both.
-
 ## Distinguishing a failed read from an empty one
 
 Only errors are wrapped. A read that legitimately matches no row returns a nil row and a nil error, which rules already treat as an answer, and that path is untouched. `resolveSubjectProcess` composes with this without change: it already passes store errors through unchanged and only synthesizes `ErrProcessNotYetMaterialized` for a MISS inside the grace window, so a read failure now arrives as retryable and a miss keeps its existing narrower contract.

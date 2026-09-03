@@ -105,26 +105,16 @@ type Rule interface {
 	// Evaluate runs the rule against a batch of events. Implementations may use gr to walk the historical process graph but must not
 	// mutate state. Returning nil findings is the common case.
 	//
-	// THREE error classes are handled differently, and the differences matter to rule authors:
+	// The two error classes are handled differently, and the difference matters to rule authors. An ordinary error discards this
+	// rule's findings for the batch and is logged at WARN, isolating a misbehaving rule from the rest. An error wrapping
+	// ErrProcessNotYetMaterialized does NOT discard them: the engine persists whatever findings came back alongside it and still
+	// propagates the miss, so the processor retries the batch and alert dedup makes the re-run idempotent.
 	//
-	//  1. An ordinary error discards this rule's findings for the batch and is logged at WARN, isolating a misbehaving rule from
-	//     the rest.
-	//  2. An error wrapping ErrProcessNotYetMaterialized does NOT discard them, and the implementation MUST NOT abandon the rest
-	//     of the batch: finish every event, then return the findings that DID resolve together with the miss. Bailing on the first
-	//     miss lets a permanently orphaned event (its fork/exec never captured, so its row never arrives) mask a real finding
-	//     elsewhere in the same batch until that finding's own grace window has elapsed, at which point it degrades to the silent
-	//     skip and is lost for good (issue #661).
-	//  3. An error wrapping ErrRuleReadUnavailable also does NOT discard them, but the implementation MUST stop the batch at once
-	//     rather than finishing it. The dependency is unavailable, so the next event's read reaches the same failure; continuing
-	//     multiplies one outage by the batch size for no gain (issue #798). Return the findings resolved so far with the error.
-	//
-	// The catalog's pendingMiss and fatalResult helpers implement all three, and a per-event loop should return through them rather
-	// than deciding locally.
-	//
-	// For 2 and 3 the engine persists the returned findings and still propagates the error, so the processor retries the batch and
-	// alert dedup makes the re-run idempotent. "Persists" means the findings that raise an ALERT. A match that is only COUNTED
-	// (the rule resolved to monitor mode) is recorded on the attempt that is acknowledged, so a batch ultimately set aside
-	// contributes no count: that number is tuning telemetry and already an approximation, and no alert is lost with it.
+	// An implementation MUST NOT abandon the rest of the batch when one event raises ErrProcessNotYetMaterialized. Finish evaluating
+	// every event, then return the findings that DID resolve together with the miss: the engine persists those findings and still
+	// retries the batch. Bailing on the first miss lets a permanently orphaned event (its fork/exec never captured, so its row never
+	// arrives) mask a real finding elsewhere in the same batch until that finding's own grace window has elapsed, at which point it
+	// degrades to the silent skip and is lost for good (issue #661). The catalog's pendingMiss helper implements this policy.
 	Evaluate(ctx context.Context, events []Event, gr GraphReader) ([]Finding, error)
 	// SupportedExclusionMatchTypes returns the exclusion match types this rule consults at evaluation time, i.e. the match types it
 	// passes to the ExclusionResolver. It returns no match types (nil or an empty slice, treated alike) for a rule that consults no
@@ -277,30 +267,6 @@ var ErrRetryBatch = errors.New("rules: batch not yet decidable")
 // It wraps ErrRetryBatch, so a consumer asking "should this batch be retried" matches both, while a consumer reporting WHY (the
 // materialization counter and its log line) still distinguishes this specific cause.
 var ErrProcessNotYetMaterialized = fmt.Errorf("%w: subject process not yet materialized", ErrRetryBatch)
-
-// ErrRuleReadUnavailable signals that a read a rule performed through GraphReader FAILED, as opposed to answering that nothing
-// matched. The engine wraps every such read, so no rule has to classify its own read failures (issue #798).
-//
-// Named for the READ rather than for a store, deliberately. GraphReader spans two independent dependencies: the process and
-// exec-chain lookups read MySQL, while GetNetworkEventsForProcess and GetHostEventsByType delegate to the ClickHouse event
-// archive. A sentinel or a log line naming "the process graph" would therefore tell an operator the wrong thing whenever it is the
-// archive that is down. Which read failed is carried in the wrapped error instead, where it is accurate for both.
-//
-// It wraps ErrRetryBatch because the batch must be retried rather than acked: the rule is not broken, its dependency is
-// unavailable, the events are still in the work queue, and swallowing the error costs the detections for every event in flight.
-//
-// It is a DISTINCT sentinel rather than the bare ErrRetryBatch because the two diverge in the per-event loops. A retryable miss is
-// ABSORBED so the batch continues (issue #661: one orphaned event must not mask the rest). A failed read is not a per-event
-// condition: the next event's read hits the same unavailable dependency, so continuing multiplies one outage by the batch size for
-// no gain. It is propagated instead, with whatever findings the rule already resolved.
-//
-// It does NOT stop the batch's other RULES. That over-corrects across the split above: a ClickHouse outage would skip rules that
-// read only MySQL, and once the queue sets the batch aside those detections are gone rather than merely delayed.
-//
-// A rule raising ErrRetryBatch must bound how long it keeps raising it. This sentinel is bounded elsewhere: the work queue sets a
-// batch aside once it has exceeded both its attempt and duration bounds (issue #836), so a permanently failing read cannot hold
-// its host's queue forever.
-var ErrRuleReadUnavailable = fmt.Errorf("%w: rule data read unavailable", ErrRetryBatch)
 
 // RuleMetadata is the per-rule descriptor the operator endpoints render. Used in two surfaces: GET /api/rules (the operator handler
 // maps the fields into a JSON-tagged ruleResponse struct, so the wire shape lives in rules/internal/operator and isn't on this

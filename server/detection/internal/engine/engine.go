@@ -76,9 +76,8 @@ const (
 )
 const tracerName = "server/detection/engine"
 
-// Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) for the
-// engine's own reads and writes; rules are handed ruleReader, which is that store wrapped so a failed read is retryable rather
-// than isolated like a broken rule (issue #798). The wrapper is built once, so dispatch stays non-allocating.
+// Engine manages a set of rules and evaluates them against event batches. The store handle is concrete (*mysql.Store) so rules reach
+// api.GraphReader through the same interface and dispatch stays non-allocating.
 type Engine struct {
 	rules []rulesapi.Rule
 	// dispatch maps an agent event type to the indices into rules of the rules that consume it, ascending. Rebuilt whenever the
@@ -229,12 +228,17 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 			// attempt that succeeds.
 			return nil, err
 		}
-		// A failed read deliberately does NOT stop the batch's remaining rules, even though it is the same condition for all of
-		// them within one rule. GraphReader spans two independent dependencies (MySQL for the process and chain lookups, the
-		// ClickHouse archive for the event lookups), so stopping here would let an archive outage skip every rule that reads only
-		// MySQL, and once the queue sets the batch aside those detections are lost rather than delayed. The per-event loops
-		// already remove the expensive factor by not re-reading a failed dependency for every event in the batch (issue #798).
-		pendingMiss = retryCause(pendingMiss, err)
+		// First retryable error wins, so the reported error names the rule that started the wait. The one exception is
+		// specificity: a materialization miss is UPGRADED over an already-stored generic wait, because the processor reads
+		// this error to decide whether to count edr.detection.materialization_retries. Without the upgrade, a rule that is
+		// merely waiting (sensor_tamper waits out a recovery window) and happens to run earlier in registration order would
+		// mask a real materialization miss on the same batch, and the counter an operator uses to spot a replica falling
+		// behind would under-report exactly when it matters.
+		if pendingMiss == nil ||
+			(!errors.Is(pendingMiss, rulesapi.ErrProcessNotYetMaterialized) &&
+				errors.Is(err, rulesapi.ErrProcessNotYetMaterialized)) {
+			pendingMiss = err
+		}
 	}
 	if pendingMiss != nil {
 		// Same reasoning as the hard error above: a retryable miss nacks the batch, so this attempt's matches are not the ones
@@ -242,36 +246,6 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 		return nil, pendingMiss
 	}
 	return tally.snapshot(), nil
-}
-
-// retryCause folds one rule's retryable error into the batch's reported cause, keeping every MATERIALLY DISTINCT one.
-//
-// Neither first-wins nor a precedence order is sufficient, because the two retry sentinels are read by DIFFERENT consumers and
-// dropping either loses a signal that nothing else carries:
-//
-//   - ErrProcessNotYetMaterialized drives the materialization-retry counter, which is how an operator spots a replica falling
-//     behind on graph materialization. A rule that is merely waiting (sensor_tamper waits out a recovery window) must not mask it
-//     by happening to run earlier in registration order, or the counter under-reports exactly when it matters.
-//   - ErrRuleReadUnavailable is what the set-aside record reports as the reason a host has a gap. A wait must not mask that
-//     either: an operator told the cause was a recovery window has been told the wrong thing about a database outage, and the
-//     retries that would have shown it are logged quietly by design.
-//
-// So a later error is JOINED when it carries a sentinel the stored cause does not, and dropped when it adds nothing. Ordinary
-// waits after the first therefore stay collapsed, keeping the common case one error that names the rule which started the wait.
-//
-// A joined cause matches both sentinels, so the counter still fires for the miss it contains while the set-aside record still
-// names the failed read. The processor classifies a joined cause by the first branch it matches, which is the materialization one:
-// correct, because a miss really did occur in that batch (issue #798).
-func retryCause(stored, next error) error {
-	if stored == nil {
-		return next
-	}
-	for _, sentinel := range []error{rulesapi.ErrProcessNotYetMaterialized, rulesapi.ErrRuleReadUnavailable} {
-		if errors.Is(next, sentinel) && !errors.Is(stored, sentinel) {
-			return errors.Join(stored, next)
-		}
-	}
-	return stored
 }
 
 // distinctEventTypes returns the event types a batch carries, in first-seen order.

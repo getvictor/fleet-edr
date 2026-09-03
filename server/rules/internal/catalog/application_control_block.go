@@ -108,7 +108,7 @@ func (r *ApplicationControlBlock) Evaluate(ctx context.Context, events []api.Eve
 		}
 		proc, err := resolveSubjectProcess(ctx, gr, evt, p.PID)
 		if fatal := miss.absorb(err); fatal != nil {
-			return fatalResult(findings, fmt.Errorf("application control block: %w", fatal))
+			return nil, fmt.Errorf("application control block: %w", fatal)
 		}
 		if proc == nil {
 			continue

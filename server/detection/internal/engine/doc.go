@@ -10,9 +10,6 @@
 //
 // The Rule interface itself lives in rules.api; engine consumes
 // []rules.api.Rule and calls rule.Evaluate(ctx, events,
-// detection.api.GraphReader). Rules are handed the store WRAPPED, so a
-// read that fails is retryable rather than isolated like a broken rule
-// (issue #798); the engine's own persistence keeps using the concrete
-// store. The wrapper is one long-lived value, so the inside-rule reads
-// stay non-allocating.
+// detection.api.GraphReader). The Engine's store handle satisfies
+// GraphReader directly so the inside-rule reads stay non-allocating.
 package engine
