@@ -36,9 +36,14 @@ type Corpus interface {
 // rule identity from file stems, including the duplicate-stem check that runs before any parsing; reimplementing that against a
 // document slice would be a second parser to keep in step with the first, which is the failure mode this codebase is most prone to.
 //
-// fstest.MapFS is used as the implementation rather than hand-rolling one. It is in the standard library's testing tree but is not
-// test-only code: it is an ordinary fs.FS implementation over a map, its semantics are specified, and writing a fourth-rate copy of
-// it to avoid the package name would be worse code for no gain.
+// fstest.MapFS is the implementation rather than a hand-rolled one, and the objection to that is worth answering here because the
+// package name invites it. testing/fstest does NOT depend on testing: its own imports are errors, fmt, io, io/fs, maps, path,
+// slices, strings, testing/iotest and time. So this links no test framework and registers no flags; MapFS is an ordinary fs.FS
+// over a map whose semantics are specified.
+//
+// Hand-rolling it would also be worse than it sounds. The loader reaches this through fs.WalkDir, so the implementation has to
+// synthesize the parent directories that a flat document set does not contain, which MapFS already does correctly. A local copy
+// would be fiddly code, exercised only here, in service of avoiding a package name.
 func FS(docs []Document) fs.FS {
 	mapped := make(fstest.MapFS, len(docs))
 	for _, d := range docs {
