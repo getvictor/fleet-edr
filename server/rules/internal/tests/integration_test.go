@@ -126,7 +126,7 @@ func (allowAllAuthZ) Allow(context.Context, identityapi.Action, identityapi.Reso
 func newRules(t *testing.T) *rulesbootstrap.Rules {
 	t.Helper()
 	s := full.Open(t)
-	r, err := rulesbootstrap.New(rulesbootstrap.Deps{
+	r, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
 		DB:     s,
 		Logger: slog.Default(),
 		AuthZ:  allowAllAuthZ{},
@@ -322,7 +322,7 @@ func TestOperator_GetAttackCoverage(t *testing.T) {
 func TestBootstrap_MissingDeps(t *testing.T) {
 	t.Parallel()
 	t.Run("nil DB", func(t *testing.T) {
-		_, err := rulesbootstrap.New(rulesbootstrap.Deps{})
+		_, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "DB")
 	})

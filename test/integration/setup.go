@@ -162,7 +162,7 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	})
 	require.NoError(t, err, "open response")
 
-	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
+	rulesCtx, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               logger,
 		AuthZ:                identityCtx.AuthZ(),

@@ -33,6 +33,7 @@ import (
 	"github.com/fleetdm/edr/server/metrics"
 	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
+	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/tracingpolicy"
 	"github.com/fleetdm/edr/server/ui"
@@ -311,7 +312,13 @@ func openContexts(
 	if responseCtx, err = openResponse(ctx, logger, db, detectionCtx, identityCtx); err != nil {
 		return
 	}
-	if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx); err != nil {
+	// rulecontent before rules: the supplier of rule definitions, per ADR-0021. Its schema and seed run here so the corpus is in
+	// place before the catalog is built from it (issue #766).
+	ruleContentCtx, err := openRuleContent(ctx, logger, db)
+	if err != nil {
+		return
+	}
+	if rulesCtx, err = openRules(ctx, logger, db, cfg, identityCtx, detectionCtx, responseCtx, ruleContentCtx); err != nil {
 		return
 	}
 	detectionCtx.LoadActive(rulesCtx.ContentService())
@@ -493,6 +500,28 @@ func openResponse(
 	return responseCtx, nil
 }
 
+// openRuleContent applies the rulecontent schema and seeds the corpus from the embedded vendored copy when storage is empty.
+//
+// Seeding here rather than in a migration keeps rule content out of the schema: it changes on its own cadence, and expressing 55
+// rule files as INSERTs would make every corpus change a schema change. The seed is guarded on an EMPTY corpus so it can never
+// overwrite content an operator authored (issue #767).
+func openRuleContent(ctx context.Context, logger *slog.Logger, db *sqlx.DB) (*rulecontentbootstrap.RuleContent, error) {
+	if err := rulecontentbootstrap.ApplySchema(ctx, db); err != nil {
+		return nil, fmt.Errorf("apply rulecontent schema: %w", err)
+	}
+	rcCtx, err := rulecontentbootstrap.New(rulecontentbootstrap.Deps{DB: db, Logger: logger})
+	if err != nil {
+		return nil, fmt.Errorf("open rulecontent: %w", err)
+	}
+	if _, err := rcCtx.SeedFrom(ctx, rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot, rulesbootstrap.EmbeddedCorpusIncludes); err != nil {
+		// Not fatal: the catalog falls back to the corpus embedded in this build, so a seed failure costs the ability to change
+		// detections without a release, not the detections themselves.
+		logger.WarnContext(ctx, "rulecontent: corpus seed failed; the catalog will use the corpus embedded in this build",
+			"err", err)
+	}
+	return rcCtx, nil
+}
+
 func openRules(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -501,10 +530,12 @@ func openRules(
 	identityCtx *identitybootstrap.Identity,
 	detectionCtx *detectionbootstrap.Detection,
 	responseCtx *responsebootstrap.Response,
+	ruleContentCtx *rulecontentbootstrap.RuleContent,
 ) (*rulesbootstrap.Rules, error) {
-	rulesCtx, err := rulesbootstrap.New(rulesbootstrap.Deps{
+	rulesCtx, err := rulesbootstrap.New(ctx, rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               logger,
+		Corpus:               ruleContentCtx.Corpus(),
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
 		PrincipalLabel:       identityCtx.Service().PrincipalLabel,

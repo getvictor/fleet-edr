@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/fleetdm/edr/server/httpserver"
 	identityapi "github.com/fleetdm/edr/server/identity/api"
 	"github.com/fleetdm/edr/server/migrations/runner"
+	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/appcontrol"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
@@ -52,6 +54,11 @@ type Deps struct {
 	// detection.api.Service.ListHosts that projects each HostSummary down to its host_id. Same optional-when-nil contract as
 	// CommandBatchInserter; nil disables the REST surface.
 	HostLister appcontrol.HostLister
+
+	// Corpus supplies rule definitions from the rulecontent context (ADR-0021): rulecontent produces content, rules consumes and
+	// evaluates it. Optional. When nil, or when the stored corpus is empty or fails to load, the catalog falls back to the corpus
+	// embedded in the binary, so a deployment that has not seeded storage behaves exactly as it did before (issue #766).
+	Corpus rulecontentapi.Corpus
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
@@ -74,7 +81,7 @@ type Rules struct {
 
 // New wires the rules context. Does NOT apply the schema (call
 // ApplySchema for that).
-func New(deps Deps) (*Rules, error) {
+func New(ctx context.Context, deps Deps) (*Rules, error) {
 	if deps.DB == nil {
 		return nil, errors.New("rules bootstrap: DB is required")
 	}
@@ -93,7 +100,7 @@ func New(deps Deps) (*Rules, error) {
 	detectionConfigStore := detectionconfig.NewStore(deps.DB)
 	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
 
-	rules := catalog.New(detectionConfigSvc)
+	rules := catalog.NewWithCorpus(detectionConfigSvc, loadCorpus(ctx, deps.Corpus, logger))
 	svc := service.New(rules, detectionConfigSvc, logger)
 
 	// Inject the per-rule exclusion-support map (issue #520) built from the live rule set so the create-exclusion API rejects a
@@ -232,6 +239,54 @@ func (r *Rules) pruneOnce(ctx context.Context, what string, prune func(context.C
 		r.logger.InfoContext(ctx, "rules: pruned "+what, "rows", deleted, "retention_days", r.retentionDays)
 	}
 }
+
+// loadCorpus returns the rule definitions to evaluate: the stored corpus when one is available, otherwise the corpus embedded in
+// the binary.
+//
+// Falling back rather than failing, and the reason is the acceptance criterion this serves: a load failure must leave the server
+// running detections rather than running none. At construction there is no previous good set to keep, so the embedded corpus IS the
+// previous good set, and it is the same content the seed would have written. A deployment whose storage is empty, unreachable, or
+// holding a malformed corpus therefore behaves exactly as it did before rule content acquired storage.
+//
+// Logged at WARN when it falls back for a REASON, and at neither when there is simply nothing stored: an unseeded corpus on first
+// boot is the expected state, not a problem.
+func loadCorpus(ctx context.Context, corpus rulecontentapi.Corpus, logger *slog.Logger) []api.Rule {
+	if corpus == nil {
+		return catalog.MustLoadImported()
+	}
+	docs, err := corpus.Documents(ctx)
+	if err != nil {
+		logger.WarnContext(ctx, "rules: stored rule corpus unreadable; using the corpus embedded in this build", "err", err)
+		return catalog.MustLoadImported()
+	}
+	if len(docs) == 0 {
+		return catalog.MustLoadImported()
+	}
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	if err != nil {
+		logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
+			"documents", len(docs), "err", err)
+		return catalog.MustLoadImported()
+	}
+	logger.InfoContext(ctx, "rules: loaded rule corpus from storage",
+		"documents", len(docs), "rules", len(loaded), "refused", len(rejected))
+	return loaded
+}
+
+// EmbeddedCorpusFS and EmbeddedCorpusRoot expose the vendored corpus embedded in this build, for seeding rulecontent's storage.
+//
+// Re-exported through bootstrap because it is already the seam tooling reaches the catalog through (see ImportedRejections), and
+// because catalog is an internal package. cmd/main passes these to rulecontent's seed; rulecontent itself takes an fs.FS and knows
+// nothing about where it came from, so the supplier direction ADR-0021 sets is not inverted. Both go away when the corpus files
+// move into rulecontent.
+func EmbeddedCorpusFS() fs.FS { return catalog.ImportedCorpusFS() }
+
+// EmbeddedCorpusRoot is the path prefix the embedded corpus is stored under, which the loader reads it back by.
+const EmbeddedCorpusRoot = catalog.CorpusRoot
+
+// EmbeddedCorpusIncludes reports whether a walked path is rule content rather than the packaging beside it, so a seed stores
+// exactly what the loader will read.
+func EmbeddedCorpusIncludes(p string) bool { return catalog.IsCorpusFile(p) }
 
 // ApplySchema applies the rules context's goose migration corpus and seeds the `Default` application control policy. Idempotent
 // (goose skips applied versions + INSERT IGNORE on the seed). No cross-context FKs; ordering with other contexts' ApplySchema is

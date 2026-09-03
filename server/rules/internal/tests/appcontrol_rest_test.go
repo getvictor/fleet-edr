@@ -126,7 +126,7 @@ func newAppControlRig(t *testing.T, hosts []string) *appControlRig {
 	inserter := newRecordingInserter()
 	audit := &recordingAudit{}
 	hostList := append([]string(nil), hosts...)
-	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
+	rules, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               slog.Default(),
 		AuthZ:                allowAllAuthZ{},
@@ -634,7 +634,7 @@ func TestAppControlREST_CreateRule_NoActorOnContextIs500(t *testing.T) {
 	db := full.Open(t)
 	inserter := newRecordingInserter()
 	audit := &recordingAudit{}
-	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
+	rules, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               slog.Default(),
 		AuthZ:                allowAllAuthZ{},
@@ -687,7 +687,7 @@ func TestAppControlREST_CreateRule_HostListerFailureRecorded(t *testing.T) {
 	db := full.Open(t)
 	inserter := newRecordingInserter()
 	audit := &recordingAudit{}
-	rules, err := rulesbootstrap.New(rulesbootstrap.Deps{
+	rules, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               slog.Default(),
 		AuthZ:                allowAllAuthZ{},

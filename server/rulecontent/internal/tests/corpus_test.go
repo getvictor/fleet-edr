@@ -1,0 +1,104 @@
+//go:build integration
+
+// Package tests holds the rulecontent context's integration tests: the corpus store against a real MySQL.
+package tests
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/fleetdm/edr/server/rulecontent/api"
+	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
+	rulecontentmysql "github.com/fleetdm/edr/server/rulecontent/internal/mysql"
+	"github.com/fleetdm/edr/server/testdb/full"
+)
+
+func newStore(t *testing.T) *rulecontentmysql.Store {
+	t.Helper()
+	db := full.Open(t)
+	require.NoError(t, rulecontentbootstrap.ApplySchema(t.Context(), db))
+	return rulecontentmysql.New(db)
+}
+
+// spec:rule-content/rule-content-is-stored-and-is-the-source-the-catalog-loads-from/replacing-content-removes-what-is-no-longer-in-it
+//
+// TestCorpus_ReplaceIsWholeCorpus pins that a replace is not an upsert.
+//
+// A corpus is the unit that is valid or not: a rule deleted upstream has to disappear, and a reader must never see half of one
+// version and half of another. Per-document upserts would leave a removed rule running forever, which is the shape of bug that
+// presents as a detection nobody can explain the origin of.
+func TestCorpus_ReplaceIsWholeCorpus(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	first, err := s.Replace(ctx, []api.Document{
+		{Path: "imported/a.yml", Content: []byte("a")},
+		{Path: "imported/b.yml", Content: []byte("b")},
+	})
+	require.NoError(t, err)
+
+	// b is gone upstream, c is new.
+	second, err := s.Replace(ctx, []api.Document{
+		{Path: "imported/a.yml", Content: []byte("a2")},
+		{Path: "imported/c.yml", Content: []byte("c")},
+	})
+	require.NoError(t, err)
+	assert.Greater(t, second, first, "every replace advances the version a replica polls")
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	paths := make([]string, 0, len(docs))
+	for _, d := range docs {
+		paths = append(paths, d.Path)
+	}
+	assert.Equal(t, []string{"imported/a.yml", "imported/c.yml"}, paths,
+		"a document absent from the new corpus must be gone, not left behind by an upsert")
+	assert.Equal(t, []byte("a2"), docs[0].Content, "and a changed document must carry its new content")
+}
+
+// TestCorpus_DocumentsAreOrderedByPath pins load order, which is observable.
+//
+// Registration order is what the operator-facing catalog and the generated rule reference list rules in. An order that varied by
+// replica would make those surfaces disagree depending on which replica answered.
+func TestCorpus_DocumentsAreOrderedByPath(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	// Inserted deliberately out of order.
+	_, err := s.Replace(ctx, []api.Document{
+		{Path: "imported/z.yml", Content: []byte("z")},
+		{Path: "imported/a.yml", Content: []byte("a")},
+		{Path: "imported/m.yml", Content: []byte("m")},
+	})
+	require.NoError(t, err)
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	require.Len(t, docs, 3)
+	assert.Equal(t, "imported/a.yml", docs[0].Path)
+	assert.Equal(t, "imported/m.yml", docs[1].Path)
+	assert.Equal(t, "imported/z.yml", docs[2].Path)
+}
+
+// spec:rule-content/rule-content-is-stored-and-is-the-source-the-catalog-loads-from/the-version-is-readable-without-reading-the-content
+//
+// TestCorpus_VersionStartsSeeded covers the counter's initial state.
+//
+// Seeded by the migration so a reader never distinguishes "no counter row" from "version zero", which would otherwise be an error
+// path every caller had to handle on a fresh deployment.
+func TestCorpus_VersionStartsSeeded(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+
+	version, err := s.Version(t.Context())
+	require.NoError(t, err, "the counter row must exist on a fresh schema")
+	assert.Zero(t, version)
+
+	empty, err := s.IsEmpty(t.Context())
+	require.NoError(t, err)
+	assert.True(t, empty, "and a fresh corpus is empty, which is what the seed keys on")
+}

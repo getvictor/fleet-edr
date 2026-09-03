@@ -112,7 +112,7 @@ func sigmaFilesUnder(fsys fs.FS, dir string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.EqualFold(path.Ext(p), ".yml") {
+		if !d.IsDir() && IsCorpusFile(p) {
 			names = append(names, p)
 		}
 		return nil
@@ -522,6 +522,42 @@ var importedRules = sync.OnceValues(func() ([]api.Rule, []rejection) {
 	}
 	return rules, rejected
 })
+
+// ImportedCorpusFS exposes the vendored corpus as an fs.FS, so a caller can seed storage from the copy embedded in this build.
+//
+// Exported because the corpus files still live in this package. ADR-0021 assigns rule content to `rulecontent`, and moving these
+// files there is a follow-up: it is mechanical, it touches 55 files, and doing it in the same change as the carve would bury the
+// carve. Until then the wiring runs through cmd/main, which passes this FS to rulecontent's seed, so rulecontent depends on
+// nothing here and the supplier direction the ADR sets is preserved.
+func ImportedCorpusFS() fs.FS { return importedCorpus }
+
+// IsCorpusFile reports whether a path is rule content, as opposed to the packaging that ships alongside it.
+//
+// Exported for the same reason CorpusRoot is: the loader and anything that STORES the corpus have to agree on what counts, and a
+// second copy of the rule would be a silent divergence. The vendored directory carries a README and a checksum manifest of the
+// snapshot as checked in, and neither is rule content. Storing them would be worse than untidy: a manifest of hashes sitting
+// beside content an operator can now edit invites someone to trust it after it has stopped being true.
+func IsCorpusFile(p string) bool { return strings.EqualFold(path.Ext(p), ".yml") }
+
+// CorpusRoot is the directory the vendored corpus lives under, and therefore the path prefix the stored documents carry.
+//
+// Exported because the seed and the loader have to agree on it: the seed records each document under the path it was walked from,
+// and the loader is given the same root to read them back under. A literal in two places would be a silent mismatch that presents
+// as an empty corpus.
+const CorpusRoot = "imported"
+
+// LoadCorpus parses rule documents from fsys under root into runnable rules, and reports the refusals alongside them.
+//
+// The injectable form of MustLoadImported, added so the corpus can come from storage rather than the binary (issue #766). Parsing
+// is unchanged and deliberately so: this loader derives a rule's identity from its file stem and detects duplicate stems before
+// anything is parsed, so a second loader written against stored documents would be a second set of those rules to keep in step.
+//
+// Returns an error rather than panicking, because a stored corpus is not a build artifact. A malformed vendored file is a mistake
+// caught before check-in, which is why the embedded path may panic; a malformed STORED corpus is a runtime condition its caller has
+// to decide about, and the decision (keep the previous good set) is not this function's to make.
+func LoadCorpus(fsys fs.FS, root string) ([]api.Rule, []rejection, error) {
+	return loadImported(fsys, root)
+}
 
 // MustLoadImported returns the imported rules, panicking if the vendored corpus does not load. Mirrors MustLoadPack and
 // MustLoadDetections: a malformed file fails at start-up rather than on the first event.
