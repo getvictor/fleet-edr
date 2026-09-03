@@ -186,10 +186,12 @@ func newRuleSet(rules []rulesapi.Rule) *ruleSet {
 	return rs
 }
 
-// LoadActive replaces the engine's active rule set with what the
-// rules.api.RuleProvider reports as active. Replace-semantics
-// (rather than append) so a future hot-reload caller can invoke this
-// repeatedly without Evaluate() seeing duplicates.
+// LoadActive replaces the engine's active rule set with what the rules.api.RuleProvider reports as active. Replace semantics
+// rather than append, so a repeated load does not leave Evaluate seeing duplicates of the same rule.
+//
+// Safe to call while Evaluate is running: the set is swapped as one immutable value, and an evaluation in flight completes against
+// the set it started with (issue #766). That is what makes it usable as the hot-reload seam it was written for, which the wording
+// here previously described as a future possibility rather than a property.
 //
 // Accepts an inline interface so detection/internal/engine doesn't
 // have to import rules/bootstrap; the rules.api.RuleProvider

@@ -395,12 +395,20 @@ func (d *Detection) SetRuleEvalStatsRecorder(r rulesapi.RuleEvalStatsRecorder) {
 // retention DB-handle wiring (retention takes a *sqlx.DB directly).
 func (d *Detection) Store() *mysql.Store { return d.store }
 
-// LoadActive registers the active rule set with the engine. cmd/main
-// calls this after rulesCtx is built. Skipped in ModeIntake (no engine). Like SetModeResolver it is set-once config the engine reads
-// only while evaluating a claimed event batch, so wire it before events are evaluated, not necessarily before Run: after newDetection
-// but before any events flow is fine (the engine has not read the rules yet); concurrent with the engine's evaluation of a batch is not.
-// Tests that can fix the rule set at construction should pass it through the helper's opts (wired before Run); those whose rules depend
-// on post-newDetection state (for example a just-inserted process id) call it after newDetection, before inserting the triggering events.
+// LoadActive replaces the active rule set on the engine. cmd/main calls this after rulesCtx is built. Skipped in ModeIntake (no
+// engine).
+//
+// Safe to call at any time, including concurrently with the engine evaluating a batch: the engine holds its rule set as one
+// immutable value and swaps it atomically, and an evaluation already in flight completes against the set it started with (issue
+// #766). It was previously set-once config that had to be wired before any events flowed, which is why callers below still do
+// that; the constraint is no longer a correctness requirement.
+//
+// Unlike SetModeResolver, which remains set-once. Replacing the rule set is the operation runtime pack loading needs, so it is the
+// one that was made swappable.
+//
+// Tests that can fix the rule set at construction should still pass it through the helper's opts (wired before Run), simply because
+// it reads more clearly; those whose rules depend on post-newDetection state (for example a just-inserted process id) call it after
+// newDetection, before inserting the triggering events.
 func (d *Detection) LoadActive(rp interface{ ActiveRules() []rulesapi.Rule }) {
 	if d.engine == nil {
 		return
