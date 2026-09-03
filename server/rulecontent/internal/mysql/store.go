@@ -62,6 +62,19 @@ func (s *Store) Replace(ctx context.Context, docs []api.Document) (int64, error)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	version, err := replaceWithin(ctx, tx, docs)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit corpus replace: %w", err)
+	}
+	return version, nil
+}
+
+// replaceWithin performs the whole-corpus write inside an open transaction and returns the new version. Shared by Replace and
+// ReplaceIfEmpty so the two cannot drift on what "replace" means.
+func replaceWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document) (int64, error) {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_documents"); err != nil {
 		return 0, fmt.Errorf("clear rule corpus: %w", err)
 	}
@@ -78,17 +91,53 @@ func (s *Store) Replace(ctx context.Context, docs []api.Document) (int64, error)
 	if err := tx.GetContext(ctx, &version, "SELECT version FROM rule_corpus_meta WHERE id = 1"); err != nil {
 		return 0, fmt.Errorf("read rule corpus version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit corpus replace: %w", err)
-	}
 	return version, nil
 }
 
-// IsEmpty reports whether the corpus holds no documents, which is how the seed decides whether to run.
+// IsEmpty reports whether the corpus holds no documents.
 func (s *Store) IsEmpty(ctx context.Context) (bool, error) {
 	var count int64
 	if err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM rule_corpus_documents"); err != nil {
 		return false, fmt.Errorf("count rule corpus documents: %w", err)
 	}
 	return count == 0, nil
+}
+
+// ReplaceIfEmpty writes docs as the corpus only if the corpus is currently empty, and reports whether it wrote.
+//
+// The check and the write are ONE transaction, which is the whole point of the method existing rather than the caller doing
+// IsEmpty followed by Replace. Separately they are a check-then-act: content committed between them is deleted, so a replica that
+// read "empty" and then wrote would discard a rule authored in that window. The window is narrow at startup and the consequence
+// is losing an operator's content, which is not a trade worth taking for one fewer method.
+//
+// The meta row is locked first, and locking THAT row rather than the documents is deliberate: an empty table has no rows for
+// SELECT ... FOR UPDATE to lock, so a concurrent seeder would not be serialized by locking what is not there. The counter row
+// always exists, so it acts as the mutex every seeder passes through.
+func (s *Store) ReplaceIfEmpty(ctx context.Context, docs []api.Document) (bool, int64, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, 0, fmt.Errorf("begin tx for conditional corpus replace: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var locked int64
+	if err := tx.GetContext(ctx, &locked, "SELECT version FROM rule_corpus_meta WHERE id = 1 FOR UPDATE"); err != nil {
+		return false, 0, fmt.Errorf("lock rule corpus meta: %w", err)
+	}
+	var count int64
+	if err := tx.GetContext(ctx, &count, "SELECT COUNT(*) FROM rule_corpus_documents"); err != nil {
+		return false, 0, fmt.Errorf("count rule corpus documents: %w", err)
+	}
+	if count > 0 {
+		return false, locked, nil
+	}
+
+	version, err := replaceWithin(ctx, tx, docs)
+	if err != nil {
+		return false, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, 0, fmt.Errorf("commit conditional corpus replace: %w", err)
+	}
+	return true, version, nil
 }

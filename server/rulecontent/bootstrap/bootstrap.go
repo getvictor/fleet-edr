@@ -65,17 +65,11 @@ func ApplySchema(ctx context.Context, db *sqlx.DB) error {
 // that ran on every boot would overwrite their work with the vendored corpus on the next restart. Empty is the only condition under
 // which this can be certain it is not destroying something, so it is the only condition it acts on.
 //
-// Runs on every replica, and races are harmless: the write is one transaction that replaces the whole corpus, so a second replica
-// arriving concurrently either finds it non-empty and does nothing, or writes the identical content.
+// The guard is enforced by the STORE, inside the transaction that writes, rather than checked here first. Checking here was the
+// first version and it was wrong: emptiness read out here and acted on afterwards is a check-then-act, so a rule authored in that
+// window would be deleted by the seed that had already decided there was nothing to lose. Narrow at startup, and losing an
+// operator's content is not a consequence worth a narrow window.
 func (r *RuleContent) SeedFrom(ctx context.Context, fsys fs.FS, root string, include func(path string) bool) (bool, error) {
-	empty, err := r.store.IsEmpty(ctx)
-	if err != nil {
-		return false, err
-	}
-	if !empty {
-		return false, nil
-	}
-
 	docs, err := readAll(fsys, root, include)
 	if err != nil {
 		return false, err
@@ -88,9 +82,15 @@ func (r *RuleContent) SeedFrom(ctx context.Context, fsys fs.FS, root string, inc
 	}
 
 	api.SortDocuments(docs)
-	version, err := r.store.Replace(ctx, docs)
+	// The store decides whether the corpus is empty, in the same transaction as the write. Reading the source first costs a walk
+	// that is thrown away when another replica got there first, which is cheaper than the alternative: checking emptiness out
+	// here would be a check-then-act, and content committed in that window would be deleted.
+	seeded, version, err := r.store.ReplaceIfEmpty(ctx, docs)
 	if err != nil {
 		return false, err
+	}
+	if !seeded {
+		return false, nil
 	}
 	r.logger.InfoContext(ctx, "rulecontent: corpus seeded", "documents", len(docs), "version", version, "root", root)
 	return true, nil

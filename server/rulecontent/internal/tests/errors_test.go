@@ -3,8 +3,10 @@
 package tests
 
 import (
+	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 
@@ -34,20 +36,90 @@ func TestStore_UnreachableStoreReportsAnErrorNotAnEmptyCorpus(t *testing.T) {
 	s := rulecontentmysql.New(db)
 	require.NoError(t, db.Close())
 
-	ctx := t.Context()
+	cases := []struct {
+		name string
+		call func(context.Context) error
+		why  string
+	}{
+		{
+			name: "Documents",
+			call: func(ctx context.Context) error { _, err := s.Documents(ctx); return err },
+			why:  "an unreachable store must not be indistinguishable from an empty one",
+		},
+		{
+			name: "Version",
+			call: func(ctx context.Context) error { _, err := s.Version(ctx); return err },
+			why:  "the version a replica polls must fail loudly rather than read as zero",
+		},
+		{
+			name: "IsEmpty",
+			call: func(ctx context.Context) error { _, err := s.IsEmpty(ctx); return err },
+			why:  "concluding the corpus is empty when the store is unreachable is the worst available answer",
+		},
+		{
+			name: "Replace",
+			call: func(ctx context.Context) error { _, err := s.Replace(ctx, nil); return err },
+			why:  "a replace must fail rather than report a version it did not write",
+		},
+		{
+			name: "ReplaceIfEmpty",
+			call: func(ctx context.Context) error { _, _, err := s.ReplaceIfEmpty(ctx, nil); return err },
+			why:  "and the seed's own guard must fail rather than decide the corpus is empty",
+		},
+	}
 
-	docs, err := s.Documents(ctx)
-	require.Error(t, err, "an unreachable store must not be indistinguishable from an empty one")
-	assert.Empty(t, docs)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Error(t, tc.call(t.Context()), tc.why)
+		})
+	}
+}
 
-	_, err = s.Version(ctx)
-	assert.Error(t, err, "and the version a replica polls must fail loudly rather than read as zero")
+// spec:rule-content/seeding-never-overwrites-content-that-is-already-there/a-store-holding-content-is-left-alone
+//
+// TestSeed_ConcurrentSeedersDoNotBothWrite covers the guard being ATOMIC, which the first version of this change got wrong.
+//
+// Emptiness was read in the bootstrap and acted on afterwards, which is a check-then-act: two replicas booting together both read
+// "empty" and both wrote, and worse, a rule authored between one replica's read and its write would be deleted by a seed that had
+// already decided there was nothing to lose. The check now happens inside the transaction that writes, serialized on the counter
+// row because an empty table has no rows for a lock to hold.
+//
+// Asserted by racing two seeders with DIFFERENT content: exactly one must win, and the corpus must hold that one's documents
+// rather than a mixture.
+func TestSeed_ConcurrentSeedersDoNotBothWrite(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
 
-	_, err = s.IsEmpty(ctx)
-	assert.Error(t, err, "and the seed's guard must fail rather than conclude the corpus is empty and overwrite it")
+	first := []api.Document{{Path: "imported/first.yml", Content: []byte("first")}}
+	second := []api.Document{{Path: "imported/second.yml", Content: []byte("second")}}
 
-	_, err = s.Replace(ctx, nil)
-	assert.Error(t, err, "and a replace must fail rather than report a version it did not write")
+	var wg sync.WaitGroup
+	results := make([]bool, 2)
+	errs := make([]error, 2)
+	for i, docs := range [][]api.Document{first, second} {
+		wg.Go(func() {
+			seeded, _, err := s.ReplaceIfEmpty(t.Context(), docs)
+			results[i], errs[i] = seeded, err
+		})
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "seeder %d", i)
+	}
+	won := 0
+	for _, seeded := range results {
+		if seeded {
+			won++
+		}
+	}
+	assert.Equal(t, 1, won, "exactly one seeder writes; two would mean the guard is not atomic")
+
+	docs, err := s.Documents(t.Context())
+	require.NoError(t, err)
+	require.Len(t, docs, 1, "and the corpus holds one seeder's content, not a mixture of both")
+	assert.Contains(t, []string{"imported/first.yml", "imported/second.yml"}, docs[0].Path)
 }
 
 // TestBootstrap_RejectsAMissingHandle covers the constructor's contract.
