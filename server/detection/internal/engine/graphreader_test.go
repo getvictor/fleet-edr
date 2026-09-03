@@ -267,3 +267,54 @@ func TestEngine_Evaluate_OrdinaryWaitDoesNotStopTheRuleLoop(t *testing.T) {
 	require.ErrorIs(t, err, rulesapi.ErrRetryBatch, "the batch is still retried")
 	assert.NotNil(t, downstream.got, "but a deliberate wait must not suppress the rules registered after it")
 }
+
+// spec:server-detection-rules-engine/rule-failure-isolation-batch-retry-on-persistence-failure/a-failed-read-is-surfaced-by-consequence-not-per-attempt
+//
+// TestRetryCause_KeepsEveryDistinctCause pins that neither retry sentinel can mask the other.
+//
+// The batch's reported cause was first-wins with a single upgrade for a materialization miss. Once a failed read stopped stopping
+// the batch, a rule that merely waits and happens to run earlier would swallow a later read failure, and the set-aside record
+// would then tell an operator the cause was a recovery window when it was a database outage. The mirror case was already handled
+// for the materialization counter, which is what made the omission easy to miss: the shape was there, the new sentinel was not
+// added to it.
+func TestRetryCause_KeepsEveryDistinctCause(t *testing.T) {
+	t.Parallel()
+
+	wait := fmt.Errorf("sensor_tamper awaiting recovery window: %w", rulesapi.ErrRetryBatch)
+	miss := fmt.Errorf("pid 42: %w", rulesapi.ErrProcessNotYetMaterialized)
+	read := fmt.Errorf("rule read GetHostEventsByType: refused: %w", rulesapi.ErrRuleReadUnavailable)
+
+	t.Run("the first cause is kept when nothing is stored", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, wait, retryCause(nil, wait))
+	})
+
+	t.Run("a read failure is not masked by an earlier wait", func(t *testing.T) {
+		t.Parallel()
+		got := retryCause(wait, read)
+		require.ErrorIs(t, got, rulesapi.ErrRuleReadUnavailable,
+			"the set-aside record must name the outage, not the recovery window that happened to be evaluated first")
+		assert.ErrorIs(t, got, rulesapi.ErrRetryBatch, "and the batch is still retried")
+	})
+
+	t.Run("a read failure is not masked by an earlier materialization miss", func(t *testing.T) {
+		t.Parallel()
+		got := retryCause(miss, read)
+		require.ErrorIs(t, got, rulesapi.ErrRuleReadUnavailable, "the read failure survives")
+		assert.ErrorIs(t, got, rulesapi.ErrProcessNotYetMaterialized,
+			"and so does the miss, whose counter is how a replica behind on materialization is spotted")
+	})
+
+	t.Run("a materialization miss is not masked by an earlier wait", func(t *testing.T) {
+		t.Parallel()
+		assert.ErrorIs(t, retryCause(wait, miss), rulesapi.ErrProcessNotYetMaterialized,
+			"the pre-existing case this shape was built for")
+	})
+
+	t.Run("a further ordinary wait adds nothing and is dropped", func(t *testing.T) {
+		t.Parallel()
+		other := fmt.Errorf("another rule waiting: %w", rulesapi.ErrRetryBatch)
+		assert.Equal(t, wait, retryCause(wait, other),
+			"the common case stays one error naming the rule that started the wait, rather than accumulating noise")
+	})
+}

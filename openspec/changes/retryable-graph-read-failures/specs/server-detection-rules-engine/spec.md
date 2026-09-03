@@ -20,6 +20,8 @@ This applies to findings that raise an alert. A match that is only COUNTED, beca
 
 A failed read SHALL NOT stop the batch's remaining rules. The reads a rule performs span more than one dependency: the process and exec-chain lookups and the event-archive lookups are backed independently, so one being unavailable says nothing about the other. Stopping the batch would skip rules that could have decided, and once the batch is set aside their detections are lost rather than late.
 
+A failed read SHALL NOT be masked by another rule's retryable error in the same batch. Both retry causes are read by different consumers, so whichever is dropped loses a signal nothing else carries: the materialization cause drives the retry counter, and the read failure is what the set-aside record reports as the reason a host has a gap.
+
 A failed read SHALL NOT be reported once per attempt. The processing cadence makes that a continuous stream of records for as long as the condition lasts, which is the log amplification that reporting a deliberate wait quietly already exists to avoid. It SHALL be surfaced by consequence instead: a retry that succeeds costs nothing and needs no report, and when retries are exhausted the record of the events being set aside SHALL name the failure that caused it, so the case that costs detections is both loud and diagnosable.
 
 The retry this creates SHALL be bounded by the work queue's own bound rather than left open-ended, so that a read which fails permanently (as opposed to transiently) cannot hold its host's queue forever. The "A batch that cannot be processed does not stall its host" requirement of the server-event-ingestion capability is what supplies that bound.
@@ -64,8 +66,8 @@ The retry this creates SHALL be bounded by the work queue's own bound rather tha
 - **GIVEN** rule evaluation failing because a read failed
 - **WHEN** the batch is returned for retry
 - **THEN** the attempt is not reported at a level that would produce a record per retry for the duration of the condition
-- **AND** it is not counted as a process-materialization retry, which is a different condition
-- **AND** when retries are exhausted, the record of the events being set aside names the underlying failure
+- **AND** a read failure on its own is not counted as a process-materialization retry, which is a different condition
+- **AND** when retries are exhausted, the record of the events being set aside names the underlying failure, even when another rule in the same batch was merely waiting
 
 #### Scenario: A read that finds nothing is not a failure
 
