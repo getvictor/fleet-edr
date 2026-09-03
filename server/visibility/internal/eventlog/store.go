@@ -369,9 +369,14 @@ func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, er
 		return 0, fmt.Errorf("nack: %w", err)
 	}
 
-	// Promotes only rows the statement above just reset, which is what the processed = 0 guard is for: between the two statements
-	// another worker can claim these rows, because the per-host claim lock is released before processing runs. A row taken by
-	// someone else is skipped rather than set aside behind their back, and the next failure will reconsider it.
+	// The processed = 0 guard restricts this to rows the statement above actually reset, and so keeps a row that was NOT in flight
+	// out of state 3: an event id in this batch that another worker already acked (1), or that an earlier failure already set aside
+	// (3), does not match and is left alone. It is NOT protection against a concurrent claimer. The statement above holds an
+	// exclusive lock on every row it modified until this transaction commits, and the claim's SELECT ... FOR UPDATE SKIP LOCKED
+	// skips locked rows, so no other worker can take these rows between the two statements. (A row can still be reset by a worker
+	// whose claim lease expired, which is the ownership limitation documented on Nack above and tracked as issue #840; the guard
+	// here neither causes nor prevents that.)
+	//
 	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
 	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
 	// hyphen in prose reads SQL subtraction the same way, which is a nudge worth taking rather than suppressing.

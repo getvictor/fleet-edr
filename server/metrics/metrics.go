@@ -153,7 +153,7 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	)
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
-		metric.WithDescription("Queued events withdrawn from processing because their batch failed repeatedly (issue #836). ANY non-zero value is worth investigating: the host in the `host_id` attribute has a gap in its process graph and those events were evaluated by no rule. The events themselves are still in the archive, so this is not data loss; it is detection loss for the events named. Alert on it per host rather than fleet-wide, since one wedged host is the case it exists to catch."),
+		metric.WithDescription("Queued events withdrawn from processing because their batch failed repeatedly (issue #836). Alert on any non-zero INCREASE, per host rather than fleet-wide: this is a cumulative counter, so an absolute-value condition keeps firing forever after the first occurrence, and one wedged host is the case it exists to catch. The host in the `host_id` attribute has a gap in its process graph. The events themselves are still in the archive, so this is not data loss; what is lost is their contribution to the graph and their evaluation by any rule that had not already finished when the batch failed, which for a batch withdrawn at the builder stage is every rule."),
 		metric.WithUnit(unitEvent),
 	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,

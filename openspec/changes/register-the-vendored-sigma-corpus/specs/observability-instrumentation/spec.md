@@ -56,6 +56,7 @@ The counter SHALL be documented as counting MATCHES rather than would-be alerts.
 - **GIVEN** a batch whose events are set aside because it could not be processed
 - **WHEN** they are set aside
 - **THEN** `edr.events.set_aside` is incremented by the number of events with a `host_id` attribute
+
 ## ADDED Requirements
 
 ### Requirement: A per-rule span reports the alerts it raised
