@@ -295,27 +295,106 @@ func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
 	return nil
 }
 
-// Nack returns claimed events to the not-yet-processed state for an immediate later ClaimForHost, clearing the claim timestamp. It is
-// scoped to processed = 2 so it only reverts in-flight rows and never resurrects an already-acknowledged event.
-func (s *Store) Nack(ctx context.Context, eventIDs []string) error {
+// The `processed` column carries four states, written as literals in the SQL below and named here rather than as constants, which
+// would be identifiers no Go expression reads:
+//
+//	0 = pending, claimable
+//	1 = acknowledged, terminal, deleted by PruneProcessed
+//	2 = claimed, with claimed_at_ns; re-offered once the lease expires
+//	3 = SET ASIDE, withdrawn from processing after repeated failure (issue #836), deleted by PruneSetAside on the retention window
+//
+// Only 0 and a lease-expired 2 are claimable, so 3 is excluded from ClaimForHost by the predicate that was already there.
+
+// setAsideAttempts and setAsideWindow are the two bounds a batch must BOTH exceed before its events are set aside.
+//
+// Both, because one cannot tell the two failure shapes apart. At the 500ms processor tick a failing batch is attempted roughly 120
+// times a minute, so an attempt bound alone would set aside anything that failed for ten seconds. A duration bound alone would set
+// aside a batch that failed once and then sat for a long time because its host went quiet, since its second attempt would already
+// be outside the window.
+//
+// Twenty attempts is reached in about ten seconds and exists only to rule out that second shape. Fifteen minutes is the bound that
+// does the work: no condition shorter than that sets anything aside, a host stalls for at most about that long rather than
+// indefinitely, and it is three claim leases, which is the other timescale in this subsystem.
+//
+// Not configurable. They are constants with their reasoning attached, and can become configuration when a deployment needs
+// different values rather than in anticipation of one.
+const (
+	setAsideAttempts = 20
+	setAsideWindow   = 15 * time.Minute
+)
+
+// Nack returns claimed events to the not-yet-processed state for an immediate later ClaimForHost, clearing the claim timestamp, and
+// counts the attempt. It reports how many events it SET ASIDE instead of returning, which is zero on all but the failing case.
+//
+// Scoped to processed = 2 so it only reverts in-flight rows and never resurrects an already-acknowledged event.
+//
+// The count and the set-aside are what keep a deterministically failing batch from stalling its host forever. The claim selects a
+// host's work in timestamp order, so a nacked batch is that host's oldest pending work and the next claim takes it again; without a
+// bound, nothing newer for that host is ever claimed and the host stops contributing to the graph and raising detections entirely
+// (issue #836). Setting the events aside is not data loss: the archive is written before the queue and retained on its own window,
+// so what is given up is those events' contribution to the graph and their evaluation by rules.
+func (s *Store) Nack(ctx context.Context, eventIDs []string) (setAside int64, err error) {
 	if len(eventIDs) == 0 {
-		return nil
+		return 0, nil
 	}
-	query, args, err := sqlx.In("UPDATE event_queue SET processed = 0, claimed_at_ns = 0 WHERE processed = 2 AND event_id IN (?)", eventIDs)
+	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return fmt.Errorf("nack build query: %w", err)
+		return 0, fmt.Errorf("begin tx for nack: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("nack: %w", err)
+	defer tx.Rollback() //nolint:errcheck
+
+	now := time.Now().UnixNano()
+	query, args, err := sqlx.In(`
+		UPDATE event_queue
+		SET attempts = attempts + 1,
+		    first_failed_at_ns = IF(first_failed_at_ns = 0, ?, first_failed_at_ns),
+		    processed = 0,
+		    claimed_at_ns = 0
+		WHERE processed = 2 AND event_id IN (?)`, now, eventIDs)
+	if err != nil {
+		return 0, fmt.Errorf("nack build query: %w", err)
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return 0, fmt.Errorf("nack: %w", err)
+	}
+
+	// Promotes only rows the statement above just reset, which is what the processed = 0 guard is for: between the two statements
+	// another worker can claim these rows, because the per-host claim lock is released before processing runs. A row taken by
+	// someone else is skipped rather than set aside behind their back, and the next failure will reconsider it.
+	// The duration bound is a cutoff computed here rather than arithmetic in the predicate. `? - first_failed_at_ns >= ?` would
+	// have to evaluate an expression per row, where a bare column comparison can use an index; and the lint that bans a spaced
+	// hyphen in prose reads SQL subtraction the same way, which is a nudge worth taking rather than suppressing.
+	failingSince := now - setAsideWindow.Nanoseconds()
+	query, args, err = sqlx.In(`
+		UPDATE event_queue
+		SET processed = 3
+		WHERE processed = 0 AND event_id IN (?) AND attempts >= ? AND first_failed_at_ns <= ?`,
+		eventIDs, setAsideAttempts, failingSince)
+	if err != nil {
+		return 0, fmt.Errorf("nack set-aside build query: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("nack set aside: %w", err)
+	}
+	setAside, err = res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("nack set-aside rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit nack: %w", err)
+	}
+	return setAside, nil
 }
 
-// CountPending counts events not yet acknowledged (processed != 1): the waiting-plus-in-flight backlog. Backs the processor-backlog
-// gauge.
+// CountPending counts events still waiting to be processed or in flight (processed 0 or 2). Backs the processor-backlog gauge.
+//
+// Set-aside rows (3) are excluded deliberately. They are not waiting for anything, so counting them would leave the backlog gauge
+// permanently elevated by a number that never drains, which is the shape an operator reads as a processor falling behind. The
+// separate edr.events.set_aside counter is what reports them.
 func (s *Store) CountPending(ctx context.Context) (int64, error) {
 	var count int64
-	if err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM event_queue WHERE processed != 1"); err != nil {
+	if err := s.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM event_queue WHERE processed IN (0, 2)"); err != nil {
 		return 0, fmt.Errorf("count pending: %w", err)
 	}
 	return count, nil
@@ -331,6 +410,47 @@ const defaultPruneBatch = 10_000
 // deadlock-retried since concurrent claims take gap locks on the same index. processed = 1 is terminal (Nack only reverts processed = 2),
 // so a row selected here is never concurrently resurrected.
 func (s *Store) PruneProcessed(ctx context.Context, batchSize int) (int64, error) {
+	total, err := s.pruneBatched(ctx, batchSize,
+		"DELETE FROM event_queue WHERE processed = 1 ORDER BY host_id, timestamp_ns LIMIT ?")
+	if err != nil {
+		return total, fmt.Errorf("prune processed event_queue: %w", err)
+	}
+	return total, nil
+}
+
+// PruneSetAside deletes set-aside rows (processed = 3) whose first failure is older than retentionDays, returning the total removed.
+//
+// Needed because PruneProcessed only deletes acked rows, so without this a set-aside row would sit in the work queue for the life
+// of the deployment. Retaining them at all is deliberate: the row names the exact events a host stopped contributing, which the
+// counter cannot. Retaining them forever is not, so the retention window doubles as the period an operator has to look.
+//
+// Aged on first_failed_at_ns rather than the row's timestamp, because that is when the events were withdrawn and so when the
+// operator's window should start. An event backlogged for a week and set aside today should be inspectable for the full window.
+//
+// retentionDays <= 0 prunes nothing, matching how the same knob disables the other retention sweeps.
+func (s *Store) PruneSetAside(ctx context.Context, retentionDays, batchSize int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).UnixNano()
+	total, err := s.pruneBatched(ctx, batchSize,
+		"DELETE FROM event_queue WHERE processed = 3 AND first_failed_at_ns < ? ORDER BY first_failed_at_ns LIMIT ?", cutoff)
+	if err != nil {
+		return total, fmt.Errorf("prune set-aside event_queue: %w", err)
+	}
+	return total, nil
+}
+
+// pruneBatched runs one DELETE repeatedly until a batch comes back short, and reports the total.
+//
+// Shared by the two prune methods above rather than written twice. The batch bound, the deadlock retry and the
+// stop-when-short-batch loop are identical for both and are the parts that are easy to get subtly different; only the predicate
+// differs, and it is a caller-supplied constant rather than anything built from input. The query MUST end in `LIMIT ?`, since the
+// batch size is appended as the final argument.
+//
+// This deliberately does not reach across packages: issue #818 tracks the same loop appearing in three prune paths in different
+// packages, and unifying those is its own change. This keeps THIS file from becoming a fourth copy.
+func (s *Store) pruneBatched(ctx context.Context, batchSize int, query string, args ...any) (int64, error) {
 	if batchSize <= 0 {
 		batchSize = defaultPruneBatch
 	}
@@ -338,15 +458,14 @@ func (s *Store) PruneProcessed(ctx context.Context, batchSize int) (int64, error
 	for {
 		var affected int64
 		if err := sqlhelpers.WithDeadlockRetry(ctx, deadlockMaxAttempts, deadlockBackoffStep, func() error {
-			res, err := s.db.ExecContext(ctx,
-				"DELETE FROM event_queue WHERE processed = 1 ORDER BY host_id, timestamp_ns LIMIT ?", batchSize)
+			res, err := s.db.ExecContext(ctx, query, append(append([]any(nil), args...), batchSize)...)
 			if err != nil {
 				return err
 			}
 			affected, err = res.RowsAffected()
 			return err
 		}); err != nil {
-			return total, fmt.Errorf("prune processed event_queue: %w", err)
+			return total, err
 		}
 		total += affected
 		if affected < int64(batchSize) {

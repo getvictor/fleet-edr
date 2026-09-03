@@ -63,6 +63,7 @@ type Recorder struct {
 	processesReconciled             metric.Int64Counter
 	queueDropped                    metric.Int64Counter
 	detectionMaterializationRetries metric.Int64Counter
+	eventsSetAside                  metric.Int64Counter
 	httpRequestDuration             metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
@@ -150,6 +151,11 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		metric.WithDescription("Detection batches re-queued because an event's subject or flow process was not materialized yet (a transient ordering race). A sustained non-zero rate means a replica is behind on graph materialization or agents are dropping fork/exec."),
 		metric.WithUnit("{retry}"),
 	)
+	r.eventsSetAside, _ = meter.Int64Counter(
+		"edr.events.set_aside",
+		metric.WithDescription("Queued events withdrawn from processing because their batch failed repeatedly (issue #836). ANY non-zero value is worth investigating: the host in the `host_id` attribute has a gap in its process graph and those events were evaluated by no rule. The events themselves are still in the archive, so this is not data loss; it is detection loss for the events named. Alert on it per host rather than fleet-wide, since one wedged host is the case it exists to catch."),
+		metric.WithUnit(unitEvent),
+	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
 	// recognizes http.server.request.duration and its standard attributes. The histogram's count gives request rate, a status-code
 	// filter gives the error rate, and the buckets give latency quantiles, so this one instrument covers the full RED picture.
@@ -206,6 +212,18 @@ func (r *Recorder) EventsIngested(ctx context.Context, hostID string, n int) {
 		return
 	}
 	r.eventsIngested.Add(ctx, int64(n), metric.WithAttributes(attribute.String("host_id", hostID)))
+}
+
+// EventsSetAside increments the set-aside counter by n for a host. Called by the processor when a nack withdraws events from
+// processing rather than returning them, which happens only once a batch has passed both retry bounds.
+//
+// Attributed per host deliberately: the question this answers is which host stopped contributing to the graph, and a fleet-wide
+// total cannot answer it.
+func (r *Recorder) EventsSetAside(ctx context.Context, hostID string, n int64) {
+	if r == nil || r.eventsSetAside == nil || n <= 0 {
+		return
+	}
+	r.eventsSetAside.Add(ctx, n, metric.WithAttributes(attribute.String("host_id", hostID)))
 }
 
 // EventsHeartbeatDropped increments the heartbeat-dropped counter by n for a host. Called per-batch by the ingest handler with the

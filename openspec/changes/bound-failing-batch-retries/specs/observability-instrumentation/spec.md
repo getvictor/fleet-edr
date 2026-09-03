@@ -1,4 +1,4 @@
-# Observability instrumentation: bounded detection-retry logging delta
+# Observability instrumentation
 
 ## MODIFIED Requirements
 
@@ -56,22 +56,3 @@ The counter SHALL be documented as counting MATCHES rather than would-be alerts.
 - **GIVEN** a batch whose events are set aside because it could not be processed
 - **WHEN** they are set aside
 - **THEN** `edr.events.set_aside` is incremented by the number of events with a `host_id` attribute
-## ADDED Requirements
-
-### Requirement: Detection materialization-miss retries are bounded in log volume
-
-The detection processor re-queues (nacks) a batch whenever rule evaluation reports the retryable not-yet-materialized error class for an event's subject or flow process. Because that condition can persist for a sustained interval under normal operational and failure modes (a replica behind on graph materialization, an agent that stopped sending fork/exec while its processes keep connecting, a datastore restore or replica re-seed, or a batch of orphaned flows for a long-lived process), the same batch re-nacks on every poll tick within its grace window. The system therefore SHALL NOT emit a warn-level log line per materialization-miss retry; it SHALL instead increment the `edr.detection.materialization_retries` counter and log the retry at debug level, so a sustained materialization-miss condition produces bounded log volume while remaining observable through the counter. A genuine (non-materialization) detection batch failure, such as an alert persistence error, SHALL continue to log at warn level so a real fault stays loud.
-
-#### Scenario: A materialization-miss retry is debug-logged and counted
-
-- **GIVEN** the processor evaluates a claimed batch and rule evaluation returns the retryable not-yet-materialized error class
-- **WHEN** the processor re-queues the batch
-- **THEN** the retry is logged at debug level, not warn level
-- **AND** the `edr.detection.materialization_retries` counter is incremented
-
-#### Scenario: A genuine detection failure still warn-logs
-
-- **GIVEN** the processor evaluates a claimed batch and rule evaluation returns a failure that is not the not-yet-materialized error class
-- **WHEN** the processor re-queues the batch
-- **THEN** the failure is logged at warn level
-- **AND** the `edr.detection.materialization_retries` counter is not incremented

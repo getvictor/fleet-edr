@@ -104,6 +104,9 @@ type GraphReader interface {
 // metrics.Recorder; tests pass nil.
 type MetricsRecorder interface {
 	EventsIngested(ctx context.Context, hostID string, n int)
+	// EventsSetAside counts events the queue withdrew from processing after a batch failed repeatedly. Per host, because the
+	// question is which host has a gap in its process graph (issue #836).
+	EventsSetAside(ctx context.Context, hostID string, n int64)
 	// EventsHeartbeatDropped is called per-batch by the ingest handler with the number of snapshot_heartbeat events that were
 	// processed for their freshness side effect and then dropped instead of persisted as retained event rows (issue #408).
 	EventsHeartbeatDropped(ctx context.Context, hostID string, n int)

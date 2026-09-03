@@ -350,9 +350,11 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 			// host first would let the next claimer take this host's LATER events and fold them ahead of these, so the retry would
 			// arrive behind generations it precedes. The claim's in-flight bound makes that window harmless even if this Nack
 			// fails, but closing the window is cheaper than relying on the bound to cover it.
-			if nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed)); nackErr != nil {
+			setAside, nackErr := p.eventLog.Nack(lockedCtx, eventIDsOf(claimed))
+			if nackErr != nil {
 				p.logger.ErrorContext(lockedCtx, "nack events after builder failure", "err", nackErr)
 			}
+			p.reportSetAside(lockedCtx, host, setAside, "builder")
 		}
 		return nil
 	}
@@ -409,9 +411,11 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		tally, err = p.detection.Evaluate(ctx, events)
 		if err != nil {
 			p.logDetectionRetry(ctx, err)
-			if nackErr := p.eventLog.Nack(ctx, eventIDs); nackErr != nil {
+			setAside, nackErr := p.eventLog.Nack(ctx, eventIDs)
+			if nackErr != nil {
 				p.logger.ErrorContext(ctx, "nack events after detection failure", "err", nackErr)
 			}
+			p.reportSetAside(ctx, hostOf(events), setAside, "detection")
 			return 0
 		}
 	}
@@ -491,4 +495,35 @@ func (p *Processor) logDetectionRetry(ctx context.Context, err error) {
 		return
 	}
 	p.logger.WarnContext(ctx, "detection failure, will retry batch", "err", err)
+}
+
+// reportSetAside surfaces events the queue withdrew from processing after repeated failure.
+//
+// This is the whole visibility half of issue #836. Until now a host whose batch failed the same way every time was
+// indistinguishable from a quiet host: the retries were silent, the backlog gauge did not separate them, and the only symptom was
+// an absence of detections nobody was watching for. So the counter carries host_id, because "which host stopped contributing" is
+// the question, and the log names the host and the stage that failed, because the counter says it happened and not what to look at.
+//
+// Logged at ERROR rather than WARN. The consequence is a gap in one host's process tree and a set of events no rule ever saw,
+// which is not a condition to notice in aggregate later.
+//
+// zero is the overwhelmingly common case: every ordinary retryable nack passes through here.
+func (p *Processor) reportSetAside(ctx context.Context, hostID string, setAside int64, stage string) {
+	if setAside <= 0 {
+		return
+	}
+	p.logger.ErrorContext(ctx, "queued events set aside after repeated failure; this host has a gap in its process graph",
+		"host_id", hostID, "events", setAside, "stage", stage)
+	if p.metrics != nil {
+		p.metrics.EventsSetAside(ctx, hostID, setAside)
+	}
+}
+
+// hostOf returns the host a claimed batch belongs to. The processor claims per host, so every event in the batch carries the same
+// one; an empty batch never reaches a nack.
+func hostOf(events []visibilityapi.Event) string {
+	if len(events) == 0 {
+		return ""
+	}
+	return events[0].HostID
 }

@@ -71,10 +71,11 @@ func (f *fakeEventLog) PendingHosts(context.Context, int) ([]string, error) { re
 func (f *fakeEventLog) ClaimForHost(context.Context, string, int) ([]api.Event, error) {
 	return nil, nil
 }
-func (f *fakeEventLog) Ack(context.Context, []string) error                { return nil }
-func (f *fakeEventLog) Nack(context.Context, []string) error               { return nil }
-func (f *fakeEventLog) CountPending(context.Context) (int64, error)        { return 0, nil }
-func (f *fakeEventLog) PruneProcessed(context.Context, int) (int64, error) { return 0, nil }
+func (f *fakeEventLog) Ack(context.Context, []string) error                    { return nil }
+func (f *fakeEventLog) Nack(context.Context, []string) (int64, error)          { return 0, nil }
+func (f *fakeEventLog) CountPending(context.Context) (int64, error)            { return 0, nil }
+func (f *fakeEventLog) PruneProcessed(context.Context, int) (int64, error)     { return 0, nil }
+func (f *fakeEventLog) PruneSetAside(context.Context, int, int) (int64, error) { return 0, nil }
 
 // postBatch drives handleIngest directly with host_id pinned the way the HostToken middleware does, so these tests need no DB: the
 // store (host-summary + snapshot-freshness writes) is only reached after a successful fan-out, which the error-path cases never hit.

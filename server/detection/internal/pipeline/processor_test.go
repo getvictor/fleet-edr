@@ -21,6 +21,8 @@ import (
 // PendingHosts reports the batch's own host so the processor's host-scoped cycle reaches ClaimForHost, and ClaimForHost serves the
 // batch once so a drain loop terminates instead of re-serving the same events forever.
 type scriptedEventLog struct {
+	// setAside is what Nack reports as withdrawn, so a test can drive the reporting path without a real queue.
+	setAside int64
 	batch    []visibilityapi.Event
 	acked    []string
 	nacked   []string
@@ -53,12 +55,15 @@ func (s *scriptedEventLog) Ack(_ context.Context, ids []string) error {
 	s.acked = append(s.acked, ids...)
 	return nil
 }
-func (s *scriptedEventLog) Nack(_ context.Context, ids []string) error {
+func (s *scriptedEventLog) Nack(_ context.Context, ids []string) (int64, error) {
 	s.nacked = append(s.nacked, ids...)
-	return nil
+	return s.setAside, nil
 }
 func (s *scriptedEventLog) CountPending(context.Context) (int64, error)        { return 0, nil }
 func (s *scriptedEventLog) PruneProcessed(context.Context, int) (int64, error) { return 0, nil }
+func (s *scriptedEventLog) PruneSetAside(context.Context, int, int) (int64, error) {
+	return 0, nil
+}
 
 // stubBuilder / stubEvaluator return a scripted error so a processor test can drive each nack/ack branch without a graph store.
 type stubBuilder struct{ err error }

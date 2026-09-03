@@ -49,7 +49,13 @@ type EventLog interface {
 
 	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost (retry after a
 	// processing failure).
-	Nack(ctx context.Context, eventIDs []string) error
+	// Nack returns claimed events for a later claim and counts the attempt, reporting how many it SET ASIDE instead of returning.
+	//
+	// The count is the point of the return value. A batch that fails the same way every time is otherwise retried forever, and
+	// because the claim takes a host's oldest work first, nothing newer for that host is ever claimed: the host stops
+	// contributing to the process graph and raising detections at all (issue #836). An implementation SHALL bound the retries and
+	// withdraw the events once that bound is passed, and the caller reports the count so a stalled host is visible.
+	Nack(ctx context.Context, eventIDs []string) (setAside int64, err error)
 
 	// CountPending counts events that have not been fully processed. Backs the processor-backlog gauge.
 	CountPending(ctx context.Context) (int64, error)
@@ -60,4 +66,12 @@ type EventLog interface {
 	// durable history); a high-volume deployment runs it on a cadence off the hot path rather than deleting on each Ack. Removing only
 	// acked events never affects a not-yet-processed or in-flight claim.
 	PruneProcessed(ctx context.Context, batchSize int) (int64, error)
+
+	// PruneSetAside removes set-aside events older than retentionDays, in batches of at most batchSize. A non-positive
+	// retentionDays prunes nothing, which keeps them indefinitely and matches what a disabled retention window means elsewhere.
+	//
+	// Set-aside rows are the only record of which events a host stopped contributing to its process graph, so they are retained
+	// for the deployment's window rather than deleted when they are created; that window doubles as the time an operator has to
+	// look at them (issue #836).
+	PruneSetAside(ctx context.Context, retentionDays, batchSize int) (int64, error)
 }
