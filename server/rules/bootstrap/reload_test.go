@@ -15,6 +15,7 @@ import (
 
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	"github.com/fleetdm/edr/server/rules/api"
+	"github.com/fleetdm/edr/server/rules/internal/catalog"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 	"github.com/fleetdm/edr/server/testdb"
@@ -72,57 +73,82 @@ func TestReload_InstallsStoredContentAndStampsItsVersion(t *testing.T) {
 	assert.False(t, logged.warned, "a successful reload is not a fallback and must not read as one")
 }
 
-// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/a-failed-reload-keeps-the-set-already-in-force
-// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/content-that-loads-to-nothing-installs-nothing
+// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/a-store-that-cannot-be-read-keeps-the-set-in-force
 //
-// TestReload_KeepsThePreviousSetWhenContentCannotBeUsed is the case that separates reload from startup.
+// TestReload_KeepsTheSetInForceWhenTheStoreCannotBeRead covers the only failures that keep history.
 //
-// At startup, unusable content falls back to the corpus embedded in the build, because there is nothing else to run. Here there IS
-// something else: the set already in force, which is by definition content that loaded. Falling back to the build would discard
-// working content because a database blinked, so every failure mode must leave the running set untouched.
-func TestReload_KeepsThePreviousSetWhenContentCannotBeUsed(t *testing.T) {
+// A read that fails leaves the stored state UNKNOWN, so the set already in force is the best available answer and the next tick
+// retries. The version is deliberately not advanced, so the poll still sees a difference and tries again.
+func TestReload_KeepsTheSetInForceWhenTheStoreCannotBeRead(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name     string
-		corpus   rulecontentapi.Corpus
-		wantErr  bool
-		wantWarn bool
+		name   string
+		corpus rulecontentapi.Corpus
+	}{
+		{name: "the version counter is unreadable", corpus: fakeCorpus{versionErr: errors.New("dial tcp: connection refused")}},
+		{name: "the documents are unreadable", corpus: fakeCorpus{version: 9, err: errors.New("dial tcp: connection refused")}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r, _ := testRules(t, tc.corpus)
+			r.installRuleSet([]api.Rule{stubRule{id: "already-running"}}, 3)
+
+			_, err := r.Reload(t.Context())
+			require.Error(t, err, "the caller has to be told, or the refresh loop cannot report it")
+
+			require.Len(t, r.svc.ActiveRules(), 1, "the set already in force must survive a store that cannot be read")
+			assert.Equal(t, "already-running", r.svc.ActiveRules()[0].ID())
+			assert.Equal(t, int64(3), r.svc.ActiveVersion(),
+				"and its version, so the next poll still sees a difference and retries")
+		})
+	}
+}
+
+// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/unusable-stored-content-converges-on-the-build-s-corpus
+//
+// TestReload_ConvergesOnTheBuildsCorpusWhenContentIsUnusable is the anti-divergence property, and it replaced the behaviour I
+// shipped first.
+//
+// Keeping the set already in force for these cases seemed obviously right and cannot work. All three are DETERMINATE: the store
+// was read, and what it holds yields no runnable rules. Keeping the running set makes the rule set a function of a replica's
+// history rather than of stored content, so a replica that restarts against the same store lands somewhere else, and because
+// neither records the version nothing ever reconciles them. One bad publish would split the fleet permanently.
+//
+// So each of these installs the corpus built into the binary and RECORDS the version, which is what a replica starting from
+// scratch does with the same store. The recorded version is the assertion that matters: without it the poll re-reads forever and
+// the divergence is merely slower.
+func TestReload_ConvergesOnTheBuildsCorpusWhenContentIsUnusable(t *testing.T) {
+	t.Parallel()
+
+	fromBuild := len(catalog.NewWithCorpus(nil, catalog.MustLoadImported()))
+	require.Greater(t, fromBuild, 10, "the build's corpus must be substantial, or these assertions say little")
+
+	cases := []struct {
+		name   string
+		corpus rulecontentapi.Corpus
 	}{
 		{
-			name:    "the version counter is unreadable",
-			corpus:  fakeCorpus{versionErr: errors.New("dial tcp: connection refused")},
-			wantErr: true,
+			name:   "the corpus was emptied",
+			corpus: fakeCorpus{version: 9, docs: nil},
 		},
 		{
-			name:    "the documents are unreadable",
-			corpus:  fakeCorpus{version: 9, err: errors.New("dial tcp: connection refused")},
-			wantErr: true,
-		},
-		{
-			name:    "the content does not parse",
-			corpus:  fakeCorpus{version: 9, docs: []rulecontentapi.Document{{Path: "imported/broken.yml", Content: []byte("{{ not sigma")}}},
-			wantErr: true,
-		},
-		{
-			name:     "the corpus was emptied",
-			corpus:   fakeCorpus{version: 9, docs: nil},
-			wantErr:  false,
-			wantWarn: true,
+			name: "the content does not parse",
+			corpus: fakeCorpus{version: 9, docs: []rulecontentapi.Document{
+				{Path: "imported/broken.yml", Content: []byte("{{ not sigma")},
+			}},
 		},
 		{
 			// The loader refuses a rule it cannot run individually and reports that as success with nothing loaded, NOT as an
-			// error, so this arrives on the happy path. Review caught it: without a guard, publishing a corpus in which every
-			// document is refused replaces a working rule set with the natively written rules alone, which looks like an ordinary
-			// reload in the log. A file_event rule is the real refusal this sensor produces, since it reads telemetry the agent
-			// does not collect.
+			// error, so this arrives on the happy path. A file_event rule is the real refusal this sensor produces, since it reads
+			// telemetry the agent does not collect.
 			name: "every document is refused individually",
 			corpus: fakeCorpus{version: 9, docs: []rulecontentapi.Document{{
 				Path:    "imported/file_event/file_event_macos_emond_launch_daemon.yml",
 				Content: mustReadEmbedded(t, "imported/file_event/file_event_macos_emond_launch_daemon.yml"),
 			}}},
-			wantErr:  false,
-			wantWarn: true,
 		},
 	}
 
@@ -130,21 +156,16 @@ func TestReload_KeepsThePreviousSetWhenContentCannotBeUsed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r, logged := testRules(t, tc.corpus)
-			inForce := []api.Rule{stubRule{id: "already-running"}}
-			r.installRuleSet(inForce, 3)
+			r.installRuleSet([]api.Rule{stubRule{id: "already-running"}}, 3)
 
 			_, err := r.Reload(t.Context())
-			if tc.wantErr {
-				require.Error(t, err, "the caller has to be told, or the refresh loop cannot report it")
-			} else {
-				require.NoError(t, err)
-				assert.True(t, logged.warned, "an emptied corpus is not an error, but it is worth saying out loud")
-			}
+			require.NoError(t, err, "a determinate state is not a failure to report; it is a state to converge on")
 
-			require.Len(t, r.svc.ActiveRules(), 1, "the set already in force must survive an unusable reload")
-			assert.Equal(t, "already-running", r.svc.ActiveRules()[0].ID())
-			assert.Equal(t, int64(3), r.svc.ActiveVersion(),
-				"and its version too, so the next poll still sees a difference and retries")
+			assert.Len(t, r.svc.ActiveRules(), fromBuild,
+				"every replica reading this store must reach the same set, which is the one built into the binary")
+			assert.Equal(t, int64(9), r.svc.ActiveVersion(),
+				"and the version must be RECORDED, or the poll re-reads forever and replicas never agree they are done")
+			assert.True(t, logged.warned, "silently replacing an operator's content with the build's is not acceptable")
 		})
 	}
 }

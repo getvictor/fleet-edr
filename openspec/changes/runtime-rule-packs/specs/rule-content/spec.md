@@ -36,7 +36,11 @@ The stored content SHALL be read back byte-identically, under the same identity 
 
 ### Requirement: An unavailable or unusable store leaves detections running
 
-The system SHALL continue evaluating detections when the stored content cannot be used. Where no previous good content is held, it SHALL fall back to the content compiled into the build, which is the same content the store would have been seeded with.
+The system SHALL continue evaluating detections when the stored content cannot be used, and SHALL fall back to the content compiled into the build, which is the same content the store would have been seeded with.
+
+The fallback SHALL depend only on what the store holds, never on what a replica happened to load previously. Two cases have to be distinguished for that to hold. A read that FAILS leaves the stored state unknown, so the set already in force is the best available answer and the attempt is retried. Content that was read successfully and yields no runnable rules is a KNOWN state, so every replica reading it SHALL reach the same rule set, which means the build's corpus rather than whatever each replica loaded before.
+
+Keeping the running set for that second case is the intuitive choice and does not work. It makes the rule set a function of a replica's history, so a replica that restarts against the same store lands somewhere else, and with no version recorded nothing reconciles them: one bad publish divides the fleet permanently. Recording the version is part of the requirement rather than an optimisation, because without it the poll re-reads the same unusable content forever.
 
 A deployment whose store is empty, unreachable, or holding content that fails to load SHALL therefore behave as it did before rule content was stored. The alternative is a server that starts with no detections because of a storage problem, which trades a bounded loss of the ability to change rules for an unbounded loss of the rules themselves.
 
@@ -56,19 +60,20 @@ Falling back for a REASON SHALL be reported. An empty store SHALL NOT be reporte
 - **THEN** the rules compiled into the build are evaluated
 - **AND** nothing is reported as wrong
 
-#### Scenario: A failed reload keeps the set already in force
+#### Scenario: A store that cannot be read keeps the set in force
 
 - **GIVEN** a running system evaluating content it loaded successfully
-- **WHEN** a later attempt to re-read that content fails, or the content it reads cannot be loaded
+- **WHEN** a later attempt to READ that content fails
 - **THEN** the rule set already in force continues to be evaluated, unchanged
-- **AND** the content compiled into the build is NOT substituted for it
+- **AND** the version it was built from is not advanced, so the next attempt retries
 
-#### Scenario: Content that loads to nothing installs nothing
+#### Scenario: Unusable stored content converges on the build's corpus
 
-- **GIVEN** a running system evaluating content it loaded successfully
-- **WHEN** the stored content is emptied
-- **THEN** the rule set already in force continues to be evaluated
-- **AND** the condition is reported
+- **GIVEN** stored content that was read successfully and yields no runnable rules, whether because it is empty, because it does not parse, or because every rule in it is refused
+- **WHEN** the rule set is built, on a running system or on one starting up
+- **THEN** both evaluate the content compiled into the build
+- **AND** the version is recorded, so a replica does not re-read the same unusable content indefinitely
+- **AND** the substitution is reported
 
 ### Requirement: Seeding never overwrites content that is already there
 

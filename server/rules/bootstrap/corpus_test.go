@@ -130,6 +130,19 @@ func TestLoadCorpus_FallsBackRatherThanRunningNoRules(t *testing.T) {
 			wantWarn:  true,
 			wantRules: embedded,
 		},
+		{
+			// This row was missing, and its absence is why the path shipped wrong: documents that the loader refuses ONE BY ONE
+			// come back as success with an empty set, not as an error, so a deployment whose stored corpus is entirely unrunnable
+			// started with no corpus detections at all while the empty-store row above fell back. The two are the same determinate
+			// state and have to reach the same rule set. A file_event rule is the real refusal this sensor produces.
+			name: "content present and every document refused",
+			corpus: fakeCorpus{docs: []rulecontentapi.Document{{
+				Path:    "imported/file_event/file_event_macos_emond_launch_daemon.yml",
+				Content: mustReadEmbedded(t, "imported/file_event/file_event_macos_emond_launch_daemon.yml"),
+			}}},
+			wantWarn:  true,
+			wantRules: embedded,
+		},
 	}
 
 	for _, tc := range cases {

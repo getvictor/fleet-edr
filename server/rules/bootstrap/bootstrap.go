@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -86,11 +85,11 @@ type Rules struct {
 	// can rebuild it. cmd/main wires the detection engine's LoadActive here; keeping it a plain func leaves this context free of a
 	// detection import (ADR-0004), the same posture as the PrincipalLabel and CommandBatchInserter deps.
 	//
-	// Atomic for the shape of the API rather than for a race in today's wiring. cmd/main installs the observer while wiring the
-	// contexts and starts this context's loops only afterwards, so nothing writes the field once the refresh goroutine is reading
-	// it. Nothing ENFORCES that order though: both the setter and Run are exported, and the cost of making the safe order
-	// unconditional is one pointer load per install, on a path that runs when content changes.
-	ruleSetObserver atomic.Pointer[func()]
+	// Set during wiring and read-only thereafter, like the other post-construction setters on this type. An earlier revision made
+	// it atomic to allow registration after Run; review showed that does not buy safety, only the absence of a reported race. A
+	// generation installed between the nil read and the store is never delivered, so the engine stays stale until the next publish,
+	// which is worse than the ordering contract because nothing reports it. The contract is the honest version.
+	ruleSetObserver func()
 }
 
 // New wires the rules context. Does NOT apply the schema (call
@@ -183,8 +182,8 @@ func (r *Rules) installRuleSet(rules []api.Rule, version int64) int {
 	}
 	r.detectionConfigSvc.SetRuleExclusionSupport(exclusionSupport)
 
-	if observer := r.ruleSetObserver.Load(); observer != nil {
-		(*observer)()
+	if r.ruleSetObserver != nil {
+		r.ruleSetObserver()
 	}
 	return n
 }
@@ -193,9 +192,13 @@ func (r *Rules) installRuleSet(rules []api.Rule, version int64) int {
 // the rules. cmd/main wires the detection engine's LoadActive.
 //
 // The callback runs synchronously on the refresh loop's goroutine, so it must not block: it is meant for rebuilding an in-memory
-// index, which is what the engine does with it. Safe to call before or after Run.
+// index, which is what the engine does with it.
+//
+// MUST be called before Run. Registering afterwards races the refresh loop, and losing that race silently costs one generation:
+// the install reads a nil observer and the consumer is not told, so it stays on the previous rule set until the next publish.
+// cmd/main registers while wiring the contexts, before it starts any of their loops.
 func (r *Rules) SetRuleSetObserver(observe func()) {
-	r.ruleSetObserver.Store(&observe)
+	r.ruleSetObserver = observe
 }
 
 // DefaultDetectionConfigRefreshInterval is how often a replica polls the detection-config version counter to pick up a config edit
@@ -315,21 +318,33 @@ func (r *Rules) Reload(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read rule corpus: %w", err)
 	}
-	if len(docs) == 0 {
-		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; keeping the rule set already in force")
-		return 0, nil
-	}
+
+	// Everything below is a DETERMINATE state: the store was read, and what it holds yields no runnable rules. Every replica
+	// reading it must therefore reach the same rule set, so each of these installs the corpus built into the binary and records the
+	// version, exactly as a replica starting from scratch against the same store would (see loadCorpus).
+	//
+	// Keeping the set already in force here was the first version and review was right that it cannot work: it makes the running
+	// rule set a function of a replica's HISTORY rather than of stored content, so a replica that restarts lands somewhere else and
+	// the recorded version never moves to reconcile them. Permanent divergence across the fleet, from one bad publish.
+	//
+	// The two read failures above are different in kind and are the only ones that keep history: there the stored state is unknown,
+	// so the set in force is the best available answer and the next tick retries.
 	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
-	if err != nil {
-		return 0, fmt.Errorf("load rule corpus: %w", err)
-	}
-	if len(loaded) == 0 {
-		// Every document was refused individually, which the loader reports as success with nothing loaded rather than as an error.
-		// Installing that would drop every corpus detection while looking like a normal reload, so it is treated exactly like the
-		// emptied corpus above: content that loads to nothing installs nothing.
-		r.logger.WarnContext(ctx, "rules: no document in the stored rule corpus could be loaded; keeping the rule set already in force",
-			"documents", len(docs), "refused", len(rejected))
-		return 0, nil
+	switch {
+	case len(docs) == 0:
+		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; using the corpus embedded in this build", "version", version)
+		loaded, rejected = catalog.MustLoadImported(), nil
+	case err != nil:
+		r.logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
+			"version", version, "documents", len(docs), "err", err)
+		loaded, rejected = catalog.MustLoadImported(), nil
+	case len(loaded) == 0:
+		// The loader refuses a rule it cannot run individually and reports that as success with nothing loaded, not as an error, so
+		// this arrives on the happy path. Without it, publishing a corpus whose every document is refused would drop every corpus
+		// detection while logging like an ordinary reload.
+		r.logger.WarnContext(ctx, "rules: no document in the stored rule corpus could be loaded; using the corpus embedded in this build",
+			"version", version, "documents", len(docs), "refused", len(rejected))
+		loaded, rejected = catalog.MustLoadImported(), nil
 	}
 
 	n := r.installRuleSet(catalog.NewWithCorpus(r.detectionConfigSvc, loaded), version)
@@ -432,6 +447,14 @@ func loadCorpus(ctx context.Context, corpus rulecontentapi.Corpus, logger *slog.
 	if err != nil {
 		logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
 			"documents", len(docs), "err", err)
+		return catalog.MustLoadImported()
+	}
+	if len(loaded) == 0 {
+		// Documents present and every one of them refused. This reached here as success with an empty set, so a deployment whose
+		// stored corpus is entirely unrunnable started with NO corpus detections while the empty-store case above fell back. Both
+		// are the same determinate state and must reach the same rule set, on this path and on the reload path alike.
+		logger.WarnContext(ctx, "rules: no document in the stored rule corpus could be loaded; using the corpus embedded in this build",
+			"documents", len(docs), "refused", len(rejected))
 		return catalog.MustLoadImported()
 	}
 	logger.InfoContext(ctx, "rules: loaded rule corpus from storage",

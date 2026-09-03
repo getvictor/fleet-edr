@@ -42,9 +42,13 @@ parameters without the code that reads them delivers no new detection.
 ## 3. Reload and convergence (this PR)
 
 - [x] `Reload` plus a `CorpusRefreshLoop` gated on the cheap version counter, following `detectionconfig`. Third loop in `Rules.Run`.
-- [x] A load failure keeps the previous good set, which is where reload deliberately differs from startup: startup falls back to the
-      corpus embedded in the build because there is nothing else to run, whereas here that would discard working content because a
-      database blinked.
+- [x] A store that cannot be READ keeps the previous good set and retries, which is where reload differs from startup: the stored
+      state is unknown, and falling back would discard working content because a database blinked.
+- [x] Stored content that reads successfully and yields no runnable rules (empty, unparseable, or every rule refused) converges on
+      the build's corpus instead, and records the version. Review caught the first version, which kept the running set for these
+      too: that makes the rule set a function of a replica's HISTORY, so a restarted replica lands elsewhere and, with no version
+      recorded, nothing reconciles them. One bad publish would divide the fleet permanently. The startup path had the same defect
+      independently, and worse: documents that were all refused yielded ZERO corpus rules while an empty store fell back.
 - [x] The version is read BEFORE the documents. The two reads cannot be atomic, and the reverse order pairs older content with the
       newer version, which the next poll reads as current and never corrects. Asserted directly, since it is a silent permanent
       staleness bug rather than a preference.
