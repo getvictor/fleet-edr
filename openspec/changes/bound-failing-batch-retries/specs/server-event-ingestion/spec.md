@@ -16,6 +16,8 @@ The system SHALL treat the resulting gap as the lesser harm, and the reasoning S
 
 Setting events aside SHALL be observable, both as a counter that dashboards and alerts can be authored against and as a log record naming the host. A stalled host is otherwise indistinguishable from a quiet one, and the only symptom is an absence of detections that nobody is watching for.
 
+Events set aside SHALL NOT be counted as backlog by the processor-backlog signal that reports how much work is waiting. They are not waiting for anything, so counting them would hold that signal up permanently by a number that never drains, which is the shape an operator reads as a processor falling behind. The separate set-aside counter is what reports them, and any probe that validates the backlog signal SHALL use the same predicate so the two cannot disagree.
+
 Events set aside SHALL age out under the deployment's retention window rather than accumulating in the work queue without bound, and that window SHALL be measured from when the events were WITHDRAWN rather than from when their batch first failed. The two diverge without bound, because attempts accrue only while a host is online: a batch that fails once, waits out an offline stretch longer than the whole retention window, and only then reaches the attempt bound would be withdrawn and swept on the next sweep, leaving no window to inspect it in. The retention window doubles as the period an operator has to look, so it SHALL start when there is something to look at.
 
 #### Scenario: A deterministically failing batch stops blocking its host
@@ -45,6 +47,13 @@ Events set aside SHALL age out under the deployment's retention window rather th
 - **WHEN** the queue is inspected
 - **THEN** the entry is still present with its payload intact, withdrawn from processing rather than removed
 - **AND** the entry names the event, so which events a host stopped contributing is recoverable
+
+#### Scenario: A set-aside event stops counting as backlog
+
+- **GIVEN** a host with one event set aside and no other queued work
+- **WHEN** the processor-backlog signal is read
+- **THEN** it reports no waiting work
+- **AND** the set-aside entry is still present, reported by the set-aside counter instead
 
 #### Scenario: Events set aside do not accumulate without bound
 

@@ -94,9 +94,11 @@ type Config struct {
 	// Data lifecycle.
 	//
 	// RetentionDays is the age cap in days for the MySQL rows the server derives and can rebuild or afford to lose: completed process
-	// records, which the retention runner prunes once their exit aged past it (alert-referenced rows are kept), and the per-rule
-	// monitor-match counters (issue #813), which the rules context prunes by day. 0 disables both. Event retention is the ClickHouse
-	// archive's native TTL (ADR-0015), not this knob. Default 30.
+	// records, which the retention runner prunes once their exit aged past it (alert-referenced rows are kept), the per-rule
+	// monitor-match counters (issue #813), which the rules context prunes by day, and the work-queue entries SET ASIDE after a batch
+	// failed repeatedly (issue #836), aged from when they were withdrawn, which makes this knob the window an operator has to inspect
+	// a host's processing gap. 0 disables all three. Event retention is the ClickHouse archive's native TTL (ADR-0015), not this
+	// knob. Default 30.
 	RetentionDays int
 
 	// Detection-rule false-positive allowlists and the disabled-rule list moved out of boot-time env to the DB-backed

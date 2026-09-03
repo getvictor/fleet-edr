@@ -126,7 +126,7 @@ func startBacklogProbe(ctx context.Context, stack *integration.Stack) *backlogPr
 			case <-ticker.C:
 				qctx, cancel := context.WithTimeout(ctx, scaleGateQueryTimeout)
 				var depth int64
-				err := stack.DB.GetContext(qctx, &depth, "SELECT COUNT(*) FROM event_queue WHERE processed != 1")
+				err := stack.DB.GetContext(qctx, &depth, "SELECT COUNT(*) FROM event_queue WHERE processed IN (0, 2)")
 				cancel()
 				if err != nil {
 					continue // a transient read error on one tick is recovered by the next; require(samples > 0) guards a total failure

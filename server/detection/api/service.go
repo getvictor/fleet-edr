@@ -45,8 +45,9 @@ type Service interface {
 	// the threshold. Used by the OTel offline-hosts gauge.
 	CountOfflineHosts(ctx context.Context, threshold time.Duration) (int, error)
 
-	// CountUnprocessed counts events with processed != 1. Used by the OTel unprocessed-events gauge so SOC dashboards can alert on
-	// stuck-processor fleets.
+	// CountUnprocessed counts events still waiting to be processed or in flight (queue states pending and claimed). Used by the OTel
+	// unprocessed-events gauge so SOC dashboards can alert on stuck-processor fleets. Events SET ASIDE after repeated failure are
+	// excluded: they are not waiting for anything, so counting them would hold the gauge up by a number that never drains (#836).
 	CountUnprocessed(ctx context.Context) (int64, error)
 
 	// IngestHandler returns the POST /api/events handler. Returned as an http.Handler rather than registered via a separate route method

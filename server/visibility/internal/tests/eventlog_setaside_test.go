@@ -284,6 +284,8 @@ func TestPruneSetAside(t *testing.T) {
 	})
 }
 
+// spec:server-event-ingestion/a-batch-that-cannot-be-processed-does-not-stall-its-host/a-set-aside-event-stops-counting-as-backlog
+//
 // TestSetAside_IsNotCountedAsBacklog pins that a withdrawn event stops looking like work.
 //
 // CountPending backs the processor-backlog gauge and counted everything not acknowledged. Set-aside entries are not waiting for

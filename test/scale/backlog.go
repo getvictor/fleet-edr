@@ -21,7 +21,10 @@ const backlogQueryTimeout = 5 * time.Second
 // backlogQuery counts not-yet-acknowledged rows in the work queue: the server-side processing backlog (waiting + in-flight). It is the
 // same predicate eventlog.Store.CountPending uses to back the processor-backlog gauge, run here from the load driver's vantage so the
 // long-form lane can gate on it without the server exposing a new endpoint.
-const backlogQuery = "SELECT COUNT(*) FROM event_queue WHERE processed != 1"
+// Mirrors the server's CountPending predicate exactly (processed 0 = pending, 2 = claimed). `processed != 1` would also count
+// state 3, the set-aside rows withdrawn from processing (issue #836), which never drain: the probe would then report a larger
+// backlog than the gauge it is validating and could fail a run that had in fact drained.
+const backlogQuery = "SELECT COUNT(*) FROM event_queue WHERE processed IN (0, 2)"
 
 // backlogSampler polls the server-side event_queue depth on an interval for the life of a run. It is started only when an operator
 // passes --backlog-dsn (the per-PR smoke and the default baseline run never open a DB connection), matching the README's stance that

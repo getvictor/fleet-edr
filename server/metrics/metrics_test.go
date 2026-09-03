@@ -119,13 +119,14 @@ func (s stubGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
 // spec:observability-instrumentation/stable-counter-names/events-withdrawn-from-processing-are-counted-per-host
 // spec:observability-instrumentation/observable-host-fleet-gauges/gauges-evaluate-on-the-reader-cadence
 //
-// Five scenarios share this test because they describe the same observation from different angles: every
+// Six scenarios share this test because they describe the same observation from different angles: every
 // counter / gauge that the spec names is fired once by Recorder methods and then collected via the
 // ManualReader. The asserts pin (a) host_id attr on edr.events.ingested, (b) rule_id+severity attrs on
 // edr.alerts.created, (c) the lossy=true vs lossy=false distinction on edr.agent.queue.dropped
 // (server-side mirror of the agent-side TestRecorder_QueueDropped), (d) that collect() drives the
-// gauge callbacks and observes their values (stubGauges feeds enrolled=3, offline=1), and (e) the
-// attribute-free edr.detection.materialization_retries counter sums both fired retries.
+// gauge callbacks and observes their values (stubGauges feeds enrolled=3, offline=1), (e) the
+// attribute-free edr.detection.materialization_retries counter sums both fired retries, and (f) the
+// host_id attr and count on edr.events.set_aside, which nothing else collects.
 //
 // spec:observability-instrumentation/aggregate-latency-and-alerting-derive-from-metrics-not-sampled-spans/event-counts-are-unaffected-by-the-sample-ratio
 // The recorder counts every ingested event with no reference to the trace sampler, so counts are authoritative regardless of the

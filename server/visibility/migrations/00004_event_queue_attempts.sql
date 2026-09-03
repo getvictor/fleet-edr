@@ -38,6 +38,15 @@ CREATE INDEX idx_event_queue_set_aside ON event_queue (processed, set_aside_at_n
 -- +goose StatementEnd
 
 -- +goose Down
+-- Normalize state 3 back to pending BEFORE dropping the columns that define it. Rolling back returns the code to a version whose
+-- claim offers only states 0 and a lease-expired 2 and whose prune deletes only state 1, so a row left at 3 would be permanently
+-- unclaimable AND permanently counted by the old `processed != 1` backlog gauge: stuck work that no sweep removes and a gauge that
+-- never drains. Returning them to pending is the conservative direction, since these events are retried rather than skipped, and
+-- the old code has no bound on that (which is the defect this migration exists to fix) but is at least a state it understands.
+-- +goose StatementBegin
+UPDATE event_queue SET processed = 0, claimed_at_ns = 0 WHERE processed = 3;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP INDEX idx_event_queue_set_aside ON event_queue;
 -- +goose StatementEnd
