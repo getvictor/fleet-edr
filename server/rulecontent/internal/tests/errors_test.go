@@ -220,3 +220,47 @@ func TestBootstrap_DefaultsTheLogger(t *testing.T) {
 	_, err = rc.SeedFrom(t.Context(), fstest.MapFS{"imported/x.yml": &fstest.MapFile{Data: []byte("x")}}, "imported", nil)
 	require.NoError(t, err)
 }
+
+// TestCorpus_ConcurrentReplaceAndSeedDoNotDeadlock pins the lock ORDER, which a previous fix in this PR got wrong.
+//
+// Adding the seed's meta-row lock left the two mutations acquiring locks in opposite orders: Replace wrote documents and then the
+// version, while ReplaceIfEmpty locked the version row and then wrote documents. That is an ABBA deadlock (MySQL 1213) between an
+// operator's replacement and a startup seed, and those two paths exist specifically to be able to run at the same time.
+//
+// Every mutation now takes meta before documents. Asserted by racing the two repeatedly: a lock cycle surfaces as an error, so any
+// error at all fails this, and the ordering was verified by reverting it and observing 1213.
+func TestCorpus_ConcurrentReplaceAndSeedDoNotDeadlock(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+
+	docs := []api.Document{
+		{Path: "imported/a.yml", Content: []byte("a")},
+		{Path: "imported/b.yml", Content: []byte("b")},
+		{Path: "imported/c.yml", Content: []byte("c")},
+	}
+
+	const rounds = 40
+	var wg sync.WaitGroup
+	errs := make(chan error, rounds*2)
+
+	wg.Go(func() {
+		for range rounds {
+			if _, err := s.Replace(t.Context(), docs); err != nil {
+				errs <- err
+			}
+		}
+	})
+	wg.Go(func() {
+		for range rounds {
+			if _, _, err := s.ReplaceIfEmpty(t.Context(), docs); err != nil {
+				errs <- err
+			}
+		}
+	})
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err, "a replacement racing a seed must not deadlock; both take meta before documents")
+	}
+}

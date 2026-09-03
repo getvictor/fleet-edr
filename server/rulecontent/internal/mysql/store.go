@@ -52,7 +52,7 @@ func (s *Store) Version(ctx context.Context) (int64, error) {
 // Whole-corpus replacement rather than per-document upserts, because a corpus is the unit that is valid or not: a rule removed
 // upstream has to disappear, and a partially applied corpus is a state no reader should be able to observe. The version bump is
 // inside the transaction for the same reason, so a replica that sees the new version can only ever read the documents that go
-// with it.
+// with it, and it happens FIRST so that every mutation locks meta before documents (see replaceWithin).
 //
 // Returns the new version.
 func (s *Store) Replace(ctx context.Context, docs []api.Document) (int64, error) {
@@ -74,7 +74,22 @@ func (s *Store) Replace(ctx context.Context, docs []api.Document) (int64, error)
 
 // replaceWithin performs the whole-corpus write inside an open transaction and returns the new version. Shared by Replace and
 // ReplaceIfEmpty so the two cannot drift on what "replace" means.
+//
+// The meta row is written FIRST, before any document, and the order is the point rather than an accident. Every mutation of this
+// corpus therefore takes its locks as meta-then-documents. When the version bump came last, Replace held document locks while
+// waiting for meta and ReplaceIfEmpty held meta while waiting for documents, which is an ABBA deadlock between an operator's
+// replacement and a startup seed: two paths that exist precisely to run at the same time.
+//
+// Fixing the ORDER rather than retrying the deadlock, because a retry would paper over a cycle this code creates itself. The
+// deadlock retry that other stores here use is for contention this code does not control.
 func replaceWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document) (int64, error) {
+	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
+		return 0, fmt.Errorf("bump rule corpus version: %w", err)
+	}
+	var version int64
+	if err := tx.GetContext(ctx, &version, "SELECT version FROM rule_corpus_meta WHERE id = 1"); err != nil {
+		return 0, fmt.Errorf("read rule corpus version: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_documents"); err != nil {
 		return 0, fmt.Errorf("clear rule corpus: %w", err)
 	}
@@ -83,13 +98,6 @@ func replaceWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document) (int64
 			"INSERT INTO rule_corpus_documents (path, content) VALUES (?, ?)", d.Path, string(d.Content)); err != nil {
 			return 0, fmt.Errorf("insert rule corpus document %q: %w", d.Path, err)
 		}
-	}
-	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
-		return 0, fmt.Errorf("bump rule corpus version: %w", err)
-	}
-	var version int64
-	if err := tx.GetContext(ctx, &version, "SELECT version FROM rule_corpus_meta WHERE id = 1"); err != nil {
-		return 0, fmt.Errorf("read rule corpus version: %w", err)
 	}
 	return version, nil
 }
