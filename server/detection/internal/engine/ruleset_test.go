@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -11,65 +12,133 @@ import (
 	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
 
+// recordingRule records that it ran, and optionally blocks so a test can hold an Evaluate open mid-batch.
+type recordingRule struct {
+	typedRule
+	mu      *sync.Mutex
+	invoked *[]string
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *recordingRule) Evaluate(context.Context, []api.Event, rulesapi.GraphReader) ([]api.Finding, error) {
+	r.mu.Lock()
+	*r.invoked = append(*r.invoked, r.ID())
+	r.mu.Unlock()
+	if r.started != nil {
+		close(r.started)
+		<-r.release
+	}
+	return nil, nil
+}
+
 // spec:server-detection-rules-engine/replacing-the-active-rule-set-is-atomic/a-batch-evaluated-during-a-replacement-sees-one-consistent-rule-set
 //
-// TestRuleSet_ReplacedWhileEvaluating is the test this whole change exists for.
+// TestEngine_Evaluate_HoldsOneRuleSetAcrossAReplacement drives Evaluate itself, which is the only way to test the property.
 //
-// Before it, replacing the active set wrote four fields in sequence while Evaluate read them together: it picks indices out of
-// dispatch and always, then uses those indices against rules and declaredTypes. A replacement landing between those reads hands
-// an evaluation indices built for a set it is no longer holding, and the failure is not a crash. It is a WRONG evaluation: a rule
-// invoked for a batch that does not carry its event types, or a rule skipped for one that does. `append(e.rules[:0], ...)` made it
-// worse by writing into the very backing array a concurrent Evaluate was iterating.
+// The first version of this test loaded the snapshot itself and re-implemented Evaluate's dispatch-then-resolve sequence. It
+// therefore proved that ruleSet is internally consistent and proved NOTHING about Evaluate, so it would have passed unchanged if
+// Evaluate regressed to loading one set for its indices and another for the rules it invokes. That regression is the entire reason
+// the snapshot exists.
 //
-// Two things are asserted, and the second is the one that matters. The race detector catches the memory race. It does NOT catch a
-// consistent-but-mismatched view, so every index this returns is checked against the set it came from: a rule selected for a batch
-// must actually declare one of that batch's event types, per THAT set.
+// So this blocks inside the first rule of set A, swaps the active set to B while that Evaluate is in flight, releases it, and
+// asserts the batch was evaluated against A throughout. Both failure modes are covered by asserting the exact invocation list: a
+// re-read after the swap would invoke B's rule (wrong rule) or skip A's second rule (missed rule), and either changes the list.
 //
-// Run with -race to get both halves.
-func TestRuleSet_ReplacedWhileEvaluating(t *testing.T) {
+// B declares the SAME event type as A on purpose. If it declared a different one, a regression would merely dispatch nothing after
+// the swap and the test could pass for the wrong reason on an empty list.
+func TestEngine_Evaluate_HoldsOneRuleSetAcrossAReplacement(t *testing.T) {
 	t.Parallel()
 
-	// Two sets with deliberately different shapes, so a torn or mismatched view is likely to produce an index that is either out
-	// of range or selecting a rule which declares the wrong type.
-	execOnly := []rulesapi.Rule{
+	var mu sync.Mutex
+	var invoked []string
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	setA := []rulesapi.Rule{
+		&recordingRule{
+			typedRule: typedRule{stubRule: stubRule{id: "a1"}, eventTypes: []string{"exec"}},
+			mu:        &mu, invoked: &invoked, started: started, release: release,
+		},
+		&recordingRule{
+			typedRule: typedRule{stubRule: stubRule{id: "a2"}, eventTypes: []string{"exec"}},
+			mu:        &mu, invoked: &invoked,
+		},
+	}
+	setB := []rulesapi.Rule{
+		&recordingRule{
+			typedRule: typedRule{stubRule: stubRule{id: "b1"}, eventTypes: []string{"exec"}},
+			mu:        &mu, invoked: &invoked,
+		},
+	}
+
+	e := New(nil, nil)
+	e.active.Store(newRuleSet(setA))
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
+		assert.NoError(t, err)
+	})
+
+	<-started                        // a1 is inside Evaluate, holding the batch open
+	e.active.Store(newRuleSet(setB)) // the replacement lands mid-batch
+	close(release)                   // let a1 finish
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"a1", "a2"}, invoked,
+		"the batch must be evaluated against the set it started with: b1 appearing means Evaluate re-read the set, and a2 "+
+			"missing means it re-read and then dispatched against B")
+}
+
+// TestRuleSet_ConcurrentSwapIsRaceFree is the memory-race half, and only that half.
+//
+// It does NOT exercise Evaluate (the test above does) and does not prove the single-view property. What it covers is the plain
+// data race the old implementation had: `append(e.rules[:0], ...)` wrote into the backing array a concurrent reader was iterating.
+// Reinstating that mutation produces data races here under -race; this implementation is clean.
+//
+// Both sets declare the same event type so the reader always has indices to check. The first version used sets with disjoint
+// types, so half its iterations dispatched nothing and asserted nothing.
+func TestRuleSet_ConcurrentSwapIsRaceFree(t *testing.T) {
+	t.Parallel()
+
+	three := []rulesapi.Rule{
 		&typedRule{stubRule: stubRule{id: "exec_a"}, eventTypes: []string{"exec"}},
 		&typedRule{stubRule: stubRule{id: "exec_b"}, eventTypes: []string{"exec"}},
 		&typedRule{stubRule: stubRule{id: "exec_c"}, eventTypes: []string{"exec"}},
 	}
-	dnsOnly := []rulesapi.Rule{
-		&typedRule{stubRule: stubRule{id: "dns_a"}, eventTypes: []string{"dns_query"}},
+	one := []rulesapi.Rule{
+		&typedRule{stubRule: stubRule{id: "exec_only"}, eventTypes: []string{"exec"}},
 	}
 
 	e := New(nil, nil)
-	e.active.Store(newRuleSet(execOnly))
+	e.active.Store(newRuleSet(three))
 	batch := []api.Event{eventOfType("exec")}
 
 	var wg sync.WaitGroup
 	const rounds = 2000
 
-	// Writer: swap between two differently shaped sets as fast as it can.
 	wg.Go(func() {
 		for i := range rounds {
 			if i%2 == 0 {
-				e.active.Store(newRuleSet(dnsOnly))
+				e.active.Store(newRuleSet(one))
 			} else {
-				e.active.Store(newRuleSet(execOnly))
+				e.active.Store(newRuleSet(three))
 			}
 		}
 	})
 
-	// Readers: dispatch and then resolve, exactly as Evaluate does, checking the two agree.
 	for range 4 {
 		wg.Go(func() {
 			for range rounds {
 				rs := e.active.Load()
-				for _, i := range rs.rulesFor(batch) {
+				idx := rs.rulesFor(batch)
+				require.NotEmpty(t, idx, "both sets declare exec, so every iteration must actually check something")
+				for _, i := range idx {
 					require.Less(t, i, len(rs.rules), "a dispatch index must be in range for the set it came from")
-					declared := rs.declaredTypes[i]
-					require.Len(t, declared, 1, "these fixtures declare exactly one type each")
-					assert.Equal(t, "exec", declared[0],
-						"a rule selected for an exec batch must declare exec IN THE SET IT CAME FROM; anything else is a "+
-							"mismatched view, which the race detector cannot see")
+					assert.Equal(t, []string{"exec"}, rs.declaredTypes[i], "and must select a rule that set declared for exec")
 				}
 			}
 		})
