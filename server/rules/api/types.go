@@ -31,8 +31,9 @@ type (
 	// Finding is a per-rule positive output. Detection persists these
 	// as alerts via mysql.Store.InsertAlert.
 	Finding = detectionapi.Finding
-	// GraphReader is the narrow read surface the engine exposes to rules. Audit of the eight production rules confirms these three methods
-	// are the entire surface they consume.
+	// GraphReader is the narrow read surface the engine exposes to rules: six methods, the entire graph surface the production rules
+	// consume. The count is load-bearing rather than trivia, because the engine wraps every one of them to make a failed read
+	// retryable (issue #798), and a method missing from that wrapper loses detections silently.
 	GraphReader = detectionapi.GraphReader
 	// NullRawJSON is the json.RawMessage alias that scans MySQL JSON NULL correctly. Used by some rule code-signing helpers
 	// (privilege_launchd_plist_write).

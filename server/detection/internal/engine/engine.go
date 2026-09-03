@@ -90,9 +90,13 @@ type Engine struct {
 	// Documentation (slice included) on every call, which is fine at load and wasteful per batch.
 	declaredTypes [][]string
 	store         *mysql.Store
-	logger        *slog.Logger
-	metrics       api.MetricsRecorder
-	modeResolver  rulesapi.RuleModeResolver
+	// ruleReader is what RULES read the graph through: the store, wrapped so a failed read is retryable rather than isolated like
+	// a broken rule (issue #798). The engine's own reads (alert persistence, dedup) use store directly, since a failure there is
+	// already surfaced to the caller and must not acquire a rules-context sentinel.
+	ruleReader   api.GraphReader
+	logger       *slog.Logger
+	metrics      api.MetricsRecorder
+	modeResolver rulesapi.RuleModeResolver
 	// evalStats is the durable sink for per-rule evaluation statistics (issue #774). Optional: nil records nothing.
 	evalStats rulesapi.RuleEvalStatsRecorder
 	// tracer is per-Engine rather than a package global so a test can install its own tracer on its own Engine instance without a data
@@ -106,7 +110,9 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Engine{store: s, logger: logger, tracer: otel.Tracer(tracerName)}
+	// Built once here, not per batch: it is one interface value with no per-call allocation, which keeps the non-allocating
+	// dispatch the concrete store handle exists for.
+	return &Engine{store: s, ruleReader: &retryableGraphReader{inner: s}, logger: logger, tracer: otel.Tracer(tracerName)}
 }
 
 // SetMetrics installs the OTel counter hook. Safe to call after New.
@@ -327,8 +333,9 @@ func consumesAny(declared []string, events []api.Event) bool {
 // evaluateRule opens a per-rule span carrying rule_id (observability-instrumentation spec) so detection latency and alert counts
 // can be grouped by rule in downstream dashboards. The span is annotated with alert_count after the rule returns; on rule-evaluate
 // failure the span records the error and the loop continues (per-rule isolation). Returns a non-nil error ONLY when alert
-// persistence fails or the rule reported a retryable rulesapi.ErrProcessNotYetMaterialized: other rule-evaluation errors are
-// logged + swallowed so a buggy rule doesn't block the rest.
+// persistence fails or the rule reported a RETRYABLE error (anything wrapping rulesapi.ErrRetryBatch: a subject process not yet
+// materialized, a rule waiting out its own window, or a failed read of the graph since issue #798): other rule-evaluation errors
+// are logged + swallowed so a buggy rule doesn't block the rest.
 func (e *Engine) evaluateRule(
 	ctx context.Context, rule rulesapi.Rule, declared []string, live []api.Event, scope *rulesapi.BatchScope, tally *batchTally,
 	stats *rulesapi.RuleEvalStats,
@@ -419,7 +426,7 @@ func (e *Engine) evaluateRule(
 		)
 	}()
 
-	findings, err := evaluate(ctx, rule, scoped, e.store, scope)
+	findings, err := evaluate(ctx, rule, scoped, e.ruleReader, scope)
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
 	// recorded but the findings are still persisted below rather than thrown away with the error. Only a non-retryable failure
 	// discards the batch's findings: that path means the rule itself misbehaved, so its output is not trustworthy.
@@ -430,10 +437,17 @@ func (e *Engine) evaluateRule(
 			e.logger.WarnContext(ctx, "detection rule evaluation failed", "rule", rule.ID(), "err", err)
 			return nil
 		}
-		// A concurrently processed batch has not committed this event's subject process row yet (intra-replica workers since
-		// issue #535, cross-replica claimers per ADR-0011). This is a retryable ordering condition, not a rule bug: fail the
-		// batch so the processor nacks it and re-evaluates once the row lands. Alert dedup makes the re-run idempotent, and
-		// the rules bound the retry with a grace window on the event's ingest age so an orphaned event cannot loop forever.
+		// A retryable error is not a rule bug, so it fails the BATCH rather than being isolated: the processor nacks and
+		// re-evaluates, and alert dedup makes the re-run idempotent. Three conditions reach here and they are bounded
+		// differently, which is why this is not described as one:
+		//
+		//   - A subject process row not yet committed by a concurrently processed batch (intra-replica workers since issue
+		//     #535, cross-replica claimers per ADR-0011). Bounded by the rules themselves, with a grace window on the event's
+		//     ingest age, so an orphaned event cannot loop forever.
+		//   - A rule waiting out a window of its own (sensor_tamper waits for a provider to recover). Bounded by that window.
+		//   - A failed READ of the process graph (issue #798), where the rule is fine and its dependency is not. Bounded
+		//     externally: the work queue sets the batch aside once it has exceeded both its attempt and duration bounds
+		//     (issue #836), since nothing about the read itself says when to stop trying.
 		retryableMiss = fmt.Errorf("rule %s: %w", rule.ID(), err)
 		// The single point where the engine judges an evaluation retryable, which is why the statistics read it from here rather
 		// than re-deriving it from a return value that later code reassigns.
@@ -490,7 +504,7 @@ func (e *Engine) evaluateRule(
 // which is nothing beside the work the rule is about to do, and keeping it out of Register means a rule cannot be registered as one
 // kind and evaluated as another.
 func evaluate(
-	ctx context.Context, rule rulesapi.Rule, events []api.Event, gr *mysql.Store, scope *rulesapi.BatchScope,
+	ctx context.Context, rule rulesapi.Rule, events []api.Event, gr api.GraphReader, scope *rulesapi.BatchScope,
 ) ([]api.Finding, error) {
 	if scoped, ok := rule.(rulesapi.ScopedRule); ok {
 		return scoped.EvaluateScoped(ctx, scope, events, gr)
