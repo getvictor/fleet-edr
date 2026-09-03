@@ -151,9 +151,16 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		metric.WithDescription("Detection batches re-queued because an event's subject or flow process was not materialized yet (a transient ordering race). A sustained non-zero rate means a replica is behind on graph materialization or agents are dropping fork/exec."),
 		metric.WithUnit("{retry}"),
 	)
+	// The description stays short because it renders as dashboard metadata beside the counter, where it competes with the chart for
+	// the reader's attention; the reasoning a maintainer needs lives here instead. Setting events aside is NOT data loss: ingest
+	// writes the archive before the work queue and retains it on its own window (ADR-0015), so the events stay available to hunting
+	// queries and alert evidence. What is given up is their contribution to the process graph and their evaluation by whichever
+	// rules had not already finished when the batch failed, which for a batch withdrawn at the builder stage is all of them.
 	r.eventsSetAside, _ = meter.Int64Counter(
 		"edr.events.set_aside",
-		metric.WithDescription("Queued events withdrawn from processing because their batch failed repeatedly (issue #836). Alert on any non-zero INCREASE, per host rather than fleet-wide: this is a cumulative counter, so an absolute-value condition keeps firing forever after the first occurrence, and one wedged host is the case it exists to catch. The host in the `host_id` attribute has a gap in its process graph. The events themselves are still in the archive, so this is not data loss; what is lost is their contribution to the graph and their evaluation by any rule that had not already finished when the batch failed, which for a batch withdrawn at the builder stage is every rule."),
+		metric.WithDescription("Queued events withdrawn from processing after their batch failed repeatedly (issue #836). The host in `host_id` "+
+			"has a gap in its process graph. Alert on a non-zero increase, per host: the counter is cumulative, so an absolute-value "+
+			"condition never clears once it fires."),
 		metric.WithUnit(unitEvent),
 	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
