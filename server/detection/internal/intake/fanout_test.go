@@ -68,10 +68,10 @@ func (f *fakeEventLog) Append(_ context.Context, events []api.Event) error {
 	return f.appendErr
 }
 func (f *fakeEventLog) PendingHosts(context.Context, int) ([]string, error) { return nil, nil }
-func (f *fakeEventLog) ClaimForHost(context.Context, string, int) ([]api.Event, error) {
-	return nil, nil
+func (f *fakeEventLog) ClaimForHost(context.Context, string, int) ([]api.Event, int64, error) {
+	return nil, 0, nil
 }
-func (f *fakeEventLog) Ack(context.Context, []string) error                    { return nil }
+func (f *fakeEventLog) Ack(context.Context, []string, int64) (bool, error)     { return true, nil }
 func (f *fakeEventLog) Nack(context.Context, []string) (int64, error)          { return 0, nil }
 func (f *fakeEventLog) CountPending(context.Context) (int64, error)            { return 0, nil }
 func (f *fakeEventLog) PruneProcessed(context.Context, int) (int64, error)     { return 0, nil }
