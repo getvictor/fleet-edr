@@ -10,6 +10,8 @@ The write is synchronous and every replica contends on the same database instanc
 
 The aggregate SHALL be exact with respect to what the per-batch writes would have accumulated: counts and total durations add, and the worst single evaluation takes the larger of the two rather than the more recent.
 
+That exactness covers the COUNTERS. The times a statistics row carries are taken when it is written, so deferring the write attributes work up to one flush interval later than it happened, and work in the final seconds of a day can be recorded against the next one. This is a bounded and accepted difference, not an exactness claim: the interval is seconds against a window read in days, so no decision the numbers exist for turns on it.
+
 A failed flush SHALL retain its statistics and retry them on a later flush, so a transient database failure costs no counts. Because the pending set is keyed by rule, retaining it SHALL NOT grow with the number of failed attempts. The only condition under which statistics are lost is an ungraceful shutdown, and that SHALL be documented where an operator reading the table would look.
 
 Buffering is acceptable for these statistics and SHALL NOT be extended to monitor match counts. A monitor match is a fact about the world that drives a promotion decision, so losing one makes a rule look quieter than it is; an evaluation cost sample is one of thousands and losing a window changes no decision.

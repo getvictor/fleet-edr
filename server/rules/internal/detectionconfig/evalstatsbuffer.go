@@ -73,8 +73,15 @@ func (b *BufferedEvalStats) RecordRuleEvalStats(_ context.Context, stats api.Rul
 	return nil
 }
 
-// mergeLocked adds stats into pending. Sums add and the maximum takes the larger, which is what keeps a flush's totals identical
-// to what the per-batch writes would have accumulated.
+// mergeLocked adds stats into pending. Sums add and the maximum takes the larger, matching the store's own upsert
+// (`evaluations + VALUES(...)`, `GREATEST(eval_ns_max, ...)`), which is what keeps a flush's COUNTERS identical to what the
+// per-batch writes would have accumulated.
+//
+// The counters only, and the exception is worth stating because the store derives the rest from its own clock at write time. The
+// day bucket, first_seen and last_seen now come from the flush rather than from the evaluation, so up to one flush interval of
+// work is attributed that much later, and work in the last seconds of a day can land in the next one. Bounded by the interval
+// against a window read in days, so it changes no decision the numbers are for, but it is a real difference and not covered by
+// the word "identical".
 func (b *BufferedEvalStats) mergeLocked(stats api.RuleEvalStats) {
 	for _, s := range stats {
 		existing, ok := b.pending[s.RuleID]
@@ -121,7 +128,11 @@ func (b *BufferedEvalStats) Flush(ctx context.Context) error {
 	return nil
 }
 
-// FlushLoop writes on the interval and once more when ctx is cancelled, which is what makes a graceful shutdown lose nothing.
+// FlushLoop writes on the interval and once more when ctx is cancelled, so a graceful shutdown writes the window it had rather
+// than discarding it.
+//
+// Not "loses nothing": that final write can itself fail, within its own short budget, and then the window IS lost. That is the
+// one documented loss window and flushOnShutdown below reports it.
 //
 // The final flush deliberately does NOT use ctx, which is already cancelled by then and would fail the write immediately. It gets
 // a short budget of its own instead, long enough for one statement and short enough not to hold up a shutdown.
