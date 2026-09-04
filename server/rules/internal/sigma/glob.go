@@ -86,6 +86,30 @@ type globSeg struct {
 }
 
 // globAtom is one pattern element: a literal rune, or `?` standing for exactly one rune.
+// cost estimates what matching this pattern against one value can cost, in units of "atoms compared per candidate position".
+//
+// Only the segments between the first and last contribute. segs[0] anchors to the start of the value and segs[len-1] to the end, so
+// each is checked once; a segment with a star on both sides is searched for at every candidate offset, which is the O(value x
+// segment) shape #787 left behind and deferred to #767 by name.
+//
+// Review asked whether an anchored segment should count too, since comparing one is linear in its length. Measured, it should not:
+// against a fixed 256-byte value an anchored prefix costs 527ns at 4096 atoms, 527ns at 65536 and 557ns at a million, because the
+// comparison abandons as soon as the value runs out. Its cost tracks the VALUE, which an author does not control and which #787
+// already bounded. For contrast, an unanchored segment of only 64 atoms costs 8.09us against that same value, fifteen times a
+// 4096-atom anchored prefix, which is the whole reason the exemption is here.
+//
+// The unit is the segment's LENGTH, not its `?` count, and that correction came out of review. The first version counted only `?`
+// on the reasoning that a literal segment can use the byte-comparison paths, which is true and does not make it cheap: measured on
+// a 4096-byte value, a middle segment of 1024 literal characters costs 1.41ms, the same order as 1024 `?` at 4.10ms. Bounding one
+// and not the other left the cheaper-looking half wide open.
+func (g glob) cost() int {
+	total := 0
+	for i := 1; i < len(g.segs)-1; i++ {
+		total += len(g.segs[i].atoms)
+	}
+	return total
+}
+
 type globAtom struct {
 	r   rune
 	any bool
@@ -107,6 +131,13 @@ func compileGlob(pattern string) glob {
 		i += w
 		switch {
 		case meta && r == '*':
+			// Adjacent stars collapse. `**` matches exactly what `*` matches, so the second one adds an empty middle segment that
+			// the search then walks for every value: measured at 19ns for two stars and 40us for 8192, growing linearly in a
+			// pattern an author is free to write. Collapsing costs nothing and removes the growth, which is better than bounding it
+			// (review of #767 suggested either; a limit would refuse a pattern that means something harmless).
+			if len(cur) == 0 && len(g.segs) > 0 {
+				continue
+			}
 			flush()
 		case meta && r == '?':
 			cur = append(cur, globAtom{any: true})

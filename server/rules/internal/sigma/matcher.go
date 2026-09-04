@@ -3,6 +3,7 @@ package sigma
 import (
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +25,9 @@ type valueTest struct {
 	lit  string         // literal comparand, case-folded compare; the active form when glob and re are nil
 	glob *glob          // the active form when the value carries Sigma wildcard syntax, compiled at load (issue #787)
 	re   *regexp.Regexp // set only by the |re modifier
+	// cost is what matching this value can cost, in the units maxValueCost bounds. Carried on the compiled form so the field's
+	// total is summed from what was actually compiled rather than re-derived from the source.
+	cost int
 }
 
 func (v valueTest) match(s string) bool {
@@ -207,25 +211,95 @@ func compileFieldTest(key string, raw any) (fieldTest, error) {
 		// An empty list matches nothing under ANY and everything under ALL, so it is always a mistake rather than a shorthand.
 		return fieldTest{}, fmt.Errorf("field %q has no values", field)
 	}
+	fieldCost := 0
 	for _, v := range values {
 		t, err := compileValue(v, m.wrap, m.useRegexp)
 		if err != nil {
 			return fieldTest{}, fmt.Errorf("field %q: %w", field, err)
+		}
+		// Summed because match tries every value until one hits, so an event that matches none pays for all of them.
+		fieldCost += t.cost
+		if fieldCost > maxFieldCost {
+			return fieldTest{}, fmt.Errorf("%w: field %q costs %d to match across its values, above the limit of %d",
+				ErrUnsupported, field, fieldCost, maxFieldCost)
 		}
 		ft.tests = append(ft.tests, t)
 	}
 	return ft, nil
 }
 
+// maxValueCost and maxFieldCost bound what matching can cost, in the units glob.cost and regexpCost estimate: roughly "atoms or
+// instructions compared per candidate position, per value".
+//
+// TWO bounds rather than one, and review is the reason. Independent per-value limits compose: 512 individually legal values on one
+// field measured at 100ms per event, because fieldTest.match tries every value until one hits and a non-matching event pays for
+// all of them. Bounding each value and not the sum bounds nothing that matters, since a field is the unit an event is actually
+// matched against.
+//
+// The numbers come from measurement on a 4096-byte value. A middle segment costs about 1.4us per atom, so 4096 units of value cost
+// holds one pattern near 6ms, and 16384 units of field cost holds a whole field near 20ms even when nothing matches. Both are far
+// above the vendored corpus, whose most expensive field measures 22 units, and far below the second-per-event a field could reach
+// before these bounds existed.
+const (
+	maxValueCost = 4096
+	maxFieldCost = 16384
+)
+
+// valueBaseCost is what EVERY value costs regardless of its shape, because match compares each one until something hits.
+//
+// Review found the hole this closes: literals and end-anchored patterns were estimated at zero, so an arbitrarily long list of
+// them passed the field budget while match still walked all of them. Measured on a 256-byte value, a plain literal comparison is
+// about 4.7ns, so 65536 of them cost 309us per event and a million would cost milliseconds. Cheap per value, unbounded in total.
+//
+// One unit overstates a literal against a segment atom, which measures nearer 3us, and that is deliberate: charging every value at
+// least a unit lets ONE budget bound both how complex a field's patterns are and how many of them there are, instead of needing a
+// separate count. The cost is that a field is capped near sixteen thousand literals, which is three orders above the corpus's
+// busiest field and far below where the measurement says they start to matter.
+//
+// A literal is charged this unit and nothing for its LENGTH, which review questioned and measurement settles: against a 64-byte
+// event value, an authored literal costs 27ns at 64 bytes, 31ns at 4096 and 22ns at a million, because the comparison stops as
+// soon as the event's string ends. Cost tracks the EVENT, exactly as it does for an end-anchored segment, and charging the author
+// for length would refuse patterns the measurement says are free. The event-side factor is out of scope here by the same reasoning
+// that puts event cardinality out of scope: bounding it means timing an evaluation, which is the per-rule budget.
+const valueBaseCost = 1
+
+// regexpCost is the size of the program Go compiles the pattern into, which is what RE2's linear match time is linear in.
+//
+// The source length is NOT a usable proxy and that was the first version's mistake: `a{1000}` is seven bytes and costs 2.19ms per
+// match, because counted repetition expands at compile time. regexp/syntax compiles the same program the matcher runs, so asking
+// it is exact rather than estimated.
+func regexpCost(v string) (int, error) {
+	parsed, err := syntax.Parse(v, syntax.Perl)
+	if err != nil {
+		return 0, fmt.Errorf("invalid regexp %q: %w", v, err)
+	}
+	prog, err := syntax.Compile(parsed.Simplify())
+	if err != nil {
+		return 0, fmt.Errorf("invalid regexp %q: %w", v, err)
+	}
+	return len(prog.Inst), nil
+}
+
 func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest, error) {
 	if useRegexp {
+		cost, err := regexpCost(v)
+		if err != nil {
+			return valueTest{}, err
+		}
+		// Reported separately from the total on purpose: the instruction count is the number an author can act on, and adding the
+		// base cost into it made the message over-report the program by one.
+		total := valueBaseCost + cost
+		if total > maxValueCost {
+			return valueTest{}, fmt.Errorf("%w: regular expression compiles to %d instructions, costing %d against a limit of %d",
+				ErrUnsupported, cost, total, maxValueCost)
+		}
 		// Compiled verbatim: Sigma's |re carries a real regular expression, and case-insensitivity is the author's to request with
 		// an inline (?i) flag. Folding it here would silently widen every imported rule that relies on case.
 		re, err := regexp.Compile(v)
 		if err != nil {
 			return valueTest{}, fmt.Errorf("invalid regexp %q: %w", v, err)
 		}
-		return valueTest{re: re}, nil
+		return valueTest{re: re, cost: total}, nil
 	}
 	if wrap != nil {
 		v = wrap(v)
@@ -234,11 +308,15 @@ func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest
 		// Split into star-separated segments here, at load, so the per-event path never re-reads the pattern's escapes and never
 		// backtracks. See glob.go for what that bounds.
 		g := compileGlob(v)
+		if c := valueBaseCost + g.cost(); c > maxValueCost {
+			return valueTest{}, fmt.Errorf("%w: pattern costs %d to match, above the limit of %d",
+				ErrUnsupported, c, maxValueCost)
+		}
 		// lit is left empty: the compiled form is what decides, and keeping the raw pattern beside it would leave two
 		// representations of one value with nothing keeping them in step.
-		return valueTest{glob: &g}, nil
+		return valueTest{glob: &g, cost: valueBaseCost + g.cost()}, nil
 	}
-	return valueTest{lit: v}, nil
+	return valueTest{lit: v, cost: valueBaseCost}, nil
 }
 
 // scalarList normalises a YAML value into the list of strings Sigma compares against. Sigma values are usually strings but the

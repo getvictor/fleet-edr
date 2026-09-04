@@ -21,6 +21,7 @@ import (
 )
 
 // spec:server-detection-rules-engine/a-rule-this-sensor-cannot-run-is-refused-by-name/a-rule-reading-an-unavailable-field-is-refused-and-the-others-still-import
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/the-content-the-system-ships-is-unaffected
 //
 // TestLoadImported_TheWholeUpstreamCorpus is issue #763's acceptance criterion stated as a test rather than as a number in a PR
 // description: the ENTIRE SigmaHQ macOS corpus imports, unmodified, and each rule this sensor cannot run is refused BY NAME with a
@@ -837,4 +838,36 @@ func TestLoadImported_UncitedRuleCarriesNoReferences(t *testing.T) {
 	assert.Empty(t, rules[0].Doc().References)
 	// It still names an origin: the corpus is the source even when the file names no author (see api.OriginOf).
 	assert.Contains(t, api.OriginOf(rules[0]), "SigmaHQ")
+}
+
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-rule-refused-for-cost-does-not-stop-the-others-loading
+//
+// TestLoadImported_ARuleRefusedForCostDoesNotStopTheOthers covers the part of the cost bound that only the loader can show.
+//
+// The value tests prove a costly pattern is refused; they cannot prove what happens to the content around it. A cost bound that
+// failed the whole import would turn one carelessly written rule into a deployment with no detections, which is the outcome the
+// refusal contract exists to prevent, and it is the shape #767's authoring flow makes reachable by accident rather than by malice.
+func TestLoadImported_ARuleRefusedForCostDoesNotStopTheOthers(t *testing.T) {
+	t.Parallel()
+
+	// A middle segment far past the per-pattern limit, written as literals so this also pins that the bound is not wildcard-only.
+	costly := []byte("title: Costly\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection: {sel: {Image: '*" + strings.Repeat("a", 9000) + "*'}, condition: sel}\n")
+	fine := []byte("title: Fine\nlevel: medium\nlogsource: {category: process_creation, product: macos}\n" +
+		"detection: {sel: {Image: '*/usr/bin/tool*'}, condition: sel}\n")
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "process_creation"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "process_creation", "costly.yml"), costly, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "process_creation", "fine.yml"), fine, 0o600))
+
+	rules, rejected, err := loadImported(os.DirFS(dir), ".")
+	require.NoError(t, err, "one unaffordable rule must not fail the import")
+
+	require.Len(t, rules, 1, "the affordable rule must still load")
+	assert.Equal(t, "fine", rules[0].ID())
+
+	require.Len(t, rejected, 1)
+	assert.Contains(t, rejected[0].File, "costly", "the refusal must name the file so an author can find it")
+	assert.Contains(t, rejected[0].Reason, "Image", "and the field within it")
 }
