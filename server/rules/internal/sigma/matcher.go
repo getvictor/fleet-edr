@@ -245,6 +245,18 @@ const (
 	maxFieldCost = 16384
 )
 
+// valueBaseCost is what EVERY value costs regardless of its shape, because match compares each one until something hits.
+//
+// Review found the hole this closes: literals and end-anchored patterns were estimated at zero, so an arbitrarily long list of
+// them passed the field budget while match still walked all of them. Measured on a 256-byte value, a plain literal comparison is
+// about 4.7ns, so 65536 of them cost 309us per event and a million would cost milliseconds. Cheap per value, unbounded in total.
+//
+// One unit overstates a literal against a segment atom, which measures nearer 3us, and that is deliberate: charging every value at
+// least a unit lets ONE budget bound both how complex a field's patterns are and how many of them there are, instead of needing a
+// separate count. The cost is that a field is capped near sixteen thousand literals, which is three orders above the corpus's
+// busiest field and far below where the measurement says they start to matter.
+const valueBaseCost = 1
+
 // regexpCost is the size of the program Go compiles the pattern into, which is what RE2's linear match time is linear in.
 //
 // The source length is NOT a usable proxy and that was the first version's mistake: `a{1000}` is seven bytes and costs 2.19ms per
@@ -268,6 +280,7 @@ func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest
 		if err != nil {
 			return valueTest{}, err
 		}
+		cost += valueBaseCost
 		if cost > maxValueCost {
 			return valueTest{}, fmt.Errorf("%w: regular expression compiles to %d instructions, above the limit of %d",
 				ErrUnsupported, cost, maxValueCost)
@@ -287,15 +300,15 @@ func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest
 		// Split into star-separated segments here, at load, so the per-event path never re-reads the pattern's escapes and never
 		// backtracks. See glob.go for what that bounds.
 		g := compileGlob(v)
-		if c := g.cost(); c > maxValueCost {
+		if c := valueBaseCost + g.cost(); c > maxValueCost {
 			return valueTest{}, fmt.Errorf("%w: pattern costs %d to match, above the limit of %d",
 				ErrUnsupported, c, maxValueCost)
 		}
 		// lit is left empty: the compiled form is what decides, and keeping the raw pattern beside it would leave two
 		// representations of one value with nothing keeping them in step.
-		return valueTest{glob: &g, cost: g.cost()}, nil
+		return valueTest{glob: &g, cost: valueBaseCost + g.cost()}, nil
 	}
-	return valueTest{lit: v}, nil
+	return valueTest{lit: v, cost: valueBaseCost}, nil
 }
 
 // scalarList normalises a YAML value into the list of strings Sigma compares against. Sigma values are usually strings but the

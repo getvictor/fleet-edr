@@ -4,7 +4,9 @@
 
 ### Requirement: A rule's pattern cannot make matching arbitrarily expensive
 
-The system SHALL refuse a rule whose patterns would cost more than a bounded amount to match against one event, and SHALL refuse it when the rule loads rather than when it first evaluates.
+The system SHALL refuse a rule whose patterns would cost more than a bounded amount to match, and SHALL refuse it when the rule loads rather than when it first evaluates.
+
+What is bounded is the cost the AUTHOR imposes, which is not the whole cost of matching an event. A field's authored values are each compared against every value the event supplies, and some event fields carry as many values as a process had arguments, so the total is a product of which this bounds one factor. Bounding the other means measuring an evaluation rather than estimating a pattern, and belongs with the per-rule evaluation budget.
 
 This requirement exists because a premise expired. The bound on wildcard matching was stated for attacker-supplied VALUES against a trusted pattern; once operators author rules, the pattern is untrusted input too, and the cost a pattern imposes is paid once per value, per field, per rule, for every event.
 

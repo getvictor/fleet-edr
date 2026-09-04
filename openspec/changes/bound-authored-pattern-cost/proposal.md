@@ -23,7 +23,7 @@ So this change bounds the costs that are real, measured against the actual match
 
 **Nested-repeat compile blowup needs no limit.** Go refuses `(a{1000}){100}` and `((a{100}){100}){100}` outright with "invalid repeat count".
 
-**What `|re` does cost is program size times input.** `(a|b)` repeated 500 times compiles to a 2500-instruction program and matches in 2.1ms; `a{1000}` matches in 2.19ms. The lever is source length, which bounds the program.
+**What `|re` does cost is program size times input.** `(a|b)` repeated 500 times compiles to a 2500-instruction program and matches in 2.1ms; `a{1000}` matches in 2.19ms. The lever is therefore the compiled program, and it is asked of `regexp/syntax` rather than inferred from the source: `(abcd){1000}` is twelve source bytes and 6002 instructions, so a source-length bound would have let the most expensive shape through. An earlier draft of this paragraph said source length was the lever, which review caught.
 
 ## Approach
 
@@ -47,6 +47,12 @@ Both bounds live in the one function every pattern passes through, so the loader
 **Per-value limits compose.** 512 individually legal values on one field measured at 100ms per event, because every value is tried before a non-match is concluded. The per-field sum is what closes that, and it is why a field of 4096 plain literals is still accepted: they cost nothing each, so the sum stays small.
 
 **Consecutive stars were an unbounded cost I had measured around.** My first measurement used `*x` repeated, which keeps every segment non-empty and reported flat cost. Actual consecutive stars grow linearly: 19ns at two, 40us at 8192. Collapsing them removes the growth without refusing anything.
+
+## What these bounds do NOT cover, and why that is PR 2's job
+
+A field test compares each authored value against every value the EVENT supplies, and some event fields are argv-derived slices with no cap of their own. So the cost of a field is authored-cost times event-cardinality, and this change bounds only the first factor. Review raised it and it is worth stating rather than leaving implied: the per-field limit bounds what an author can impose, not the total an arbitrary event can provoke.
+
+That is deliberate. The event side is agent-supplied rather than authored, it was uncapped before this change and is unchanged by it, and bounding it well means measuring the thing itself rather than a proxy, which is exactly what the per-rule evaluation budget does. Capping the authored side is what #767 asks for; capping the product is what the budget is for.
 
 ## Not in this change
 

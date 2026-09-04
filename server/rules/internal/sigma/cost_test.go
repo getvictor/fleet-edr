@@ -21,6 +21,7 @@ func detectionWith(field string, values any) map[string]any {
 }
 
 // spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-costing-more-than-the-limit-is-refused
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-anchored-to-the-ends-of-the-value-costs-nothing
 //
 // TestCompile_BoundsWhatOnePatternCanCost covers the per-value half of the bound.
 //
@@ -37,17 +38,18 @@ func TestCompile_BoundsWhatOnePatternCanCost(t *testing.T) {
 		refused bool
 	}{
 		{
+			// Every value is charged valueBaseCost for the comparison itself, so the affordable run is one shorter than the limit.
 			name:    "single-character wildcards at the limit",
-			pattern: "*" + strings.Repeat("?", maxValueCost) + "*",
+			pattern: "*" + strings.Repeat("?", maxValueCost-valueBaseCost) + "*",
 		},
 		{
 			name:    "single-character wildcards one past the limit",
-			pattern: "*" + strings.Repeat("?", maxValueCost+1) + "*",
+			pattern: "*" + strings.Repeat("?", maxValueCost-valueBaseCost+1) + "*",
 			refused: true,
 		},
 		{
 			name:    "a literal run costs the same and is bounded the same",
-			pattern: "*" + strings.Repeat("a", maxValueCost+1) + "*",
+			pattern: "*" + strings.Repeat("a", maxValueCost-valueBaseCost+1) + "*",
 			refused: true,
 		},
 		{
@@ -94,8 +96,17 @@ func TestCompile_BoundsWhatOneFieldCanCostAcrossItsValues(t *testing.T) {
 	t.Parallel()
 
 	// Each value is a middle segment of 512, so it is well inside the per-value limit and the sum is what decides.
-	const per = 512
-	value := "*" + strings.Repeat("a", per) + "*"
+	const atoms = 512
+	// What one such value costs: the comparison every value pays, plus the segment searched at each candidate offset.
+	const per = valueBaseCost + atoms
+	value := "*" + strings.Repeat("a", atoms) + "*"
+	literals := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			out[i] = "/usr/bin/tool"
+		}
+		return out
+	}
 	list := func(n int) []any {
 		out := make([]any, n)
 		for i := range out {
@@ -118,14 +129,18 @@ func TestCompile_BoundsWhatOneFieldCanCostAcrossItsValues(t *testing.T) {
 		assert.Contains(t, err.Error(), "across its values", "the refusal must say it is the total, not one value")
 	})
 
-	t.Run("many CHEAP values are not refused, because the sum is what matters", func(t *testing.T) {
+	t.Run("a long list of cheap values is still allowed", func(t *testing.T) {
 		t.Parallel()
-		plain := make([]any, 4096)
-		for i := range plain {
-			plain[i] = "/usr/bin/tool"
-		}
-		_, err := Compile(detectionWith("Image", plain))
-		require.NoError(t, err, "a long list of literals costs nothing per event and must stay legal")
+		_, err := Compile(detectionWith("Image", literals(maxFieldCost)))
+		require.NoError(t, err, "literals cost about 4.7ns each, so thousands of them must stay legal")
+	})
+
+	t.Run("but not an unbounded one, because every value is still compared", func(t *testing.T) {
+		t.Parallel()
+		// The hole review found: with literals estimated at zero cost, this list passed while match still walked all of it.
+		_, err := Compile(detectionWith("Image", literals(maxFieldCost+1)))
+		require.ErrorIs(t, err, ErrUnsupported)
+		assert.Contains(t, err.Error(), "across its values")
 	})
 }
 

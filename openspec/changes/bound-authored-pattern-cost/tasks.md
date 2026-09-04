@@ -10,6 +10,9 @@
       `(abcd){1000}` is 12 bytes and 6002 instructions.
 - [x] Adjacent stars collapse at compile time rather than being refused, since `**` means what `*` means. Measured at 19ns for two
       and 40us for 8192 before the collapse.
+- [x] Every value is charged a base cost for the comparison it always pays, so ONE budget bounds both how complex a field's
+      patterns are and how many there are. Review found the hole: literals and end-anchored patterns estimated at zero let an
+      unbounded list pass while match still walked all of it, measured at 309us per event for 65536 of them.
 - [x] Refusals name the field, the limit, and whether one pattern or the field's total reached it.
 - [x] The bounds sit in the one function every pattern passes through, so validation and load cannot disagree.
 - [x] Every vendored rule still imports, 66 with the same 3 refusals, and a rule refused for cost does not stop its siblings
