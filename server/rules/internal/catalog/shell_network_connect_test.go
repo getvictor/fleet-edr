@@ -749,8 +749,75 @@ func TestShellNetworkConnectFiresForAShellParentedAtLaunchd(t *testing.T) {
 	findings, err := (&ShellNetworkConnect{}).Evaluate(ctx, events, s.GraphReader())
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "a launchd-parented shell is a match, not incomplete ancestry")
-	assert.Contains(t, findings[0].Description, "(unknown)", "there is no parent process to name")
+	assert.Contains(t, findings[0].Description, "/sbin/launchd",
+		"pid 1 is what the parent IS, and naming it is what lets an operator write an exclusion for it (issue #831)")
+	assert.NotContains(t, findings[0].Description, "(unknown)",
+		"the parent is absent from the process table, not unidentifiable")
 	assert.Contains(t, findings[0].Description, "/bin/bash")
+}
+
+// spec:server-detection-rules-engine/shell-network-connect-parent-exclusions/a-launchd-parented-chain-can-be-suppressed
+//
+// TestShellNetworkConnectLaunchdParentIsSuppressible is the half of issue #831 that motivated naming pid 1 at all. Rendering was
+// the cheap part; the point was that the class could not be silenced. Before this, every exclusion type needed a parent process
+// ROW to match against and a launchd-parented shell has none, so parentExcluded returned false before consulting anything and the
+// operator's only option was disabling the rule outright.
+func TestShellNetworkConnectLaunchdParentIsSuppressible(t *testing.T) {
+	t.Parallel()
+
+	const base = int64(1_000_000_000_000)
+	events := []api.Event{
+		{EventID: "fork-bash", HostID: "hl2", TimestampNs: base, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":100,"parent_pid":1}`)},
+		{EventID: "exec-bash", HostID: "hl2", TimestampNs: base + 100_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":100,"ppid":1,"path":"/bin/bash","args":["bash","-c","curl x"],"uid":501,"gid":20}`)},
+		{EventID: "fork-curl", HostID: "hl2", TimestampNs: base + 200_000_000, EventType: "fork",
+			Payload: json.RawMessage(`{"child_pid":200,"parent_pid":100}`)},
+		{EventID: "exec-curl", HostID: "hl2", TimestampNs: base + 300_000_000, EventType: "exec",
+			Payload: json.RawMessage(`{"pid":200,"ppid":100,"path":"/usr/bin/curl","args":["curl","x"],"uid":501,"gid":20}`)},
+		{EventID: "net-curl", HostID: "hl2", TimestampNs: base + 400_000_000, EventType: "network_connect",
+			Payload: json.RawMessage(
+				`{"pid":200,"path":"/usr/bin/curl","uid":501,"protocol":"tcp","direction":"outbound",` +
+					`"remote_address":"198.51.100.42","remote_port":443}`)},
+	}
+
+	s := openCatalogStore(t)
+	ctx := t.Context()
+	require.NoError(t, s.InsertEvents(ctx, events))
+	materialize(t, s, events)
+
+	cases := []struct {
+		name      string
+		glob      string
+		wantFires bool
+		why       string
+	}{
+		{
+			name: "an exclusion naming pid 1 suppresses the chain",
+			glob: "/sbin/launchd", wantFires: false,
+			why: "the operator asked for launchd-parented chains to be silent for this rule, and now can be obeyed",
+		},
+		{
+			name: "an exclusion naming something else leaves it firing",
+			glob: "/usr/bin/ssh", wantFires: true,
+			why: "suppression must be no broader than what the operator wrote",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rule := &ShellNetworkConnect{Exclusions: &fakeExclusions{entries: []fakeExcl{
+				{ruleID: "shell_network_connect", matchType: api.ExclusionMatchParentPathGlob, value: tc.glob},
+			}}}
+			findings, err := rule.Evaluate(t.Context(), events, s.GraphReader())
+			require.NoError(t, err)
+			if tc.wantFires {
+				assert.Len(t, findings, 1, tc.why)
+				return
+			}
+			assert.Empty(t, findings, tc.why)
+		})
+	}
 }
 
 // A store failure while resolving a parent edge must surface rather than read as "this process has no parent", which the walk would

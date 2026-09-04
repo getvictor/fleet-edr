@@ -280,10 +280,7 @@ func (r *SuspiciousExec) evalExecArm2(
 func (r *SuspiciousExec) makeExecFinding(
 	evt api.Event, parent, shell, tempProc *api.Process, tempPath string, batch []api.Event,
 ) *api.Finding {
-	parentPath := "(unknown)"
-	if parent != nil {
-		parentPath = parent.Path
-	}
+	parentPath := parentPathFor(parent, shell)
 	eventIDs := []string{evt.EventID}
 	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)

@@ -189,10 +189,7 @@ func (r *ShellNetworkConnect) evalNetwork(
 	if shell == nil {
 		return nil, 0, nil
 	}
-	parentPath := "(unknown)"
-	if parent != nil {
-		parentPath = parent.Path
-	}
+	parentPath := parentPathFor(parent, shell)
 	eventIDs := []string{evt.EventID}
 	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)

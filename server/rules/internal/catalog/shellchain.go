@@ -41,7 +41,7 @@ func shouldFire(
 	if !shellWithinWindow(r, shell, triggerTS) {
 		return false
 	}
-	if parentExcluded(r, parent, hostID) {
+	if parentExcluded(r, parent, shell, hostID) {
 		return false
 	}
 	return true
@@ -93,15 +93,17 @@ func findShellOnExecChain(
 			return nil, nil, nil, err
 		}
 		// Ancestry incomplete: the shell claims a parent with no record, so report nothing. Firing here would produce a finding
-		// whose parent reads "(unknown)", and an operator's parent exclusion cannot suppress a parent that was never resolved, so
+		// whose parent cannot be named, and an operator's parent exclusion cannot suppress a parent that was never resolved, so
 		// the alert would recur past a rule they had deliberately configured, with no way to silence it short of disabling the
-		// rule. Giving up this one class of chain keeps the rest tunable.
+		// rule. Giving up this one class of chain keeps the rest tunable. A shell parented at launchd is NOT this case: its parent
+		// is nameable (pid 1) and therefore excludable, which is what issue #831 fixed.
 		//
 		// This DROPS the chain; it does not defer it. Ancestor and parent-chain lookups keep skip semantics by design (the
 		// canonical retry contract covers the pid an event is ABOUT, not its ancestry), so returning nil here acknowledges the
 		// batch and no later parent record brings the detection back. Earlier wording here said "defer", which read as
 		// recoverable and is not (issue #829 review). A shell parented at launchd (PPID <= 1) is a genuine no-parent case rather
-		// than a missing record, and still counts.
+		// than a missing record, and still counts; see parentPathFor for what such an alert names and why that makes it
+		// suppressible.
 		if priorParent == nil && prior.PPID > 1 {
 			return nil, nil, prior, nil
 		}
@@ -251,9 +253,45 @@ func findShellFromResolvedProcess(
 // such as Claude Code) by a non-spoofable identifier rather than a path glob an attacker who can write to /tmp can land inside. A nil
 // parent (shell parented at launchd, or parent not yet materialised) never matches: those are the cases the rule must continue to
 // flag because there's no human-attested entry point. Glob semantics live in the resolver (api.GlobMatch).
-func parentExcluded(r shellChainRule, parent *api.Process, hostID string) bool {
-	if r.exclusionResolver() == nil || parent == nil {
+// launchdPath is pid 1 on macOS. A shell started directly by launchd has no parent process ROW to name, and naming the absence
+// `(unknown)` left the alert unsuppressable: parent exclusions match on a path, and `(unknown)` matches nothing, so an operator
+// seeing one repeatedly had no way to silence it short of disabling the rule (issue #831).
+//
+// Naming pid 1 is not a synthetic stand-in for a missing record. It is what the parent IS, so an operator writing a
+// parent_path_glob for it is excluding the thing the alert actually names.
+const launchdPath = "/sbin/launchd"
+
+// unknownParentPath is what an alert names when the parent cannot be named at all. Reached only for a claimed PPID of 0, which is
+// the kernel; every other unresolved parent is either pid 1 or drops the chain before a finding is built.
+const unknownParentPath = "(unknown)"
+
+// parentPathFor returns the path an alert should name for a shell's parent.
+//
+// The PPID 0 case is kept distinct from pid 1 on purpose rather than folded into it. Pid 0 is the kernel and pid 1 is launchd, so
+// rendering a claimed PPID of 0 as launchd would state something false, and would let a launchd exclusion silence a chain that was
+// never launchd's. No shell is expected to claim it; the point is that if one does, the alert says it cannot name the parent
+// instead of naming the wrong one.
+func parentPathFor(parent, child *api.Process) string {
+	if parent != nil {
+		return parent.Path
+	}
+	if child != nil && child.PPID == 1 {
+		return launchdPath
+	}
+	return unknownParentPath
+}
+
+func parentExcluded(r shellChainRule, parent, child *api.Process, hostID string) bool {
+	if r.exclusionResolver() == nil {
 		return false
+	}
+	if parent == nil {
+		// No parent RECORD, which after the ancestry-incomplete drop above means the parent is pid 1 or the kernel. Only the path
+		// glob can apply: there is no process row here, so no code-signing identity to match on. Issue #831: without this a
+		// launchd-parented chain was unsuppressable, because every exclusion type needed a row that does not exist.
+		path := parentPathFor(parent, child)
+		return path != unknownParentPath &&
+			r.exclusionResolver().Excluded(r.ID(), api.ExclusionMatchParentPathGlob, path, hostID)
 	}
 	if r.exclusionResolver().Excluded(r.ID(), api.ExclusionMatchParentPathGlob, parent.Path, hostID) {
 		return true
