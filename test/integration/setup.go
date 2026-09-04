@@ -199,9 +199,14 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	require.NoError(t, rulesCtx.ApplySchema(ctx), "seed rules default policy")
 
 	detectionCtx.LoadActive(rulesCtx.ContentService())
-	// Mirrors cmd/main: content published on another replica is picked up by rules' corpus refresh loop, and the engine holds its
-	// own compiled copy, so it has to be told to rebuild. Wired here so this stack matches production rather than only resembling
-	// it; a stack missing it would let a test pass while the engine evaluated a withdrawn rule set.
+	// Mirrors cmd/main: the engine holds its own compiled copy of the rule set, so an install has to tell it to rebuild or it keeps
+	// evaluating the previous one.
+	//
+	// This wires the notification, and that is ALL it does here. Unlike cmd/main, this stack does not start rules' loops (below it
+	// starts only detection and identity), so nothing in it polls for published content and the observer fires only if a test
+	// installs a rule set itself. A test that wants runtime publishes starts the refresh loop on its own, as
+	// rule_corpus_reload_test.go does. Starting rules' loops for every stack would add a config-refresh and a counter-prune
+	// goroutine to tests that want neither, for no caller that needs them today.
 	rulesCtx.SetRuleSetObserver(func() { detectionCtx.LoadActive(rulesCtx.ContentService()) })
 	// Wire the mode resolver and the monitor-match recorder, exactly as cmd/main does. Without them the engine has no resolver
 	// and every rule runs at its DECLARED default, so a per-rule setting written to the database has no effect on an integration
