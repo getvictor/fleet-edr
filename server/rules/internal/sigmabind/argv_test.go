@@ -97,6 +97,9 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-before-an-assignment-does-not-hide-it
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-s-operand-is-not-an-assignment
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-after-the-end-of-options-marker-belongs-to-the-command
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-name-a-shell-would-reject-does-not-end-the-run
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-attached-operand-is-not-read-as-further-options
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-invocation-env-would-refuse-reports-no-assignments
 //
 // TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
 // different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
@@ -150,10 +153,45 @@ func TestEnvAssignments(t *testing.T) {
 			// `env -- -i A=1` runs a command NAMED -i with A=1 as its argument, so there is no assignment. Without honouring
 			// `--` this parses -i as an option and reports A=1 as an injection that never happened.
 			[]string{"env", "--", "-i", "A=1"}, nil},
-		{"a token containing an equals sign that is not an assignment ends the run", "/usr/bin/env",
-			// `=bad` contains an equals sign and assigns nothing, so it is the command env will run. Treating "contains =" as
-			// the boundary let the run continue over it and collect what followed.
-			[]string{"env", "A=1", "=bad", "B=2"}, []string{"A=1"}},
+		{"a token a shell would reject does not end the run", "/usr/bin/env",
+			// Measured against env(1) on macOS: `env 2+2=4 MARKER=yes sh -c 'echo $MARKER'` prints yes, so env really does
+			// apply both and keep going. An earlier round ended the run here instead, on the theory that only a shell-legal
+			// name counts, and that was a bypass: `env 2+2=4 DYLD_INSERT_LIBRARIES=x prog` reported nothing at all.
+			[]string{"env", "2+2=4", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a token assigning nothing is the command and ends the run", "/usr/bin/env",
+			[]string{"env", "A=1", "prog", "B=2"}, []string{"A=1"}},
+		{"a malformed name is not reported, but what follows it still is", "/usr/bin/env",
+			// `=bad` is skipped by the report filter rather than by the boundary, so B=2 behind it survives.
+			[]string{"env", "A=1", "=bad", "B=2"}, []string{"A=1", "B=2"}},
+
+		// The two rows below are the option-parse bypasses review found in the first cut of this fix, both verified against
+		// env(1) rather than reasoned about.
+		{"an attached operand ending in an option letter consumes nothing extra", "/usr/bin/env",
+			// `env -uS A=1 prog` unsets S and applies A=1: measured. Reading the LAST letter of the cluster to decide whether
+			// the next argument is an operand ate A=1 here, and would equally have eaten a DYLD_ assignment.
+			[]string{"env", "-uS", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"an option env does not have means nothing ran", "/usr/bin/env",
+			// `env -z A=1 prog` exits with `illegal option -- z` and never execs prog, so reporting the assignment would be a
+			// finding for an injection that did not happen.
+			[]string{"env", "-z", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"}, nil},
+		{"an unknown option inside an otherwise valid cluster also refuses", "/usr/bin/env",
+			[]string{"env", "-iz", "A=1", "prog"}, nil},
+		{"an unknown option carrying an equals sign refuses too", "/usr/bin/env",
+			// This row is the one that makes the refusal observable, and mutation testing is what found that out. On a refused
+			// option the scan is reported as starting at the offending token, which normally ends the run by itself for want of
+			// an equals sign; `-z=1` has one, so without the refusal the run would step over it and collect what followed.
+			// Measured: env exits `illegal option -- z` here and execs nothing.
+			[]string{"env", "-z=1", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an operand-taking option's own operand may look like an option", "/usr/bin/env",
+			// -P's operand is a path, and a path is not parsed as a further option.
+			[]string{"env", "-P", "-weird", "A=1", "prog"}, []string{"A=1"}},
+		{"the string option's payload is not parsed for assignments", "/usr/bin/env",
+			// KNOWN GAP, pinned deliberately: `-S` carries a whole command line that env re-splits, so an assignment inside it
+			// is invisible to this field. Reporting nothing is the safe direction (a miss, not a fabricated finding); splitting
+			// -S the way env does is tracked separately.
+			[]string{"env", "-S", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib prog"}, nil},
 		{"an option with a missing operand at the end of argv", "/usr/bin/env",
 			[]string{"env", "-u"}, nil},
 		{"options with no command at all", "/usr/bin/env",
@@ -180,11 +218,12 @@ func TestComputedFieldsAreAbsentWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestEnvAssignments_RejectsNonAssignments pins that merely containing "=" is not enough. `=VALUE` and `2+2=4` are not assignments,
-// and admitting them would let a future rule match on something the shell never assigned.
+// TestEnvAssignments_RejectsNonAssignments pins that merely containing "=" is not enough to be REPORTED. `=VALUE` and `2+2=4` are
+// not well-formed assignments, and admitting them would let a future rule match on something no shell would have assigned.
 //
-// This narrowing is behaviour-neutral for the rule the field serves today: every DYLD_ prefix it looks for carries a valid key, so
-// nothing the Go matcher would have matched is dropped.
+// The distinction this test does not make, and TestEnvAssignments does: rejecting a token from the report is not the same as
+// ending the scan at it. env keeps applying assignments past a name a shell would reject, so the boundary stays permissive and
+// only the reported set is narrowed. Getting those two the same way round was a measured bypass.
 func TestEnvAssignments_RejectsNonAssignments(t *testing.T) {
 	t.Parallel()
 

@@ -12,9 +12,13 @@ The system SHALL expose the operands that follow that verb, so a rule can ask wh
 
 The system SHALL expose the environment assignments made at exec time that are visible in the argument vector. An assignment is only an assignment in leading position: the same text as a later argument is an operand of the program, not an assignment performed before it. A substring match over the whole command line cannot make that distinction, which is why the position is recovered here rather than left to the rule.
 
-For an invocation of `env`, the assignments SHALL be the run of `KEY=VALUE` tokens that follows env's own OPTIONS, ending at the first token that is not an assignment, which is the command env will run. An option ahead of the assignments SHALL NOT end the run: an option is not the command, and treating it as one hid every assignment written behind it.
+For an invocation of `env`, the assignments SHALL be the run of `KEY=VALUE` tokens that follows env's own OPTIONS, ending at the first token that assigns nothing, which is the command env will run. An option ahead of the assignments SHALL NOT end the run: an option is not the command, and treating it as one hid every assignment written behind it.
 
-An option's OPERAND SHALL NOT be read as an assignment. The variable named by an unset is the opposite of an injection, and reporting `env -u VAR prog` as assigning VAR would invert what the event says.
+The end of that run SHALL be decided by whether a token assigns at all, and NOT by whether the name it assigns is one a shell would accept. env applies any nonempty name, so a token such as `2+2=4` is an assignment env performs and the run continues past it; ending the run there would hide an injection written behind it. Only WELL-FORMED assignments SHALL be reported, so the narrower test governs the reported set and the wider one governs the boundary.
+
+An option's OPERAND SHALL NOT be read as an assignment. The variable named by an unset is the opposite of an injection, and reporting `env -u VAR prog` as assigning VAR would invert what the event says. An operand SHALL be taken from the remainder of its own token when there is one and from the next argument otherwise, so that the trailing characters of an attached operand are not themselves read as further options.
+
+An invocation carrying an option env does NOT have SHALL report no assignments, because env exits without executing the command and therefore performs none of them. Reporting one would describe an injection that did not happen.
 
 For any other executable the assignment SHALL be the first argument alone, which is the shell's `VAR=value cmd` form. The invocation name SHALL NOT be scanned for env, since that is env's own name and not an assignment it performs.
 
@@ -55,3 +59,21 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **GIVEN** an exec event for env whose end-of-options marker is followed by a token that looks like an option
 - **WHEN** the assignments are read
 - **THEN** that token is treated as the command rather than as an option
+
+#### Scenario: A name a shell would reject does not end the run
+
+- **GIVEN** an exec event for env whose leading assignments include a name no shell would accept, followed by an injection assignment
+- **WHEN** the assignments are read
+- **THEN** the injection assignment is reported and the malformed name is not
+
+#### Scenario: An attached operand is not read as further options
+
+- **GIVEN** an exec event for env whose option carries its operand attached, with the operand ending in a character that is itself an option letter
+- **WHEN** the assignments are read
+- **THEN** the following assignment is reported rather than consumed as an operand
+
+#### Scenario: An invocation env would refuse reports no assignments
+
+- **GIVEN** an exec event for env carrying an option env does not have, followed by an assignment
+- **WHEN** the assignments are read
+- **THEN** no assignment is reported

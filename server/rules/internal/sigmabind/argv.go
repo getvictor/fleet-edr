@@ -103,54 +103,91 @@ func envAssignments(path string, argv []string) []string {
 	if len(argv) == 0 {
 		return nil
 	}
+	after, ok := skipEnvOptions(argv[1:])
+	if !ok {
+		// env would have refused the options and run nothing, so nothing was assigned.
+		return nil
+	}
+
 	var out []string
-	for _, a := range argv[min(1+skipEnvOptions(argv[1:]), len(argv)):] {
-		if !isAssignment(a) {
-			// The first token that is not an assignment is the command env will run; everything after it belongs to that command.
-			// Tested against isAssignment rather than merely containing "=", which review caught: a token such as `=bad` or
-			// `2+2=4` contains one and is not an assignment, and skipping past it let the run continue over the command.
+	for _, a := range argv[min(1+after, len(argv)):] {
+		if !strings.Contains(a, "=") {
+			// The run ends at the first token that assigns nothing, which is the command env will run.
+			//
+			// The boundary is "contains a separator", NOT the stricter isAssignment below, and the difference is a bypass. env
+			// accepts any nonempty name, so `env 2+2=4 DYLD_INSERT_LIBRARIES=x prog` really does apply both; breaking on the
+			// first token a SHELL would reject truncates the run and hides the injection behind it. Review pushed this both ways,
+			// and the direction that matters is the one that cannot miss a real assignment: end the run late, and let the filter
+			// below decide what is worth reporting.
 			break
 		}
-		out = append(out, a)
+		if isAssignment(a) {
+			out = append(out, a)
+		}
 	}
 	return out
 }
 
-// envOptionsTakingAnOperand are env's short options whose value is the NEXT argument when it is not attached.
+// env's short options, split by whether their value is a separate argument. From env(1) on macOS.
 //
-// From env(1) on macOS. Getting this set wrong in either direction is a detection error rather than a cosmetic one: treating an
-// operand as an assignment would let `env -u DYLD_INSERT_LIBRARIES prog` read as an injection when it is the opposite, an unset,
-// and missing one ends the scan early and hides the assignment behind it, which is the bug this parsing exists to fix.
-const envOptionsTakingAnOperand = "uPSC"
+// Both sets are needed and getting either wrong is a detection error. An operand mistaken for an assignment would report
+// `env -u DYLD_INSERT_LIBRARIES prog` as an injection when it is the opposite, an unset. An option whose operand is missed ends
+// the scan early and hides the assignment behind it.
+const (
+	envOptionsTakingAnOperand = "uPSC"
+	envOptionsTakingNone      = "iv0"
+)
 
-// skipEnvOptions returns the index of env's first non-option argument.
+// skipEnvOptions returns the index of env's first non-option argument, and whether env would accept the options it saw.
 //
-// Conservative about clustering, which is what BSD env accepts: the operand belongs to the LAST letter of a cluster, so `-iu NAME`
-// consumes NAME while `-uNAME` carries it attached and consumes nothing. A lone `-` means the same as `-i` and takes no operand,
-// and `--` ends option parsing outright.
-func skipEnvOptions(argv []string) int {
+// ok is false when a token looks like an option env does not have. env exits without running anything in that case, so no
+// assignment it carries was ever applied and reporting one would be a fabricated finding: `env -z DYLD_INSERT_LIBRARIES=x prog`
+// injects nothing because env never execs prog.
+//
+// Clustering follows BSD env. An operand-taking letter consumes the REST of its own token when there is any (`-uNAME`, and also
+// `-uS`, where S is the name and not a second option), and the next argument otherwise (`-u NAME`, `-iu NAME`). A lone dash means
+// the same as -i and takes no operand.
+func skipEnvOptions(argv []string) (next int, ok bool) {
 	i := 0
 	for i < len(argv) {
 		a := argv[i]
 		switch {
 		case a == "--":
-			return i + 1
+			return i + 1, true
 		case a == "-":
-			// Historic synonym for -i. Not an option cluster, so nothing follows it.
 			i++
-		case strings.HasPrefix(a, "-") && len(a) > 1:
-			letters := a[1:]
+		case len(a) > 1 && a[0] == '-':
+			consumed, valid := parseEnvOptionCluster(a[1:])
+			if !valid {
+				return 0, false
+			}
 			i++
-			if strings.ContainsRune(envOptionsTakingAnOperand, rune(letters[len(letters)-1])) {
-				// The operand is the next argument. An attached operand (-uNAME) ends in the NAME's last letter instead, so it
-				// does not reach here.
+			if consumed {
 				i++
 			}
 		default:
-			return i
+			return i, true
 		}
 	}
-	return i
+	return i, true
+}
+
+// parseEnvOptionCluster walks one cluster's letters, reporting whether it consumes the NEXT argument as an operand and whether
+// every letter is an option env has.
+func parseEnvOptionCluster(letters string) (consumesNext, valid bool) {
+	for k := range len(letters) {
+		c := rune(letters[k])
+		switch {
+		case strings.ContainsRune(envOptionsTakingAnOperand, c):
+			// The operand is whatever remains of this token, or the next argument when nothing remains.
+			return k == len(letters)-1, true
+		case strings.ContainsRune(envOptionsTakingNone, c):
+			continue
+		default:
+			return false, false
+		}
+	}
+	return false, true
 }
 
 // isAssignment reports whether a token is a real KEY=VALUE assignment rather than merely containing "=".
