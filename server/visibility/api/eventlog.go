@@ -40,12 +40,19 @@ type EventLog interface {
 	// match the claimable predicate: a claimer that died between claiming a fork and flushing it would let the next claimer take
 	// the following exec and fold it as an exec with no fork. Callers therefore get at-most-one-gap-free prefix per host and may
 	// see nothing for a host until an abandoned claim's lease expires, which is bounded and preferable to out-of-order folding.
-	ClaimForHost(ctx context.Context, hostID string, limit int) ([]Event, error)
+	// Returns the claim's stamp alongside the events, which Ack requires to prove it still holds the claim (issue #817). The
+	// stamp is meaningless when no events were claimed.
+	ClaimForHost(ctx context.Context, hostID string, limit int) ([]Event, int64, error)
 
 	// Ack marks the claimed events (identified by EventID) fully processed: they are excluded from future claims but stay in the queue
 	// until PruneProcessed removes them, so Ack is a cheap index update off the delete path. Acknowledgment needs only identity, so it
 	// takes IDs rather than whole events: the caller need not retain the (potentially large) payloads until ack.
-	Ack(ctx context.Context, eventIDs []string) error
+	//
+	// Takes the stamp ClaimForHost returned and reports whether this claim still held the rows (issue #817). A claim expires and is
+	// re-offered, so an evaluation that outlives its lease runs alongside its own reclaimer; an unconditional ack let both attempts
+	// succeed and neither learn it had lost, so anything additive done after acknowledging counted the batch twice. A caller told
+	// held=false MUST skip whatever it does after the ack, because the attempt that owns the rows now will do it.
+	Ack(ctx context.Context, eventIDs []string, claimStampNs int64) (held bool, err error)
 
 	// Nack returns the claimed events (identified by EventID) to the not-yet-processed state for a later ClaimForHost (retry after a
 	// processing failure).

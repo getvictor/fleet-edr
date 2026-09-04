@@ -30,7 +30,16 @@ type scriptedEventLog struct {
 	claimReq []string // hosts ClaimForHost was asked for, in order
 	// ackErr makes Ack fail, which is the only way to exercise the branch where a batch was evaluated but NOT durably accepted.
 	ackErr error
+	// ackNotHeld makes Ack report that this claim no longer held the rows (issue #817), which is how the lost-claim branch is
+	// reached without waiting out a real five-minute lease.
+	ackNotHeld bool
+	// ackStamps records the claim stamp each Ack was given, so a test can assert the processor passes back what it was handed
+	// rather than a zero or a fresh value.
+	ackStamps []int64
 }
+
+// scriptedClaimStamp is the stamp the scripted claim hands out. Non-zero so a test can tell it apart from an unset field.
+const scriptedClaimStamp = int64(1_700_000_000_000_000_000)
 
 func (s *scriptedEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
 func (s *scriptedEventLog) PendingHosts(context.Context, int) ([]string, error) {
@@ -40,20 +49,26 @@ func (s *scriptedEventLog) PendingHosts(context.Context, int) ([]string, error) 
 	return []string{s.batch[0].HostID}, nil
 }
 
-func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int) ([]visibilityapi.Event, error) {
+func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int) ([]visibilityapi.Event, int64, error) {
 	s.claimReq = append(s.claimReq, hostID)
 	if s.claimed {
-		return nil, nil
+		return nil, 0, nil
 	}
 	s.claimed = true
-	return s.batch, nil
+	// A fixed non-zero stamp: the processor must pass back whatever it was handed, and zero would not distinguish "the stamp was
+	// threaded through" from "the field was never set".
+	return s.batch, scriptedClaimStamp, nil
 }
-func (s *scriptedEventLog) Ack(_ context.Context, ids []string) error {
+func (s *scriptedEventLog) Ack(_ context.Context, ids []string, stamp int64) (bool, error) {
+	s.ackStamps = append(s.ackStamps, stamp)
 	if s.ackErr != nil {
-		return s.ackErr
+		return false, s.ackErr
+	}
+	if s.ackNotHeld {
+		return false, nil
 	}
 	s.acked = append(s.acked, ids...)
-	return nil
+	return true, nil
 }
 func (s *scriptedEventLog) Nack(_ context.Context, ids []string) (int64, error) {
 	s.nacked = append(s.nacked, ids...)
@@ -326,6 +341,45 @@ func TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck(t *testing.T) {
 
 		assert.Empty(t, rec.calls, "the batch was not durably accepted, so its matches are not this attempt's to record")
 		assert.Zero(t, metrics.total, "and the counter must not move either, or the re-served batch counts twice")
+	})
+
+	t.Run("a LOST claim records nothing, and says which host", func(t *testing.T) {
+		t.Parallel()
+		// Issue #817: this attempt outlived its lease and another one owns the rows now. Everything up to the ack is idempotent,
+		// so the graph and the alerts are unharmed; the counter is not, and belongs to whichever attempt still holds the claim.
+		// Distinct from a failed ack above: nothing went wrong here, and treating it as an error would have this attempt retry
+		// work the other one is already doing.
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		handler := &capturingLogHandler{}
+		log := &scriptedEventLog{batch: oneEventBatch(), ackNotHeld: true}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(handler))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(context.Background())
+
+		assert.Empty(t, rec.calls, "the attempt that holds the claim will record these, so this one must not")
+		assert.Zero(t, metrics.total, "which is the double-count #817 exists to remove")
+		assert.Empty(t, log.nacked, "and it must not requeue: the rows are not this attempt's to requeue")
+
+		level, logged := handler.levelOf("lost the claim before acknowledging")
+		require.True(t, logged, "an exceeded lease is invisible unless this says so; before #817 neither attempt could tell")
+		assert.Equal(t, slog.LevelWarn, level, "worth an operator's attention: it means batches are outliving their lease")
+	})
+
+	t.Run("the claim stamp the processor acks with is the one it was handed", func(t *testing.T) {
+		t.Parallel()
+		// The stamp is what makes the ack conditional, so passing a fresh or zero value would make the check vacuous while
+		// leaving every other assertion in this file green.
+		log := &scriptedEventLog{batch: oneEventBatch()}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(&capturingLogHandler{}))
+
+		p.ProcessOnce(context.Background())
+
+		require.NotEmpty(t, log.ackStamps, "the batch must have been acked, or this asserts nothing")
+		assert.Equal(t, []int64{scriptedClaimStamp}, log.ackStamps,
+			"the ack must carry the claim's own stamp; a fresh one would match nothing and a zero would match anything")
 	})
 
 	t.Run("a recording failure does not nack the acked batch", func(t *testing.T) {
