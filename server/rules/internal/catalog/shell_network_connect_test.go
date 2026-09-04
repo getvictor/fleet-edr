@@ -756,7 +756,7 @@ func TestShellNetworkConnectFiresForAShellParentedAtLaunchd(t *testing.T) {
 	assert.Contains(t, findings[0].Description, "/bin/bash")
 }
 
-// spec:server-detection-rules-engine/shell-network-connect-parent-exclusions/a-launchd-parented-chain-can-be-suppressed
+// spec:server-detection-rules-engine/a-launchd-parented-chain-names-pid-1-and-can-be-suppressed/a-launchd-parented-chain-can-be-suppressed-by-a-parent-path-exclusion
 //
 // TestShellNetworkConnectLaunchdParentIsSuppressible is the half of issue #831 that motivated naming pid 1 at all. Rendering was
 // the cheap part; the point was that the class could not be silenced. Before this, every exclusion type needed a parent process
