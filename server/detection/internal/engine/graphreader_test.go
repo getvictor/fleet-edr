@@ -209,7 +209,13 @@ func TestEngine_HandsRulesTheRetryableReader(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, rule.got, "the rule must have been evaluated, or this asserts nothing")
-	assert.IsType(t, &retryableGraphReader{}, rule.got,
-		"rules must read through the decorator; handed the bare store, a failed read is isolated and the batch is acked (#798)")
-	assert.Same(t, e.ruleReader, rule.got, "and it must be the engine's own instance, not a fresh one built per batch")
+
+	// A rule is handed a per-evaluation timing wrapper (issue #767) around the engine's retryable reader. The wrapper is the
+	// thing that changed; what must not change is that reads still go THROUGH the decorator, because handed the bare store a
+	// failed read is isolated and the batch is acked (#798).
+	timed, ok := rule.got.(*timedReader)
+	require.True(t, ok, "rules are handed the per-evaluation timing wrapper")
+	assert.IsType(t, &retryableGraphReader{}, timed.inner,
+		"and it must wrap the retryable decorator, or a failed read stops reaching the processor")
+	assert.Same(t, e.ruleReader, timed.inner, "specifically the engine's own instance, not a fresh decorator per batch")
 }

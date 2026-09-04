@@ -149,6 +149,7 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.DetectionMaterializationRetry(ctx)
 	r.DetectionMaterializationRetry(ctx)
 	r.EventsSetAside(ctx, "host-wedged", 4)
+	r.RuleEvaluationSkipped(ctx, "proc_creation_macos_applescript")
 
 	rm := collect()
 
@@ -170,6 +171,12 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	// or a missing registration passes just as happily. This is the only place the name and the host_id attribute are
 	// pinned, and an operator alert authored against the wrong name reports a stalled host as silence (issue #836).
 	assert.Equal(t, int64(4), findSum(t, rm, "edr.events.set_aside", map[string]any{"host_id": "host-wedged"}))
+	// Same reasoning again, for the same class of bug: a fake recorder proves the engine calls a method, which a misspelled
+	// instrument name passes just as happily. A rule the server has stopped evaluating raises no alerts, and that absence looks
+	// exactly like a rule that matches nothing, so this counter is the only thing separating them and an alert authored against
+	// the wrong name would report a dropped rule as quiet (issue #767).
+	assert.Equal(t, int64(1), findSum(t, rm, "edr.detection.rule_evaluation_skipped",
+		map[string]any{"rule_id": "proc_creation_macos_applescript"}))
 	assert.Equal(t, int64(3), findGauge(t, rm, "edr.enrolled.hosts"))
 	assert.Equal(t, int64(1), findGauge(t, rm, "edr.offline.hosts"))
 }
