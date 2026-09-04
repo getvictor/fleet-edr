@@ -146,12 +146,18 @@ func TestProcessDetail_LegacyFlowWithoutPIDVersionStillSurfaces(t *testing.T) {
 // spec:server-rest-api/per-process-detail-with-re-exec-chain/a-named-generation-of-a-re-exec-chain-is-addressable
 // spec:server-rest-api/per-process-detail-with-re-exec-chain/a-pidversion-naming-no-generation-is-not-silently-substituted
 //
-// Addressing, the other half of #716. Attribution alone leaves the reported symptom in place: a re-exec preserves the chain's
-// original fork_time_ns (insertReExec does this deliberately), so both generations tie on it and GetProcessByPID's
-// (fork_time_ns DESC, id DESC) ordering always resolves the newest. Measured against the running dev server, asking for the bash
-// generation's own exec instant still returned the curl generation, which then correctly reported no flows, so the panel still read
-// "No network activity" for the connection an alert fired on. Naming the generation is what makes the owning one reachable.
-func TestProcessDetail_PIDVersionAddressesAGenerationTheAsOfReadCannotReach(t *testing.T) {
+// Addressing, the other half of #716.
+//
+// This test was written when the as-of read could not reach an older generation at all: a re-exec preserves the chain's original
+// fork_time_ns, so both generations tied on it and (fork_time_ns DESC, id DESC) always resolved the newest. Asking for the bash
+// generation's own exec instant returned the curl generation, which correctly reported no flows, so the panel read "No network
+// activity" for the connection an alert had fired on.
+//
+// Issue #799 fixed that ordering, so the as-of read now resolves the generation whose IMAGE was running at the instant asked
+// about, and the first subtest below records the corrected behaviour rather than the limitation. Naming a generation is still the
+// only way to address one by IDENTITY rather than by time, which is what the remaining subtests cover and what a flow carrying a
+// pidversion needs.
+func TestProcessDetail_PIDVersionAddressesAGenerationByIdentity(t *testing.T) {
 	t.Parallel()
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
@@ -193,18 +199,20 @@ func TestProcessDetail_PIDVersionAddressesAGenerationTheAsOfReadCannotReach(t *t
 		{EventID: "e-addr-curl", HostID: host, TimestampNs: now + 200*ms, EventType: "exec",
 			Payload: json.RawMessage(`{"pid":52222,"ppid":1,"path":"/usr/bin/curl","pidversion":151027}`)},
 	})
+	// Asked at the CURL generation's own exec instant, not at bash's. Waiting for the bash instant to report curl was how this
+	// test used to detect materialisation, which only worked because of the ordering bug #799 fixed.
+	curlExecNs := now + 200*ms
 	require.Eventually(t, func() bool {
-		p, err := d.Service().GetProcessDetail(ctx, host, pid, bashExecNs, nil)
+		p, err := d.Service().GetProcessDetail(ctx, host, pid, curlExecNs, nil)
 		return err == nil && p != nil && p.Process.Path == "/usr/bin/curl"
 	}, 10*time.Second, 100*time.Millisecond, "the re-exec must materialise as a second generation on the same pid")
 
-	t.Run("without a pidversion the as-of read cannot reach the older generation", func(t *testing.T) {
+	t.Run("the as-of read now reaches the generation running at that instant", func(t *testing.T) {
 		p, err := d.Service().GetProcessDetail(ctx, host, pid, bashExecNs, nil)
 		require.NoError(t, err)
 		require.NotNil(t, p)
-		assert.Equal(t, "/usr/bin/curl", p.Process.Path,
-			"the chain ties on fork_time_ns so id DESC wins, even asking for the bash generation's own exec instant")
-		assert.Empty(t, p.NetworkConnections, "and the flow correctly does not belong to this generation")
+		assert.Equal(t, "/bin/bash", p.Process.Path,
+			"issue #799: the lookup resolves on the image's own start instant, so the bash generation's exec instant reaches bash")
 	})
 
 	t.Run("naming the generation reaches it and its flow", func(t *testing.T) {
@@ -212,7 +220,7 @@ func TestProcessDetail_PIDVersionAddressesAGenerationTheAsOfReadCannotReach(t *t
 		p, err := d.Service().GetProcessDetail(ctx, host, pid, bashExecNs, &gen)
 		require.NoError(t, err)
 		require.NotNil(t, p)
-		assert.Equal(t, "/bin/bash", p.Process.Path, "pidversion selects the generation the as-of read could not")
+		assert.Equal(t, "/bin/bash", p.Process.Path, "naming the generation reaches it by identity, whatever instant is asked for")
 		require.Len(t, p.NetworkConnections, 1, "the named generation carries the flow that belongs to it")
 		assert.Equal(t, "nc-addr", p.NetworkConnections[0].EventID)
 	})

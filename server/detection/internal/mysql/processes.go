@@ -586,8 +586,37 @@ func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int,
 	return exists, nil
 }
 
-// GetProcessByPID returns the process that was active at the given
-// timestamp. Satisfies api.GraphReader.
+// GetProcessByPID returns the process generation whose IMAGE was running at the given timestamp. Satisfies api.GraphReader.
+//
+// The image's own start instant, COALESCE(exec_time_ns, fork_time_ns), decides WHICH generation is returned, rather than the fork
+// (issue #799). A re-exec preserves the original fork time on every generation of a pid, so fork_time_ns cannot order them: both
+// rows satisfied `fork_time_ns <= atTimeNs` and `id DESC` then handed back whichever generation was written LAST. For a parent that
+// forked a child at T1 and re-executed at T2, a rule asking what the parent's image was at T1 was told the T2 image, a binary that
+// had not run yet.
+//
+// The ordering is GetParentPath's, verbatim, which is the second correction review forced and the more important one. My first
+// version filtered on the image start in the WHERE, which excluded a process between its fork and its FIRST exec: that exec updates
+// the fork row in place, so such a row's image start lies in the future, and the callers this change exists to fix ask at a CHILD's
+// fork time, which can fall in exactly that window. A parent that forked a child before executing anything itself came back as
+// having no record at all.
+//
+// My second version preferred rather than filtered, which fixed that and was still a fourth hand-written ordering for one question.
+// GetParentPath already answers "what was this pid running at this instant" and its ordering handles a case neither of my versions
+// did: when NEITHER candidate's image had been applied yet, the chain's EARLIEST image is the closest surviving evidence of what
+// the parent was running, so that one sorts first. Issues #723 and #724 paid for that reasoning; reusing it is cheaper and more
+// correct than repeating it.
+//
+// Reusing it inherits one open question, filed as #861 rather than answered here: the final `exec_time_ns ASC` sorts a NULL exec
+// ahead of a non-NULL one at the same image start, and the batch overlay's ranking has no counterpart to that clause, so the two
+// could disagree in that tie. It is pre-existing in the two functions above, and changing it under this PR would change their
+// shipped behaviour on a case whose reachability is itself in doubt.
+//
+// This is the lookup every parent-image and attribution question goes through, including the eleven corpus rules that read
+// ParentImage, so the wrong answer was both wrong attribution and a missed detection: a malicious parent that re-executed into
+// something benign before the batch was evaluated read as benign.
+//
+// COALESCE falls back to fork_time_ns for a generation that has not executed, which is the pure-fork row's only start instant.
+// Issue #723 fixed the aliveness half of this bracket; this is the generation-selection half.
 func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
 	var proc api.Process
 	err := s.db.GetContext(ctx, &proc, `
@@ -598,9 +627,15 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 		FROM processes
 		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)
-		ORDER BY fork_time_ns DESC, id DESC
+		ORDER BY fork_time_ns DESC,
+		         (exec_time_ns IS NULL OR exec_time_ns <= ?) DESC,
+		         CASE WHEN exec_time_ns IS NULL OR exec_time_ns <= ? THEN COALESCE(exec_time_ns, fork_time_ns) END DESC,
+		         exec_time_ns ASC,
+		         pidversion IS NOT NULL DESC,
+		         pidversion DESC,
+		         id DESC
 		LIMIT 1`,
-		hostID, pid, atTimeNs, atTimeNs,
+		hostID, pid, atTimeNs, atTimeNs, atTimeNs, atTimeNs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
