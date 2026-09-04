@@ -46,7 +46,7 @@ func nackUntilBound(t *testing.T, log visibilityapi.EventLog, db *sqlx.DB, hostI
 	t.Helper()
 	var ids []string
 	for range times {
-		claimed, err := log.ClaimForHost(t.Context(), hostID, batchLimit)
+		claimed, _, err := log.ClaimForHost(t.Context(), hostID, batchLimit)
 		require.NoError(t, err)
 		require.NotEmpty(t, claimed, "the failing batch must still be offered on every attempt")
 		ids = ids[:0]
@@ -87,7 +87,7 @@ func TestSetAside_UnblocksTheHost(t *testing.T) {
 	ageFirstFailure(t, db, ids, 16*time.Minute)
 
 	// One more failure, now past both bounds.
-	claimed, err := log.ClaimForHost(t.Context(), host, batch)
+	claimed, _, err := log.ClaimForHost(t.Context(), host, batch)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
 	var again []string
@@ -98,7 +98,7 @@ func TestSetAside_UnblocksTheHost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Positive(t, setAside, "past both bounds the batch must be set aside rather than returned")
 
-	next, err := log.ClaimForHost(t.Context(), host, batch)
+	next, _, err := log.ClaimForHost(t.Context(), host, batch)
 	require.NoError(t, err)
 	require.NotEmpty(t, next, "the host must resume: this is the whole point, and an empty claim here is the wedge")
 	got := make([]string, 0, len(next))
@@ -127,13 +127,15 @@ func TestSetAside_TransientFailureIsRetried(t *testing.T) {
 	ids := nackUntilBound(t, log, db, host, 10, 60)
 	require.NotEmpty(t, ids)
 
-	claimed, err := log.ClaimForHost(t.Context(), host, 10)
+	claimed, transientStamp, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed, "inside the duration window the batch is still retried, however many attempts it has taken")
 
 	// The condition clears and the batch acknowledges like any other.
-	require.NoError(t, log.Ack(t.Context(), []string{"transient-1"}))
-	after, err := log.ClaimForHost(t.Context(), host, 10)
+	held, ackErr := log.Ack(t.Context(), []string{"transient-1"}, transientStamp)
+	require.NoError(t, ackErr)
+	require.True(t, held)
+	after, _, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	assert.Empty(t, after, "an acknowledged event is terminal")
 }
@@ -154,7 +156,7 @@ func TestSetAside_OldFailureWithFewAttemptsIsRetried(t *testing.T) {
 	enqueue(t, log, host, "quiet-1", 1_000)
 
 	// Exactly one failure.
-	claimed, err := log.ClaimForHost(t.Context(), host, 10)
+	claimed, _, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
 	setAside, err := log.Nack(t.Context(), []string{"quiet-1"})
@@ -164,7 +166,7 @@ func TestSetAside_OldFailureWithFewAttemptsIsRetried(t *testing.T) {
 	// Then the host goes quiet for an hour, so the duration bound is well past.
 	ageFirstFailure(t, db, []string{"quiet-1"}, time.Hour)
 
-	claimed, err = log.ClaimForHost(t.Context(), host, 10)
+	claimed, _, err = log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1, "the event is still claimable, since one failure is not a deterministic failure")
 	setAside, err = log.Nack(t.Context(), []string{"quiet-1"})
@@ -173,7 +175,7 @@ func TestSetAside_OldFailureWithFewAttemptsIsRetried(t *testing.T) {
 		"two attempts is not enough to call this deterministic, however long ago the first one was: the duration bound alone "+
 			"would withdraw events over a single failure the next attempt might have processed")
 
-	again, err := log.ClaimForHost(t.Context(), host, 10)
+	again, _, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	assert.Len(t, again, 1, "and it is still being retried")
 }
@@ -193,7 +195,7 @@ func TestSetAside_RetainsTheEntry(t *testing.T) {
 	enqueue(t, log, host, "retained-1", 1_000)
 	ids := nackUntilBound(t, log, db, host, 10, 20)
 	ageFirstFailure(t, db, ids, 16*time.Minute)
-	claimed, err := log.ClaimForHost(t.Context(), host, 10)
+	claimed, _, err := log.ClaimForHost(t.Context(), host, 10)
 	require.NoError(t, err)
 	require.NotEmpty(t, claimed)
 	setAside, err := log.Nack(t.Context(), []string{"retained-1"})

@@ -178,28 +178,31 @@ func (s *Store) PendingHosts(ctx context.Context, limit int) ([]string, error) {
 // COMMITTED so the SKIP LOCKED scan takes no next-key/gap locks on the (processed, host_id, timestamp_ns) index, removing the
 // contention at its source, and the whole transaction is wrapped in the same bounded deadlock retry the append and prune paths use
 // so any residual 1213 is cleared transparently rather than surfacing to the processor loop (issue #544).
-func (s *Store) ClaimForHost(ctx context.Context, hostID string, limit int) ([]api.Event, error) {
+func (s *Store) ClaimForHost(ctx context.Context, hostID string, limit int) ([]api.Event, int64, error) {
 	if limit <= 0 || hostID == "" {
-		return nil, nil
+		return nil, 0, nil
 	}
-	var events []api.Event
+	var (
+		events []api.Event
+		stamp  int64
+	)
 	err := sqlhelpers.WithDeadlockRetry(ctx, deadlockMaxAttempts, deadlockBackoffStep, func() error {
 		var claimErr error
-		events, claimErr = s.claimOnce(ctx, hostID, limit)
+		events, stamp, claimErr = s.claimOnce(ctx, hostID, limit)
 		return claimErr
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return events, nil
+	return events, stamp, nil
 }
 
 // claimOnce runs one claim transaction for one host. Extracted so ClaimForHost can wrap it in a deadlock retry. READ COMMITTED is
 // deliberate (see ClaimForHost): the SKIP LOCKED scan must not take gap locks, or concurrent claimers deadlock on the claim UPDATE.
-func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.Event, error) {
+func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.Event, int64, error) {
 	tx, err := s.db.BeginTxx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return nil, fmt.Errorf("begin tx for claim: %w", err)
+		return nil, 0, fmt.Errorf("begin tx for claim: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -232,7 +235,7 @@ func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.
 		SELECT MIN(timestamp_ns)
 		FROM event_queue
 		WHERE host_id = ? AND processed = 2 AND claimed_at_ns >= ?`, hostID, cutoff); err != nil {
-		return nil, fmt.Errorf("claim in-flight floor: %w", err)
+		return nil, 0, fmt.Errorf("claim in-flight floor: %w", err)
 	}
 	// Carry the bound as a flag plus a value rather than folding "nothing in flight" into a sentinel timestamp. Two sentinel attempts
 	// each produced an edge on agent-supplied timestamps: an exclusive bound against math.MaxInt64 stranded a row stamped exactly
@@ -256,43 +259,82 @@ func (s *Store) claimOnce(ctx context.Context, hostID string, limit int) ([]api.
 		LIMIT ?
 		FOR UPDATE SKIP LOCKED`, hostID, cutoff, hasFloor, inFlightFloor, limit)
 	if err != nil {
-		return nil, fmt.Errorf("claim select: %w", err)
+		return nil, 0, fmt.Errorf("claim select: %w", err)
 	}
 	if len(events) == 0 {
-		return events, tx.Commit()
+		return events, 0, tx.Commit()
 	}
 
 	ids := make([]string, len(events))
 	for i, e := range events {
 		ids[i] = e.EventID
 	}
-	query, args, err := sqlx.In("UPDATE event_queue SET processed = 2, claimed_at_ns = ? WHERE event_id IN (?)", time.Now().UnixNano(), ids)
+	// The stamp is this claim's identity, returned so Ack can prove it still holds the claim it is acknowledging (issue #817).
+	// Reusing claimed_at_ns rather than adding a token column: it is already written here, already unique per claim in practice,
+	// and a re-claim necessarily overwrites it, which is exactly the condition Ack needs to detect. Two claims landing in the same
+	// nanosecond would both match, which is a residual rather than a guarantee; it needs a clock coarser than the one this runs on.
+	stamp := time.Now().UnixNano()
+	query, args, err := sqlx.In("UPDATE event_queue SET processed = 2, claimed_at_ns = ? WHERE event_id IN (?)", stamp, ids)
 	if err != nil {
-		return nil, fmt.Errorf("claim build update: %w", err)
+		return nil, 0, fmt.Errorf("claim build update: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		return nil, fmt.Errorf("claim update: %w", err)
+		return nil, 0, fmt.Errorf("claim update: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit claim tx: %w", err)
+		return nil, 0, fmt.Errorf("commit claim tx: %w", err)
 	}
-	return events, nil
+	return events, stamp, nil
 }
 
 // Ack marks claimed events fully processed (-> 1); they will not be claimed again. A separate PruneProcessed sweep removes acknowledged
 // rows so the queue stays small (the archive holds the retained history).
-func (s *Store) Ack(ctx context.Context, eventIDs []string) error {
+//
+// Conditional on still holding the claim, and reports whether it did (issue #817). A claim expires after claimLeaseNs and is
+// re-offered, so an evaluation that outlives its lease runs alongside its own reclaimer; before this both attempts acknowledged
+// successfully and neither learned it had lost. Alert persistence was unharmed because it deduplicates on (host, rule, subject),
+// but anything additive after the ack counted the batch twice, and the gap was in the queue contract rather than in the counter.
+//
+// held is false when the rows are no longer in this claim: either another claimer took them (claimed_at_ns moved) or they are no
+// longer in flight at all. A caller that has lost the claim must skip whatever it does after acknowledging, because the attempt
+// that now owns the rows will do it.
+func (s *Store) Ack(ctx context.Context, eventIDs []string, claimStampNs int64) (held bool, err error) {
 	if len(eventIDs) == 0 {
-		return nil
+		return true, nil
 	}
-	query, args, err := sqlx.In("UPDATE event_queue SET processed = 1 WHERE event_id IN (?)", eventIDs)
+	query, args, err := sqlx.In(
+		"UPDATE event_queue SET processed = 1 WHERE event_id IN (?) AND processed = 2 AND claimed_at_ns = ?", eventIDs, claimStampNs)
 	if err != nil {
-		return fmt.Errorf("ack build query: %w", err)
+		return false, fmt.Errorf("ack build query: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
-		return fmt.Errorf("ack: %w", err)
+	// In a transaction so a partial match applies NOTHING. Without it the UPDATE advances whichever rows still match, and the
+	// caller is told it lost while half the batch has been acknowledged: the rows another attempt owns get re-processed by it,
+	// and the rows this attempt just acked are never processed by anyone. Found by the test for the partial case, which the
+	// single-event version of it could not reach.
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin tx for ack: %w", err)
 	}
-	return nil
+	defer tx.Rollback() //nolint:errcheck
+
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, fmt.Errorf("ack: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("ack rows affected: %w", err)
+	}
+	// Partial is treated as lost rather than won. A subset matching means the claim covered rows another attempt has since taken,
+	// so this attempt cannot claim to have processed the batch exactly once, which is the only thing the result is used for. The
+	// deferred rollback is what undoes the rows that did match.
+	if affected != int64(len(eventIDs)) {
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit ack: %w", err)
+	}
+	return true, nil
 }
 
 // The `processed` column carries four states, written as literals in the SQL below and named here rather than as constants, which
