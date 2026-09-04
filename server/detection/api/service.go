@@ -63,8 +63,15 @@ type Service interface {
 // The canonical definition lives here; rules/internal/catalog imports
 // it directly via detection.api.
 type GraphReader interface {
-	// GetProcessByPID returns the row whose (host, pid) bracket atTimeNs (i.e. fork_time_ns <= atTimeNs <= exit_time_ns or exit_time_ns IS
-	// NULL).
+	// GetProcessByPID returns the generation of (host, pid) whose IMAGE was running at atTimeNs.
+	//
+	// The lifetime bracket selects the candidates (fork_time_ns <= atTimeNs, and either no exit or an exit at or after it); which
+	// candidate is returned is decided by the image's own start instant, not by the fork (issue #799). Every generation of a
+	// re-exec chain carries the same fork time, so ordering on the fork returns whichever generation was recorded last, which for
+	// a parent asked about at its child's fork is an image that had not run yet.
+	//
+	// A generation between its fork and its first exec is still returned. Its image start lies in the future, and excluding it
+	// would answer "no such process" for a parent that forked a child before executing anything itself.
 	GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*Process, error)
 
 	// GetProcessByPIDVersion returns the process generation matching the exact (host, pid, pidversion) identity at the event time

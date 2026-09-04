@@ -81,6 +81,25 @@ func TestGetProcessByPID_ReturnsTheImageRunningAtTheInstantAsked(t *testing.T) {
 		assert.Nil(t, got)
 	})
 
+	t.Run("a process is still found between its fork and its FIRST exec", func(t *testing.T) {
+		t.Parallel()
+		// The regression review caught in the first version of this fix. A first exec updates the fork row in place, so between
+		// the fork and that exec there is ONE row whose image start lies in the future. Filtering on the image start excluded it,
+		// and the callers this change exists to fix ask at a CHILD's fork time, which can fall in exactly that window: a parent
+		// that forked a child before executing anything itself came back as having no record at all.
+		const window = 7300
+		execAt := int64(2000)
+		id, err := s.InsertProcess(ctx, api.Process{
+			HostID: host, PID: window, Path: "/bin/preexec", ForkTimeNs: 1000, ExecTimeNs: &execAt,
+		})
+		require.NoError(t, err)
+
+		got, err := s.GetProcessByPID(ctx, host, window, 1500)
+		require.NoError(t, err)
+		require.NotNil(t, got, "a process that exists at the instant asked about must be found, image started or not")
+		assert.Equal(t, id, got.ID)
+	})
+
 	t.Run("a generation that never executed is found by its fork time", func(t *testing.T) {
 		t.Parallel()
 		// COALESCE falls back to fork_time_ns, which is a pure-fork row's only start instant. Without that fallback this row
