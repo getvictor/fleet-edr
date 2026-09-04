@@ -92,6 +92,12 @@ type globSeg struct {
 // each is checked once; a segment with a star on both sides is searched for at every candidate offset, which is the O(value x
 // segment) shape #787 left behind and deferred to #767 by name.
 //
+// Review asked whether an anchored segment should count too, since comparing one is linear in its length. Measured, it should not:
+// against a fixed 256-byte value an anchored prefix costs 527ns at 4096 atoms, 527ns at 65536 and 557ns at a million, because the
+// comparison abandons as soon as the value runs out. Its cost tracks the VALUE, which an author does not control and which #787
+// already bounded. For contrast, an unanchored segment of only 64 atoms costs 8.09us against that same value, fifteen times a
+// 4096-atom anchored prefix, which is the whole reason the exemption is here.
+//
 // The unit is the segment's LENGTH, not its `?` count, and that correction came out of review. The first version counted only `?`
 // on the reasoning that a literal segment can use the byte-comparison paths, which is true and does not make it cheap: measured on
 // a 4096-byte value, a middle segment of 1024 literal characters costs 1.41ms, the same order as 1024 `?` at 4.10ms. Bounding one

@@ -69,6 +69,13 @@ func TestCompile_BoundsWhatOnePatternCanCost(t *testing.T) {
 			name:    "the shapes real rules use",
 			pattern: "*/usr/bin/??/tool*",
 		},
+		{
+			// Review asked whether anchored segments should count. Measured: against a fixed 256-byte value an anchored prefix
+			// costs 527ns at 4096 atoms and 557ns at a million, because the comparison abandons when the value runs out. This row
+			// is far past every limit and must still be accepted, or the exemption has quietly gone.
+			name:    "an anchored prefix far past every limit is still accepted",
+			pattern: strings.Repeat("a", maxFieldCost*4) + "*",
+		},
 	}
 
 	for _, tc := range cases {

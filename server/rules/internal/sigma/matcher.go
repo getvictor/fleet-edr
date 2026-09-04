@@ -280,10 +280,12 @@ func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest
 		if err != nil {
 			return valueTest{}, err
 		}
-		cost += valueBaseCost
-		if cost > maxValueCost {
-			return valueTest{}, fmt.Errorf("%w: regular expression compiles to %d instructions, above the limit of %d",
-				ErrUnsupported, cost, maxValueCost)
+		// Reported separately from the total on purpose: the instruction count is the number an author can act on, and adding the
+		// base cost into it made the message over-report the program by one.
+		total := valueBaseCost + cost
+		if total > maxValueCost {
+			return valueTest{}, fmt.Errorf("%w: regular expression compiles to %d instructions, costing %d against a limit of %d",
+				ErrUnsupported, cost, total, maxValueCost)
 		}
 		// Compiled verbatim: Sigma's |re carries a real regular expression, and case-insensitivity is the author's to request with
 		// an inline (?i) flag. Folding it here would silently widen every imported rule that relies on case.
@@ -291,7 +293,7 @@ func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest
 		if err != nil {
 			return valueTest{}, fmt.Errorf("invalid regexp %q: %w", v, err)
 		}
-		return valueTest{re: re, cost: cost}, nil
+		return valueTest{re: re, cost: total}, nil
 	}
 	if wrap != nil {
 		v = wrap(v)

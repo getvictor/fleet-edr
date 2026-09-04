@@ -48,7 +48,7 @@ Both bounds live in the one function every pattern passes through, so the loader
 
 **Consecutive stars were an unbounded cost I had measured around.** My first measurement used `*x` repeated, which keeps every segment non-empty and reported flat cost. Actual consecutive stars grow linearly: 19ns at two, 40us at 8192. Collapsing them removes the growth without refusing anything.
 
-## What these bounds do NOT cover, and why that is PR 2's job
+## What these bounds do not cover, and why that is PR 2's job
 
 A field test compares each authored value against every value the EVENT supplies, and some event fields are argv-derived slices with no cap of their own. So the cost of a field is authored-cost times event-cardinality, and this change bounds only the first factor. Review raised it and it is worth stating rather than leaving implied: the per-field limit bounds what an author can impose, not the total an arbitrary event can provoke.
 
