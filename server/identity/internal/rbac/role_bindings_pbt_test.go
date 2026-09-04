@@ -4,6 +4,7 @@ package rbac_test
 
 import (
 	"fmt"
+	"github.com/jmoiron/sqlx"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -32,12 +33,43 @@ var pbtEmailCounter atomic.Uint64
 // Property: a binding with expires_at=t is returned iff t is NULL OR
 // t is strictly after the wall-clock NOW(6) at SELECT time.
 //
-// Generation strategy: rapid draws an offset in (-2h, +2h) skipping a
-// 250ms band around zero. The skip avoids a known race (the
-// timestamp's nominal offset puts it past NOW(6) at INSERT time, but
-// the SELECT runs on a slightly-later NOW(6) and the row no longer
-// matches). 250ms is large enough to absorb test runner / DB roundtrip
-// jitter without trivializing the boundary check.
+// Generation strategy: rapid draws an offset in (-2h, +2h) skipping a 250ms band around zero, so the boundary is approached from
+// both sides without a drawn offset of exactly zero.
+//
+// The band used to be described as absorbing test-runner and round-trip jitter, and it does not: it only makes the flake rarer. A
+// drawn offset is measured before three MySQL round trips, so on a loaded runner the row can genuinely expire before the SELECT
+// runs, the query correctly returns nothing, and the live assertion fails. That happened twice on unrelated PRs (issue #802, drawn
+// offset 250, then again at 275), and it does not reproduce locally because round trips here are sub-millisecond.
+//
+// Widening the band would only lengthen the odds, and computing the expiry from the database's own clock would not help either:
+// the row still expires between the INSERT and the SELECT whichever clock set it. What removes the race is to stop asserting
+// against the nominal offset and assert against the window the query actually ran in, which is what the three cases below do.
+// Every drawn offset stays meaningful and no margin is assumed.
+//
+// Both the window and the expiry it is compared against are read from the DATABASE, because the predicate under test compares
+// against NOW(6) and stores the expiry as TIMESTAMP(6). Bounds from the client would only agree while the two clocks do, and a
+// client-side expiry carries nanoseconds the column does not, either of which can pick the wrong branch by a hair and put the
+// flake back. Reading both back removes the assumption rather than bounding it.
+
+// storedExpiry reads back the expiry as the column holds it, so an assertion about the boundary compares the same value the
+// predicate does rather than the client's higher-precision copy of it.
+func storedExpiry(t *testing.T, db *sqlx.DB, userID int64) time.Time {
+	t.Helper()
+	var at time.Time
+	require.NoError(t, db.GetContext(t.Context(), &at,
+		`SELECT expires_at FROM role_bindings WHERE user_id = ?`, userID))
+	return at
+}
+
+// dbNow reads the clock the predicate under test actually compares against. A test asserting on expiry has to use it rather than
+// time.Now(), or it is asserting that two clocks agree, which is not the property and is not guaranteed.
+func dbNow(t *testing.T, db *sqlx.DB) time.Time {
+	t.Helper()
+	var now time.Time
+	require.NoError(t, db.GetContext(t.Context(), &now, `SELECT NOW(6)`))
+	return now
+}
+
 func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 	t.Parallel()
 	db := openSchema(t)
@@ -64,18 +96,57 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 			ScopeID:   "*",
 			ExpiresAt: expires,
 		})
+		if expires != nil {
+			// Read back what was actually persisted. TIMESTAMP(6) holds microseconds and the client value carries nanoseconds,
+			// so comparing the bounds against the client's copy can differ from what the predicate sees by up to a microsecond,
+			// which is the whole width of the boundary this test is about.
+			stored := storedExpiry(t, db, uid)
+			expires = &stored
+		}
 
+		// Bracket the query, so the assertion can be made against the interval it ran in rather than against a nominal offset
+		// computed several round trips earlier.
+		//
+		// Bracketed with the DATABASE's clock, not Go's, which review caught: the predicate under test compares against
+		// NOW(6), so bounds read from the client only line up with it while the two clocks agree. A probe measured the skew
+		// on this host at 681us, small enough to hide the problem and not to remove it, and a CI runner and its MySQL
+		// container have no reason to be that close. Reading NOW(6) puts the bounds and the predicate on one clock, so no
+		// offset can select the wrong branch.
+		//
+		// The two extra round trips widen the bracket, which is the safe direction: it can only move a case into the
+		// ambiguous middle, never onto the wrong side of it.
+		beforeSelect := dbNow(t, db)
 		got, err := store.ListLiveBindings(t.Context(), uid)
 		require.NoError(rt, err)
+		afterSelect := dbNow(t, db)
 
-		// Property: returned iff null OR strictly future.
-		shouldReturn := nullExpiry || offsetMillis > 0
-		if shouldReturn {
+		// A NULL expiry is timeless: it is live whatever the clock did.
+		if nullExpiry {
+			require.Lenf(rt, got, 1, "a binding with no expiry is always live")
+			return
+		}
+
+		switch {
+		case afterSelect.Before(*expires):
+			// The expiry was still in the future for the whole query, so nothing the clock did can excuse a miss.
 			require.Lenf(rt, got, 1,
-				"binding with offset_millis=%d null=%v should be live", offsetMillis, nullExpiry)
-		} else {
+				"binding expiring %v after the query finished should be live (offset_millis=%d)",
+				expires.Sub(afterSelect), offsetMillis)
+		case !beforeSelect.Before(*expires):
+			// Already expired when the query began, and an expired row only gets more expired.
+			//
+			// Equality counts as expired rather than ambiguous, which review pointed out: the predicate is `expires_at >
+			// NOW(6)`, strictly, so an expiry equal to the pre-query bound cannot be live at a NOW(6) that is at or after it.
+			// Reading it as ambiguous would give up an assertion the predicate actually settles.
 			require.Emptyf(rt, got,
-				"binding with offset_millis=%d null=%v should be expired", offsetMillis, nullExpiry)
+				"binding that expired %v before the query began should not be live (offset_millis=%d)",
+				beforeSelect.Sub(*expires), offsetMillis)
+		default:
+			// The expiry falls inside the query's own execution window, so both answers are correct and asserting either would
+			// be asserting the scheduler. This is the case the old code got wrong: it insisted on "live" here. What is still
+			// worth pinning is that the row is never returned TWICE, which is a property of the query rather than of timing.
+			require.LessOrEqualf(rt, len(got), 1,
+				"at most one binding row whichever side of the boundary the query landed (offset_millis=%d)", offsetMillis)
 		}
 	})
 }
