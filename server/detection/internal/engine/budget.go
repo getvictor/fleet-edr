@@ -41,6 +41,11 @@ const (
 // Reads happen once per rule per batch and writes only when an evaluation is over budget, which is why the skip set is an atomic
 // pointer read without a lock while the overrun bookkeeping sits behind a mutex.
 type evalBudget struct {
+	// budgetNs is maxRuleEvalNs in production and lowered by tests, so an over-budget evaluation can be driven by a rule that is
+	// actually slow rather than by poking the bookkeeping. Review found the gap that motivated this: a fixture sleeping 1ms
+	// against a 100ms budget never entered the overrun branch at all, so a mutation that reported an overrun as an error (the
+	// failure mode this whole design exists to avoid) survived the test that was supposed to cover it.
+	budgetNs int64
 	// skipped is the set of rule ids this replica has stopped evaluating, replaced wholesale so a reader never holds a lock.
 	skipped atomic.Pointer[map[string]skipRecord]
 
@@ -63,8 +68,10 @@ type overrunRun struct {
 	worstNs int64
 }
 
-func newEvalBudget() *evalBudget {
-	b := &evalBudget{overruns: map[string]*overrunRun{}}
+func newEvalBudget() *evalBudget { return newEvalBudgetWith(maxRuleEvalNs) }
+
+func newEvalBudgetWith(budgetNs int64) *evalBudget {
+	b := &evalBudget{budgetNs: budgetNs, overruns: map[string]*overrunRun{}}
 	empty := map[string]skipRecord{}
 	b.skipped.Store(&empty)
 	return b
@@ -82,7 +89,7 @@ func (b *evalBudget) skipping(ruleID string) bool {
 // An evaluation inside the budget clears the run. That is what makes the count mean "repeatedly" rather than "ever": a rule that is
 // occasionally slow and usually fine never accumulates, and only a rule that is consistently over budget reaches the bound.
 func (b *evalBudget) record(ruleID string, elapsedNs int64, now time.Time) (exhausted bool, worstNs int64) {
-	if elapsedNs <= maxRuleEvalNs {
+	if elapsedNs <= b.budgetNs {
 		b.mu.Lock()
 		delete(b.overruns, ruleID)
 		b.mu.Unlock()
@@ -128,6 +135,23 @@ func (b *evalBudget) markSkipped(ruleID string, rec skipRecord) bool {
 	next[ruleID] = rec
 	b.skipped.Store(&next)
 	return true
+}
+
+// forget clears everything this budget has learned, which a new rule set requires.
+//
+// Review found the interaction: the skip is keyed by rule id, and #850 made rule content reloadable while the server runs. Without
+// this, an operator who fixes a slow rule and publishes it under the same id gets the corrected version installed and never
+// evaluated, because the id is still in the skip set. The heuristic would then be punishing a rule that no longer exists.
+//
+// Cleared wholesale rather than per changed rule: the engine is handed a whole set and does not diff it, and a rule whose id
+// survived a reload may still have a changed body. Re-learning costs at most one window of overruns per genuinely slow rule, which
+// is the same cost a restart already carries and for the same reason.
+func (b *evalBudget) forget() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.overruns = map[string]*overrunRun{}
+	empty := map[string]skipRecord{}
+	b.skipped.Store(&empty)
 }
 
 // Skipped reports what this replica has stopped evaluating, for the operator-facing surface. Copied so a caller cannot mutate the

@@ -236,3 +236,121 @@ func TestEngine_Evaluate_SkippingOneRuleLeavesTheOthersRunning(t *testing.T) {
 	assert.Zero(t, slow.invocations(), "the skipped rule must not run")
 	assert.Equal(t, 1, fine.invocations(), "and every other rule must, or one expensive rule blinds the deployment")
 }
+
+// spec:server-detection-rules-engine/a-rule-that-repeatedly-exceeds-its-evaluation-budget-stops-being-evaluated/an-overrun-does-not-cause-the-batch-to-be-replayed
+//
+// TestEngine_Evaluate_ARealOverrunIsRecordedAndNotReturned closes the gap review found in the test above it: that one drove the
+// budget bookkeeping directly, so the branch in evaluateRule's defer was never entered and a mutation reporting an overrun as an
+// error would have survived.
+//
+// Here the rule is genuinely slower than the budget, which is lowered rather than waiting out 100ms twenty times. That exercises
+// the real path: the overrun is recorded, the batch still succeeds, and the rule stops being evaluated once the count is reached.
+//
+// One thing this does NOT cover, stated because mutation testing showed it: charging the budget the FULL evaluateRule duration
+// instead of the rule's own survives every test here. It cannot fail one, because these run against a nil store, so alert
+// persistence does nothing and the two durations are equal by construction. Making them differ needs a real store and a
+// deterministically slow write, which is a harness worth more than the guard it would add. What holds the distinction is that
+// ruleElapsed is measured around exactly one call, the rule's own Evaluate, and the comment there says why.
+func TestEngine_Evaluate_ARealOverrunIsRecordedAndNotReturned(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	// A budget below the rule's own sleep, so every evaluation is a real overrun measured by the engine.
+	e.budget = newEvalBudgetWith(int64(time.Millisecond))
+	rule := &slowRule{stubRule: stubRule{id: "genuinely_slow"}, sleep: 3 * time.Millisecond}
+	e.Register(rule)
+	batch := []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}}
+
+	for range maxRuleOverruns {
+		_, err := e.Evaluate(t.Context(), batch)
+		require.NoError(t, err, "an overrun must never reach the caller as an error, or the batch is nacked and retried into it")
+	}
+
+	assert.True(t, e.budget.skipping("genuinely_slow"), "twenty real overruns must exhaust the budget")
+	assert.Equal(t, maxRuleOverruns, rule.invocations(), "and every one of those evaluations must have actually run")
+
+	before := rule.invocations()
+	_, err := e.Evaluate(t.Context(), batch)
+	require.NoError(t, err)
+	assert.Equal(t, before, rule.invocations(), "after which it is skipped")
+}
+
+// TestEngine_LoadActive_ForgetsWhatTheBudgetLearned covers the interaction with #850's reloadable rule content.
+//
+// The skip is keyed by rule id, so without clearing it an operator who fixes a slow rule and publishes it under the same id gets
+// the corrected rule installed and never evaluated. The heuristic would be punishing a rule that no longer exists, and the only
+// way out would be a restart.
+func TestEngine_LoadActive_ForgetsWhatTheBudgetLearned(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	fixed := &slowRule{stubRule: stubRule{id: "was_slow"}}
+	e.Register(fixed)
+
+	now := time.Now()
+	for range maxRuleOverruns {
+		e.budget.record("was_slow", maxRuleEvalNs+1, now)
+	}
+	require.True(t, e.budget.skipping("was_slow"))
+
+	// The operator publishes a corrected rule under the same id, which #850's refresh loop installs through here.
+	e.LoadActive(staticProvider{rules: []rulesapi.Rule{fixed}})
+
+	assert.False(t, e.budget.skipping("was_slow"), "a new rule set must get a fresh judgement")
+
+	// And a run that had NOT yet reached the bound must be cleared too, not just the completed skips. A rule sitting on
+	// nineteen overruns would otherwise be skipped by its first overrun after the reload, which is the same bug with a smaller
+	// number: the judgement would still be about the rule that was replaced.
+	partial := &slowRule{stubRule: stubRule{id: "nearly_slow"}}
+	e.Register(partial)
+	for range maxRuleOverruns - 1 {
+		e.budget.record("nearly_slow", maxRuleEvalNs+1, now)
+	}
+	e.LoadActive(staticProvider{rules: []rulesapi.Rule{fixed, partial}})
+	e.budget.record("nearly_slow", maxRuleEvalNs+1, now)
+	assert.False(t, e.budget.skipping("nearly_slow"),
+		"one overrun after a reload must not finish a run the previous rule set started")
+
+	_, err := e.Evaluate(t.Context(), []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, fixed.invocations(), "and the corrected rule must actually run")
+}
+
+// staticProvider is the minimal shape LoadActive accepts.
+type staticProvider struct{ rules []rulesapi.Rule }
+
+func (p staticProvider) ActiveRules() []rulesapi.Rule { return p.rules }
+
+// spec:server-detection-rules-engine/a-rule-that-repeatedly-exceeds-its-evaluation-budget-stops-being-evaluated/a-skipped-rule-reports-its-configured-mode-unchanged
+//
+// TestEvalBudget_DoesNotTouchTheRuleSet pins the design decision this change turns on, which review noted had no test.
+//
+// A rule's mode is what the operator asked for; a skip is what the server is doing to protect itself. Reporting one as the other
+// would have the catalog claim a rule was disabled by someone who never touched it, and leave unclear who may undo it. So the
+// budget owns a set of ids and nothing else: it does not reach into the rule set, the resolved modes, or anything an operator
+// reads as configuration.
+//
+// Asserted structurally, because that is what makes it durable. A future change that "helpfully" flipped the mode would have to
+// give the budget a way to reach it, and this test is what says the budget has no such reach by construction.
+func TestEvalBudget_DoesNotTouchTheRuleSet(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	rule := &slowRule{stubRule: stubRule{id: "over_budget"}}
+	e.Register(rule)
+
+	before := e.active.Load()
+	require.Len(t, before.rules, 1)
+
+	now := time.Now()
+	for range maxRuleOverruns {
+		e.budget.record("over_budget", maxRuleEvalNs+1, now)
+	}
+	require.True(t, e.budget.skipping("over_budget"), "the rule must actually be skipped, or this asserts nothing")
+
+	after := e.active.Load()
+	assert.Same(t, before, after, "exhausting a budget must not replace the rule set")
+	require.Len(t, after.rules, 1, "and must not remove the rule from it")
+	assert.Equal(t, "over_budget", after.rules[0].ID(),
+		"the rule stays registered and keeps reporting whatever mode the operator configured; only this replica stops running it")
+}

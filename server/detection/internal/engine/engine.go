@@ -137,6 +137,8 @@ func (e *Engine) Register(r rulesapi.Rule) {
 	next := make([]rulesapi.Rule, len(current), len(current)+1)
 	copy(next, current)
 	e.active.Store(newRuleSet(append(next, r)))
+	// Deliberately does NOT clear the evaluation budget, unlike LoadActive. This adds one rule and leaves the others as they were,
+	// so what the budget learned about them still applies; clearing it would discard useful state for no reason.
 }
 
 // ruleSet is the engine's active rules together with the indices derived from them, immutable once built.
@@ -206,6 +208,9 @@ func (e *Engine) LoadActive(cs interface{ ActiveRules() []rulesapi.Rule }) {
 	next := make([]rulesapi.Rule, len(active))
 	copy(next, active)
 	e.active.Store(newRuleSet(next))
+	// A new set means what the budget learned about the old one no longer applies. Without this, an operator who fixes a slow rule
+	// and publishes it under the same id gets the corrected rule installed and never evaluated (issue #767 review).
+	e.budget.forget()
 }
 
 // Evaluate runs the rules that consume the batch's event types against it, per rulesFor: a rule is invoked only when the batch
@@ -415,15 +420,20 @@ func (e *Engine) evaluateRule(
 	// record zero misses for an evaluation that genuinely missed, and the miss is the counter an operator reads to find the rule
 	// driving the retries (issue #833 review).
 	var evalRetryable bool
+	// The rule's OWN evaluation time, assigned below and read by the defer, for the same reason evalRetryable is a variable
+	// rather than derived from a return: the defer runs on every path and needs a value the happy path sets.
+	var ruleElapsed int64
 	defer func() {
 		elapsed := time.Since(start).Nanoseconds()
 		// Deliberately NOT returned as an error. In Evaluate a rule error that is not retryable returns from the batch and the
 		// batch is nacked and replayed, so a slow rule reporting failure would be retried into the same slow rule on every
 		// attempt: #836's stalled host by another route. Recording it keeps the findings this evaluation produced and lets the
 		// batch finish, and the skip applies to later batches.
-		if exhausted, worstNs := e.budget.record(rule.ID(), elapsed, time.Now()); exhausted {
+		//
+		// Charged the rule's OWN duration, not `elapsed`, which also covers alert persistence. See ruleStart below.
+		if exhausted, worstNs := e.budget.record(rule.ID(), ruleElapsed, time.Now()); exhausted {
 			e.logger.WarnContext(ctx, "detection: rule exceeded its evaluation budget repeatedly and will not be evaluated on this replica",
-				"rule_id", rule.ID(), "worst", time.Duration(worstNs).String(), "budget", time.Duration(maxRuleEvalNs).String(),
+				"rule_id", rule.ID(), "worst", time.Duration(worstNs).String(), "budget", time.Duration(e.budget.budgetNs).String(),
 				"overruns", maxRuleOverruns, "window", ruleOverrunWindow.String())
 			if e.metrics != nil {
 				e.metrics.RuleEvaluationSkipped(ctx, rule.ID())
@@ -479,7 +489,14 @@ func (e *Engine) evaluateRule(
 		)
 	}()
 
+	// Timed separately from `start` above, which spans the whole call including alert persistence. The budget must charge a rule
+	// for its OWN work: review found that feeding it the full duration lets a slow or failing database accumulate overruns and
+	// disable a rule that is not itself expensive, which punishes the wrong thing and removes detections during exactly the
+	// incident an operator most needs them. RuleEvalStats keeps reporting the full duration, since that is what "this rule cost
+	// the pipeline" means for the tuning table (issue #774).
+	ruleStart := time.Now()
 	findings, err := evaluate(ctx, rule, scoped, e.ruleReader, scope)
+	ruleElapsed = time.Since(ruleStart).Nanoseconds()
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
 	// recorded but the findings are still persisted below rather than thrown away with the error. Only a non-retryable failure
 	// discards the batch's findings: that path means the rule itself misbehaved, so its output is not trustworthy.
