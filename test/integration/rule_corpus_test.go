@@ -90,6 +90,13 @@ func TestRuleCorpus_StoredContentIsWhatLoads(t *testing.T) {
 // storage is responsible for. When rules carry their own provenance (issue #765) this becomes a field read instead.
 func importedIDsIn(t *testing.T, rules []api.Rule) []string {
 	t.Helper()
+	return filterCorpusIDs(corpusRuleIDs(t), rules)
+}
+
+// corpusRuleIDs is the set of ids the vendored corpus is responsible for. Computed separately from the filter so a caller inside a
+// retry callback can build it once, where a require would be the wrong tool.
+func corpusRuleIDs(t *testing.T) map[string]bool {
+	t.Helper()
 	fromCorpus := map[string]bool{}
 	require.NoError(t, fs.WalkDir(rulesbootstrap.EmbeddedCorpusFS(), rulesbootstrap.EmbeddedCorpusRoot,
 		func(p string, d fs.DirEntry, walkErr error) error {
@@ -100,7 +107,11 @@ func importedIDsIn(t *testing.T, rules []api.Rule) []string {
 			return nil
 		}))
 	require.NotEmpty(t, fromCorpus, "the embedded corpus must hold rule documents for this comparison to mean anything")
+	return fromCorpus
+}
 
+// filterCorpusIDs keeps the rules that came from the corpus, sorted, discarding the natively written ones.
+func filterCorpusIDs(fromCorpus map[string]bool, rules []api.Rule) []string {
 	var ids []string
 	for _, r := range rules {
 		if fromCorpus[r.ID()] {
@@ -117,8 +128,14 @@ func importedIDsIn(t *testing.T, rules []api.Rule) []string {
 // refused for its own reasons would produce an empty rule set that looks the same as a corpus that never loaded.
 func vendoredDocument(t *testing.T, docPath string) fs.FS {
 	t.Helper()
+	return fstest.MapFS{docPath: &fstest.MapFile{Data: mustReadVendored(t, docPath)}}
+}
+
+// mustReadVendored reads one document out of the corpus embedded in this build, failing with the path when it is not there.
+func mustReadVendored(t *testing.T, docPath string) []byte {
+	t.Helper()
 	body, err := fs.ReadFile(rulesbootstrap.EmbeddedCorpusFS(), docPath)
 	require.NoErrorf(t, err, "the corpus must still hold %s; if it was renamed upstream, update storedRuleDoc and storedRuleID", docPath)
 	require.True(t, rulesbootstrap.EmbeddedCorpusIncludes(docPath), "and the seed must consider it rule content, or it stores nothing")
-	return fstest.MapFS{docPath: &fstest.MapFile{Data: body}}
+	return body
 }

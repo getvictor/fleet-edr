@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"slices"
 
 	"github.com/jmoiron/sqlx"
 
@@ -41,6 +42,32 @@ func New(deps Deps) (*RuleContent, error) {
 
 // Corpus exposes the published read surface consumers hold.
 func (r *RuleContent) Corpus() api.Corpus { return r.store }
+
+// Replace installs a corpus wholesale, returning the version it now carries.
+//
+// Unlike SeedFrom this OVERWRITES whatever is stored, which is what publishing content means: the caller has decided what the
+// corpus should be.
+//
+// The write and the version bump are one transaction, and the guarantee that buys is ONE-WAY: a reader can never observe the new
+// version paired with the previous documents. It does not make a version read and a document read atomic with each other, so a
+// reader that takes them separately can still pair an older version with newer documents. That direction is harmless and is what
+// the consumer's version-before-documents ordering relies on, since the next poll sees the difference and converges.
+//
+// The caller's slice is cloned before sorting. Publishing should not reorder a value the caller still holds, least of all when the
+// write then fails.
+//
+// This is the seam the import and authoring paths (issues #767, #768) write through. It exists here rather than on the store so
+// that a caller outside this context can publish content without reaching into its internals.
+func (r *RuleContent) Replace(ctx context.Context, docs []api.Document) (int64, error) {
+	sorted := slices.Clone(docs)
+	api.SortDocuments(sorted)
+	version, err := r.store.Replace(ctx, sorted)
+	if err != nil {
+		return 0, err
+	}
+	r.logger.InfoContext(ctx, "rulecontent: corpus replaced", "documents", len(sorted), "version", version)
+	return version, nil
+}
 
 // ApplySchema applies the rulecontent migrations. Idempotent (goose skips applied versions).
 func ApplySchema(ctx context.Context, db *sqlx.DB) error {

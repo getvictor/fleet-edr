@@ -15,15 +15,36 @@ import (
 )
 
 // fakeCorpus is a scripted rulecontent supplier.
+//
+// err applies to both reads, which is the shape of an unreachable store; versionErr narrows a failure to the version counter
+// alone, so the reload path's two reads can fail independently. calls records each read in order when non-nil, which is how the
+// version-before-documents ordering is asserted.
 type fakeCorpus struct {
-	docs []rulecontentapi.Document
-	err  error
+	docs       []rulecontentapi.Document
+	err        error
+	version    int64
+	versionErr error
+	calls      *[]string
 }
 
 func (f fakeCorpus) Documents(context.Context) ([]rulecontentapi.Document, error) {
+	f.record("documents")
 	return f.docs, f.err
 }
-func (f fakeCorpus) Version(context.Context) (int64, error) { return 1, f.err }
+
+func (f fakeCorpus) Version(context.Context) (int64, error) {
+	f.record("version")
+	if f.versionErr != nil {
+		return 0, f.versionErr
+	}
+	return f.version, f.err
+}
+
+func (f fakeCorpus) record(op string) {
+	if f.calls != nil {
+		*f.calls = append(*f.calls, op)
+	}
+}
 
 // embeddedCorpus presents the vendored corpus as storage-shaped documents, so the good case exercises the real parse path over
 // the same content the seed would have written rather than a fixture that only resembles it.
@@ -61,6 +82,7 @@ func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *capturingHandler) WithGroup(string) slog.Handler      { return h }
 
+// spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/a-system-starting-up-has-no-running-set-to-keep
 // spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/an-unseeded-store-is-not-an-error
 // spec:rule-content/an-unavailable-or-unusable-store-leaves-detections-running/content-that-fails-to-load-does-not-stop-detection
 //
@@ -106,6 +128,19 @@ func TestLoadCorpus_FallsBackRatherThanRunningNoRules(t *testing.T) {
 		{
 			name:      "content present but unparseable",
 			corpus:    fakeCorpus{docs: []rulecontentapi.Document{{Path: "imported/broken.yml", Content: []byte("{{ not sigma")}}},
+			wantWarn:  true,
+			wantRules: embedded,
+		},
+		{
+			// This row was missing, and its absence is why the path shipped wrong: documents that the loader refuses ONE BY ONE
+			// come back as success with an empty set, not as an error, so a deployment whose stored corpus is entirely unrunnable
+			// started with no corpus detections at all while the empty-store row above fell back. The two are the same determinate
+			// state and have to reach the same rule set. A file_event rule is the real refusal this sensor produces.
+			name: "content present and every document refused",
+			corpus: fakeCorpus{docs: []rulecontentapi.Document{{
+				Path:    "imported/file_event/file_event_macos_emond_launch_daemon.yml",
+				Content: mustReadEmbedded(t, "imported/file_event/file_event_macos_emond_launch_daemon.yml"),
+			}}},
 			wantWarn:  true,
 			wantRules: embedded,
 		},

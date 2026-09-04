@@ -237,3 +237,72 @@ func (vendoredStubRule) Origin() string { return "Upstream, by Someone" }
 type anonymousUpstreamStubRule struct{ stubRule }
 
 func (anonymousUpstreamStubRule) Origin() string { return "" }
+
+// spec:rule-content/a-running-server-picks-up-changed-content/the-rule-set-in-force-is-replaced-wholesale
+//
+// TestSwap_ReplacesTheSetBothReadersSee covers the swap itself: both public readers must move together, because they are two
+// projections of one rule set and a reader that kept the old generation would report a catalog that does not match what is being
+// evaluated. List additionally filters non-detections, so it is asserted on a set where that filter has something to do.
+func TestSwap_ReplacesTheSetBothReadersSee(t *testing.T) {
+	t.Parallel()
+
+	svc := New([]api.Rule{stubRule{id: "before"}}, nil, nil)
+	require.Equal(t, []string{"before"}, ids(svc.List()))
+	require.Len(t, svc.ActiveRules(), 1)
+
+	n := svc.Swap([]api.Rule{stubRule{id: "after"}, stubProjection{stubRule{id: "projection"}}}, 7)
+
+	assert.Equal(t, 2, n, "the count reported is what was installed, which is what a caller logs")
+	assert.Equal(t, []string{"after"}, ids(svc.List()), "the catalog follows the swap, and still omits the non-detection")
+	assert.Len(t, svc.ActiveRules(), 2, "and evaluation keeps receiving every rule, non-detections included")
+	assert.Equal(t, int64(7), svc.ActiveVersion())
+}
+
+// spec:rule-content/a-running-server-picks-up-changed-content/a-replica-adopts-stored-content-on-its-first-poll
+//
+// TestActiveVersion_ZeroMeansNotFromStorage pins the sentinel rather than leaving it to a caller to infer.
+//
+// A deployment that has never seeded storage, and the docs generator, both run a rule set that came from the build. Reporting some
+// version for those would claim a generation of stored content that does not exist, and an operator comparing replicas would read
+// it as agreement.
+func TestActiveVersion_ZeroMeansNotFromStorage(t *testing.T) {
+	t.Parallel()
+
+	assert.Zero(t, New([]api.Rule{stubRule{id: "embedded"}}, nil, nil).ActiveVersion(),
+		"a set built at construction did not come from stored content")
+
+	svc := New(nil, nil, nil)
+	svc.Swap([]api.Rule{stubRule{id: "stored"}}, 3)
+	assert.Equal(t, int64(3), svc.ActiveVersion())
+	svc.Swap([]api.Rule{stubRule{id: "embedded-again"}}, 0)
+	assert.Zero(t, svc.ActiveVersion(), "and falling back to the build's content reports so, rather than keeping a stale version")
+}
+
+// spec:rule-content/a-running-server-picks-up-changed-content/the-rule-set-in-force-is-replaced-wholesale
+//
+// TestSwap_CopiesTheCallersSlice covers the aliasing half. The caller builds the slice, so without a copy it holds a live handle
+// into the set every concurrent reader is walking, and a later append or index write reaches into evaluation. This is the same
+// defect #846 removed from the engine, which is why the engine copies on LoadActive as well.
+func TestSwap_CopiesTheCallersSlice(t *testing.T) {
+	t.Parallel()
+
+	caller := []api.Rule{stubRule{id: "installed"}}
+	svc := New(nil, nil, nil)
+	svc.Swap(caller, 1)
+
+	caller[0] = stubRule{id: "mutated-after-the-swap"}
+
+	require.Len(t, svc.ActiveRules(), 1)
+	assert.Equal(t, "installed", svc.ActiveRules()[0].ID(), "the installed set must not alias the caller's slice")
+}
+
+// TestNew_NilRulesIsAnEmptySet keeps the docs-generator path working. CatalogOnly passes catalog.New(nil), and a nil set must read
+// as empty rather than panicking on the first Load.
+func TestNew_NilRulesIsAnEmptySet(t *testing.T) {
+	t.Parallel()
+
+	svc := New(nil, nil, nil)
+	assert.Empty(t, svc.ActiveRules())
+	assert.Empty(t, svc.List())
+	assert.Zero(t, svc.ActiveVersion())
+}

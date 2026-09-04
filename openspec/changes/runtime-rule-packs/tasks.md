@@ -39,8 +39,37 @@ parameters without the code that reads them delivers no new detection.
 - Moving `rules/internal/export` into `rulecontent` (also assigned by the ADR). Unrelated to storage.
 - Untrusted-content validation. Belongs with #767, where untrusted input actually arrives; the seeded corpus is vendored.
 
-## 3. Reload and convergence (final PR)
+## 3. Reload and convergence (this PR)
 
-- [ ] `Reload` plus a `RefreshLoop` on the cheap version counter, following `detectionconfig`.
-- [ ] A load failure keeps the previous good set.
-- [ ] Active version surfaced for operators; two replicas converge, proven by integration test.
+- [x] `Reload` plus a `CorpusRefreshLoop` gated on the cheap version counter, following `detectionconfig`. Third loop in `Rules.Run`.
+- [x] A store that cannot be READ keeps the previous good set and retries, which is where reload differs from startup: the stored
+      state is unknown, and falling back would discard working content because a database blinked.
+- [x] Stored content that reads successfully and yields no runnable rules (empty, unparseable, or every rule refused) leaves the
+      running set alone and does NOT record the version, which is #766's contract and what lets the corrected content be adopted.
+      This went back and forth: one revision had every replica adopt its binary's corpus and record the version, to close the gap
+      that a RESTARTED replica falls back and diverges from its peers. That is unsound, because replicas mid-rolling-deployment
+      embed different corpora and would record one version against different rules, reporting agreement they do not have. The
+      residual divergence is stated in the spec and the release notes, and the cross-replica question is #851; the upstream remedy
+      is #767's publish-time validation.
+- [x] The STARTUP path had a real defect of its own, found along the way and kept: documents that were all refused yielded ZERO
+      corpus rules, while an empty store fell back correctly. The table covering that path had no row for the case.
+- [x] The version is read BEFORE the documents. The two reads cannot be atomic, and the reverse order pairs older content with the
+      newer version, which the next poll reads as current and never corrects. Asserted directly, since it is a silent permanent
+      staleness bug rather than a preference.
+- [x] The install fans out to all THREE consumers that derive from the rule set, through one definition shared by startup and
+      reload. The second one had no symptom of its own and was found by reading rather than from the plan: the exclusion-support map
+      the create-exclusion API validates against is built from the rule set, so a stale map rejects an exclusion for a rule that now
+      exists.
+- [x] Making that map reloadable made it racy. It carried a comment saying it was written once during wiring and needed no
+      synchronization, which reloading falsified; reinstating the plain field reports four data races under `-race`.
+- [x] `rulecontent.Replace` as the publish seam, which #767's import path writes through.
+- [x] Two replicas converge, proven by integration test over one database, including a SECOND publish. The first reload happens
+      regardless of the counter (a fresh replica stamps its set as not-from-storage), so only a subsequent publish exercises the gate.
+- [x] Mutation-tested: dropping either half of the fan-out, reversing the two reads, flipping the gate polarity, a non-bumping
+      replace, and a loop that never polls. Each compiles and each fails its own test.
+
+## Deferred from section 3, with reasons
+
+- An operator-facing surface for the active corpus version. The version is used by the gate and logged on every reload, so it is
+  diagnosable today, but putting it on an API or in the UI wants a place to show it, which arrives with #767's authoring views. Not
+  worth an endpoint of its own first.
