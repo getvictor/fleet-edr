@@ -706,26 +706,38 @@ func TestEventLog_AckRequiresStillHoldingTheClaim(t *testing.T) {
 	require.Len(t, second, 1, "an expired claim is re-offered, which is the whole premise")
 	require.NotEqual(t, firstStamp, secondStamp, "the re-claim must stamp its own identity, or nothing can tell them apart")
 
-	t.Run("the attempt that lost the claim does not acknowledge", func(t *testing.T) {
-		held, err := log.Ack(ctx, []string{"e-817"}, firstStamp)
-		require.NoError(t, err, "losing a claim is a normal outcome, not an error")
-		assert.False(t, held, "the first attempt must learn it lost, which is the whole point of #817")
+	// Both attempts ack the SAME row, so the cases run in order against one fixture and are deliberately not parallel: the
+	// second case's premise is that the first changed nothing. wantPending is what carries that, since a lost ack proves itself
+	// by the row still being claimable rather than by its return value alone.
+	cases := []struct {
+		name        string
+		stamp       int64
+		wantHeld    bool
+		wantPending int64
+		why         string
+	}{
+		{
+			name:  "the attempt that lost the claim does not acknowledge",
+			stamp: firstStamp, wantHeld: false, wantPending: 1,
+			why: "the first attempt must learn it lost, and must leave the row to the claimer that now owns it",
+		},
+		{
+			name:  "the attempt that holds the claim does acknowledge",
+			stamp: secondStamp, wantHeld: true, wantPending: 0,
+			why: "the holding claim advances the queue",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			held, err := log.Ack(ctx, []string{"e-817"}, tc.stamp)
+			require.NoError(t, err, "losing a claim is a normal outcome, not an error")
+			assert.Equal(t, tc.wantHeld, held, tc.why)
 
-		// And it must not have advanced the queue: the row still belongs to the second claimer.
-		pending, err := log.CountPending(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, int64(1), pending, "a lost ack must not mark the row processed")
-	})
-
-	t.Run("the attempt that holds the claim does acknowledge", func(t *testing.T) {
-		held, err := log.Ack(ctx, []string{"e-817"}, secondStamp)
-		require.NoError(t, err)
-		assert.True(t, held)
-
-		pending, err := log.CountPending(ctx)
-		require.NoError(t, err)
-		assert.Zero(t, pending, "the holding claim advances the queue")
-	})
+			pending, err := log.CountPending(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPending, pending, tc.why)
+		})
+	}
 }
 
 // spec:server-event-ingestion/acknowledgement-requires-still-holding-the-claim/an-ack-from-a-lost-claim-does-not-acknowledge
