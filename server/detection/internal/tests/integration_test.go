@@ -279,6 +279,9 @@ type recordingMetrics struct {
 	monitorMatches      int
 	processesReconciled int64
 	processRowsDeleted  int64
+	// rulesSkipped names the rules a replica stopped evaluating for exceeding their budget, so a test can assert the transition
+	// is reported once rather than per batch.
+	rulesSkipped []string
 }
 
 func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n int64) {
@@ -286,6 +289,12 @@ func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n in
 	defer m.mu.Unlock()
 	m.setAsideHost = hostID
 	m.setAside += n
+}
+
+func (m *recordingMetrics) RuleEvaluationSkipped(_ context.Context, ruleID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rulesSkipped = append(m.rulesSkipped, ruleID)
 }
 
 func (m *recordingMetrics) EventsIngested(_ context.Context, _ string, n int) {

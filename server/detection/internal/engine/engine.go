@@ -97,6 +97,9 @@ type Engine struct {
 	// race against another parallel test (a package-level var mutated by one test is read by evaluateRule in another). Production always
 	// gets the same named tracer via New.
 	tracer trace.Tracer
+	// budget stops evaluating a rule that repeatedly costs more than it is worth (issue #767). Per-replica and safe to lose; see
+	// evalBudget for why a restart clearing it is the intended behaviour rather than a gap.
+	budget *evalBudget
 }
 
 // New creates a detection engine backed by the given store.
@@ -106,7 +109,8 @@ func New(s *mysql.Store, logger *slog.Logger) *Engine {
 	}
 	// Built once here, not per batch: it is one interface value with no per-call allocation, which keeps the non-allocating
 	// dispatch the concrete store handle exists for.
-	e := &Engine{store: s, ruleReader: &retryableGraphReader{inner: s}, logger: logger, tracer: otel.Tracer(tracerName)}
+	e := &Engine{
+		budget: newEvalBudget(), store: s, ruleReader: &retryableGraphReader{inner: s}, logger: logger, tracer: otel.Tracer(tracerName)}
 	// Seeded rather than left nil so Evaluate needs no nil check on the hot path and a batch arriving before the first load
 	// simply matches nothing.
 	e.active.Store(newRuleSet(nil))
@@ -250,6 +254,12 @@ func (e *Engine) Evaluate(ctx context.Context, events []api.Event) (rulesapi.Mon
 	rs := e.active.Load()
 	for _, i := range rs.rulesFor(live) {
 		rule := rs.rules[i]
+		if e.budget.skipping(rule.ID()) {
+			// This replica has stopped evaluating the rule for exceeding its budget repeatedly. Skipped silently here: the
+			// transition was logged and counted once when it happened, and repeating it per batch would bury the signal under
+			// itself, which is the mistake the set-aside reporting in #836 avoided the same way.
+			continue
+		}
 		err := e.evaluateRule(ctx, rule, rs.declaredTypes[i], live, scope, tally, &stats)
 		if err == nil {
 			continue
@@ -407,6 +417,18 @@ func (e *Engine) evaluateRule(
 	var evalRetryable bool
 	defer func() {
 		elapsed := time.Since(start).Nanoseconds()
+		// Deliberately NOT returned as an error. In Evaluate a rule error that is not retryable returns from the batch and the
+		// batch is nacked and replayed, so a slow rule reporting failure would be retried into the same slow rule on every
+		// attempt: #836's stalled host by another route. Recording it keeps the findings this evaluation produced and lets the
+		// batch finish, and the skip applies to later batches.
+		if exhausted, worstNs := e.budget.record(rule.ID(), elapsed, time.Now()); exhausted {
+			e.logger.WarnContext(ctx, "detection: rule exceeded its evaluation budget repeatedly and will not be evaluated on this replica",
+				"rule_id", rule.ID(), "worst", time.Duration(worstNs).String(), "budget", time.Duration(maxRuleEvalNs).String(),
+				"overruns", maxRuleOverruns, "window", ruleOverrunWindow.String())
+			if e.metrics != nil {
+				e.metrics.RuleEvaluationSkipped(ctx, rule.ID())
+			}
+		}
 		// One entry per rule per batch, appended rather than merged, because rulesFor sorts and compacts its indices so a rule
 		// is evaluated exactly once per batch.
 		*stats = append(*stats, rulesapi.RuleEvalStat{
