@@ -4,15 +4,7 @@
 
 #833 landed durable per-rule evaluation statistics for #774. The counters were right and their cadence was not: the write ran synchronously once per event batch.
 
-Measured per call on the test MySQL for one 73-rule batch, which is what the dev server dispatches:
-
-| writers | p50 | p95 |
-| --- | --- | --- |
-| 1 | 1.535ms | 3.403ms |
-| 8 | 4.088ms | 9.723ms |
-| 32 | 12.656ms | 50.415ms |
-
-Two consequences. It capped ingest, because throughput saturates near 1800 writes/sec against a single MySQL and every replica contends on the same instance, so this bounded batches/sec for a whole deployment however many replicas were added. And it cost more than the work it measured: all 73 dispatched rules evaluated in roughly 1.2ms in total on the dev server, against a ~1.5ms write.
+Two consequences, both from the table below. It capped ingest, because throughput saturates near 1800 writes/sec against a single MySQL and every replica contends on the same instance, so this bounded batches/sec for a whole deployment however many replicas were added. And it cost more than the work it measured: all 73 dispatched rules evaluated in roughly 1.2ms in total on the dev server, against a write of about 1.5ms at one writer and over 12ms at thirty-two.
 
 Row-lock contention is not the mechanism, and that was tested rather than assumed. A host-derived shard column moved p50 not at all and left throughput flat, so it was reverted; do not re-add one without a measurement showing something different.
 
@@ -26,7 +18,7 @@ Per-rule evaluation duration also becomes an OTel histogram, which is where "whi
 
 ## Measured effect
 
-Re-measured on the same committed harness (`server/rules/internal/tests/evalstats_latency_test.go`, run with `EDR_MEASURE=1`):
+All numbers from one committed harness (`server/rules/internal/tests/evalstats_latency_test.go`, run with `EDR_MEASURE=1`), stated once here rather than repeated per section, so a later edit cannot leave two versions of them:
 
 | | p50 | p95 | p99 |
 | --- | --- | --- | --- |
