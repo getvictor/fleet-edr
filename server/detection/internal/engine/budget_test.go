@@ -450,3 +450,64 @@ func TestEngine_Evaluate_TimeWaitingOnTheGraphIsNotCharged(t *testing.T) {
 	assert.False(t, e.budget.skipping("reads_a_lot"),
 		"a rule that is slow only because the graph is slow must not be disabled; that punishes the database, not the rule")
 }
+
+// TestEvalBudget_InBudgetEvaluationDoesNotTakeTheLock pins the property review asked for after finding that clearing a rule's
+// overrun run held the single mutex on the one path that always runs, serializing every ingestion worker once per evaluated rule.
+//
+// The assertion is direct rather than a benchmark: the test HOLDS the mutex and requires record to return anyway. A record that
+// reaches for the lock cannot finish, so the deadline is what fails, and the test measures the property (this path does not
+// acquire mu) rather than a timing proxy for it.
+func TestEvalBudget_InBudgetEvaluationDoesNotTakeTheLock(t *testing.T) {
+	t.Parallel()
+
+	b := newEvalBudgetWith(int64(10 * time.Millisecond))
+
+	b.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		exhausted, worst := b.record("rule.fast", int64(time.Millisecond), time.Now())
+		assert.False(t, exhausted)
+		assert.Zero(t, worst)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		b.mu.Unlock()
+		t.Fatal("an in-budget evaluation blocked on the overrun lock; the hot path must not acquire it")
+	}
+	b.mu.Unlock()
+}
+
+// TestEvalBudget_ClearingStillWorksWhenARunExists is the other half of the lock-free gate above: skipping the lock is only correct
+// while there is nothing to clear, so once a run exists an in-budget evaluation must still clear it and the gate must reopen.
+func TestEvalBudget_ClearingStillWorksWhenARunExists(t *testing.T) {
+	t.Parallel()
+
+	budgetNs := int64(10 * time.Millisecond)
+	b := newEvalBudgetWith(budgetNs)
+	now := time.Now()
+
+	// One overrun opens a run, which the gate must then observe.
+	b.record("rule.slow", budgetNs+1, now)
+	require.Equal(t, int64(1), b.activeRuns.Load(), "an overrun must publish its run to the lock-free gate")
+
+	// An evaluation inside the budget clears it, and the gate closes again.
+	b.record("rule.slow", 1, now.Add(time.Second))
+	require.Equal(t, int64(0), b.activeRuns.Load(), "clearing the last run must close the gate")
+
+	// The cleared run means the count restarts, so the rule is not skipped by the overruns that preceded the clear.
+	for i := range maxRuleOverruns - 1 {
+		exhausted, _ := b.record("rule.slow", budgetNs+1, now.Add(time.Duration(i+2)*time.Second))
+		require.False(t, exhausted, "overrun %d must not exhaust the budget after a clear reset the count", i+1)
+	}
+	assert.False(t, b.skipping("rule.slow"))
+
+	// A reload discards the runs, so the gate must close with them. Mutation testing found this one: leaving it open is not a
+	// correctness bug, since the first in-budget evaluation republishes the real length, but it puts every worker back through
+	// the lock in the meantime, and a reload happens on a timer.
+	require.Positive(t, b.activeRuns.Load(), "the loop above must leave a run open for forget to clear")
+	b.forget()
+	assert.Zero(t, b.activeRuns.Load(), "forget must close the lock-free gate along with the runs it discards")
+}

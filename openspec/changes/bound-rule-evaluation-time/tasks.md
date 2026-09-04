@@ -4,7 +4,8 @@
 
 - [ ] Compare each evaluation's already-measured elapsed time against a budget, in the defer that records it.
 - [ ] Skip a rule only after repeated overruns within a window, following #836's twin bounds.
-- [ ] The skip is per-replica and in-process, annotated as an ADR-0010 cache that is safe to lose.
+- [ ] The skip is per-replica and in-process, carrying ADR-0010's `per-replica perf cache, safe to lose` annotation verbatim.
 - [ ] An overrun records and CONTINUES: no error, so the batch is not nacked and does not retry into the same slow rule.
 - [ ] The condition is reported as a counter and a log naming the rule and its measured cost, not as a mode change.
 - [ ] Mutation-tested: the budget removed, one bound removed, and the overrun reported as an error instead of recorded.
+- [ ] The hot path stays lock-free: clearing a rule's overrun run is gated on a published length, so an under-budget evaluation (the case that always runs) never takes the mutex. Asserted by holding the mutex and requiring `record` to return anyway, rather than by a timing proxy.

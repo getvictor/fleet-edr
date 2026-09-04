@@ -38,9 +38,9 @@ const (
 
 // evalBudget tracks which rules have exhausted their evaluation budget on THIS replica.
 //
-// Per-replica in-process state, and safe to lose in ADR-0010's sense: it holds nothing a peer would need to serve the next request,
-// each replica measures the load it actually sees, and a restart clears it. That last part is deliberate rather than incidental. A
-// heuristic that survived a restart would keep punishing a rule for a condition that may have passed, and the cheapest way to
+// Both containers below are a per-replica perf cache, safe to lose: they hold nothing a peer would need to serve the next request,
+// each replica measures the load it actually sees, and a restart clears them. That last part is deliberate rather than incidental.
+// A heuristic that survived a restart would keep punishing a rule for a condition that may have passed, and the cheapest way to
 // re-test the rule is to let the next process try it.
 //
 // Reads happen once per rule per batch and writes only when an evaluation is over budget, which is why the skip set is an atomic
@@ -57,6 +57,17 @@ type evalBudget struct {
 	mu sync.Mutex
 	// overruns counts recent overruns per rule. Only touched when an evaluation exceeds the budget.
 	overruns map[string]*overrunRun
+	// activeRuns is len(overruns), published so the in-budget path can decide there is nothing to clear WITHOUT taking mu.
+	//
+	// Review found the contention this removes: clearing a rule's run on an under-budget evaluation is a delete of a key that is
+	// almost never there, and doing it under the lock made every ingestion worker serialize once per evaluated rule on the one
+	// path that always runs. Maintained under mu so it is exact for any reader that holds the lock.
+	//
+	// Reading it stale is safe in both directions. Stale zero skips clearing a run another worker created concurrently, which the
+	// lock never ordered either: whether an in-budget evaluation clears a run created at the same instant was always a race, and
+	// the invariant that matters ("an in-budget evaluation clears a run that predates it") still holds. Stale non-zero takes the
+	// lock and finds nothing to delete.
+	activeRuns atomic.Int64
 }
 
 // skipRecord is what a skip reports about itself: enough for an operator to see which rule stopped and how badly it was over.
@@ -95,8 +106,14 @@ func (b *evalBudget) skipping(ruleID string) bool {
 // occasionally slow and usually fine never accumulates, and only a rule that is consistently over budget reaches the bound.
 func (b *evalBudget) record(ruleID string, elapsedNs int64, now time.Time) (exhausted bool, worstNs int64) {
 	if elapsedNs <= b.budgetNs {
+		if b.activeRuns.Load() == 0 {
+			// The overwhelming common case: nothing is over budget anywhere on this replica, so there is no run to clear and no
+			// reason to touch the lock.
+			return false, 0
+		}
 		b.mu.Lock()
 		delete(b.overruns, ruleID)
+		b.activeRuns.Store(int64(len(b.overruns)))
 		b.mu.Unlock()
 		return false, 0
 	}
@@ -118,6 +135,7 @@ func (b *evalBudget) record(ruleID string, elapsedNs int64, now time.Time) (exha
 	if reached {
 		delete(b.overruns, ruleID)
 	}
+	b.activeRuns.Store(int64(len(b.overruns)))
 	b.mu.Unlock()
 
 	if !reached {
@@ -155,6 +173,7 @@ func (b *evalBudget) forget() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.overruns = map[string]*overrunRun{}
+	b.activeRuns.Store(0)
 	empty := map[string]skipRecord{}
 	b.skipped.Store(&empty)
 }
