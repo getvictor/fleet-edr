@@ -36,9 +36,9 @@ The stored content SHALL be read back byte-identically, under the same identity 
 
 ### Requirement: An unavailable or unusable store leaves detections running
 
-The system SHALL continue evaluating detections when the stored content cannot be used, and SHALL fall back to the content compiled into the build, which is the same content the store would have been seeded with.
+The system SHALL continue evaluating detections when the stored content cannot be used. Which content it evaluates depends on whether it has any: a system with nothing loaded SHALL fall back to the content compiled into the build, which is the same content the store would have been seeded with, and a system already evaluating content SHALL keep it.
 
-A system that is already evaluating content SHALL keep evaluating it when new content cannot be used, and SHALL NOT record that content's version. Not recording it is what lets the system adopt the content as soon as it is corrected, since the poll keeps seeing a difference.
+Keeping the content in force SHALL NOT record the unusable content's version. Not recording it is what lets the system adopt the content as soon as it is corrected, since the poll keeps seeing a difference.
 
 This leaves a divergence that is stated here rather than hidden. A replica that RESTARTS while unusable content is stored has no set in force to keep, so it falls back to the content compiled into its build and evaluates something different from its peers until the content is corrected. Making every replica adopt its build's content instead does not fix this and makes it worse: replicas part-way through a rolling deployment carry DIFFERENT built-in content, so they would record one version against different rules and report agreement they do not have. The condition is prevented upstream, by refusing content that cannot run before it is stored, rather than reconciled afterwards.
 

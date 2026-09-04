@@ -44,11 +44,15 @@ parameters without the code that reads them delivers no new detection.
 - [x] `Reload` plus a `CorpusRefreshLoop` gated on the cheap version counter, following `detectionconfig`. Third loop in `Rules.Run`.
 - [x] A store that cannot be READ keeps the previous good set and retries, which is where reload differs from startup: the stored
       state is unknown, and falling back would discard working content because a database blinked.
-- [x] Stored content that reads successfully and yields no runnable rules (empty, unparseable, or every rule refused) converges on
-      the build's corpus instead, and records the version. Review caught the first version, which kept the running set for these
-      too: that makes the rule set a function of a replica's HISTORY, so a restarted replica lands elsewhere and, with no version
-      recorded, nothing reconciles them. One bad publish would divide the fleet permanently. The startup path had the same defect
-      independently, and worse: documents that were all refused yielded ZERO corpus rules while an empty store fell back.
+- [x] Stored content that reads successfully and yields no runnable rules (empty, unparseable, or every rule refused) leaves the
+      running set alone and does NOT record the version, which is #766's contract and what lets the corrected content be adopted.
+      This went back and forth: one revision had every replica adopt its binary's corpus and record the version, to close the gap
+      that a RESTARTED replica falls back and diverges from its peers. That is unsound, because replicas mid-rolling-deployment
+      embed different corpora and would record one version against different rules, reporting agreement they do not have. The
+      residual divergence is stated in the spec and the release notes, and the cross-replica question is #851; the upstream remedy
+      is #767's publish-time validation.
+- [x] The STARTUP path had a real defect of its own, found along the way and kept: documents that were all refused yielded ZERO
+      corpus rules, while an empty store fell back correctly. The table covering that path had no row for the case.
 - [x] The version is read BEFORE the documents. The two reads cannot be atomic, and the reverse order pairs older content with the
       newer version, which the next poll reads as current and never corrects. Asserted directly, since it is a silent permanent
       staleness bug rather than a preference.
