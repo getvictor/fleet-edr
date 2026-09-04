@@ -343,6 +343,45 @@ func TestProcessor_RecordsMonitorMatchesOnlyAfterTheAck(t *testing.T) {
 		assert.Zero(t, metrics.total, "and the counter must not move either, or the re-served batch counts twice")
 	})
 
+	t.Run("a LOST claim records nothing, and says which host", func(t *testing.T) {
+		t.Parallel()
+		// Issue #817: this attempt outlived its lease and another one owns the rows now. Everything up to the ack is idempotent,
+		// so the graph and the alerts are unharmed; the counter is not, and belongs to whichever attempt still holds the claim.
+		// Distinct from a failed ack above: nothing went wrong here, and treating it as an error would have this attempt retry
+		// work the other one is already doing.
+		rec := &recordingMonitorRecorder{}
+		metrics := &countingMonitorMetrics{}
+		handler := &capturingLogHandler{}
+		log := &scriptedEventLog{batch: oneEventBatch(), ackNotHeld: true}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(handler))
+		p.SetMonitorMatchRecorder(rec)
+		p.SetMetrics(metrics)
+
+		p.ProcessOnce(context.Background())
+
+		assert.Empty(t, rec.calls, "the attempt that holds the claim will record these, so this one must not")
+		assert.Zero(t, metrics.total, "which is the double-count #817 exists to remove")
+		assert.Empty(t, log.nacked, "and it must not requeue: the rows are not this attempt's to requeue")
+
+		level, logged := handler.levelOf("lost the claim before acknowledging")
+		require.True(t, logged, "an exceeded lease is invisible unless this says so; before #817 neither attempt could tell")
+		assert.Equal(t, slog.LevelWarn, level, "worth an operator's attention: it means batches are outliving their lease")
+	})
+
+	t.Run("the claim stamp the processor acks with is the one it was handed", func(t *testing.T) {
+		t.Parallel()
+		// The stamp is what makes the ack conditional, so passing a fresh or zero value would make the check vacuous while
+		// leaving every other assertion in this file green.
+		log := &scriptedEventLog{batch: oneEventBatch()}
+		p := newTestProcessor(t, log, stubBuilder{}, stubEvaluator{tally: tally}, singleCycleOpts(&capturingLogHandler{}))
+
+		p.ProcessOnce(context.Background())
+
+		require.NotEmpty(t, log.ackStamps, "the batch must have been acked, or this asserts nothing")
+		assert.Equal(t, []int64{scriptedClaimStamp}, log.ackStamps,
+			"the ack must carry the claim's own stamp; a fresh one would match nothing and a zero would match anything")
+	})
+
 	t.Run("a recording failure does not nack the acked batch", func(t *testing.T) {
 		t.Parallel()
 		rec := &recordingMonitorRecorder{err: errors.New("db down")}
