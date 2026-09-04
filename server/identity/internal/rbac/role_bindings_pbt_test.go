@@ -33,31 +33,34 @@ var pbtEmailCounter atomic.Uint64
 // Property: a binding with expires_at=t is returned iff t is NULL OR
 // t is strictly after the wall-clock NOW(6) at SELECT time.
 //
-// Generation strategy: rapid draws an offset in (-2h, +2h) skipping a
-// 250ms band around zero, so the boundary is approached from both
-// sides without a drawn offset of exactly zero.
+// Generation strategy: rapid draws an offset in (-2h, +2h) skipping a 250ms band around zero, so the boundary is approached from
+// both sides without a drawn offset of exactly zero.
 //
-// The band used to be described as absorbing test-runner and round-trip
-// jitter, and it does not: it only makes the flake rarer. A drawn offset
-// is measured from the client's clock BEFORE three MySQL round trips, so
-// on a loaded runner the row can genuinely expire before the SELECT
-// runs, the query correctly returns nothing, and the live assertion
-// fails. That happened twice on unrelated PRs (issue #802, drawn offset
-// 250; then again at 275), and it is not reproducible locally because
-// round trips here are sub-millisecond.
+// The band used to be described as absorbing test-runner and round-trip jitter, and it does not: it only makes the flake rarer. A
+// drawn offset is measured before three MySQL round trips, so on a loaded runner the row can genuinely expire before the SELECT
+// runs, the query correctly returns nothing, and the live assertion fails. That happened twice on unrelated PRs (issue #802, drawn
+// offset 250, then again at 275), and it does not reproduce locally because round trips here are sub-millisecond.
 //
-// Widening the band would only lengthen the odds, and computing the
-// expiry from the database's own clock would not help either: the row
-// still expires between the INSERT and the SELECT whichever clock set
-// it. What removes the race is to stop asserting against the nominal
-// offset and assert against the window the query actually ran in, which
-// is what the three cases below do. Every drawn offset stays meaningful
-// and no margin is assumed.
+// Widening the band would only lengthen the odds, and computing the expiry from the database's own clock would not help either:
+// the row still expires between the INSERT and the SELECT whichever clock set it. What removes the race is to stop asserting
+// against the nominal offset and assert against the window the query actually ran in, which is what the three cases below do.
+// Every drawn offset stays meaningful and no margin is assumed.
 //
-// That window is read from the DATABASE's clock, because the predicate
-// under test compares against NOW(6). Bounds taken from the client would
-// only agree with it while the two clocks do, which is an assumption and
-// not the property being tested.
+// Both the window and the expiry it is compared against are read from the DATABASE, because the predicate under test compares
+// against NOW(6) and stores the expiry as TIMESTAMP(6). Bounds from the client would only agree while the two clocks do, and a
+// client-side expiry carries nanoseconds the column does not, either of which can pick the wrong branch by a hair and put the
+// flake back. Reading both back removes the assumption rather than bounding it.
+
+// storedExpiry reads back the expiry as the column holds it, so an assertion about the boundary compares the same value the
+// predicate does rather than the client's higher-precision copy of it.
+func storedExpiry(t *testing.T, db *sqlx.DB, userID int64) time.Time {
+	t.Helper()
+	var at time.Time
+	require.NoError(t, db.GetContext(t.Context(), &at,
+		`SELECT expires_at FROM role_bindings WHERE user_id = ?`, userID))
+	return at
+}
+
 // dbNow reads the clock the predicate under test actually compares against. A test asserting on expiry has to use it rather than
 // time.Now(), or it is asserting that two clocks agree, which is not the property and is not guaranteed.
 func dbNow(t *testing.T, db *sqlx.DB) time.Time {
@@ -93,6 +96,13 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 			ScopeID:   "*",
 			ExpiresAt: expires,
 		})
+		if expires != nil {
+			// Read back what was actually persisted. TIMESTAMP(6) holds microseconds and the client value carries nanoseconds,
+			// so comparing the bounds against the client's copy can differ from what the predicate sees by up to a microsecond,
+			// which is the whole width of the boundary this test is about.
+			stored := storedExpiry(t, db, uid)
+			expires = &stored
+		}
 
 		// Bracket the query, so the assertion can be made against the interval it ran in rather than against a nominal offset
 		// computed several round trips earlier.
