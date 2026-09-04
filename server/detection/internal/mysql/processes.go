@@ -586,8 +586,20 @@ func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int,
 	return exists, nil
 }
 
-// GetProcessByPID returns the process that was active at the given
-// timestamp. Satisfies api.GraphReader.
+// GetProcessByPID returns the process generation whose IMAGE was running at the given timestamp. Satisfies api.GraphReader.
+//
+// Bracketed and ordered on COALESCE(exec_time_ns, fork_time_ns), the instant the row's image started running, rather than on
+// fork_time_ns (issue #799). A re-exec preserves the original fork time on every generation of a pid, so fork_time_ns cannot order
+// them: both rows satisfied `fork_time_ns <= atTimeNs` and `id DESC` then handed back whichever generation was written LAST. For a
+// parent that forked a child at T1 and re-executed at T2, a rule asking what the parent's image was at T1 was told the T2 image, a
+// binary that had not run yet.
+//
+// This is the lookup every parent-image and attribution question goes through, including the eleven corpus rules that read
+// ParentImage, so the wrong answer was both wrong attribution and a missed detection: a malicious parent that re-executed into
+// something benign before the batch was evaluated read as benign.
+//
+// COALESCE falls back to fork_time_ns for a generation that has not executed, which is the pure-fork row's only start instant.
+// Issue #723 fixed the aliveness half of this bracket; this is the generation-selection half.
 func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atTimeNs int64) (*api.Process, error) {
 	var proc api.Process
 	err := s.db.GetContext(ctx, &proc, `
@@ -596,9 +608,9 @@ func (s *Store) GetProcessByPID(ctx context.Context, hostID string, pid int, atT
 		       exit_ingested_at_ns, exit_reason, exit_code, previous_exec_id,
 		       is_snapshot, last_seen_ns, source_event_id, exec_event_id, exit_event_id
 		FROM processes
-		WHERE host_id = ? AND pid = ? AND fork_time_ns <= ?
+		WHERE host_id = ? AND pid = ? AND COALESCE(exec_time_ns, fork_time_ns) <= ?
 		  AND (exit_time_ns IS NULL OR exit_time_ns >= ?)
-		ORDER BY fork_time_ns DESC, id DESC
+		ORDER BY COALESCE(exec_time_ns, fork_time_ns) DESC, id DESC
 		LIMIT 1`,
 		hostID, pid, atTimeNs, atTimeNs,
 	)
