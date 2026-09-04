@@ -331,10 +331,11 @@ func (p *Processor) hostCandidates() int {
 func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 	var (
 		events      []visibilityapi.Event
+		claimStamp  int64
 		buildFailed bool
 	)
 	claimAndBuild := func(lockedCtx context.Context) error {
-		claimed, err := p.eventLog.ClaimForHost(lockedCtx, host, p.batch)
+		claimed, stamp, err := p.eventLog.ClaimForHost(lockedCtx, host, p.batch)
 		if err != nil {
 			p.logger.ErrorContext(lockedCtx, "claim events", "host_id", host, "err", err)
 			return nil
@@ -342,7 +343,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 		if len(claimed) == 0 {
 			return nil
 		}
-		events = claimed
+		events, claimStamp = claimed, stamp
 		if err := p.builder.ProcessBatch(lockedCtx, claimed); err != nil {
 			p.logger.WarnContext(lockedCtx, "graph builder failure, will retry batch", "err", err)
 			buildFailed = true
@@ -388,7 +389,7 @@ func (p *Processor) processHost(ctx context.Context, host string) (int, bool) {
 		return 0, true
 	}
 
-	return p.evaluateAndAck(ctx, events, eventIDsOf(events)), true
+	return p.evaluateAndAck(ctx, events, eventIDsOf(events), claimStamp), true
 }
 
 // eventIDsOf projects a claimed batch to the identities Ack and Nack take, so neither the locked region nor the post-lock path has to
@@ -403,7 +404,7 @@ func eventIDsOf(events []visibilityapi.Event) []string {
 
 // evaluateAndAck runs detection over an already-materialized batch and acknowledges it, returning the events processed or 0 if the
 // batch was nacked or the ack failed. Split from processHost so the locked region above stays readable as claim-fold-flush.
-func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.Event, eventIDs []string) int {
+func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.Event, eventIDs []string, claimStamp int64) int {
 	// Run detection rules after processes are materialized.
 	var tally rulesapi.MonitorTally
 	if p.detection != nil {
@@ -420,11 +421,23 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 		}
 	}
 
-	if err := p.eventLog.Ack(ctx, eventIDs); err != nil {
+	held, err := p.eventLog.Ack(ctx, eventIDs, claimStamp)
+	if err != nil {
 		// The batch processed but the queue was not durably advanced (the rows stay leased until the claim lease expires).
 		// Returning 0 stops the drain loop so the worker waits for the next tick rather than treating this as a full-batch
 		// drain and immediately re-claiming, which would spread a transient ack outage into a tight re-processing loop.
 		p.logger.ErrorContext(ctx, "ack events", "err", err)
+		return 0
+	}
+	if !held {
+		// This evaluation outlived its claim lease and another attempt owns the rows now (issue #817). Everything up to here is
+		// idempotent: the graph builder is keyed on event identity and alert persistence deduplicates on
+		// (source, host, rule, subject). What follows is not, so it belongs to whichever attempt still holds the claim.
+		//
+		// Logged at WARN because it is also the first visibility anyone has that leases are being exceeded at all, which was
+		// previously invisible by construction: both attempts acknowledged successfully and neither learned it had lost.
+		p.logger.WarnContext(ctx, "lost the claim before acknowledging; another attempt owns this batch",
+			"host_id", hostOf(events), "events", len(eventIDs))
 		return 0
 	}
 	p.recordMonitorMatches(ctx, tally)
@@ -442,11 +455,11 @@ func (p *Processor) evaluateAndAck(ctx context.Context, events []visibilityapi.E
 // prevent. It is the better trade only because the alternative is systematic: counting during evaluation inflates on every
 // retry, while this loses counts only in the window between two adjacent statements.
 //
-// A successful Ack is NOT proof that this attempt uniquely processed the batch. Ack is an unconditional update that ignores its
-// affected-row count, and a claim expires after five minutes and is re-offered, so an evaluation that outlives its lease can be
-// running alongside its own reclaimer with both acknowledging successfully. Alert persistence is immune because it deduplicates
-// on (host, rule, subject); this additive counter is not, and can double-count that batch. Tracked as #817, which belongs in the
-// queue contract rather than here.
+// A successful Ack IS now proof that this attempt uniquely processed the batch, which it was not when this comment was first
+// written. Ack was an unconditional update that ignored its affected-row count, so an evaluation outliving its five-minute lease
+// ran alongside its own reclaimer and both acknowledged successfully, double-counting this additive counter (alert persistence was
+// immune, deduplicating on (host, rule, subject)). Issue #817 fixed that in the queue contract, where it belonged: Ack is
+// conditional on still holding the claim and reports whether it did, and the caller skips this write when it has lost.
 //
 // A failure here cannot fail the batch: the events are already acknowledged, and re-nacking them to save a counter would replay
 // real detection work. It is logged and dropped.

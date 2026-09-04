@@ -30,7 +30,16 @@ type scriptedEventLog struct {
 	claimReq []string // hosts ClaimForHost was asked for, in order
 	// ackErr makes Ack fail, which is the only way to exercise the branch where a batch was evaluated but NOT durably accepted.
 	ackErr error
+	// ackNotHeld makes Ack report that this claim no longer held the rows (issue #817), which is how the lost-claim branch is
+	// reached without waiting out a real five-minute lease.
+	ackNotHeld bool
+	// ackStamps records the claim stamp each Ack was given, so a test can assert the processor passes back what it was handed
+	// rather than a zero or a fresh value.
+	ackStamps []int64
 }
+
+// scriptedClaimStamp is the stamp the scripted claim hands out. Non-zero so a test can tell it apart from an unset field.
+const scriptedClaimStamp = int64(1_700_000_000_000_000_000)
 
 func (s *scriptedEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
 func (s *scriptedEventLog) PendingHosts(context.Context, int) ([]string, error) {
@@ -40,20 +49,26 @@ func (s *scriptedEventLog) PendingHosts(context.Context, int) ([]string, error) 
 	return []string{s.batch[0].HostID}, nil
 }
 
-func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int) ([]visibilityapi.Event, error) {
+func (s *scriptedEventLog) ClaimForHost(_ context.Context, hostID string, _ int) ([]visibilityapi.Event, int64, error) {
 	s.claimReq = append(s.claimReq, hostID)
 	if s.claimed {
-		return nil, nil
+		return nil, 0, nil
 	}
 	s.claimed = true
-	return s.batch, nil
+	// A fixed non-zero stamp: the processor must pass back whatever it was handed, and zero would not distinguish "the stamp was
+	// threaded through" from "the field was never set".
+	return s.batch, scriptedClaimStamp, nil
 }
-func (s *scriptedEventLog) Ack(_ context.Context, ids []string) error {
+func (s *scriptedEventLog) Ack(_ context.Context, ids []string, stamp int64) (bool, error) {
+	s.ackStamps = append(s.ackStamps, stamp)
 	if s.ackErr != nil {
-		return s.ackErr
+		return false, s.ackErr
+	}
+	if s.ackNotHeld {
+		return false, nil
 	}
 	s.acked = append(s.acked, ids...)
-	return nil
+	return true, nil
 }
 func (s *scriptedEventLog) Nack(_ context.Context, ids []string) (int64, error) {
 	s.nacked = append(s.nacked, ids...)
