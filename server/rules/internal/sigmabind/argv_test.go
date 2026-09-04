@@ -150,6 +150,10 @@ func TestEnvAssignments(t *testing.T) {
 			// `env -- -i A=1` runs a command NAMED -i with A=1 as its argument, so there is no assignment. Without honouring
 			// `--` this parses -i as an option and reports A=1 as an injection that never happened.
 			[]string{"env", "--", "-i", "A=1"}, nil},
+		{"a token containing an equals sign that is not an assignment ends the run", "/usr/bin/env",
+			// `=bad` contains an equals sign and assigns nothing, so it is the command env will run. Treating "contains =" as
+			// the boundary let the run continue over it and collect what followed.
+			[]string{"env", "A=1", "=bad", "B=2"}, []string{"A=1"}},
 		{"an option with a missing operand at the end of argv", "/usr/bin/env",
 			[]string{"env", "-u"}, nil},
 		{"options with no command at all", "/usr/bin/env",

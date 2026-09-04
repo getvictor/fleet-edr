@@ -105,13 +105,13 @@ func envAssignments(path string, argv []string) []string {
 	}
 	var out []string
 	for _, a := range argv[min(1+skipEnvOptions(argv[1:]), len(argv)):] {
-		if !strings.Contains(a, "=") {
+		if !isAssignment(a) {
 			// The first token that is not an assignment is the command env will run; everything after it belongs to that command.
+			// Tested against isAssignment rather than merely containing "=", which review caught: a token such as `=bad` or
+			// `2+2=4` contains one and is not an assignment, and skipping past it let the run continue over the command.
 			break
 		}
-		if isAssignment(a) {
-			out = append(out, a)
-		}
+		out = append(out, a)
 	}
 	return out
 }
