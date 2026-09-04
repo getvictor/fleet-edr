@@ -606,6 +606,11 @@ func (s *Store) EventAlreadyApplied(ctx context.Context, hostID string, pid int,
 // the parent was running, so that one sorts first. Issues #723 and #724 paid for that reasoning; reusing it is cheaper and more
 // correct than repeating it.
 //
+// Reusing it inherits one open question, filed as #861 rather than answered here: the final `exec_time_ns ASC` sorts a NULL exec
+// ahead of a non-NULL one at the same image start, and the batch overlay's ranking has no counterpart to that clause, so the two
+// could disagree in that tie. It is pre-existing in the two functions above, and changing it under this PR would change their
+// shipped behaviour on a case whose reachability is itself in doubt.
+//
 // This is the lookup every parent-image and attribution question goes through, including the eleven corpus rules that read
 // ParentImage, so the wrong answer was both wrong attribution and a missed detection: a malicious parent that re-executed into
 // something benign before the batch was evaluated read as benign.
