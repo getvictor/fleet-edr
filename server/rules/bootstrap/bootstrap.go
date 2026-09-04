@@ -169,6 +169,13 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 //     for a rule that now exists, and accepts one naming a rule that no longer does.
 //  3. Any observer, which is how the detection engine's derived dispatch indices get rebuilt.
 //
+// The three are each atomic on their own and are NOT atomic together, so for the moment it takes to walk them a concurrent reader
+// can see a mix: the catalog already listing the new set while the engine still evaluates the old one, or an exclusion validated
+// against the previous rule list. No ordering removes that window, it only chooses which side is briefly stale, and the cure
+// (one lock spanning all three) would sit on the evaluation path that runs per batch per worker to serialise against a write that
+// happens when content changes. The observable cost is bounded: an exclusion may be accepted for a rule just withdrawn, which
+// leaves an inert row, and the engine runs the previous generation for the rest of the install.
+//
 // Returns the number of rules installed.
 func (r *Rules) installRuleSet(rules []api.Rule, version int64) int {
 	n := r.svc.Swap(rules, version)
