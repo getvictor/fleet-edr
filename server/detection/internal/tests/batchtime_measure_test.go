@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -32,8 +32,14 @@ import (
 //
 //	EDR_MEASURE=1 EDR_TEST_DSN='root@tcp(127.0.0.1:33307)/edr_test?parseTime=true' \
 //	  go test -tags integration -run TestMeasureBatchProcessingTime -v ./server/detection/internal/tests/
+//
+// Deliberately NOT parallel, which is why paralleltest is silenced rather than satisfied: a measurement sharing the machine with
+// the rest of the suite measures contention, not the thing it names. It is also skipped by default, so it costs the suite
+// nothing.
+//
+//nolint:paralleltest // a measurement must have the machine to itself or its numbers mean nothing.
 func TestMeasureBatchProcessingTime(t *testing.T) {
-	if os.Getenv("EDR_MEASURE") == "" {
+	if os.Getenv("EDR_MEASURE") == "" { //nolint:forbidigo // a measurement gate, not wiring: the value selects whether to run at all.
 		t.Skip("set EDR_MEASURE=1 to run the batch-processing-time measurement")
 	}
 
@@ -42,7 +48,7 @@ func TestMeasureBatchProcessingTime(t *testing.T) {
 	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
 	ctx := t.Context()
 
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() { _ = d.Run(runCtx) }()
 
@@ -75,7 +81,7 @@ func TestMeasureBatchProcessingTime(t *testing.T) {
 		samples = append(samples, time.Since(start))
 	}
 
-	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
+	slices.Sort(samples)
 	pct := func(p float64) time.Duration { return samples[int(float64(len(samples)-1)*p)] }
 	t.Logf("batch drain (ingest to acknowledged), %d events per batch, %d batches: p50=%v p95=%v max=%v",
 		eventsPerBatch, batches,

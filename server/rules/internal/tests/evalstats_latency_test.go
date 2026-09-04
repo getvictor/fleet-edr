@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -27,8 +27,14 @@ import (
 //
 //	EDR_MEASURE=1 EDR_TEST_DSN='root@tcp(127.0.0.1:33307)/edr_test?parseTime=true' \
 //	  go test -tags integration -run TestMeasureEvalStatsRecordLatency -v ./server/rules/internal/detectionconfig/
+//
+// Deliberately NOT parallel, which is why paralleltest is silenced rather than satisfied: a latency measurement sharing the
+// machine with the rest of the suite measures contention, not the thing it names. It is also skipped by default, so it costs the
+// suite nothing.
+//
+//nolint:paralleltest // a measurement must have the machine to itself or its numbers mean nothing.
 func TestMeasureEvalStatsRecordLatency(t *testing.T) {
-	if os.Getenv("EDR_MEASURE") == "" {
+	if os.Getenv("EDR_MEASURE") == "" { //nolint:forbidigo // a measurement gate, not wiring: the value selects whether to run at all.
 		t.Skip("set EDR_MEASURE=1 to run the drain-path latency measurement")
 	}
 
@@ -71,7 +77,7 @@ func TestMeasureEvalStatsRecordLatency(t *testing.T) {
 		for _, s := range samples {
 			all = append(all, s...)
 		}
-		sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+		slices.Sort(all)
 		pct := func(p float64) time.Duration {
 			if len(all) == 0 {
 				return 0
