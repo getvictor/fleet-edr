@@ -205,6 +205,13 @@ func TestEnvAssignments(t *testing.T) {
 			// attacker a one-flag bypass. The miss-over-fabrication preference inverts when the miss is attacker-controlled.
 			[]string{"env", "-C", "/tmp", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
 			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"an empty working directory means nothing ran", "/usr/bin/env",
+			// Statically invalid whatever the host looks like, because chdir("") always fails (measured: `cannot change
+			// directory to ''`). Review caught this: an earlier pass treated -C as host-dependent wholesale, and the empty
+			// case is the one value of it that is not.
+			[]string{"env", "-C", "", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an attached empty working directory refuses too", "/usr/bin/env",
+			[]string{"env", "-C", "", "A=1", "prog"}, nil},
 		{"a working-directory whose name contains an equals sign still reports", "/usr/bin/env",
 			// Mutation testing found this gap: validating every operand the way -u is validated changes nothing unless an
 			// operand would actually fail those rules. A directory name may legally contain an equals sign, and env runs there

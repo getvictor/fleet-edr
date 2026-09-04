@@ -240,26 +240,31 @@ func parseEnvOptionCluster(letters string) (envOptionCluster, bool) {
 }
 
 // envOperandUsable reports whether env would accept this operand, and therefore whether the assignments after it describe
-// anything that ran. Only the cases env decides STATICALLY are judged here.
+// anything that ran. Only the cases env decides STATICALLY are judged here, which is a per-option question and, for one option,
+// a per-VALUE one.
 //
-// -u is decidable and worth deciding: env calls unsetenv and exits when the name is empty or contains `=` (measured), so those
+// -u is decidable throughout: env calls unsetenv and exits when the name is empty or contains `=` (measured), so those
 // assignments never applied. Refusing them costs no coverage, because an invocation that does not exec is not an injection an
 // attacker gains anything from.
 //
-// -C is NOT decided here even though env refuses a directory that does not exist, and that asymmetry is deliberate rather than an
-// oversight. Whether the directory exists is a property of the host at exec time, which this cannot know, and env USUALLY
-// succeeds. Treating -C as unusable would therefore hand an attacker a one-flag bypass of a high-severity rule
-// (`env -C / DYLD_INSERT_LIBRARIES=x prog`), which is a worse trade than the rare fabrication from a directory that happened not
-// to exist. The general rule elsewhere in this file prefers a miss to a fabrication; it inverts here precisely because the miss
-// would be attacker-CONTROLLED rather than accidental.
+// -C splits, which review caught after an earlier pass treated the option as host-dependent wholesale. An EMPTY working
+// directory is statically invalid, because chdir("") fails whatever the host looks like (measured: `cannot change directory to
+// ”`), so that case is decided here. A NON-EMPTY one is not decided, and that part of the asymmetry stands: whether a directory
+// exists is a property of the host at exec time, env usually succeeds, and treating it as unusable would hand an attacker a
+// one-flag bypass of a high-severity rule (`env -C / DYLD_INSERT_LIBRARIES=x prog`). The rule elsewhere in this file prefers a
+// miss to a fabrication and inverts there precisely because that miss would be attacker-CONTROLLED rather than accidental.
 //
-// -P is not decided because env never refuses it: a bogus or empty utilpath still runs (measured), since it only affects where
-// the utility is looked up.
+// -P is not decided at all because env never refuses it: a bogus or empty utilpath still runs (measured), since it only affects
+// where the utility is looked up.
 func envOperandUsable(opt rune, operand string) bool {
-	if opt != 'u' {
+	switch opt {
+	case 'u':
+		return operand != "" && !strings.Contains(operand, "=")
+	case 'C':
+		return operand != ""
+	default:
 		return true
 	}
-	return operand != "" && !strings.Contains(operand, "=")
 }
 
 // isAssignment reports whether a token is a real KEY=VALUE assignment rather than merely containing "=".
