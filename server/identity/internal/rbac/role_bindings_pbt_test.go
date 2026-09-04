@@ -132,8 +132,12 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 			require.Lenf(rt, got, 1,
 				"binding expiring %v after the query finished should be live (offset_millis=%d)",
 				expires.Sub(afterSelect), offsetMillis)
-		case beforeSelect.After(*expires):
-			// Already expired before the query began, and an expired row only gets more expired.
+		case !beforeSelect.Before(*expires):
+			// Already expired when the query began, and an expired row only gets more expired.
+			//
+			// Equality counts as expired rather than ambiguous, which review pointed out: the predicate is `expires_at >
+			// NOW(6)`, strictly, so an expiry equal to the pre-query bound cannot be live at a NOW(6) that is at or after it.
+			// Reading it as ambiguous would give up an assertion the predicate actually settles.
 			require.Emptyf(rt, got,
 				"binding that expired %v before the query began should not be live (offset_millis=%d)",
 				beforeSelect.Sub(*expires), offsetMillis)
