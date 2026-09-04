@@ -177,13 +177,25 @@ func skipEnvOptions(argv []string) (next int, usable bool) {
 		case a == "-":
 			i++
 		case len(a) > 1 && a[0] == '-':
-			consumed, ok := parseEnvOptionCluster(a[1:])
+			cluster, ok := parseEnvOptionCluster(a[1:])
 			if !ok {
 				return 0, false
 			}
 			i++
-			if consumed {
+			if cluster.opt == 0 {
+				continue
+			}
+			operand := cluster.attached
+			if cluster.consumesNext {
+				if i >= len(argv) {
+					// env exits `option requires an argument`, so nothing ran.
+					return 0, false
+				}
+				operand = argv[i]
 				i++
+			}
+			if !envOperandUsable(cluster.opt, operand) {
+				return 0, false
 			}
 		default:
 			return i, true
@@ -192,26 +204,62 @@ func skipEnvOptions(argv []string) (next int, usable bool) {
 	return i, true
 }
 
-// parseEnvOptionCluster walks one cluster's letters, reporting whether it consumes the NEXT argument as an operand and whether the
-// assignment run after the cluster is still meaningful.
-func parseEnvOptionCluster(letters string) (consumesNext, usable bool) {
+// envOptionCluster is what one option cluster resolved to: whether the next argument is its operand, which option took one, and
+// the operand's value when it was attached to the token.
+//
+// The option and its value are carried rather than skipped because an operand can make env REFUSE, and review found the case:
+// `env -u A=B DYLD_INSERT_LIBRARIES=x prog` exits `unsetenv A=B: Invalid argument` and never execs prog, so reporting the
+// assignment was a fabricated injection finding.
+type envOptionCluster struct {
+	consumesNext bool
+	opt          rune
+	attached     string
+}
+
+// parseEnvOptionCluster walks one cluster's letters, reporting what it resolved to and whether the assignment run after it is
+// still meaningful.
+func parseEnvOptionCluster(letters string) (envOptionCluster, bool) {
 	for k := range len(letters) {
 		c := rune(letters[k])
 		switch {
 		case strings.ContainsRune(envOptionsEndingTheRun, c):
 			// Reached before the operand check on purpose, since -S is in both sets and its payload is what makes the run
 			// meaningless. Whether the payload is attached or separate makes no difference to that.
-			return false, false
+			return envOptionCluster{}, false
 		case strings.ContainsRune(envOptionsTakingAnOperand, c):
 			// The operand is whatever remains of this token, or the next argument when nothing remains.
-			return k == len(letters)-1, true
+			last := k == len(letters)-1
+			return envOptionCluster{consumesNext: last, opt: c, attached: letters[k+1:]}, true
 		case strings.ContainsRune(envOptionsTakingNone, c):
 			continue
 		default:
-			return false, false
+			return envOptionCluster{}, false
 		}
 	}
-	return false, true
+	return envOptionCluster{}, true
+}
+
+// envOperandUsable reports whether env would accept this operand, and therefore whether the assignments after it describe
+// anything that ran. Only the cases env decides STATICALLY are judged here.
+//
+// -u is decidable and worth deciding: env calls unsetenv and exits when the name is empty or contains `=` (measured), so those
+// assignments never applied. Refusing them costs no coverage, because an invocation that does not exec is not an injection an
+// attacker gains anything from.
+//
+// -C is NOT decided here even though env refuses a directory that does not exist, and that asymmetry is deliberate rather than an
+// oversight. Whether the directory exists is a property of the host at exec time, which this cannot know, and env USUALLY
+// succeeds. Treating -C as unusable would therefore hand an attacker a one-flag bypass of a high-severity rule
+// (`env -C / DYLD_INSERT_LIBRARIES=x prog`), which is a worse trade than the rare fabrication from a directory that happened not
+// to exist. The general rule elsewhere in this file prefers a miss to a fabrication; it inverts here precisely because the miss
+// would be attacker-CONTROLLED rather than accidental.
+//
+// -P is not decided because env never refuses it: a bogus or empty utilpath still runs (measured), since it only affects where
+// the utility is looked up.
+func envOperandUsable(opt rune, operand string) bool {
+	if opt != 'u' {
+		return true
+	}
+	return operand != "" && !strings.Contains(operand, "=")
 }
 
 // isAssignment reports whether a token is a real KEY=VALUE assignment rather than merely containing "=".

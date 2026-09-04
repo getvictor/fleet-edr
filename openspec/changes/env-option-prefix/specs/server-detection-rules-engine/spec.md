@@ -22,6 +22,10 @@ An invocation SHALL report no assignments when the argument vector after env's o
 
 That asymmetry is the reason the rule SHALL prefer reporting nothing in all three. Reporting nothing risks MISSING an injection, which another detection may still catch. Reporting the run risks FABRICATING one, sending an analyst after an event that did not happen, and this field feeds a high-severity rule.
 
+An option's OPERAND SHALL also be judged where env decides it STATICALLY. An unset of a name env cannot unset, being empty or containing an assignment separator, makes env exit before executing anything, so the assignments after it were never applied. An operand-taking option with no operand at all likewise makes env exit.
+
+The preference for a miss over a fabrication SHALL NOT extend to an operand whose validity depends on the HOST rather than on the argument vector. The working-directory option is refused only when the directory does not exist, which is a property of the host at execution time and usually holds, so treating it as unusable would let an attacker suppress a high-severity finding with one flag. A miss the ATTACKER chooses is worse than a fabrication the environment causes by accident, which is why the preference inverts for exactly this case and no other.
+
 For any other executable the assignment SHALL be the first argument alone, which is the shell's `VAR=value cmd` form. The invocation name SHALL NOT be scanned for env, since that is env's own name and not an assignment it performs.
 
 A rule matching any of these fields is portable in the sense that it is valid Sigma, but it depends on a field only this system supplies, and SHALL be reported as such rather than as standard Sigma.
@@ -91,3 +95,15 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **GIVEN** an exec event for env whose option value is a command line, followed by a token that looks like an assignment
 - **WHEN** the assignments are read
 - **THEN** no assignment is reported, because that token may be an argument of the command the value names
+
+#### Scenario: An unset of a name env cannot unset reports no assignments
+
+- **GIVEN** an exec event for env unsetting a name that is empty or contains an assignment separator, followed by an assignment
+- **WHEN** the assignments are read
+- **THEN** no assignment is reported, because env exits before executing anything
+
+#### Scenario: An operand whose validity depends on the host does not suppress the finding
+
+- **GIVEN** an exec event for env whose working-directory operand is one env would accept, followed by an assignment
+- **WHEN** the assignments are read
+- **THEN** the assignment is reported, because suppressing it would be an attacker-selectable bypass rather than a protection

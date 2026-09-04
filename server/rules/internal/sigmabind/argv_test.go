@@ -102,6 +102,8 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-invocation-env-would-refuse-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-suppressing-the-command-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-command-line-carried-as-an-option-value-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unset-of-a-name-env-cannot-unset-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
 //
 // TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
 // different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
@@ -186,6 +188,34 @@ func TestEnvAssignments(t *testing.T) {
 			[]string{"env", "-z", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"}, nil},
 		{"an unknown option inside an otherwise valid cluster also refuses", "/usr/bin/env",
 			[]string{"env", "-iz", "A=1", "prog"}, nil},
+		{"an unset of an invalid name means nothing ran", "/usr/bin/env",
+			// Measured: `env -u A=B DYLD_INSERT_LIBRARIES=/tmp/x prog` exits `unsetenv A=B: Invalid argument` and never execs
+			// prog, so the assignment behind it was never applied. Review caught this being reported as an injection.
+			[]string{"env", "-u", "A=B", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an unset of an empty name also means nothing ran", "/usr/bin/env",
+			[]string{"env", "-u", "", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"an attached unset of an invalid name refuses too", "/usr/bin/env",
+			[]string{"env", "-uA=B", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
+		{"a valid unset still reports what follows it", "/usr/bin/env",
+			[]string{"env", "-u", "PATH", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a working-directory option does NOT suppress the finding", "/usr/bin/env",
+			// Deliberate asymmetry with the two run-ending options, and the reason is in envOperandUsable: whether the directory
+			// exists is a host property this cannot know, env usually succeeds, and treating it as unusable would hand an
+			// attacker a one-flag bypass. The miss-over-fabrication preference inverts when the miss is attacker-controlled.
+			[]string{"env", "-C", "/tmp", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a working-directory whose name contains an equals sign still reports", "/usr/bin/env",
+			// Mutation testing found this gap: validating every operand the way -u is validated changes nothing unless an
+			// operand would actually fail those rules. A directory name may legally contain an equals sign, and env runs there
+			// happily (measured), so treating one as invalid would suppress a real injection, and an attacker can create such
+			// a directory.
+			[]string{"env", "-C", "/tmp/a=b", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a utility-path option does not suppress it either", "/usr/bin/env",
+			// env never refuses this one: a bogus or empty utilpath still runs, measured.
+			[]string{"env", "-P", "/nonexistent/bin", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
 		{"an unknown option carrying an equals sign refuses too", "/usr/bin/env",
 			// This row is the one that makes the refusal observable, and mutation testing is what found that out. On a refused
 			// option the scan is reported as starting at the offending token, which normally ends the run by itself for want of
