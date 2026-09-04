@@ -20,6 +20,10 @@ Skipping SHALL be observable as a counter and as a log record naming the rule an
 
 The budget SHALL be set from measured evaluation times rather than chosen, and SHALL leave room above the slowest rule doing legitimate work.
 
+The budget SHALL measure only a rule's OWN work, excluding time it spent waiting on reads of the process graph. Those reads are synchronous, so charging them would disable rules for being slow when the datastore was slow, and would do it in proportion to how much of the graph each rule consults: a datastore slowdown would remove much of the catalog at once, worst first among the rules doing the most correlation, at exactly the moment detections matter most. What is left is what a rule author controls.
+
+Waiting SHALL be attributed to the rule whose evaluation TRIGGERED the read, including when the read is performed on behalf of an earlier rule that resolved the same event lazily. Lookups shared across a batch are performed once, by whichever rule first needs the result, and that rule is the one that waits. Crediting the wait to the rule that merely arranged the sharing leaves the waiting rule charged in full for a datastore it does not control, which is the outcome excluding the wait exists to prevent.
+
 #### Scenario: A rule over budget on one batch is still evaluated on the next
 
 - **GIVEN** a rule whose evaluation exceeds the budget once
@@ -51,3 +55,15 @@ The budget SHALL be set from measured evaluation times rather than chosen, and S
 - **GIVEN** one rule being skipped for exceeding its budget
 - **WHEN** a batch is processed
 - **THEN** every other rule is evaluated as usual
+
+#### Scenario: A rule slowed only by the datastore is not skipped
+
+- **GIVEN** a rule whose own work is well inside the budget but whose graph reads take longer than the budget
+- **WHEN** it is evaluated repeatedly enough to exceed the overrun bound
+- **THEN** it is still evaluated, because the waiting is not charged to it
+
+#### Scenario: Waiting is charged to the rule that triggered the read
+
+- **GIVEN** two rules over one batch, where the first arranges a shared lookup without resolving it and a later rule triggers the read
+- **WHEN** both are evaluated repeatedly enough to exceed the overrun bound
+- **THEN** neither is skipped, because the wait is excluded from the rule that actually waited rather than credited to the rule that arranged it

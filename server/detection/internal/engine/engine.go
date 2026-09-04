@@ -494,13 +494,23 @@ func (e *Engine) evaluateRule(
 	// disable a rule that is not itself expensive, which punishes the wrong thing and removes detections during exactly the
 	// incident an operator most needs them. RuleEvalStats keeps reporting the full duration, since that is what "this rule cost
 	// the pipeline" means for the tuning table (issue #774).
-	// Wrapped per evaluation so the budget can subtract what this rule spent WAITING on the graph rather than working. Review
-	// found why that matters: a rule's reads are synchronous MySQL, so charging them means a slow database disables rules instead
-	// of slow rules, worst first among the rules doing the most correlation, at the moment detections matter most.
-	reader := &timedReader{inner: e.ruleReader}
+	// The budget subtracts what this rule spent WAITING on the graph rather than working. Review found why that matters: a rule's
+	// reads are synchronous MySQL, so charging them means a slow database disables rules instead of slow rules, worst first among
+	// the rules doing the most correlation, at the moment detections matter most.
+	//
+	// The accumulator rides the CONTEXT, not the reader. A second review round found why it has to: the Sigma adapter memoizes
+	// each event's graph lookups for the whole batch, and those closures hold the reader of whichever rule built the memo, so a
+	// reader accumulating into its own field credited the first rule for a read a later rule triggered and left the later rule
+	// with a total of zero. See waitAccumulator.
+	//
+	// The wrapper is therefore stateless and built here rather than held on the Engine, which is deliberate: ruleReader is
+	// replaced after New by tests that install a failing or counting graph, and a wrapper snapshotted at construction would keep
+	// reading the one New built. Costs one small allocation per rule per batch and cannot go stale.
+	waiting := &waitAccumulator{}
+	ruleCtx := withWaitAccumulator(ctx, waiting)
 	ruleStart := time.Now()
-	findings, err := evaluate(ctx, rule, scoped, reader, scope)
-	ruleElapsed = time.Since(ruleStart).Nanoseconds() - reader.waiting.Nanoseconds()
+	findings, err := evaluate(ruleCtx, rule, scoped, &timedReader{inner: e.ruleReader}, scope)
+	ruleElapsed = time.Since(ruleStart).Nanoseconds() - waiting.ns.Load()
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
 	// recorded but the findings are still persisted below rather than thrown away with the error. Only a non-retryable failure
 	// discards the batch's findings: that path means the rule itself misbehaved, so its output is not trustworthy.

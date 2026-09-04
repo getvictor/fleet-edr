@@ -425,6 +425,8 @@ func (r slowGraphReader) GetProcessByPID(context.Context, string, int, int64) (*
 	return nil, nil
 }
 
+// spec:server-detection-rules-engine/a-rule-that-repeatedly-exceeds-its-evaluation-budget-stops-being-evaluated/a-rule-slowed-only-by-the-datastore-is-not-skipped
+//
 // TestEngine_Evaluate_TimeWaitingOnTheGraphIsNotCharged covers the correction review forced twice.
 //
 // The budget first charged the whole evaluateRule call, including alert persistence. Fixed, it still charged the rule's reads,
@@ -510,4 +512,74 @@ func TestEvalBudget_ClearingStillWorksWhenARunExists(t *testing.T) {
 	require.Positive(t, b.activeRuns.Load(), "the loop above must leave a run open for forget to clear")
 	b.forget()
 	assert.Zero(t, b.activeRuns.Load(), "forget must close the lock-free gate along with the runs it discards")
+}
+
+// lendingRule hands its reader to a later rule, which is what the Sigma adapter's batch memo does in production.
+type lendingRule struct {
+	stubRule
+	lent chan rulesapi.GraphReader
+}
+
+func (r *lendingRule) Evaluate(_ context.Context, _ []api.Event, gr rulesapi.GraphReader) ([]api.Finding, error) {
+	// Deliberately does NOT read. In production the first rule to see an event builds the memo and may never resolve it; the
+	// lookups are lazy, so the read happens whenever some later rule first asks.
+	select {
+	case r.lent <- gr:
+	default:
+	}
+	return nil, nil
+}
+
+// borrowingRule reads through the EARLIER rule's reader while passing its OWN context, which is exactly the shape the memo
+// produces: the closure holds the reader of whichever rule built it, and sigmaEvent rebinds the context per rule.
+type borrowingRule struct {
+	stubRule
+	lent chan rulesapi.GraphReader
+}
+
+func (r *borrowingRule) Evaluate(ctx context.Context, _ []api.Event, own rulesapi.GraphReader) ([]api.Finding, error) {
+	select {
+	case borrowed := <-r.lent:
+		_, _ = borrowed.GetProcessByPID(ctx, "host-a", 1, 0)
+	default:
+		_, _ = own.GetProcessByPID(ctx, "host-a", 1, 0)
+	}
+	return nil, nil
+}
+
+// spec:server-detection-rules-engine/a-rule-that-repeatedly-exceeds-its-evaluation-budget-stops-being-evaluated/waiting-is-charged-to-the-rule-that-triggered-the-read
+//
+// TestEngine_Evaluate_WaitingIsChargedToTheRuleThatTriggeredTheRead pins the attribution bug the second review round found.
+//
+// The Sigma adapter memoizes each event's graph lookups for the whole batch, and those closures capture the api.GraphReader
+// belonging to whichever rule BUILT the memo, while the context is rebound to whichever rule INVOKES them. So a read triggered by
+// a later rule ran through an earlier rule's reader. When the wait total lived on the reader, it was credited to the earlier rule,
+// whose evaluation had already finished and whose total was discarded, and the rule that actually waited was left with zero
+// subtracted. The slow database it waited on was charged to it after all, and could still get it skipped.
+//
+// Reproduced here without the catalog package, by having one rule lend its reader to a later one, because the property is about
+// the engine: a read made with rule B's context must be subtracted from B whichever reader instance performs it.
+func TestEngine_Evaluate_WaitingIsChargedToTheRuleThatTriggeredTheRead(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	// Far below the read delay, so a rule charged for the read is skipped almost at once.
+	e.budget = newEvalBudgetWith(int64(time.Millisecond))
+	e.ruleReader = &retryableGraphReader{inner: slowGraphReader{delay: 5 * time.Millisecond}}
+
+	lent := make(chan rulesapi.GraphReader, 1)
+	// Registered in this order so the lender is evaluated first and the borrower reads through the reader it was handed.
+	e.Register(&lendingRule{stubRule: stubRule{id: "builds_the_memo"}, lent: lent})
+	e.Register(&borrowingRule{stubRule: stubRule{id: "triggers_the_read"}, lent: lent})
+
+	batch := []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}}
+	for range maxRuleOverruns * 2 {
+		_, err := e.Evaluate(t.Context(), batch)
+		require.NoError(t, err)
+	}
+
+	assert.False(t, e.budget.skipping("triggers_the_read"),
+		"the rule that waited on the graph must have that wait subtracted even though another rule's reader performed it")
+	assert.False(t, e.budget.skipping("builds_the_memo"),
+		"and the rule that merely built the memo must not be charged for a read it never asked for")
 }
