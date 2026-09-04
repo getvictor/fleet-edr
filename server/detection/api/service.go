@@ -164,4 +164,11 @@ type MetricsRecorder interface {
 	// warn-logging every retry: the processor logs the retry at DEBUG and increments this counter, so a sustained materialization-miss
 	// backlog stays detectable without flooding the logs or the OTLP export.
 	DetectionMaterializationRetry(ctx context.Context)
+	// RuleEvaluationSkipped is called ONCE, when a rule exceeds its evaluation budget often enough that this replica stops
+	// evaluating it (issue #767). Not per skipped batch: the condition is a transition, and counting it per batch afterwards
+	// would report a rule that costs nothing as the busiest thing in the fleet.
+	//
+	// A skipped rule raises no alerts, which looks exactly like a rule that matches nothing, so this counter is the only thing
+	// that separates the two. Per rule, because the answer an operator needs is which rule to fix.
+	RuleEvaluationSkipped(ctx context.Context, ruleID string)
 }

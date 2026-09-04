@@ -64,6 +64,7 @@ type Recorder struct {
 	queueDropped                    metric.Int64Counter
 	detectionMaterializationRetries metric.Int64Counter
 	eventsSetAside                  metric.Int64Counter
+	ruleEvalSkipped                 metric.Int64Counter
 	httpRequestDuration             metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
@@ -163,6 +164,16 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 			"condition never clears once it fires."),
 		metric.WithUnit(unitEvent),
 	)
+	// One increment per rule per replica when the budget is exhausted, not per skipped batch: see the interface comment on
+	// RuleEvaluationSkipped. An operator reads this to find the rule to fix; a rule appearing here has stopped contributing
+	// detections on that replica, which no alert-volume signal can show because the absence looks like quiet.
+	r.ruleEvalSkipped, _ = meter.Int64Counter(
+		"edr.detection.rule_evaluation_skipped",
+		metric.WithDescription("Rules a replica stopped evaluating after they exceeded their evaluation budget repeatedly (issue #767). "+
+			"The rule in `rule_id` is no longer contributing detections on that replica and needs its patterns looked at. Cleared by a "+
+			"restart, so alert on an increase rather than an absolute value."),
+		metric.WithUnit("{rule}"),
+	)
 	// Deliberately the OTel HTTP semantic-convention name (not the edr.* prefix the metrics above use): tooling, including SigNoz,
 	// recognizes http.server.request.duration and its standard attributes. The histogram's count gives request rate, a status-code
 	// filter gives the error rate, and the buckets give latency quantiles, so this one instrument covers the full RED picture.
@@ -231,6 +242,14 @@ func (r *Recorder) EventsSetAside(ctx context.Context, hostID string, n int64) {
 		return
 	}
 	r.eventsSetAside.Add(ctx, n, metric.WithAttributes(attribute.String("host_id", hostID)))
+}
+
+// RuleEvaluationSkipped records that this replica has stopped evaluating a rule for exceeding its evaluation budget (issue #767).
+func (r *Recorder) RuleEvaluationSkipped(ctx context.Context, ruleID string) {
+	if r == nil || r.ruleEvalSkipped == nil {
+		return
+	}
+	r.ruleEvalSkipped.Add(ctx, 1, metric.WithAttributes(attribute.String("rule_id", ruleID)))
 }
 
 // EventsHeartbeatDropped increments the heartbeat-dropped counter by n for a host. Called per-batch by the ingest handler with the
