@@ -171,4 +171,15 @@ type MetricsRecorder interface {
 	// A skipped rule raises no alerts, which looks exactly like a rule that matches nothing, so this counter is the only thing
 	// that separates the two. Per rule, because the answer an operator needs is which rule to fix.
 	RuleEvaluationSkipped(ctx context.Context, ruleID string)
+	// RuleEvaluationDuration is called once per rule per batch with how long that rule's evaluation took, and is where "which
+	// rule is slow" is properly answered (issue #837).
+	//
+	// A histogram rather than the durable per-rule table alone, because the two answer different questions and only one of them
+	// belongs on the drain path. The table exists so a noisy rule is identifiable from the UI without querying a metrics
+	// backend, which is #774's acceptance criterion, and it now writes on a periodic flush. This gives real percentiles, at the
+	// cost of an in-process aggregation the OTel SDK exports on its own interval, which is the standard mechanism for hot-path
+	// telemetry and what the per-batch write bypassed.
+	//
+	// Cardinality is rule count times buckets: bounded and low-thousands with today's corpus, and worth watching as it grows.
+	RuleEvaluationDuration(ctx context.Context, ruleID string, d time.Duration)
 }

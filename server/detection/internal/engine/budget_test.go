@@ -275,8 +275,10 @@ func TestEngine_Evaluate_ARealOverrunIsRecordedAndNotReturned(t *testing.T) {
 	assert.Equal(t, before, rule.invocations(), "after which it is skipped")
 }
 
-// recordingSkips is the smallest MetricsRecorder that answers "was the transition reported": the engine calls exactly one method
-// on the skip path, so the rest can be absent rather than stubbed.
+// recordingSkips answers "was the transition reported". It records the one method the skip path is about and stubs the other the
+// evaluation path calls; the rest stay absent, which is safe only for methods the engine does not reach. Embedding an interface
+// makes that a runtime nil dereference rather than a compile error, so a new call on the evaluation path has to be stubbed here
+// deliberately (issue #837 added one).
 type recordingSkips struct {
 	api.MetricsRecorder
 	mu      sync.Mutex
@@ -288,6 +290,7 @@ func (r *recordingSkips) RuleEvaluationSkipped(_ context.Context, ruleID string)
 	defer r.mu.Unlock()
 	r.skipped = append(r.skipped, ruleID)
 }
+func (r *recordingSkips) RuleEvaluationDuration(context.Context, string, time.Duration) {}
 
 func (r *recordingSkips) names() []string {
 	r.mu.Lock()

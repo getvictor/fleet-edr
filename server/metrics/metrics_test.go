@@ -112,6 +112,8 @@ func (s stubGauges) OfflineHosts(context.Context, time.Duration) (int, error) {
 	return s.offline, nil
 }
 
+// spec:server-detection-rules-engine/evaluation-statistics-are-aggregated-in-process-and-written-periodically/evaluation-duration-is-available-as-a-histogram-per-rule
+//
 // spec:observability-instrumentation/stable-counter-names/ingested-events-are-counted-by-host
 // spec:observability-instrumentation/stable-counter-names/alerts-are-counted-only-on-creation
 // spec:observability-instrumentation/stable-counter-names/already-delivered-queue-trim-is-distinguishable-from-data-loss
@@ -150,6 +152,9 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	r.DetectionMaterializationRetry(ctx)
 	r.EventsSetAside(ctx, "host-wedged", 4)
 	r.RuleEvaluationSkipped(ctx, "proc_creation_macos_applescript")
+	r.RuleEvaluationDuration(ctx, "proc_creation_macos_applescript", 3*time.Millisecond)
+	r.RuleEvaluationDuration(ctx, "proc_creation_macos_applescript", 7*time.Millisecond)
+	r.RuleEvaluationDuration(ctx, "dyld_insert", 200*time.Microsecond)
 
 	rm := collect()
 
@@ -177,6 +182,14 @@ func TestRecorder_RecordsCounters(t *testing.T) {
 	// the wrong name would report a dropped rule as quiet (issue #767).
 	assert.Equal(t, int64(1), findSum(t, rm, "edr.detection.rule_evaluation_skipped",
 		map[string]any{"rule_id": "proc_creation_macos_applescript"}))
+	// Same class of bug once more, and this instrument is the one an operator will actually build a dashboard on, since it is
+	// where "which rule is slow" is answered with percentiles rather than with a durable table read at page load (issue #837).
+	// Counted per rule, so the attribute is pinned too: a histogram with the rule id dropped would aggregate the whole catalog
+	// into one series and answer nothing.
+	assert.Equal(t, uint64(2), findHistogramCount(t, rm, "edr.detection.rule_evaluation.duration",
+		map[string]any{"rule_id": "proc_creation_macos_applescript"}))
+	assert.Equal(t, uint64(1), findHistogramCount(t, rm, "edr.detection.rule_evaluation.duration",
+		map[string]any{"rule_id": "dyld_insert"}))
 	assert.Equal(t, int64(3), findGauge(t, rm, "edr.enrolled.hosts"))
 	assert.Equal(t, int64(1), findGauge(t, rm, "edr.offline.hosts"))
 }

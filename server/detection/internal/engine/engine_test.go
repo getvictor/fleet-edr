@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -886,6 +887,11 @@ func (m *countingMetrics) AlertCreated(_ context.Context, ruleID, _ string) {
 func (m *countingMetrics) MonitorMatched(_ context.Context, ruleID, _ string, _ int) {
 	m.monitors = append(m.monitors, ruleID)
 }
+
+// Overridden rather than left to the embedded nil, which is what a fake embedding an interface costs: it works only while the
+// engine calls exactly the methods it overrides, and any new call on the evaluation path is a nil dereference rather than a
+// compile error. Adding the evaluation-duration histogram (issue #837) hit exactly that.
+func (m *countingMetrics) RuleEvaluationDuration(context.Context, string, time.Duration) {}
 
 // spec:observability-instrumentation/stable-counter-names/a-suppressed-match-is-counted-rather-than-only-logged
 //

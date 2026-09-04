@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,7 +94,8 @@ type capturingRecorder struct {
 func (c *capturingRecorder) EventsIngested(context.Context, string, int) {}
 
 // Not recorded: nothing in this package evaluates a rule, so a count here would only ever be zero.
-func (c *capturingRecorder) RuleEvaluationSkipped(context.Context, string) {}
+func (c *capturingRecorder) RuleEvaluationSkipped(context.Context, string)                 {}
+func (c *capturingRecorder) RuleEvaluationDuration(context.Context, string, time.Duration) {}
 func (c *capturingRecorder) EventsSetAside(_ context.Context, hostID string, n int64) {
 	c.setAside = append(c.setAside, setAsideCall{hostID: hostID, n: n})
 }

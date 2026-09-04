@@ -439,6 +439,12 @@ func (e *Engine) evaluateRule(
 				e.metrics.RuleEvaluationSkipped(ctx, rule.ID())
 			}
 		}
+		if e.metrics != nil {
+			// The same duration the budget is charged, so the histogram and the skip decision cannot disagree about what a
+			// rule cost. Recorded on every path including the failing ones, because a rule that is slow and then errors is
+			// exactly the rule an operator is looking for (issue #837).
+			e.metrics.RuleEvaluationDuration(ctx, rule.ID(), time.Duration(ruleElapsed))
+		}
 		// One entry per rule per batch, appended rather than merged, because rulesFor sorts and compacts its indices so a rule
 		// is evaluated exactly once per batch.
 		*stats = append(*stats, rulesapi.RuleEvalStat{

@@ -13,8 +13,8 @@ import (
 
 // RecordRuleEvalStats adds a batch's per-rule evaluation work to the per-(rule, day) counters.
 //
-// One statement for the whole batch rather than one per rule: a batch evaluates every rule whose declared event types it carries,
-// which at a thousand rules is a great many, and this runs on the drain path after every batch.
+// One statement for the whole set rather than one per rule: a flush carries every rule that ran since the last one, which at a
+// thousand rules is a great many.
 //
 // Unlike RecordMonitorMatches, this is called whether or not the batch was acknowledged, and a replayed batch adds again. That is
 // not the retry inflation the sibling avoids, it is a different quantity: a monitor match is a fact about the world, so a replay
@@ -27,18 +27,27 @@ import (
 // this rule costing lately", a question about now, and attributing work to an event's own timestamp would let a skewed host clock
 // or a long queue backlog write into a day the operator has already read past.
 //
-// This write is synchronous on the drain path, and every batch upserts rows keyed only by rule and day, so the review asked
-// whether it creates ingestion backpressure. Measured per call on the test MySQL for one 73-rule batch, which is what the dev
-// server dispatches:
+// NO LONGER ON THE DRAIN PATH. This is now called once per replica per flush interval by BufferedEvalStats, which is what the
+// engine writes into; issue #837 took the lever the last paragraph of this comment used to propose. The measurements below are
+// kept because they are the reason, and because they are what a future change would have to beat.
+//
+// Measured per call on the test MySQL for one 73-rule batch, which is what the dev server dispatches:
 //
 //	writers   p50        p95        throughput
 //	1         1.47ms     1.82ms     638/s
 //	8         3.37ms     7.78ms     1837/s
 //	32        11.22ms    41.56ms    1863/s
 //
-// Latency does climb with concurrency and throughput saturates near 1800/s. A replica runs six workers (a 25-connection pool, two
-// per worker, halved so workers cannot starve the request path), so a two or three replica deployment sits around twelve to
-// eighteen concurrent writers and pays a few milliseconds per batch.
+// Latency climbs with concurrency and throughput saturates near 1800/s. A replica runs six workers (a 25-connection pool, two per
+// worker, halved so workers cannot starve the request path), so a two or three replica deployment sat around twelve to eighteen
+// concurrent writers, paying that per batch, and every replica contended on the same instance. That bounded batches/sec for the
+// whole deployment however many replicas were added, which is why an observability feature had to stop doing it per batch.
+//
+// Re-measured on the same harness when #837 moved it (server/rules/internal/tests/evalstats_latency_test.go, which is committed so
+// the claim can be re-checked rather than taken on trust): the store's own cost reproduced at p50 1.535ms/4.088ms/12.656ms for
+// 1/8/32 writers, and the drain path now spends p50 1us at every one of those concurrencies. One flush of 73 rules costs 1.349ms,
+// once per interval per replica. For scale, a 100-event batch drains end to end in 39ms at p50, so the write this removed was
+// about 4% of a batch at one writer and about a third of it at thirty-two.
 //
 // CORRECTION, recorded because the first pass here got it wrong: an earlier version of this comment reported wall-clock divided by
 // operation count as if it were latency. That is reciprocal throughput, and it made a saturating write look like one that got
@@ -49,10 +58,6 @@ import (
 // at thirty-two) and left throughput unchanged; only the p95 tail at thirty-two writers improved. So the cost is the write itself
 // against a saturating MySQL, not writers colliding on rows, and the shard was reverted rather than kept for a mechanism the data
 // refuses. Do not re-add it without a measurement that shows something different.
-//
-// If the per-batch cost ever does matter, the lever is to stop doing this once per batch: aggregate per replica and flush on a
-// ticker, as a documented per-replica cache whose loss is acceptable for a cost metric. That trades a bounded loss window for the
-// drain-path cost, which is a real trade; sharding is not, because it was measured and does nothing.
 //
 // eval_ns_max is a MAX rather than last-write-wins, and the timestamps are extrema, because these calls are not serialised: the
 // per-host claim lock is released before detection runs, so two batches can be in this write concurrently across workers and
