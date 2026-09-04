@@ -2,18 +2,26 @@
 
 ## 1. Bound the cost of an authored pattern (this PR)
 
-- [ ] Bound `?` in a non-anchored segment, the residual #787 deferred here by name, measured at 27.6us to 4.10ms as the count grows.
-- [ ] Bound `|re` source length, which is what bounds the compiled program that match cost tracks.
-- [ ] Bound the number of values in one field test, which is the multiplier on both.
-- [ ] Refusals name the field and the limit, as `ErrUnsupported` does elsewhere in this package.
-- [ ] The bounds sit in the one function every pattern passes through, so the loader CI runs and the loader a publish runs cannot disagree.
-- [ ] Every vendored rule still imports: a bound that refuses content we ship is set wrong.
-- [ ] Mutation-tested: each bound removed, and each set one past the value the tests use.
+- [x] One cost model, bounded per pattern AND per field. Independent per-value limits do not bound what an event pays: 512
+      individually legal values on one field measured at 100ms per event.
+- [x] A wildcard pattern's unit is the LENGTH of a segment with a star on either side, not its `?` count. 1024 literal characters
+      cost 1.41ms, 1024 `?` cost 4.10ms; bounding one and not the other left half the cost open.
+- [x] A regular expression's unit is its compiled program size, asked of `regexp/syntax` rather than guessed from the source.
+      `(abcd){1000}` is 12 bytes and 6002 instructions.
+- [x] Adjacent stars collapse at compile time rather than being refused, since `**` means what `*` means. Measured at 19ns for two
+      and 40us for 8192 before the collapse.
+- [x] Refusals name the field, the limit, and whether one pattern or the field's total reached it.
+- [x] The bounds sit in the one function every pattern passes through, so validation and load cannot disagree.
+- [x] Every vendored rule still imports, 66 with the same 3 refusals, and a rule refused for cost does not stop its siblings
+      loading (asserted at the loader, which is the only level that can show it).
+- [x] Mutation-tested five ways: the `?`-only unit, the missing per-field sum, source-length regex bounding, the star collapse, and
+      the anchored-segment exemption. Source-length bounding SURVIVED the first attempt, because the test asserted only that a
+      nested-repeat pattern errored and Go's own parser refuses that; the case now uses a pattern Go accepts.
 
 ## Deliberately not bounded, with the measurement
 
-- Star count. Flat at 119ns for one star and 129ns for 256.
-- Nested repeats in `|re`. Go's parser refuses them.
+- Star count with non-empty segments. Flat at 119ns for one and 129ns for 256.
+- Nested repeats in `|re`. Go's parser refuses them, and a test records that this bound is not what does it.
 
 ## 2. Per-rule evaluation budget (next PR)
 

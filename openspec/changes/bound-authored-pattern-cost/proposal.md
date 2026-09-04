@@ -27,13 +27,26 @@ So this change bounds the costs that are real, measured against the actual match
 
 ## Approach
 
-Three bounds, at the one place every pattern passes through on its way to being matched, so validation and load cannot disagree about what is acceptable:
+One cost model rather than three independent limits, which is a correction: the first version bounded a `?` count, a regex source length and a value count separately, and review showed each was the wrong unit or the wrong scope.
 
-- The number of `?` in a segment that is not anchored to either end of the pattern.
-- The length of a `|re` pattern's source.
-- The number of values a single field test may carry.
+Cost is estimated in units of "atoms or instructions compared per candidate position", and bounded twice:
 
-Each is a named constant with its reasoning beside it and an `ErrUnsupported` refusal naming the field and the limit, following `maxConditionDepth`, which is the same shape of bound already in this package and whose comment already anticipates operator-authored input.
+- **Per pattern.** For a wildcard pattern, the LENGTH of any segment with a star on either side, because that segment is searched for at every candidate offset. For a regular expression, the size of the program Go compiles it to.
+- **Per field, summed across its values.** A field's values are tried until one matches, so an event matching none pays for all of them.
+
+Adjacent stars are collapsed at compile time instead of bounded, because `**` means what `*` means and refusing it would serve nobody.
+
+Both bounds live in the one function every pattern passes through, so the loader CI runs and the loader a publish runs cannot disagree. Refusals name the field, the limit, and whether one pattern or the field's total reached it, following `maxConditionDepth`, whose own comment already anticipated operator-authored input.
+
+## Three corrections review forced, each with the measurement
+
+**Counting `?` was the wrong unit.** A middle segment of 1024 literal characters costs 1.41ms against a 4096-byte value, the same order as 1024 `?` at 4.10ms. The first bound counted only the wildcards, on the true-but-irrelevant reasoning that a literal segment can use the byte-comparison paths. It can, and it is still linear in the segment. The unit is now the segment's length.
+
+**Bounding regex SOURCE length bounded nothing.** `(abcd){1000}` is 12 source bytes and compiles to 6002 instructions, because counted repetition expands at compile time; `a{1000}` is 7 bytes and 1002 instructions. `regexp/syntax` compiles the same program the matcher runs, so the bound now asks it instead of guessing from the source. For scale, the vendored corpus's longest expression is 32 bytes and 12 instructions.
+
+**Per-value limits compose.** 512 individually legal values on one field measured at 100ms per event, because every value is tried before a non-match is concluded. The per-field sum is what closes that, and it is why a field of 4096 plain literals is still accepted: they cost nothing each, so the sum stays small.
+
+**Consecutive stars were an unbounded cost I had measured around.** My first measurement used `*x` repeated, which keeps every segment non-empty and reported flat cost. Actual consecutive stars grow linearly: 19ns at two, 40us at 8192. Collapsing them removes the growth without refusing anything.
 
 ## Not in this change
 

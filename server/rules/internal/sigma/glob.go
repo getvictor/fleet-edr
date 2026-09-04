@@ -1,7 +1,6 @@
 package sigma
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"unicode"
@@ -87,37 +86,22 @@ type globSeg struct {
 }
 
 // globAtom is one pattern element: a literal rune, or `?` standing for exactly one rune.
-// maxUnanchoredAnyRunes bounds the `?` atoms in a segment that is anchored to NEITHER end of the pattern, which is the one shape
-// whose match cost grows with the pattern rather than only with the value.
+// cost estimates what matching this pattern against one value can cost, in units of "atoms compared per candidate position".
 //
-// Splitting on stars removed backtracking (#787), and its own comment records what it left: a middle segment carrying `?` cannot
-// use the byte-comparison paths, so it walks candidate offsets and stays O(value x segment). #787 could leave that alone because
-// the pattern was trusted; #767 makes patterns operator-authored, so the pattern side needs its own bound.
+// Only the segments between the first and last contribute. segs[0] anchors to the start of the value and segs[len-1] to the end, so
+// each is checked once; a segment with a star on both sides is searched for at every candidate offset, which is the O(value x
+// segment) shape #787 left behind and deferred to #767 by name.
 //
-// Measured against this matcher on a 4096-byte value: 27.6us at one `?`, 108.6us at 16, 1.35ms at 256, 4.10ms at 1024, linear in
-// the count. The vendored corpus uses NO `?` at all, so this bound is headroom for an author rather than an accommodation of
-// existing content, and 32 holds the worst case near 200us. Same reasoning as maxConditionDepth: far above what real content
-// needs, far below where it hurts.
-//
-// The first and last segments are exempt because they are anchored to the ends of the value and checked once, not at every offset.
-const maxUnanchoredAnyRunes = 32
-
-// checkCost reports whether the compiled pattern is one this evaluator is willing to run against every value it sees.
-func (g glob) checkCost() error {
-	// segs[0] anchors to the start and segs[len-1] to the end, so only what lies between them walks candidate positions.
+// The unit is the segment's LENGTH, not its `?` count, and that correction came out of review. The first version counted only `?`
+// on the reasoning that a literal segment can use the byte-comparison paths, which is true and does not make it cheap: measured on
+// a 4096-byte value, a middle segment of 1024 literal characters costs 1.41ms, the same order as 1024 `?` at 4.10ms. Bounding one
+// and not the other left the cheaper-looking half wide open.
+func (g glob) cost() int {
+	total := 0
 	for i := 1; i < len(g.segs)-1; i++ {
-		anyRunes := 0
-		for _, a := range g.segs[i].atoms {
-			if a.any {
-				anyRunes++
-			}
-		}
-		if anyRunes > maxUnanchoredAnyRunes {
-			return fmt.Errorf("%w: pattern has a run of %d single-character wildcards between stars, above the limit of %d",
-				ErrUnsupported, anyRunes, maxUnanchoredAnyRunes)
-		}
+		total += len(g.segs[i].atoms)
 	}
-	return nil
+	return total
 }
 
 type globAtom struct {
@@ -141,6 +125,13 @@ func compileGlob(pattern string) glob {
 		i += w
 		switch {
 		case meta && r == '*':
+			// Adjacent stars collapse. `**` matches exactly what `*` matches, so the second one adds an empty middle segment that
+			// the search then walks for every value: measured at 19ns for two stars and 40us for 8192, growing linearly in a
+			// pattern an author is free to write. Collapsing costs nothing and removes the growth, which is better than bounding it
+			// (review of #767 suggested either; a limit would refuse a pattern that means something harmless).
+			if len(cur) == 0 && len(g.segs) > 0 {
+				continue
+			}
 			flush()
 		case meta && r == '?':
 			cur = append(cur, globAtom{any: true})
