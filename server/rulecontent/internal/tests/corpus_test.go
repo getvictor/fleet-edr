@@ -146,3 +146,34 @@ func TestCorpus_VersionStartsSeeded(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, docs, "and a fresh corpus is empty, which is what the seed's guard keys on")
 }
+
+// spec:rule-content/rule-content-is-stored-and-is-the-source-the-catalog-loads-from/replacing-content-removes-what-is-no-longer-in-it
+//
+// TestReplace_DoesNotReorderTheCallersSlice pins that publishing leaves the caller's value alone.
+//
+// Replace has to sort, because stored order is what the loader reads back and it must not depend on the order a caller happened to
+// build its slice in. Sorting the caller's OWN slice to achieve that is an undocumented side effect on a cross-context API: the
+// caller still holds that value, and the reordering happens even when the write then fails, which is the case a caller is least
+// likely to have considered.
+func TestReplace_DoesNotReorderTheCallersSlice(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	rc, _ := newContext(t)
+
+	caller := []api.Document{
+		{Path: "imported/z_last.yml", Content: []byte("z")},
+		{Path: "imported/a_first.yml", Content: []byte("a")},
+	}
+	asBuilt := []string{caller[0].Path, caller[1].Path}
+
+	_, err := rc.Replace(ctx, caller)
+	require.NoError(t, err)
+
+	assert.Equal(t, asBuilt, []string{caller[0].Path, caller[1].Path},
+		"the caller's slice must come back in the order it was built, not the order the store wanted")
+
+	stored, err := rc.Corpus().Documents(ctx)
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	assert.Equal(t, "imported/a_first.yml", stored[0].Path, "and the store must still hold them sorted, which is why it sorts")
+}

@@ -69,8 +69,9 @@ func (s *Service) Swap(rules []api.Rule, version int64) int {
 
 // ActiveVersion returns the corpus version the rule set in force was built from, or 0 when it did not come from stored content.
 //
-// Surfaced so an operator can tell which generation of content a replica is actually running, which is the question a rolling
-// deployment or a just-published change raises and which "the rules loaded" cannot answer.
+// Its one caller is the refresh gate, which compares it against the stored counter to decide whether the content needs re-reading;
+// that comparison is the whole reason the version travels with the rules. It is NOT an operator surface. Reporting the running
+// generation to an operator is deferred with the rest of that work, and this returning a number is not the same as answering it.
 func (s *Service) ActiveVersion() int64 { return s.active.Load().version }
 
 // --- api.Lister + api.RuleProvider --------------------------------------------

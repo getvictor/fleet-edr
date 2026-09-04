@@ -112,7 +112,7 @@ The version SHALL be read BEFORE the content, and the ordering is a correctness 
 
 Adopting content SHALL bring every consumer derived from the rule set with it. The rule set has more than one consumer: the operator-facing catalog, the validation that rejects an exclusion naming a rule that does not exist, and the evaluation engine's own compiled indices. A consumer left holding a set built from withdrawn content produces no error of its own, so this is stated as a requirement rather than left to each call site: the catalog would list rules that are never evaluated, and the validation would reject an exclusion for a rule that now exists.
 
-Replacing the content SHALL advance the version counter in the same transaction that writes the content, so that no reader can observe one generation's content under another generation's number.
+Replacing the content SHALL advance the version counter in the same transaction that writes the content. The guarantee that buys is ONE-WAY and the direction matters: a reader can never observe the new version paired with the previous content. It does not make a version read and a content read atomic with each other, so a reader taking them separately can still pair an older version with newer content, which is precisely the pairing the ordering above is chosen to tolerate.
 
 A replica that has just started SHALL NOT assume the set it built is current. It has content but not the version that produced it, so its first poll SHALL adopt the stored generation and record its version, rather than treating an unknown version as a match. Assuming currency would leave a replica that started during a publish serving the older content until the NEXT publish, which is indistinguishable from working correctly.
 
