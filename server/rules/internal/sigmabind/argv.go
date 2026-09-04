@@ -71,11 +71,14 @@ func commandArguments(argv []string) []string {
 //
 // The window is deliberately narrow, because an assignment is only an assignment in the leading position:
 //
-//   - For an `env`-style invocation (the binary is /usr/bin/env or any path ending in /env), it is the run of leading tokens that
-//     contain "=", ending at the first token that does not. `env A=1 B=2 prog C=3` yields A=1 and B=2 but not C=3, which is correct:
-//     C=3 is an argument to prog, not an assignment env performs. An option ahead of the assignments (`env -i A=1 prog`) ends the
-//     run early and the assignment is missed; that is a pre-existing gap in the Go matcher, reproduced here so the equivalence
-//     property stays meaningful, and tracked in issue #792 rather than widened silently.
+//   - For an `env`-style invocation (the binary is /usr/bin/env or any path ending in /env), it is the run of tokens that contain
+//     "=" AFTER env's own options, ending at the first token that does not. `env A=1 B=2 prog C=3` yields A=1 and B=2 but not C=3,
+//     which is correct: C=3 is an argument to prog, not an assignment env performs.
+//
+//     The option prefix is parsed rather than treated as the end of the run (issue #792). `env -i DYLD_INSERT_LIBRARIES=x /bin/true`
+//     is a real injection whose assignment used to be invisible, because `-i` contains no "=" and ended the scan before it. The
+//     same held for `-u NAME`, `-P path`, `-S string` and anything after `--`.
+//
 //   - For anything else it is argv[0] alone, which is the shell's `VAR=value cmd` form as the dyld_insert rule describes it.
 //     Worth knowing: that branch appears to be unreachable in practice. ESF serialises only es_exec_arg, so the environment a shell
 //     applies is never in argv, and argv[0] is an assignment in 0 of 670,185 real exec events on a dev host. The branch is
@@ -88,21 +91,66 @@ func commandArguments(argv []string) []string {
 //
 // The window is decided by the resolved executable path rather than by argv[0], since argv[0] is whatever the caller chose to pass.
 func envAssignments(path string, argv []string) []string {
-	envStyle := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
-	var out []string
-	for i, a := range argv {
-		if i > 0 && !envStyle {
-			break
+	if path != "/usr/bin/env" && !strings.HasSuffix(path, "/env") {
+		// Not env: the window is argv[0] alone, the shell's `VAR=value cmd` form.
+		if len(argv) > 0 && isAssignment(argv[0]) {
+			return []string{argv[0]}
 		}
-		if i > 0 && !strings.Contains(a, "=") {
-			break
-		}
+		return nil
+	}
 
+	// argv[0] is the program name env was invoked as, never an option or an assignment, so option parsing starts after it.
+	if len(argv) == 0 {
+		return nil
+	}
+	var out []string
+	for _, a := range argv[min(1+skipEnvOptions(argv[1:]), len(argv)):] {
+		if !strings.Contains(a, "=") {
+			// The first token that is not an assignment is the command env will run; everything after it belongs to that command.
+			break
+		}
 		if isAssignment(a) {
 			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// envOptionsTakingAnOperand are env's short options whose value is the NEXT argument when it is not attached.
+//
+// From env(1) on macOS. Getting this set wrong in either direction is a detection error rather than a cosmetic one: treating an
+// operand as an assignment would let `env -u DYLD_INSERT_LIBRARIES prog` read as an injection when it is the opposite, an unset,
+// and missing one ends the scan early and hides the assignment behind it, which is the bug this parsing exists to fix.
+const envOptionsTakingAnOperand = "uPSC"
+
+// skipEnvOptions returns the index of env's first non-option argument.
+//
+// Conservative about clustering, which is what BSD env accepts: the operand belongs to the LAST letter of a cluster, so `-iu NAME`
+// consumes NAME while `-uNAME` carries it attached and consumes nothing. A lone `-` means the same as `-i` and takes no operand,
+// and `--` ends option parsing outright.
+func skipEnvOptions(argv []string) int {
+	i := 0
+	for i < len(argv) {
+		a := argv[i]
+		switch {
+		case a == "--":
+			return i + 1
+		case a == "-":
+			// Historic synonym for -i. Not an option cluster, so nothing follows it.
+			i++
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			letters := a[1:]
+			i++
+			if strings.ContainsRune(envOptionsTakingAnOperand, rune(letters[len(letters)-1])) {
+				// The operand is the next argument. An attached operand (-uNAME) ends in the NAME's last letter instead, so it
+				// does not reach here.
+				i++
+			}
+		default:
+			return i
+		}
+	}
+	return i
 }
 
 // isAssignment reports whether a token is a real KEY=VALUE assignment rather than merely containing "=".

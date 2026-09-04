@@ -207,19 +207,60 @@ func legacyLaunchAgentFires(path string, argv []string) bool {
 	return plist != "" && legacyLaunchAgentPath.MatchString(plist)
 }
 
+// legacyMatchDyldArg is the reference the property compares the shipped detection against.
+//
+// Corrected for issue #792, which changed what this rule detects rather than how it is written. The previous version stopped the
+// assignment scan at the first token without "=", so an option ahead of the assignment ended it and the injection was invisible;
+// it also scanned from args[0], which for env is env's own name and never an assignment it performs.
+//
+// Written from the stated rule rather than by calling the production helper, so the property still catches a transcription error
+// between the Sigma definition and the intent. What it no longer proves is that the two were derived independently, since the same
+// person wrote both; the named tests below carry the cases that matter on their own.
 func legacyMatchDyldArg(path string, args []string) string {
-	isEnv := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
-	for i, a := range args {
-		if !isEnv && i > 0 {
-			break
-		}
-		if isEnv && i > 0 && !strings.Contains(a, "=") {
-			break
-		}
+	matched := func(a string) string {
 		for _, prefix := range legacyDyldPrefixes {
 			if strings.HasPrefix(a, prefix) {
 				return prefix + "<redacted>"
 			}
+		}
+		return ""
+	}
+
+	if path != "/usr/bin/env" && !strings.HasSuffix(path, "/env") {
+		// Shell form: the assignment is the first argument or it is not an assignment at all.
+		if len(args) == 0 {
+			return ""
+		}
+		return matched(args[0])
+	}
+
+	// env form: args[0] is env's own name, then env's options, then the assignments it performs.
+	i := 1
+	for i < len(args) {
+		a := args[i]
+		if a == "--" {
+			i++
+			break
+		}
+		if a == "-" {
+			i++
+			continue
+		}
+		if len(a) < 2 || a[0] != '-' {
+			break
+		}
+		takesOperand := strings.ContainsRune("uPSC", rune(a[len(a)-1]))
+		i++
+		if takesOperand {
+			i++
+		}
+	}
+	for ; i < len(args); i++ {
+		if !strings.Contains(args[i], "=") {
+			break
+		}
+		if m := matched(args[i]); m != "" {
+			return m
 		}
 	}
 	return ""

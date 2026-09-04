@@ -94,6 +94,9 @@ func TestCommandArguments(t *testing.T) {
 }
 
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-leading-assignment-is-distinguished-from-a-later-argument
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-before-an-assignment-does-not-hide-it
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-s-operand-is-not-an-assignment
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-after-the-end-of-options-marker-belongs-to-the-command
 //
 // TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
 // different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
@@ -123,6 +126,34 @@ func TestEnvAssignments(t *testing.T) {
 			[]string{"sh", "A=1", "B=2"}, nil},
 		{"no assignments", "/usr/bin/true", []string{"/usr/bin/true"}, nil},
 		{"empty argv", "/usr/bin/env", nil, nil},
+
+		// Issue #792: env's own options used to end the scan, so every assignment behind one was invisible. The first row is a
+		// real injection shape that this field reported nothing for.
+		{"env -i hides nothing now", "/usr/bin/env",
+			[]string{"env", "-i", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"},
+			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
+		{"a lone dash is the historic synonym for the ignore-environment option", "/usr/bin/env",
+			[]string{"env", "-", "A=1", "prog"}, []string{"A=1"}},
+		{"an option's operand is not mistaken for an assignment", "/usr/bin/env",
+			[]string{"env", "-u", "PATH", "A=1", "prog"}, []string{"A=1"}},
+		{"an unset of the very variable being looked for is not an injection", "/usr/bin/env",
+			[]string{"env", "-u", "DYLD_INSERT_LIBRARIES", "/bin/true"}, nil},
+		{"an attached operand consumes nothing extra", "/usr/bin/env",
+			[]string{"env", "-uPATH", "A=1", "prog"}, []string{"A=1"}},
+		{"a cluster's operand belongs to its last letter", "/usr/bin/env",
+			[]string{"env", "-iu", "PATH", "A=1", "prog"}, []string{"A=1"}},
+		{"options with no operand", "/usr/bin/env",
+			[]string{"env", "-i", "-0", "A=1", "prog"}, []string{"A=1"}},
+		{"everything after the end-of-options marker is operands", "/usr/bin/env",
+			[]string{"env", "--", "A=1", "prog"}, []string{"A=1"}},
+		{"after the end-of-options marker an option-looking token is the command", "/usr/bin/env",
+			// `env -- -i A=1` runs a command NAMED -i with A=1 as its argument, so there is no assignment. Without honouring
+			// `--` this parses -i as an option and reports A=1 as an injection that never happened.
+			[]string{"env", "--", "-i", "A=1"}, nil},
+		{"an option with a missing operand at the end of argv", "/usr/bin/env",
+			[]string{"env", "-u"}, nil},
+		{"options with no command at all", "/usr/bin/env",
+			[]string{"env", "-i"}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
