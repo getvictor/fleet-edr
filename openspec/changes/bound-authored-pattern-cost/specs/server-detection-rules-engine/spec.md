@@ -37,6 +37,13 @@ Every rule the system ships SHALL still load, and a rule refused for cost SHALL 
 - **THEN** it is accepted however long that portion is, because such a portion is compared once rather than searched for at every offset
 - **AND** it is still charged the base cost every value pays for being compared at all
 
+#### Scenario: A pattern is not charged for a literal it compares whole
+
+- **GIVEN** a rule whose pattern is a plain literal longer than any limit
+- **WHEN** the rule is loaded
+- **THEN** it is accepted, because comparing it stops as soon as the event's own string ends, so its length costs the author nothing
+- **AND** it is still charged the base cost every value pays for being compared at all
+
 #### Scenario: A field costing more than the limit across its values is refused
 
 - **GIVEN** a rule whose single field lists values that are each within the per-pattern limit but together exceed the field limit

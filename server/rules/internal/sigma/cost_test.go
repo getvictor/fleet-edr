@@ -22,6 +22,7 @@ func detectionWith(field string, values any) map[string]any {
 
 // spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-costing-more-than-the-limit-is-refused
 // spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-is-not-charged-for-a-portion-anchored-to-the-ends-of-the-value
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-is-not-charged-for-a-literal-it-compares-whole
 //
 // TestCompile_BoundsWhatOnePatternCanCost covers the per-value half of the bound.
 //
@@ -199,6 +200,8 @@ func TestCompile_RegexpIsBoundedByItsCompiledProgram(t *testing.T) {
 	})
 }
 
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/adjacent-wildcards-are-collapsed-rather-than-refused
+//
 // TestCompileGlob_CollapsesAdjacentStars pins the fix for a cost that needed no limit.
 //
 // `**` matches exactly what `*` matches, so every extra star used to add an empty middle segment that the search walked for every
