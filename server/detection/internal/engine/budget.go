@@ -26,6 +26,11 @@ const maxRuleEvalNs = int64(100 * time.Millisecond)
 // 20 overruns bounds the wasted work before a skip to roughly two seconds. The window makes the count mean "repeatedly, lately"
 // rather than "eventually": without it a rule that ran slow twenty times over a month would be skipped on the strength of a
 // condition that has long passed.
+//
+// The window is FIXED from the first overrun of a run, not sliding, which review asked about and which is the deliberate choice.
+// Nineteen overruns just inside a window and one just outside it start a fresh run rather than tripping the bound, so a rule has
+// to be consistently over budget within one window to be skipped. A sliding window would trip on that pattern, and would need the
+// timestamps of every overrun rather than a count and a start.
 const (
 	maxRuleOverruns   = 20
 	ruleOverrunWindow = 15 * time.Minute

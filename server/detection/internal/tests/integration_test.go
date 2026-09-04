@@ -279,9 +279,6 @@ type recordingMetrics struct {
 	monitorMatches      int
 	processesReconciled int64
 	processRowsDeleted  int64
-	// rulesSkipped names the rules a replica stopped evaluating for exceeding their budget, so a test can assert the transition
-	// is reported once rather than per batch.
-	rulesSkipped []string
 }
 
 func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n int64) {
@@ -291,11 +288,9 @@ func (m *recordingMetrics) EventsSetAside(_ context.Context, hostID string, n in
 	m.setAside += n
 }
 
-func (m *recordingMetrics) RuleEvaluationSkipped(_ context.Context, ruleID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.rulesSkipped = append(m.rulesSkipped, ruleID)
-}
+// Not recorded: the transition is asserted against the engine's own recorder in the engine package, where the skip is produced.
+// A field here that nothing reads is the kind of unused surface that reads as coverage.
+func (m *recordingMetrics) RuleEvaluationSkipped(context.Context, string) {}
 
 func (m *recordingMetrics) EventsIngested(_ context.Context, _ string, n int) {
 	m.mu.Lock()

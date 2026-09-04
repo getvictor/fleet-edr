@@ -275,6 +275,55 @@ func TestEngine_Evaluate_ARealOverrunIsRecordedAndNotReturned(t *testing.T) {
 	assert.Equal(t, before, rule.invocations(), "after which it is skipped")
 }
 
+// recordingSkips is the smallest MetricsRecorder that answers "was the transition reported": the engine calls exactly one method
+// on the skip path, so the rest can be absent rather than stubbed.
+type recordingSkips struct {
+	api.MetricsRecorder
+	mu      sync.Mutex
+	skipped []string
+}
+
+func (r *recordingSkips) RuleEvaluationSkipped(_ context.Context, ruleID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.skipped = append(r.skipped, ruleID)
+}
+
+func (r *recordingSkips) names() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.skipped...)
+}
+
+// spec:server-detection-rules-engine/a-rule-that-repeatedly-exceeds-its-evaluation-budget-stops-being-evaluated/a-rule-repeatedly-over-budget-stops-being-evaluated
+//
+// TestEngine_Evaluate_ReportsTheSkipOnceThroughTheRecorder closes a gap review found: the transition was asserted through the
+// budget's own return value, and nothing checked that the engine actually told the recorder.
+//
+// It matters because a skipped rule raises no alerts, which looks exactly like a rule that matches nothing. This counter is the
+// only thing separating the two, so an engine that skipped the rule and reported nothing would be the silent failure the whole
+// design exists to avoid. Once, not per batch: a rule that costs nothing because it is skipped must not read as the busiest thing
+// in the fleet.
+func TestEngine_Evaluate_ReportsTheSkipOnceThroughTheRecorder(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	e.budget = newEvalBudgetWith(int64(time.Millisecond))
+	rec := &recordingSkips{}
+	e.SetMetrics(rec)
+	e.Register(&slowRule{stubRule: stubRule{id: "announced"}, sleep: 3 * time.Millisecond})
+
+	batch := []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}}
+	for range maxRuleOverruns * 2 {
+		_, err := e.Evaluate(t.Context(), batch)
+		require.NoError(t, err)
+	}
+
+	require.True(t, e.budget.skipping("announced"))
+	assert.Equal(t, []string{"announced"}, rec.names(),
+		"the transition must be reported exactly once, naming the rule an operator has to fix")
+}
+
 // TestEngine_LoadActive_ForgetsWhatTheBudgetLearned covers the interaction with #850's reloadable rule content.
 //
 // The skip is keyed by rule id, so without clearing it an operator who fixes a slow rule and publishes it under the same id gets
@@ -353,4 +402,52 @@ func TestEvalBudget_DoesNotTouchTheRuleSet(t *testing.T) {
 	require.Len(t, after.rules, 1, "and must not remove the rule from it")
 	assert.Equal(t, "over_budget", after.rules[0].ID(),
 		"the rule stays registered and keeps reporting whatever mode the operator configured; only this replica stops running it")
+}
+
+// slowReadingRule spends its time WAITING on the graph rather than working, which is what the budget must not charge it for.
+type slowReadingRule struct {
+	stubRule
+	readFor time.Duration
+}
+
+func (r *slowReadingRule) Evaluate(ctx context.Context, _ []api.Event, gr rulesapi.GraphReader) ([]api.Finding, error) {
+	_, _ = gr.GetProcessByPID(ctx, "host-a", 1, 0)
+	return nil, nil
+}
+
+// slowGraphReader is a reader whose every call takes a while, standing in for a database under load.
+type slowGraphReader struct {
+	stubGraphReader
+	delay time.Duration
+}
+
+func (r slowGraphReader) GetProcessByPID(context.Context, string, int, int64) (*api.Process, error) {
+	time.Sleep(r.delay)
+	return nil, nil
+}
+
+// TestEngine_Evaluate_TimeWaitingOnTheGraphIsNotCharged covers the correction review forced twice.
+//
+// The budget first charged the whole evaluateRule call, including alert persistence. Fixed, it still charged the rule's reads,
+// which are synchronous MySQL: a slow database would then disable rules rather than slow rules, worst first among the rules doing
+// the most correlation, at exactly the moment detections matter most. What is left is the rule's own matching, which is the thing
+// an author controls.
+func TestEngine_Evaluate_TimeWaitingOnTheGraphIsNotCharged(t *testing.T) {
+	t.Parallel()
+
+	e := New(nil, nil)
+	// A budget far below the read delay, so a rule charged for its reads would be skipped almost immediately.
+	e.budget = newEvalBudgetWith(int64(time.Millisecond))
+	e.ruleReader = &retryableGraphReader{inner: slowGraphReader{delay: 5 * time.Millisecond}}
+	rule := &slowReadingRule{stubRule: stubRule{id: "reads_a_lot"}}
+	e.Register(rule)
+
+	batch := []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}}
+	for range maxRuleOverruns * 2 {
+		_, err := e.Evaluate(t.Context(), batch)
+		require.NoError(t, err)
+	}
+
+	assert.False(t, e.budget.skipping("reads_a_lot"),
+		"a rule that is slow only because the graph is slow must not be disabled; that punishes the database, not the rule")
 }

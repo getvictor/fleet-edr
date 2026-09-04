@@ -494,9 +494,13 @@ func (e *Engine) evaluateRule(
 	// disable a rule that is not itself expensive, which punishes the wrong thing and removes detections during exactly the
 	// incident an operator most needs them. RuleEvalStats keeps reporting the full duration, since that is what "this rule cost
 	// the pipeline" means for the tuning table (issue #774).
+	// Wrapped per evaluation so the budget can subtract what this rule spent WAITING on the graph rather than working. Review
+	// found why that matters: a rule's reads are synchronous MySQL, so charging them means a slow database disables rules instead
+	// of slow rules, worst first among the rules doing the most correlation, at the moment detections matter most.
+	reader := &timedReader{inner: e.ruleReader}
 	ruleStart := time.Now()
-	findings, err := evaluate(ctx, rule, scoped, e.ruleReader, scope)
-	ruleElapsed = time.Since(ruleStart).Nanoseconds()
+	findings, err := evaluate(ctx, rule, scoped, reader, scope)
+	ruleElapsed = time.Since(ruleStart).Nanoseconds() - reader.waiting.Nanoseconds()
 	// A retryable materialization miss is reported ALONGSIDE whatever findings the rule did resolve in this batch, so the miss is
 	// recorded but the findings are still persisted below rather than thrown away with the error. Only a non-retryable failure
 	// discards the batch's findings: that path means the rule itself misbehaved, so its output is not trustworthy.
