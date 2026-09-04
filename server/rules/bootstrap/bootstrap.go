@@ -298,7 +298,11 @@ func (r *Rules) handleCorpusRefreshErr(ctx context.Context, op string, err error
 	return false
 }
 
-// Reload rebuilds the rule set from stored content and puts it in force, reporting how many rules are now active.
+// Reload rebuilds the rule set from stored content and puts it in force, reporting how many rules it INSTALLED.
+//
+// Zero therefore means "installed nothing", NOT "nothing is running": every branch that declines to install leaves a set in force,
+// and that set is usually not empty. The two readings differ exactly where it matters, so the count answers what this call did
+// rather than what the server is evaluating, which is Service.ActiveRules.
 //
 // On any failure the rule set already in force is LEFT ALONE and the error is returned. This is the one place the reload path
 // deliberately differs from the startup path: at startup there is no previous set, so unusable content falls back to the corpus
@@ -306,8 +310,8 @@ func (r *Rules) handleCorpusRefreshErr(ctx context.Context, op string, err error
 // database error.
 //
 // Content that loads to nothing installs nothing, for the same reason: an operator who empties the corpus is not asking for a
-// server with no detections. The loaded version is left unadvanced in that case, so the poll keeps re-reading while the corpus is
-// empty, which is a rare and deliberate state rather than a steady one.
+// server with no detections. The loaded version is left unadvanced in that case, so the poll keeps re-reading while the content
+// stays unusable. That re-read has a cost, which #851 weighs against recording the version.
 func (r *Rules) Reload(ctx context.Context) (int, error) {
 	if r.corpus == nil {
 		return 0, errors.New("rules: no rule corpus is configured")
