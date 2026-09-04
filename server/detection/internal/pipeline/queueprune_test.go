@@ -24,12 +24,12 @@ type fakeEventLog struct {
 
 func (f *fakeEventLog) Append(context.Context, []visibilityapi.Event) error { return nil }
 func (f *fakeEventLog) PendingHosts(context.Context, int) ([]string, error) { return nil, nil }
-func (f *fakeEventLog) ClaimForHost(context.Context, string, int) ([]visibilityapi.Event, error) {
-	return nil, nil
+func (f *fakeEventLog) ClaimForHost(context.Context, string, int) ([]visibilityapi.Event, int64, error) {
+	return nil, 0, nil
 }
-func (f *fakeEventLog) Ack(context.Context, []string) error           { return nil }
-func (f *fakeEventLog) Nack(context.Context, []string) (int64, error) { return 0, nil }
-func (f *fakeEventLog) CountPending(context.Context) (int64, error)   { return 0, nil }
+func (f *fakeEventLog) Ack(context.Context, []string, int64) (bool, error) { return true, nil }
+func (f *fakeEventLog) Nack(context.Context, []string) (int64, error)      { return 0, nil }
+func (f *fakeEventLog) CountPending(context.Context) (int64, error)        { return 0, nil }
 func (f *fakeEventLog) PruneProcessed(_ context.Context, batchSize int) (int64, error) {
 	f.pruneCalled++
 	f.gotBatch = batchSize
