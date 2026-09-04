@@ -6,7 +6,7 @@
 
 The system SHALL refuse a rule whose patterns would cost more than a bounded amount to match, and SHALL refuse it when the rule loads rather than when it first evaluates.
 
-What is bounded is the cost the AUTHOR imposes, which is not the whole cost of matching an event. A field's authored values are each compared against every value the event supplies, and some event fields carry as many values as a process had arguments, so the total is a product of which this bounds one factor. Bounding the other means measuring an evaluation rather than estimating a pattern, and belongs with the per-rule evaluation budget.
+What is bounded is the cost the AUTHOR imposes, which is not the whole cost of matching an event. Two event-side factors are deliberately outside it, and both were measured to be event-bounded rather than author-bounded. A field's authored values are each compared against every value the event supplies, and some event fields carry as many values as a process had arguments. Separately, comparing one value costs in proportion to the EVENT's string, not the author's: a literal or an end-anchored portion stops as soon as the event's string ends, so lengthening the authored side beyond it adds nothing. Bounding what an arbitrary event can provoke means measuring an evaluation rather than estimating a pattern, and belongs with the per-rule evaluation budget.
 
 This requirement exists because a premise expired. The bound on wildcard matching was stated for attacker-supplied VALUES against a trusted pattern; once operators author rules, the pattern is untrusted input too, and the cost a pattern imposes is paid once per value, per field, per rule, for every event.
 
@@ -30,11 +30,12 @@ Every rule the system ships SHALL still load, and a rule refused for cost SHALL 
 - **WHEN** the rule is loaded
 - **THEN** it is refused, naming the field and the limit
 
-#### Scenario: A pattern anchored to the ends of the value costs nothing
+#### Scenario: A pattern is not charged for a portion anchored to the ends of the value
 
 - **GIVEN** a rule whose long pattern portion sits at the start or the end of the pattern rather than between two wildcards
 - **WHEN** the rule is loaded
-- **THEN** it is accepted, because such a portion is compared once rather than searched for at every offset
+- **THEN** it is accepted however long that portion is, because such a portion is compared once rather than searched for at every offset
+- **AND** it is still charged the base cost every value pays for being compared at all
 
 #### Scenario: A field costing more than the limit across its values is refused
 

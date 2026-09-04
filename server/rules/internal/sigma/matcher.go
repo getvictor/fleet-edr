@@ -255,6 +255,12 @@ const (
 // least a unit lets ONE budget bound both how complex a field's patterns are and how many of them there are, instead of needing a
 // separate count. The cost is that a field is capped near sixteen thousand literals, which is three orders above the corpus's
 // busiest field and far below where the measurement says they start to matter.
+//
+// A literal is charged this unit and nothing for its LENGTH, which review questioned and measurement settles: against a 64-byte
+// event value, an authored literal costs 27ns at 64 bytes, 31ns at 4096 and 22ns at a million, because the comparison stops as
+// soon as the event's string ends. Cost tracks the EVENT, exactly as it does for an end-anchored segment, and charging the author
+// for length would refuse patterns the measurement says are free. The event-side factor is out of scope here by the same reasoning
+// that puts event cardinality out of scope: bounding it means timing an evaluation, which is the per-rule budget.
 const valueBaseCost = 1
 
 // regexpCost is the size of the program Go compiles the pattern into, which is what RE2's linear match time is linear in.

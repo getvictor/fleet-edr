@@ -21,7 +21,7 @@ func detectionWith(field string, values any) map[string]any {
 }
 
 // spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-costing-more-than-the-limit-is-refused
-// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-anchored-to-the-ends-of-the-value-costs-nothing
+// spec:server-detection-rules-engine/a-rule-s-pattern-cannot-make-matching-arbitrarily-expensive/a-pattern-is-not-charged-for-a-portion-anchored-to-the-ends-of-the-value
 //
 // TestCompile_BoundsWhatOnePatternCanCost covers the per-value half of the bound.
 //
@@ -54,11 +54,11 @@ func TestCompile_BoundsWhatOnePatternCanCost(t *testing.T) {
 		},
 		{
 			// Anchored to the start of the value, so it is compared once rather than searched for at every offset.
-			name:    "a long run in the FIRST segment is anchored and costs nothing",
+			name:    "a long run in the FIRST segment is not charged for its length",
 			pattern: strings.Repeat("a", maxValueCost*2) + "*",
 		},
 		{
-			name:    "a long run in the LAST segment is anchored and costs nothing",
+			name:    "a long run in the LAST segment is not charged for its length",
 			pattern: "*" + strings.Repeat("a", maxValueCost*2),
 		},
 		{
@@ -75,6 +75,13 @@ func TestCompile_BoundsWhatOnePatternCanCost(t *testing.T) {
 			// is far past every limit and must still be accepted, or the exemption has quietly gone.
 			name:    "an anchored prefix far past every limit is still accepted",
 			pattern: strings.Repeat("a", maxFieldCost*4) + "*",
+		},
+		{
+			// Same measurement, no wildcards at all: 27ns at 64 bytes and 22ns at a million against a 64-byte event value,
+			// because the comparison stops when the event's string ends. Charging the author for this length would refuse a
+			// pattern that is free.
+			name:    "a plain literal far past every limit is still accepted",
+			pattern: strings.Repeat("a", maxFieldCost*4),
 		},
 	}
 
