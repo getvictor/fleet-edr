@@ -33,11 +33,25 @@ var pbtEmailCounter atomic.Uint64
 // t is strictly after the wall-clock NOW(6) at SELECT time.
 //
 // Generation strategy: rapid draws an offset in (-2h, +2h) skipping a
-// 250ms band around zero. The skip avoids a known race (the
-// timestamp's nominal offset puts it past NOW(6) at INSERT time, but
-// the SELECT runs on a slightly-later NOW(6) and the row no longer
-// matches). 250ms is large enough to absorb test runner / DB roundtrip
-// jitter without trivializing the boundary check.
+// 250ms band around zero, so the boundary is approached from both
+// sides without a drawn offset of exactly zero.
+//
+// The band used to be described as absorbing test-runner and round-trip
+// jitter, and it does not: it only makes the flake rarer. A drawn offset
+// is measured from the client's clock BEFORE three MySQL round trips, so
+// on a loaded runner the row can genuinely expire before the SELECT
+// runs, the query correctly returns nothing, and the live assertion
+// fails. That happened twice on unrelated PRs (issue #802, drawn offset
+// 250; then again at 275), and it is not reproducible locally because
+// round trips here are sub-millisecond.
+//
+// Widening the band would only lengthen the odds, and computing the
+// expiry from the database's own clock would not help either: the row
+// still expires between the INSERT and the SELECT whichever clock set
+// it. What removes the race is to stop asserting against the nominal
+// offset and assert against the window the query actually ran in, which
+// is what the three cases below do. Every drawn offset stays meaningful
+// and no margin is assumed.
 func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 	t.Parallel()
 	db := openSchema(t)
@@ -65,17 +79,36 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 			ExpiresAt: expires,
 		})
 
+		// Bracket the query, so the assertion can be made against the interval it ran in rather than against a nominal offset
+		// computed several round trips earlier.
+		beforeSelect := time.Now()
 		got, err := store.ListLiveBindings(t.Context(), uid)
 		require.NoError(rt, err)
+		afterSelect := time.Now()
 
-		// Property: returned iff null OR strictly future.
-		shouldReturn := nullExpiry || offsetMillis > 0
-		if shouldReturn {
+		// A NULL expiry is timeless: it is live whatever the clock did.
+		if nullExpiry {
+			require.Lenf(rt, got, 1, "a binding with no expiry is always live")
+			return
+		}
+
+		switch {
+		case afterSelect.Before(*expires):
+			// The expiry was still in the future for the whole query, so nothing the clock did can excuse a miss.
 			require.Lenf(rt, got, 1,
-				"binding with offset_millis=%d null=%v should be live", offsetMillis, nullExpiry)
-		} else {
+				"binding expiring %v after the query finished should be live (offset_millis=%d)",
+				expires.Sub(afterSelect), offsetMillis)
+		case beforeSelect.After(*expires):
+			// Already expired before the query began, and an expired row only gets more expired.
 			require.Emptyf(rt, got,
-				"binding with offset_millis=%d null=%v should be expired", offsetMillis, nullExpiry)
+				"binding that expired %v before the query began should not be live (offset_millis=%d)",
+				beforeSelect.Sub(*expires), offsetMillis)
+		default:
+			// The expiry falls inside the query's own execution window, so both answers are correct and asserting either would
+			// be asserting the scheduler. This is the case the old code got wrong: it insisted on "live" here. What is still
+			// worth pinning is that the row is never returned TWICE, which is a property of the query rather than of timing.
+			require.LessOrEqualf(rt, len(got), 1,
+				"at most one binding row whichever side of the boundary the query landed (offset_millis=%d)", offsetMillis)
 		}
 	})
 }
