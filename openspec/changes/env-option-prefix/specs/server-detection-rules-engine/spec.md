@@ -18,7 +18,9 @@ The end of that run SHALL be decided by whether a token assigns at all, and NOT 
 
 An option's OPERAND SHALL NOT be read as an assignment. The variable named by an unset is the opposite of an injection, and reporting `env -u VAR prog` as assigning VAR would invert what the event says. An operand SHALL be taken from the remainder of its own token when there is one and from the next argument otherwise, so that the trailing characters of an attached operand are not themselves read as further options.
 
-An invocation carrying an option env does NOT have SHALL report no assignments, because env exits without executing the command and therefore performs none of them. Reporting one would describe an injection that did not happen.
+An invocation SHALL report no assignments when the argument vector after env's options no longer describes what env applied. Three cases, and in each one the safe direction is the same: an option env does NOT have, because env exits without executing the command and performs none of them; the option that suppresses running a command at all, which env refuses to combine with one; and the option carrying a whole command line as its value, since env re-splits that value and the command it names may consume the tokens that follow as its own arguments.
+
+That asymmetry is the reason the rule SHALL prefer reporting nothing in all three. Reporting nothing risks MISSING an injection, which another detection may still catch. Reporting the run risks FABRICATING one, sending an analyst after an event that did not happen, and this field feeds a high-severity rule.
 
 For any other executable the assignment SHALL be the first argument alone, which is the shell's `VAR=value cmd` form. The invocation name SHALL NOT be scanned for env, since that is env's own name and not an assignment it performs.
 
@@ -77,3 +79,15 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **GIVEN** an exec event for env carrying an option env does not have, followed by an assignment
 - **WHEN** the assignments are read
 - **THEN** no assignment is reported
+
+#### Scenario: An option suppressing the command reports no assignments
+
+- **GIVEN** an exec event for env carrying the option that refuses to run a command, followed by an assignment
+- **WHEN** the assignments are read
+- **THEN** no assignment is reported
+
+#### Scenario: A command line carried as an option value reports no assignments
+
+- **GIVEN** an exec event for env whose option value is a command line, followed by a token that looks like an assignment
+- **WHEN** the assignments are read
+- **THEN** no assignment is reported, because that token may be an argument of the command the value names

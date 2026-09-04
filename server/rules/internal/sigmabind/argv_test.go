@@ -100,6 +100,8 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-name-a-shell-would-reject-does-not-end-the-run
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-attached-operand-is-not-read-as-further-options
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-invocation-env-would-refuse-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-suppressing-the-command-reports-no-assignments
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-command-line-carried-as-an-option-value-reports-no-assignments
 //
 // TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
 // different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
@@ -146,7 +148,13 @@ func TestEnvAssignments(t *testing.T) {
 		{"a cluster's operand belongs to its last letter", "/usr/bin/env",
 			[]string{"env", "-iu", "PATH", "A=1", "prog"}, []string{"A=1"}},
 		{"options with no operand", "/usr/bin/env",
-			[]string{"env", "-i", "-0", "A=1", "prog"}, []string{"A=1"}},
+			[]string{"env", "-i", "-v", "A=1", "prog"}, []string{"A=1"}},
+		{"the NUL-output option means no command ran", "/usr/bin/env",
+			// Measured: `env -0 A=1 /bin/sh` exits `cannot specify command with -0`. Review caught this being modelled as an
+			// ordinary no-operand option, which reported an assignment for an invocation that execs nothing.
+			[]string{"env", "-0", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"}, nil},
+		{"the NUL-output option inside a cluster too", "/usr/bin/env",
+			[]string{"env", "-i0", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "/bin/true"}, nil},
 		{"everything after the end-of-options marker is operands", "/usr/bin/env",
 			[]string{"env", "--", "A=1", "prog"}, []string{"A=1"}},
 		{"after the end-of-options marker an option-looking token is the command", "/usr/bin/env",
@@ -192,6 +200,13 @@ func TestEnvAssignments(t *testing.T) {
 			// is invisible to this field. Reporting nothing is the safe direction (a miss, not a fabricated finding); splitting
 			// -S the way env does is tracked separately.
 			[]string{"env", "-S", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib prog"}, nil},
+		{"nothing after the string option is an assignment either", "/usr/bin/env",
+			// Measured: `env -S "/bin/echo hi" DYLD_INSERT_LIBRARIES=/tmp/x` prints `hi DYLD_INSERT_LIBRARIES=/tmp/x`, so the
+			// trailing token is echo's ARGUMENT. Skipping only the payload and collecting what followed fabricated an injection
+			// finding, which review caught.
+			[]string{"env", "-S", "/bin/echo hi", "DYLD_INSERT_LIBRARIES=/tmp/x"}, nil},
+		{"an attached string-option payload ends the run too", "/usr/bin/env",
+			[]string{"env", "-S/bin/echo hi", "DYLD_INSERT_LIBRARIES=/tmp/x"}, nil},
 		{"an option with a missing operand at the end of argv", "/usr/bin/env",
 			[]string{"env", "-u"}, nil},
 		{"options with no command at all", "/usr/bin/env",

@@ -103,9 +103,10 @@ func envAssignments(path string, argv []string) []string {
 	if len(argv) == 0 {
 		return nil
 	}
-	after, ok := skipEnvOptions(argv[1:])
-	if !ok {
-		// env would have refused the options and run nothing, so nothing was assigned.
+	after, usable := skipEnvOptions(argv[1:])
+	if !usable {
+		// Either env would have refused these options and run nothing, or the run that follows them says nothing about what env
+		// applied. Both mean there is no assignment here to report.
 		return nil
 	}
 
@@ -128,26 +129,45 @@ func envAssignments(path string, argv []string) []string {
 	return out
 }
 
-// env's short options, split by whether their value is a separate argument. From env(1) on macOS.
+// env's short options, grouped by how each one affects the assignment run that follows it. Taken from env(1) on macOS and
+// verified by running it, because every one of these groups was got wrong at least once by reasoning alone.
 //
-// Both sets are needed and getting either wrong is a detection error. An operand mistaken for an assignment would report
-// `env -u DYLD_INSERT_LIBRARIES prog` as an injection when it is the opposite, an unset. An option whose operand is missed ends
-// the scan early and hides the assignment behind it.
+// Getting a group wrong is a detection error in one direction or the other. An operand mistaken for an assignment reports
+// `env -u DYLD_INSERT_LIBRARIES prog` as an injection when it is the exact opposite, an unset. An option whose operand is missed
+// ends the scan early and hides the assignment behind it.
 const (
+	// Options whose value may be a separate argument: -u name, -P utilpath, -S string, -C workdir.
 	envOptionsTakingAnOperand = "uPSC"
-	envOptionsTakingNone      = "iv0"
+	// Options that take no value: -i, -v.
+	envOptionsTakingNone = "iv"
+	// Options after which the outer argument vector no longer describes what env applied to a command.
+	//
+	// -0 because env REFUSES to run a command at all with it (`env -0 A=1 /bin/sh` exits `cannot specify command with -0`), so
+	// nothing was injected into anything. -S because its operand is a whole command line that env re-splits, and the split
+	// payload may itself name the command: `env -S "/bin/echo hi" DYLD_INSERT_LIBRARIES=/tmp/x` runs echo with the assignment
+	// as its ARGUMENT, which measurement confirms, so reporting it as an assignment would be a fabricated injection finding.
+	envOptionsEndingTheRun = "0S"
 )
 
-// skipEnvOptions returns the index of env's first non-option argument, and whether env would accept the options it saw.
+// skipEnvOptions returns the index of env's first non-option argument, and whether the assignment run that starts there describes
+// anything env actually applied.
 //
-// ok is false when a token looks like an option env does not have. env exits without running anything in that case, so no
-// assignment it carries was ever applied and reporting one would be a fabricated finding: `env -z DYLD_INSERT_LIBRARIES=x prog`
-// injects nothing because env never execs prog.
+// usable is false for three distinct reasons that the caller treats identically, which is why they share one flag rather than an
+// enum the caller would only collapse again:
+//
+//   - An option env does not have. env exits without executing the command, so no assignment it carries was ever applied:
+//     `env -z DYLD_INSERT_LIBRARIES=x prog` injects nothing because env never execs prog.
+//   - -0, which env refuses to combine with a command at all.
+//   - -S, whose payload governs the command line and which this parser deliberately does not re-split.
+//
+// In all three the safe direction is the same and it is not symmetric: reporting nothing risks MISSING an injection, while
+// reporting the run risks FABRICATING one against a high-severity rule. A miss is recoverable by another detection; a fabricated
+// dylib-injection finding sends an analyst after an event that did not happen.
 //
 // Clustering follows BSD env. An operand-taking letter consumes the REST of its own token when there is any (`-uNAME`, and also
 // `-uS`, where S is the name and not a second option), and the next argument otherwise (`-u NAME`, `-iu NAME`). A lone dash means
 // the same as -i and takes no operand.
-func skipEnvOptions(argv []string) (next int, ok bool) {
+func skipEnvOptions(argv []string) (next int, usable bool) {
 	i := 0
 	for i < len(argv) {
 		a := argv[i]
@@ -157,8 +177,8 @@ func skipEnvOptions(argv []string) (next int, ok bool) {
 		case a == "-":
 			i++
 		case len(a) > 1 && a[0] == '-':
-			consumed, valid := parseEnvOptionCluster(a[1:])
-			if !valid {
+			consumed, ok := parseEnvOptionCluster(a[1:])
+			if !ok {
 				return 0, false
 			}
 			i++
@@ -172,12 +192,16 @@ func skipEnvOptions(argv []string) (next int, ok bool) {
 	return i, true
 }
 
-// parseEnvOptionCluster walks one cluster's letters, reporting whether it consumes the NEXT argument as an operand and whether
-// every letter is an option env has.
-func parseEnvOptionCluster(letters string) (consumesNext, valid bool) {
+// parseEnvOptionCluster walks one cluster's letters, reporting whether it consumes the NEXT argument as an operand and whether the
+// assignment run after the cluster is still meaningful.
+func parseEnvOptionCluster(letters string) (consumesNext, usable bool) {
 	for k := range len(letters) {
 		c := rune(letters[k])
 		switch {
+		case strings.ContainsRune(envOptionsEndingTheRun, c):
+			// Reached before the operand check on purpose, since -S is in both sets and its payload is what makes the run
+			// meaningless. Whether the payload is attached or separate makes no difference to that.
+			return false, false
 		case strings.ContainsRune(envOptionsTakingAnOperand, c):
 			// The operand is whatever remains of this token, or the next argument when nothing remains.
 			return k == len(letters)-1, true
