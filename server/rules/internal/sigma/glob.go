@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"unicode"
@@ -86,6 +87,39 @@ type globSeg struct {
 }
 
 // globAtom is one pattern element: a literal rune, or `?` standing for exactly one rune.
+// maxUnanchoredAnyRunes bounds the `?` atoms in a segment that is anchored to NEITHER end of the pattern, which is the one shape
+// whose match cost grows with the pattern rather than only with the value.
+//
+// Splitting on stars removed backtracking (#787), and its own comment records what it left: a middle segment carrying `?` cannot
+// use the byte-comparison paths, so it walks candidate offsets and stays O(value x segment). #787 could leave that alone because
+// the pattern was trusted; #767 makes patterns operator-authored, so the pattern side needs its own bound.
+//
+// Measured against this matcher on a 4096-byte value: 27.6us at one `?`, 108.6us at 16, 1.35ms at 256, 4.10ms at 1024, linear in
+// the count. The vendored corpus uses NO `?` at all, so this bound is headroom for an author rather than an accommodation of
+// existing content, and 32 holds the worst case near 200us. Same reasoning as maxConditionDepth: far above what real content
+// needs, far below where it hurts.
+//
+// The first and last segments are exempt because they are anchored to the ends of the value and checked once, not at every offset.
+const maxUnanchoredAnyRunes = 32
+
+// checkCost reports whether the compiled pattern is one this evaluator is willing to run against every value it sees.
+func (g glob) checkCost() error {
+	// segs[0] anchors to the start and segs[len-1] to the end, so only what lies between them walks candidate positions.
+	for i := 1; i < len(g.segs)-1; i++ {
+		anyRunes := 0
+		for _, a := range g.segs[i].atoms {
+			if a.any {
+				anyRunes++
+			}
+		}
+		if anyRunes > maxUnanchoredAnyRunes {
+			return fmt.Errorf("%w: pattern has a run of %d single-character wildcards between stars, above the limit of %d",
+				ErrUnsupported, anyRunes, maxUnanchoredAnyRunes)
+		}
+	}
+	return nil
+}
+
 type globAtom struct {
 	r   rune
 	any bool

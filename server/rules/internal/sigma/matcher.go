@@ -207,6 +207,10 @@ func compileFieldTest(key string, raw any) (fieldTest, error) {
 		// An empty list matches nothing under ANY and everything under ALL, so it is always a mistake rather than a shorthand.
 		return fieldTest{}, fmt.Errorf("field %q has no values", field)
 	}
+	if len(values) > maxFieldValues {
+		return fieldTest{}, fmt.Errorf("%w: field %q lists %d values, above the limit of %d",
+			ErrUnsupported, field, len(values), maxFieldValues)
+	}
 	for _, v := range values {
 		t, err := compileValue(v, m.wrap, m.useRegexp)
 		if err != nil {
@@ -217,8 +221,28 @@ func compileFieldTest(key string, raw any) (fieldTest, error) {
 	return ft, nil
 }
 
+// maxRegexpSource bounds the source of a |re pattern, in bytes.
+//
+// Go's regexp is RE2, so there is no catastrophic backtracking to defend against and a pattern's match cost is linear in the input.
+// The constant it is linear in is the compiled program, and that grows with the source: measured on a 4096-byte value, `(a|b)`
+// repeated 500 times compiles to a 2500-instruction program and costs 2.1ms per match, and `a{1000}` costs 2.19ms. Bounding the
+// source is what bounds the program, since Go exposes no budget for either.
+//
+// The longest expression in the vendored corpus is 33 bytes, so 1024 is thirty times its headroom and still short enough that the
+// compiled program stays small.
+const maxRegexpSource = 1024
+
+// maxFieldValues bounds how many values one field test may carry, because the list multiplies every other cost here: each value is
+// matched against the field until one hits, so a field listing thousands of patterns pays for all of them on every non-matching
+// event. The longest list in the vendored corpus is 22 values, so 512 is more than twenty times what shipped content needs.
+const maxFieldValues = 512
+
 func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest, error) {
 	if useRegexp {
+		if len(v) > maxRegexpSource {
+			return valueTest{}, fmt.Errorf("%w: regular expression is %d bytes, above the limit of %d",
+				ErrUnsupported, len(v), maxRegexpSource)
+		}
 		// Compiled verbatim: Sigma's |re carries a real regular expression, and case-insensitivity is the author's to request with
 		// an inline (?i) flag. Folding it here would silently widen every imported rule that relies on case.
 		re, err := regexp.Compile(v)
@@ -234,6 +258,9 @@ func compileValue(v string, wrap func(string) string, useRegexp bool) (valueTest
 		// Split into star-separated segments here, at load, so the per-event path never re-reads the pattern's escapes and never
 		// backtracks. See glob.go for what that bounds.
 		g := compileGlob(v)
+		if err := g.checkCost(); err != nil {
+			return valueTest{}, err
+		}
 		// lit is left empty: the compiled form is what decides, and keeping the raw pattern beside it would leave two
 		// representations of one value with nothing keeping them in step.
 		return valueTest{glob: &g}, nil
