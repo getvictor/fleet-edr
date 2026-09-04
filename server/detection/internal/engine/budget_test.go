@@ -407,7 +407,6 @@ func TestEvalBudget_DoesNotTouchTheRuleSet(t *testing.T) {
 // slowReadingRule spends its time WAITING on the graph rather than working, which is what the budget must not charge it for.
 type slowReadingRule struct {
 	stubRule
-	readFor time.Duration
 }
 
 func (r *slowReadingRule) Evaluate(ctx context.Context, _ []api.Event, gr rulesapi.GraphReader) ([]api.Finding, error) {
