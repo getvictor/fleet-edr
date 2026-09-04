@@ -4,6 +4,7 @@ package rbac_test
 
 import (
 	"fmt"
+	"github.com/jmoiron/sqlx"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,20 @@ var pbtEmailCounter atomic.Uint64
 // offset and assert against the window the query actually ran in, which
 // is what the three cases below do. Every drawn offset stays meaningful
 // and no margin is assumed.
+//
+// That window is read from the DATABASE's clock, because the predicate
+// under test compares against NOW(6). Bounds taken from the client would
+// only agree with it while the two clocks do, which is an assumption and
+// not the property being tested.
+// dbNow reads the clock the predicate under test actually compares against. A test asserting on expiry has to use it rather than
+// time.Now(), or it is asserting that two clocks agree, which is not the property and is not guaranteed.
+func dbNow(t *testing.T, db *sqlx.DB) time.Time {
+	t.Helper()
+	var now time.Time
+	require.NoError(t, db.GetContext(t.Context(), &now, `SELECT NOW(6)`))
+	return now
+}
+
 func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 	t.Parallel()
 	db := openSchema(t)
@@ -81,10 +96,19 @@ func TestListLiveBindings_ExpiryBoundary_PBT(t *testing.T) {
 
 		// Bracket the query, so the assertion can be made against the interval it ran in rather than against a nominal offset
 		// computed several round trips earlier.
-		beforeSelect := time.Now()
+		//
+		// Bracketed with the DATABASE's clock, not Go's, which review caught: the predicate under test compares against
+		// NOW(6), so bounds read from the client only line up with it while the two clocks agree. A probe measured the skew
+		// on this host at 681us, small enough to hide the problem and not to remove it, and a CI runner and its MySQL
+		// container have no reason to be that close. Reading NOW(6) puts the bounds and the predicate on one clock, so no
+		// offset can select the wrong branch.
+		//
+		// The two extra round trips widen the bracket, which is the safe direction: it can only move a case into the
+		// ambiguous middle, never onto the wrong side of it.
+		beforeSelect := dbNow(t, db)
 		got, err := store.ListLiveBindings(t.Context(), uid)
 		require.NoError(rt, err)
-		afterSelect := time.Now()
+		afterSelect := dbNow(t, db)
 
 		// A NULL expiry is timeless: it is live whatever the clock did.
 		if nullExpiry {
