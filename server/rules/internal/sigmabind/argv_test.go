@@ -104,6 +104,7 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/a-command-line-carried-as-an-option-value-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-unset-of-a-name-env-cannot-unset-reports-no-assignments
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
 //
 // TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
 // different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
@@ -171,9 +172,13 @@ func TestEnvAssignments(t *testing.T) {
 			[]string{"DYLD_INSERT_LIBRARIES=/tmp/e.dylib"}},
 		{"a token assigning nothing is the command and ends the run", "/usr/bin/env",
 			[]string{"env", "A=1", "prog", "B=2"}, []string{"A=1"}},
-		{"a malformed name is not reported, but what follows it still is", "/usr/bin/env",
-			// `=bad` is skipped by the report filter rather than by the boundary, so B=2 behind it survives.
-			[]string{"env", "A=1", "=bad", "B=2"}, []string{"A=1", "B=2"}},
+		{"an assignment with an empty name means nothing ran", "/usr/bin/env",
+			// Measured: `env =bad DYLD_INSERT_LIBRARIES=x prog` prints `setenv =bad: Invalid argument` and execs nothing, so
+			// what follows was never applied. An earlier round had this reporting B=2, which was a fabrication; review caught
+			// it. The discriminator is the EMPTY name, not shell-legality, which the row below pins.
+			[]string{"env", "A=1", "=bad", "B=2"}, nil},
+		{"an empty name ahead of an injection suppresses it too", "/usr/bin/env",
+			[]string{"env", "=bad", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}, nil},
 
 		// The two rows below are the option-parse bypasses review found in the first cut of this fix, both verified against
 		// env(1) rather than reasoned about.

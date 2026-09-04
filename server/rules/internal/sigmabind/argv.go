@@ -112,6 +112,15 @@ func envAssignments(path string, argv []string) []string {
 
 	var out []string
 	for _, a := range argv[min(1+after, len(argv)):] {
+		if key, _, found := strings.Cut(a, "="); found && key == "" {
+			// env calls setenv with an empty name, gets EINVAL, and exits before executing anything (measured:
+			// `env =bad DYLD_INSERT_LIBRARIES=x prog` prints `setenv =bad: Invalid argument` and runs nothing). So an
+			// assignment BEHIND one of these was never applied, and reporting it is a fabricated injection finding.
+			//
+			// Distinct from the permissive boundary below, and the discriminator is emptiness rather than shell-legality:
+			// `2+2=4` has a name a shell would reject, env sets it happily, and the run continues past it.
+			return nil
+		}
 		if !strings.Contains(a, "=") {
 			// The run ends at the first token that assigns nothing, which is the command env will run.
 			//

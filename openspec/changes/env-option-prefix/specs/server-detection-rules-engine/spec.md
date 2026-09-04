@@ -16,6 +16,8 @@ For an invocation of `env`, the assignments SHALL be the run of `KEY=VALUE` toke
 
 The end of that run SHALL be decided by whether a token assigns at all, and NOT by whether the name it assigns is one a shell would accept. env applies any nonempty name, so a token such as `2+2=4` is an assignment env performs and the run continues past it; ending the run there would hide an injection written behind it. Only WELL-FORMED assignments SHALL be reported, so the narrower test governs the reported set and the wider one governs the boundary.
 
+An assignment whose NAME is empty is the exception, and it ends more than the run: env cannot set it, exits before executing anything, and therefore applied none of the assignments around it. Such an invocation SHALL report no assignments at all. The discriminator is emptiness rather than shell-legality, which is why this does not reopen the boundary above.
+
 An option's OPERAND SHALL NOT be read as an assignment. The variable named by an unset is the opposite of an injection, and reporting `env -u VAR prog` as assigning VAR would invert what the event says. An operand SHALL be taken from the remainder of its own token when there is one and from the next argument otherwise, so that the trailing characters of an attached operand are not themselves read as further options.
 
 An invocation SHALL report no assignments when the argument vector after env's options no longer describes what env applied. Three cases, and in each one the safe direction is the same: an option env does NOT have, because env exits without executing the command and performs none of them; the option that suppresses running a command at all, which env refuses to combine with one; and the option carrying a whole command line as its value, since env re-splits that value and the command it names may consume the tokens that follow as its own arguments.
@@ -110,3 +112,9 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **WHEN** the assignments are read
 - **THEN** the assignment is reported, because suppressing it would be an attacker-selectable bypass rather than a protection
 - **AND** an EMPTY working directory instead reports no assignments, because that one is refused whatever the host looks like
+
+#### Scenario: An assignment with an empty name reports nothing at all
+
+- **GIVEN** an exec event for env whose leading assignments include one with an empty name, followed by an injection assignment
+- **WHEN** the assignments are read
+- **THEN** no assignment is reported, because env exits before executing anything
