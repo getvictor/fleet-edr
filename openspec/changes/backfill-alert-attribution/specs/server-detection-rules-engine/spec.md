@@ -21,6 +21,8 @@ Alerts from a rule the deployment no longer runs SHALL NOT be credited, and that
 
 A failure to credit SHALL NOT prevent the system from starting or from detecting, because an unpaid credit on historical rows is not a reason to stop detecting today, and the next start retries.
 
+Crediting SHALL NOT delay the system becoming able to serve. Its cost scales with alert history rather than with anything bounded, nothing a request can observe depends on it, and a rolling restart would otherwise pay that cost once per replica before each could serve.
+
 #### Scenario: An uncredited alert is credited
 
 - **GIVEN** an alert raised by a rule this project did not write, carrying no attribution

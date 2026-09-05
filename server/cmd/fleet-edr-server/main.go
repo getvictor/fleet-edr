@@ -150,9 +150,22 @@ func run() error {
 	//
 	// A failure here does NOT stop the server. The obligation it settles is real, but an unpaid credit on historical rows is not
 	// a reason to refuse to detect anything today, and the next boot tries again.
-	if _, err := detectionCtx.BackfillAlertOrigins(ctx, coord, rulesCtx.ContentService().ActiveRules()); err != nil {
-		logger.WarnContext(ctx, "could not credit alerts raised before rule attribution was recorded", "err", err)
-	}
+	//
+	// In the BACKGROUND for the same reason, which review asked about. The pass reads a table it has no index for, so its cost
+	// scales with alert history; run inline it would sit between this replica and its first served request, and a rolling restart
+	// would pay that per replica. Nothing here waits on the result, and a credit on historical rows is not something a request
+	// can observe missing, so there is nothing for startup to gain by blocking on it.
+	//
+	// Contrast the revocation snapshots below, which ARE loaded synchronously and are fatal on failure: those gate an allow-all
+	// security decision on the hot path, and serving before they are loaded would honour a revoked credential. This gates nothing.
+	backfillRules := rulesCtx.ContentService().ActiveRules()
+	go func() {
+		// Cancellation is not a failure, it is shutdown reaching a pass that was still walking. Warning about it would put a line
+		// in the log of every deployment that restarts while the backfill is running, describing something that is working.
+		if _, err := detectionCtx.BackfillAlertOrigins(ctx, coord, backfillRules); err != nil && !errors.Is(err, context.Canceled) {
+			logger.WarnContext(ctx, "could not credit alerts raised before rule attribution was recorded", "err", err)
+		}
+	}()
 
 	// The revocation snapshot is the ONLY revocation enforcement on the no-DB verify hot path, so an empty snapshot is "revocation
 	// disabled" (absent host => allowed). Fail closed: load it once before serving and treat a failed initial load as fatal rather than
