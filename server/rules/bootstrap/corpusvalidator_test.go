@@ -193,3 +193,25 @@ func TestCorpusValidator_AliasedPathsWouldCollapse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "two stored rows project to ONE file, which is the whole problem")
 }
+
+// spec:rule-content/authored-content-is-validated-by-the-loader/two-rule-identities-differing-only-by-case-are-refused
+//
+// TestCorpusValidator_RefusesStemsCollidingOnlyByCase covers a cross-layer inconsistency review found, which is invisible from
+// any single layer.
+//
+// Rule identity is the file stem, and the corpus path column is deliberately BINARY, so storage will hold both Foo.yml and
+// foo.yml. But the id is persisted downstream in detection_rule_settings and alerts, whose rule_id columns take the schema default
+// collation (utf8mb4_0900_ai_ci) and each carry a unique key over it. To MySQL, "Foo" and "foo" are one value.
+//
+// So a corpus with both loads two rules the rest of the system cannot tell apart: tuning one tunes the other, and their alerts
+// deduplicate into a single row. Comparing stems as exact Go strings was what let that through.
+func TestCorpusValidator_RefusesStemsCollidingOnlyByCase(t *testing.T) {
+	t.Parallel()
+	_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+		ruleDoc("imported/Keychain_Dump.yml", "11111111-1111-4111-8111-111111111111", "First", simpleDetection),
+		ruleDoc("authored/keychain_dump.yml", "22222222-2222-4222-8222-222222222222", "Second", simpleDetection),
+	})
+	require.Error(t, err, "two ids MySQL cannot distinguish must not both be storable")
+	assert.Contains(t, err.Error(), "case-insensitively",
+		"the reason must say WHY, since both files look distinct to anyone reading the corpus")
+}

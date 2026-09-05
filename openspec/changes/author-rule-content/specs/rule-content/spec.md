@@ -55,6 +55,8 @@ A document the loader would reject SHALL be refused, and the refusal SHALL carry
 
 The system SHALL distinguish a document that breaks the corpus from one the corpus can carry but this deployment cannot run. The first is refused. The second is accepted with a warning naming the file and the reason, because a corpus written for a fleet of sensors legitimately contains rules a given sensor cannot map, and refusing the write would stop an operator storing a rule their deployment would simply not run. A pattern above the affordable-matching limit falls in the second class: the rule is never loaded, so it cannot slow evaluation, and the operator is told which field exceeded which limit.
 
+Rule identities SHALL be compared the way the system that stores them compares them, not the way the language that loads them does. Identity is persisted alongside per-rule settings and alert deduplication, where comparison is case-insensitive, so two documents whose identities differ only by case name one rule everywhere it matters: tuning one would tune the other and their alerts would deduplicate together, while the corpus itself would show two distinct rules.
+
 The system SHALL refuse a submitted document whose path the loader does not inspect. Such a document would be stored, reported as successful, and never evaluated anywhere, which is the opposite of what an operator adding a rule intends.
 
 A proposed corpus in which NO document can run SHALL be refused, and that includes a proposal to store nothing at all. An empty corpus does not mean "no rules": the system keeps the rule set already in force when the store is empty, so rules an operator deleted would go on running while the deletion reported success, with no surface anywhere that would show it.
@@ -72,6 +74,12 @@ A refused document SHALL NOT be written, and SHALL NOT change the corpus version
 - **GIVEN** a corpus already holding a rule whose identity a submitted document would also claim
 - **WHEN** an operator submits it
 - **THEN** it is refused, because accepting it would refuse the whole corpus at the next load
+
+#### Scenario: Two rule identities differing only by case are refused
+
+- **GIVEN** a proposed corpus with two documents whose rule identities differ only by case
+- **WHEN** an operator submits it
+- **THEN** it is refused, because the stores that record per-rule settings and deduplicate alerts cannot tell the two apart
 
 #### Scenario: A document the loader would not read is refused
 

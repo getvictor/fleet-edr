@@ -144,14 +144,29 @@ func checkStemLengths(names []string) error {
 }
 
 func checkDuplicateStems(names []string) error {
-	seen := make(map[string]string, len(names))
+	type claim struct{ file, id string }
+	seen := make(map[string]claim, len(names))
 	for _, name := range names {
 		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
-		if prev, dup := seen[id]; dup {
-			return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
-				name, id, prev)
+		// Compared CASE-INSENSITIVELY, because Go is not what decides whether two rule ids are the same. The id is persisted in
+		// detection_rule_settings and alerts, whose rule_id columns take the schema default collation (utf8mb4_0900_ai_ci), and
+		// both carry a unique key over it: uk_detection_rule_settings_rule_scope and uk_alerts_dedup. So "Foo" and "foo" are one
+		// value to MySQL however distinct they look here.
+		//
+		// Comparing them as exact Go strings therefore lets a corpus load two rules that the rest of the system cannot tell
+		// apart: tuning one would tune the other, and their alerts would deduplicate into a single row. The corpus path column is
+		// deliberately BINARY (see the rulecontent migration), so storage will happily hold both files, which is what makes this
+		// reachable rather than theoretical once operators author content.
+		folded := strings.ToLower(id)
+		if prev, dup := seen[folded]; dup {
+			if prev.id == id {
+				return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
+					name, id, prev.file)
+			}
+			return fmt.Errorf("%s: rule id %q collides with %q claimed by %s; rule ids are compared case-insensitively where they "+
+				"are stored, so these two would share one row of per-rule settings and one alert dedup key", name, id, prev.id, prev.file)
 		}
-		seen[id] = name
+		seen[folded] = claim{file: name, id: id}
 	}
 	return nil
 }
