@@ -4,12 +4,15 @@ package tests
 
 import (
 	"context"
+	"log/slog"
 	"testing"
+
+	"github.com/fleetdm/edr/server/coordination/leader"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fleetdm/edr/server/detection/api"
 	"github.com/fleetdm/edr/server/detection/bootstrap"
 )
 
@@ -107,4 +110,96 @@ func TestBackfillAlertOrigins_EmptyScopeWritesNothing(t *testing.T) {
 	assert.Empty(t, originOfAlert(t, ctx, d, id))
 }
 
-var _ = api.Alert{}
+// stubOriginRule is the smallest rule the scope decision reads: an id and a declared foreign origin.
+type stubOriginRule struct{ id, origin string }
+
+func (r stubOriginRule) ID() string           { return r.id }
+func (r stubOriginRule) DisplayName() string  { return r.id }
+func (r stubOriginRule) Techniques() []string { return nil }
+func (r stubOriginRule) Origin() string       { return r.origin }
+func (r stubOriginRule) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
+func (r stubOriginRule) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: r.id, EventTypes: []string{"exec"}}
+}
+func (r stubOriginRule) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r stubOriginRule) Evaluate(context.Context, []rulesapi.Event, rulesapi.GraphReader) ([]rulesapi.Finding, error) {
+	return nil, nil
+}
+
+// TestBackfillAlertOrigins_ThroughTheLeaderLock exercises the path an operator's upgrade actually takes, which the store test
+// above does not: the bootstrap method decides scope, takes the lock, and reports whether this replica did the work.
+//
+// Worth its own test rather than trusting the two halves. The store is handed a prepared map, so nothing there proves the
+// scope decision is wired to it, and DoOnceIfLeader is the difference between crediting alerts once and every replica racing to
+// do it at boot.
+func TestBackfillAlertOrigins_ThroughTheLeaderLock(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	coord := leader.NewMySQL(d.Store().DB(), slog.New(slog.DiscardHandler))
+
+	vendored := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "", `{"pid":10}`)
+	ours := insertAlertWithOrigin(t, ctx, d, "suspicious_exec", "", `{"pid":11}`)
+
+	ran, err := d.BackfillAlertOrigins(ctx, coord, []rulesapi.Rule{
+		stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"},
+		plainRule{id: "suspicious_exec"},
+	})
+	require.NoError(t, err)
+	assert.True(t, ran, "this replica held the lock, so it did the work")
+
+	assert.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, vendored))
+	assert.Empty(t, originOfAlert(t, ctx, d, ours), "a rule this project wrote is out of scope even through the full path")
+
+	// Running again is the second boot, and must change nothing.
+	ranAgain, err := d.BackfillAlertOrigins(ctx, coord, []rulesapi.Rule{
+		stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"},
+	})
+	require.NoError(t, err)
+	assert.True(t, ranAgain, "the lock is free again, so this replica runs the pass")
+	assert.Equal(t, "SigmaHQ", originOfAlert(t, ctx, d, vendored))
+}
+
+// plainRule declares no origin, so OriginOf reports this project and the scope decision skips it.
+type plainRule struct{ id string }
+
+func (r plainRule) ID() string           { return r.id }
+func (r plainRule) DisplayName() string  { return r.id }
+func (r plainRule) Techniques() []string { return nil }
+func (r plainRule) Platforms() []rulesapi.Platform {
+	return []rulesapi.Platform{rulesapi.PlatformDarwin}
+}
+func (r plainRule) Doc() rulesapi.Documentation {
+	return rulesapi.Documentation{Title: r.id, EventTypes: []string{"exec"}}
+}
+func (r plainRule) SupportedExclusionMatchTypes() []rulesapi.ExclusionMatchType { return nil }
+func (r plainRule) Evaluate(context.Context, []rulesapi.Event, rulesapi.GraphReader) ([]rulesapi.Finding, error) {
+	return nil, nil
+}
+
+// TestBackfillAlertOrigins_NoVendoredRulesSkipsTheLock covers the deployment running none: it must not take a server-global
+// lock to discover it has nothing to do, since every replica would queue on it at every boot for no work.
+func TestBackfillAlertOrigins_NoVendoredRulesSkipsTheLock(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	coord := leader.NewMySQL(d.Store().DB(), slog.New(slog.DiscardHandler))
+
+	ran, err := d.BackfillAlertOrigins(ctx, coord, []rulesapi.Rule{plainRule{id: "suspicious_exec"}})
+	require.NoError(t, err)
+	assert.False(t, ran, "nothing in scope means no lock and no pass")
+}
+
+// TestBackfillAlertOrigins_NoCoordinatorIsANoOp covers a deployment wired without leader election, where taking the pass would
+// mean every replica running it concurrently.
+func TestBackfillAlertOrigins_NoCoordinatorIsANoOp(t *testing.T) {
+	t.Parallel()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+	ran, err := d.BackfillAlertOrigins(t.Context(), nil, []rulesapi.Rule{
+		stubOriginRule{id: "proc_creation_macos_applescript", origin: "SigmaHQ"},
+	})
+	require.NoError(t, err)
+	assert.False(t, ran)
+}
