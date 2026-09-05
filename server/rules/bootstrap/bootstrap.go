@@ -363,7 +363,7 @@ func (r *Rules) Reload(ctx context.Context) (int, error) {
 	//
 	// The real remedy is upstream: content that cannot run should never reach the store, which is what publish-time validation in
 	// #767 is for. Until then the conservative choice is the contract, and issue #851 carries the cross-replica question.
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
 	switch {
 	case len(docs) == 0:
 		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; keeping the rule set already in force", "version", version)
@@ -475,7 +475,7 @@ func loadCorpus(ctx context.Context, corpus rulecontentapi.Corpus, logger *slog.
 	if len(docs) == 0 {
 		return catalog.MustLoadImported()
 	}
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
 	if err != nil {
 		logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
 			"documents", len(docs), "err", err)
@@ -653,4 +653,58 @@ func ImportedRejections() []RefusedRule {
 		out = append(out, RefusedRule{File: r.File, Reason: r.Reason})
 	}
 	return out
+}
+
+// storedCorpusRoot is the root the STORED corpus is walked from, and it is deliberately not catalog.CorpusRoot.
+//
+// catalog.CorpusRoot ("imported") is where the corpus VENDORED into this build lives, and it stays the prefix the seed records
+// those documents under, because that is where they came from. But the store holds exactly the corpus and nothing else: the seed
+// filters to rule files, so there is no README or checksum manifest beside them to exclude. Walking the whole document set is
+// therefore the honest reading of "the stored corpus", and filtering it to one prefix would only mean that a document stored under
+// any other prefix is silently never loaded.
+//
+// Which is what operator authoring needs (issue #767). An operator's own rule has no business living under a directory called
+// "imported", and a prefix that quietly excludes content from evaluation is the worst way to find that out.
+//
+// Rule identity is unaffected: it comes from the file STEM, not the path, and checkDuplicateStems already collides across
+// directories by design. So a rule means the same thing wherever it is stored, and two documents claiming one identity are refused
+// whether they sit in the same directory or not.
+const storedCorpusRoot = "."
+
+// CorpusValidator validates a proposed rule-content document set by loading it, and satisfies rulecontentapi.Validator.
+//
+// The whole point is that it runs the SAME loader the corpus load runs, over the same root, so "valid" means exactly "this
+// deployment will load this". A validator that re-implemented the loader's checks would be a second notion of validity whose only
+// job is to agree with the first, and the direction it would drift is the dangerous one: content accepted at authoring time that
+// the deployment then refuses, which drops the whole rule set back to the copy embedded in the binary.
+//
+// It lives in `rules` rather than in `rulecontent` because the loader does: producing evaluatable rules is what `rules` is for.
+// `rulecontent` declares the port and `cmd` wires this in, so content still imports no other context's api (ADR-0021, arch-go.yml).
+type CorpusValidator struct{}
+
+// Compile-time proof that this satisfies the port rulecontent declares. Without it the two could drift apart silently until the
+// wiring in cmd/main failed to build, which is a long way from where the mistake would be.
+var _ rulecontentapi.Validator = CorpusValidator{}
+
+// Validate reports whether docs would load as a corpus.
+//
+// An error means refused. A rejection does NOT: the loader refuses individual rules it cannot map to this sensor's events, which
+// is an expected outcome for a corpus written for a fleet of sensors, and refusing the write over one would mean an operator
+// cannot store a rule that the deployment would simply not run. Those come back as warnings so the operator learns the rule will
+// not fire, rather than being told the document is broken.
+func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]string, error) {
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
+	if err != nil {
+		return nil, err
+	}
+	warnings := make([]string, 0, len(rejected))
+	for _, r := range rejected {
+		warnings = append(warnings, fmt.Sprintf("%s will not run: %s", r.File, r.Reason))
+	}
+	if len(loaded) == 0 && len(docs) > 0 {
+		// Every document refused. Storing this would leave the deployment with no corpus detections at all, and both load paths
+		// treat that as a reason to fall back to the embedded copy, so accepting it would silently discard the operator's corpus.
+		return warnings, fmt.Errorf("no document in the proposed corpus can run: %d refused", len(rejected))
+	}
+	return warnings, nil
 }
