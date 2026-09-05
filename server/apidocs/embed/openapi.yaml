@@ -1643,7 +1643,7 @@ components:
             written on this deployment; for a rule vendored from an upstream corpus, that project and the rule's own
             author, which is the attribution the corpus licence carries (those rules are shipped and exported
             unmodified). Always present on this endpoint, so a
-            reader tells the two apart by the value rather than by its absence.
+            reader tells them apart by the value rather than by its absence.
           example: "SigmaHQ, by Daniil Yugoslavskiy, oscd.community"
         techniques:
           type: array

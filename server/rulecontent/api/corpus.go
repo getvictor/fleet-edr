@@ -19,11 +19,14 @@ type Document struct {
 	Content []byte
 	// Source is where this document came from, and it is always populated on a document READ back.
 	//
-	// On the way IN it depends on the path, and the distinction is contractual rather than incidental. Through the AUTHORING
-	// surface it is ignored: that write records the operator's provenance itself, because how a document arrived is an
-	// observation rather than a claim the caller gets to make. A whole-corpus replacement may state it, and must be able to:
-	// that is the path a pack upgrade and a restore go through, and both have to be able to put back an operator's own rules as
-	// theirs rather than relabelling them. Empty there means "not stated", which is recorded as vendored.
+	// On the way IN it depends on WHICH WRITE SURFACE the document arrived through, never on the document's own path. The
+	// distinction is contractual: deriving provenance from a path is the specific thing this design rules out, since an operator
+	// chooses their own paths and could then launder an authored rule into a vendored one.
+	//
+	// Through the AUTHORING surface this field is ignored: that write records the operator's provenance itself, because how a
+	// document arrived is an observation rather than a claim the caller gets to make. A whole-corpus replacement may state it,
+	// and must be able to, since that is the surface a pack upgrade and a restore go through and both have to put an operator's
+	// own rules back as theirs rather than relabelling them. Empty there means "not stated", which is recorded as vendored.
 	Source Source
 }
 
