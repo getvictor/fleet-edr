@@ -101,8 +101,8 @@ func findShellOnExecChain(
 		// This DROPS the chain; it does not defer it. Ancestor and parent-chain lookups keep skip semantics by design (the
 		// canonical retry contract covers the pid an event is ABOUT, not its ancestry), so returning nil here acknowledges the
 		// batch and no later parent record brings the detection back. Earlier wording here said "defer", which read as
-		// recoverable and is not (issue #829 review). A shell with no parent to resolve at all (PPID <= 1) is a genuine no-parent case
-		// than a missing record, and still counts; see parentPathFor for what such an alert names and why that makes it
+		// recoverable and is not (issue #829 review). A shell with no parent to resolve at all (PPID <= 1) is a genuine no-parent
+		// case rather than a missing record, and still counts; see parentPathFor for what such an alert names and why that makes it
 		// suppressible.
 		if priorParent == nil && prior.PPID > 1 {
 			return nil, nil, prior, nil
