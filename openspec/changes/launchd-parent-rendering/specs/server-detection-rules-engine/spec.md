@@ -40,3 +40,23 @@ Suppressing this class is BROAD by nature, and the system SHALL state that where
 - **WHEN** the rule evaluates it
 - **THEN** the parent is reported as unnameable rather than as pid 1
 - **AND** an exclusion matching pid 1's path does not suppress it
+
+## MODIFIED Requirements
+
+### Requirement: Version-agnostic parent allowlist matching
+
+A rule's non-shell parent exclusions SHALL match an entry against the candidate parent process path treating the `*` character as a wildcard that matches any run of characters including the path separator. An entry that contains no `*` MUST match only by exact string equality, preserving the behavior of existing literal-path configurations. A candidate whose non-shell parent matches an entry is suppressed for the rule that entry names. A finding whose parent cannot be named is never suppressed by an entry, and NO finding lacking a resolved parent process record is ever suppressed by a code-signing exclusion, because there is no signing identity to match against. A shell started directly by process 1 is the exception to the first of those: process 1 is nameable, so an entry naming its path does match, which is what makes that class suppressible at all. Entries are per rule: the temp-exec and outbound-connect shapes are separate rules, so an entry saved against one does not suppress the other. The entries are the durable per-rule exclusions on the detection-configuration surface; the `EDR_SUSPICIOUS_EXEC_PARENT_ALLOWLIST` environment variable this requirement previously named no longer exists.
+
+#### Scenario: A glob allowlist entry suppresses a version-stamped parent
+
+- **GIVEN** a `shell_network_connect` exclusion set containing the entry `*/claude/versions/*`
+- **AND** a chain whose non-shell parent path is `/Users/dev/.local/share/claude/versions/2.1.178/claude` spawns a shell that makes an outbound connection to a public address
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces no `shell_network_connect` finding, because the version-stamped parent path matches the glob entry
+
+#### Scenario: A literal allowlist entry still matches exactly
+
+- **GIVEN** a `shell_network_connect` exclusion set containing the literal entry `/usr/libexec/sshd-session`
+- **AND** an otherwise-identical chain whose non-shell parent path is `/usr/libexec/sshd-session`
+- **WHEN** the engine evaluates the rule against the batch
+- **THEN** the engine produces no `shell_network_connect` finding, because the literal entry matches the parent path exactly
