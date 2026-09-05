@@ -3,7 +3,7 @@
 package tests
 
 import (
-	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,7 +108,7 @@ func TestDeleteDocument_NotFoundLeavesTheVersionAlone(t *testing.T) {
 
 	_, err = s.DeleteDocument(ctx, "imported/never-existed.yml")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, api.ErrDocumentNotFound), "callers branch on this, so it must be matchable with errors.Is")
+	require.ErrorIs(t, err, api.ErrDocumentNotFound, "callers branch on this, so it must be matchable with errors.Is")
 
 	now, err := s.Version(ctx)
 	require.NoError(t, err)
@@ -117,4 +117,35 @@ func TestDeleteDocument_NotFoundLeavesTheVersionAlone(t *testing.T) {
 	docs, err := s.Documents(ctx)
 	require.NoError(t, err)
 	assert.Len(t, docs, 1, "and it must not have removed anything either")
+}
+
+// spec:rule-content/operators-author-rule-content/a-failed-write-changes-nothing
+//
+// TestPutDocument_AFailedWriteLeavesTheVersionAlone pins that the version bump is inside the same transaction as the document
+// write, and it matters because the bump happens FIRST. Every replica polls that counter, so a write that failed after moving it
+// would send the whole fleet to re-read a corpus that had not changed, and would report a version no content corresponds to.
+//
+// The failure is forced with a path longer than the column holds, which is deterministic and needs no fault injection: the insert
+// fails inside the open transaction, and the deferred rollback takes the bump with it.
+func TestPutDocument_AFailedWriteLeavesTheVersionAlone(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	before, err := s.Version(ctx)
+	require.NoError(t, err)
+
+	_, err = s.PutDocument(ctx, api.Document{
+		Path:    "imported/" + strings.Repeat("x", 300) + ".yml",
+		Content: []byte("content"),
+	})
+	require.Error(t, err, "a path the column cannot hold must fail rather than silently truncate")
+
+	after, err := s.Version(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "the version bump must roll back with the write it was made for")
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, docs, "and nothing may be stored")
 }

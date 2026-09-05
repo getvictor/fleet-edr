@@ -7,6 +7,7 @@ package authoring
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/fleetdm/edr/server/rulecontent/api"
@@ -23,7 +24,7 @@ type Service struct {
 // "validated" a property of the wiring rather than of the type, and the wiring is exactly what a future caller gets wrong.
 func New(corpus api.Corpus, writer api.Writer, validator api.Validator) (*Service, error) {
 	if corpus == nil || writer == nil || validator == nil {
-		return nil, fmt.Errorf("rule content authoring: corpus, writer and validator are all required")
+		return nil, errors.New("rule content authoring: corpus, writer and validator are all required")
 	}
 	return &Service{corpus: corpus, writer: writer, validator: validator}, nil
 }

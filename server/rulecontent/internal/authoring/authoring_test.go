@@ -113,7 +113,7 @@ func TestPut_RefusedWritesNothing(t *testing.T) {
 	_, _, err := newService(t, &fakeCorpus{}, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"})
 
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, api.ErrRefused), "callers branch on this")
+	require.ErrorIs(t, err, api.ErrRefused, "callers branch on this")
 	assert.Contains(t, err.Error(), "already claimed by imported/a.yml",
 		"the validator's own reason must survive, since it is what names the thing to fix")
 	assert.Empty(t, w.put, "a refused document must not reach the store")
@@ -161,7 +161,7 @@ func TestDelete_NotFoundIsRefusedBeforeValidating(t *testing.T) {
 	_, _, err := newService(t, corpus, w, v).Delete(t.Context(), "imported/never-existed.yml")
 
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, api.ErrDocumentNotFound))
+	require.ErrorIs(t, err, api.ErrDocumentNotFound)
 	assert.Nil(t, v.saw, "nothing was proposed, so there is nothing to validate")
 	assert.Empty(t, w.deleted)
 }

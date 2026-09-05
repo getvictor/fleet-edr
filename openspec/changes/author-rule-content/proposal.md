@@ -19,8 +19,7 @@ So this change builds the third criterion, and the path that makes the first two
 
 - Rule content gains a per-document write path: create, replace, delete. Each writes the document and the corpus version in one transaction, so a replica polling for change never sees a version that promises content it cannot read.
 - Every write is validated first, **by the loader itself** rather than by a second parser written to agree with it. A document that the corpus loader would reject is refused at authoring time, with the loader's own reason.
-- A document that loads but has no discriminating predicate is **warned about, not refused.** A rule matching everything is a foot-gun rather than an error, and an operator writing a deliberately broad hunting rule is doing something legitimate.
-- Every mutation is attributable to an actor, audited the way `detection_rule_settings` already is.
+Not here, and deliberately: the operator-facing HTTP surface, its authorization, the audit of every mutation, and the warning for a detection with no discriminating predicate. Those are the consumer half and they follow in the next change, which keeps this one at the size the repo aims for and sequences the producer first. Nothing calls the authoring service until then, exactly as #766 shipped `Replace` before anything replaced a corpus.
 
 ## Where the seam falls, which ADR-0021 deferred to this issue
 

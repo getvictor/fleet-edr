@@ -42,6 +42,10 @@ Validation SHALL consider the whole document set the write would produce, not th
 
 A document the loader would reject SHALL be refused, and the refusal SHALL carry the loader's own reason, naming what to fix.
 
+The system SHALL distinguish a document that breaks the corpus from one the corpus can carry but this deployment cannot run. The first is refused. The second is accepted with a warning naming the file and the reason, because a corpus written for a fleet of sensors legitimately contains rules a given sensor cannot map, and refusing the write would stop an operator storing a rule their deployment would simply not run. A pattern above the affordable-matching limit falls in the second class: the rule is never loaded, so it cannot slow evaluation, and the operator is told which field exceeded which limit.
+
+A proposed corpus in which NO document can run SHALL be refused, even though each individual rejection is only a warning, because storing it would leave the deployment falling back to the rule set embedded in its binary and silently discard what the operator published.
+
 A refused document SHALL NOT be written, and SHALL NOT change the corpus version.
 
 #### Scenario: A document the loader refuses is not written
@@ -56,52 +60,14 @@ A refused document SHALL NOT be written, and SHALL NOT change the corpus version
 - **WHEN** an operator submits it
 - **THEN** it is refused, because accepting it would refuse the whole corpus at the next load
 
-#### Scenario: A pattern too expensive to match is refused
+#### Scenario: A pattern too expensive to match is reported and does not run
 
-- **GIVEN** a rule document whose pattern exceeds the authored-pattern cost limit
+- **GIVEN** a rule document whose pattern exceeds the affordable-matching limit, alongside a rule that runs
 - **WHEN** an operator submits it
-- **THEN** it is refused, naming the field to fix
+- **THEN** it is written, the rule is not loaded, and the operator is warned naming the field and the limit it exceeded
 
-### Requirement: A rule matching everything is warned about
+#### Scenario: A corpus in which nothing can run is refused
 
-The system SHALL warn when a submitted document defines a detection with no discriminating predicate, and SHALL accept it.
-
-Accepting is deliberate: a rule that matches everything is a foot-gun rather than an error, and an operator writing a broad hunting rule on purpose is doing something legitimate. Refusing it would substitute the system's judgement for the operator's on a question the system cannot answer.
-
-A warning SHALL NOT prevent the write, and SHALL be reported to the operator that made it.
-
-#### Scenario: A rule with no discriminating predicate warns
-
-- **GIVEN** a document defining a detection that matches every event of its type
+- **GIVEN** a proposed corpus whose every document this deployment would refuse
 - **WHEN** an operator submits it
-- **THEN** it is written, and the operator is warned that it matches everything
-
-#### Scenario: A discriminating rule warns about nothing
-
-- **GIVEN** a document defining a detection with a discriminating predicate
-- **WHEN** an operator submits it
-- **THEN** it is written with no warning
-
-### Requirement: Every authoring change is attributable
-
-The system SHALL record an audit entry for every rule-content mutation, attributing it to the acting principal, naming the document, and distinguishing a create or replace from a delete.
-
-An audit entry SHALL be recorded for a mutation that took effect. A refused submission SHALL NOT be recorded as a mutation, because the corpus did not change.
-
-#### Scenario: A write is attributed
-
-- **GIVEN** an operator writes a rule document
-- **WHEN** the write succeeds
-- **THEN** an audit entry attributes the write to that operator and names the document
-
-#### Scenario: A delete is attributed
-
-- **GIVEN** an operator deletes a rule document
-- **WHEN** the delete succeeds
-- **THEN** an audit entry attributes the delete to that operator and names the document
-
-#### Scenario: A refused submission is not a mutation
-
-- **GIVEN** a submission the validator refuses
-- **WHEN** it is refused
-- **THEN** no mutation audit entry is recorded
+- **THEN** it is refused, because storing it would silently discard the corpus in force
