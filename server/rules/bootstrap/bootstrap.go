@@ -756,6 +756,13 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 		}
 	}
 
+	// Provenance is passed here even though no check below reads it, and the reason is that `nil` would not mean "unused": it is
+	// the claim that every document is vendored, which is false for a corpus holding an operator's rules. Wiring the true value
+	// costs a map build and cannot be wrong; wiring a false one is a trap for the first check that does read it.
+	//
+	// A mutant replacing this with nil therefore SURVIVES, and that is expected rather than a gap: validation reports rules that
+	// will not run and searches that match everything, and neither depends on who wrote the rule. The two production LOAD seams
+	// are a different matter and are pinned, since provenance is what they decide attribution from.
 	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
 	if err != nil {
 		return nil, err

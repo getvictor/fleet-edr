@@ -24,6 +24,18 @@
 -- the authoring surface (#875) shipped after it and the only other writer is Replace, which had no production caller. Backfilling
 -- them as vendored is therefore a statement of fact rather than a guess, and it is the safe direction besides: mislabelling an
 -- authored rule as vendored over-credits upstream, which is visible, where the reverse silently drops a licence obligation.
+-- On the rolling upgrade ADR-0009 requires this to survive: during cutover, binary N and binary N+1 run against one MySQL, so a
+-- column added with a DEFAULT is a hazard whenever N still writes the table without naming it. N's write would take the default
+-- and be recorded as vendored, and an operator authoring a rule against an old replica in that window would be credited to
+-- SigmaHQ permanently, which is precisely the bug this migration ends.
+--
+-- That hazard cannot occur here, and the reason is checkable rather than a judgement: no released binary writes this table at
+-- all. `rule_corpus_documents` does not exist in v0.4.0 or v0.4.0-rc.1; the table, its store, and PutDocument were all introduced
+-- by #847, which is in no release tag, so the migration that creates the table and this one that adds the column ship in the same
+-- release. There is no binary N with a write path to skew.
+--
+-- It will NOT stay moot. Once this release ships, an old replica does have PutDocument, and the next column added to this table
+-- has to be expand-contract: nullable, written explicitly by the new binary, tightened in a later release.
 -- +goose StatementBegin
 ALTER TABLE rule_corpus_documents
 	ADD COLUMN source VARCHAR(16) NOT NULL DEFAULT 'vendored';
