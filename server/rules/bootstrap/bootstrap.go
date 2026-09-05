@@ -24,6 +24,7 @@ import (
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/rules/internal/export"
 	"github.com/fleetdm/edr/server/rules/internal/operator"
+	"github.com/fleetdm/edr/server/rules/internal/ruleauthoring"
 	"github.com/fleetdm/edr/server/rules/internal/service"
 	rulesmigrations "github.com/fleetdm/edr/server/rules/migrations"
 )
@@ -70,6 +71,14 @@ type Deps struct {
 	// evaluates it. Optional. When nil, or when the stored corpus is empty or fails to load, the catalog falls back to the corpus
 	// embedded in the binary, so a deployment that has not seeded storage behaves exactly as it did before (issue #766).
 	Corpus rulecontentapi.Corpus
+	// RuleAuthor is rulecontent's authoring lifecycle, which backs the operator surface for creating and deleting rule
+	// documents (issue #767). Nil leaves that surface unmounted, which is the right answer for a deployment or a tool that has
+	// no business changing rule content, and is what tooling and the tests that only read the catalog pass.
+	//
+	// It is handed in rather than built here because building it needs a validator, the only honest validator is this package's
+	// CorpusValidator, and rulecontent must not import it (ADR-0021). cmd/main closes that loop by constructing the lifecycle
+	// with the validator and passing the result back.
+	RuleAuthor rulecontentapi.Author
 }
 
 // Rules is the handle cmd/main holds for the rules bounded context.
@@ -89,6 +98,7 @@ type Rules struct {
 	// evalStatsFlushInterval is how often that buffer is written. See Deps.EvalStatsFlushInterval.
 	evalStatsFlushInterval time.Duration
 	detectionConfigH       *operator.DetectionConfigHandler
+	ruleAuthoringH         *operator.RuleAuthoringHandler
 	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
 	retentionDays int
 	db            *sqlx.DB
@@ -143,6 +153,20 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		detectionConfigH.SetPrincipalLabelResolver(deps.PrincipalLabel)
 	}
 
+	// Mounted only when both halves are present: the lifecycle to change content, and the corpus to read it back. Without either
+	// the surface would be half a surface, and a handler that 500s on every request is worse than a route that is not there.
+	var ruleAuthoringH *operator.RuleAuthoringHandler
+	if deps.RuleAuthor != nil && deps.Corpus != nil {
+		authoringSvc, aerr := ruleauthoring.New(deps.RuleAuthor, CorpusValidator{}, deps.Audit, logger)
+		if aerr != nil {
+			return nil, fmt.Errorf("build rule authoring service: %w", aerr)
+		}
+		ruleAuthoringH, aerr = operator.NewRuleAuthoringHandler(authoringSvc, deps.Corpus, deps.AuthZ, logger)
+		if aerr != nil {
+			return nil, fmt.Errorf("build rule authoring handler: %w", aerr)
+		}
+	}
+
 	appControlStore := appcontrol.NewStore(deps.DB)
 	var appControlSvc *appcontrol.Service
 	var appControlH *operator.AppControlHandler
@@ -167,6 +191,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		appControlSvc:          appControlSvc,
 		detectionConfigSvc:     detectionConfigSvc,
 		detectionConfigH:       detectionConfigH,
+		ruleAuthoringH:         ruleAuthoringH,
 		db:                     deps.DB,
 		logger:                 logger,
 		corpus:                 deps.Corpus,
@@ -581,6 +606,11 @@ func (r *Rules) ApplicationControlStore() api.ApplicationControlStore { return r
 //	GET  /api/v1/app-control/policies                    (when CommandBatchInserter + HostLister are wired)
 //	GET  /api/v1/app-control/policies/{id}               (when CommandBatchInserter + HostLister are wired)
 //	POST /api/v1/app-control/policies/{id}/rules         (when CommandBatchInserter + HostLister are wired)
+//	GET  /api/v1/rule-content/documents                  (when RuleAuthor + Corpus are wired)
+//	POST /api/v1/rule-content/documents:check            (when RuleAuthor + Corpus are wired)
+//	GET  /api/v1/rule-content/documents/{path...}        (when RuleAuthor + Corpus are wired)
+//	PUT  /api/v1/rule-content/documents/{path...}        (when RuleAuthor + Corpus are wired)
+//	DELETE /api/v1/rule-content/documents/{path...}      (when RuleAuthor + Corpus are wired)
 //
 // Caller wraps in identity Session + CSRF middleware before mounting.
 // rules has no public agent-facing routes, so RegisterPublicRoutes
@@ -591,6 +621,9 @@ func (r *Rules) RegisterAuthedRoutes(mux httpserver.Router) {
 		r.appControlH.RegisterRoutes(mux)
 	}
 	r.detectionConfigH.RegisterRoutes(mux)
+	if r.ruleAuthoringH != nil {
+		r.ruleAuthoringH.RegisterRoutes(mux)
+	}
 }
 
 // CatalogOnly returns just the rule catalog, without wiring the operator routes. Exposed for tooling that doesn't have a DB handle

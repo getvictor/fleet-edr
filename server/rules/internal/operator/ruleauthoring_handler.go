@@ -295,8 +295,7 @@ func (h *RuleAuthoringHandler) actor(ctx context.Context, w http.ResponseWriter)
 func (h *RuleAuthoringHandler) decode(ctx context.Context, w http.ResponseWriter, r *http.Request, v any) bool {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, ruleContentBodyLimit))
 	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
 			writeOperatorErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, errCodeRCBodyTooLarge,
 				"request body is too large")
 			return false

@@ -173,10 +173,17 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 		rulesbootstrap.EmbeddedCorpusIncludes)
 	require.NoError(t, err, "seed rule corpus")
 
+	// The authoring lifecycle is assembled here for the same reason cmd/main assembles it: rulecontent owns it but takes the
+	// validator as a port, and the only honest validator lives in rules. Wired in the cross-context harness rather than the
+	// rules-only one because rules/internal may not import rulecontent's bootstrap (arch-go), which is the boundary working.
+	ruleAuthor, err := ruleContentCtx.Author(rulesbootstrap.CorpusValidator{})
+	require.NoError(t, err)
+
 	rulesCtx, err := rulesbootstrap.New(t.Context(), rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               logger,
 		Corpus:               ruleContentCtx.Corpus(),
+		RuleAuthor:           ruleAuthor,
 		AuthZ:                identityCtx.AuthZ(),
 		Audit:                identityCtx.AuditRecorder(),
 		CommandBatchInserter: responseCtx.Service().InsertBatch,
@@ -333,12 +340,21 @@ func buildMux(
 	responseCtx.RegisterAuthedRoutes(apiMux)
 	identityCtx.RegisterAuthedRoutes(apiMux)
 	sessionProtected := sessionMW(csrfMW(apiMux))
+	// NOTE: this is an ALLOW-LIST, and a route missing from it 404s rather than failing to compile. Registering a handler on
+	// apiMux above is not enough; the outer mux only forwards the patterns named here. A new operator route whose author forgets
+	// this gets a test suite that passes while the endpoint is unreachable, which is how it presents: 404 page not found from a
+	// handler that is definitely mounted. Add the pattern here, matching the handler's own pattern exactly, wildcards included.
 	for _, p := range []string{
 		"POST /api/commands",
 		"GET /api/audit-events",
 		"GET /api/v1/app-control/policies",
 		"GET /api/v1/app-control/policies/{id}",
 		"POST /api/v1/app-control/policies/{id}/rules",
+		"GET /api/v1/rule-content/documents",
+		"POST /api/v1/rule-content/documents:check",
+		"GET /api/v1/rule-content/documents/{path...}",
+		"PUT /api/v1/rule-content/documents/{path...}",
+		"DELETE /api/v1/rule-content/documents/{path...}",
 	} {
 		mux.Handle(p, sessionProtected)
 	}
