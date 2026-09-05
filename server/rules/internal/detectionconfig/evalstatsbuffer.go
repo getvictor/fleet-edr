@@ -115,6 +115,12 @@ func (b *BufferedEvalStats) mergeLocked(stats api.RuleEvalStats) {
 // raw volume can read high, and by at most one flush's worth. The same reasoning the store's own doc gives for a replayed batch
 // applies, for the same reason.
 //
+// A retry also moves WHEN the work is attributed, and further than one interval, which review caught in a bound stated for the
+// happy path alone. The store takes the day and the first/last timestamps from its own clock at the successful write, so a flush
+// that fails for an hour attributes that hour's work to the recovery, and an outage spanning midnight attributes it to the next
+// day. EvalStats filters on that day, so a long enough outage can push work outside the window a reader is looking at. Bounded by
+// the outage rather than by the interval, and the direction is a late attribution rather than a lost count.
+//
 // The alternative, dropping on failure, trades a bounded over-count for an unbounded under-count, and under-counting is the
 // direction that misleads: a rule that looks cheaper than it is gets left alone.
 func (b *BufferedEvalStats) Flush(ctx context.Context) error {
@@ -185,8 +191,9 @@ func (b *BufferedEvalStats) flushOnShutdown() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), shutdownFlushTimeout)
 	defer cancel()
 	if err := b.Flush(ctx); err != nil {
-		// The one documented loss window. Reported at WARN with the count, so an operator reading a gap in the table can tell
-		// whether this is why.
+		// A loss, and it can happen on a GRACEFUL shutdown too, which review corrected: this write gets one short budget and a
+		// database that is down through the shutdown exhausts it. Reported at WARN with the count, so an operator reading a gap
+		// in the table can tell whether this is why.
 		b.logger.WarnContext(ctx, "rule eval stats lost on shutdown", "err", err, "rules", b.PendingRules())
 	}
 }

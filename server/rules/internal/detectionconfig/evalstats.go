@@ -45,9 +45,12 @@ import (
 //
 // Re-measured on the same harness when #837 moved it (server/rules/internal/tests/evalstats_latency_test.go, which is committed so
 // the claim can be re-checked rather than taken on trust): the store's own cost reproduced at p50 1.535ms/4.088ms/12.656ms for
-// 1/8/32 writers, and the drain path now spends p50 1us at every one of those concurrencies. One flush of 73 rules costs 1.349ms,
-// once per interval per replica. For scale, a 100-event batch drains end to end in 39ms at p50, so the write this removed was
-// about 4% of a batch at one writer and about a third of it at thirty-two.
+// 1/8/32 writers, and the drain path now spends p50 1us at every one of those concurrencies for this call. One flush of 73 rules costs about 1.5ms,
+// once per interval per replica. The drain path also gained one OTel histogram record per evaluated rule, 114us for a 73-rule
+// batch, which a before/after claim has to include: about 115us per batch after, against 1.48ms to 12.98ms before.
+//
+// For scale, a 100-event batch drains end to end in 39ms at p50, so the write this removed was about 4% of a batch at one
+// writer and about a third of it at thirty-two, and what replaced it is about 0.3%.
 //
 // CORRECTION, recorded because the first pass here got it wrong: an earlier version of this comment reported wall-clock divided by
 // operation count as if it were latency. That is reciprocal throughput, and it made a saturating write look like one that got

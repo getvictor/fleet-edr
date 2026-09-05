@@ -239,6 +239,12 @@ func run() error {
 	// that window was therefore false in production while being true in tests, which drive Run directly.
 	//
 	// Bounded, because a shutdown must end: the flush has its own short budget and this only has to outlast it.
+	//
+	// What this does NOT cover, and review was right to say so: the detection workers are not joined here either, so an
+	// evaluation still in flight can record statistics after the final flush has already run, and those are lost. Joining them
+	// too would mean ordering two contexts' shutdowns against each other, which is a larger change than the residual justifies:
+	// the loss is whatever one in-flight batch had produced, against a table read over days. Documented in the spec rather than
+	// left for a reader to discover.
 	select {
 	case <-rulesDone:
 	case <-time.After(rulesShutdownWait):

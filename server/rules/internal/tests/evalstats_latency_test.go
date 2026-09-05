@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
+	"github.com/fleetdm/edr/server/metrics"
 	api "github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/detectionconfig"
 	"github.com/fleetdm/edr/server/testdb/full"
@@ -101,4 +103,21 @@ func TestMeasureEvalStatsRecordLatency(t *testing.T) {
 	flushStart := time.Now()
 	require.NoError(t, buffered.Flush(context.Background()))
 	t.Logf("%-28s one flush of %d rules: %v", "flush (after, per interval)", 73, time.Since(flushStart).Round(time.Microsecond))
+
+	// The OTel histogram this change also adds, measured with a REAL SDK meter rather than the nil-instrument no-op a bare
+	// Recorder gives. Review caught its absence: the drain path now records one sample per evaluated rule, so an after-figure
+	// covering only the buffer call is not a figure for the change. A no-op recorder would have measured nothing and looked fine.
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	rec := metrics.New(nil, metrics.Options{Meter: mp.Meter("measure")})
+
+	histStart := time.Now()
+	for _, st := range batch {
+		rec.RuleEvaluationDuration(context.Background(), st.RuleID, time.Millisecond)
+	}
+	perBatch := time.Since(histStart)
+	t.Logf("%-28s %d records (one per rule, per batch): %v total, %v each",
+		"histogram (after, per batch)", len(batch), perBatch.Round(time.Microsecond),
+		(perBatch / time.Duration(len(batch))).Round(time.Nanosecond))
 }

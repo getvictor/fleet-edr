@@ -27,9 +27,11 @@ All numbers from one committed harness (`server/rules/internal/tests/evalstats_l
 | after, per batch, 1 writer | 1us | 1us | 1us |
 | after, per batch, 32 writers | 1us | 48us | 389us |
 
-One flush of 73 rules costs 1.349ms, once per interval per replica.
+One flush of 73 rules costs about 1.5ms to 2ms, once per interval per replica.
 
-Stated as a fraction of the work a batch does, which #837 notes was never established: a 100-event batch drains end to end, from ingest to acknowledged, in 39ms at p50 (`server/detection/internal/tests/batchtime_measure_test.go`). So the removed write was about 4% of a batch at one writer and about a third of it at thirty-two.
+The after-figure above is the buffer call ALONE, and review was right that a before/after claim has to include everything the drain path gained. The change also records one OTel histogram sample per evaluated rule: measured with a real SDK meter (a bare recorder has a nil instrument and would have measured nothing), that is 114us for a 73-rule batch, or 1.56us per rule. So the honest per-batch comparison is about 115us after, against 1.48ms at one writer and 12.98ms at thirty-two before.
+
+Stated as a fraction of the work a batch does, which #837 notes was never established: a 100-event batch drains end to end, from ingest to acknowledged, in 39ms at p50 (`server/detection/internal/tests/batchtime_measure_test.go`). So the removed write was about 4% of a batch at one writer and about a third of it at thirty-two, and what replaced it is about 0.3%.
 
 ## Why buffering is acceptable here and would not be for match counts
 
