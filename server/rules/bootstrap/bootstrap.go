@@ -39,6 +39,14 @@ type Deps struct {
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
+	// EvalStatsFlushInterval is how often accumulated per-rule evaluation statistics are written (issue #837). Optional: zero
+	// or negative means DefaultEvalStatsFlushInterval, applied by FlushLoop so one place decides it.
+	//
+	// A dep rather than a constant for the same reason the detection context takes ProcessInterval: an integration test that
+	// ingests a batch and then asserts the statistics landed would otherwise have to wait out the production interval, and a
+	// test that waits thirty seconds gets deleted or made flaky. Nothing in production sets it.
+	EvalStatsFlushInterval time.Duration
+
 	// PrincipalLabel resolves a principal id (usr_<id> / svc_<id> / sys) to its display label (a user's email, a service account's
 	// name, or "system") for the detection-config exclusions list's created_by column. Optional: when nil the handler returns the raw
 	// principal id. cmd/main wires it over identity's Service.PrincipalLabel; a func keeps the rules context free of an identity-internal
@@ -74,8 +82,10 @@ type Rules struct {
 	detectionConfigStore *detectionconfig.Store
 	// evalStatsBuffer is what the detection context actually writes per-rule evaluation statistics into, so that write stops
 	// touching the database on the drain path (issue #837). Flushed by Run below, and on shutdown.
-	evalStatsBuffer  *detectionconfig.BufferedEvalStats
-	detectionConfigH *operator.DetectionConfigHandler
+	evalStatsBuffer *detectionconfig.BufferedEvalStats
+	// evalStatsFlushInterval is how often that buffer is written. See Deps.EvalStatsFlushInterval.
+	evalStatsFlushInterval time.Duration
+	detectionConfigH       *operator.DetectionConfigHandler
 	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
 	retentionDays int
 	db            *sqlx.DB
@@ -144,18 +154,19 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
 	}
 	r := &Rules{
-		svc:                  svc,
-		detectionConfigStore: detectionConfigStore,
-		evalStatsBuffer:      evalStatsBuffer,
-		operatorH:            opH,
-		appControlH:          appControlH,
-		appControlSt:         appControlStore,
-		appControlSvc:        appControlSvc,
-		detectionConfigSvc:   detectionConfigSvc,
-		detectionConfigH:     detectionConfigH,
-		db:                   deps.DB,
-		logger:               logger,
-		corpus:               deps.Corpus,
+		svc:                    svc,
+		detectionConfigStore:   detectionConfigStore,
+		evalStatsBuffer:        evalStatsBuffer,
+		evalStatsFlushInterval: deps.EvalStatsFlushInterval,
+		operatorH:              opH,
+		appControlH:            appControlH,
+		appControlSt:           appControlStore,
+		appControlSvc:          appControlSvc,
+		detectionConfigSvc:     detectionConfigSvc,
+		detectionConfigH:       detectionConfigH,
+		db:                     deps.DB,
+		logger:                 logger,
+		corpus:                 deps.Corpus,
 	}
 
 	// Version 0: the initial set is stamped as not-from-storage even when it came from the store, because the version that produced
@@ -239,7 +250,7 @@ func (r *Rules) Run(ctx context.Context) {
 		// Flushes on cancellation as well as on the interval, which is what makes a graceful shutdown lose no counts. Run is
 		// waited on by the server's shutdown path, so the final write completes before the process exits.
 		func(ctx context.Context) {
-			r.evalStatsBuffer.FlushLoop(ctx, detectionconfig.DefaultEvalStatsFlushInterval)
+			r.evalStatsBuffer.FlushLoop(ctx, r.evalStatsFlushInterval)
 		},
 	}
 	var wg sync.WaitGroup

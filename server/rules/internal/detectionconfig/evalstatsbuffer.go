@@ -137,6 +137,12 @@ func (b *BufferedEvalStats) Flush(ctx context.Context) error {
 // The final flush deliberately does NOT use ctx, which is already cancelled by then and would fail the write immediately. It gets
 // a short budget of its own instead, long enough for one statement and short enough not to hold up a shutdown.
 func (b *BufferedEvalStats) FlushLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		// Defaulted here rather than at the wiring, so there is one place that decides it and a caller holding a zero value
+		// cannot panic a background goroutine. A hand-built Rules in a test does exactly that, and NewTicker panics on a
+		// non-positive interval rather than failing the call.
+		interval = DefaultEvalStatsFlushInterval
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

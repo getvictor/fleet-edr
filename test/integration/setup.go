@@ -180,6 +180,8 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 		AuthZ:                identityCtx.AuthZ(),
 		Audit:                identityCtx.AuditRecorder(),
 		CommandBatchInserter: responseCtx.Service().InsertBatch,
+		// Fast so the cross-context statistics test does not wait out the production interval (issue #837).
+		EvalStatsFlushInterval: 20 * time.Millisecond,
 		HostLister: func(ctx context.Context) ([]string, error) {
 			hosts, err := detectionCtx.Service().ListHosts(ctx)
 			if err != nil {
@@ -245,6 +247,11 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 			t.Errorf("identity.Run failed: %v", err)
 		}
 	}()
+	// The rules context's loops were never started here, which went unnoticed while nothing in this suite depended on them.
+	// Issue #837 made one of them load-bearing: per-rule evaluation statistics are now written by a flush rather than on the
+	// drain path, so without Run the cross-context statistics test sees an empty table. Run returns no error, unlike the two
+	// above, so there is nothing to surface.
+	go rulesCtx.Run(ctx)
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
