@@ -2,6 +2,7 @@ package detectionconfig
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -40,6 +41,14 @@ const DefaultEvalStatsFlushInterval = 30 * time.Second
 type BufferedEvalStats struct {
 	inner  api.RuleEvalStatsRecorder
 	logger *slog.Logger
+
+	// flushing serialises Flush against itself, so a periodic tick and the shutdown flush cannot run at once. Review found the
+	// race: shutdown cancelled the loop while a tick was already inside the write, and the shutdown flush then found an empty
+	// pending set and reported nothing lost while the tick's window went with its cancelled context.
+	//
+	// Separate from mu, and held for the whole write rather than instead of it: mu protects the map for the microseconds a merge
+	// or a drain takes, and taking it across the database call is what this whole change exists to avoid.
+	flushing sync.Mutex
 
 	mu sync.Mutex
 	// pending is a per-replica perf cache, safe to lose: it holds only this replica's own unwritten counts, and the durable
@@ -114,7 +123,10 @@ func (b *BufferedEvalStats) mergeLocked(stats api.RuleEvalStats) {
 //
 // Issue #868 tracks making the write idempotent, which is the only thing that would make it exact under failure, and it is a
 // schema question rather than a retry question.
-func (b *BufferedEvalStats) Flush(ctx context.Context) error {
+func (b *BufferedEvalStats) Flush(ctx context.Context) (err error) {
+	b.flushing.Lock()
+	defer b.flushing.Unlock()
+
 	b.mu.Lock()
 	if len(b.pending) == 0 {
 		b.mu.Unlock()
@@ -129,14 +141,19 @@ func (b *BufferedEvalStats) Flush(ctx context.Context) error {
 
 	// Written outside the lock, so a slow write does not block the drain path that is still recording into pending. The drained
 	// counts are gone either way: see above for why a retry is not the improvement it looks like.
-	return b.inner.RecordRuleEvalStats(ctx, drained)
+	if err := b.inner.RecordRuleEvalStats(ctx, drained); err != nil {
+		// Wrapped with what was lost, because the caller can no longer count it: pending has already been replaced, so a caller
+		// asking the buffer afterwards is told zero. Review caught the shutdown warning reporting exactly that.
+		return fmt.Errorf("flush %d rule aggregates: %w", len(drained), err)
+	}
+	return nil
 }
 
 // FlushLoop writes on the interval and once more when ctx is cancelled, so a graceful shutdown writes the window it had rather
 // than discarding it.
 //
-// Not "loses nothing": that final write can itself fail, within its own short budget, and then the window IS lost. That is the
-// one documented loss window and flushOnShutdown below reports it.
+// Not "loses nothing": that final write can itself fail, within its own short budget, and then the window IS lost. That is one of
+// the loss conditions the requirement enumerates, and flushOnShutdown below reports it with the count.
 //
 // The final flush deliberately does NOT use ctx, which is already cancelled by then and would fail the write immediately. It gets
 // a short budget of its own instead, long enough for one statement and short enough not to hold up a shutdown.
@@ -157,7 +174,8 @@ func (b *BufferedEvalStats) FlushLoop(ctx context.Context, interval time.Duratio
 		case <-ticker.C:
 			if err := b.Flush(ctx); err != nil {
 				// Logged rather than returned: this loop is the only caller, and giving up would turn a transient database
-				// problem into a permanent stop. The counts are still pending and the next tick retries them.
+				// problem into a permanent stop. That window is gone, and the error says how many rules' statistics went with
+				// it; the next tick starts from whatever has accumulated since.
 				b.logger.ErrorContext(ctx, "flush rule eval stats", "err", err)
 			}
 		}
@@ -177,8 +195,9 @@ func (b *BufferedEvalStats) flushOnShutdown() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), shutdownFlushTimeout)
 	defer cancel()
 	if err := b.Flush(ctx); err != nil {
-		// Reported at WARN with the count, so an operator reading a gap in the table can tell whether this is why.
-		b.logger.WarnContext(ctx, "rule eval stats lost on shutdown", "err", err, "rules", b.PendingRules())
+		// The error carries how many rule aggregates were lost; PendingRules would report zero here, because Flush has already
+		// replaced the map.
+		b.logger.WarnContext(ctx, "rule eval stats lost on shutdown", "err", err)
 	}
 }
 

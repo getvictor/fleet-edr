@@ -164,7 +164,7 @@ func TestBufferedEvalStats_FlushIsAggregationOverAnyBatchSequence(t *testing.T) 
 	})
 }
 
-// spec:server-detection-rules-engine/evaluation-statistics-are-aggregated-in-process-and-written-periodically/a-failed-flush-is-retried-rather-than-dropped
+// spec:server-detection-rules-engine/evaluation-statistics-are-aggregated-in-process-and-written-periodically/a-failed-flush-discards-that-window-and-reports-it
 //
 // TestBufferedEvalStats_AFailedWriteDiscardsThatWindow pins the choice made in review after two rounds spent narrowing what a
 // retry could promise.

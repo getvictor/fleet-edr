@@ -43,11 +43,12 @@ Per-rule evaluation duration SHALL additionally be reported as a metrics histogr
 - **WHEN** it is shut down gracefully
 - **THEN** the statistics are written before it exits
 
-#### Scenario: A failed flush is retried rather than dropped
+#### Scenario: A failed flush discards that window and reports it
 
 - **GIVEN** a replica holding unflushed statistics and a database that rejects the write
-- **WHEN** the flush fails and further batches are recorded
-- **THEN** a later successful flush writes every count from both the failed attempt and the work recorded after it
+- **WHEN** the flush fails
+- **THEN** that window is discarded rather than retried, and the failure names how many rules' statistics were lost
+- **AND** statistics recorded after the failure are written by the next successful flush, unaffected by it
 
 #### Scenario: Evaluation duration is available as a histogram per rule
 
