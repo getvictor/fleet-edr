@@ -101,7 +101,7 @@ func findShellOnExecChain(
 		// This DROPS the chain; it does not defer it. Ancestor and parent-chain lookups keep skip semantics by design (the
 		// canonical retry contract covers the pid an event is ABOUT, not its ancestry), so returning nil here acknowledges the
 		// batch and no later parent record brings the detection back. Earlier wording here said "defer", which read as
-		// recoverable and is not (issue #829 review). A shell parented at launchd (PPID <= 1) is a genuine no-parent case rather
+		// recoverable and is not (issue #829 review). A shell with no parent to resolve at all (PPID <= 1) is a genuine no-parent case
 		// than a missing record, and still counts; see parentPathFor for what such an alert names and why that makes it
 		// suppressible.
 		if priorParent == nil && prior.PPID > 1 {
@@ -120,7 +120,7 @@ func findShellOnExecChain(
 // findShellWithNonShellAncestor walks the PPID chain inclusively starting at
 // startPID looking for a shell process whose own parent is non-shell. Returns
 // the matched shell and its non-shell parent. The parent return value is nil
-// only when the shell's parent is launchd (PPID <= 1): that still counts as
+// only when the shell has no parent to resolve (PPID <= 1): that still counts as
 // a match because launchd is structurally non-shell. PPID > 1 with a missing
 // parent record means "ancestry incomplete, report nothing". This
 // keeps the rule from alerting on partial data and, in particular, keeps the
@@ -150,7 +150,7 @@ func findShellWithNonShellAncestor(
 //   - (nil, nil, advance, nil) means keep walking; `advance` is the next
 //     ancestor to examine.
 //   - (nil, nil, nil, nil) means terminate without a match: ran out of
-//     ancestry (PPID<=1 with no shell yet) or the parent record is
+//     ancestry (no parent to resolve, PPID <= 1, with no shell yet) or the parent record is
 //     missing (report nothing rather than alert on incomplete data).
 //
 // Splitting this out keeps findShellWithNonShellAncestor's loop body small
@@ -265,6 +265,10 @@ const unknownParentPath = "(unknown)"
 // rendering a claimed PPID of 0 as launchd would state something false, and would let a launchd exclusion silence a chain that was
 // never launchd's. No shell is expected to claim it; the point is that if one does, the alert says it cannot name the parent
 // instead of naming the wrong one.
+// PPID <= 1 means there is no parent process row to resolve, and the two values it covers are NOT the same thing: pid 1 is launchd
+// and pid 0 is the kernel. The walk treats them alike because neither has a row; what an alert NAMES for them differs, which is
+// what issue #831 turned on. Comments elsewhere in this file used to call the whole range "launchd", and that equivalence is what
+// review kept catching after the two cases were separated.
 func parentPathFor(parent, child *api.Process) string {
 	if parent != nil {
 		return parent.Path
