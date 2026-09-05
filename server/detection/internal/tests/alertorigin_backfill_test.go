@@ -4,7 +4,9 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/fleetdm/edr/server/coordination/leader"
@@ -27,6 +29,20 @@ func insertAlertWithOrigin(t *testing.T, ctx context.Context, d *bootstrap.Detec
 		`INSERT INTO alerts (host_id, rule_id, source, severity, title, description, origin, subject, techniques)
 		 VALUES (?, ?, 'detection', 'high', 'seeded', 'seeded', ?, ?, '[]')`,
 		"host-827", ruleID, origin, subject)
+	require.NoError(t, err)
+	id, err := res.LastInsertId()
+	require.NoError(t, err)
+	return id
+}
+
+// insertAppControlAlert writes the row an application-control block really produces: the operator's own policy entry as the rule
+// id, under the application_control source.
+func insertAppControlAlert(t *testing.T, ctx context.Context, d *bootstrap.Detection, ruleID, subject string) int64 {
+	t.Helper()
+	res, err := d.Store().DB().ExecContext(ctx,
+		`INSERT INTO alerts (host_id, rule_id, source, severity, title, description, origin, subject, techniques)
+		 VALUES (?, ?, 'application_control', 'high', 'Application blocked', 'seeded', '', ?, '[]')`,
+		"host-827", ruleID, subject)
 	require.NoError(t, err)
 	id, err := res.LastInsertId()
 	require.NoError(t, err)
@@ -57,7 +73,10 @@ func TestBackfillAlertOrigins(t *testing.T) {
 
 	vendored := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "", `{"pid":1}`)
 	ours := insertAlertWithOrigin(t, ctx, d, "suspicious_exec", "", `{"pid":2}`)
-	projection := insertAlertWithOrigin(t, ctx, d, "application_control_block", "", `{"pid":3}`)
+	// The shape an application-control block ACTUALLY persists: the alert carries the operator's policy entry id
+	// (`app_control:<n>`) and source `application_control`, not the catalog rule id. Review caught the first version of this row
+	// using the catalog id, which the system never writes, so it asserted the exclusion against a shape that cannot occur.
+	projection := insertAppControlAlert(t, ctx, d, "app_control:7", `{"pid":3}`)
 	alreadyCredited := insertAlertWithOrigin(t, ctx, d, "proc_creation_macos_applescript", "Someone Else", `{"pid":4}`)
 
 	// Only the vendored rule is in scope, which is the caller's decision and what the store is handed.
@@ -71,7 +90,8 @@ func TestBackfillAlertOrigins(t *testing.T) {
 	assert.Empty(t, originOfAlert(t, ctx, d, ours),
 		"our own rule's alert must stay empty, or the distinction migration 00012 preserves is destroyed")
 	assert.Empty(t, originOfAlert(t, ctx, d, projection),
-		"a projection's alert must stay empty, or this project claims authorship of the operator's own policy entry")
+		"an application-control alert must stay empty: its rule id is the operator's own policy entry, so crediting it would "+
+			"claim this project wrote their blocklist")
 	assert.Equal(t, "Someone Else", originOfAlert(t, ctx, d, alreadyCredited),
 		"an origin already recorded must never be overwritten")
 }
@@ -202,4 +222,41 @@ func TestBackfillAlertOrigins_NoCoordinatorIsANoOp(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, ran)
+}
+
+// spec:server-detection-rules-engine/alerts-raised-before-attribution-was-recorded-are-credited/more-alerts-than-one-statement-rewrites-are-all-credited
+//
+// TestBackfillAlertOrigins_CreditsMoreThanOneBatch exercises the loop, which exists because the statement cannot use an index:
+// alerts has none on origin, and rule_id sits third in the dedup key, so one unbounded UPDATE would hold row locks across a table
+// scan at boot. The batch bound is what keeps that from happening, and a bound is only correct if the loop around it terminates
+// having done all the work.
+//
+// Seeds one more row than a batch holds, which is the smallest input that proves a second pass happens at all.
+func TestBackfillAlertOrigins_CreditsMoreThanOneBatch(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	d := newDetection(t, detectionOpts{mode: bootstrap.ModeFull})
+
+	const rows = 1001
+	values := make([]string, 0, rows)
+	args := make([]any, 0, rows*2)
+	for i := range rows {
+		values = append(values, "(?, 'proc_creation_macos_applescript', 'detection', 'high', 'seeded', 'seeded', '', ?, '[]')")
+		args = append(args, "host-batch", fmt.Sprintf(`{"pid":%d}`, i))
+	}
+	_, err := d.Store().DB().ExecContext(ctx,
+		`INSERT INTO alerts (host_id, rule_id, source, severity, title, description, origin, subject, techniques) VALUES `+
+			strings.Join(values, ", "), args...)
+	require.NoError(t, err)
+
+	updated, err := d.Store().BackfillAlertOrigins(ctx, map[string]string{
+		"proc_creation_macos_applescript": "SigmaHQ",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(rows), updated, "every row is credited, across however many batches that takes")
+
+	var uncredited int
+	require.NoError(t, d.Store().DB().GetContext(ctx, &uncredited,
+		`SELECT COUNT(*) FROM alerts WHERE host_id = 'host-batch' AND origin = ''`))
+	assert.Zero(t, uncredited, "the loop must not stop at the first batch")
 }

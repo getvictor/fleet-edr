@@ -31,6 +31,11 @@ import (
 //
 // Only rows with an EMPTY origin are touched, so this cannot overwrite an attribution already recorded, and re-running it is a
 // no-op rather than a rewrite. That is what makes it safe to run on every boot of a replica that wins the leader lock.
+//
+// Known limit, worth stating because it is silent: the caller builds origins from the rules the deployment RUNS, so alerts from a
+// vendored rule that has since been removed from the corpus stay uncredited. Crediting them would mean keeping a record of every
+// rule that ever shipped, which is a larger thing than this pass, and the alternative of guessing an author is worse than leaving
+// the field empty.
 func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]string) (int64, error) {
 	if len(origins) == 0 {
 		return 0, nil
@@ -57,14 +62,42 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 	for _, id := range ruleIDs {
 		args = append(args, id)
 	}
+	fmt.Fprintf(&cases, " LIMIT %d", backfillBatchSize)
 
-	res, err := s.db.ExecContext(ctx, cases.String(), args...)
-	if err != nil {
-		return 0, fmt.Errorf("backfill alert origins: %w", err)
+	// Batched, because this cannot use an index. alerts carries no index on origin, and rule_id sits THIRD in the dedup key
+	// behind source and host_id, so `origin = '' AND rule_id IN (...)` is a table scan however it is written. One unbounded
+	// UPDATE would hold row locks across that scan, at boot, on a server that may already be serving reads.
+	//
+	// A LIMIT bounds each statement's lock footprint instead, and the loop ends when a pass changes nothing. Total work is the
+	// same; what changes is that no single statement holds the table for the length of it.
+	var total int64
+	for {
+		res, err := s.db.ExecContext(ctx, cases.String(), args...)
+		if err != nil {
+			return total, fmt.Errorf("backfill alert origins: %w", err)
+		}
+		updated, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("backfill alert origins rows affected: %w", err)
+		}
+		total += updated
+		if updated < backfillBatchSize {
+			return total, nil
+		}
+		// Yield between batches so a boot-time backfill cannot monopolise a connection against live traffic.
+		select {
+		case <-ctx.Done():
+			return total, ctx.Err()
+		default:
+		}
 	}
-	updated, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("backfill alert origins rows affected: %w", err)
-	}
-	return updated, nil
 }
+
+// backfillBatchSize bounds how many rows one statement rewrites.
+//
+// NOTE ON COVERAGE: removing the LIMIT is a MISSED mutation and always will be. Without it the UPDATE does the same work in
+// one pass and every functional assertion still holds; what changes is the lock footprint, which a test in this package
+// cannot observe without measuring contention against live traffic. The LOOP around it is covered, by seeding one more row
+// than a batch holds. Large enough that a typical deployment finishes in one pass,
+// small enough that no single statement holds a scan's worth of row locks.
+const backfillBatchSize = 1000
