@@ -275,8 +275,10 @@ func TestEngine_Evaluate_ARealOverrunIsRecordedAndNotReturned(t *testing.T) {
 	assert.Equal(t, before, rule.invocations(), "after which it is skipped")
 }
 
-// recordingSkips is the smallest MetricsRecorder that answers "was the transition reported": the engine calls exactly one method
-// on the skip path, so the rest can be absent rather than stubbed.
+// recordingSkips answers "was the transition reported". It records the one method the skip path is about and stubs the other the
+// evaluation path calls; the rest stay absent, which is safe only for methods the engine does not reach. Embedding an interface
+// makes that a runtime nil dereference rather than a compile error, so a new call on the evaluation path has to be stubbed here
+// deliberately (issue #837 added one).
 type recordingSkips struct {
 	api.MetricsRecorder
 	mu      sync.Mutex
@@ -288,6 +290,7 @@ func (r *recordingSkips) RuleEvaluationSkipped(_ context.Context, ruleID string)
 	defer r.mu.Unlock()
 	r.skipped = append(r.skipped, ruleID)
 }
+func (r *recordingSkips) RuleEvaluationDuration(context.Context, string, time.Duration) {}
 
 func (r *recordingSkips) names() []string {
 	r.mu.Lock()
@@ -582,4 +585,65 @@ func TestEngine_Evaluate_WaitingIsChargedToTheRuleThatTriggeredTheRead(t *testin
 		"the rule that waited on the graph must have that wait subtracted even though another rule's reader performed it")
 	assert.False(t, e.budget.skipping("builds_the_memo"),
 		"and the rule that merely built the memo must not be charged for a read it never asked for")
+}
+
+// recordingDurations captures what the histogram is told, so a test can assert the QUANTITY rather than only that a method was
+// called. Embeds the interface for the methods the engine does not reach on this path; see countingMetrics for why that is a trap
+// worth knowing about.
+type recordingDurations struct {
+	api.MetricsRecorder
+	mu   sync.Mutex
+	seen map[string]time.Duration
+}
+
+func (r *recordingDurations) RuleEvaluationDuration(_ context.Context, ruleID string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.seen == nil {
+		r.seen = map[string]time.Duration{}
+	}
+	r.seen[ruleID] = max(r.seen[ruleID], d)
+}
+
+func (r *recordingDurations) RuleEvaluationSkipped(context.Context, string) {}
+
+func (r *recordingDurations) worst(ruleID string) time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.seen[ruleID]
+}
+
+// spec:server-detection-rules-engine/evaluation-statistics-are-aggregated-in-process-and-written-periodically/evaluation-duration-is-available-as-a-histogram-per-rule
+//
+// TestEngine_Evaluate_HistogramIncludesGraphReadTime pins the one place the histogram and the budget deliberately disagree, which
+// review asked for after an earlier cut had them agree.
+//
+// The budget subtracts graph-read time so a slow datastore cannot disable rules. The histogram must NOT, because it is what an
+// operator reads to ask which rule is slow, and a rule that is slow through its reads is exactly as much of an operator problem
+// as one slow through matching. It also has to agree with the durable table, which records the full duration.
+//
+// Asserted together in one test because the pair is the point: the same evaluation must be visible to the histogram and invisible
+// to the skip.
+func TestEngine_Evaluate_HistogramIncludesGraphReadTime(t *testing.T) {
+	t.Parallel()
+
+	const readDelay = 5 * time.Millisecond
+	e := New(nil, nil)
+	// A budget far below the read delay, so a rule charged for its reads would be skipped almost immediately.
+	e.budget = newEvalBudgetWith(int64(time.Millisecond))
+	e.ruleReader = &retryableGraphReader{inner: slowGraphReader{delay: readDelay}}
+	rec := &recordingDurations{}
+	e.SetMetrics(rec)
+	e.Register(&slowReadingRule{stubRule: stubRule{id: "reads_a_lot"}})
+
+	batch := []api.Event{{EventID: "e1", HostID: "host-a", EventType: "exec"}}
+	for range maxRuleOverruns * 2 {
+		_, err := e.Evaluate(t.Context(), batch)
+		require.NoError(t, err)
+	}
+
+	assert.GreaterOrEqual(t, rec.worst("reads_a_lot"), readDelay,
+		"the histogram must include the time spent waiting on the graph, or it answers a different question from the table")
+	assert.False(t, e.budget.skipping("reads_a_lot"),
+		"and the budget must still exclude it, or a slow datastore disables rules rather than slow rules doing so")
 }

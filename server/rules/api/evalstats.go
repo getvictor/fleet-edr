@@ -48,6 +48,12 @@ type RuleEvalStatsRecorder interface {
 	// Called on the evaluation path rather than after an acknowledgement, and called on the failure path too, so it MUST NOT be
 	// able to fail the batch: the caller logs an error and moves on. The batch's real work is the detection, and replaying it to
 	// save a counter would cost more than the counter is worth.
+	//
+	// Nor may an implementation of this perform a DATABASE WRITE, which is a stronger requirement than the one above and is the
+	// one issue #837 added. The implementation the engine is given accumulates in memory and a flush writes; the per-batch write
+	// this used to be capped ingest for the whole deployment, because every replica contended on the same instance. A future
+	// implementation that writes here would reintroduce that, and no test of the buffer in isolation would notice, so the
+	// wiring is asserted against a real database in server/rules/internal/tests.
 	RecordRuleEvalStats(ctx context.Context, stats RuleEvalStats) error
 }
 
