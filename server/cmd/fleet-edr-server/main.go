@@ -173,9 +173,15 @@ func run() error {
 	backfillRules := rulesCtx.ContentService().ActiveRules()
 	go func() {
 		defer close(backfillDone)
-		// Cancellation is not a failure, it is shutdown reaching a pass that was still walking. Warning about it would put a line
-		// in the log of every deployment that restarts while the backfill is running, describing something that is working.
-		if _, err := detectionCtx.BackfillAlertOrigins(backfillCtx, coord, backfillRules); err != nil && !errors.Is(err, context.Canceled) {
+		// Shutdown reaching a pass that was still walking is not a failure, and warning about it would put a line in the log of
+		// every deployment that restarts mid-pass describing something that is working.
+		//
+		// The test for that is whether OUR context is done, NOT whether the error is context.Canceled, and the difference is real
+		// enough that review caught it here. DoOnceIfLeader hands the callback a LEASE context and its keep-alive cancels that
+		// lease when the advisory lock is lost, so a lock loss surfaces as context.Canceled while backfillCtx is still perfectly
+		// alive. Matching on the error would file that under "we are shutting down" and say nothing, which is exactly the failure
+		// someone would want told about.
+		if _, err := detectionCtx.BackfillAlertOrigins(backfillCtx, coord, backfillRules); err != nil && backfillCtx.Err() == nil {
 			logger.WarnContext(ctx, "could not credit alerts raised before rule attribution was recorded", "err", err)
 		}
 	}()
