@@ -13,6 +13,10 @@ import (
 	"github.com/fleetdm/edr/server/rulecontent/api"
 )
 
+// Compile-time proof that the service satisfies the published lifecycle. Without it the two drift apart until the wiring in
+// cmd/main fails to build, which is a long way from where the mistake would be.
+var _ api.Author = (*Service)(nil)
+
 // Service validates and applies single-document changes to the corpus.
 type Service struct {
 	corpus    api.Corpus
