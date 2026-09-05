@@ -105,19 +105,15 @@ func (b *BufferedEvalStats) mergeLocked(stats api.RuleEvalStats) {
 
 // Flush writes everything accumulated so far, and is safe to call with nothing pending.
 //
-// On a write failure the drained statistics go BACK into pending and the next flush retries them, so a transient database problem
-// discards no counts. The map is keyed by rule id, so a database that stays down cannot grow it past the rule count.
+// A failed write DISCARDS that window rather than retrying it, and the reasoning is worth stating because an earlier version of
+// this did retry. The write is an additive upsert, so a retry is at-least-once: a commit whose result never reaches the client is
+// added again, repeated failures are not bounded to one window, and because further work merges in between attempts the derived
+// mean moves rather than staying put. Neither choice gives the exact totals #837 asks for once the database is failing, so the
+// tie goes to the one whose behaviour can be stated in a sentence. #837's own rationale for buffering is that losing a window
+// changes no decision.
 //
-// Retrying an ADDITIVE upsert is at-least-once, not exactly-once. A commit whose result never reaches the client is added again,
-// and because further work merges in between attempts, a repeated failure can inflate by more than one flush and can move the
-// derived mean rather than leaving it untouched. Both are narrower statements than earlier drafts of this comment made, and
-// review had to correct them twice.
-//
-// The full set of conditions under which these numbers are inexact lives in ONE place, the requirement in
-// openspec/changes/evalstats-off-drain-path. It is deliberately not restated here: it was restated in five documents, they drifted
-// apart within one round, and a reader who needs the guarantee should read the requirement rather than whichever copy they landed
-// on. Issue #868 tracks making the write idempotent, which is what would let the guarantee be stated without any of this.
-
+// Issue #868 tracks making the write idempotent, which is the only thing that would make it exact under failure, and it is a
+// schema question rather than a retry question.
 func (b *BufferedEvalStats) Flush(ctx context.Context) error {
 	b.mu.Lock()
 	if len(b.pending) == 0 {
@@ -131,14 +127,9 @@ func (b *BufferedEvalStats) Flush(ctx context.Context) error {
 	b.pending = map[string]*api.RuleEvalStat{}
 	b.mu.Unlock()
 
-	// Written outside the lock, so a slow write does not block the drain path that is still recording into pending.
-	if err := b.inner.RecordRuleEvalStats(ctx, drained); err != nil {
-		b.mu.Lock()
-		b.mergeLocked(drained)
-		b.mu.Unlock()
-		return err
-	}
-	return nil
+	// Written outside the lock, so a slow write does not block the drain path that is still recording into pending. The drained
+	// counts are gone either way: see above for why a retry is not the improvement it looks like.
+	return b.inner.RecordRuleEvalStats(ctx, drained)
 }
 
 // FlushLoop writes on the interval and once more when ctx is cancelled, so a graceful shutdown writes the window it had rather
@@ -186,9 +177,7 @@ func (b *BufferedEvalStats) flushOnShutdown() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), shutdownFlushTimeout)
 	defer cancel()
 	if err := b.Flush(ctx); err != nil {
-		// A loss, and it can happen on a GRACEFUL shutdown too, which review corrected: this write gets one short budget and a
-		// database that is down through the shutdown exhausts it. Reported at WARN with the count, so an operator reading a gap
-		// in the table can tell whether this is why.
+		// Reported at WARN with the count, so an operator reading a gap in the table can tell whether this is why.
 		b.logger.WarnContext(ctx, "rule eval stats lost on shutdown", "err", err, "rules", b.PendingRules())
 	}
 }

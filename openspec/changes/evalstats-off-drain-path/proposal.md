@@ -39,9 +39,7 @@ The distinction is already in the spec rather than being re-argued. A monitor ma
 
 ADR-0010's carve-out covers the in-process state, and the annotation it requires is carried verbatim.
 
-A transient database failure discards nothing: a failed flush returns its counts to the pending set and the next flush retries them. Because the set is keyed by rule id, a database that stays down grows the counts and never the map.
-
-That retry is at-least-once against an additive write, so it is not free, and the conditions under which these numbers are inexact are enumerated in the requirement rather than here. Restating them in five places is what let them drift apart in one review round. #868 tracks making the write idempotent, which is what would remove the question.
+A failed flush discards that window and says so. Retrying was tried and rejected: the write is additive, so a retry is at-least-once and can both double a window and move the derived mean, and neither choice is exact once the database is failing. #868 tracks making the write idempotent, which is what would make it exact.
 
 ## Rejected: sampling
 

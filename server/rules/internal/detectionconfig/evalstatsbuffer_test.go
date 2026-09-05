@@ -166,37 +166,34 @@ func TestBufferedEvalStats_FlushIsAggregationOverAnyBatchSequence(t *testing.T) 
 
 // spec:server-detection-rules-engine/evaluation-statistics-are-aggregated-in-process-and-written-periodically/a-failed-flush-is-retried-rather-than-dropped
 //
-// TestBufferedEvalStats_AFailedWriteIsRetriedNotLost pins the reason the documented loss window is an ungraceful shutdown ALONE.
-// A transient database failure must cost no counts, or "the totals remain exact" would be untrue of any deployment that ever had
-// one.
-func TestBufferedEvalStats_AFailedWriteIsRetriedNotLost(t *testing.T) {
+// TestBufferedEvalStats_AFailedWriteDiscardsThatWindow pins the choice made in review after two rounds spent narrowing what a
+// retry could promise.
+//
+// The write is an additive upsert, so retrying it is at-least-once: it can double a window's contribution and, because later work
+// merges in between attempts, move the derived mean. Neither retrying nor discarding gives exact totals once the database is
+// failing, so this takes the one that can be stated in a sentence. Losing a window is what issue #837 says buffering costs.
+func TestBufferedEvalStats_AFailedWriteDiscardsThatWindow(t *testing.T) {
 	t.Parallel()
 
-	inner := &countingRecorder{failFor: 2}
+	inner := &countingRecorder{failFor: 1}
 	b := detectionconfig.NewBufferedEvalStats(inner, nil)
 
 	require.NoError(t, b.RecordRuleEvalStats(t.Context(), api.RuleEvalStats{
 		{RuleID: "r1", Evaluations: 2, EvalNs: 40, MaxEvalNs: 30},
 	}))
+	require.Error(t, b.Flush(t.Context()), "the write fails")
+	assert.Zero(t, b.PendingRules(), "and the window goes with it rather than being held for a retry")
 
-	require.Error(t, b.Flush(t.Context()), "the first attempt fails")
-	assert.Equal(t, 1, b.PendingRules(), "and the counts go back rather than being dropped")
-
-	// More work arrives while the store is still down, and must merge with what was returned rather than replace it.
+	// Work after the failure is unaffected, which is the property that matters: a failed window costs that window and nothing
+	// beyond it.
 	require.NoError(t, b.RecordRuleEvalStats(t.Context(), api.RuleEvalStats{
 		{RuleID: "r1", Evaluations: 1, EvalNs: 5, MaxEvalNs: 5},
 	}))
-	require.Error(t, b.Flush(t.Context()), "the second attempt fails too")
-	assert.Equal(t, 1, b.PendingRules(), "the map is keyed by rule, so a store that stays down grows counts and not memory")
-
-	require.NoError(t, b.Flush(t.Context()), "the third succeeds")
-	assert.Equal(t, api.RuleEvalStat{RuleID: "r1", Evaluations: 3, EvalNs: 45, MaxEvalNs: 30}, inner.lastWritten()["r1"],
-		"every count from both the failed attempts and the work that arrived between them is written")
-	assert.Zero(t, b.PendingRules())
+	require.NoError(t, b.Flush(t.Context()))
+	assert.Equal(t, api.RuleEvalStat{RuleID: "r1", Evaluations: 1, EvalNs: 5, MaxEvalNs: 5}, inner.lastWritten()["r1"],
+		"the second window is written whole, with nothing carried over from the first")
 }
 
-// spec:server-detection-rules-engine/evaluation-statistics-are-aggregated-in-process-and-written-periodically/a-graceful-shutdown-writes-what-it-had-accumulated
-//
 // TestBufferedEvalStats_FlushLoopWritesOnShutdown covers the graceful-shutdown criterion. The final write deliberately does not
 // use the cancelled context, which would fail it immediately, so this also pins that the flush actually reaches the store.
 func TestBufferedEvalStats_FlushLoopWritesOnShutdown(t *testing.T) {
