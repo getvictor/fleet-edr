@@ -416,6 +416,67 @@ func (d *Detection) LoadActive(rp interface{ ActiveRules() []rulesapi.Rule }) {
 	d.engine.LoadActive(rp)
 }
 
+// BackfillAlertOrigins credits alerts raised by a vendored rule before attribution was recorded (issue #827).
+//
+// A boot-time one-shot rather than a gated loop, which is what DoOnceIfLeader exists for: the work is finite, it is finished after
+// one pass, and a replica that loses the race has nothing to wait for. Adding a fourth RunIfLeader loop would also have made this
+// hold a pooled connection for the process lifetime, which the sizing in LeaderGatedConns accounts for and which a one-shot has no
+// business claiming.
+//
+// Scope is decided HERE rather than in the store, because it is a question about rules and the store knows only alerts. Two
+// exclusions, both of which would be worse than skipping the backfill entirely if got wrong:
+//
+//   - AlertOriginOf returns "" for a projection, whose rule_id is the operator's own policy entry rather than a detection we
+//     wrote, so crediting this project for it would be the bug review caught in #824.
+//   - A rule whose origin is this project is skipped, because filling those rows would erase the distinction migration 00012
+//     preserves between an alert raised before attribution existed and one raised by us.
+//
+// Reports how many rows it credited, so an operator upgrading can see whether the obligation was outstanding at all. Returns
+// (false, nil) when another replica holds the lock, which is a normal outcome and not a failure.
+func (d *Detection) BackfillAlertOrigins(ctx context.Context, coord leader.Coordinator, rules []rulesapi.Rule) (bool, error) {
+	if d.store == nil || coord == nil {
+		return false, nil
+	}
+	origins := vendoredOrigins(rules)
+	if len(origins) == 0 {
+		return false, nil
+	}
+	return coord.DoOnceIfLeader(ctx, lockAlertOriginBackfill, func(ctx context.Context) error {
+		updated, err := d.store.BackfillAlertOrigins(ctx, origins)
+		if err != nil {
+			return err
+		}
+		if updated > 0 {
+			d.logger.InfoContext(ctx, "credited alerts raised before rule attribution was recorded",
+				"alerts", updated, "rules", len(origins))
+		}
+		return nil
+	})
+}
+
+// vendoredOrigins picks the rules whose historical alerts may be credited, and it is a named function rather than a loop inside
+// the caller because the two rules it applies are the whole risk of this feature: getting either wrong writes something
+// irreversible into an operator's alert history, and neither is visible in the SQL.
+//
+// AlertOriginOf returns "" for a projection, whose rule_id is the operator's own policy entry rather than a detection anyone here
+// wrote. The project's own origin is skipped because migration 00012 deliberately distinguishes an alert raised BEFORE
+// attribution existed from one raised by us, and filling those rows destroys that distinction with no way back.
+func vendoredOrigins(rules []rulesapi.Rule) map[string]string {
+	origins := make(map[string]string, len(rules))
+	for _, r := range rules {
+		origin := rulesapi.AlertOriginOf(r)
+		if origin == "" || origin == rulesapi.ProjectOrigin {
+			continue
+		}
+		origins[r.ID()] = origin
+	}
+	return origins
+}
+
+// lockAlertOriginBackfill names the one-shot above. MySQL GET_LOCK names are server-global, so this identifies the task across
+// every replica of one deployment, like the periodic tasks' locks.
+const lockAlertOriginBackfill = "edr_alert_origin_backfill"
+
 // Run launches the processor + processttl + retention goroutines.
 // Returns when ctx is cancelled. ModeIntake is a no-op.
 func (d *Detection) Run(ctx context.Context) error {

@@ -145,6 +145,47 @@ func run() error {
 		return err
 	}
 
+	// Credit alerts raised by a vendored rule before attribution was recorded (issue #827). A boot-time one-shot on whichever
+	// replica wins the lock, and a no-op on every later boot because it only touches rows with an empty origin.
+	//
+	// A failure here does NOT stop the server. The obligation it settles is real, but an unpaid credit on historical rows is not
+	// a reason to refuse to detect anything today, and the next boot tries again.
+	//
+	// In the BACKGROUND for the same reason, which review asked about. The pass reads a table it has no index for, so its cost
+	// scales with alert history; run inline it would sit between this replica and its first served request, and a rolling restart
+	// would pay that per replica. Nothing here waits on the result, and a credit on historical rows is not something a request
+	// can observe missing, so there is nothing for startup to gain by blocking on it.
+	//
+	// Contrast the revocation snapshots below, which ARE loaded synchronously and are fatal on failure: those gate an allow-all
+	// security decision on the hot path, and serving before they are loaded would honour a revoked credential. This gates nothing.
+	// Its own context, cancelled and WAITED FOR by a defer registered here rather than left to ride on the lifecycle context, and
+	// the placement is the point. Defers run last-registered-first, and `db.Close()` is registered above this, so it would
+	// otherwise run while this goroutine still held a live context: any later fatal step would tear down into a pool waiting on
+	// an unindexed scan to finish. Registering the cancel HERE puts it ahead of that close, and waiting for the goroutine means
+	// the pool has its connection back before anything tries to shut it down.
+	backfillCtx, stopBackfill := context.WithCancel(ctx)
+	backfillDone := make(chan struct{})
+	defer func() {
+		stopBackfill()
+		<-backfillDone
+	}()
+
+	backfillRules := rulesCtx.ContentService().ActiveRules()
+	go func() {
+		defer close(backfillDone)
+		// Shutdown reaching a pass that was still walking is not a failure, and warning about it would put a line in the log of
+		// every deployment that restarts mid-pass describing something that is working.
+		//
+		// The test for that is whether OUR context is done, NOT whether the error is context.Canceled, and the difference is real
+		// enough that review caught it here. DoOnceIfLeader hands the callback a LEASE context and its keep-alive cancels that
+		// lease when the advisory lock is lost, so a lock loss surfaces as context.Canceled while backfillCtx is still perfectly
+		// alive. Matching on the error would file that under "we are shutting down" and say nothing, which is exactly the failure
+		// someone would want told about.
+		if _, err := detectionCtx.BackfillAlertOrigins(backfillCtx, coord, backfillRules); err != nil && backfillCtx.Err() == nil {
+			logger.WarnContext(ctx, "could not credit alerts raised before rule attribution was recorded", "err", err)
+		}
+	}()
+
 	// The revocation snapshot is the ONLY revocation enforcement on the no-DB verify hot path, so an empty snapshot is "revocation
 	// disabled" (absent host => allowed). Fail closed: load it once before serving and treat a failed initial load as fatal rather than
 	// serving with an allow-all snapshot. The DB was just exercised by the schema apply above, so a failure here is a real outage, not a
