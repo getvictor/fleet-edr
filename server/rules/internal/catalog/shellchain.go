@@ -247,12 +247,6 @@ func findShellFromResolvedProcess(
 	return nil, nil, nil
 }
 
-// parentExcluded reports whether the given non-shell parent process is excluded for hostID. It matches four dimensions of the parent
-// (issue #520): the path glob (match type parent_path_glob) and the parent's already-persisted code-signing identity (team_id,
-// signing_id, cdhash). The signature dimensions let an operator exclude a benign signed parent (e.g. a Developer-ID developer tool
-// such as Claude Code) by a non-spoofable identifier rather than a path glob an attacker who can write to /tmp can land inside. A nil
-// parent (shell parented at launchd, or parent not yet materialised) never matches: those are the cases the rule must continue to
-// flag because there's no human-attested entry point. Glob semantics live in the resolver (api.GlobMatch).
 // launchdPath is pid 1 on macOS. A shell started directly by launchd has no parent process ROW to name, and naming the absence
 // `(unknown)` left the alert unsuppressable: parent exclusions match on a path, and `(unknown)` matches nothing, so an operator
 // seeing one repeatedly had no way to silence it short of disabling the rule (issue #831).
@@ -275,12 +269,23 @@ func parentPathFor(parent, child *api.Process) string {
 	if parent != nil {
 		return parent.Path
 	}
-	if child != nil && child.PPID == 1 {
+	// child is never nil: shouldFire dereferences its PID before reaching here, and both finding builders are called with a shell
+	// they already resolved. A guard for it would be dead code masking misuse rather than handling it.
+	if child.PPID == 1 {
 		return launchdPath
 	}
 	return unknownParentPath
 }
 
+// parentExcluded reports whether the given non-shell parent process is excluded for hostID. It matches four dimensions of the parent
+// (issue #520): the path glob (match type parent_path_glob) and the parent's already-persisted code-signing identity (team_id,
+// signing_id, cdhash). The signature dimensions let an operator exclude a benign signed parent (e.g. a Developer-ID developer tool
+// such as Claude Code) by a non-spoofable identifier rather than a path glob an attacker who can write to /tmp can land inside. Glob
+// semantics live in the resolver (api.GlobMatch).
+//
+// A parent with no process ROW is not the blanket non-match it used to be, and that sentence in this doc was what issue #831 had to
+// undo. Pid 1 is nameable, so the path glob applies to it; a parent that cannot be named at all still matches nothing, and a parent
+// with no row matches no SIGNATURE dimension either, because there is no signing identity to read. See parentPathFor.
 func parentExcluded(r shellChainRule, parent, child *api.Process, hostID string) bool {
 	if r.exclusionResolver() == nil {
 		return false
