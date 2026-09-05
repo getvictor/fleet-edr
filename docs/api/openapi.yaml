@@ -1040,13 +1040,19 @@ paths:
                     type: string
                     description: Present only when `would_apply` is false.
         "400":
-          description: Malformed JSON, an oversize body, or a missing `path`.
+          description: Malformed JSON, or a missing `path`.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/RuleContentError"
         "403":
           description: Caller lacks rule_content.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
           content:
             application/json:
               schema:
@@ -1208,6 +1214,12 @@ paths:
                 $ref: "#/components/schemas/RuleContentError"
         "409":
           description: The corpus changed between validation and the write.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
           content:
             application/json:
               schema:

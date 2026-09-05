@@ -2,9 +2,7 @@ package operator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -291,21 +289,24 @@ func (h *RuleAuthoringHandler) actor(ctx context.Context, w http.ResponseWriter)
 	return actor, true
 }
 
-// decode reads a bounded JSON body into v.
+// decode reads a bounded JSON body into v, writing the right 400/413 and reporting whether the caller may continue.
+//
+// The read-and-classify logic is httpserver.DecodeCappedJSON's, not a second copy of it. An earlier revision hand-rolled the same
+// read, size check and unmarshal, which review caught: the helper already exists, the handler beside this one uses it, and the
+// invariant that makes it correct (read one byte PAST the limit, so an over-cap body is a typed 413 rather than a silent
+// truncation) is exactly the thing a reimplementation gets subtly wrong.
 func (h *RuleAuthoringHandler) decode(ctx context.Context, w http.ResponseWriter, r *http.Request, v any) bool {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, ruleContentBodyLimit))
-	if err != nil {
-		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
-			writeOperatorErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, errCodeRCBodyTooLarge,
-				"request body is too large")
-			return false
-		}
+	switch httpserver.DecodeCappedJSON(r, ruleContentBodyLimit, v) {
+	case httpserver.BodyReadFailed:
 		writeOperatorErr(ctx, h.logger, w, http.StatusBadRequest, errCodeRCReadBody, "could not read request body")
 		return false
-	}
-	if err := json.Unmarshal(body, v); err != nil {
+	case httpserver.BodyTooLarge:
+		writeOperatorErr(ctx, h.logger, w, http.StatusRequestEntityTooLarge, errCodeRCBodyTooLarge, "request body is too large")
+		return false
+	case httpserver.BodyInvalidJSON:
 		writeOperatorErr(ctx, h.logger, w, http.StatusBadRequest, errCodeRCInvalidJSON, "request body is not valid JSON")
 		return false
+	case httpserver.BodyOK:
 	}
 	return true
 }

@@ -338,18 +338,18 @@ func rcServerWithActor(t *testing.T, svc ruleAuthoringService, actor *identityap
 // that cannot wire this surface, so the property is pinned here instead of being assumed to carry over.
 func TestRuleAuthoring_ServiceAccountWritesAreNotRejectedForActorShape(t *testing.T) {
 	t.Parallel()
-	svc := &fakeAuthoringSvc{}
-	srv := rcServerWithActor(t, svc, &identityapi.Actor{
-		Principal:  identityapi.ServiceAccountPrincipal(7, "ci-bot"),
-		AuthMethod: "service_account",
-	})
-
 	for _, tc := range []struct{ name, method, path, body string }{
 		{"put", http.MethodPut, "/api/v1/rule-content/documents/authored/sa.yml", `{"content":"title: x\n","reason":"ci push"}`},
 		{"delete", http.MethodDelete, "/api/v1/rule-content/documents/authored/sa.yml", `{"reason":"ci cleanup"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			// A service and server PER subtest. Sharing one across parallel subtests raced on the fake's recording slices, which
+			// review caught: two handlers appending to the same slice is a data race under -race and can lose entries besides.
+			srv := rcServerWithActor(t, &fakeAuthoringSvc{}, &identityapi.Actor{
+				Principal:  identityapi.ServiceAccountPrincipal(7, "ci-bot"),
+				AuthMethod: "service_account",
+			})
 			status, body := rcDo(t, srv, tc.method, tc.path, tc.body)
 			assert.NotContains(t, body, "actor is required",
 				"a service-account write must not be refused for carrying no human user id (#518)")

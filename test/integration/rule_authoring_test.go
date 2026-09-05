@@ -54,7 +54,7 @@ func rcRequest(t *testing.T, stack *Stack, user testkit.SeededUser, method, path
 // The unit tests cover each in isolation with fakes, and that is where the branch coverage lives. What this adds is the thing
 // fakes cannot show: that the corpus a write lands in is the corpus the loader validated against, and that the audit row a
 // reviewer will read actually reaches the table.
-func TestRuleAuthoring_EndToEnd(t *testing.T) {
+func TestRuleAuthoring_EndToEnd(t *testing.T) { //nolint:tparallel // ordered walk over one corpus; see the doc comment
 	t.Parallel()
 	stack := Setup(t)
 	admin := testkit.SeedJITUser(t, stack.DB, "author@rules.test", "admin")
@@ -149,9 +149,11 @@ func TestRuleAuthoring_EndToEnd(t *testing.T) {
 			"a stored rule must be in force after a reload, or authoring it accomplished nothing")
 	})
 
-	t.Run("a second write against a stale corpus version is a conflict, not a silent overwrite", func(t *testing.T) {
-		// Two writes racing is the shape the version check exists for. Serially they both succeed, because each reads the version
-		// it is about to move; what must never happen is the second one landing on a corpus it never saw.
+	t.Run("a second sequential write succeeds, each against the version it read", func(t *testing.T) {
+		// Named for what it actually shows. An earlier name claimed this covered the stale-version CONFLICT, which it does not:
+		// the request is sequential and reads the current version internally, so it is expected to succeed. Leaving that name in
+		// place would have made the conflict path look integration-tested when the only thing covering it is the store test that
+		// drives two writes against one version.
 		status, got := rcRequest(t, stack, admin, http.MethodPut, path, body("second edit"))
 		require.Equal(t, http.StatusOK, status, got)
 	})

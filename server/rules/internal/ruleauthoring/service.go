@@ -24,15 +24,19 @@ type Service struct {
 	logger   *slog.Logger
 }
 
-// New builds a Service. The author and validator are required; the recorder is not, because the non-production wirings that
-// construct this without one still need the mutations to work. What a missing recorder costs is spelled out at the call site
-// below, where the row is dropped.
+// New builds a Service. Every collaborator is required, the recorder included.
+//
+// An earlier revision let the recorder be nil and logged the dropped row, on the theory that a non-production wiring still needs
+// the mutations to work. Review pointed out what that actually buys: the caller mounts these routes whenever an author and a
+// corpus are present, so a wiring with no recorder is a reachable state in which every successful change to what a fleet detects
+// loses its audit row. "Every authoring change is attributable" is a contract this change introduces, and a construction that can
+// silently violate it is not a convenience.
 func New(
 	author rulecontentapi.Author, validate rulecontentapi.Validator,
 	audit identityapi.AuditRecorder, logger *slog.Logger,
 ) (*Service, error) {
-	if author == nil || validate == nil {
-		return nil, errors.New("rule authoring: an author and a validator are both required")
+	if author == nil || validate == nil || audit == nil {
+		return nil, errors.New("rule authoring: an author, a validator and an audit recorder are all required")
 	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -97,13 +101,6 @@ func (s *Service) record(
 	ctx context.Context, actor *identityapi.Actor, reason string,
 	action identityapi.AuditAction, docPath string, version int64, warnings []string,
 ) {
-	if s.audit == nil {
-		// No recorder wired (non-production and tests). The mutation is committed either way, so the honest thing is to say a row
-		// was lost rather than to pretend one was written.
-		s.logger.WarnContext(ctx, "rule content change not audited: no recorder is wired",
-			"action", string(action), "document", docPath)
-		return
-	}
 	payload := map[string]any{
 		"reason":         reason,
 		"corpus_version": version,

@@ -62,11 +62,7 @@ func (a *recordingAudit) Record(_ context.Context, e identityapi.AuditEvent) err
 
 func newService(t *testing.T, author *fakeAuthor, v *fakeValidator, audit *recordingAudit) *Service {
 	t.Helper()
-	var rec identityapi.AuditRecorder
-	if audit != nil {
-		rec = audit
-	}
-	s, err := New(author, v, rec, slog.New(slog.DiscardHandler))
+	s, err := New(author, v, audit, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	return s
 }
@@ -230,14 +226,18 @@ func TestCheck_ReportsWarnings(t *testing.T) {
 	assert.Equal(t, []string{"authored/x.yml will not run: unsupported field"}, warnings)
 }
 
-// TestNew_RequiresAnAuthorAndValidator keeps those two from being optional. A recorder is optional by contrast, because the
-// non-production wirings still need mutations to work, and the dropped row is logged rather than hidden.
-func TestNew_RequiresAnAuthorAndValidator(t *testing.T) {
+// TestNew_RequiresEveryCollaborator keeps "every authoring change is attributable" enforceable by the type rather than by the
+// wiring.
+//
+// The recorder was optional in an earlier revision, and review showed what that cost: the caller mounts these routes whenever an
+// author and a corpus are present, so a recorder-less wiring is a reachable state in which every successful change to what a
+// fleet detects loses its audit row. A contract a construction can silently violate is not a contract.
+func TestNew_RequiresEveryCollaborator(t *testing.T) {
 	t.Parallel()
-	_, noAuthor := New(nil, &fakeValidator{}, nil, nil)
+	_, noAuthor := New(nil, &fakeValidator{}, &recordingAudit{}, nil)
 	require.Error(t, noAuthor)
-	_, noValidator := New(&fakeAuthor{}, nil, nil, nil)
+	_, noValidator := New(&fakeAuthor{}, nil, &recordingAudit{}, nil)
 	require.Error(t, noValidator)
 	_, noRecorder := New(&fakeAuthor{}, &fakeValidator{}, nil, nil)
-	require.NoError(t, noRecorder, "a missing recorder is a logged loss, not a refusal to function")
+	require.Error(t, noRecorder, "a surface that cannot audit must not be constructible")
 }
