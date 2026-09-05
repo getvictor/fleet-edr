@@ -325,8 +325,9 @@ type RuleMetadata struct {
 	// Algorithm mirrors the rule's AlgorithmName() when it declares one, and is empty otherwise. Names the evaluator that decides
 	// the rule, which is what makes a Go-implemented rule inspectable without reading the source. Consumed by the rule-file export.
 	Algorithm string
-	// Origin names where the rule came from: ProjectOrigin for one this project authored, and the upstream project plus that
-	// rule's own author for one it vendored. Never empty (see api.OriginOf), so a surface may render it unconditionally.
+	// Origin names where the rule came from: ProjectOrigin for one this project authored, LocalOrigin for one an operator wrote
+	// on their own deployment, and the upstream project plus that rule's own author for one it vendored. Never empty (see
+	// api.OriginOf), so a surface may render it unconditionally.
 	// Surfaced so the operator-facing reference can credit third-party rules and so a reader can tell whose rule they are looking
 	// at, which they otherwise cannot: a vendored rule is rendered exactly like an authored one.
 	Origin string

@@ -78,6 +78,8 @@ The system SHALL identify the pack of shipped rule content a corpus holds, in a 
 
 The identity SHALL be derived from the shipped content itself, so that a deployment can determine whether it is running the pack in the build it is executing by comparing rather than by trusting a recorded label.
 
+A corpus stored before the system recorded pack identity SHALL report no identity, rather than an identity computed on its behalf. Such a corpus holds some generation of shipped content and nothing recorded which, so reporting one would be inventing it. A caller comparing against the build's own pack SHALL treat the absence as "unknown, therefore not known to be current", which is distinct from the identity of a pack that is genuinely empty.
+
 #### Scenario: The identity changes when the shipped content changes
 
 - **GIVEN** two sets of shipped rule content that differ
@@ -89,6 +91,12 @@ The identity SHALL be derived from the shipped content itself, so that a deploym
 - **GIVEN** the same shipped rule content
 - **WHEN** it is identified more than once
 - **THEN** the identity is the same each time
+
+#### Scenario: A corpus stored before pack identity was recorded reports none
+
+- **GIVEN** a corpus stored before the system recorded pack identity
+- **WHEN** its pack identity is read
+- **THEN** no identity is reported, which is distinct from the identity of a corpus holding no shipped content at all
 
 #### Scenario: Content written by an operator does not change the pack identity
 

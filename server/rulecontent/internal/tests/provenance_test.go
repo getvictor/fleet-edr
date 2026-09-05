@@ -287,3 +287,24 @@ func TestUnknownSource_IsRefused(t *testing.T) {
 		require.ErrorIs(t, err, api.ErrUnknownSource)
 	})
 }
+
+// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/a-corpus-stored-before-pack-identity-was-recorded-reports-none
+//
+// TestPackDigest_UnrecordedIsUnknownNotEmpty separates the two states that both look like "nothing" and mean opposite things.
+//
+// A corpus stored before this existed holds SOME generation of shipped content, and nothing wrote down which. Reporting a digest
+// for it would be inventing one, and reporting the EMPTY pack's digest would be worse: that is a real identity, so the deployment
+// would claim to hold no shipped rules while running a full corpus. The upgrade path reads the absence as "unknown, therefore not
+// known to be current", and that only works if the two are distinguishable.
+func TestPackDigest_UnrecordedIsUnknownNotEmpty(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	// A fresh corpus that nothing has written: the state the migration leaves a pre-existing deployment in.
+	digest, err := s.PackDigest(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, digest, "an unrecorded pack identity is absent, not computed")
+	assert.NotEqual(t, api.PackDigest(nil), digest,
+		"absent must be distinguishable from the identity of a genuinely empty pack, or unknown reads as current")
+}

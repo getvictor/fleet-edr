@@ -91,9 +91,9 @@ func (h *Handler) handleListRules(w http.ResponseWriter, r *http.Request) {
 		// this response cannot answer. Additive fields; existing consumers ignore them.
 		Mode       api.DetectionRuleMode `json:"mode"`
 		ModeSource api.RuleModeSource    `json:"mode_source"`
-		// Origin credits a vendored rule's upstream project and author, and names this project for a rule it wrote. The corpus
-		// is under DRL 1.1 and the rules are served unmodified, so attribution travels with the rule itself; this carries it onto
-		// the surface an operator actually reads.
+		// Origin credits a vendored rule's upstream project and author, names this project for a rule it wrote, and names the
+		// deployment for one the operator wrote themselves. The vendored corpus is under DRL 1.1 and those rules are served
+		// unmodified, so attribution travels with the rule itself; this carries it onto the surface an operator actually reads.
 		//
 		// No omitempty, and the schema marks it required: api.OriginOf never returns "" (issue #765), so omitting on empty could
 		// only ever fire if the value were lost in transit, which is exactly the case a consumer wants to see rather than have

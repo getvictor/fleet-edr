@@ -129,3 +129,33 @@ func contentsInOrder(docs []Document) [][]byte {
 	}
 	return out
 }
+
+// TestPackDigest_GoldenValue pins the persisted digest FORMAT against literal bytes, which every other test here cannot do.
+//
+// The stability assertions elsewhere compare PackDigest to another call to PackDigest, so they hold under any change to the
+// framing, the field order, or the hash itself. That is fine for the property they state and useless for the one that matters
+// here: this value is written to the database and compared against a LATER build's computation of it. Change the framing and
+// every deployment silently reads as not current, an upgrade nobody asked for is offered for a pack that never moved, and not
+// one self-comparing test fails. Review caught that, and it is the same shape as the weak tests mutation testing found earlier.
+//
+// So this is a wire-format pin in the project's sense: literal expected bytes, auditable by reading. A change to the framing has
+// to fail here, so that carrying deployments across it becomes a deliberate decision rather than a surprise.
+//
+// The fixture is deliberately awkward. The documents are given OUT of sorted order, and one path is a sibling of the other's
+// directory, so the value covers the sort and the length-prefixing rather than only the hash call.
+func TestPackDigest_GoldenValue(t *testing.T) {
+	t.Parallel()
+
+	docs := []Document{
+		{Path: "imported/process_creation/b.yml", Content: []byte("title: B\n"), Source: SourceVendored},
+		{Path: "imported/a.yml", Content: []byte("title: A\n"), Source: SourceVendored},
+	}
+	assert.Equal(t, "0998ff11c3a534c62b4cac91e60f506894756535a0efb4fe8d08b89dcca439f4", PackDigest(docs),
+		"the persisted digest format changed, so deployments carrying the old value would all read as out of date")
+
+	// An empty pack has its own identity, and it is the digest of no fields rather than a special case in the code. Worth
+	// pinning because "" means UNKNOWN elsewhere, and the two must never be conflated: unknown is a corpus that predates the
+	// digest, empty is a build that genuinely ships no rules.
+	assert.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", PackDigest(nil),
+		"the empty pack's identity is the digest of nothing, and is not the empty string")
+}

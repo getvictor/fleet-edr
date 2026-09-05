@@ -692,7 +692,11 @@ func (r *importedRule) UndiscriminatingSearches() []string {
 	return r.detection.UndiscriminatingSearches()
 }
 
-// Origin implements the origin accessor the catalog surfaces mirror, naming the upstream project and the rule's own author.
+// Origin implements the origin accessor the catalog surfaces mirror.
+//
+// It names the upstream project and the rule's own author for content that shipped with the product, and the deployment for
+// content an operator wrote. Which of the two it is comes from the recorded provenance, never from the file's path or from what
+// the rule says about itself.
 func (r *importedRule) Origin() string {
 	// An operator's own rule is credited to their deployment, never upstream. Crediting SigmaHQ for it is false, and because that
 	// credit is how the Detection Rule License is honoured, it also states a licence the content was never under (#874). The

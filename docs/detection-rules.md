@@ -1,6 +1,6 @@
 # Detection rules
 
-Every rule names a **Source**. `Fleet EDR` marks a rule this project wrote; any other value credits an upstream project and that rule's own author, and those rules are reproduced unmodified. The upstream macOS corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the [Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License).
+Every rule names a **Source**. `Fleet EDR` marks a rule this project wrote, and `Locally authored` one written on this deployment; any other value credits an upstream project and that rule's own author, and those rules are reproduced unmodified. The upstream macOS corpus comes from [SigmaHQ](https://github.com/SigmaHQ/sigma) under the [Detection Rule License 1.1](https://github.com/SigmaHQ/Detection-Rule-License).
 
 This page is generated from `tools/gen-rule-docs` by reading the
 `rulesapi.RuleMetadata.Doc` field on every rule registered in

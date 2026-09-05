@@ -455,7 +455,7 @@ func (d *Detection) BackfillAlertOrigins(ctx context.Context, coord leader.Coord
 }
 
 // vendoredOrigins picks the rules whose historical alerts may be credited, and it is a named function rather than a loop inside
-// the caller because the two rules it applies are the whole risk of this feature: getting either wrong writes something
+// the caller because the three rules it applies are the whole risk of this feature: getting any of them wrong writes something
 // irreversible into an operator's alert history, and neither is visible in the SQL.
 //
 // AlertOriginOf returns "" for a projection, whose rule_id is the operator's own policy entry rather than a detection anyone here
