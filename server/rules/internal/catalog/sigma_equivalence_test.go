@@ -47,6 +47,12 @@ var argvCategories = map[string][]string{
 
 var argvCategoryNames = []string{"flag", "subcommand", "plist", "assignment", "empty", "other", "casevariant"}
 
+// env's own options, one per group that the parser treats differently: accepted and valueless, accepted with a separate operand,
+// accepted with an attached operand, the end-of-options marker, the lone-dash synonym, an option env does not have, and the two
+// that make the outer argument vector stop describing what env applied. Drawn for the env shape in drawArgv so the carve-out
+// below covers each group rather than whichever one happened to be sampled.
+var envOptionTokens = []string{"-i", "-v", "-u", "PATH", "-uPATH", "--", "-", "-q", "-0", "-S"}
+
 // drawArgv models a command INVOCATION rather than emitting token soup, and that distinction decides whether this test is worth
 // anything.
 //
@@ -70,6 +76,36 @@ func drawArgv(t *rapid.T) []string {
 	}
 
 	argv := []string{rapid.SampledFrom([]string{"launchctl", "security", "env", "sh"}).Draw(t, "argv0")}
+
+	// An env invocation whose assignments sit BEHIND its option prefix, drawn as its own shape for the same reason the empty
+	// token below is: it is the input the two dyld implementations now disagree about, and the structured branch cannot otherwise
+	// produce it, because it always puts a verb between the flags and the operands and both implementations stop at the verb.
+	// Without this the divergence turns up only through the free-form branch, at a rate low enough that the property passed while
+	// never exercising its own carve-out, and a mutation removing the carve-out survived.
+	if rapid.Bool().Draw(t, "envAssignmentsBehindOptions") {
+		// A refusal shape roughly a third of the time, so the removed-finding carve-out is reached rather than only asserted.
+		// An empty-name assignment is drawn here rather than added to the assignment category, which other shapes reuse.
+		refusal := rapid.IntRange(0, 2).Draw(t, "envRefusal") == 0
+		if refusal {
+			argv = append(argv, rapid.SampledFrom([]string{"=bad", "=", "=DYLD_INSERT_LIBRARIES"}).Draw(t, "emptyName"))
+		}
+		// With a refusal drawn, the option run may be EMPTY, and it has to be able to be: the legacy oracle stops at the first
+		// token without an equals sign, so an option between the empty name and the assignments makes both sides report nothing
+		// and the divergence never appears. Mutation testing caught exactly that, with the carve-out surviving every seed.
+		lo := 1
+		if refusal {
+			lo = 0
+		}
+		for range rapid.IntRange(lo, 2).Draw(t, "envOptions") {
+			argv = append(argv, rapid.SampledFrom(envOptionTokens).Draw(t, "envOption"))
+		}
+		for range rapid.IntRange(1, 2).Draw(t, "envAssignments") {
+			argv = append(argv, rapid.SampledFrom(argvCategories["assignment"]).Draw(t, "envAssignment"))
+		}
+		argv = append(argv, rapid.SampledFrom([]string{"prog", "/usr/bin/true"}).Draw(t, "envCommand"))
+		return argv
+	}
+
 	for range rapid.IntRange(0, 2).Draw(t, "leadingFlags") {
 		argv = append(argv, rapid.SampledFrom(argvCategories["flag"]).Draw(t, "leadingFlag"))
 	}
@@ -207,19 +243,54 @@ func legacyLaunchAgentFires(path string, argv []string) bool {
 	return plist != "" && legacyLaunchAgentPath.MatchString(plist)
 }
 
+// legacyMatchDyldArg is the reference the property compares the shipped detection against.
+//
+// Corrected for issue #792, which changed what this rule detects rather than how it is written. The previous version stopped the
+// assignment scan at the first token without "=", so an option ahead of the assignment ended it and the injection was invisible;
+// it also scanned from args[0], which for env is env's own name and never an assignment it performs.
+//
+// Written from the stated rule rather than by calling the production helper, so the property still catches a transcription error
+// between the Sigma definition and the intent. What it no longer proves is that the two were derived independently, since the same
+// person wrote both; the named tests below carry the cases that matter on their own.
 func legacyMatchDyldArg(path string, args []string) string {
-	isEnv := path == "/usr/bin/env" || strings.HasSuffix(path, "/env")
-	for i, a := range args {
-		if !isEnv && i > 0 {
-			break
-		}
-		if isEnv && i > 0 && !strings.Contains(a, "=") {
-			break
-		}
+	matched := func(a string) string {
 		for _, prefix := range legacyDyldPrefixes {
 			if strings.HasPrefix(a, prefix) {
 				return prefix + "<redacted>"
 			}
+		}
+		return ""
+	}
+
+	if path != "/usr/bin/env" && !strings.HasSuffix(path, "/env") {
+		// Shell form: the assignment is the first argument or it is not an assignment at all.
+		if len(args) == 0 {
+			return ""
+		}
+		return matched(args[0])
+	}
+
+	// env form: args[0] is env's own name, then the run of assignments env performs.
+	//
+	// This oracle deliberately does NOT model env's option grammar, and an earlier round of this PR was wrong to give it a copy.
+	// Two reasons, and the second is the one that matters.
+	//
+	// The grammar is intricate (attached operands, clusters, options env does not have, two options after which the outer
+	// argument vector stops describing anything), it was corrected twice under review, and a second copy has to be corrected in
+	// lockstep or the property compares one bug against another. Review caught the copy disagreeing with production on `-uS`
+	// and on `-z`.
+	//
+	// More importantly, mirroring production here would make the property agree BY CONSTRUCTION on the very behaviour #792
+	// changed, which is the one thing an independent oracle must not do. What the legacy Go matcher actually did was stop at the
+	// first token that was not an assignment, and env's own options stopped it too: that WAS the bug. Preserving it keeps the
+	// property measuring the fix, and the divergence is asserted as the documented exception in TestEquivalence_DyldInsert
+	// rather than hidden. One source for env's option grammar, and it is production's.
+	for i := 1; i < len(args); i++ {
+		if !strings.Contains(args[i], "=") {
+			break
+		}
+		if m := matched(args[i]); m != "" {
+			return m
 		}
 	}
 	return ""
@@ -272,7 +343,18 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 	})
 }
 
-// TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries.
+// TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries, with one documented exception.
+//
+// The exception runs the OPPOSITE way to the launch-agent one, which is why it is stated separately rather than folded into the
+// same helper. That conversion only ever removes findings; this one deliberately ADDS them. #792 fixed a bug in the Go matcher,
+// which stopped its scan at env's first option and so reported nothing for `env -i DYLD_INSERT_LIBRARIES=x prog`, an injection it
+// was written to catch. The frozen oracle in this file still reproduces that bug on purpose, since its job is to say what the Go
+// matcher did rather than what it should have done.
+//
+// So the divergence is asserted rather than excused, and in both directions at once: where the two differ, the input MUST be an
+// env invocation whose assignments sit behind an option prefix, and the detection MUST be the side that fires. Anything else is a
+// real regression. In particular this pins that no divergence appears for a non-env path, for an env invocation with no option
+// prefix, or in the narrowing direction.
 func TestEquivalence_DyldInsert(t *testing.T) {
 	t.Parallel()
 
@@ -281,8 +363,78 @@ func TestEquivalence_DyldInsert(t *testing.T) {
 		argv := drawArgv(t)
 		goFires := legacyMatchDyldArg(path, argv) != ""
 		sigmaFires := evalCompiled(t, dyldDetection(), path, argv)
+
+		if goFires != sigmaFires {
+			// Two deliberate divergences, in OPPOSITE directions, each asserted with its own shape so neither can excuse the
+			// other. Review found the second one missing, which would have failed this property the first time the generator
+			// drew a refusal shape.
+			switch {
+			case sigmaFires && !goFires:
+				require.True(t, hidesAnAssignmentBehindAnEnvOption(path, argv),
+					"undocumented ADDED finding: path=%q argv=%q", path, argv)
+			case goFires && !sigmaFires:
+				require.True(t, envWouldRefuseTheInvocation(path, argv),
+					"undocumented REMOVED finding: path=%q argv=%q", path, argv)
+			}
+			return
+		}
 		require.Equal(t, goFires, sigmaFires, "path=%q argv=%q", path, argv)
 	})
+}
+
+// envWouldRefuseTheInvocation reports the shapes for which env exits before executing anything, so the corrected parser reports
+// nothing where the legacy Go matcher happily reported an assignment. Those are findings the fix REMOVES, which is the opposite
+// direction to the carve-out below and needs its own statement.
+//
+// Shape-based on purpose, for the same reason as its sibling: naming the token forms rather than re-deciding them keeps this from
+// agreeing with production by construction. It is deliberately BROADER than production, since its job is to say "a refusal was
+// plausible here", not to decide the refusal.
+func envWouldRefuseTheInvocation(path string, argv []string) bool {
+	if path != "/usr/bin/env" && !strings.HasSuffix(path, "/env") {
+		return false
+	}
+	for _, a := range argv[min(1, len(argv)):] {
+		switch {
+		case strings.HasPrefix(a, "="):
+			// An assignment with an empty name: env calls setenv, gets EINVAL, and exits.
+			return true
+		case a == "--":
+			return false
+		case len(a) > 1 && a[0] == '-':
+			// An option env does not have, or one after which the outer argv describes nothing. Left broad rather than
+			// enumerated here so the oracle does not become a second option parser.
+			return true
+		case strings.Contains(a, "="):
+			continue
+		default:
+			// The command. Nothing after it is env's to refuse.
+			return false
+		}
+	}
+	return false
+}
+
+// hidesAnAssignmentBehindAnEnvOption reports the one shape the two dyld implementations are known to read differently: an env
+// invocation in which an option-looking token sits between argv[0] and the first assignment, which is where the Go matcher stopped
+// scanning and the corrected parser does not.
+//
+// Deliberately a statement about the SHAPE of the input rather than a second copy of the option parser. Re-implementing the parse
+// here would make the carve-out agree with production by construction, which is the one thing an independent oracle must not do.
+func hidesAnAssignmentBehindAnEnvOption(path string, argv []string) bool {
+	if path != "/usr/bin/env" && !strings.HasSuffix(path, "/env") {
+		return false
+	}
+	sawOption := false
+	for _, a := range argv[min(1, len(argv)):] {
+		if strings.Contains(a, "=") {
+			// Reached an assignment. It diverges only if an option came first, which is what stopped the Go matcher.
+			return sawOption
+		}
+		if strings.HasPrefix(a, "-") {
+			sawOption = true
+		}
+	}
+	return false
 }
 
 // spec:server-detection-rules-engine/converting-a-rule-may-narrow-what-it-detects-never-widen-it/a-conversion-removes-a-finding-rather-than-adding-one
@@ -300,6 +452,49 @@ func TestLaunchAgentEmptySubcommandIsTheOneDeliberateChange(t *testing.T) {
 
 	require.False(t, evalCompiled(t, launchAgentDetection(), "/bin/launchctl", argv),
 		"the computed field treats the empty token as the verb, which is what launchctl would do, so the rule declines")
+}
+
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-option-before-an-assignment-does-not-hide-it
+//
+// TestEnvOptionPrefixIsTheOtherDeliberateChange pins the dyld divergence as an example, so the behaviour change is visible in a
+// named test rather than living only inside a property's escape hatch. Same reason as the launch-agent one above, and the same
+// shape of evidence, but the opposite direction: this conversion ADDS a finding the Go matcher missed.
+//
+// It also covers a gap mutation testing exposed in the property. Disabling the generator's env shape leaves the property passing
+// vacuously, because nothing else it draws reaches the divergence, and no assertion inside the property can notice that. This test
+// can: it names the input.
+func TestEnvOptionPrefixIsTheOtherDeliberateChange(t *testing.T) {
+	t.Parallel()
+
+	// The injection #792 reported nothing for. env applies the assignment and execs prog, so this is a real dylib injection.
+	argv := []string{"env", "-i", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}
+
+	require.Empty(t, legacyMatchDyldArg("/usr/bin/env", argv),
+		"the Go matcher stopped at env's own option and reported nothing, which was the bug")
+	require.True(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", argv),
+		"the shipped detection must see past the option prefix and fire")
+
+	// And the correction is bounded: an option env does not have still reports nothing, because env execs nothing at all.
+	refused := []string{"env", "-z", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}
+	require.False(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", refused),
+		"an invocation env would refuse must not produce a finding for an injection that never happened")
+}
+
+// spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
+//
+// TestEnvRefusalRemovesAFindingDeterministically is the removed-finding direction of the same divergence, pinned by name for the
+// same reason as its sibling: mutation testing showed the property reaches this only because the generator draws the shape, and no
+// assertion inside the property can notice if that draw stops happening.
+func TestEnvRefusalRemovesAFindingDeterministically(t *testing.T) {
+	t.Parallel()
+
+	// env exits `setenv =bad: Invalid argument` and execs nothing, so the assignment behind it was never applied.
+	argv := []string{"env", "=bad", "DYLD_INSERT_LIBRARIES=/tmp/e.dylib", "prog"}
+
+	require.NotEmpty(t, legacyMatchDyldArg("/usr/bin/env", argv),
+		"the Go matcher walked past the empty name and reported the assignment, which is the fabrication being removed")
+	require.False(t, evalCompiled(t, dyldDetection(), "/usr/bin/env", argv),
+		"the shipped detection must report nothing for an invocation env refuses to run")
 }
 
 // TestDetectionsAreCaseSensitiveWhereGoIs pins the reason each detection uses |re. A plain Sigma value folds case, so
