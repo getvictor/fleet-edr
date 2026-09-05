@@ -118,6 +118,7 @@ A rule matching any of these fields is portable in the sense that it is valid Si
 - **GIVEN** an exec event for env whose leading assignments include one with an empty name, followed by an injection assignment
 - **WHEN** the assignments are read
 - **THEN** no assignment is reported, because env exits before executing anything
+
 #### Scenario: A shell-form assignment is not reported
 
 - **GIVEN** an exec event for an ordinary binary whose first argument looks like an environment assignment

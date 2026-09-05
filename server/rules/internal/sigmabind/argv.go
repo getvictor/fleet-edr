@@ -79,15 +79,15 @@ func commandArguments(argv []string) []string {
 //     is a real injection whose assignment used to be invisible, because `-i` contains no "=" and ended the scan before it. The
 //     same held for `-u NAME`, `-P path`, `-S string` and anything after `--`.
 //
-//   - For anything else it is argv[0] alone, which is the shell's `VAR=value cmd` form as the dyld_insert rule describes it.
-//     Worth knowing: that branch appears to be unreachable in practice. ESF serialises only es_exec_arg, so the environment a shell
-//     applies is never in argv, and argv[0] is an assignment in 0 of 670,185 real exec events on a dev host. The branch is
-//     reproduced here because this field's contract is to match the Go matcher exactly; issue #791 covers the rule.
+//   - For anything else it is EMPTY. A shell's `VAR=value cmd` form is not in the argument vector at all: ESF serialises only
+//     es_exec_arg, so the environment a shell applies never appears there, and argv[0] was an assignment in 0 of 670,185 real
+//     exec events on a dev host. This used to report argv[0], which made the dyld_insert rule advertise a shape no agent can
+//     send (issue #791).
 //
-// This is what makes the field worth computing. `DYLD_INSERT_LIBRARIES=x /bin/true` and `/bin/true DYLD_INSERT_LIBRARIES=x` join to
-// DIFFERENT CommandLine strings, since argv is joined in order, but they carry the same assignment text and only the first is an
-// injection. A rule written as `CommandLine|contains: 'DYLD_INSERT_LIBRARIES='` matches both, because a substring match is exactly
-// the operation that discards position.
+// This is what makes the field worth computing. `env DYLD_INSERT_LIBRARIES=x /bin/true` and `env /bin/true DYLD_INSERT_LIBRARIES=x`
+// join to DIFFERENT CommandLine strings, since argv is joined in order, but they carry the same assignment text and only the first
+// is an injection. A rule written as `CommandLine|contains: 'DYLD_INSERT_LIBRARIES='` matches both, because a substring match is
+// exactly the operation that discards position.
 //
 // The window is decided by the resolved executable path rather than by argv[0], since argv[0] is whatever the caller chose to pass.
 func envAssignments(path string, argv []string) []string {

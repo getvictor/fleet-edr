@@ -343,7 +343,7 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 	})
 }
 
-// TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries, with one documented exception.
+// TestEquivalence_DyldInsert: as above, across both env-style and ordinary binaries, with THREE documented exceptions.
 //
 // The exception runs the OPPOSITE way to the launch-agent one, which is why it is stated separately rather than folded into the
 // same helper. That conversion only ever removes findings; this one deliberately ADDS them. #792 fixed a bug in the Go matcher,
@@ -351,8 +351,10 @@ func TestEquivalence_LaunchAgent(t *testing.T) {
 // was written to catch. The frozen oracle in this file still reproduces that bug on purpose, since its job is to say what the Go
 // matcher did rather than what it should have done.
 //
-// So the divergence is asserted rather than excused, and in both directions at once: where the two differ, the input MUST be an
-// env invocation whose assignments sit behind an option prefix, and the detection MUST be the side that fires. Anything else is a
+// So each divergence is asserted rather than excused, by shape and by direction. The detection fires where the matcher did not
+// for an env invocation whose assignments sit behind an option prefix; the matcher fires where the detection does not for an
+// invocation env would refuse, and for a non-env invocation whose argv[0] is an assignment, which is the shape issue #791
+// removed. Anything else is a real regression. Anything else is a
 // real regression. In particular this pins that no divergence appears for a non-env path, for an env invocation with no option
 // prefix, or in the narrowing direction.
 func TestEquivalence_DyldInsert(t *testing.T) {

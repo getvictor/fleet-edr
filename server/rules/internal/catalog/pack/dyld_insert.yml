@@ -20,10 +20,11 @@ logsource:
   product: macos
   category: process_creation
 detection:
-  # EnvAssignments holds only the leading KEY=VALUE window: argv[0] for an ordinary binary, and the run of leading assignments for
-  # an `env`-style invocation. That is the whole point of the field. `DYLD_INSERT_LIBRARIES=x /bin/true` and
-  # `/bin/true DYLD_INSERT_LIBRARIES=x` carry the same text and only the first is an injection, and a CommandLine substring match
-  # cannot tell them apart because a substring match is precisely what discards position.
+  # EnvAssignments holds the leading KEY=VALUE window of an `env` invocation, and nothing for any other binary. That is the whole
+  # point of the field. `env DYLD_INSERT_LIBRARIES=x /bin/true` and `env /bin/true DYLD_INSERT_LIBRARIES=x` carry the same text and
+  # only the first is an injection, and a CommandLine substring match cannot tell them apart because a substring match is precisely
+  # what discards position. A shell assignment such as `DYLD_INSERT_LIBRARIES=x /bin/true` is absent from the argument vector
+  # entirely, so it is not matched here and cannot be (issue #791).
   #
   # Matched with |re rather than |startswith because |startswith folds case, while the Go rule this replaces used
   # strings.HasPrefix: a lowercased `dyld_insert_libraries=` would otherwise have started firing.
@@ -44,5 +45,5 @@ x-engine:
   event_types:
     - exec
   limitations:
-    - 'Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is NOT detected and never was, despite earlier wording here: the sensor records a process''s arguments, and a shell applies those variables without putting them there, so the assignment is absent from the event entirely (issue #791). Capturing the environment is tracked as issue #862.'
+    - 'Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is not, and never was despite earlier wording here: a shell applies those variables without passing them as arguments, so the assignment is absent from the event the sensor records (issue #791). Capturing the environment is tracked as issue #862.'
     - 'DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule''s pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.'

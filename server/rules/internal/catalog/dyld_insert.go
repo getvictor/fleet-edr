@@ -63,7 +63,7 @@ func (r *DyldInsert) Doc() api.Documentation {
 			"Apple-signed binaries are immune to DYLD_INSERT_LIBRARIES under SIP, but the rule still fires on the launch: investigate why an admin script is setting these vars at all.",
 		},
 		Limitations: []string{
-			"Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is NOT detected and never was, despite earlier wording here: the sensor records a process's arguments, and a shell applies those variables without putting them there, so the assignment is absent from the event entirely (issue #791). Capturing the environment is tracked as issue #862.",
+			"Only an `env(1)` invocation is detected. A shell assignment such as `DYLD_INSERT_LIBRARIES=… /bin/ls` is not, and never was despite earlier wording here: a shell applies those variables without passing them as arguments, so the assignment is absent from the event the sensor records (issue #791). Capturing the environment is tracked as issue #862.",
 			"DYLD_FRAMEWORK_PATH and DYLD_FALLBACK_* are intentionally NOT matched: higher-FP, lower-signal. Add them to the detection block in the rule's pack file if a pilot surfaces real abuse; the Go prefix list only names the matched variable in the alert.",
 		},
 	}

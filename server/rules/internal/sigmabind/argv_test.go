@@ -107,9 +107,12 @@ func TestCommandArguments(t *testing.T) {
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-operand-whose-validity-depends-on-the-host-does-not-suppress-the-finding
 // spec:server-detection-rules-engine/argument-position-is-available-as-a-field/an-assignment-with-an-empty-name-reports-nothing-at-all
 //
-// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. The two orderings below join to
-// different CommandLine strings but carry the same assignment text, so a `CommandLine|contains` match cannot tell them apart, and
-// only one of them is an injection. That is the reason this field exists.
+// TestEnvAssignments covers the window that distinguishes an injection from an ordinary argument. Two env invocations carrying the
+// same assignment text in different positions join to different CommandLine strings, so a `CommandLine|contains` match cannot tell
+// them apart, and only one of them is an injection. That is the reason this field exists.
+//
+// The shell form appears here only as a NEGATIVE. It is not a shape the field declines to report; it is a shape no agent can send,
+// which issue #791 measured and which the rows below pin so the distinction cannot quietly reverse.
 func TestEnvAssignments(t *testing.T) {
 	t.Parallel()
 
@@ -135,7 +138,7 @@ func TestEnvAssignments(t *testing.T) {
 			[]string{"env", "A=1", "prog", "C=3"}, []string{"A=1"}},
 		{"a shim path ending in /env counts as env", "/opt/homebrew/bin/env",
 			[]string{"env", "A=1", "prog"}, []string{"A=1"}},
-		{"a non-env binary gets only argv[0]", "/bin/sh",
+		{"a non-env binary reports nothing", "/bin/sh",
 			[]string{"sh", "A=1", "B=2"}, nil},
 		{"no assignments", "/usr/bin/true", []string{"/usr/bin/true"}, nil},
 		{"empty argv", "/usr/bin/env", nil, nil},
