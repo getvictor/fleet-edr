@@ -2,7 +2,7 @@
 
 - [x] The engine's per-batch call accumulates in memory and performs no database write, behind the same interface it already consumed so nothing in the detection context changes.
 - [x] Totals stay exact: sums add, the worst single evaluation takes the larger, and a flush writes what the per-batch writes would have accumulated. Stated as a property test over any sequence of batches, not just a table.
-- [x] A failed flush returns its counts and the next one retries them, so only an ungraceful shutdown loses anything. The pending set is keyed by rule id, so a database that stays down cannot grow it.
+- [x] A failed flush returns its counts and the next one retries them, so no count is discarded. The pending set is keyed by rule id, so a database that stays down cannot grow it. The retry's own limits, and every condition under which the numbers are inexact, are stated once in the requirement; #868 tracks removing them.
 - [x] A graceful shutdown flushes. The final write gets its own short budget rather than the cancelled context, which would fail it immediately.
 - [x] Per-rule evaluation duration is an OTel histogram, with buckets chosen against the measured distribution and a top bucket above the evaluation budget so a rule approaching a skip is visible before it is skipped.
 - [x] The instrument name and its rule attribute are pinned against the concrete recorder, since a fake proves only that a method was called.

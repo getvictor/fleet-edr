@@ -204,11 +204,12 @@ func setupReplica(t *testing.T, db *sqlx.DB, opts ...Option) *Stack {
 	// Mirrors cmd/main: the engine holds its own compiled copy of the rule set, so an install has to tell it to rebuild or it keeps
 	// evaluating the previous one.
 	//
-	// This wires the notification, and that is ALL it does here. Unlike cmd/main, this stack does not start rules' loops (below it
-	// starts only detection and identity), so nothing in it polls for published content and the observer fires only if a test
-	// installs a rule set itself. A test that wants runtime publishes starts the refresh loop on its own, as
-	// rule_corpus_reload_test.go does. Starting rules' loops for every stack would add a config-refresh and a counter-prune
-	// goroutine to tests that want neither, for no caller that needs them today.
+	// This wires the notification. The stack DOES start rules' loops now (below, alongside detection and identity), which it did
+	// not when this comment was written: issue #837 made one of them load-bearing, because per-rule statistics are written by a
+	// flush rather than on the drain path and the cross-context test that checks the recorder is wired would otherwise read an
+	// empty table. So the corpus refresh polls here too, at the interval Deps sets, and the observer no longer fires only when a
+	// test installs a rule set itself. A test wanting deterministic control over a runtime publish still drives it directly, as
+	// rule_corpus_reload_test.go does.
 	rulesCtx.SetRuleSetObserver(func() { detectionCtx.LoadActive(rulesCtx.ContentService()) })
 	// Wire the mode resolver and the monitor-match recorder, exactly as cmd/main does. Without them the engine has no resolver
 	// and every rule runs at its DECLARED default, so a per-rule setting written to the database has no effect on an integration

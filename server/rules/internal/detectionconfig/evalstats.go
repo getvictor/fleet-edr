@@ -38,9 +38,9 @@ import (
 //	8         3.37ms     7.78ms     1837/s
 //	32        11.22ms    41.56ms    1863/s
 //
-// Latency climbs with concurrency and throughput saturates near 1800/s. A replica runs six workers (a 25-connection pool, two per
-// worker, halved so workers cannot starve the request path), so a two or three replica deployment sat around twelve to eighteen
-// concurrent writers, paying that per batch, and every replica contended on the same instance. That bounded batches/sec for the
+// Latency climbs with concurrency and throughput saturates near 1800/s. A replica runs four processor workers by default (DefaultProcessConcurrency; the 25-connection pool affords up to six
+// before the processor clamps), so a two or three replica deployment sat around eight to twelve concurrent writers, paying that per
+// batch, and every replica contended on the same instance. That bounded batches/sec for the
 // whole deployment however many replicas were added, which is why an observability feature had to stop doing it per batch.
 //
 // Re-measured on the same harness when #837 moved it (server/rules/internal/tests/evalstats_latency_test.go, which is committed so

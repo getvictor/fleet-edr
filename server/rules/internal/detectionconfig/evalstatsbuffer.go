@@ -108,21 +108,16 @@ func (b *BufferedEvalStats) mergeLocked(stats api.RuleEvalStats) {
 // On a write failure the drained statistics go BACK into pending and the next flush retries them, so a transient database problem
 // discards no counts. The map is keyed by rule id, so a database that stays down cannot grow it past the rule count.
 //
-// Retrying an ADDITIVE upsert is at-least-once, not exactly-once, which review pointed out and which the word "exact" hid: if the
-// server commits and the connection drops before the client sees the result, the next flush adds the same counts again. What that
-// costs is bounded and already the documented posture for this table. Evaluations and eval_ns_sum inflate together, so the mean
-// they produce does not move, and eval_ns_max is idempotent because the column takes a GREATEST. Only retryable_misses and the
-// raw volume can read high, and by at most one flush's worth. The same reasoning the store's own doc gives for a replayed batch
-// applies, for the same reason.
+// Retrying an ADDITIVE upsert is at-least-once, not exactly-once. A commit whose result never reaches the client is added again,
+// and because further work merges in between attempts, a repeated failure can inflate by more than one flush and can move the
+// derived mean rather than leaving it untouched. Both are narrower statements than earlier drafts of this comment made, and
+// review had to correct them twice.
 //
-// A retry also moves WHEN the work is attributed, and further than one interval, which review caught in a bound stated for the
-// happy path alone. The store takes the day and the first/last timestamps from its own clock at the successful write, so a flush
-// that fails for an hour attributes that hour's work to the recovery, and an outage spanning midnight attributes it to the next
-// day. EvalStats filters on that day, so a long enough outage can push work outside the window a reader is looking at. Bounded by
-// the outage rather than by the interval, and the direction is a late attribution rather than a lost count.
-//
-// The alternative, dropping on failure, trades a bounded over-count for an unbounded under-count, and under-counting is the
-// direction that misleads: a rule that looks cheaper than it is gets left alone.
+// The full set of conditions under which these numbers are inexact lives in ONE place, the requirement in
+// openspec/changes/evalstats-off-drain-path. It is deliberately not restated here: it was restated in five documents, they drifted
+// apart within one round, and a reader who needs the guarantee should read the requirement rather than whichever copy they landed
+// on. Issue #868 tracks making the write idempotent, which is what would let the guarantee be stated without any of this.
+
 func (b *BufferedEvalStats) Flush(ctx context.Context) error {
 	b.mu.Lock()
 	if len(b.pending) == 0 {

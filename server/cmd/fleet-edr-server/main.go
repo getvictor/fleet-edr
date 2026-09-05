@@ -197,10 +197,15 @@ func run() error {
 	go tracing.StartSettingsPoller(ctx, traceSampler, samplerReader, logger, primedSampler)
 	// Converge this replica's detection-config snapshot with mutations made on other replicas (ADR-0010): a peer's exclusion / rule-mode
 	// edit only bumps the shared version counter, so without this poll a non-mutating replica would serve a stale config until restart.
+	// Cancellable independently of ctx, so the join below can stop these loops whether we are shutting down on a signal or
+	// returning on a fatal server error. Review found that: with the process context still live on the error path, the join
+	// waited out its full timeout and then logged a statistics-loss warning that had not happened.
+	rulesLoopCtx, stopRulesLoops := context.WithCancel(ctx)
+	defer stopRulesLoops()
 	rulesDone := make(chan struct{})
 	go func() {
 		defer close(rulesDone)
-		rulesCtx.Run(ctx)
+		rulesCtx.Run(rulesLoopCtx)
 	}()
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty. httpserver.Build skips installing the middleware on a nil
@@ -245,6 +250,7 @@ func run() error {
 	// too would mean ordering two contexts' shutdowns against each other, which is a larger change than the residual justifies:
 	// the loss is whatever one in-flight batch had produced, against a table read over days. Documented in the spec rather than
 	// left for a reader to discover.
+	stopRulesLoops()
 	select {
 	case <-rulesDone:
 	case <-time.After(rulesShutdownWait):

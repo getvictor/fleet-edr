@@ -39,7 +39,9 @@ The distinction is already in the spec rather than being re-argued. A monitor ma
 
 ADR-0010's carve-out covers the in-process state, and the annotation it requires is carried verbatim.
 
-A transient database failure loses nothing: a failed flush returns its counts to the pending set and the next flush retries them. Because the set is keyed by rule id, a database that stays down grows the counts and never the map. The documented loss window is therefore an ungraceful shutdown alone.
+A transient database failure discards nothing: a failed flush returns its counts to the pending set and the next flush retries them. Because the set is keyed by rule id, a database that stays down grows the counts and never the map.
+
+That retry is at-least-once against an additive write, so it is not free, and the conditions under which these numbers are inexact are enumerated in the requirement rather than here. Restating them in five places is what let them drift apart in one review round. #868 tracks making the write idempotent, which is what would remove the question.
 
 ## Rejected: sampling
 
