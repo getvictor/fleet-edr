@@ -34,7 +34,7 @@ func New(corpus api.Corpus, writer api.Writer, validator api.Validator) (*Servic
 // Returns the new corpus version and any advisory warnings. A refusal comes back wrapped in api.ErrRefused with the validator's
 // own reason, and nothing is written.
 func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []string, error) {
-	proposed, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
+	proposed, base, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
 		return upsert(docs, doc)
 	})
 	if err != nil {
@@ -44,7 +44,7 @@ func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []string, e
 	if err != nil {
 		return 0, warnings, fmt.Errorf("%w: %w", api.ErrRefused, err)
 	}
-	version, err := s.writer.PutDocument(ctx, doc)
+	version, err := s.writer.PutDocument(ctx, doc, base)
 	if err != nil {
 		return 0, warnings, err
 	}
@@ -58,7 +58,7 @@ func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []string, e
 // comes from the writer, so a delete of something absent is refused before it can move the version.
 func (s *Service) Delete(ctx context.Context, path string) (int64, []string, error) {
 	var found bool
-	proposed, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
+	proposed, base, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
 		kept := make([]api.Document, 0, len(docs))
 		for _, d := range docs {
 			if d.Path == path {
@@ -81,27 +81,39 @@ func (s *Service) Delete(ctx context.Context, path string) (int64, []string, err
 	if err != nil {
 		return 0, warnings, fmt.Errorf("%w: %w", api.ErrRefused, err)
 	}
-	version, err := s.writer.DeleteDocument(ctx, path)
+	version, err := s.writer.DeleteDocument(ctx, path, base)
 	if err != nil {
 		return 0, warnings, err
 	}
 	return version, warnings, nil
 }
 
-// proposed reads the corpus in force and applies change to a copy of it, which is what gets validated.
+// proposed reads the corpus in force and applies change to a copy of it, returning what to validate and the version it was built
+// from.
 //
 // A copy, because the validator must see the corpus the write WOULD produce rather than the one that exists. Validating the
 // submitted document alone would miss the failure that matters most here: rule identity is a file stem, and two documents claiming
 // one identity refuse the entire corpus rather than one document, so a document that is valid alone can still be the write that
 // drops a deployment to the rule set embedded in its binary.
-func (s *Service) proposed(ctx context.Context, change func([]api.Document) []api.Document) ([]api.Document, error) {
+//
+// The VERSION is read BEFORE the documents, and the order is deliberate rather than incidental. A write landing between the two
+// reads then leaves us holding a version older than the documents we read, so the write is refused with ErrCorpusChanged and the
+// caller retries: a false negative, which is free. Reading them the other way round would leave us holding a version NEWER than
+// the documents, and the write would be accepted on the strength of a corpus we never actually saw.
+func (s *Service) proposed(
+	ctx context.Context, change func([]api.Document) []api.Document,
+) (docs []api.Document, baseVersion int64, err error) {
+	baseVersion, err = s.corpus.Version(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read corpus version: %w", err)
+	}
 	current, err := s.corpus.Documents(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read corpus in force: %w", err)
+		return nil, 0, fmt.Errorf("read corpus in force: %w", err)
 	}
 	next := change(current)
 	api.SortDocuments(next)
-	return next, nil
+	return next, baseVersion, nil
 }
 
 // upsert replaces the document at doc.Path, or appends it when the corpus does not have that path yet.

@@ -157,8 +157,8 @@ func (s *Store) ReplaceIfEmpty(ctx context.Context, docs []api.Document) (bool, 
 // The meta row is bumped FIRST, before the document, which is the lock order replaceWithin documents and which every mutation of
 // this corpus has to share. Bumping it last here would give this path a documents-then-meta order against Replace's
 // meta-then-documents, which is the ABBA deadlock that ordering was chosen to remove.
-func (s *Store) PutDocument(ctx context.Context, doc api.Document) (int64, error) {
-	return s.withVersionBump(ctx, "put", func(tx *sqlx.Tx) error {
+func (s *Store) PutDocument(ctx context.Context, doc api.Document, expectedVersion int64) (int64, error) {
+	return s.withVersionBump(ctx, "put", expectedVersion, func(tx *sqlx.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"INSERT INTO rule_corpus_documents (path, content) VALUES (?, ?) AS new ON DUPLICATE KEY UPDATE content = new.content",
 			doc.Path, string(doc.Content))
@@ -174,8 +174,8 @@ func (s *Store) PutDocument(ctx context.Context, doc api.Document) (int64, error
 // Reports api.ErrDocumentNotFound when the path held nothing, and the transaction is rolled back in that case so the version does
 // NOT move. Both halves matter: a version bump with no content change would make every replica re-read the corpus to discover
 // nothing had happened, and reporting success would tell an operator who mistyped a path that they had deleted a rule.
-func (s *Store) DeleteDocument(ctx context.Context, path string) (int64, error) {
-	return s.withVersionBump(ctx, "delete", func(tx *sqlx.Tx) error {
+func (s *Store) DeleteDocument(ctx context.Context, path string, expectedVersion int64) (int64, error) {
+	return s.withVersionBump(ctx, "delete", expectedVersion, func(tx *sqlx.Tx) error {
 		res, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_documents WHERE path = ?", path)
 		if err != nil {
 			return fmt.Errorf("delete rule corpus document %q: %w", path, err)
@@ -191,25 +191,44 @@ func (s *Store) DeleteDocument(ctx context.Context, path string) (int64, error) 
 	})
 }
 
-// withVersionBump runs write inside a transaction that has already bumped the version, and returns the new version.
+// withVersionBump runs write inside a transaction that has locked the meta row, checked the caller's expected version, and bumped
+// it, and returns the new version.
 //
-// Shared by the two single-document mutations so neither can forget the bump or take its locks in the other order. A write that
-// returns an error rolls the whole thing back, including the bump, which is what lets DeleteDocument report "not found" without
-// moving the version.
-func (s *Store) withVersionBump(ctx context.Context, op string, write func(tx *sqlx.Tx) error) (int64, error) {
+// Shared by the two single-document mutations so neither can forget the bump, the check, or the lock order. A write that returns
+// an error rolls the whole thing back, including the bump, which is what lets DeleteDocument report "not found" without moving the
+// version.
+//
+// The meta row is taken with SELECT ... FOR UPDATE, and that single line is what makes the version check mean anything. It
+// serialises every mutation of this corpus through one row, so a second writer BLOCKS until the first commits and then reads the
+// version the first produced, rather than both reading the old one and both deciding they are current. Without the lock, the
+// comparison below would be its own check-then-act, which is the race it exists to close.
+//
+// expectedVersion < 0 skips the check, which only the seed path has any business doing: it runs before anything could have
+// validated a corpus to compare against.
+//
+// NOTE ON COVERAGE, measured: removing FOR UPDATE is a MISSED mutation and will stay one. The stale-version tests drive the two
+// writes in sequence, so the comparison alone is enough to refuse the second and they pass either way. What the lock adds is only
+// visible with two writers in flight at once, where without it both read the same version, both find themselves current, and both
+// proceed. Catching that needs a test that can hold one transaction open while another starts, which is a different kind of test
+// from these. The version check ITSELF is covered, and dropping it fails.
+func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion int64, write func(tx *sqlx.Tx) error) (int64, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin tx for corpus %s: %w", op, err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	var current int64
+	if err := tx.GetContext(ctx, &current, "SELECT version FROM rule_corpus_meta WHERE id = 1 FOR UPDATE"); err != nil {
+		return 0, fmt.Errorf("lock rule corpus version: %w", err)
+	}
+	if expectedVersion >= 0 && current != expectedVersion {
+		return 0, fmt.Errorf("%w: validated against %d, corpus is now at %d", api.ErrCorpusChanged, expectedVersion, current)
+	}
 	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
 		return 0, fmt.Errorf("bump rule corpus version: %w", err)
 	}
-	var version int64
-	if err := tx.GetContext(ctx, &version, "SELECT version FROM rule_corpus_meta WHERE id = 1"); err != nil {
-		return 0, fmt.Errorf("read rule corpus version: %w", err)
-	}
+	version := current + 1
 	if err := write(tx); err != nil {
 		return 0, err
 	}

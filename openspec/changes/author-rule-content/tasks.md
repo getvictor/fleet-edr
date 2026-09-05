@@ -4,7 +4,7 @@
 - [x] Deleting a path the corpus does not have reports not-found rather than success, so an operator learns whether they deleted the rule they meant.
 - [ ] A failed write leaves both the document and the version untouched, pinned by a test that fails the commit rather than by inspection.
 - [x] Validation runs `catalog.LoadCorpus`, the same loader the corpus load and the CI corpus test run, over the WHOLE document set the write would produce. A rule's identity is its file stem and a duplicate identity refuses the entire corpus, so validating the submitted document alone would accept the one write that can take a deployment's rule set down to its embedded copy.
-- [x] The validator reaches `rulecontent` by INVERSION, not import: `rulecontent/api` declares the port, `rules` supplies the implementation, `cmd` wires it. `arch-go.yml` is unchanged, which is the check that the seam held.
+- [x] The validator reaches `rulecontent` by INVERSION, not import: `rulecontent/api` declares the port and `rules` supplies the implementation. `arch-go.yml` is unchanged, which is the check that the seam held. The `cmd` wiring that joins them lands with the consumer half, along with the caller that would use it.
 - [x] A refused document is not written and does not move the corpus version, and the refusal carries the loader's own reason rather than a rephrasing.
 - [x] Mutation-tested: dropping the version bump, dropping the validator call, treating a warning as a refusal, and auditing a refusal each fail a test.
 

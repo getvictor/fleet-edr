@@ -13,28 +13,33 @@ import (
 
 // fakeCorpus is the corpus in force.
 type fakeCorpus struct {
-	docs []api.Document
-	err  error
+	docs       []api.Document
+	version    int64
+	err        error
+	versionErr error
 }
 
 func (f *fakeCorpus) Documents(context.Context) ([]api.Document, error) { return f.docs, f.err }
-func (f *fakeCorpus) Version(context.Context) (int64, error)            { return 1, nil }
+func (f *fakeCorpus) Version(context.Context) (int64, error)            { return f.version, f.versionErr }
 
 // fakeWriter records what it was asked to write, so a test can assert that a refusal wrote NOTHING rather than only that it
 // returned an error.
 type fakeWriter struct {
-	put     []api.Document
-	deleted []string
-	err     error
+	put      []api.Document
+	deleted  []string
+	expected []int64
+	err      error
 }
 
-func (f *fakeWriter) PutDocument(_ context.Context, doc api.Document) (int64, error) {
+func (f *fakeWriter) PutDocument(_ context.Context, doc api.Document, expected int64) (int64, error) {
 	f.put = append(f.put, doc)
+	f.expected = append(f.expected, expected)
 	return 7, f.err
 }
 
-func (f *fakeWriter) DeleteDocument(_ context.Context, path string) (int64, error) {
+func (f *fakeWriter) DeleteDocument(_ context.Context, path string, expected int64) (int64, error) {
 	f.deleted = append(f.deleted, path)
+	f.expected = append(f.expected, expected)
 	return 8, f.err
 }
 
@@ -200,5 +205,51 @@ func TestPut_UnreadableCorpusRefusesRatherThanValidatingAPartialSet(t *testing.T
 
 	require.Error(t, err)
 	assert.Nil(t, v.saw, "validating against a corpus we failed to read would hide every collision in it")
+	assert.Empty(t, w.put)
+}
+
+// TestPut_WritesAgainstTheVersionItValidated is what stops validation being advisory under concurrency.
+//
+// Validating a snapshot and then writing in a separate transaction is a check-then-act. Two operators adding authored/x.yml and
+// other/x.yml at the same moment each validate against a corpus without the other, both pass, and the corpus that lands claims one
+// rule identity twice. Every replica then refuses the whole thing and falls back to the copy embedded in its binary, which is the
+// exact failure whole-corpus validation exists to prevent.
+//
+// The write therefore carries the version the validation was done against, and the store refuses if the corpus has moved.
+func TestPut_WritesAgainstTheVersionItValidated(t *testing.T) {
+	t.Parallel()
+	w := &fakeWriter{}
+	corpus := &fakeCorpus{version: 42, docs: []api.Document{{Path: "imported/a.yml"}}}
+
+	_, _, err := newService(t, corpus, w, &fakeValidator{}).Put(t.Context(), api.Document{Path: "authored/b.yml"})
+	require.NoError(t, err)
+
+	require.Equal(t, []int64{42}, w.expected, "the write must be conditional on the version that was validated")
+}
+
+// TestDelete_WritesAgainstTheVersionItValidated is the same property for the other mutation.
+func TestDelete_WritesAgainstTheVersionItValidated(t *testing.T) {
+	t.Parallel()
+	w := &fakeWriter{}
+	corpus := &fakeCorpus{version: 9, docs: []api.Document{{Path: "imported/a.yml"}, {Path: "imported/b.yml"}}}
+
+	_, _, err := newService(t, corpus, w, &fakeValidator{}).Delete(t.Context(), "imported/a.yml")
+	require.NoError(t, err)
+
+	require.Equal(t, []int64{9}, w.expected)
+}
+
+// TestPut_UnreadableVersionRefusesBeforeReadingDocuments pins that a version we could not read is not silently treated as zero,
+// which would make every write claim to have validated against the corpus's very first state.
+func TestPut_UnreadableVersionRefusesBeforeReadingDocuments(t *testing.T) {
+	t.Parallel()
+	w := &fakeWriter{}
+	v := &fakeValidator{}
+	corpus := &fakeCorpus{versionErr: errors.New("connection refused")}
+
+	_, _, err := newService(t, corpus, w, v).Put(t.Context(), api.Document{Path: "authored/a.yml"})
+
+	require.Error(t, err)
+	assert.Nil(t, v.saw)
 	assert.Empty(t, w.put)
 }

@@ -123,3 +123,37 @@ func TestCorpusValidator_UnrunnableRuleBesideARunnableOneIsAWarning(t *testing.T
 	assert.Contains(t, warnings[0], "unmappable.yml")
 	assert.Contains(t, warnings[0], "will not run")
 }
+
+// spec:rule-content/authored-content-is-validated-by-the-loader/a-document-the-loader-would-not-read-is-refused
+//
+// TestCorpusValidator_RefusesAPathTheLoaderWillNotRead is a hole review found, and the failure mode is the quiet kind.
+//
+// LoadCorpus walks only the paths IsCorpusFile accepts, so a document stored at authored/rule.yaml is invisible to it. Validation
+// would pass on the strength of the OTHER documents, the file would be stored, the operator would be told it worked, and the rule
+// would never be evaluated anywhere. Refused rather than warned about, because the operator's whole purpose was to add a rule.
+func TestCorpusValidator_RefusesAPathTheLoaderWillNotRead(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"authored/rule.yaml", "authored/rule.txt", "authored/rule"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+				ruleDoc("imported/runnable.yml", "11111111-1111-4111-8111-111111111111", "Runnable", simpleDetection),
+				ruleDoc(path, "55555555-5555-4555-8555-555555555555", "Invisible", simpleDetection),
+			})
+			require.Error(t, err, "a document the loader will not read must not be storable")
+			assert.Contains(t, err.Error(), path)
+		})
+	}
+}
+
+// TestCorpusValidator_RefusesAnEmptyCorpus covers deleting the last document, and the consequence is not the obvious one.
+//
+// An empty store does not mean "no rules". Reload and loadCorpus each KEEP the rule set already in force when the store is empty,
+// so the rule an operator just deleted would go on running on every replica while the delete reported success. That is worse than
+// refusing, because there is no surface anywhere that would show it.
+func TestCorpusValidator_RefusesAnEmptyCorpus(t *testing.T) {
+	t.Parallel()
+	_, err := CorpusValidator{}.Validate(t.Context(), nil)
+	require.Error(t, err, "emptying the corpus leaves the previous rules running indefinitely")
+	assert.Contains(t, err.Error(), "no document in the proposed corpus can run")
+}

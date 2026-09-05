@@ -18,6 +18,17 @@ var ErrDocumentNotFound = errors.New("rule content: document not found")
 // re-phrasing it here would make this package a second, drifting account of why the loader refuses things.
 var ErrRefused = errors.New("rule content: document refused")
 
+// ErrCorpusChanged reports that the corpus moved between being validated and being written, so the write was refused.
+//
+// This is what makes validation mean anything under concurrency. Validating a snapshot and then writing in a separate transaction
+// is a check-then-act: two operators adding `authored/x.yml` and `other/x.yml` at the same time each validate against a corpus
+// without the other, both pass, and the corpus that lands claims one rule identity twice. Every replica then refuses the whole
+// thing and falls back to the copy embedded in its binary, which is precisely the failure whole-corpus validation exists to
+// prevent, reintroduced through the back door.
+//
+// The caller's remedy is to re-read, re-validate and retry, which is why this is a distinct error rather than a generic conflict.
+var ErrCorpusChanged = errors.New("rule content: corpus changed since it was validated")
+
 // Writer is the write surface for rule content, the counterpart to Corpus.
 //
 // Per-document rather than whole-corpus, which is the difference between this and Replace. An operator edits ONE rule; expressing
@@ -26,12 +37,14 @@ var ErrRefused = errors.New("rule content: document refused")
 //
 // Every method returns the corpus version the write produced, so a caller can report what a replica has to reach before the change
 // is live without a second round trip to read it.
+// Every method takes the corpus version the caller validated against and refuses with ErrCorpusChanged if the corpus has moved
+// since. Without that the validation above is advisory: it describes a corpus that no longer exists by the time the write lands.
 type Writer interface {
 	// PutDocument creates or replaces the document at doc.Path and returns the new corpus version.
-	PutDocument(ctx context.Context, doc Document) (int64, error)
+	PutDocument(ctx context.Context, doc Document, expectedVersion int64) (int64, error)
 	// DeleteDocument removes the document at path and returns the new corpus version. Reports ErrDocumentNotFound, and leaves the
 	// corpus version unmoved, when there was nothing there.
-	DeleteDocument(ctx context.Context, path string) (int64, error)
+	DeleteDocument(ctx context.Context, path string, expectedVersion int64) (int64, error)
 }
 
 // Validator decides whether a proposed corpus may replace the one in force.

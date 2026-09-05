@@ -693,6 +693,18 @@ var _ rulecontentapi.Validator = CorpusValidator{}
 // cannot store a rule that the deployment would simply not run. Those come back as warnings so the operator learns the rule will
 // not fire, rather than being told the document is broken.
 func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]string, error) {
+	// Checked BEFORE loading, because the loader would simply not look at these. LoadCorpus walks only the paths IsCorpusFile
+	// accepts, so a document stored at `authored/rule.yaml` is invisible to it: validation would pass on the strength of the OTHER
+	// documents, the file would be stored, and it would never be evaluated. Silently, and with the operator told it succeeded.
+	//
+	// This is the one class of mistake this whole surface must not make, so it is refused rather than warned about: the operator
+	// meant to add a rule, and the alternative is a rule that exists everywhere except where it matters.
+	for _, d := range docs {
+		if !catalog.IsCorpusFile(d.Path) {
+			return nil, fmt.Errorf("%s: rule content must be a .yml file, or the loader will not read it", d.Path)
+		}
+	}
+
 	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
 	if err != nil {
 		return nil, err
@@ -701,10 +713,12 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 	for _, r := range rejected {
 		warnings = append(warnings, fmt.Sprintf("%s will not run: %s", r.File, r.Reason))
 	}
-	if len(loaded) == 0 && len(docs) > 0 {
-		// Every document refused. Storing this would leave the deployment with no corpus detections at all, and both load paths
-		// treat that as a reason to fall back to the embedded copy, so accepting it would silently discard the operator's corpus.
-		return warnings, fmt.Errorf("no document in the proposed corpus can run: %d refused", len(rejected))
+	if len(loaded) == 0 {
+		// Nothing in the proposed corpus can run, which includes the proposal to store NOTHING. Both cases have the same
+		// consequence and it is not the obvious one: Reload and loadCorpus each keep the rule set already in force when the store
+		// is empty or unusable, so the rules an operator just deleted would go on running while the delete reported success. An
+		// empty corpus is therefore not "no rules", it is "the previous rules, indefinitely, with no way to tell".
+		return warnings, fmt.Errorf("no document in the proposed corpus can run: %d document(s), %d refused", len(docs), len(rejected))
 	}
 	return warnings, nil
 }

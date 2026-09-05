@@ -31,6 +31,8 @@ The **content** half stays where ADR-0021 put it. `rulecontent` owns the documen
 
 ## Validation runs the real loader, not a copy
 
-The validator hands the submitted document to `catalog.LoadCorpus` over a single-document filesystem. This is the same function the corpus load runs and the same one CI's corpus test runs, so "valid" means exactly "this deployment will load it", with no second implementation to drift.
+The validator hands the whole proposed document set to `catalog.LoadCorpus`. This is the same function the corpus load runs and the same one CI's corpus test runs, so "valid" means exactly "this deployment will load this", with no second implementation to drift.
+
+The whole SET rather than the submitted document, because a rule's identity is its file stem and two documents claiming one identity refuse the entire corpus rather than one document. A document that is valid alone can therefore be exactly the write that drops a deployment to the copy embedded in its binary.
 
 It also means the cost bounds, the unsupported-Sigma rejections, the duplicate-identity check, and the condition-depth limit are all enforced at authoring time for free, because they are the loader's behaviour rather than something this change re-states.

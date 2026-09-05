@@ -25,7 +25,7 @@ func TestPutDocument_CreatesAndReplaces(t *testing.T) {
 	before, err := s.Version(ctx)
 	require.NoError(t, err)
 
-	created, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("first")})
+	created, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("first")}, -1)
 	require.NoError(t, err)
 	assert.Greater(t, created, before, "a write moves the version, or a replica never learns to re-read")
 
@@ -35,7 +35,7 @@ func TestPutDocument_CreatesAndReplaces(t *testing.T) {
 	assert.Equal(t, "imported/a.yml", docs[0].Path)
 	assert.Equal(t, "first", string(docs[0].Content))
 
-	replaced, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("second")})
+	replaced, err := s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("second")}, -1)
 	require.NoError(t, err)
 	assert.Greater(t, replaced, created)
 
@@ -59,7 +59,7 @@ func TestPutDocument_LeavesOtherDocumentsAlone(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = s.PutDocument(ctx, api.Document{Path: "imported/b.yml", Content: []byte("b-edited")})
+	_, err = s.PutDocument(ctx, api.Document{Path: "imported/b.yml", Content: []byte("b-edited")}, -1)
 	require.NoError(t, err)
 
 	docs, err := s.Documents(ctx)
@@ -81,7 +81,7 @@ func TestDeleteDocument_RemovesAndBumpsTheVersion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	after, err := s.DeleteDocument(ctx, "imported/a.yml")
+	after, err := s.DeleteDocument(ctx, "imported/a.yml", -1)
 	require.NoError(t, err)
 	assert.Greater(t, after, seeded)
 
@@ -106,7 +106,7 @@ func TestDeleteDocument_NotFoundLeavesTheVersionAlone(t *testing.T) {
 	seeded, err := s.Replace(ctx, []api.Document{{Path: "imported/a.yml", Content: []byte("a")}})
 	require.NoError(t, err)
 
-	_, err = s.DeleteDocument(ctx, "imported/never-existed.yml")
+	_, err = s.DeleteDocument(ctx, "imported/never-existed.yml", -1)
 	require.Error(t, err)
 	require.ErrorIs(t, err, api.ErrDocumentNotFound, "callers branch on this, so it must be matchable with errors.Is")
 
@@ -138,7 +138,7 @@ func TestPutDocument_AFailedWriteLeavesTheVersionAlone(t *testing.T) {
 	_, err = s.PutDocument(ctx, api.Document{
 		Path:    "imported/" + strings.Repeat("x", 300) + ".yml",
 		Content: []byte("content"),
-	})
+	}, -1)
 	require.Error(t, err, "a path the column cannot hold must fail rather than silently truncate")
 
 	after, err := s.Version(ctx)
@@ -148,4 +148,65 @@ func TestPutDocument_AFailedWriteLeavesTheVersionAlone(t *testing.T) {
 	docs, err := s.Documents(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, docs, "and nothing may be stored")
+}
+
+// spec:rule-content/operators-author-rule-content/a-write-validated-against-a-corpus-that-has-since-moved-is-refused
+//
+// TestPutDocument_RefusesAStaleVersion is what makes whole-corpus validation hold under concurrency.
+//
+// Validation happens against a snapshot, and the write lands in a separate transaction. Without this check the two are a
+// check-then-act: two operators adding documents whose file stems collide each validate against a corpus lacking the other, both
+// pass, and the corpus that lands claims one rule identity twice. Every replica then refuses the whole thing.
+//
+// A stale expected version must therefore refuse, and must leave both the corpus and its counter exactly as they were.
+func TestPutDocument_RefusesAStaleVersion(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	stale, err := s.Version(ctx)
+	require.NoError(t, err)
+
+	// Somebody else writes first, moving the corpus on.
+	current, err := s.PutDocument(ctx, api.Document{Path: "imported/other.yml", Content: []byte("other")}, stale)
+	require.NoError(t, err)
+	require.Greater(t, current, stale)
+
+	// Our write was validated against the version before that one.
+	_, err = s.PutDocument(ctx, api.Document{Path: "imported/ours.yml", Content: []byte("ours")}, stale)
+	require.Error(t, err)
+	require.ErrorIs(t, err, api.ErrCorpusChanged, "the caller re-reads, re-validates and retries on this")
+
+	after, err := s.Version(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, current, after, "a refused write must not move the counter")
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	require.Len(t, docs, 1, "and must not store anything")
+	assert.Equal(t, "imported/other.yml", docs[0].Path)
+}
+
+// TestDeleteDocument_RefusesAStaleVersion is the same property for the other mutation. Deleting on a stale view is the more
+// alarming half: the corpus you validated the removal against is not the one you are removing from.
+func TestDeleteDocument_RefusesAStaleVersion(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	ctx := t.Context()
+
+	seeded, err := s.Replace(ctx, []api.Document{
+		{Path: "imported/a.yml", Content: []byte("a")},
+		{Path: "imported/b.yml", Content: []byte("b")},
+	})
+	require.NoError(t, err)
+
+	_, err = s.PutDocument(ctx, api.Document{Path: "imported/c.yml", Content: []byte("c")}, seeded)
+	require.NoError(t, err)
+
+	_, err = s.DeleteDocument(ctx, "imported/a.yml", seeded)
+	require.ErrorIs(t, err, api.ErrCorpusChanged)
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	assert.Len(t, docs, 3, "nothing removed on a stale view")
 }
