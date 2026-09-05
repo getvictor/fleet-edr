@@ -332,3 +332,41 @@ func TestBuiltInRuleIDs_IsNotEmpty(t *testing.T) {
 	require.NotEmpty(t, ids, "an empty list would make the collision check silently inert")
 	assert.Contains(t, ids, "suspicious_exec")
 }
+
+// TestCorpusValidator_RefusesADocumentShadowedByAnAncestor covers the last member of the aliasing family review found, reached
+// from the opposite direction to the leading-slash case.
+//
+// "authored/a.yml" and "authored/a.yml/hidden.yml" are both valid relative paths and both store, but the projection makes the
+// first an ordinary FILE, so the walk stops there and never reaches the second. Validation would pass on the parent alone and the
+// child would be stored, reported as stored, and never evaluated.
+func TestCorpusValidator_RefusesADocumentShadowedByAnAncestor(t *testing.T) {
+	t.Parallel()
+	_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+		ruleDoc("authored/a.yml", "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "Parent", simpleDetection),
+		ruleDoc("authored/a.yml/hidden.yml", "ffffffff-ffff-4fff-8fff-ffffffffffff", "Hidden", simpleDetection),
+	})
+	require.Error(t, err, "a document the walk cannot reach must not be storable")
+	assert.Contains(t, err.Error(), "would never reach it")
+}
+
+// TestCorpusValidator_ShadowedDocumentWouldBeInvisible pins the projection behaviour the guard above exists for, so the guard is
+// revisited rather than removed if the walk ever starts descending into such a path.
+func TestCorpusValidator_ShadowedDocumentWouldBeInvisible(t *testing.T) {
+	t.Parallel()
+	fsys := rulecontentapi.FS([]rulecontentapi.Document{
+		{Path: "authored/a.yml", Content: []byte("parent")},
+		{Path: "authored/a.yml/hidden.yml", Content: []byte("hidden")},
+	})
+	var walked []string
+	require.NoError(t, fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			walked = append(walked, p)
+		}
+		return nil
+	}))
+	assert.NotContains(t, walked, "authored/a.yml/hidden.yml",
+		"the walk cannot reach a document nested under a file, which is exactly why it must be refused")
+}

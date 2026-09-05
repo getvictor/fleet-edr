@@ -71,7 +71,7 @@ The system SHALL refuse a submitted document whose rule identifier is already us
 
 Rule identifiers SHALL be restricted to a character set over which case is the only way two identifiers can differ and still compare equal where they are stored. Reproducing an accent-insensitive collation outside the store is not reliably possible, and every approximation fails in the direction that admits a colliding pair, so the identifier space is narrowed rather than the comparison widened.
 
-The system SHALL refuse a submitted document whose path the loader does not inspect. Such a document would be stored, reported as successful, and never evaluated anywhere, which is the opposite of what an operator adding a rule intends.
+The system SHALL refuse a submitted document whose path the loader does not inspect, including one nested beneath another document's path. Such a document would be stored, reported as successful, and never evaluated anywhere, which is the opposite of what an operator adding a rule intends.
 
 The system SHALL bound the size of a submitted document, the length of its path, and the number of documents in a corpus. The path bound matches what storage accepts, so a path too long to store is refused with a reason naming what to shorten rather than failing later as an internal error. The whole corpus is revalidated on every edit and reparsed by every replica whenever it changes, so an operator submitting nothing but valid rules could otherwise make both arbitrarily expensive, which is a denial of service requiring no malformed input.
 

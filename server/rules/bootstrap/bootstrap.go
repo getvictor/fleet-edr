@@ -772,6 +772,24 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 		}
 	}
 
+	// No document may sit UNDER another, which fs.ValidPath does not decide. "authored/a.yml" and "authored/a.yml/hidden.yml" are
+	// both perfectly valid relative paths and both store fine, but the projection makes the first an ordinary FILE, so WalkDir
+	// stops there and never reaches the second. Validation would pass on the strength of the parent alone, the child would be
+	// written, and it would never be evaluated anywhere: the same silent outcome as the leading-slash alias, reached from the
+	// other direction.
+	paths := make(map[string]struct{}, len(docs))
+	for _, d := range docs {
+		paths[d.Path] = struct{}{}
+	}
+	for _, d := range docs {
+		for dir := path.Dir(d.Path); dir != "." && dir != "/"; dir = path.Dir(dir) {
+			if _, shadowed := paths[dir]; shadowed {
+				return nil, fmt.Errorf("%s: sits under %q, which is itself a rule file, so the loader would never reach it",
+					d.Path, dir)
+			}
+		}
+	}
+
 	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
 	if err != nil {
 		return nil, err

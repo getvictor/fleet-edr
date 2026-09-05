@@ -39,6 +39,6 @@ These constraints apply, and a corpus that breaks any of them is refused as a wh
 ## What else a corpus must satisfy
 
 - **Every file is `.yml`.** The loader reads nothing else, so a rule stored under another extension would be kept, reported as stored, and never evaluated.
-- **Paths are plain and relative.** No leading slash, and no `.` or `..` segments. Two paths that differ only by a leading slash are distinct rows in storage but the same file to the loader, so one of the two would silently disappear at load.
+- **Paths are plain and relative, and none sits under another.** No leading slash, and no `.` or `..` segments. A rule may not be nested beneath another rule's path either: `authored/a.yml/nested.yml` stores happily but the loader treats `a.yml` as a file and never looks inside it. Two paths that differ only by a leading slash are distinct rows in storage but the same file to the loader, so one of the two would silently disappear at load.
 - **At least one rule must run.** A corpus in which nothing loads is refused, including an empty one. An empty corpus does not mean "no rules": the server keeps the rule set already in force when it finds nothing to load, so the rules an operator meant to remove would go on running.
 - **Bounded size.** A rule file may be up to 64 KiB, its path up to 255 characters, and a corpus up to 4096 rules. The whole corpus is revalidated on every edit and reparsed by every replica whenever it changes, so these bound work that is otherwise unbounded. The largest rule shipped here is under 4 KiB.
