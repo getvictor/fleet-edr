@@ -12,6 +12,8 @@ The warning SHALL name the searches responsible, because an operator fixing it n
 
 The system SHALL NOT warn about a pattern that restricts the value in any way, including one that requires at least one character and one that requires the value to be empty. A warning that fires on rules an operator wrote deliberately is ignored, and then reports nothing when it matters.
 
+The system SHALL warn only where such a search is ASSERTED by the rule's condition, and SHALL NOT warn where the condition negates it or does not use it at all. A search matching everything contributes nothing where it is asserted, but negating it makes it match nothing, which is the most discriminating predicate there is and a different concern entirely: a rule that can never fire. A search the condition never mentions cannot make the rule broad.
+
 The system SHALL NOT claim to decide this for a regular-expression pattern. Whether a regular expression matches every value is a question about a different matcher, and answering it wrongly in the reassuring direction would be worse than not answering.
 
 #### Scenario: A search matching every value is warned about
@@ -19,6 +21,18 @@ The system SHALL NOT claim to decide this for a regular-expression pattern. Whet
 - **GIVEN** a submitted rule whose search matches any value of its field
 - **WHEN** it is validated
 - **THEN** it is accepted, and the warning names that search
+
+#### Scenario: A negated match-everything search is not warned about
+
+- **GIVEN** a submitted rule whose condition negates a search that matches every value
+- **WHEN** it is validated
+- **THEN** it is accepted with no such warning, because negating it makes it match nothing
+
+#### Scenario: A search the condition does not use is not warned about
+
+- **GIVEN** a submitted rule declaring a search that matches everything but never referencing it in the condition
+- **WHEN** it is validated
+- **THEN** it is accepted with no such warning, because an unreferenced search is never evaluated
 
 #### Scenario: A discriminating rule is not warned about
 

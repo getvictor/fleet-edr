@@ -221,3 +221,103 @@ func TestUndiscriminatingSearches_AllFormQuantifiesOverEveryValue(t *testing.T) 
 			"nothing in the list restricts anything, so every event carrying the field satisfies it")
 	})
 }
+
+// spec:rule-content/a-rule-that-discriminates-nothing-is-warned-about/a-negated-match-everything-search-is-not-warned-about
+// spec:rule-content/a-rule-that-discriminates-nothing-is-warned-about/a-search-the-condition-does-not-use-is-not-warned-about
+//
+// TestUndiscriminatingSearches_PolarityDecidesWhetherBreadthIsAFootGun covers the counterexample review produced against my own
+// stated reasoning.
+//
+// I had documented that a search matching everything contributes nothing wherever it sits, and ignored the condition on that
+// basis. It is false under negation: with `condition: not selection` and a wildcard selection, the rule matches exactly the
+// events that have NO Image, so the wildcard is the rule's discriminating predicate. Reporting it would be a false positive of
+// exactly the kind that teaches operators to ignore the warning, which is the failure this whole feature is built to avoid.
+//
+// The asymmetry is the point: always-true asserted contributes nothing; always-true NEGATED is always false, which is maximally
+// discriminating and a different problem (a rule that can never fire) for someone else to report.
+func TestUndiscriminatingSearches_PolarityDecidesWhetherBreadthIsAFootGun(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		detection map[string]any
+		want      []string
+		why       string
+	}{
+		"asserted wildcard is a foot-gun": {
+			detection: map[string]any{
+				"selection": map[string]any{"Image": "*"},
+				"condition": "selection",
+			},
+			want: []string{"selection"},
+			why:  "always true, asserted: the rule matches everything",
+		},
+		"negated wildcard is the predicate": {
+			detection: map[string]any{
+				"selection": map[string]any{"Image": "*"},
+				"condition": "not selection",
+			},
+			want: nil,
+			why:  "matches exactly the events with no Image, which is discriminating",
+		},
+		"wildcard filter under and-not is not breadth": {
+			detection: map[string]any{
+				"selection": map[string]any{"Image|endswith": "/osascript"},
+				"filter":    map[string]any{"CommandLine": "*"},
+				"condition": "selection and not filter",
+			},
+			want: nil,
+			why:  "the filter suppresses everything, so the rule never fires: a different problem, not breadth",
+		},
+		"double negation is positive again": {
+			detection: map[string]any{
+				"selection": map[string]any{"Image": "*"},
+				"condition": "not (not selection)",
+			},
+			want: []string{"selection"},
+			why:  "two negations restore the assertion",
+		},
+		"asserted wildcard in an or makes the whole rule broad": {
+			detection: map[string]any{
+				"selection": map[string]any{"Image|endswith": "/osascript"},
+				"anything":  map[string]any{"CommandLine": "*"},
+				"condition": "selection or anything",
+			},
+			want: []string{"anything"},
+			why:  "an always-true branch of an or matches everything",
+		},
+		"a search the condition never mentions cannot make the rule broad": {
+			detection: map[string]any{
+				"selection": map[string]any{"Image|endswith": "/osascript"},
+				"unused":    map[string]any{"CommandLine": "*"},
+				"condition": "selection",
+			},
+			want: nil,
+			why:  "an unreferenced search is never evaluated",
+		},
+		"a NEGATED quantifier does not make its members breadth": {
+			detection: map[string]any{
+				"selection_a": map[string]any{"Image|endswith": "/osascript"},
+				"selection_b": map[string]any{"CommandLine": "*"},
+				"condition":   "not 1 of selection_*",
+			},
+			want: nil,
+			why:  "polarity has to pass through a quantifier too, or a negated always-true member reads as a foot-gun",
+		},
+		"a quantifier references its searches positively": {
+			detection: map[string]any{
+				"selection_a": map[string]any{"Image|endswith": "/osascript"},
+				"selection_b": map[string]any{"CommandLine": "*"},
+				"condition":   "1 of selection_*",
+			},
+			want: []string{"selection_b"},
+			why:  "`1 of` is an or over its searches, so an always-true member matches everything",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r, err := Compile(tc.detection)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, r.UndiscriminatingSearches(), tc.why)
+		})
+	}
+}

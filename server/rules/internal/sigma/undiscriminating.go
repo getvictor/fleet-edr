@@ -102,20 +102,63 @@ func (s search) discriminatesNothing() bool {
 	return false
 }
 
-// UndiscriminatingSearches returns the names of this rule's searches that every event carrying their fields satisfies.
+// positivelyReferenced collects the indices of searches the condition uses at POSITIVE polarity, meaning not beneath a `not`.
+//
+// The polarity is the whole reason this walk exists, and an earlier revision of this file ignored the condition entirely on the
+// grounds that a search matching everything contributes nothing wherever it sits. Review produced the counterexample: with
+// `condition: not selection` and `selection: {Image: '*'}`, the rule matches exactly the events that have no Image. The wildcard
+// is then the rule's discriminating predicate rather than a foot-gun, and reporting it would be a false positive of precisely the
+// kind that teaches operators to ignore the warning.
+//
+// The asymmetry is real rather than a technicality. An always-true search at positive polarity contributes nothing: `A and true`
+// is A, and `A or true` matches everything. Negated, the same search is always FALSE, which is maximally discriminating and a
+// different problem entirely, a rule that can never fire. This function reports breadth, so it reports the positive positions and
+// leaves the never-fires question to whoever asks it.
+func positivelyReferenced(n node, positive bool, out map[int]struct{}) {
+	switch t := n.(type) {
+	case refNode:
+		if positive {
+			out[t.idx] = struct{}{}
+		}
+	case notNode:
+		positivelyReferenced(t.inner, !positive, out)
+	case andNode:
+		positivelyReferenced(t.left, positive, out)
+		positivelyReferenced(t.right, positive, out)
+	case orNode:
+		positivelyReferenced(t.left, positive, out)
+		positivelyReferenced(t.right, positive, out)
+	case quantNode:
+		// `1 of x*` and `all of x*` reference their searches the way an or and an and do, so polarity passes straight through.
+		if positive {
+			for _, i := range t.indices {
+				out[i] = struct{}{}
+			}
+		}
+	}
+}
+
+// UndiscriminatingSearches returns the names of this rule's searches that match everything AND are used positively.
 //
 // Names rather than a boolean, because an operator fixing this needs to know where to look: a rule with six searches and one
 // wildcard is a different problem from one that is wildcards throughout, and a bare "this rule is too broad" makes them find out
 // which for themselves.
 //
-// Nil when every search restricts something, so a caller can treat the result as the warning list directly.
+// Nil when nothing qualifies, so a caller can treat the result as the warning list directly.
 //
-// Note what this does NOT consider: the condition. A search that discriminates nothing is worth reporting even inside a condition
-// that narrows it, because it contributes nothing there either, and reasoning about whether `a and not b` is broad overall means
-// reasoning about the whole boolean expression rather than about one search. Reporting the search is the honest claim.
+// The polarity filter is what keeps this honest. A search matching everything is only a foot-gun where it is asserted; negated it
+// is the opposite, and a search the condition never mentions cannot make the rule broad at all.
+//
+// Order follows declaration order, so the same rule reports the same list every time.
 func (r *Rule) UndiscriminatingSearches() []string {
+	positive := make(map[int]struct{}, len(r.searches))
+	positivelyReferenced(r.cond, true, positive)
+
 	var names []string
-	for _, s := range r.searches {
+	for i, s := range r.searches {
+		if _, used := positive[i]; !used {
+			continue
+		}
 		if s.discriminatesNothing() {
 			names = append(names, s.name)
 		}
