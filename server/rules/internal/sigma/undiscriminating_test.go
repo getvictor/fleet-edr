@@ -321,3 +321,20 @@ func TestUndiscriminatingSearches_PolarityDecidesWhetherBreadthIsAFootGun(t *tes
 		})
 	}
 }
+
+// TestUndiscriminatingSearches_OrderIsLexicalNotAuthored pins the ordering the doc comment claims, because the previous comment
+// claimed declaration order and was wrong: Compile sorts the names, and it must, since a YAML mapping has no order to preserve.
+//
+// Worth a test rather than a corrected sentence, because "the same rule reports the same list every time" is the property a
+// caller actually depends on, and a sentence cannot fail.
+func TestUndiscriminatingSearches_OrderIsLexicalNotAuthored(t *testing.T) {
+	t.Parallel()
+	r, err := Compile(map[string]any{
+		"zebra":     map[string]any{"Image": "*"},
+		"alpha":     map[string]any{"CommandLine": "*"},
+		"condition": "zebra or alpha",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha", "zebra"}, r.UndiscriminatingSearches(),
+		"lexical by search name, whatever order the author wrote them in")
+}

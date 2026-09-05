@@ -149,7 +149,9 @@ func positivelyReferenced(n node, positive bool, out map[int]struct{}) {
 // The polarity filter is what keeps this honest. A search matching everything is only a foot-gun where it is asserted; negated it
 // is the opposite, and a search the condition never mentions cannot make the rule broad at all.
 //
-// Order follows declaration order, so the same rule reports the same list every time.
+// Order is LEXICAL by search name, not the order the author wrote them: Compile sorts the names before building r.searches, and
+// it has to, because a YAML mapping has no order for it to preserve. Determinism is what the ordering buys and it holds either
+// way; the claim about declaration order was simply wrong, in a function whose sort I had read.
 func (r *Rule) UndiscriminatingSearches() []string {
 	positive := make(map[int]struct{}, len(r.searches))
 	positivelyReferenced(r.cond, true, positive)
