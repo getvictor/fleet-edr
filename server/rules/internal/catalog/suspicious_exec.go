@@ -109,7 +109,7 @@ func (r *SuspiciousExec) Doc() api.Documentation {
 		Limitations: []string{
 			"The window bounds how long after the shell exec a temp exec still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"Exclusions are keyed by rule id, so one saved here does not silence `shell_network_connect` on the same parent, and vice versa. Before issue #776 split the rules, a single exclusion silenced both shapes.",
-			"A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. A shell started directly by launchd has no parent to name, so those alerts still read `(unknown)` and still fire. Skipped chains are counted per rule on the server's detection traces.",
+			"A chain whose shell claims a parent that is not in the recorded process tree raises nothing, and is not reconsidered if that parent is recorded later. Skipped chains are counted per rule on the server's detection traces. A shell started directly by launchd is a different case: it has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.",
 		},
 	}
 }
@@ -280,10 +280,7 @@ func (r *SuspiciousExec) evalExecArm2(
 func (r *SuspiciousExec) makeExecFinding(
 	evt api.Event, parent, shell, tempProc *api.Process, tempPath string, batch []api.Event,
 ) *api.Finding {
-	parentPath := "(unknown)"
-	if parent != nil {
-		parentPath = parent.Path
-	}
+	parentPath := parentPathFor(parent, shell)
 	eventIDs := []string{evt.EventID}
 	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)

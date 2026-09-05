@@ -92,6 +92,7 @@ func (r *ShellNetworkConnect) Doc() api.Documentation {
 			"The window bounds how long after the shell exec a connection still counts; long-tail post-shell activity is missed by design. Set in x-engine.params.window.",
 			"An outbound DNS lookup (port 53) to a local-resolver-class address (loopback, RFC1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA/link-local) is treated as name resolution and does not fire; a lookup to a publicly routable resolver still does.",
 			"Exclusions saved against `suspicious_exec` before the split (issue #776) do not apply here, because exclusions are keyed by rule id. Re-add any that should silence this shape too.",
+			"A shell started directly by launchd has no parent process row, but pid 1 is what its parent IS, so the alert names `/sbin/launchd` and a parent-path-glob exclusion for it works. Note that such an exclusion covers every launchd-started shell chain for this rule, which includes real persistence execution.",
 		},
 	}
 }
@@ -189,10 +190,7 @@ func (r *ShellNetworkConnect) evalNetwork(
 	if shell == nil {
 		return nil, 0, nil
 	}
-	parentPath := "(unknown)"
-	if parent != nil {
-		parentPath = parent.Path
-	}
+	parentPath := parentPathFor(parent, shell)
 	eventIDs := []string{evt.EventID}
 	if shellEventID := findShellExecEventID(batch, evt.HostID, shell.PID, shell.Path, evt.EventID); shellEventID != "" {
 		eventIDs = append([]string{shellEventID}, eventIDs...)
