@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
+	"github.com/fleetdm/edr/server/rules/api"
 	"github.com/fleetdm/edr/server/rules/internal/catalog"
 )
 
@@ -444,4 +445,93 @@ func TestCorpusValidator_BreadthWarningIsAdvisoryNotARefusal(t *testing.T) {
 	})
 	require.NoError(t, err, "a corpus containing a broad rule still loads, so it is still storable")
 	assert.Len(t, warnings, 1, "and the operator is told, once, which rule it is")
+}
+
+// spec:rule-content/attribution-follows-recorded-provenance/an-operator-s-rule-is-not-credited-upstream
+// spec:rule-content/attribution-follows-recorded-provenance/a-shipped-rule-keeps-its-upstream-credit
+//
+// TestLoadCorpus_AttributionFollowsRecordedProvenance is the fix for #874, asserted where it becomes visible rather than at the
+// column that records it.
+//
+// The fixtures deliberately use the SAME path prefix and the same `author:` field for both rules, so nothing about the document
+// itself distinguishes them. Only the recorded source does. That is the point: #873 established a rule's identity is its file
+// stem rather than its path, operators choose their own paths, and a prefix rule would let someone launder an authored rule into
+// a vendored one by writing to `imported/`, carrying a Detection Rule License attribution it was never under.
+func TestLoadCorpus_AttributionFollowsRecordedProvenance(t *testing.T) {
+	t.Parallel()
+	docs := []rulecontentapi.Document{
+		{
+			Path:    "imported/shipped_rule.yml",
+			Content: ruleDoc("x", "11111111-3333-4333-8333-333333333333", "Shipped", simpleDetection).Content,
+			Source:  rulecontentapi.SourceVendored,
+		},
+		{
+			Path:    "imported/operator_rule.yml",
+			Content: ruleDoc("x", "22222222-3333-4333-8333-333333333333", "Operators", simpleDetection).Content,
+			Source:  rulecontentapi.SourceAuthored,
+		},
+	}
+
+	loaded, _, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
+	require.NoError(t, err)
+
+	origins := make(map[string]string, len(loaded))
+	for _, r := range loaded {
+		origins[r.ID()] = api.OriginOf(r)
+	}
+
+	assert.Equal(t, api.LocalOrigin, origins["operator_rule"],
+		"an operator's own rule must not be credited upstream, whatever path it sits under")
+	assert.Contains(t, origins["shipped_rule"], "SigmaHQ",
+		"a rule that came with the product keeps the credit its licence requires")
+}
+
+// spec:rule-content/attribution-follows-recorded-provenance/an-alert-from-an-operator-s-rule-carries-no-upstream-attribution
+//
+// TestLoadCorpus_AlertAttributionFollowsProvenance covers the consequence that reaches persistence. AlertOriginOf is what #824
+// stores on every alert row and what #870 backfilled, so an authored rule wrongly credited here would put a licence attribution on
+// alert history, where it is durable and much harder to walk back than a catalog label.
+func TestLoadCorpus_AlertAttributionFollowsProvenance(t *testing.T) {
+	t.Parallel()
+	docs := []rulecontentapi.Document{{
+		Path:    "authored/mine.yml",
+		Content: ruleDoc("x", "33333333-3333-4333-8333-333333333333", "Mine", simpleDetection).Content,
+		Source:  rulecontentapi.SourceAuthored,
+	}}
+
+	loaded, _, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+
+	alertOrigin := api.AlertOriginOf(loaded[0])
+	assert.Equal(t, api.LocalOrigin, alertOrigin)
+	assert.NotContains(t, alertOrigin, "SigmaHQ",
+		"alert rows are durable, so a wrong licence attribution there outlives the rule that caused it")
+}
+
+// TestAuthoredIn_KeysOnTheProjectionTheLoaderWalks pins the one thing that would make the lookup silently miss.
+//
+// rulecontentapi.FS strips a leading slash when it projects documents into a filesystem, so the loader walks the stripped name.
+// Deriving the key differently on the two sides is the shape that has already cost this work once: the lookup answers "not
+// authored" for everything, nothing errors, and every operator rule quietly gets an upstream credit.
+func TestAuthoredIn_KeysOnTheProjectionTheLoaderWalks(t *testing.T) {
+	t.Parallel()
+	authored := authoredIn([]rulecontentapi.Document{
+		{Path: "/authored/leading_slash.yml", Source: rulecontentapi.SourceAuthored},
+		{Path: "authored/plain.yml", Source: rulecontentapi.SourceAuthored},
+		{Path: "imported/shipped.yml", Source: rulecontentapi.SourceVendored},
+	})
+	require.NotNil(t, authored)
+
+	assert.True(t, authored("authored/leading_slash.yml"), "the loader sees the slash stripped, so the lookup must too")
+	assert.True(t, authored("authored/plain.yml"))
+	assert.False(t, authored("imported/shipped.yml"))
+}
+
+// TestAuthoredIn_NilWhenNothingIsAuthored keeps the loader on its explicit "everything is vendored" path rather than consulting a
+// lookup that can only answer no.
+func TestAuthoredIn_NilWhenNothingIsAuthored(t *testing.T) {
+	t.Parallel()
+	assert.Nil(t, authoredIn([]rulecontentapi.Document{{Path: "imported/a.yml", Source: rulecontentapi.SourceVendored}}))
+	assert.Nil(t, authoredIn(nil))
 }

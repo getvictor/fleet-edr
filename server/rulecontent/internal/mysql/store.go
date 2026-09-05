@@ -24,13 +24,15 @@ func (s *Store) Documents(ctx context.Context) ([]api.Document, error) {
 	var rows []struct {
 		Path    string `db:"path"`
 		Content string `db:"content"`
+		Source  string `db:"source"`
 	}
-	if err := s.db.SelectContext(ctx, &rows, "SELECT path, content FROM rule_corpus_documents ORDER BY path"); err != nil {
+	if err := s.db.SelectContext(ctx, &rows,
+		"SELECT path, content, source FROM rule_corpus_documents ORDER BY path"); err != nil {
 		return nil, fmt.Errorf("select rule corpus documents: %w", err)
 	}
 	docs := make([]api.Document, 0, len(rows))
 	for _, r := range rows {
-		docs = append(docs, api.Document{Path: r.Path, Content: []byte(r.Content)})
+		docs = append(docs, api.Document{Path: r.Path, Content: []byte(r.Content), Source: api.Source(r.Source)})
 	}
 	return docs, nil
 }
@@ -72,6 +74,9 @@ func (s *Store) Replace(ctx context.Context, docs []api.Document) (int64, error)
 	if err != nil {
 		return 0, err
 	}
+	if err := setPackDigest(ctx, tx, api.PackDigest(api.VendoredDocuments(withDefaultSource(docs)))); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit corpus replace: %w", err)
 	}
@@ -100,8 +105,16 @@ func replaceWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document) (int64
 		return 0, fmt.Errorf("clear rule corpus: %w", err)
 	}
 	for _, d := range docs {
+		// A document with no source declared is vendored: this path is the seed and the whole-corpus publish, both of which carry
+		// content shipped with the product. A caller that has one keeps it, which is what lets a corpus be restored with its
+		// provenance intact rather than relabelled by the restore.
+		source := d.Source
+		if source == "" {
+			source = api.SourceVendored
+		}
 		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO rule_corpus_documents (path, content) VALUES (?, ?)", d.Path, string(d.Content)); err != nil {
+			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?)",
+			d.Path, string(d.Content), string(source)); err != nil {
 			return 0, fmt.Errorf("insert rule corpus document %q: %w", d.Path, err)
 		}
 	}
@@ -141,6 +154,12 @@ func (s *Store) ReplaceIfEmpty(ctx context.Context, docs []api.Document) (bool, 
 	if err != nil {
 		return false, 0, err
 	}
+	// The digest covers the VENDORED half only, so an operator adding a rule later does not make the deployment look out of date.
+	// Recorded in this transaction rather than after it, because a separate write can fail on its own and leave a corpus whose
+	// content and stated identity disagree, silently.
+	if err := setPackDigest(ctx, tx, api.PackDigest(api.VendoredDocuments(withDefaultSource(docs)))); err != nil {
+		return false, 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, 0, fmt.Errorf("commit conditional corpus replace: %w", err)
 	}
@@ -159,9 +178,16 @@ func (s *Store) ReplaceIfEmpty(ctx context.Context, docs []api.Document) (bool, 
 // meta-then-documents, which is the ABBA deadlock that ordering was chosen to remove.
 func (s *Store) PutDocument(ctx context.Context, doc api.Document, expectedVersion int64) (int64, error) {
 	return s.withVersionBump(ctx, "put", expectedVersion, func(tx *sqlx.Tx) error {
+		// SourceAuthored is written here rather than taken from doc, and the caller cannot override it. A document arriving
+		// through this method came through the authoring surface, which is the fact being recorded; letting a caller declare its
+		// own provenance would make the licence attribution a claim rather than an observation.
+		//
+		// The source is updated on a replace as well as an insert, because writing over a vendored document makes it the
+		// operator's: they now own its content, and crediting upstream for what they wrote would be the bug this exists to fix.
 		_, err := tx.ExecContext(ctx,
-			"INSERT INTO rule_corpus_documents (path, content) VALUES (?, ?) AS new ON DUPLICATE KEY UPDATE content = new.content",
-			doc.Path, string(doc.Content))
+			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?) AS new "+
+				"ON DUPLICATE KEY UPDATE content = new.content, source = new.source",
+			doc.Path, string(doc.Content), string(api.SourceAuthored))
 		if err != nil {
 			return fmt.Errorf("upsert rule corpus document %q: %w", doc.Path, err)
 		}
@@ -237,4 +263,46 @@ func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion 
 		return 0, fmt.Errorf("commit corpus %s: %w", op, err)
 	}
 	return version, nil
+}
+
+// PackDigest returns the identity of the vendored content this corpus holds, or "" when none has been recorded.
+//
+// Empty is a real answer rather than a missing one: a corpus seeded before provenance was recorded holds SOME vendored
+// generation and nothing wrote down which, so reporting a digest would be inventing one. A caller comparing against the build's
+// pack has to treat empty as "unknown, therefore not known to be current" rather than as a mismatch or a match.
+func (s *Store) PackDigest(ctx context.Context) (string, error) {
+	var digest string
+	if err := s.db.GetContext(ctx, &digest, "SELECT pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
+		return "", fmt.Errorf("select rule corpus pack digest: %w", err)
+	}
+	return digest, nil
+}
+
+// setPackDigest records which vendored pack the corpus now holds, inside the caller's transaction.
+//
+// Always written in the SAME transaction as the documents it describes. Recorded separately it would be a second write that can
+// fail on its own, leaving a corpus whose content and stated identity disagree, and the disagreement is silent: the deployment
+// would report a pack it is not running.
+func setPackDigest(ctx context.Context, tx *sqlx.Tx, digest string) error {
+	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET pack_digest = ? WHERE id = 1", digest); err != nil {
+		return fmt.Errorf("record rule corpus pack digest: %w", err)
+	}
+	return nil
+}
+
+// withDefaultSource applies the same defaulting replaceWithin does, so the digest is taken over the documents that will actually
+// be stored rather than over the caller's un-defaulted view of them.
+//
+// It exists because the two would otherwise disagree in exactly one case, and silently: a seed hands over documents with no
+// source, replaceWithin stores them as vendored, and a digest computed over the raw input would find no vendored documents at all
+// and record the digest of an empty pack. The deployment would then hold the whole corpus and claim to hold nothing.
+func withDefaultSource(docs []api.Document) []api.Document {
+	out := make([]api.Document, 0, len(docs))
+	for _, d := range docs {
+		if d.Source == "" {
+			d.Source = api.SourceVendored
+		}
+		out = append(out, d)
+	}
+	return out
 }

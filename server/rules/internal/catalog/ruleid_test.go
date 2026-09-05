@@ -69,7 +69,7 @@ func TestLoadImported_RefusesAnOverLongRuleID(t *testing.T) {
 		"process_creation/" + stem + ".yml": &fstest.MapFile{Data: body},
 	}
 
-	_, _, err := loadImported(fsys, ".")
+	_, _, err := loadImported(fsys, ".", nil)
 
 	require.Error(t, err, "a rule whose identifier cannot be stored must not load")
 	assert.Contains(t, err.Error(), "over the", "the message must say the identifier is over the limit")
@@ -129,7 +129,7 @@ func TestLoadImported_RefusesAnOverLongRuleIDEvenWhenTheRuleIsOtherwiseRejected(
 	stem := strings.Repeat("s", api.MaxRuleIDLen+1)
 	fsys := fstest.MapFS{"process_creation/" + stem + ".yml": &fstest.MapFile{Data: body}}
 
-	_, rejected, err := loadImported(fsys, ".")
+	_, rejected, err := loadImported(fsys, ".", nil)
 
 	require.Error(t, err,
 		"an unstorable identifier must FAIL the load, not be recorded as a soft rejection alongside unmappable rules")

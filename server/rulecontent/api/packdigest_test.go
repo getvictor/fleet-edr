@@ -1,0 +1,131 @@
+package api
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/the-identity-is-stable-for-unchanged-content
+// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/the-identity-changes-when-the-shipped-content-changes
+func TestPackDigest(t *testing.T) {
+	t.Parallel()
+	base := []Document{
+		{Path: "imported/a.yml", Content: []byte("alpha")},
+		{Path: "imported/b.yml", Content: []byte("beta")},
+	}
+
+	t.Run("stable for the same content, and does not disturb its input", func(t *testing.T) {
+		t.Parallel()
+		// Asserted against a SEPARATELY CONSTRUCTED equal set rather than against the same expression twice. Hashing one value
+		// twice is trivially equal unless the function keeps state, so it tests almost nothing; what is worth pinning is that two
+		// callers holding equal content agree, which is the property a deployment comparing itself to a build depends on.
+		same := []Document{
+			{Path: "imported/a.yml", Content: []byte("alpha")},
+			{Path: "imported/b.yml", Content: []byte("beta")},
+		}
+		assert.Equal(t, PackDigest(base), PackDigest(same))
+
+		// And the order the caller handed them over in survives, because the function sorts a CLONE. A sort in place would
+		// reorder a slice its caller still holds, which is the kind of side effect that surfaces somewhere else entirely.
+		unsorted := []Document{base[1], base[0]}
+		_ = PackDigest(unsorted)
+		assert.Equal(t, "imported/b.yml", unsorted[0].Path, "the caller's slice must not be reordered under it")
+	})
+
+	t.Run("independent of the order it is given in", func(t *testing.T) {
+		t.Parallel()
+		// A caller assembling a pack from a filesystem walk does not necessarily hand them over sorted, and the digest is a
+		// property of the SET rather than of the reading order.
+		reversed := []Document{base[1], base[0]}
+		assert.Equal(t, PackDigest(base), PackDigest(reversed))
+	})
+
+	t.Run("changes when content changes", func(t *testing.T) {
+		t.Parallel()
+		changed := []Document{base[0], {Path: "imported/b.yml", Content: []byte("beta!")}}
+		assert.NotEqual(t, PackDigest(base), PackDigest(changed))
+	})
+
+	t.Run("changes when a document is added", func(t *testing.T) {
+		t.Parallel()
+		added := append(append([]Document{}, base...), Document{Path: "imported/c.yml", Content: []byte("gamma")})
+		assert.NotEqual(t, PackDigest(base), PackDigest(added))
+	})
+
+	t.Run("changes when a document is removed", func(t *testing.T) {
+		t.Parallel()
+		assert.NotEqual(t, PackDigest(base), PackDigest(base[:1]))
+	})
+
+	t.Run("changes when a document MOVES without its content changing", func(t *testing.T) {
+		t.Parallel()
+		// The path is hashed, not only the bytes. Without that a rule could move between directories, changing which file the
+		// loader reads it from, while the deployment still believed it held the same pack.
+		//
+		// The moved path is chosen to keep the SORT ORDER identical, and that is not incidental. An earlier version moved
+		// "imported/a.yml" to "imported/moved.yml", which sorts after "imported/b.yml", so the contents changed order and the
+		// digest differed for that reason instead. It asserted the right thing and would have passed with the path removed from
+		// the hash entirely, which mutation testing is how I found out.
+		moved := []Document{{Path: "imported/aa.yml", Content: []byte("alpha")}, base[1]}
+		assert.Equal(t, [][]byte{[]byte("alpha"), []byte("beta")}, contentsInOrder(moved),
+			"the fixture must differ from base ONLY in a path, or it tests ordering rather than path hashing")
+		assert.NotEqual(t, PackDigest(base), PackDigest(moved))
+	})
+
+	t.Run("a split between path and content cannot collide", func(t *testing.T) {
+		t.Parallel()
+		// Without a length prefix these two hash the same concatenation, so a digest could be preserved across a change that
+		// moves bytes from the path into the content. Unlikely by accident and cheap to rule out.
+		a := []Document{{Path: "a", Content: []byte("bc")}}
+		b := []Document{{Path: "ab", Content: []byte("c")}}
+		assert.NotEqual(t, PackDigest(a), PackDigest(b))
+	})
+
+	t.Run("an empty pack has a stable identity of its own", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, PackDigest(nil), PackDigest([]Document{}))
+		assert.NotEqual(t, PackDigest(nil), PackDigest(base))
+	})
+}
+
+// spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/content-written-by-an-operator-does-not-change-the-pack-identity
+//
+// TestVendoredDocuments_ExcludesAuthoredContent is what keeps an operator's own rules from making a deployment look out of date,
+// and keeps deleting one from making it look current.
+func TestVendoredDocuments_ExcludesAuthoredContent(t *testing.T) {
+	t.Parallel()
+	mixed := []Document{
+		{Path: "imported/a.yml", Content: []byte("alpha"), Source: SourceVendored},
+		{Path: "authored/mine.yml", Content: []byte("mine"), Source: SourceAuthored},
+		{Path: "imported/b.yml", Content: []byte("beta"), Source: SourceVendored},
+	}
+	vendoredOnly := []Document{mixed[0], mixed[2]}
+
+	assert.Equal(t, vendoredOnly, VendoredDocuments(mixed))
+	assert.Equal(t, PackDigest(VendoredDocuments(vendoredOnly)), PackDigest(VendoredDocuments(mixed)),
+		"adding a rule of their own must not change which pack the deployment is running")
+}
+
+// TestSource_ValidRejectsAnythingUnrecognised keeps a row written by a future version from being silently read as one of today's
+// two values, which would attribute content on the strength of not understanding it.
+func TestSource_ValidRejectsAnythingUnrecognised(t *testing.T) {
+	t.Parallel()
+	assert.True(t, SourceVendored.Valid())
+	assert.True(t, SourceAuthored.Valid())
+	for _, s := range []Source{"", "imported", "operator", "VENDORED", "unknown"} {
+		assert.False(t, s.Valid(), "%q must not be treated as a known source", s)
+	}
+}
+
+// contentsInOrder returns the contents a digest would hash, in digest order, so a fixture can assert it differs from another only
+// in the way it means to.
+func contentsInOrder(docs []Document) [][]byte {
+	sorted := append([]Document{}, docs...)
+	SortDocuments(sorted)
+	out := make([][]byte, 0, len(sorted))
+	for _, d := range sorted {
+		out = append(out, d.Content)
+	}
+	return out
+}

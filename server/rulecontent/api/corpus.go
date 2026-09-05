@@ -16,6 +16,9 @@ import (
 type Document struct {
 	Path    string
 	Content []byte
+	// Source is where this document came from. Empty on a document being SUBMITTED, because a caller does not get to declare its
+	// own provenance: the store records it from the path the write arrived through. Populated on a document READ back.
+	Source Source
 }
 
 // Corpus is the read surface `rules` consumes to build its evaluatable rule set.
@@ -58,4 +61,28 @@ func FS(docs []Document) fs.FS {
 // and a rule set that differs by replica would make those two surfaces disagree depending on which replica answered.
 func SortDocuments(docs []Document) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
+}
+
+// Source says where a rule document came from: shipped with the product, or written by an operator.
+//
+// Recorded when the document is stored rather than derived from its path, which is the decision the rest of this rests on. A
+// rule's identity is its file STEM and not its path (#873), and the load walks the whole stored set precisely so authored content
+// need not live under a directory named `imported`. Reading provenance off a prefix would contradict that AND be chosen by the
+// operator it describes: writing to `imported/mine.yml` would launder an authored rule into a vendored one, and with it a licence
+// attribution it was never under.
+type Source string
+
+const (
+	// SourceVendored marks content shipped with the product. It carries the upstream project's licence, and its attribution is
+	// how that licence is honoured.
+	SourceVendored Source = "vendored"
+	// SourceAuthored marks content an operator wrote. It is theirs, carries no upstream licence, and must not be credited to an
+	// upstream project.
+	SourceAuthored Source = "authored"
+)
+
+// Valid reports whether s is a source this system records. Anything else is a row written by a version that knew something this
+// one does not, which a reader must not silently treat as either known value.
+func (s Source) Valid() bool {
+	return s == SourceVendored || s == SourceAuthored
 }

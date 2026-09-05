@@ -218,6 +218,17 @@ func UndiscriminatingSearchesOf(r Rule) []string {
 // presence of attribution invariant and moves the question a reader is actually asking ("whose rule is this?") onto the value.
 const ProjectOrigin = "Fleet EDR"
 
+// LocalOrigin is the attribution carried by a rule an operator wrote on their own deployment.
+//
+// It exists because neither of the other answers is true of such a rule. ProjectOrigin claims this project wrote it, and the
+// upstream credit claims a project that has never seen it wrote it, which is the bug #874 named: that credit is how the Detection
+// Rule License is honoured, so attaching it to an operator's own work misstates the licensing of content never under it.
+//
+// A real value rather than "" for the reason ProjectOrigin is one: attribution is total, so a surface renders it unconditionally
+// and a blank reaching a display means the value was dropped in transit. It is worded for the operator reading an alert, who
+// wants to know whose rule fired rather than which subsystem recorded it.
+const LocalOrigin = "Locally authored"
+
 // OriginOf returns r's declared origin, or ProjectOrigin for a rule this project authored.
 //
 // Never returns "": see ProjectOrigin. Callers may therefore render the result unconditionally, and a blank origin reaching a

@@ -44,6 +44,10 @@ type importedRule struct {
 	// name with no way to check it.
 	references []string
 
+	// authored records that an operator wrote this rule on their own deployment, rather than it arriving with the product. It
+	// decides attribution and nothing else: the rule evaluates identically either way.
+	authored bool
+
 	// source is the vendored file's bytes, verbatim. Kept so an operator exporting this rule gets the upstream rule they can diff
 	// against SigmaHQ, rather than a re-rendering of it in this project's format. See VendoredSource.
 	source []byte
@@ -212,7 +216,7 @@ type rejection struct {
 // A file that is unreadable, malformed, or claims an id another file already claimed is an error instead. Those say the import
 // itself is broken rather than that one detection does not fit, and continuing past them would import a corpus that is not the one
 // on disk.
-func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
+func loadImported(fsys fs.FS, dir string, authoredAt Provenance) ([]api.Rule, []rejection, error) {
 	names, err := sigmaFilesUnder(fsys, dir)
 	if err != nil {
 		return nil, nil, err
@@ -249,7 +253,7 @@ func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", name, err)
 		}
-		rule, err := parseImported(name, raw)
+		rule, err := parseImported(name, raw, authoredAt.authored(name))
 		if err != nil {
 			if cannotRun, ok := errors.AsType[unmappableError](err); ok {
 				rejected = append(rejected, rejection{File: name, Reason: cannotRun.reason})
@@ -301,7 +305,7 @@ func compileImportedDetection(name string, detection yaml.Node) (*sigma.Rule, er
 }
 
 // parseImported turns one upstream file into a rule, or explains exactly why it cannot.
-func parseImported(name string, raw []byte) (*importedRule, error) {
+func parseImported(name string, raw []byte, authored bool) (*importedRule, error) {
 	var f sigmaFile
 	if err := yaml.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
@@ -373,6 +377,7 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 		eventTypes:  []string{eventType},
 		falsePos:    f.FalsePositive,
 		detection:   compiled,
+		authored:    authored,
 	}, nil
 }
 
@@ -564,7 +569,7 @@ var importedCorpus embed.FS
 // importedRules is the corpus loaded once. Memoized because loadImported walks 69 files and compiles a detection for each, which is
 // start-up work, not per-call work.
 var importedRules = sync.OnceValues(func() ([]api.Rule, []rejection) {
-	rules, rejected, err := loadImported(importedCorpus, "imported")
+	rules, rejected, err := loadImported(importedCorpus, "imported", nil)
 	if err != nil {
 		// A corpus this repository vendors either loads or the build is broken. Failing at start-up is the whole point of
 		// checking it in: the alternative is a server that boots with a detection silently missing.
@@ -619,8 +624,23 @@ const CorpusRoot = "imported"
 // Returns an error rather than panicking, because a stored corpus is not a build artifact. A malformed vendored file is a mistake
 // caught before check-in, which is why the embedded path may panic; a malformed STORED corpus is a runtime condition its caller has
 // to decide about, and the decision (keep the previous good set) is not this function's to make.
-func LoadCorpus(fsys fs.FS, root string) ([]api.Rule, []rejection, error) {
-	return loadImported(fsys, root)
+func LoadCorpus(fsys fs.FS, root string, authoredAt Provenance) ([]api.Rule, []rejection, error) {
+	return loadImported(fsys, root, authoredAt)
+}
+
+// Provenance reports whether the document at a path was written by an operator rather than shipped with the product.
+//
+// Passed in rather than read off the path, which is the whole point of #874's fix. A rule's identity is its file STEM and not its
+// path (#873), operators choose their own paths, and a prefix rule would let someone launder an authored rule into a vendored one
+// by writing to `imported/mine.yml`, taking a licence attribution with it. Only the store knows how a document arrived.
+//
+// A nil Provenance means every document is vendored, which is right for the corpus embedded in the build: it is by definition
+// what shipped.
+type Provenance func(path string) bool
+
+// authored answers p safely for a nil Provenance.
+func (p Provenance) authored(path string) bool {
+	return p != nil && p(path)
 }
 
 // MustLoadImported returns the imported rules, panicking if the vendored corpus does not load. Mirrors MustLoadPack and
@@ -674,6 +694,13 @@ func (r *importedRule) UndiscriminatingSearches() []string {
 
 // Origin implements the origin accessor the catalog surfaces mirror, naming the upstream project and the rule's own author.
 func (r *importedRule) Origin() string {
+	// An operator's own rule is credited to their deployment, never upstream. Crediting SigmaHQ for it is false, and because that
+	// credit is how the Detection Rule License is honoured, it also states a licence the content was never under (#874). The
+	// rule's own `author:` field is not consulted here: it is whatever the operator typed, and this is a statement about where the
+	// content came from rather than about what it says of itself.
+	if r.authored {
+		return api.LocalOrigin
+	}
 	if r.author == "" {
 		return "SigmaHQ"
 	}
