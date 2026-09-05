@@ -145,6 +145,15 @@ func run() error {
 		return err
 	}
 
+	// Credit alerts raised by a vendored rule before attribution was recorded (issue #827). A boot-time one-shot on whichever
+	// replica wins the lock, and a no-op on every later boot because it only touches rows with an empty origin.
+	//
+	// A failure here does NOT stop the server. The obligation it settles is real, but an unpaid credit on historical rows is not
+	// a reason to refuse to detect anything today, and the next boot tries again.
+	if _, err := detectionCtx.BackfillAlertOrigins(ctx, coord, rulesCtx.ContentService().ActiveRules()); err != nil {
+		logger.WarnContext(ctx, "could not credit alerts raised before rule attribution was recorded", "err", err)
+	}
+
 	// The revocation snapshot is the ONLY revocation enforcement on the no-DB verify hot path, so an empty snapshot is "revocation
 	// disabled" (absent host => allowed). Fail closed: load it once before serving and treat a failed initial load as fatal rather than
 	// serving with an allow-all snapshot. The DB was just exercised by the schema apply above, so a failure here is a real outage, not a
