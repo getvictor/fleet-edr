@@ -180,6 +180,35 @@ type OriginNamer interface {
 	Origin() string
 }
 
+// SelfDescribingBreadth is an OPTIONAL interface a rule implements to report which of its own searches match everything.
+//
+// Optional for the same reason OriginNamer is: only a declaratively-compiled rule can answer it. A rule written in Go decides
+// what it matches in code, so there is no structure to inspect and nothing sensible to return, which is different from returning
+// "none" and should not be spelled the same way.
+//
+// The answer names the searches rather than reporting a boolean, because whoever is fixing it needs to know which part of their
+// rule to look at.
+//
+// UndiscriminatingSearches SHOULD say nothing about a matcher it cannot decide, rather than answering in the reassuring
+// direction. An empty result therefore means "nothing this can decide is undiscriminating", not "this rule is definitely
+// specific", and a caller wording a warning has to respect the difference.
+type SelfDescribingBreadth interface {
+	UndiscriminatingSearches() []string
+}
+
+// UndiscriminatingSearchesOf returns the searches in r that match everything, or nil for a rule that cannot answer.
+//
+// The accessor exists so callers do not each repeat the type assertion, which is how the OriginOf / AlgorithmNameOf pair already
+// works. Collapsing "cannot answer" and "nothing to report" into one nil is deliberate here: both mean there is no warning to
+// show, and a caller that needed to tell them apart would be making a claim this interface does not support.
+func UndiscriminatingSearchesOf(r Rule) []string {
+	describer, ok := r.(SelfDescribingBreadth)
+	if !ok {
+		return nil
+	}
+	return describer.UndiscriminatingSearches()
+}
+
 // ProjectOrigin is the attribution carried by every rule this project wrote, i.e. every rule that declares no OriginNamer.
 //
 // It exists so attribution is TOTAL rather than conditional. The vendored corpus ships under the Detection Rule License, which

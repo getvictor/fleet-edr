@@ -643,6 +643,19 @@ func VendoredSource(ruleID string) ([]byte, bool) {
 	return nil, false
 }
 
+// UndiscriminatingSearches implements api.SelfDescribingBreadth by asking the compiled detection which of its searches match
+// everything.
+//
+// A thin delegation on purpose. The question is about compiled matcher structure, so the sigma package is the only place that can
+// answer it without a second implementation of matching semantics, and this type's job is to carry the answer out to the
+// operator-facing surfaces rather than to work it out again.
+func (r *importedRule) UndiscriminatingSearches() []string {
+	if r.detection == nil {
+		return nil
+	}
+	return r.detection.UndiscriminatingSearches()
+}
+
 // Origin implements the origin accessor the catalog surfaces mirror, naming the upstream project and the rule's own author.
 func (r *importedRule) Origin() string {
 	if r.author == "" {

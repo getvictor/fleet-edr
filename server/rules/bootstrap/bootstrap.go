@@ -764,6 +764,22 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 	for _, r := range rejected {
 		warnings = append(warnings, fmt.Sprintf("%s will not run: %s", r.File, r.Reason))
 	}
+	// A rule that matches everything is the foot-gun issue #767 names: it fires on every event of its type, so it buries real
+	// detections and costs evaluation on every batch to tell an operator nothing.
+	//
+	// Warned about rather than refused, and that is the design rather than caution. An operator writing a deliberately broad
+	// hunting rule is doing something legitimate, and refusing it would substitute our judgement for theirs on the one question
+	// we cannot answer, which is whether they meant it.
+	//
+	// Worded as "matches every event carrying its fields" because that is what it is: a field test still requires the field to be
+	// PRESENT. For an exec event's Image that is a distinction without a difference; for a field only some events carry, it is not.
+	for _, loadedRule := range loaded {
+		for _, searchName := range api.UndiscriminatingSearchesOf(loadedRule) {
+			warnings = append(warnings, fmt.Sprintf(
+				"%s: search %q matches every event carrying its fields, so it discriminates nothing",
+				loadedRule.ID(), searchName))
+		}
+	}
 	if len(loaded) == 0 {
 		// Nothing in the proposed corpus can run, which includes the proposal to store NOTHING. Both cases have the same
 		// consequence and it is not the obvious one: Reload and loadCorpus each keep the rule set already in force when the store

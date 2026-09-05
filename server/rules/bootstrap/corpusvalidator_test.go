@@ -370,3 +370,78 @@ func TestCorpusValidator_ShadowedDocumentWouldBeInvisible(t *testing.T) {
 	assert.NotContains(t, walked, "authored/a.yml/hidden.yml",
 		"the walk cannot reach a document nested under a file, which is exactly why it must be refused")
 }
+
+// undiscriminatingDoc renders a rule whose detection block is supplied verbatim, so these tests exercise shapes an operator can
+// actually write rather than hand-built structs.
+func undiscriminatingDoc(path, id, detection string) rulecontentapi.Document {
+	return rulecontentapi.Document{Path: path, Content: []byte(
+		"title: Breadth Fixture\n" +
+			"id: " + id + "\n" +
+			"status: test\ndescription: fixture\nauthor: test\n" +
+			"logsource:\n    category: process_creation\n    product: macos\n" +
+			"detection:\n" + detection +
+			"level: medium\n")}
+}
+
+// spec:rule-content/a-rule-that-discriminates-nothing-is-warned-about/a-search-matching-every-value-is-warned-about
+//
+// TestCorpusValidator_WarnsOnARuleThatDiscriminatesNothing covers the foot-gun #767 names, and the ACCEPTANCE is as much the
+// point as the warning: refusing would substitute our judgement for the operator's on whether they meant it.
+func TestCorpusValidator_WarnsOnARuleThatDiscriminatesNothing(t *testing.T) {
+	t.Parallel()
+	warnings, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+		undiscriminatingDoc("authored/matches_everything.yml", "11111111-2222-4222-8222-222222222222",
+			"    selection:\n        Image: '*'\n    condition: selection\n"),
+	})
+	require.NoError(t, err, "a rule matching everything is a foot-gun, not an error: the operator may have meant it")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "matches_everything", "names the rule")
+	assert.Contains(t, warnings[0], `search "selection"`, "and the search, which is what the operator has to look at")
+	assert.Contains(t, warnings[0], "discriminates nothing")
+}
+
+// spec:rule-content/a-rule-that-discriminates-nothing-is-warned-about/a-discriminating-rule-is-not-warned-about
+// spec:rule-content/a-rule-that-discriminates-nothing-is-warned-about/a-pattern-requiring-at-least-one-character-is-not-warned-about
+// spec:rule-content/a-rule-that-discriminates-nothing-is-warned-about/a-pattern-requiring-an-empty-value-is-not-warned-about
+//
+// TestCorpusValidator_DoesNotWarnOnRulesThatRestrictSomething is the half that decides whether the warning is worth anything.
+//
+// A warning that fires on patterns an author wrote deliberately teaches operators to ignore it, and then it reports nothing on
+// the day it matters. The empty-value case is the one most easily got backwards: it is the NARROWEST pattern there is, and a
+// predicate written as "every segment is empty" would call it the broadest.
+func TestCorpusValidator_DoesNotWarnOnRulesThatRestrictSomething(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"anchored suffix":              "    selection:\n        Image|endswith: '/osascript'\n    condition: selection\n",
+		"requires one character":       "    selection:\n        Image: '*?*'\n    condition: selection\n",
+		"requires an empty value":      "    selection:\n        CommandLine: ''\n    condition: selection\n",
+		"requires the field be absent": "    selection:\n        CommandLine:\n    condition: selection\n",
+		"a second field narrows it":    "    selection:\n        Image: '*'\n        CommandLine|contains: 'curl'\n    condition: selection\n",
+	}
+	id := 0
+	for name, detection := range cases {
+		id++
+		fixtureID := fmt.Sprintf("33333333-3333-4333-8333-%012d", id)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			warnings, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+				undiscriminatingDoc("authored/restricts.yml", fixtureID, detection),
+			})
+			require.NoError(t, err)
+			assert.Empty(t, warnings, "this pattern restricts what matches, so warning about it would train operators to ignore the warning")
+		})
+	}
+}
+
+// TestCorpusValidator_BreadthWarningIsAdvisoryNotARefusal pins that the document is STORED. The whole distinction between this
+// and the refusals above is that an operator may legitimately want a rule this broad.
+func TestCorpusValidator_BreadthWarningIsAdvisoryNotARefusal(t *testing.T) {
+	t.Parallel()
+	warnings, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+		ruleDoc("imported/runnable.yml", "44444444-2222-4222-8222-222222222222", "Runnable", simpleDetection),
+		undiscriminatingDoc("authored/broad.yml", "55555555-2222-4222-8222-222222222222",
+			"    selection:\n        Image: '*'\n    condition: selection\n"),
+	})
+	require.NoError(t, err, "a corpus containing a broad rule still loads, so it is still storable")
+	assert.Len(t, warnings, 1, "and the operator is told, once, which rule it is")
+}
