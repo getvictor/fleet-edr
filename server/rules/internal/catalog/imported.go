@@ -133,7 +133,7 @@ func sigmaFilesUnder(fsys fs.FS, dir string) ([]string, error) {
 // first. The identifier here is an upstream filename, so this is the path a corpus re-sync introduces the problem through.
 func checkStemIdentifiers(names []string) error {
 	for _, name := range names {
-		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+		id := RuleIDForPath(name)
 		if err := checkRuleIDLength(name, id); err != nil {
 			return err
 		}
@@ -167,7 +167,7 @@ func checkDuplicateStems(names []string) error {
 	type claim struct{ file, id string }
 	seen := make(map[string]claim, len(names))
 	for _, name := range names {
-		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+		id := RuleIDForPath(name)
 		// Compared CASE-INSENSITIVELY, because Go is not what decides whether two rule ids are the same. The id is persisted in
 		// detection_rule_settings and alerts, whose rule_id columns take the schema default collation (utf8mb4_0900_ai_ci), and
 		// both carry a unique key over it: uk_detection_rule_settings_rule_scope and uk_alerts_dedup. So "Foo" and "foo" are one
@@ -353,7 +353,7 @@ func parseImported(name string, raw []byte) (*importedRule, error) {
 
 	// The rule id is the filename stem, which is what lets an upstream file carry no x-engine block at all. SigmaHQ names its files
 	// after the rule, and the stem is stable across a re-sync in a way the file's own UUID is not readable.
-	id := strings.TrimSuffix(path.Base(name), path.Ext(name))
+	id := RuleIDForPath(name)
 	if id == "" {
 		// A file named exactly `.yml` is a valid directory entry and leaves nothing to identify the rule by. Findings, exclusions
 		// and per-host settings all key on the id.
@@ -580,6 +580,20 @@ var importedRules = sync.OnceValues(func() ([]api.Rule, []rejection) {
 // carve. Until then the wiring runs through cmd/main, which passes this FS to rulecontent's seed, so rulecontent depends on
 // nothing here and the supplier direction the ADR sets is preserved.
 func ImportedCorpusFS() fs.FS { return importedCorpus }
+
+// RuleIDForPath derives a rule's identifier from the path its document is stored under.
+//
+// The id is the filename STEM, and this is the one place that says so. It was five places until review counted them: the two
+// preflights here, the constructor below, and two more in the operator validator. Five copies of one derivation is the semantic
+// duplication this codebase is most prone to, and the failure mode is quiet rather than loud: the copies agree today, so nothing
+// breaks until one of them is changed, and then a lookup keyed on a stem simply misses and the caller sees an absent value rather
+// than an error.
+//
+// Exported because the validator outside this package has to key on the same answer. A rule loaded from the corpus cannot say
+// which path it came from, so mapping an id back to its document is only possible if both sides derive it identically.
+func RuleIDForPath(p string) string {
+	return strings.TrimSuffix(path.Base(p), path.Ext(p))
+}
 
 // IsCorpusFile reports whether a path is rule content, as opposed to the packaging that ships alongside it.
 //

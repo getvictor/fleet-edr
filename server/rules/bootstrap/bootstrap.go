@@ -770,12 +770,13 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 		})
 	}
 
-	// A rule's id is its file STEM, so the loaded rules cannot say which path they came from and the breadth warnings below have
-	// to be mapped back. Built from the documents actually submitted rather than guessed at, because the directory is not
-	// recoverable from the id.
+	// A loaded rule cannot say which path it came from, so the breadth warnings below have to be mapped back through the id.
+	// Both sides go through catalog.RuleIDForPath, which is the point: if the two derived the id independently they would agree
+	// until one changed, and then this lookup would simply miss and the warning would carry no path, which WarningsFor then drops.
+	// An operator's own warning disappearing silently is a worse outcome than a loud mismatch.
 	pathByStem := make(map[string]string, len(docs))
 	for _, d := range docs {
-		pathByStem[strings.TrimSuffix(path.Base(d.Path), path.Ext(d.Path))] = d.Path
+		pathByStem[catalog.RuleIDForPath(d.Path)] = d.Path
 	}
 	// A rule that matches everything is the foot-gun issue #767 names: it fires on every event of its type, so it buries real
 	// detections and costs evaluation on every batch to tell an operator nothing.
@@ -871,7 +872,7 @@ func checkIdentifiersAgainstBuiltIns(docs []rulecontentapi.Document) error {
 		builtIn[strings.ToLower(id)] = id
 	}
 	for _, d := range docs {
-		stem := strings.TrimSuffix(path.Base(d.Path), path.Ext(d.Path))
+		stem := catalog.RuleIDForPath(d.Path)
 		if claimed, taken := builtIn[strings.ToLower(stem)]; taken {
 			return fmt.Errorf("%s: rule id %q is already the id of a rule this deployment ships (%q); "+
 				"per-rule settings and alert deduplication are keyed by it, so the two could not be told apart",
