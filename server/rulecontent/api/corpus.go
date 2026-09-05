@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"sort"
 	"strings"
@@ -16,6 +17,17 @@ import (
 type Document struct {
 	Path    string
 	Content []byte
+	// Source is where this document came from, and it is always populated on a document READ back.
+	//
+	// On the way IN it depends on WHICH WRITE SURFACE the document arrived through, never on the document's own path. The
+	// distinction is contractual: deriving provenance from a path is the specific thing this design rules out, since an operator
+	// chooses their own paths and could then launder an authored rule into a vendored one.
+	//
+	// Through the AUTHORING surface this field is ignored: that write records the operator's provenance itself, because how a
+	// document arrived is an observation rather than a claim the caller gets to make. A whole-corpus replacement may state it,
+	// and must be able to, since that is the surface a pack upgrade and a restore go through and both have to put an operator's
+	// own rules back as theirs rather than relabelling them. Empty there means "not stated", which is recorded as vendored.
+	Source Source
 }
 
 // Corpus is the read surface `rules` consumes to build its evaluatable rule set.
@@ -59,3 +71,36 @@ func FS(docs []Document) fs.FS {
 func SortDocuments(docs []Document) {
 	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
 }
+
+// Source says where a rule document came from: shipped with the product, or written by an operator.
+//
+// Recorded when the document is stored rather than derived from its path, which is the decision the rest of this rests on. A
+// rule's identity is its file STEM and not its path (#873), and the load walks the whole stored set precisely so authored content
+// need not live under a directory named `imported`. Reading provenance off a prefix would contradict that AND be chosen by the
+// operator it describes: writing to `imported/mine.yml` would launder an authored rule into a vendored one, and with it a licence
+// attribution it was never under.
+type Source string
+
+const (
+	// SourceVendored marks content shipped with the product. It carries the upstream project's licence, and its attribution is
+	// how that licence is honoured.
+	SourceVendored Source = "vendored"
+	// SourceAuthored marks content an operator wrote. It is theirs, carries no upstream licence, and must not be credited to an
+	// upstream project.
+	SourceAuthored Source = "authored"
+)
+
+// Valid reports whether s is a source this system records. Anything else is a row written by a version that knew something this
+// one does not, which a reader must not silently treat as either known value.
+func (s Source) Valid() bool {
+	return s == SourceVendored || s == SourceAuthored
+}
+
+// ErrUnknownSource reports a provenance value this version does not recognise, on the way in or on the way out.
+//
+// Refusing is the only safe direction, and the asymmetry is why. An unrecognised value is not SourceAuthored, so attribution
+// treats it as vendored and credits the upstream project; it is also not SourceVendored, so the pack digest excludes it. One
+// unknown row would therefore be credited to SigmaHQ while being left out of the identity of the pack it is claimed to belong to.
+// The first half is a licence claim about content nobody here can vouch for, which is the failure this whole change exists to
+// prevent, so a corpus carrying one is refused rather than half-interpreted.
+var ErrUnknownSource = errors.New("rule content: unknown document source")

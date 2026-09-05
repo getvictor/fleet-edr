@@ -43,13 +43,16 @@ func (r projectionRule) NonDetectionKind() rulesapi.NonDetectionKind {
 
 // spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/our-own-rule-is-left-alone
 // spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-projection-is-left-alone
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-rule-the-operator-has-since-written-themselves-is-left-alone
 //
-// TestVendoredOrigins covers the two exclusions that make this feature safe, and they are worth a test of their own because
-// neither is visible in the SQL the backfill runs: the statement credits whatever it is handed.
+// TestVendoredOrigins covers the three exclusions that make this feature safe, and they are worth a test of their own because
+// none is visible in the SQL the backfill runs: the statement credits whatever it is handed.
 //
-// Getting either wrong writes something irreversible into an operator's alert history. Crediting our own rules erases the
+// Getting any of them wrong writes something irreversible into an operator's alert history. Crediting our own rules erases the
 // distinction migration 00012 preserves between an alert raised before attribution existed and one raised by us. Crediting a
-// projection claims this project wrote the operator's blocklist entry, which is the bug review caught in #824.
+// projection claims this project wrote the operator's blocklist entry, which is the bug review caught in #824. Crediting a rule
+// the operator has since written themselves claims they wrote the shipped detection that used to hold that identifier, which is
+// #874's own failure pointed the other way and is the exclusion review caught on #878.
 func TestVendoredOrigins(t *testing.T) {
 	t.Parallel()
 
@@ -63,6 +66,10 @@ func TestVendoredOrigins(t *testing.T) {
 		// Vendored but declaring nothing, which OriginOf reports as unknown rather than as ours. Creditable, because the
 		// alternative is crediting this project for a rule that announced foreign provenance.
 		originRule{scopeRule{id: "imported_but_unnamed", origin: ""}},
+		// An operator's own rule that OVERWROTE a shipped one, so it keeps the shipped id (#873: the id is the file stem) while
+		// the live rule is theirs. The historical alerts under this id were raised by the shipped rule, so crediting them to
+		// the operator would permanently claim they wrote a detection they did not.
+		originRule{scopeRule{id: "proc_creation_macos_base64_decode", origin: rulesapi.LocalOrigin}},
 	}
 
 	got := vendoredOrigins(rules)
@@ -76,6 +83,9 @@ func TestVendoredOrigins(t *testing.T) {
 		"our own rule must be excluded, or the pre-attribution distinction is destroyed")
 	assert.NotContains(t, got, "application_control_block",
 		"a projection must be excluded even when it declares an origin, since its rule id is the operator's own policy entry")
+	assert.NotContains(t, got, "proc_creation_macos_base64_decode",
+		"an operator's own rule must be excluded, or overwriting a shipped rule permanently credits them with the shipped "+
+			"rule's historical alerts")
 }
 
 // TestVendoredOrigins_NoVendoredRules pins the deployment this is a no-op for, so the caller can skip the lock entirely rather

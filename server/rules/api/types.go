@@ -218,6 +218,17 @@ func UndiscriminatingSearchesOf(r Rule) []string {
 // presence of attribution invariant and moves the question a reader is actually asking ("whose rule is this?") onto the value.
 const ProjectOrigin = "Fleet EDR"
 
+// LocalOrigin is the attribution carried by a rule an operator wrote on their own deployment.
+//
+// It exists because neither of the other answers is true of such a rule. ProjectOrigin claims this project wrote it, and the
+// upstream credit claims a project that has never seen it wrote it, which is the bug #874 named: that credit is how the Detection
+// Rule License is honoured, so attaching it to an operator's own work misstates the licensing of content never under it.
+//
+// A real value rather than "" for the reason ProjectOrigin is one: attribution is total, so a surface renders it unconditionally
+// and a blank reaching a display means the value was dropped in transit. It is worded for the operator reading an alert, who
+// wants to know whose rule fired rather than which subsystem recorded it.
+const LocalOrigin = "Locally authored"
+
 // OriginOf returns r's declared origin, or ProjectOrigin for a rule this project authored.
 //
 // Never returns "": see ProjectOrigin. Callers may therefore render the result unconditionally, and a blank origin reaching a
@@ -314,8 +325,9 @@ type RuleMetadata struct {
 	// Algorithm mirrors the rule's AlgorithmName() when it declares one, and is empty otherwise. Names the evaluator that decides
 	// the rule, which is what makes a Go-implemented rule inspectable without reading the source. Consumed by the rule-file export.
 	Algorithm string
-	// Origin names where the rule came from: ProjectOrigin for one this project authored, and the upstream project plus that
-	// rule's own author for one it vendored. Never empty (see api.OriginOf), so a surface may render it unconditionally.
+	// Origin names where the rule came from: ProjectOrigin for one this project authored, LocalOrigin for one an operator wrote
+	// on their own deployment, and the upstream project plus that rule's own author for one it vendored. Never empty (see
+	// api.OriginOf), so a surface may render it unconditionally.
 	// Surfaced so the operator-facing reference can credit third-party rules and so a reader can tell whose rule they are looking
 	// at, which they otherwise cannot: a vendored rule is rendered exactly like an authored one.
 	Origin string

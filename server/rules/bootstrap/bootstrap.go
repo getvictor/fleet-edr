@@ -391,7 +391,7 @@ func (r *Rules) Reload(ctx context.Context) (int, error) {
 	//
 	// The real remedy is upstream: content that cannot run should never reach the store, which is what publish-time validation in
 	// #767 is for. Until then the conservative choice is the contract, and issue #851 carries the cross-replica question.
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
 	switch {
 	case len(docs) == 0:
 		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; keeping the rule set already in force", "version", version)
@@ -503,7 +503,7 @@ func loadCorpus(ctx context.Context, corpus rulecontentapi.Corpus, logger *slog.
 	if len(docs) == 0 {
 		return catalog.MustLoadImported()
 	}
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
 	if err != nil {
 		logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
 			"documents", len(docs), "err", err)
@@ -756,7 +756,14 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 		}
 	}
 
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
+	// Provenance is passed here even though no check below reads it, and the reason is that `nil` would not mean "unused": it is
+	// the claim that every document is vendored, which is false for a corpus holding an operator's rules. Wiring the true value
+	// costs a map build and cannot be wrong; wiring a false one is a trap for the first check that does read it.
+	//
+	// A mutant replacing this with nil therefore SURVIVES, and that is expected rather than a gap: validation reports rules that
+	// will not run and searches that match everything, and neither depends on who wrote the rule. The two production LOAD seams
+	// are a different matter and are pinned, since provenance is what they decide attribution from.
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot, authoredIn(docs))
 	if err != nil {
 		return nil, err
 	}
@@ -901,4 +908,30 @@ func checkNoDocumentShadowsAnother(docs []rulecontentapi.Document) error {
 		}
 	}
 	return nil
+}
+
+// authoredIn reports which of these documents an operator wrote, for the loader to attribute them by.
+//
+// Built from the SOURCE the store recorded rather than from the path, which is the fix for #874. Deriving it from a prefix would
+// contradict #873's rule that identity is the file stem and not the path, and would let an operator launder their own rule into a
+// vendored one by writing to `imported/mine.yml`, carrying a Detection Rule License attribution it was never under.
+//
+// The projection strips one leading slash the same way rulecontentapi.FS does, because the loader walks the names FS produced and
+// looks them up here; deriving the key differently on the two sides is the silent-miss shape that has already cost this work once.
+func authoredIn(docs []rulecontentapi.Document) catalog.Provenance {
+	authored := make(map[string]struct{}, len(docs))
+	for _, d := range docs {
+		if d.Source == rulecontentapi.SourceAuthored {
+			authored[strings.TrimPrefix(d.Path, "/")] = struct{}{}
+		}
+	}
+	if len(authored) == 0 {
+		// Nil rather than an empty map, so the loader takes its "everything is vendored" path explicitly rather than consulting a
+		// lookup that can only answer no.
+		return nil
+	}
+	return func(path string) bool {
+		_, ok := authored[path]
+		return ok
+	}
 }

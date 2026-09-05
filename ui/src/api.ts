@@ -580,8 +580,8 @@ export interface RuleDocEntry {
   // reports nothing about.
   mode?: string;
   mode_source?: string;
-  // Where the rule came from: "Fleet EDR" for one this project wrote, and the upstream project plus that rule's author for a
-  // vendored one. Shown so an operator can tell whose rule they are reading. Since issue #765 the server names an origin for every
+  // Where the rule came from: "Fleet EDR" for one this project wrote, "Locally authored" for one written on this deployment, and
+  // the upstream project plus that rule's author for a vendored one. Shown so an operator can tell whose rule they are reading. Since issue #765 the server names an origin for every
   // rule, so this is absent only from a server that predates that change.
   origin?: string;
   // The exclusion match types this rule actually consults (issue #520). The detection-tuning exclusion editor offers only these for

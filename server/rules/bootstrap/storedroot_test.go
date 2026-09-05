@@ -9,7 +9,27 @@ import (
 	"github.com/stretchr/testify/require"
 
 	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
+	rulesapi "github.com/fleetdm/edr/server/rules/api"
 )
+
+// authoredDoc is a rule the operator wrote, marked the way the store records it. The fixture carries `author: test`, so a load
+// that loses the provenance wiring does not merely produce a different origin: it produces "SigmaHQ, by test", crediting an
+// upstream project for the operator's work. That is the failure #874 named, and it is what these assertions detect.
+func authoredDoc(path, id, title string) rulecontentapi.Document {
+	d := ruleDoc(path, id, title, simpleDetection)
+	d.Source = rulecontentapi.SourceAuthored
+	return d
+}
+
+// originOfRule returns the attribution the running rule set carries for one id, and whether it was loaded at all.
+func originOfRule(rules []rulesapi.Rule, id string) (string, bool) {
+	for _, r := range rules {
+		if r.ID() == id {
+			return rulesapi.OriginOf(r), true
+		}
+	}
+	return "", false
+}
 
 // stubCorpus serves a fixed document set as the stored corpus.
 type stubCorpus struct{ docs []rulecontentapi.Document }
@@ -29,8 +49,8 @@ func (c stubCorpus) Version(context.Context) (int64, error)                     
 // binary when nothing loads, so a wrong root returns a perfectly healthy rule set that simply lacks the authored rule.
 func TestLoadCorpus_ReadsDocumentsOutsideTheImportedPrefix(t *testing.T) {
 	t.Parallel()
-	authored := ruleDoc("authored/operator_written_rule.yml", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-		"Operator Written Rule", simpleDetection)
+	authored := authoredDoc("authored/operator_written_rule.yml", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"Operator Written Rule")
 
 	rules := loadCorpus(t.Context(), stubCorpus{docs: []rulecontentapi.Document{authored}},
 		slog.New(slog.DiscardHandler))
@@ -42,6 +62,14 @@ func TestLoadCorpus_ReadsDocumentsOutsideTheImportedPrefix(t *testing.T) {
 	require.NotEmpty(t, ids)
 	assert.Contains(t, ids, "operator_written_rule",
 		"a document stored outside imported/ must reach the running rule set, not be silently skipped")
+
+	// The rule loading is only half of it, and review found the other half untested: this call passes the recorded provenance
+	// into the loader, and dropping that argument left every test green while crediting the operator's rule to SigmaHQ on every
+	// restart. Asserting the id alone cannot see that, because the rule loads either way.
+	origin, ok := originOfRule(rules, "operator_written_rule")
+	require.True(t, ok)
+	assert.Equal(t, rulesapi.LocalOrigin, origin,
+		"the startup load must carry recorded provenance, or an operator's rule is credited upstream after every restart")
 }
 
 // TestLoadCorpus_StillReadsTheImportedPrefix keeps the change above from being a swap rather than a widening: content stored under
@@ -70,8 +98,8 @@ func TestLoadCorpus_StillReadsTheImportedPrefix(t *testing.T) {
 // never loading it at all, because it works until it does not.
 func TestReload_ReadsDocumentsOutsideTheImportedPrefix(t *testing.T) {
 	t.Parallel()
-	authored := ruleDoc("authored/reloaded_operator_rule.yml", "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-		"Reloaded Operator Rule", simpleDetection)
+	authored := authoredDoc("authored/reloaded_operator_rule.yml", "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+		"Reloaded Operator Rule")
 
 	r, _ := testRules(t, fakeCorpus{docs: []rulecontentapi.Document{authored}, version: 7})
 
@@ -85,4 +113,11 @@ func TestReload_ReadsDocumentsOutsideTheImportedPrefix(t *testing.T) {
 	}
 	assert.Contains(t, ids, "reloaded_operator_rule",
 		"a published document outside imported/ must reach the rule set, not be dropped at the next reload")
+
+	// The reload path passes provenance separately from the startup path, and mutation showed each is unpinned on its own:
+	// reverting either to nil passed every test in this package while restoring upstream attribution at the next poll.
+	origin, ok := originOfRule(r.svc.ActiveRules(), "reloaded_operator_rule")
+	require.True(t, ok)
+	assert.Equal(t, rulesapi.LocalOrigin, origin,
+		"a reload must carry recorded provenance, or an operator's rule is credited upstream at the next publish")
 }

@@ -20,7 +20,7 @@ import (
 func TestVendoredCorpus_NoRuleDiscriminatesNothing(t *testing.T) {
 	t.Parallel()
 
-	rules, _, err := LoadCorpus(ImportedCorpusFS(), CorpusRoot)
+	rules, _, err := LoadCorpus(ImportedCorpusFS(), CorpusRoot, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, rules, "an empty corpus would make this pass by having nothing to check")
 
