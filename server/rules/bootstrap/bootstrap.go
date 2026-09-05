@@ -39,6 +39,14 @@ type Deps struct {
 	// route gates on. Required. cmd/main wires identityCtx.AuthZ().
 	AuthZ identityapi.AuthZ
 
+	// EvalStatsFlushInterval is how often accumulated per-rule evaluation statistics are written (issue #837). Optional: zero
+	// or negative means DefaultEvalStatsFlushInterval, applied by FlushLoop so one place decides it.
+	//
+	// A dep rather than a constant for the same reason the detection context takes ProcessInterval: an integration test that
+	// ingests a batch and then asserts the statistics landed would otherwise have to wait out the production interval, and a
+	// test that waits thirty seconds gets deleted or made flaky. Nothing in production sets it.
+	EvalStatsFlushInterval time.Duration
+
 	// PrincipalLabel resolves a principal id (usr_<id> / svc_<id> / sys) to its display label (a user's email, a service account's
 	// name, or "system") for the detection-config exclusions list's created_by column. Optional: when nil the handler returns the raw
 	// principal id. cmd/main wires it over identity's Service.PrincipalLabel; a func keeps the rules context free of an identity-internal
@@ -72,7 +80,12 @@ type Rules struct {
 	// detectionConfigStore is retained beyond the Service because the monitor-match counters are written by the detection
 	// pipeline and pruned here, neither of which goes through the config Service's snapshot machinery.
 	detectionConfigStore *detectionconfig.Store
-	detectionConfigH     *operator.DetectionConfigHandler
+	// evalStatsBuffer is what the detection context actually writes per-rule evaluation statistics into, so that write stops
+	// touching the database on the drain path (issue #837). Flushed by Run below, and on shutdown.
+	evalStatsBuffer *detectionconfig.BufferedEvalStats
+	// evalStatsFlushInterval is how often that buffer is written. See Deps.EvalStatsFlushInterval.
+	evalStatsFlushInterval time.Duration
+	detectionConfigH       *operator.DetectionConfigHandler
 	// retentionDays caps the age of recorded monitor-match counts. Zero prunes nothing.
 	retentionDays int
 	db            *sqlx.DB
@@ -111,6 +124,7 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 	// resolves both for the rules (ExclusionResolver, consulted before a rule fires) and the engine (RuleModeResolver). Built here so
 	// the rule set is constructed against the live resolver; the initial snapshot is loaded in ApplySchema once the tables exist.
 	detectionConfigStore := detectionconfig.NewStore(deps.DB)
+	evalStatsBuffer := detectionconfig.NewBufferedEvalStats(detectionConfigStore, logger)
 	detectionConfigSvc := detectionconfig.NewService(detectionConfigStore, nil, deps.Audit, logger)
 
 	// Built empty and filled below by installRuleSet, so the initial load and every later reload go through ONE definition of what
@@ -140,17 +154,19 @@ func New(ctx context.Context, deps Deps) (*Rules, error) {
 		appControlH = operator.NewAppControl(appControlSvc, deps.AuthZ, logger)
 	}
 	r := &Rules{
-		svc:                  svc,
-		detectionConfigStore: detectionConfigStore,
-		operatorH:            opH,
-		appControlH:          appControlH,
-		appControlSt:         appControlStore,
-		appControlSvc:        appControlSvc,
-		detectionConfigSvc:   detectionConfigSvc,
-		detectionConfigH:     detectionConfigH,
-		db:                   deps.DB,
-		logger:               logger,
-		corpus:               deps.Corpus,
+		svc:                    svc,
+		detectionConfigStore:   detectionConfigStore,
+		evalStatsBuffer:        evalStatsBuffer,
+		evalStatsFlushInterval: deps.EvalStatsFlushInterval,
+		operatorH:              opH,
+		appControlH:            appControlH,
+		appControlSt:           appControlStore,
+		appControlSvc:          appControlSvc,
+		detectionConfigSvc:     detectionConfigSvc,
+		detectionConfigH:       detectionConfigH,
+		db:                     deps.DB,
+		logger:                 logger,
+		corpus:                 deps.Corpus,
 	}
 
 	// Version 0: the initial set is stamped as not-from-storage even when it came from the store, because the version that produced
@@ -223,20 +239,24 @@ const DefaultDetectionConfigRefreshInterval = 5 * time.Second
 // (issue #722). The delete here is idempotent and needs no coordination: replicas racing on it delete rows the others already
 // deleted, which costs one statement per replica per interval and buys back a permanently held connection.
 func (r *Rules) Run(ctx context.Context) {
+	// Listed rather than hand-counted, so adding a loop cannot leave the WaitGroup short and make Run return while one is still
+	// live. The magic-number lint flagged the count, and the count drifting from the list is the real hazard behind it.
+	loops := []func(context.Context){
+		func(ctx context.Context) {
+			r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
+		},
+		func(ctx context.Context) { r.pruneCountersLoop(ctx, DefaultCounterPruneInterval) },
+		func(ctx context.Context) { r.CorpusRefreshLoop(ctx, DefaultCorpusRefreshInterval) },
+		// Flushes on cancellation as well as on the interval, which is what makes a graceful shutdown lose no counts. Run is
+		// waited on by the server's shutdown path, so the final write completes before the process exits.
+		func(ctx context.Context) {
+			r.evalStatsBuffer.FlushLoop(ctx, r.evalStatsFlushInterval)
+		},
+	}
 	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		r.detectionConfigSvc.RefreshLoop(ctx, DefaultDetectionConfigRefreshInterval)
-	}()
-	go func() {
-		defer wg.Done()
-		r.pruneCountersLoop(ctx, DefaultCounterPruneInterval)
-	}()
-	go func() {
-		defer wg.Done()
-		r.CorpusRefreshLoop(ctx, DefaultCorpusRefreshInterval)
-	}()
+	for _, loop := range loops {
+		wg.Go(func() { loop(ctx) })
+	}
 	wg.Wait()
 }
 
@@ -534,7 +554,7 @@ func (r *Rules) DetectionConfigModeResolver() api.RuleModeResolver { return r.de
 // Separate from MonitorMatchRecorder, and consumed by the ENGINE rather than the pipeline, because the two obey opposite recording
 // rules: monitor matches are written only after the batch is acknowledged so a replay cannot count them twice, while evaluation
 // statistics count every attempt and must be written even when the batch is nacked. See api.RuleEvalStat for the full reasoning.
-func (r *Rules) RuleEvalStatsRecorder() api.RuleEvalStatsRecorder { return r.detectionConfigStore }
+func (r *Rules) RuleEvalStatsRecorder() api.RuleEvalStatsRecorder { return r.evalStatsBuffer }
 
 // MonitorMatchRecorder exposes the durable monitor-match counter the detection pipeline writes to after acknowledging a batch
 // (issue #813). Same direction as the mode resolver above: the rules context owns the table, and detection consumes the narrow

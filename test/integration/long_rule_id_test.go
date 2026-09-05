@@ -53,9 +53,9 @@ func TestLongRuleID_PromotedRuleAlertsWithoutWedgingTheQueue(t *testing.T) {
 	_, err = stack.DB.ExecContext(ctx, `UPDATE detection_config_meta SET version = version + 1 WHERE id = 1`)
 	require.NoError(t, err)
 
-	// Setup does not start the rules context's refresh loop, so without this the config stays frozen at whatever boot loaded and
-	// the rule evaluates in monitor mode. t.Context cancels it with the test.
-	go stack.Rules.Run(ctx)
+	// Setup starts the rules context's loops now (issue #837 made the eval-stats flush depend on them), so the config refresh is
+	// already running and this test no longer starts its own. Doing so would run every one of those loops twice against a single
+	// Rules instance, which review caught.
 
 	resolver := stack.Rules.DetectionConfigModeResolver()
 	require.Eventually(t, func() bool {

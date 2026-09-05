@@ -34,6 +34,12 @@ const (
 // httpDurationBuckets is the OTel HTTP semantic-convention default bucket set for http.server.request.duration, in seconds.
 // Using the conventional boundaries keeps p50/p95/p99 readings comparable with any other OTel-instrumented service and with
 // SigNoz's built-in expectations for this metric.
+// ruleEvalDurationBuckets covers the measured range of a rule's evaluation: the mean on the dev server was 0.094ms and the
+// slowest rule doing legitimate work 17.8ms, so the interesting span is tens of microseconds to tens of milliseconds. The top
+// boundaries sit above the 100ms evaluation budget (issue #767) so a rule approaching its skip is visible here first, which is
+// while an operator can still act on it.
+var ruleEvalDurationBuckets = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1}
+
 var httpDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10}
 
 // knownHTTPMethods bounds the http.request.method label. An unrecognized method (a scanner sending garbage verbs) collapses to
@@ -66,6 +72,7 @@ type Recorder struct {
 	eventsSetAside                  metric.Int64Counter
 	ruleEvalSkipped                 metric.Int64Counter
 	httpRequestDuration             metric.Float64Histogram
+	ruleEvaluationDuration          metric.Float64Histogram
 	// observable gauges retained only so the GC can't collect them; the callbacks run
 	// against the global meter provider.
 	enrolledGauge metric.Int64ObservableGauge
@@ -184,6 +191,17 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 		metric.WithExplicitBucketBoundaries(httpDurationBuckets...),
 	)
 
+	// Buckets chosen against the measured distribution rather than the default: on the dev server the mean rule evaluation was
+	// 0.094ms and the slowest doing legitimate work 17.8ms, so the interesting range is tens of microseconds to tens of
+	// milliseconds. The top bucket sits above the 100ms evaluation budget (issue #767) so a rule approaching its skip is visible
+	// here before it is skipped, which is the point at which an operator can still act.
+	r.ruleEvaluationDuration, _ = meter.Float64Histogram(
+		"edr.detection.rule_evaluation.duration",
+		metric.WithDescription("Duration of one detection rule's evaluation of one event batch, by rule."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(ruleEvalDurationBuckets...),
+	)
+
 	if gauges != nil {
 		threshold := opts.OfflineThreshold
 		r.enrolledGauge, _ = meter.Int64ObservableGauge(
@@ -242,6 +260,17 @@ func (r *Recorder) EventsSetAside(ctx context.Context, hostID string, n int64) {
 		return
 	}
 	r.eventsSetAside.Add(ctx, n, metric.WithAttributes(attribute.String("host_id", hostID)))
+}
+
+// RuleEvaluationDuration records how long one rule took to evaluate one batch (issue #837).
+//
+// This is the tier that answers "which rule is slow" with percentiles. The nil check matches the recorder's other methods: a
+// Recorder built without a meter records nothing rather than panicking.
+func (r *Recorder) RuleEvaluationDuration(ctx context.Context, ruleID string, d time.Duration) {
+	if r == nil || r.ruleEvaluationDuration == nil {
+		return
+	}
+	r.ruleEvaluationDuration.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("rule_id", ruleID)))
 }
 
 // RuleEvaluationSkipped records that this replica has stopped evaluating a rule for exceeding its evaluation budget (issue #767).

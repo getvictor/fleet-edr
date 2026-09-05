@@ -32,9 +32,14 @@ func newPruneHarness(t *testing.T, retentionDays int) (*Rules, *sqlx.DB) {
 	store := detectionconfig.NewStore(db)
 	return &Rules{
 		detectionConfigStore: store,
-		// Run fans out to the config refresh as well as the prune, so it needs a real service; the prune tests below do not touch
-		// it, and a nil one would turn a Run lifecycle test into a nil dereference rather than a test.
+		// Run fans out to every loop in its list, so each one this harness does not use still needs a value it can call: a nil
+		// turns a Run lifecycle test into a nil dereference rather than a test. The prune tests below touch none of them.
+		//
+		// This is the cost of building the struct by hand rather than through New, and it is a real one: adding the eval-stats
+		// flush to Run panicked here until this line was added. Kept by hand anyway, because going through New would drag in
+		// authz and the whole corpus for a test about one DELETE.
 		detectionConfigSvc: detectionconfig.NewService(store, nil, nil, slog.New(slog.DiscardHandler)),
+		evalStatsBuffer:    detectionconfig.NewBufferedEvalStats(store, slog.New(slog.DiscardHandler)),
 		retentionDays:      retentionDays,
 		logger:             slog.New(slog.DiscardHandler),
 	}, db
@@ -161,8 +166,8 @@ func TestPruneCountersLoop(t *testing.T) {
 // production and leave the whole suite green. That is the failure this exists to catch: the loop is well covered and the line that
 // starts it was not covered at all.
 //
-// It also pins that Run RETURNS on cancellation. Run fans out to two goroutines under a WaitGroup, so a fan-out that forgets to
-// wait, or a loop that ignores its context, hangs shutdown rather than failing anything.
+// It also pins that Run RETURNS on cancellation. Run fans out to a goroutine per loop under a WaitGroup, so a fan-out that
+// forgets to wait, or a loop that ignores its context, hangs shutdown rather than failing anything.
 func TestRun_DrivesTheMatchCountPrune(t *testing.T) {
 	t.Parallel()
 
