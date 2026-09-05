@@ -190,8 +190,22 @@ type AsyncAuditWriter interface {
 // auditors need a record of who read the audit log, regardless of
 // the operator's read_sampling configuration.
 //
-// The default branch returns false for every non-read action; adding
-// a new read action to the Action enum requires adding it here too.
+// The default branch returns false for every non-read action. Adding a
+// new read action to the Action enum requires DECIDING about it here,
+// which is not the same as adding it: membership means the event is
+// eligible to be SAMPLED, and sampling means dropped.
+//
+// The set is the high-volume operator reads, where a complete trail is
+// not worth the insert cost per request. The admin-surface reads are
+// deliberately absent, so they audit synchronously and always:
+// detection_config.read, application_control.read and rule_content.read
+// are page loads on a governed settings screen, a handful per session
+// rather than per host or per alert. For those the trail of who looked
+// at what the deployment detects is worth more than the sampling saves,
+// and a dropped row is a governance loss rather than a cost saving.
+//
+// Their absence used to be indistinguishable from an oversight, which is
+// how review read it. Stated here so the next reader sees a decision.
 //
 //nolint:exhaustive
 func IsReadAction(a Action) bool {
