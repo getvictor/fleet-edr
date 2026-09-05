@@ -146,3 +146,75 @@ func (s *Store) ReplaceIfEmpty(ctx context.Context, docs []api.Document) (bool, 
 	}
 	return true, version, nil
 }
+
+// PutDocument creates or replaces one document and bumps the version, in one transaction. Returns the new version.
+//
+// Per-document rather than through Replace, and the difference is not an optimisation. Replace takes the whole corpus, so an
+// operator editing one rule through it would have to read every document, substitute one, and write them all back. Two operators
+// editing different rules would then each write a corpus that omits the other's edit, and the later write would silently discard
+// the earlier one. A single-row upsert has no such window: it touches the row it names and nothing else.
+//
+// The meta row is bumped FIRST, before the document, which is the lock order replaceWithin documents and which every mutation of
+// this corpus has to share. Bumping it last here would give this path a documents-then-meta order against Replace's
+// meta-then-documents, which is the ABBA deadlock that ordering was chosen to remove.
+func (s *Store) PutDocument(ctx context.Context, doc api.Document) (int64, error) {
+	return s.withVersionBump(ctx, "put", func(tx *sqlx.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"INSERT INTO rule_corpus_documents (path, content) VALUES (?, ?) AS new ON DUPLICATE KEY UPDATE content = new.content",
+			doc.Path, string(doc.Content))
+		if err != nil {
+			return fmt.Errorf("upsert rule corpus document %q: %w", doc.Path, err)
+		}
+		return nil
+	})
+}
+
+// DeleteDocument removes one document and bumps the version, in one transaction. Returns the new version.
+//
+// Reports api.ErrDocumentNotFound when the path held nothing, and the transaction is rolled back in that case so the version does
+// NOT move. Both halves matter: a version bump with no content change would make every replica re-read the corpus to discover
+// nothing had happened, and reporting success would tell an operator who mistyped a path that they had deleted a rule.
+func (s *Store) DeleteDocument(ctx context.Context, path string) (int64, error) {
+	return s.withVersionBump(ctx, "delete", func(tx *sqlx.Tx) error {
+		res, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_documents WHERE path = ?", path)
+		if err != nil {
+			return fmt.Errorf("delete rule corpus document %q: %w", path, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("delete rule corpus document %q rows affected: %w", path, err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("%w: %s", api.ErrDocumentNotFound, path)
+		}
+		return nil
+	})
+}
+
+// withVersionBump runs write inside a transaction that has already bumped the version, and returns the new version.
+//
+// Shared by the two single-document mutations so neither can forget the bump or take its locks in the other order. A write that
+// returns an error rolls the whole thing back, including the bump, which is what lets DeleteDocument report "not found" without
+// moving the version.
+func (s *Store) withVersionBump(ctx context.Context, op string, write func(tx *sqlx.Tx) error) (int64, error) {
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx for corpus %s: %w", op, err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
+		return 0, fmt.Errorf("bump rule corpus version: %w", err)
+	}
+	var version int64
+	if err := tx.GetContext(ctx, &version, "SELECT version FROM rule_corpus_meta WHERE id = 1"); err != nil {
+		return 0, fmt.Errorf("read rule corpus version: %w", err)
+	}
+	if err := write(tx); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit corpus %s: %w", op, err)
+	}
+	return version, nil
+}
