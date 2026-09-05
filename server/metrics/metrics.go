@@ -197,7 +197,7 @@ func New(gauges GaugeSource, opts Options) *Recorder {
 	// here before it is skipped, which is the point at which an operator can still act.
 	r.ruleEvaluationDuration, _ = meter.Float64Histogram(
 		"edr.detection.rule_evaluation.duration",
-		metric.WithDescription("Duration of one detection rule's evaluation of one event batch, by rule. Excludes alert persistence; this is the rule's own matching plus its graph reads."),
+		metric.WithDescription("Duration of one detection rule's evaluation of one event batch, by rule."),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(ruleEvalDurationBuckets...),
 	)

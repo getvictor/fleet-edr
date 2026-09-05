@@ -42,8 +42,11 @@ type BufferedEvalStats struct {
 	logger *slog.Logger
 
 	mu sync.Mutex
-	// pending is keyed by rule id, so its SIZE is bounded by the rule count no matter how many batches accumulate into it. That
-	// is what makes returning a failed write's stats to it safe: a database that stays down grows the counters, never the map.
+	// pending is a per-replica perf cache, safe to lose: it holds only this replica's own unwritten counts, and the durable
+	// table is the only thing a reader sees.
+	//
+	// Keyed by rule id, so its SIZE is bounded by the rule count no matter how many batches accumulate into it. That is what
+	// makes returning a failed write's stats to it safe: a database that stays down grows the counters, never the map.
 	pending map[string]*api.RuleEvalStat
 }
 
@@ -103,8 +106,17 @@ func (b *BufferedEvalStats) mergeLocked(stats api.RuleEvalStats) {
 // Flush writes everything accumulated so far, and is safe to call with nothing pending.
 //
 // On a write failure the drained statistics go BACK into pending and the next flush retries them, so a transient database problem
-// costs no counts. That is why the documented loss window is an ungraceful shutdown alone: nothing else discards a count. The map
-// is keyed by rule id, so a database that stays down cannot grow it past the rule count.
+// discards no counts. The map is keyed by rule id, so a database that stays down cannot grow it past the rule count.
+//
+// Retrying an ADDITIVE upsert is at-least-once, not exactly-once, which review pointed out and which the word "exact" hid: if the
+// server commits and the connection drops before the client sees the result, the next flush adds the same counts again. What that
+// costs is bounded and already the documented posture for this table. Evaluations and eval_ns_sum inflate together, so the mean
+// they produce does not move, and eval_ns_max is idempotent because the column takes a GREATEST. Only retryable_misses and the
+// raw volume can read high, and by at most one flush's worth. The same reasoning the store's own doc gives for a replayed batch
+// applies, for the same reason.
+//
+// The alternative, dropping on failure, trades a bounded over-count for an unbounded under-count, and under-counting is the
+// direction that misleads: a rule that looks cheaper than it is gets left alone.
 func (b *BufferedEvalStats) Flush(ctx context.Context) error {
 	b.mu.Lock()
 	if len(b.pending) == 0 {

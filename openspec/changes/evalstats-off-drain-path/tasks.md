@@ -11,3 +11,7 @@
 - [x] The wiring is asserted against a real database, because both ways this can be silently undone (the accessor handing out the store again, the flush loop dropped from Run) leave every unit test passing. Mutation-tested: both killed.
 - [x] `ADR-0010`'s `per-replica perf cache, safe to lose` annotation carried verbatim.
 - [x] The prior doc comment describing the write as synchronous on the drain path corrected, with the new numbers, rather than left to contradict the code.
+- [x] Shutdown actually WAITS for the flush. `rulesCtx.Run` was started detached in main and nothing joined it, so the shutdown flush ran on a goroutine the process did not wait for: the guarantee held in tests, which drive Run directly, and not in production. Bounded so a shutdown still ends, and a timeout is logged.
+- [x] The histogram measures the same duration the durable table records, INCLUDING graph reads. An earlier cut used the budget's narrower number, which made two surfaces answer one question differently. The budget still excludes that time for its own purpose, and the pair is pinned in one test.
+- [x] The exactness claim is narrowed to what an additive retry can promise: a commit whose result never reaches the client is added again, bounded to one flush, leaving the derived mean unmoved because count and total inflate together. Dropping instead would under-count, which is the direction that misleads.
+

@@ -197,7 +197,11 @@ func run() error {
 	go tracing.StartSettingsPoller(ctx, traceSampler, samplerReader, logger, primedSampler)
 	// Converge this replica's detection-config snapshot with mutations made on other replicas (ADR-0010): a peer's exclusion / rule-mode
 	// edit only bumps the shared version counter, so without this poll a non-mutating replica would serve a stale config until restart.
-	go rulesCtx.Run(ctx)
+	rulesDone := make(chan struct{})
+	go func() {
+		defer close(rulesDone)
+		rulesCtx.Run(ctx)
+	}()
 
 	// Only construct the resolver when EDR_TRUSTED_PROXIES is non-empty. httpserver.Build skips installing the middleware on a nil
 	// resolver, and httpserver.ClientIP's fallback returns the same peer IP the resolver's empty-list path would return, so this saves
@@ -227,8 +231,25 @@ func run() error {
 	gwCtx, gwCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer gwCancel() // controlChannel.Stop cancels this on shutdown; the defer is a belt-and-suspenders guard against a context leak
 	go gw.Run(gwCtx)
-	return httpserver.RunAndShutdown(ctx, srv, controlChannel{ControlMux: gw, stopRun: gwCancel}, logger, drain, cfg.ShutdownDrain)
+	err = httpserver.RunAndShutdown(ctx, srv, controlChannel{ControlMux: gw, stopRun: gwCancel}, logger, drain, cfg.ShutdownDrain)
+
+	// Wait for the rules context's loops to finish before returning, or the process exits while its last write is still in
+	// flight. Review found this: rulesCtx.Run was started detached and nothing joined it, so the per-rule statistics flushed on
+	// shutdown (issue #837) were written on a goroutine the process did not wait for. The claim that a graceful shutdown keeps
+	// that window was therefore false in production while being true in tests, which drive Run directly.
+	//
+	// Bounded, because a shutdown must end: the flush has its own short budget and this only has to outlast it.
+	select {
+	case <-rulesDone:
+	case <-time.After(rulesShutdownWait):
+		logger.WarnContext(ctx, "rules background loops did not finish before shutdown; per-rule statistics for the last window may be lost")
+	}
+	return err
 }
+
+// rulesShutdownWait bounds how long shutdown waits for the rules context's loops to return. Only has to outlast the eval-stats
+// flush's own timeout, which is what it is waiting for.
+const rulesShutdownWait = 10 * time.Second
 
 // controlChannel adapts the response control gateway to httpserver.ControlMux so shutdown also ends the gateway's delivery loop. The
 // gateway's ServeHTTP is promoted from the embedded interface; Stop first cancels the delivery-loop context (started with SIGTERM

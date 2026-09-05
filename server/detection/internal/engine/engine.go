@@ -440,10 +440,17 @@ func (e *Engine) evaluateRule(
 			}
 		}
 		if e.metrics != nil {
-			// The same duration the budget is charged, so the histogram and the skip decision cannot disagree about what a
-			// rule cost. Recorded on every path including the failing ones, because a rule that is slow and then errors is
-			// exactly the rule an operator is looking for (issue #837).
-			e.metrics.RuleEvaluationDuration(ctx, rule.ID(), time.Duration(ruleElapsed))
+			// The FULL duration, matching what the durable table records, not the narrower number the budget is charged.
+			// Review found the inconsistency: the histogram is what an operator reads to ask which rule is slow, and a rule
+			// that is slow through graph reads is exactly as much of an operator problem as one slow through matching. Two
+			// surfaces answering the same question with different quantities is worse than either choice.
+			//
+			// The budget still subtracts graph-read time, deliberately and for a different purpose: it decides whether to
+			// stop evaluating a rule, and a slow datastore must not disable rules. See waitAccumulator.
+			//
+			// Recorded on every path including the failing ones, because a rule that is slow and then errors is exactly the
+			// rule an operator is looking for (issue #837).
+			e.metrics.RuleEvaluationDuration(ctx, rule.ID(), time.Duration(elapsed))
 		}
 		// One entry per rule per batch, appended rather than merged, because rulesFor sorts and compacts its indices so a rule
 		// is evaluated exactly once per batch.
