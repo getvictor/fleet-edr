@@ -74,3 +74,22 @@ type Validator interface {
 	// operator. Warnings are advisory: a corpus with warnings is still written.
 	Validate(ctx context.Context, docs []Document) (warnings []string, err error)
 }
+
+// Author is the authoring lifecycle: validate a proposed change, then apply it.
+//
+// The published counterpart to Writer, and the difference between them is the whole point. Writer is the raw store operation and
+// makes no promise about validity; Author is the surface a caller outside this context should hold, because going through it is
+// what guarantees the corpus that lands is one the deployment can load.
+//
+// Both return the new corpus version and any advisory warnings. A warning does NOT mean the change was refused: a rule this
+// deployment cannot run is still a rule an operator may legitimately store, so it is reported rather than rejected.
+//
+// Errors a caller is expected to branch on: ErrRefused when validation rejected the proposed corpus, ErrDocumentNotFound when a
+// delete named a path that holds nothing, and ErrCorpusChanged when the corpus moved between validation and the write, which the
+// caller resolves by retrying rather than by reporting a failure.
+type Author interface {
+	// Put creates or replaces the document at doc.Path.
+	Put(ctx context.Context, doc Document) (version int64, warnings []string, err error)
+	// Delete removes the document at path.
+	Delete(ctx context.Context, path string) (version int64, warnings []string, err error)
+}

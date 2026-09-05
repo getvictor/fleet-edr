@@ -12,6 +12,7 @@ import (
 
 	"github.com/fleetdm/edr/server/migrations/runner"
 	"github.com/fleetdm/edr/server/rulecontent/api"
+	"github.com/fleetdm/edr/server/rulecontent/internal/authoring"
 	rulecontentmysql "github.com/fleetdm/edr/server/rulecontent/internal/mysql"
 	rulecontentmigrations "github.com/fleetdm/edr/server/rulecontent/migrations"
 )
@@ -58,6 +59,18 @@ func (c readOnlyCorpus) Documents(ctx context.Context) ([]api.Document, error) {
 	return c.inner.Documents(ctx)
 }
 func (c readOnlyCorpus) Version(ctx context.Context) (int64, error) { return c.inner.Version(ctx) }
+
+// Author builds the authoring lifecycle over this context's storage, validated by v.
+//
+// The validator is INJECTED rather than constructed here, which is what keeps the ADR-0021 seam intact: the only honest validator
+// is the corpus loader, the loader lives in `rules` because it produces evaluatable rules, and this context imports no other
+// context's api. cmd/main supplies the implementation and this package never learns what it is.
+//
+// A nil validator is an error rather than a permissive default. The whole reason this surface exists is that rule content is
+// untrusted input, so a construction that silently skips validation would be worse than no surface at all.
+func (r *RuleContent) Author(v api.Validator) (api.Author, error) {
+	return authoring.New(r.Corpus(), r.store, v)
+}
 
 // Replace installs a corpus wholesale, returning the version it now carries.
 //

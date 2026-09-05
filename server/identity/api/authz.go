@@ -97,6 +97,17 @@ const (
 	ActionDetectionConfigRead  Action = "detection_config.read"
 	ActionDetectionConfigWrite Action = "detection_config.write"
 
+	// Rule content authoring (issue #767). The admin surface creates, replaces and deletes the rule documents the detection engine
+	// loads, which is a governed change to WHAT the deployment detects rather than to how a known rule behaves. Read covers the
+	// corpus listing and the dry-run check; write gates the mutations.
+	//
+	// Held by admin (write) and admin + senior_analyst (read), the same band as detection_config, because it is the same people
+	// working from the same screen: an operator authors a rule and then sets its mode from the table beside it. A narrower band
+	// would be defensible for a surface that could break detection outright, but validation is what stops that and it runs before
+	// anything is stored.
+	ActionRuleContentRead  Action = "rule_content.read"
+	ActionRuleContentWrite Action = "rule_content.write"
+
 	// Trace-sampler management (issue #374). Gates reading and updating the deployment's runtime OTel trace-sampling settings (the
 	// per-tier ratios and the force-full incident toggle). Held by admin + super_admin, mirroring sso.manage: it is an operational
 	// telemetry-cost lever, peer to the other deployment-settings actions, and not granted to the analyst/auditor roles. The settings
@@ -128,6 +139,7 @@ func RegisteredActions() []Action {
 		ActionAppControlRuleCreate, ActionAppControlRuleUpdate, ActionAppControlRuleDelete, ActionAppControlRuleBulkUpsert,
 		ActionAppControlPolicyCreate, ActionAppControlPolicyUpdate, ActionAppControlPolicyDelete,
 		ActionDetectionConfigRead, ActionDetectionConfigWrite,
+		ActionRuleContentRead, ActionRuleContentWrite,
 		ActionTracingManage,
 	}
 }

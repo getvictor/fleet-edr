@@ -39,6 +39,11 @@ tags:
     description: Command queue (UI + Agent)
   - name: Admin
     description: Enrollment + policy management (UI, admin-only)
+  - name: Rule authoring
+    description: |
+      The rule documents a deployment loads, as opposed to the per-rule
+      tuning under Detection tuning. Read is held by admin and
+      senior_analyst; changing content is held by admin.
   - name: Detection tuning
     description: |
       Detection-rule tuning the engine consults at evaluation time:
@@ -937,6 +942,297 @@ paths:
               schema:
                 $ref: "#/components/schemas/DetectionConfigError"
 
+  /api/v1/rule-content/documents:
+    get:
+      tags: [Rule authoring]
+      summary: List the rule documents this deployment loads
+      description: |
+        Returns a summary of every document in the stored corpus, plus the
+        corpus version a replica polls to notice a change.
+
+        Summaries rather than content: the corpus is every rule the
+        deployment runs, and returning all of it to draw a table of names
+        would send megabytes. Fetch one document to read its content.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Corpus listing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [corpus_version, documents]
+                properties:
+                  corpus_version:
+                    type: integer
+                    format: int64
+                    description: |
+                      Changes whenever the corpus changes. A write reports the
+                      version it produced, so a caller can tell whether the
+                      corpus it is looking at is still current.
+                  documents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuleContentDocumentSummary"
+        "403":
+          description: Caller lacks rule_content.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+
+  /api/v1/rule-content/documents:check:
+    post:
+      tags: [Rule authoring]
+      summary: Check a change without applying it
+      description: |
+        Reports what submitting a document would do. Nothing is stored and
+        no mutation is audited, because nothing happened to the corpus.
+
+        A refusal comes back as `200` with `would_apply: false`, NOT as a
+        4xx. The check succeeded: a question was asked and correctly
+        answered. A 4xx would say the request was wrong, which it was not,
+        and would force a caller to treat "your rule has a problem" and
+        "your request was malformed" through the same branch.
+
+        Gated on `rule_content.read`, since it changes nothing.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                  description: The path the document would be stored under.
+                  example: authored/my_rule.yml
+                content:
+                  type: string
+                  description: The rule file, verbatim.
+      responses:
+        "200":
+          description: |
+            The check completed. `would_apply` says whether submitting it
+            would be accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [would_apply, warnings]
+                properties:
+                  would_apply:
+                    type: boolean
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                    description: |
+                      Advisory. A rule this deployment cannot run is still a
+                      rule an operator may store, so it is reported rather
+                      than refused.
+                  refusal:
+                    type: string
+                    description: Present only when `would_apply` is false.
+        "400":
+          description: Malformed JSON, or a missing `path`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "403":
+          description: Caller lacks rule_content.read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+
+  /api/v1/rule-content/documents/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        description: |
+          The document's path within the corpus, including directories, so
+          it contains slashes (`authored/my_rule.yml`).
+        schema:
+          type: string
+        example: authored/my_rule.yml
+    get:
+      tags: [Rule authoring]
+      summary: Read one rule document
+      description: |
+        Returns the rule file itself rather than a JSON envelope, because
+        the response IS the artifact an operator edits and hands to another
+        tool. A caller who must unwrap it first is worse off.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: The rule file, verbatim.
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "403":
+          description: |
+            Caller lacks rule_content.read. Returned before the document is
+            looked up, so the answer does not disclose whether it exists:
+            existence is itself information about what a deployment detects.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "404":
+          description: No such rule document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+    put:
+      tags: [Rule authoring]
+      summary: Create or replace a rule document
+      description: |
+        Validates the corpus the write would produce, then stores the
+        document if that corpus loads. `reason` is required and recorded on
+        the audit row.
+
+        Validation runs the same loader the deployment loads its corpus
+        with, so acceptance means "this deployment will load this".
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutRuleContentDocumentRequest"
+      responses:
+        "200":
+          description: The document was stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentChangeResult"
+        "400":
+          description: Malformed JSON, or a blank `reason`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "403":
+          description: Caller lacks rule_content.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "409":
+          description: |
+            The corpus changed between being validated and being written.
+            Re-read it and retry; the same change against the current
+            corpus will usually succeed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "422":
+          description: |
+            The request was well formed and the CONTENT was not. The message
+            carries the loader's own reason, naming what to fix.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+    delete:
+      tags: [Rule authoring]
+      summary: Delete a rule document
+      description: |
+        Removes the document, so the rule it defined stops being evaluated
+        once replicas converge. `reason` is required and recorded.
+
+        The corpus that would REMAIN is validated first: removing a rule can
+        be the change that breaks a corpus, because what is left still has
+        to load.
+      security:
+        - SessionCookie: []
+          CSRF: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: Recorded on the audit row.
+      responses:
+        "200":
+          description: The document was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentChangeResult"
+        "400":
+          description: Malformed JSON or a blank `reason`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "403":
+          description: Caller lacks rule_content.write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "404":
+          description: |
+            No such rule document. Reported rather than treated as success,
+            so an operator who mistyped a path learns they removed nothing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "409":
+          description: The corpus changed between validation and the write.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "413":
+          description: Request body is too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+        "422":
+          description: |
+            The corpus that would remain does not load. The message carries
+            the reason.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleContentError"
+
 components:
   securitySchemes:
     HostToken:
@@ -1524,6 +1820,80 @@ components:
           format: int64
           default: 0
           description: Optional; defaults to 0 (global). A non-global scope is rejected with a 400 until editable host groups land.
+
+    RuleContentDocumentSummary:
+      type: object
+      required: [path, bytes]
+      properties:
+        path:
+          type: string
+          description: |
+            The document's path within the corpus. The rule's IDENTITY is the
+            file stem, so `authored/keychain_extra.yml` defines the rule
+            `keychain_extra`, and renaming the file renames the rule.
+          example: authored/keychain_extra.yml
+        bytes:
+          type: integer
+          description: Size of the stored document.
+
+    PutRuleContentDocumentRequest:
+      type: object
+      required: [content, reason]
+      properties:
+        content:
+          type: string
+          description: The rule file, verbatim.
+        reason:
+          type: string
+          description: |
+            Why the change is being made. Required, and recorded on the audit
+            row: it is the only field that says why, so a blank one would
+            leave a trail that records who and what and is silent on the
+            question a reviewer is asking.
+
+    RuleContentChangeResult:
+      type: object
+      required: [path, corpus_version, warnings]
+      properties:
+        path:
+          type: string
+        corpus_version:
+          type: integer
+          format: int64
+          description: |
+            The version the change produced. A replica has to reach this
+            before the change is in force.
+        warnings:
+          type: array
+          items:
+            type: string
+          description: |
+            Advisory, and always an array so a caller need not null-check.
+            A rule this deployment cannot run is still stored: the message
+            says so, naming the file and the reason, rather than the change
+            being refused.
+
+    RuleContentError:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable code the UI switches on.
+          enum:
+            - rule_content.invalid_json
+            - rule_content.read_body
+            - rule_content.body_too_large
+            - rule_content.invalid_input
+            - rule_content.refused
+            - rule_content.not_found
+            - rule_content.conflict
+            - internal
+        message:
+          type: string
+          description: |
+            Human-readable detail. For a refusal this carries the loader's
+            own reason, naming what to fix, rather than a rephrasing of it.
 
     DetectionConfigError:
       type: object

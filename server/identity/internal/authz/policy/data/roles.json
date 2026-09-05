@@ -37,7 +37,9 @@
         "application_control.policy_delete",
         "detection_config.read",
         "detection_config.write",
-        "tracing.manage"
+        "tracing.manage",
+        "rule_content.read",
+        "rule_content.write"
       ]
     },
     "senior_analyst": {
@@ -53,7 +55,8 @@
         "alert.reopen",
         "process.read",
         "application_control.read",
-        "detection_config.read"
+        "detection_config.read",
+        "rule_content.read"
       ]
     },
     "analyst": {

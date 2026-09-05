@@ -80,6 +80,16 @@ const (
 	AuditDetectionConfigExclusionCreate   AuditAction = "detection_config.exclusion_create"
 	AuditDetectionConfigExclusionDelete   AuditAction = "detection_config.exclusion_delete"
 	AuditDetectionConfigRuleSettingUpdate AuditAction = "detection_config.rule_setting_update"
+
+	// Rule content authoring (issue #767). Records a change to the rule DOCUMENTS the detection engine loads, as distinct from the
+	// detection_config actions above, which record a change to how an existing rule behaves. Both matter, and conflating them
+	// would leave a reader unable to tell "someone retuned a rule" from "someone changed what we detect".
+	//
+	// Only a change that took effect is recorded. A submission validation refused did not alter the corpus, and recording it as a
+	// mutation would make this trail disagree with the thing it audits; the operator gets the refusal and its reason, and an
+	// authorization denial is already recorded by the chokepoint.
+	AuditRuleContentDocumentPut    AuditAction = "rule_content.document_put"
+	AuditRuleContentDocumentDelete AuditAction = "rule_content.document_delete"
 )
 
 // AuditEvent is the value passed to AuditRecorder.Record. Caller
@@ -180,8 +190,22 @@ type AsyncAuditWriter interface {
 // auditors need a record of who read the audit log, regardless of
 // the operator's read_sampling configuration.
 //
-// The default branch returns false for every non-read action; adding
-// a new read action to the Action enum requires adding it here too.
+// The default branch returns false for every non-read action. Adding a
+// new read action to the Action enum requires DECIDING about it here,
+// which is not the same as adding it: membership means the event is
+// eligible to be SAMPLED, and sampling means dropped.
+//
+// The set is the high-volume operator reads, where a complete trail is
+// not worth the insert cost per request. The admin-surface reads are
+// deliberately absent, so they audit synchronously and always:
+// detection_config.read, application_control.read and rule_content.read
+// are page loads on a governed settings screen, a handful per session
+// rather than per host or per alert. For those the trail of who looked
+// at what the deployment detects is worth more than the sampling saves,
+// and a dropped row is a governance loss rather than a cost saving.
+//
+// Their absence used to be indistinguishable from an oversight, which is
+// how review read it. Stated here so the next reader sees a decision.
 //
 //nolint:exhaustive
 func IsReadAction(a Action) bool {

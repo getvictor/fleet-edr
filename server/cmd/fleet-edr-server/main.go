@@ -33,6 +33,7 @@ import (
 	"github.com/fleetdm/edr/server/metrics"
 	observabilitybootstrap "github.com/fleetdm/edr/server/observability/bootstrap"
 	responsebootstrap "github.com/fleetdm/edr/server/response/bootstrap"
+	rulecontentapi "github.com/fleetdm/edr/server/rulecontent/api"
 	rulecontentbootstrap "github.com/fleetdm/edr/server/rulecontent/bootstrap"
 	rulesbootstrap "github.com/fleetdm/edr/server/rules/bootstrap"
 	"github.com/fleetdm/edr/server/tracingpolicy"
@@ -609,10 +610,24 @@ func openRules(
 	responseCtx *responsebootstrap.Response,
 	ruleContentCtx *rulecontentbootstrap.RuleContent,
 ) (*rulesbootstrap.Rules, error) {
+	// Closing the loop ADR-0021 leaves open. rulecontent owns the authoring lifecycle but must not import the evaluator, so it
+	// takes the validator as a port; the only honest validator is the corpus loader, which lives in rules. Neither context can
+	// construct the pair, so cmd does: build the lifecycle with rules' validator, then hand it to rules as a dependency.
+	//
+	// A failure here leaves the authoring surface unmounted rather than stopping the server. An operator who cannot author a rule
+	// today still has a deployment that detects, and the alternative is refusing to boot over a surface nothing depends on yet.
+	var ruleAuthor rulecontentapi.Author
+	if author, aerr := ruleContentCtx.Author(rulesbootstrap.CorpusValidator{}); aerr != nil {
+		logger.WarnContext(ctx, "rule authoring surface unavailable; rule content cannot be changed through the API", "err", aerr)
+	} else {
+		ruleAuthor = author
+	}
+
 	rulesCtx, err := rulesbootstrap.New(ctx, rulesbootstrap.Deps{
 		DB:                   db,
 		Logger:               logger,
 		Corpus:               ruleContentCtx.Corpus(),
+		RuleAuthor:           ruleAuthor,
 		Audit:                identityCtx.AuditRecorder(),
 		AuthZ:                identityCtx.AuthZ(),
 		PrincipalLabel:       identityCtx.Service().PrincipalLabel,
