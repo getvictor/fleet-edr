@@ -232,6 +232,11 @@ func TestBackfillAlertOrigins_NoCoordinatorIsANoOp(t *testing.T) {
 // having done all the work.
 //
 // Seeds one more row than a batch holds, which is the smallest input that proves a second pass happens at all.
+//
+// What this does NOT prove is the id cursor, and that is a property of the cursor rather than a gap here. Each batch's UPDATE
+// removes its rows from the `origin = ”` predicate, so the loop terminates having credited everything whether or not the next
+// pass resumes from the last id. The cursor's whole effect is that the table is scanned once rather than once per batch, which
+// is not observable from a functional assertion. See the coverage note on backfillBatchSize.
 func TestBackfillAlertOrigins_CreditsMoreThanOneBatch(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // BackfillAlertOrigins credits alerts that were raised before attribution was recorded, for the vendored rules named in origins.
@@ -49,30 +51,59 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 	}
 	sort.Strings(ruleIDs)
 
-	// One statement rather than one per rule: the whole set is a dozen rules today, and a single UPDATE keeps this to one round
-	// trip on a path that runs while the server is still coming up.
+	// One CASE covering every rule rather than a statement per rule: the whole set is a dozen rules today, so batching them keeps
+	// the round trips proportional to the ALERTS to credit rather than to the corpus, on a path that runs while the server is
+	// still coming up. Both statements below share it.
 	var cases strings.Builder
-	args := make([]any, 0, len(ruleIDs)*2)
+	caseArgs := make([]any, 0, len(ruleIDs)*2)
 	cases.WriteString("UPDATE alerts SET origin = CASE rule_id")
 	for _, id := range ruleIDs {
 		cases.WriteString(" WHEN ? THEN ?")
-		args = append(args, id, origins[id])
+		caseArgs = append(caseArgs, id, origins[id])
 	}
-	cases.WriteString(" END WHERE origin = '' AND rule_id IN (?" + strings.Repeat(", ?", len(ruleIDs)-1) + ")")
-	for _, id := range ruleIDs {
-		args = append(args, id)
-	}
-	fmt.Fprintf(&cases, " LIMIT %d", backfillBatchSize)
+	cases.WriteString(" END WHERE id IN (?)")
+	updateSQL := cases.String()
 
-	// Batched, because this cannot use an index. alerts carries no index on origin, and rule_id sits THIRD in the dedup key
-	// behind source and host_id, so `origin = '' AND rule_id IN (...)` is a table scan however it is written. One unbounded
-	// UPDATE would hold row locks across that scan, at boot, on a server that may already be serving reads.
+	ruleArgs := make([]any, 0, len(ruleIDs))
+	for _, id := range ruleIDs {
+		ruleArgs = append(ruleArgs, id)
+	}
+	selectSQL := "SELECT id FROM alerts WHERE origin = '' AND rule_id IN (?" +
+		strings.Repeat(", ?", len(ruleIDs)-1) + ") AND id > ? ORDER BY id LIMIT ?"
+
+	// Walked by PRIMARY KEY, in batches, and the cursor is the whole point. A LIMIT alone was the first attempt and it made the
+	// total work WORSE, which both reviewers caught: with no usable index every statement restarts from the beginning, so N
+	// batches cost N scans rather than one. Resuming from the last id turns that back into a single forward pass whose locks are
+	// still bounded per statement.
 	//
-	// A LIMIT bounds each statement's lock footprint instead, and the loop ends when a pass changes nothing. Total work is the
-	// same; what changes is that no single statement holds the table for the length of it.
+	// alerts carries no index this predicate can use. There is none on origin, and rule_id sits THIRD in the dedup key behind
+	// source and host_id, so `origin = '' AND rule_id IN (...)` cannot be satisfied by a lookup however it is written. Walking the
+	// primary key is what makes the scan happen once.
+	//
+	// So this reads the table once per boot, including the boot after everything is already credited, and NOT adding an index to
+	// avoid that is deliberate. An index on origin would not help: our own rules keep an empty origin permanently and on purpose,
+	// so `origin = ''` stays a high-cardinality match forever rather than emptying out after the first pass. An index on rule_id
+	// would help, and it would tax every alert INSERT, on the hot detection path, for the life of the deployment, to save one
+	// scan per boot on a leader-only path that runs off the request path while the server is still coming up. The scan is the
+	// cheaper side of that trade.
 	var total int64
+	var cursor int64
 	for {
-		res, err := s.db.ExecContext(ctx, cases.String(), args...)
+		var ids []int64
+		selectArgs := append(append([]any{}, ruleArgs...), cursor, backfillBatchSize)
+		if err := s.db.SelectContext(ctx, &ids, selectSQL, selectArgs...); err != nil {
+			return total, fmt.Errorf("backfill alert origins select: %w", err)
+		}
+		if len(ids) == 0 {
+			return total, nil
+		}
+
+		// Updated by primary key, so this statement touches exactly the rows just identified and holds nothing else.
+		query, updateArgs, err := sqlx.In(updateSQL, append(append([]any{}, caseArgs...), ids)...)
+		if err != nil {
+			return total, fmt.Errorf("backfill alert origins expand: %w", err)
+		}
+		res, err := s.db.ExecContext(ctx, s.db.Rebind(query), updateArgs...)
 		if err != nil {
 			return total, fmt.Errorf("backfill alert origins: %w", err)
 		}
@@ -81,23 +112,27 @@ func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]str
 			return total, fmt.Errorf("backfill alert origins rows affected: %w", err)
 		}
 		total += updated
-		if updated < backfillBatchSize {
-			return total, nil
-		}
-		// Yield between batches so a boot-time backfill cannot monopolise a connection against live traffic.
-		select {
-		case <-ctx.Done():
-			return total, ctx.Err()
-		default:
+		cursor = ids[len(ids)-1]
+
+		// Checked between batches so a cancelled start-up stops here rather than walking the rest of the table. Not a yield: the
+		// batches are what bound this, and a sleep would only make a boot-time pass take longer.
+		if err := ctx.Err(); err != nil {
+			return total, err
 		}
 	}
 }
 
 // backfillBatchSize bounds how many rows one statement rewrites.
 //
-// NOTE ON COVERAGE: removing the LIMIT is a MISSED mutation and always will be. Without it the UPDATE does the same work in
-// one pass and every functional assertion still holds; what changes is the lock footprint, which a test in this package
-// cannot observe without measuring contention against live traffic. The LOOP around it is covered, by seeding one more row
-// than a batch holds. Large enough that a typical deployment finishes in one pass,
-// small enough that no single statement holds a scan's worth of row locks.
+// Large enough that a typical deployment finishes in one pass, small enough that no single statement holds a scan's worth of
+// row locks.
+//
+// NOTE ON COVERAGE, measured rather than assumed. Three mutants, and only one is caught:
+//
+//   - Dropping the `origin = ”` guard FAILS the tests, which is the correctness property and the one worth pinning.
+//   - Raising this bound SURVIVES. A larger batch does the same work with the same result.
+//   - Pinning the cursor at 0, or dropping `id > ?`, also SURVIVES, and that is not a gap in the tests. Each batch's UPDATE
+//     removes those rows from the `origin = ”` predicate, so the loop makes progress and terminates correctly either way.
+//     The cursor buys ONE forward scan instead of N restarts of a scan, and total scan work is not a thing a test in this
+//     package can observe. The LOOP itself IS covered, by seeding more rows than one batch holds.
 const backfillBatchSize = 1000
