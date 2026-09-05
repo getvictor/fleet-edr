@@ -10,6 +10,7 @@ import (
 
 	"github.com/fleetdm/edr/server/rulecontent/api"
 	rulecontentmysql "github.com/fleetdm/edr/server/rulecontent/internal/mysql"
+	rulecontenttestkit "github.com/fleetdm/edr/server/rulecontent/testkit"
 	"github.com/fleetdm/edr/server/testdb/full"
 )
 
@@ -154,89 +155,92 @@ func TestPackDigest_MatchesTheDigestOfWhatWasStored(t *testing.T) {
 
 // spec:rule-content/the-corpus-identifies-which-shipped-pack-it-holds/changing-a-shipped-rule-changes-the-pack-identity
 //
-// TestPackDigest_FollowsASingleDocumentMutation is the half the whole-corpus tests above cannot reach, and review found it
-// missing. Both single-document mutations can change the VENDORED set without looking like they do: writing over a shipped
-// document reclassifies that row as the operator's, and deleting one removes it. A digest that only the whole-corpus writers
-// maintain would keep asserting the deployment holds a pack it no longer holds, which is the single claim the digest exists to
-// make.
+// TestPackDigest_FollowsASingleDocumentMutation is the half the whole-corpus tests cannot reach, and review found it missing.
+// Both single-document mutations can change the SHIPPED set without looking like they do: writing over a shipped document
+// reclassifies that row as the operator's, and deleting one removes it. A digest only the whole-corpus writers maintained would
+// keep asserting the deployment holds a pack it no longer holds, which is the single claim the digest exists to make.
+//
+// Driven from a table because the cases differ in exactly one expectation, whether the pack MOVED, and stating that in a column
+// is what makes the third case load-bearing rather than decorative: an operator's own rule must not move it.
+//
+// Every case also has to satisfy an invariant no per-case assertion states, and it is the stronger of the two claims: whatever
+// the mutation was, the recorded identity must equal the digest of the shipped content actually left behind. A digest that
+// changed for the wrong reason would satisfy "it moved" and fail this.
 func TestPackDigest_FollowsASingleDocumentMutation(t *testing.T) {
 	t.Parallel()
 
-	t.Run("overwriting a shipped document changes the pack", func(t *testing.T) {
-		t.Parallel()
-		s := newStore(t)
-		ctx := t.Context()
+	shipped := func(path, content string) api.Document {
+		return api.Document{Path: path, Content: []byte(content), Source: api.SourceVendored}
+	}
+	seed := []api.Document{shipped("imported/a.yml", "a"), shipped("imported/b.yml", "b")}
 
-		version, err := s.Replace(ctx, []api.Document{
-			{Path: "imported/a.yml", Content: []byte("a"), Source: api.SourceVendored},
-			{Path: "imported/b.yml", Content: []byte("b"), Source: api.SourceVendored},
+	cases := []struct {
+		name      string
+		mutate    func(t *testing.T, s *rulecontentmysql.Store, version int64)
+		packMoved bool
+	}{
+		{
+			// The operator writes their own version of a shipped rule. It keeps the path, so the row becomes theirs and the
+			// pack is one rule smaller.
+			name: "overwriting a shipped document",
+			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
+				_, err := s.PutDocument(t.Context(),
+					api.Document{Path: "imported/a.yml", Content: []byte("mine")}, version)
+				require.NoError(t, err)
+			},
+			packMoved: true,
+		},
+		{
+			name: "deleting a shipped document",
+			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
+				_, err := s.DeleteDocument(t.Context(), "imported/a.yml", version)
+				require.NoError(t, err)
+			},
+			packMoved: true,
+		},
+		{
+			// Adding their own rule must not make the deployment look out of date. This is what stops the recomputation above
+			// from being "recompute on every write", which would be correct and needlessly expensive.
+			name: "adding a rule of the operator's own",
+			mutate: func(t *testing.T, s *rulecontentmysql.Store, version int64) {
+				_, err := s.PutDocument(t.Context(),
+					api.Document{Path: "authored/mine.yml", Content: []byte("mine")}, version)
+				require.NoError(t, err)
+			},
+			packMoved: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newStore(t)
+			ctx := t.Context()
+
+			version, err := s.Replace(ctx, seed)
+			require.NoError(t, err)
+			before, err := s.PackDigest(ctx)
+			require.NoError(t, err)
+			require.NotEmpty(t, before)
+
+			tc.mutate(t, s, version)
+
+			after, err := s.PackDigest(ctx)
+			require.NoError(t, err)
+			if tc.packMoved {
+				assert.NotEqual(t, before, after, "the shipped content changed, so the pack identity must have moved")
+			} else {
+				assert.Equal(t, before, after, "the shipped content is unchanged, so the pack identity must be too")
+			}
+
+			stored, err := s.Documents(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, api.PackDigest(api.VendoredDocuments(stored)), after,
+				"the recorded identity must be the digest of the shipped content actually stored")
 		})
-		require.NoError(t, err)
-		before, err := s.PackDigest(ctx)
-		require.NoError(t, err)
-		require.NotEmpty(t, before)
-
-		// The operator writes their own version of a shipped rule. The row becomes theirs, so the pack is now one rule smaller.
-		_, err = s.PutDocument(ctx, api.Document{Path: "imported/a.yml", Content: []byte("mine")}, version)
-		require.NoError(t, err)
-
-		after, err := s.PackDigest(ctx)
-		require.NoError(t, err)
-		assert.NotEqual(t, before, after, "the shipped set lost a document, so the pack identity must have moved")
-
-		stored, err := s.Documents(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, api.PackDigest(api.VendoredDocuments(stored)), after,
-			"the recorded identity must be the digest of the shipped content actually left")
-	})
-
-	t.Run("deleting a shipped document changes the pack", func(t *testing.T) {
-		t.Parallel()
-		s := newStore(t)
-		ctx := t.Context()
-
-		version, err := s.Replace(ctx, []api.Document{
-			{Path: "imported/a.yml", Content: []byte("a"), Source: api.SourceVendored},
-			{Path: "imported/b.yml", Content: []byte("b"), Source: api.SourceVendored},
-		})
-		require.NoError(t, err)
-		before, err := s.PackDigest(ctx)
-		require.NoError(t, err)
-
-		_, err = s.DeleteDocument(ctx, "imported/a.yml", version)
-		require.NoError(t, err)
-
-		after, err := s.PackDigest(ctx)
-		require.NoError(t, err)
-		assert.NotEqual(t, before, after, "a shipped rule was removed, so the deployment no longer holds that pack")
-	})
-
-	t.Run("a purely authored change leaves the pack alone", func(t *testing.T) {
-		t.Parallel()
-		s := newStore(t)
-		ctx := t.Context()
-
-		version, err := s.Replace(ctx, []api.Document{
-			{Path: "imported/a.yml", Content: []byte("a"), Source: api.SourceVendored},
-		})
-		require.NoError(t, err)
-		before, err := s.PackDigest(ctx)
-		require.NoError(t, err)
-
-		// Adding their own rule must not make the deployment look out of date. This is the counterpart to the two cases above:
-		// recomputing on every mutation is only correct if it still reports the same pack when the shipped half did not move.
-		_, err = s.PutDocument(ctx, api.Document{Path: "authored/mine.yml", Content: []byte("mine")}, version)
-		require.NoError(t, err)
-
-		after, err := s.PackDigest(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, before, after, "the operator's own rule is not part of the pack")
-	})
+	}
 }
 
-// spec:rule-content/an-unrecognised-provenance-is-refused/content-declaring-an-unrecognised-provenance-is-not-stored
-// spec:rule-content/an-unrecognised-provenance-is-refused/a-stored-document-with-an-unrecognised-provenance-is-not-interpreted
-//
 // TestUnknownSource_IsRefused covers the asymmetry that makes an unrecognised provenance value worse than either known one: it is
 // not SourceAuthored, so attribution credits it upstream, and it is not SourceVendored, so the pack digest leaves it out. One
 // such row would therefore carry a licence claim about content nothing here can vouch for, which is the failure this change
@@ -307,4 +311,55 @@ func TestPackDigest_UnrecordedIsUnknownNotEmpty(t *testing.T) {
 	assert.Empty(t, digest, "an unrecorded pack identity is absent, not computed")
 	assert.NotEqual(t, api.PackDigest(nil), digest,
 		"absent must be distinguishable from the identity of a genuinely empty pack, or unknown reads as current")
+}
+
+// TestProvenanceMigration_LeavesExistingDocumentsIntact runs the REAL migration against a corpus that already holds documents,
+// which review pointed out nothing did: every other test here opens an already-migrated database, so the migration's behaviour on
+// existing content was asserted only by the dev-server QA and by nothing repeatable.
+//
+// The claim under test is the one the migration's own comment makes: documents stored before provenance existed survive, and are
+// recorded as having shipped with the product. That default is a statement of fact rather than a guess, since every document
+// predating the migration was written by the seed, and it is the direction that fails safely: over-crediting upstream is visible,
+// where the reverse silently drops a licence obligation.
+//
+// It rewinds by dropping the two columns and the migration's own version row, then re-applies the schema, so goose replays the
+// checked-in file rather than a copy of its DDL restated here. A copy would drift from the migration it claims to cover.
+func TestProvenanceMigration_LeavesExistingDocumentsIntact(t *testing.T) {
+	t.Parallel()
+	db := full.Open(t)
+	s := rulecontentmysql.New(db)
+	ctx := t.Context()
+
+	_, err := s.Replace(ctx, []api.Document{
+		{Path: "imported/a.yml", Content: []byte("title: A\n"), Source: api.SourceVendored},
+		{Path: "imported/process_creation/b.yml", Content: []byte("title: B\n"), Source: api.SourceVendored},
+	})
+	require.NoError(t, err)
+
+	// Rewind to the pre-migration shape: the columns gone, and goose no longer believing it has applied 00002.
+	for _, stmt := range []string{
+		"ALTER TABLE rule_corpus_documents DROP COLUMN source",
+		"ALTER TABLE rule_corpus_meta DROP COLUMN pack_digest",
+		"DELETE FROM rulecontent_goose_db_version WHERE version_id = 2",
+	} {
+		_, err := db.ExecContext(ctx, stmt)
+		require.NoError(t, err, "rewind step %q", stmt)
+	}
+
+	require.NoError(t, rulecontenttestkit.ApplySchema(ctx, db), "the migration must apply to a populated corpus")
+
+	docs, err := s.Documents(ctx)
+	require.NoError(t, err)
+	require.Len(t, docs, 2, "the migration must not remove documents it found")
+	for _, d := range docs {
+		assert.Equal(t, api.SourceVendored, d.Source,
+			"%s predates provenance, so it came with the product", d.Path)
+	}
+	assert.Equal(t, "title: A\n", string(docs[0].Content), "content must survive the migration unchanged")
+
+	// The pack identity is deliberately NOT invented for a corpus that predates it: this deployment holds some generation of
+	// shipped content and nothing recorded which, so the upgrade path reads the absence as "unknown, therefore not current".
+	digest, err := s.PackDigest(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, digest, "a migrated corpus must not claim a pack identity nobody recorded")
 }

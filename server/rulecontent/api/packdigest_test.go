@@ -119,10 +119,30 @@ func TestSource_ValidRejectsAnythingUnrecognised(t *testing.T) {
 	assert.Equal(t, "vendored", string(SourceVendored), "the stored value for content shipped with the product")
 	assert.Equal(t, "authored", string(SourceAuthored), "the stored value for content an operator wrote")
 
-	assert.True(t, SourceVendored.Valid())
-	assert.True(t, SourceAuthored.Valid())
-	for _, s := range []Source{"", "imported", "operator", "VENDORED", "unknown"} {
-		assert.False(t, s.Valid(), "%q must not be treated as a known source", s)
+	cases := []struct {
+		name  string
+		value Source
+		valid bool
+	}{
+		{"content shipped with the product", SourceVendored, true},
+		{"content an operator wrote", SourceAuthored, true},
+		// Empty is what a caller supplies when it does not state a provenance. It is a supported INPUT, resolved to vendored
+		// before storage, but it is never a stored value, so reading one back means something is wrong.
+		{"unstated", "", false},
+		// The path prefix the corpus happens to use. Named here because it is the value someone would reach for if they
+		// reintroduced path-derived provenance, which is the design this change rules out.
+		{"the storage prefix mistaken for a source", "imported", false},
+		{"a plausible synonym", "operator", false},
+		// Case matters: the column collates case-insensitively for lookups elsewhere in this schema, so a reader that folded
+		// case would accept a value nothing writes.
+		{"the right word in the wrong case", "VENDORED", false},
+		{"a value a later version might introduce", "community", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.valid, tc.value.Valid(), "Valid() for %q", tc.value)
+		})
 	}
 }
 

@@ -4,6 +4,8 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
@@ -173,21 +175,27 @@ func (s *Store) ReplaceIfEmpty(ctx context.Context, docs []api.Document) (bool, 
 // this corpus has to share. Bumping it last here would give this path a documents-then-meta order against Replace's
 // meta-then-documents, which is the ABBA deadlock that ordering was chosen to remove.
 func (s *Store) PutDocument(ctx context.Context, doc api.Document, expectedVersion int64) (int64, error) {
-	return s.withVersionBump(ctx, "put", expectedVersion, func(tx *sqlx.Tx) error {
+	return s.withVersionBump(ctx, "put", expectedVersion, func(tx *sqlx.Tx) (bool, error) {
+		// Read before writing, because after the upsert the row says "authored" whatever it said before. A path that held a
+		// SHIPPED document is the only case where this write shrinks the pack: a new path adds content that was never in it,
+		// and a path that was already the operator's was never counted.
+		wasVendored, err := pathHoldsVendored(ctx, tx, doc.Path)
+		if err != nil {
+			return false, err
+		}
 		// SourceAuthored is written here rather than taken from doc, and the caller cannot override it. A document arriving
 		// through this method came through the authoring surface, which is the fact being recorded; letting a caller declare its
 		// own provenance would make the licence attribution a claim rather than an observation.
 		//
 		// The source is updated on a replace as well as an insert, because writing over a vendored document makes it the
 		// operator's: they now own its content, and crediting upstream for what they wrote would be the bug this exists to fix.
-		_, err := tx.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?) AS new "+
 				"ON DUPLICATE KEY UPDATE content = new.content, source = new.source",
-			doc.Path, string(doc.Content), string(api.SourceAuthored))
-		if err != nil {
-			return fmt.Errorf("upsert rule corpus document %q: %w", doc.Path, err)
+			doc.Path, string(doc.Content), string(api.SourceAuthored)); err != nil {
+			return false, fmt.Errorf("upsert rule corpus document %q: %w", doc.Path, err)
 		}
-		return nil
+		return wasVendored, nil
 	})
 }
 
@@ -197,19 +205,24 @@ func (s *Store) PutDocument(ctx context.Context, doc api.Document, expectedVersi
 // NOT move. Both halves matter: a version bump with no content change would make every replica re-read the corpus to discover
 // nothing had happened, and reporting success would tell an operator who mistyped a path that they had deleted a rule.
 func (s *Store) DeleteDocument(ctx context.Context, path string, expectedVersion int64) (int64, error) {
-	return s.withVersionBump(ctx, "delete", expectedVersion, func(tx *sqlx.Tx) error {
+	return s.withVersionBump(ctx, "delete", expectedVersion, func(tx *sqlx.Tx) (bool, error) {
+		// Read before deleting, for the same reason as the upsert: afterwards there is no row to ask.
+		wasVendored, err := pathHoldsVendored(ctx, tx, path)
+		if err != nil {
+			return false, err
+		}
 		res, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_documents WHERE path = ?", path)
 		if err != nil {
-			return fmt.Errorf("delete rule corpus document %q: %w", path, err)
+			return false, fmt.Errorf("delete rule corpus document %q: %w", path, err)
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("delete rule corpus document %q rows affected: %w", path, err)
+			return false, fmt.Errorf("delete rule corpus document %q rows affected: %w", path, err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("%w: %s", api.ErrDocumentNotFound, path)
+			return false, fmt.Errorf("%w: %s", api.ErrDocumentNotFound, path)
 		}
-		return nil
+		return wasVendored, nil
 	})
 }
 
@@ -234,7 +247,9 @@ func (s *Store) DeleteDocument(ctx context.Context, path string, expectedVersion
 // UPDATE, because the comparison alone refuses a write that comes second. Two writers holding ONE version is the shape that
 // distinguishes them: with the lock, exactly one wins; without it both read the same version under REPEATABLE READ, both conclude
 // they are current, and both commit. Removing FOR UPDATE now fails that test with two documents stored where one was allowed.
-func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion int64, write func(tx *sqlx.Tx) error) (int64, error) {
+func (s *Store) withVersionBump(
+	ctx context.Context, op string, expectedVersion int64, write func(tx *sqlx.Tx) (bool, error),
+) (int64, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin tx for corpus %s: %w", op, err)
@@ -252,7 +267,8 @@ func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion 
 		return 0, fmt.Errorf("bump rule corpus version: %w", err)
 	}
 	version := current + 1
-	if err := write(tx); err != nil {
+	packMoved, err := write(tx)
+	if err != nil {
 		return 0, err
 	}
 	// Re-derived here rather than in each mutation, for the same reason the version bump is: neither single-document path can
@@ -261,10 +277,18 @@ func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion 
 	// longer holds the pack it did, and a digest left alone would keep asserting it does. That assertion is the one thing the
 	// digest exists to make, so a stale one is worse than none.
 	//
-	// Recomputed unconditionally instead of only when the vendored set moved. Deciding whether it moved means reading the
-	// documents anyway, so the branch would buy nothing but a way to be wrong.
-	if err := recordPackDigestWithin(ctx, tx); err != nil {
-		return 0, err
+	// Only when the shipped set actually moved, which is the common case NOT moving: an operator adding or editing a rule of
+	// their own leaves the pack alone. An earlier revision rescanned unconditionally and justified it by claiming that deciding
+	// whether the set moved meant reading the documents anyway. That was simply wrong, and review was right to call it: the
+	// answer comes from the ONE row being written, which the caller has already had to look at.
+	//
+	// The cost of getting this wrong is not theoretical. The rescan materialises every document's content inside the
+	// transaction holding the meta row's FOR UPDATE, which serialises every mutation of this corpus; at the validator's bound
+	// of 4096 documents times 64 KiB that is 256 MiB read under the one lock every other writer is waiting on.
+	if packMoved {
+		if err := recordPackDigestWithin(ctx, tx); err != nil {
+			return 0, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit corpus %s: %w", op, err)
@@ -288,6 +312,29 @@ func (s *Store) PackDigest(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("select rule corpus pack digest: %w", err)
 	}
 	return digest, nil
+}
+
+// pathHoldsVendored reports whether the corpus currently stores content that SHIPPED at this path.
+//
+// It answers exactly the question the two single-document mutations need: whether the change they are about to make moves the
+// shipped set, and therefore whether the pack identity has to be re-derived. A missing row is not vendored, which is the right
+// answer rather than a convenient one: adding a document the pack never contained does not change the pack.
+//
+// An unrecognised source is refused here too. Reporting "not vendored" for a value this version cannot interpret would let the
+// digest silently stop describing a document that may well be part of the pack.
+func pathHoldsVendored(ctx context.Context, tx *sqlx.Tx, path string) (bool, error) {
+	var stored string
+	switch err := tx.GetContext(ctx, &stored, "SELECT source FROM rule_corpus_documents WHERE path = ?", path); {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("read source of rule corpus document %q: %w", path, err)
+	}
+	source := api.Source(stored)
+	if !source.Valid() {
+		return false, fmt.Errorf("%w: %s has source %q", api.ErrUnknownSource, path, stored)
+	}
+	return source == api.SourceVendored, nil
 }
 
 // recordPackDigestWithin re-derives the pack identity from the documents the transaction will commit, and records it.
