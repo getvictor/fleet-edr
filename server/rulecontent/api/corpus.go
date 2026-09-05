@@ -17,8 +17,13 @@ import (
 type Document struct {
 	Path    string
 	Content []byte
-	// Source is where this document came from. Empty on a document being SUBMITTED, because a caller does not get to declare its
-	// own provenance: the store records it from the path the write arrived through. Populated on a document READ back.
+	// Source is where this document came from, and it is always populated on a document READ back.
+	//
+	// On the way IN it depends on the path, and the distinction is contractual rather than incidental. Through the AUTHORING
+	// surface it is ignored: that write records the operator's provenance itself, because how a document arrived is an
+	// observation rather than a claim the caller gets to make. A whole-corpus replacement may state it, and must be able to:
+	// that is the path a pack upgrade and a restore go through, and both have to be able to put back an operator's own rules as
+	// theirs rather than relabelling them. Empty there means "not stated", which is recorded as vendored.
 	Source Source
 }
 

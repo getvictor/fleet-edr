@@ -44,10 +44,8 @@ ALTER TABLE rule_corpus_meta
 -- +goose StatementEnd
 
 -- +goose Down
--- +goose StatementBegin
-ALTER TABLE rule_corpus_documents DROP COLUMN source;
--- +goose StatementEnd
-
--- +goose StatementBegin
-ALTER TABLE rule_corpus_meta DROP COLUMN pack_digest;
--- +goose StatementEnd
+-- Forward-only migrations (ADR-0009), and this one has a specific reason beyond the policy. Dropping `source` would discard which
+-- rules an operator wrote, and that is not recoverable by re-running the Up: every surviving row would come back defaulted to
+-- vendored, so an operator's own rules would be credited upstream again. That is the exact misattribution this migration exists to
+-- end. The rollback path is restore-from-backup; this Down is intentionally a no-op, as 00012_alerts_origin.sql is for the same
+-- reason.

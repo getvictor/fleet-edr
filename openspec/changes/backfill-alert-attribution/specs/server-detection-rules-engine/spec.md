@@ -12,10 +12,11 @@ This is non-overlap, not once-per-deployment, and the difference is worth statin
 
 It SHALL touch only alerts whose attribution is absent, so an attribution already recorded is never overwritten and repeating the pass changes nothing.
 
-Two classes of alert SHALL NOT be credited, and both are irreversible if credited wrongly:
+Three classes of alert SHALL NOT be credited, and each is irreversible if credited wrongly:
 
 - An alert raised by a rule this project wrote. The absence of attribution on those rows is meaningful: it distinguishes an alert raised before attribution existed from one raised by this project, and crediting them collapses the two.
 - An alert raised by a projection of an operator's own configuration, whose rule identifier names the operator's policy entry rather than a detection. Crediting those claims authorship of the operator's configuration.
+- An alert whose rule is now one the operator wrote themselves. A rule's identifier is its file stem, so an operator who writes their own version of a rule that shipped with the product keeps that identifier: the rule running now is theirs, while the historical alerts under that identifier were raised by the rule that shipped. Crediting those to the operator would state permanently that they wrote a detection they did not.
 
 The pass SHALL bound how much it rewrites in a single statement. Alerts carry no index that this predicate can use, so an unbounded rewrite would hold row locks across a full scan at start-up, on a system that may already be serving.
 
@@ -42,6 +43,12 @@ Crediting SHALL NOT delay the system becoming able to serve. Its cost scales wit
 - **GIVEN** an alert raised by a projection of an operator's own configuration, carrying no attribution
 - **WHEN** the pass runs
 - **THEN** the alert still carries no attribution, because its rule identifier names the operator's entry rather than a detection
+
+#### Scenario: A rule the operator has since written themselves is left alone
+
+- **GIVEN** an alert carrying no attribution, raised under an identifier whose rule is now content the operator wrote
+- **WHEN** the pass runs
+- **THEN** the alert still carries no attribution, because those alerts were raised by the rule that shipped under that identifier
 
 #### Scenario: A recorded attribution is not overwritten
 

@@ -43,13 +43,16 @@ func (r projectionRule) NonDetectionKind() rulesapi.NonDetectionKind {
 
 // spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/our-own-rule-is-left-alone
 // spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-projection-is-left-alone
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-rule-the-operator-has-since-written-themselves-is-left-alone
 //
-// TestVendoredOrigins covers the two exclusions that make this feature safe, and they are worth a test of their own because
-// neither is visible in the SQL the backfill runs: the statement credits whatever it is handed.
+// TestVendoredOrigins covers the three exclusions that make this feature safe, and they are worth a test of their own because
+// none is visible in the SQL the backfill runs: the statement credits whatever it is handed.
 //
-// Getting either wrong writes something irreversible into an operator's alert history. Crediting our own rules erases the
+// Getting any of them wrong writes something irreversible into an operator's alert history. Crediting our own rules erases the
 // distinction migration 00012 preserves between an alert raised before attribution existed and one raised by us. Crediting a
-// projection claims this project wrote the operator's blocklist entry, which is the bug review caught in #824.
+// projection claims this project wrote the operator's blocklist entry, which is the bug review caught in #824. Crediting a rule
+// the operator has since written themselves claims they wrote the shipped detection that used to hold that identifier, which is
+// #874's own failure pointed the other way and is the exclusion review caught on #878.
 func TestVendoredOrigins(t *testing.T) {
 	t.Parallel()
 
