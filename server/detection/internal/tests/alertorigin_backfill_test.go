@@ -56,8 +56,8 @@ func originOfAlert(t *testing.T, ctx context.Context, d *bootstrap.Detection, id
 	return origin
 }
 
-// spec:server-detection-rules-engine/alerts-raised-before-attribution-was-recorded-are-credited/an-uncredited-alert-from-a-vendored-rule-is-credited
-// spec:server-detection-rules-engine/alerts-raised-before-attribution-was-recorded-are-credited/an-attribution-already-recorded-is-never-overwritten
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/an-uncredited-alert-is-credited
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-recorded-attribution-is-not-overwritten
 //
 // TestBackfillAlertOrigins covers issue #827, and the two rows that must NOT change are the reason it exists as a test rather
 // than a one-line UPDATE.
@@ -224,7 +224,7 @@ func TestBackfillAlertOrigins_NoCoordinatorIsANoOp(t *testing.T) {
 	assert.False(t, ran)
 }
 
-// spec:server-detection-rules-engine/alerts-raised-before-attribution-was-recorded-are-credited/more-alerts-than-one-statement-rewrites-are-all-credited
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/more-alerts-than-one-batch-are-all-credited
 //
 // TestBackfillAlertOrigins_CreditsMoreThanOneBatch exercises the loop, which exists because the statement cannot use an index:
 // alerts has none on origin, and rule_id sits third in the dedup key, so one unbounded UPDATE would hold row locks across a table

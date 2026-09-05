@@ -34,10 +34,10 @@ import (
 // Only rows with an EMPTY origin are touched, so this cannot overwrite an attribution already recorded, and re-running it is a
 // no-op rather than a rewrite. That is what makes it safe to run on every boot of a replica that wins the leader lock.
 //
-// Known limit, worth stating because it is silent: the caller builds origins from the rules the deployment RUNS, so alerts from a
-// vendored rule that has since been removed from the corpus stay uncredited. Crediting them would mean keeping a record of every
-// rule that ever shipped, which is a larger thing than this pass, and the alternative of guessing an author is worse than leaving
-// the field empty.
+// Known limit, tracked as #871 and worth stating because it is silent: the caller builds origins from the rules the deployment
+// RUNS, so alerts from a vendored rule that has since been removed from the corpus stay uncredited. Crediting them would mean
+// keeping a record of every rule that ever shipped, which is a larger thing than this pass, and the alternative of guessing an
+// author is worse than leaving the field empty.
 func (s *Store) BackfillAlertOrigins(ctx context.Context, origins map[string]string) (int64, error) {
 	if len(origins) == 0 {
 		return 0, nil

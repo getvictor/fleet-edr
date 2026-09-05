@@ -41,8 +41,8 @@ func (r projectionRule) NonDetectionKind() rulesapi.NonDetectionKind {
 	return rulesapi.NonDetectionProjection
 }
 
-// spec:server-detection-rules-engine/alerts-raised-before-attribution-was-recorded-are-credited/an-alert-from-a-rule-this-project-wrote-is-left-alone
-// spec:server-detection-rules-engine/alerts-raised-before-attribution-was-recorded-are-credited/an-alert-from-a-projection-is-left-alone
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/our-own-rule-is-left-alone
+// spec:server-detection-rules-engine/alerts-from-vendored-rules-are-credited/a-projection-is-left-alone
 //
 // TestVendoredOrigins covers the two exclusions that make this feature safe, and they are worth a test of their own because
 // neither is visible in the SQL the backfill runs: the statement credits whatever it is handed.
