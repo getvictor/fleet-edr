@@ -21,11 +21,18 @@ func TestAttributionConstantsArePinned(t *testing.T) {
 
 	assert.Equal(t, "Fleet EDR", api.ProjectOrigin, "the credit shown for every rule this project wrote")
 	assert.Equal(t, "unknown upstream", api.UnknownOrigin, "the credit shown for a rule that declares a source but names nobody")
+	// Pinned as a LITERAL for the same reason as the others, and it is the one most easily missed: every other assertion about
+	// this value compares against the constant, so a rename would pass all of them while changing what is written to every
+	// alert row and returned by the API. The value is persisted and consumer-facing, not internal.
+	assert.Equal(t, "Locally authored", api.LocalOrigin, "the credit shown for a rule an operator wrote on their own deployment")
 
-	// The two populations have to stay distinguishable by their attribution, which is the job the value does on the alert view.
+	// The three populations have to stay distinguishable by their attribution, which is the job the value does on the alert view.
 	// Naming ourselves after an upstream project would satisfy every "is it non-empty" assertion while crediting the wrong party.
 	assert.NotEqual(t, api.ProjectOrigin, api.UnknownOrigin)
+	assert.NotEqual(t, api.ProjectOrigin, api.LocalOrigin, "our rules and the operator's must not read the same")
+	assert.NotEqual(t, api.UnknownOrigin, api.LocalOrigin)
 	assert.NotContains(t, api.ProjectOrigin, "SigmaHQ", "our own credit must not be confusable with the vendored corpus's")
+	assert.NotContains(t, api.LocalOrigin, "SigmaHQ", "an operator's own rule must not read as vendored content")
 }
 
 // spec:server-detection-rules-engine/an-alert-credits-the-author-of-the-rule-that-raised-it/a-rule-declaring-an-upstream-but-naming-no-author-is-not-claimed-as-ours

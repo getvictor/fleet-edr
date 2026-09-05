@@ -111,6 +111,14 @@ func TestVendoredDocuments_ExcludesAuthoredContent(t *testing.T) {
 // two values, which would attribute content on the strength of not understanding it.
 func TestSource_ValidRejectsAnythingUnrecognised(t *testing.T) {
 	t.Parallel()
+
+	// Pinned as LITERALS, because these are stored values and every other assertion here compares a constant with itself. A
+	// rename would pass all of them, and the damage is not theoretical now that an unrecognised source is REFUSED on read:
+	// every row an earlier version wrote would stop being interpretable, so the whole corpus of every existing deployment would
+	// fail to load. Changing either string is a migration, and this is where that has to be noticed.
+	assert.Equal(t, "vendored", string(SourceVendored), "the stored value for content shipped with the product")
+	assert.Equal(t, "authored", string(SourceAuthored), "the stored value for content an operator wrote")
+
 	assert.True(t, SourceVendored.Valid())
 	assert.True(t, SourceAuthored.Valid())
 	for _, s := range []Source{"", "imported", "operator", "VENDORED", "unknown"} {

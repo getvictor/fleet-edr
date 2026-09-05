@@ -1442,7 +1442,7 @@ components:
           type: string
           description: >-
             Who wrote the rule that fired, captured when the alert was raised. `Fleet EDR` for a rule this project authored,
-            `SigmaHQ, by <author>` for one from the imported corpus. Distinct from `source`, which names the subsystem that
+            `Locally authored` for one written on this deployment, and `SigmaHQ, by <author>` for one from the imported corpus. Distinct from `source`, which names the subsystem that
             raised the alert rather than the rule's author. Empty in two cases: an alert raised before the field existed, and an
             application-control block, whose rule id is the operator's own policy rather than a detection with an author.
           example: SigmaHQ, by Alejandro Ortuno, oscd.community
@@ -1639,9 +1639,10 @@ components:
         origin:
           type: string
           description: |
-            Where the rule came from. `Fleet EDR` for a rule written for this engine; for a rule vendored from an
-            upstream corpus, that project and the rule's own author, which is the attribution the corpus licence
-            carries (those rules are shipped and exported unmodified). Always present on this endpoint, so a
+            Where the rule came from. `Fleet EDR` for a rule written for this engine, `Locally authored` for one
+            written on this deployment; for a rule vendored from an upstream corpus, that project and the rule's own
+            author, which is the attribution the corpus licence carries (those rules are shipped and exported
+            unmodified). Always present on this endpoint, so a
             reader tells the two apart by the value rather than by its absence.
           example: "SigmaHQ, by Daniil Yugoslavskiy, oscd.community"
         techniques:
