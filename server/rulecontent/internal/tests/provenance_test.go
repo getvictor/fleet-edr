@@ -87,10 +87,13 @@ func TestPutDocument_OverwritingAShippedDocumentMakesItTheOperators(t *testing.T
 // TestPackDigest_CoversOnlyShippedContent is what stops an operator's own rules making a deployment look out of date, and stops
 // deleting one making it look current. The pack is what shipped; their rules are not part of it.
 //
-// Driven through Replace with a MIXED set rather than through PutDocument, and the distinction is why an earlier version of this
-// test proved nothing. Only the whole-corpus writers record a digest, so adding an authored document through PutDocument leaves
-// the recorded value untouched whatever the filter does: the test passed because nothing recomputed, not because authored content
-// was excluded. Mutation testing is how that surfaced.
+// Driven through Replace with a MIXED set, which pins the whole-corpus writers' own filtering rather than the recomputation the
+// single-document paths do. The two are worth separating: TestPackDigest_FollowsASingleDocumentMutation covers those.
+//
+// An earlier version of this test drove PutDocument, and proved nothing. At the time only the whole-corpus writers recorded a
+// digest, so the recorded value was untouched whatever the filter did: it passed because nothing recomputed, not because
+// authored content was excluded. Mutation testing is how that surfaced. PutDocument does recompute now, which is a fix that
+// arrived later and would have masked the original gap rather than closing it.
 func TestPackDigest_CoversOnlyShippedContent(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)

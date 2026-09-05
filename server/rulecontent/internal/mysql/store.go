@@ -23,7 +23,7 @@ func New(db *sqlx.DB) *Store { return &Store{db: db} }
 func (s *Store) Documents(ctx context.Context) ([]api.Document, error) {
 	var rows []corpusRow
 	if err := s.db.SelectContext(ctx, &rows,
-		"SELECT path, content, source FROM rule_corpus_documents ORDER BY path"); err != nil {
+		selectCorpusDocuments); err != nil {
 		return nil, fmt.Errorf("select rule corpus documents: %w", err)
 	}
 	return documentsFromRows(rows)
@@ -301,7 +301,7 @@ func (s *Store) PackDigest(ctx context.Context) (string, error) {
 func recordPackDigestWithin(ctx context.Context, tx *sqlx.Tx) error {
 	var rows []corpusRow
 	if err := tx.SelectContext(ctx, &rows,
-		"SELECT path, content, source FROM rule_corpus_documents ORDER BY path"); err != nil {
+		selectCorpusDocuments); err != nil {
 		return fmt.Errorf("read rule corpus documents for pack digest: %w", err)
 	}
 	docs, err := documentsFromRows(rows)
@@ -359,6 +359,11 @@ func documentsFromRows(rows []corpusRow) ([]api.Document, error) {
 	}
 	return docs, nil
 }
+
+// selectCorpusDocuments is the one definition of how a corpus is read. Both readers take it: the plain one and the one inside a
+// mutation's transaction. Two copies would drift as the stored shape changes, and the ordering is not incidental either, since
+// every replica has to load the same corpus in the same order.
+const selectCorpusDocuments = "SELECT path, content, source FROM rule_corpus_documents ORDER BY path"
 
 // corpusRow is one stored rule-content row, shared by the queries that read them so the column set is stated once.
 type corpusRow struct {
