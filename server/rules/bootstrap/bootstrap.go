@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 
@@ -679,6 +680,9 @@ const storedCorpusRoot = "."
 const (
 	maxDocumentBytes   = 64 * 1024
 	maxCorpusDocuments = 4096
+	// maxDocumentPathLen mirrors rule_corpus_documents.path, declared VARCHAR(255). Checked here so an over-long path is a
+	// refusal that names what to shorten rather than a database error surfacing as an internal failure.
+	maxDocumentPathLen = 255
 )
 
 // CorpusValidator validates a proposed rule-content document set by loading it, and satisfies rulecontentapi.Validator.
@@ -735,6 +739,14 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 		}
 		if !catalog.IsCorpusFile(d.Path) {
 			return nil, fmt.Errorf("%s: rule content must be a .yml file, or the loader will not read it", d.Path)
+		}
+		// Length against the STORAGE column, not against the rule id. The loader already bounds the identifier, which is the file
+		// stem, but the path carries directories too, so a perfectly canonical .yml with a long enough prefix passes every check
+		// here, parses fine, and then fails as a raw database error on write. That surfaces to an operator as an internal failure
+		// rather than as a refusal naming what to shorten, which is the difference this whole surface exists to make.
+		if n := utf8.RuneCountInString(d.Path); n > maxDocumentPathLen {
+			return nil, fmt.Errorf("%s: rule content path may be at most %d characters, and this is %d",
+				d.Path, maxDocumentPathLen, n)
 		}
 	}
 

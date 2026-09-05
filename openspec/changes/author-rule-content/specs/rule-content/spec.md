@@ -71,7 +71,7 @@ Rule identifiers SHALL be restricted to a character set over which case is the o
 
 The system SHALL refuse a submitted document whose path the loader does not inspect. Such a document would be stored, reported as successful, and never evaluated anywhere, which is the opposite of what an operator adding a rule intends.
 
-The system SHALL bound both the size of a submitted document and the number of documents in a corpus. The whole corpus is revalidated on every edit and reparsed by every replica whenever it changes, so an operator submitting nothing but valid rules could otherwise make both arbitrarily expensive, which is a denial of service requiring no malformed input.
+The system SHALL bound the size of a submitted document, the length of its path, and the number of documents in a corpus. The path bound matches what storage accepts, so a path too long to store is refused with a reason naming what to shorten rather than failing later as an internal error. The whole corpus is revalidated on every edit and reparsed by every replica whenever it changes, so an operator submitting nothing but valid rules could otherwise make both arbitrarily expensive, which is a denial of service requiring no malformed input.
 
 A proposed corpus in which NO document can run SHALL be refused, and that includes a proposal to store nothing at all. An empty corpus does not mean "no rules": the system keeps the rule set already in force when the store is empty, so rules an operator deleted would go on running while the deletion reported success, with no surface anywhere that would show it.
 
@@ -115,7 +115,7 @@ A refused document SHALL NOT be written, and SHALL NOT change the corpus version
 
 #### Scenario: An oversized corpus is refused
 
-- **GIVEN** a proposed corpus exceeding the permitted document size or document count
+- **GIVEN** a proposed corpus exceeding the permitted document size, path length, or document count
 - **WHEN** an operator submits it
 - **THEN** it is refused before it is parsed
 

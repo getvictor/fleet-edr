@@ -281,3 +281,22 @@ func TestCorpusValidator_BoundsTheCorpus(t *testing.T) {
 		assert.Contains(t, err.Error(), "at most")
 	})
 }
+
+// TestCorpusValidator_RefusesAnOverlongPath covers the gap between what the loader bounds and what storage accepts.
+//
+// The loader bounds the rule IDENTIFIER, which is the file stem. The path carries directories too, so a perfectly canonical .yml
+// with a long enough prefix passed every check, parsed fine, and then failed as a raw database error against the VARCHAR(255)
+// column. An operator would see an internal failure rather than a refusal naming what to shorten.
+func TestCorpusValidator_RefusesAnOverlongPath(t *testing.T) {
+	t.Parallel()
+	// A short, legal stem under a directory prefix that alone exceeds the column.
+	long := "authored/" + strings.Repeat("d/", 130) + "rule.yml"
+	require.Greater(t, len(long), maxDocumentPathLen, "fixture must actually exceed the bound it is testing")
+
+	_, err := CorpusValidator{}.Validate(t.Context(), []rulecontentapi.Document{
+		ruleDoc("imported/runnable.yml", "11111111-1111-4111-8111-111111111111", "Runnable", simpleDetection),
+		ruleDoc(long, "99999999-9999-4999-8999-999999999999", "Deep", simpleDetection),
+	})
+	require.Error(t, err, "a path storage cannot hold must be refused here, not by the database")
+	assert.Contains(t, err.Error(), "at most 255 characters")
+}

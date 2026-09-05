@@ -12,11 +12,15 @@ import (
 // easiest to get wrong: a typo in a path deletes nothing and, without this, reports success.
 var ErrDocumentNotFound = errors.New("rule content: document not found")
 
-// ErrRefused reports that a submitted document was rejected by validation and was NOT written.
+// ErrRefused reports that a proposed change was rejected by validation and was NOT written.
+//
+// A CHANGE rather than a document, because a deletion is refused through this too: what validation judges is the corpus a write
+// would produce, and removing a rule can be the change that breaks one. Naming a document here would make the message read as
+// nonsense for the delete path, which review caught.
 //
 // Wrapped around the validator's own reason rather than replacing it: the reason is what tells an operator which field to fix, and
 // re-phrasing it here would make this package a second, drifting account of why the loader refuses things.
-var ErrRefused = errors.New("rule content: document refused")
+var ErrRefused = errors.New("rule content: change refused")
 
 // ErrCorpusChanged reports that the corpus moved between being validated and being written, so the write was refused.
 //
