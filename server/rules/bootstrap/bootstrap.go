@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"path"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 
@@ -363,7 +366,7 @@ func (r *Rules) Reload(ctx context.Context) (int, error) {
 	//
 	// The real remedy is upstream: content that cannot run should never reach the store, which is what publish-time validation in
 	// #767 is for. Until then the conservative choice is the contract, and issue #851 carries the cross-replica question.
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
 	switch {
 	case len(docs) == 0:
 		r.logger.WarnContext(ctx, "rules: stored rule corpus is empty; keeping the rule set already in force", "version", version)
@@ -475,7 +478,7 @@ func loadCorpus(ctx context.Context, corpus rulecontentapi.Corpus, logger *slog.
 	if len(docs) == 0 {
 		return catalog.MustLoadImported()
 	}
-	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), catalog.CorpusRoot)
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
 	if err != nil {
 		logger.WarnContext(ctx, "rules: stored rule corpus failed to load; using the corpus embedded in this build",
 			"documents", len(docs), "err", err)
@@ -653,4 +656,183 @@ func ImportedRejections() []RefusedRule {
 		out = append(out, RefusedRule{File: r.File, Reason: r.Reason})
 	}
 	return out
+}
+
+// storedCorpusRoot is the root the STORED corpus is walked from, and it is deliberately not catalog.CorpusRoot.
+//
+// catalog.CorpusRoot ("imported") is where the corpus VENDORED into this build lives, and it stays the prefix the seed records
+// those documents under, because that is where they came from. But the store holds exactly the corpus and nothing else: the seed
+// filters to rule files, so there is no README or checksum manifest beside them to exclude. Walking the whole document set is
+// therefore the honest reading of "the stored corpus", and filtering it to one prefix would only mean that a document stored under
+// any other prefix is silently never loaded.
+//
+// Which is what operator authoring needs (issue #767). An operator's own rule has no business living under a directory called
+// "imported", and a prefix that quietly excludes content from evaluation is the worst way to find that out.
+//
+// Rule identity is unaffected: it comes from the file STEM, not the path, and checkDuplicateStems already collides across
+// directories by design. So a rule means the same thing wherever it is stored, and two documents claiming one identity are refused
+// whether they sit in the same directory or not.
+const storedCorpusRoot = "."
+
+// maxDocumentBytes and maxCorpusDocuments bound what a corpus may cost to validate and to load.
+//
+// Both are what a trust boundary needs and neither is what storage allows: the content column is MEDIUMTEXT (16 MiB) and nothing
+// caps the row count. A cap belongs here rather than in the schema because it is a policy about untrusted input, which is exactly
+// what the rulecontent migration said when it declined to make the column width the thing that bounds a rule.
+const (
+	maxDocumentBytes   = 64 * 1024
+	maxCorpusDocuments = 4096
+	// maxDocumentPathLen mirrors rule_corpus_documents.path, declared VARCHAR(255). Checked here so an over-long path is a
+	// refusal that names what to shorten rather than a database error surfacing as an internal failure.
+	maxDocumentPathLen = 255
+)
+
+// CorpusValidator validates a proposed rule-content document set by loading it, and satisfies rulecontentapi.Validator.
+//
+// The whole point is that it runs the SAME loader the corpus load runs, over the same root, so "valid" means exactly "this
+// deployment will load this". A validator that re-implemented the loader's checks would be a second notion of validity whose only
+// job is to agree with the first, and the direction it would drift is the dangerous one: content accepted at authoring time that
+// the deployment then refuses, which drops the whole rule set back to the copy embedded in the binary.
+//
+// It lives in `rules` rather than in `rulecontent` because the loader does: producing evaluatable rules is what `rules` is for.
+// `rulecontent` declares the port and `cmd` wires this in, so content still imports no other context's api (ADR-0021, arch-go.yml).
+type CorpusValidator struct{}
+
+// Compile-time proof that this satisfies the port rulecontent declares. Without it the two could drift apart silently until the
+// wiring in cmd/main failed to build, which is a long way from where the mistake would be.
+var _ rulecontentapi.Validator = CorpusValidator{}
+
+// Validate reports whether docs would load as a corpus.
+//
+// An error means refused. A rejection does NOT: the loader refuses individual rules it cannot map to this sensor's events, which
+// is an expected outcome for a corpus written for a fleet of sensors, and refusing the write over one would mean an operator
+// cannot store a rule that the deployment would simply not run. Those come back as warnings so the operator learns the rule will
+// not fire, rather than being told the document is broken.
+func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]string, error) {
+	// Every check below runs BEFORE the corpus is parsed, and each one exists because the loader would otherwise not object.
+	// They are separate functions rather than a run of conditions because each carries a different reason, and a reader tracing
+	// a refusal needs the reason more than the sequence.
+	for _, check := range []func([]rulecontentapi.Document) error{
+		boundCorpusSize,
+		checkDocumentPaths,
+		checkIdentifiersAgainstBuiltIns,
+		checkNoDocumentShadowsAnother,
+	} {
+		if err := check(docs); err != nil {
+			return nil, err
+		}
+	}
+
+	loaded, rejected, err := catalog.LoadCorpus(rulecontentapi.FS(docs), storedCorpusRoot)
+	if err != nil {
+		return nil, err
+	}
+	warnings := make([]string, 0, len(rejected))
+	for _, r := range rejected {
+		warnings = append(warnings, fmt.Sprintf("%s will not run: %s", r.File, r.Reason))
+	}
+	if len(loaded) == 0 {
+		// Nothing in the proposed corpus can run, which includes the proposal to store NOTHING. Both cases have the same
+		// consequence and it is not the obvious one: Reload and loadCorpus each keep the rule set already in force when the store
+		// is empty or unusable, so the rules an operator just deleted would go on running while the delete reported success. An
+		// empty corpus is therefore not "no rules", it is "the previous rules, indefinitely, with no way to tell".
+		return warnings, fmt.Errorf("no document in the proposed corpus can run: %d document(s), %d refused", len(docs), len(rejected))
+	}
+	return warnings, nil
+}
+
+// boundCorpusSize bounds what a corpus can cost to validate and to load.
+//
+// Parsing is the expensive part and this is a trust boundary. Storage takes MEDIUMTEXT, 16 MiB per row and unlimited rows, and
+// the cost of a corpus is not paid once: every edit revalidates the whole set, and every replica reparses it on each version
+// change. Without a bound an operator can make each of those arbitrarily slow using nothing but valid rules, which is a denial of
+// service that needs no malformed input at all.
+//
+// The numbers are far above real content and far below where it hurts, the same shape as the other limits here: the largest
+// vendored rule is a few kilobytes against a 64 KiB per-document cap, and the corpus is 69 rules against a 4096 cap.
+func boundCorpusSize(docs []rulecontentapi.Document) error {
+	if len(docs) > maxCorpusDocuments {
+		return fmt.Errorf("a corpus may hold at most %d documents, and this one has %d", maxCorpusDocuments, len(docs))
+	}
+	for _, d := range docs {
+		if len(d.Content) > maxDocumentBytes {
+			return fmt.Errorf("%s: rule content may be at most %d bytes, and this is %d", d.Path, maxDocumentBytes, len(d.Content))
+		}
+	}
+	return nil
+}
+
+// checkDocumentPaths refuses a path the loader would not read, or that storage cannot hold.
+//
+// All three refusals share one failure mode, which is why they sit together: the document is stored, the operator is told it
+// succeeded, and the rule is never evaluated anywhere.
+//
+//   - Canonical, because rulecontentapi.FS strips ONE leading slash while storage keys the raw path. "/authored/x.yml" and
+//     "authored/x.yml" are two rows that collapse to one entry when the loader is handed them, so validation sees a single
+//     document, both persist, and every later load silently drops whichever the map does not keep. fs.ValidPath also rejects
+//     "..", ".", the empty path and a trailing slash, which alias or escape the same way.
+//   - A .yml extension, because LoadCorpus walks only the paths IsCorpusFile accepts. A document at "authored/rule.yaml" is
+//     invisible to it, so validation would pass on the strength of the OTHER documents.
+//   - A length storage accepts. The loader bounds the rule IDENTIFIER, which is the file stem, but the path carries directories
+//     too, so a canonical .yml with a long enough prefix parses fine and then fails as a raw database error on write. That
+//     surfaces as an internal failure rather than a refusal naming what to shorten.
+func checkDocumentPaths(docs []rulecontentapi.Document) error {
+	for _, d := range docs {
+		if !fs.ValidPath(d.Path) {
+			return fmt.Errorf("%q: rule content needs a plain relative path, with no leading slash and no . or .. segments", d.Path)
+		}
+		if !catalog.IsCorpusFile(d.Path) {
+			return fmt.Errorf("%s: rule content must be a .yml file, or the loader will not read it", d.Path)
+		}
+		if n := utf8.RuneCountInString(d.Path); n > maxDocumentPathLen {
+			return fmt.Errorf("%s: rule content path may be at most %d characters, and this is %d", d.Path, maxDocumentPathLen, n)
+		}
+	}
+	return nil
+}
+
+// checkIdentifiersAgainstBuiltIns refuses a stored rule claiming an id this project already ships.
+//
+// The loader cannot see this. checkDuplicateStems compares a corpus only against ITSELF, and NewWithCorpus then appends the
+// result to the built-in list and checks nothing. So a corpus file named suspicious_exec.yml yields a second rule under an id
+// already in use, and because per-rule settings and alert deduplication are keyed by that id, tuning one would tune both and
+// their alerts would merge while the catalog listed two rules under one identity.
+//
+// Folded on both sides for the same reason the corpus-internal check is: the columns holding the id compare it
+// case-insensitively, so Suspicious_Exec collides just as surely as suspicious_exec.
+func checkIdentifiersAgainstBuiltIns(docs []rulecontentapi.Document) error {
+	builtIn := make(map[string]string, 16)
+	for _, id := range catalog.BuiltInRuleIDs() {
+		builtIn[strings.ToLower(id)] = id
+	}
+	for _, d := range docs {
+		stem := strings.TrimSuffix(path.Base(d.Path), path.Ext(d.Path))
+		if claimed, taken := builtIn[strings.ToLower(stem)]; taken {
+			return fmt.Errorf("%s: rule id %q is already the id of a rule this deployment ships (%q); "+
+				"per-rule settings and alert deduplication are keyed by it, so the two could not be told apart",
+				d.Path, stem, claimed)
+		}
+	}
+	return nil
+}
+
+// checkNoDocumentShadowsAnother refuses a document nested beneath another, which fs.ValidPath does not decide.
+//
+// "authored/a.yml" and "authored/a.yml/hidden.yml" are both perfectly valid relative paths and both store fine, but the
+// projection makes the first an ordinary FILE, so WalkDir stops there and never reaches the second. Validation would pass on the
+// strength of the parent alone, the child would be written, and it would never be evaluated: the same silent outcome as the
+// leading-slash alias, reached from the other direction.
+func checkNoDocumentShadowsAnother(docs []rulecontentapi.Document) error {
+	paths := make(map[string]struct{}, len(docs))
+	for _, d := range docs {
+		paths[d.Path] = struct{}{}
+	}
+	for _, d := range docs {
+		for dir := path.Dir(d.Path); dir != "." && dir != "/"; dir = path.Dir(dir) {
+			if _, shadowed := paths[dir]; shadowed {
+				return fmt.Errorf("%s: sits under %q, which is itself a rule file, so the loader would never reach it", d.Path, dir)
+			}
+		}
+	}
+	return nil
 }

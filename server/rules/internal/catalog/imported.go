@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -124,34 +125,73 @@ func sigmaFilesUnder(fsys fs.FS, dir string) ([]string, error) {
 	return names, nil
 }
 
-// checkDuplicateStems fails when two files resolve to one rule id, whatever directories they sit in.
-//
-// The id is the filename stem, so this is reachable only because the import walks a tree. Whichever file loaded second would
-// otherwise win silently, and which rule an operator gets would depend on directory order.
-// checkStemLengths refuses any filename whose stem cannot be stored as a rule identifier, before a single file is parsed.
+// checkStemIdentifiers refuses any filename whose stem cannot serve as a rule identifier, before a single file is parsed: one
+// too long to store, or one drawn from a character set over which identity cannot be decided outside the database.
 //
 // A preflight rather than a per-file check, because the per-file position made the refusal conditional on the file being otherwise
 // valid: a rule using an unsupported field is a SOFT rejection, recorded and skipped, and an over-long name reached that exit
 // first. The identifier here is an upstream filename, so this is the path a corpus re-sync introduces the problem through.
-func checkStemLengths(names []string) error {
+func checkStemIdentifiers(names []string) error {
 	for _, name := range names {
 		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
 		if err := checkRuleIDLength(name, id); err != nil {
 			return err
 		}
+		if !ruleIDCharset.MatchString(id) {
+			return fmt.Errorf("%s: rule id %q may contain only unaccented ASCII letters (a-z, A-Z), digits, underscore and hyphen",
+				name, id)
+		}
 	}
 	return nil
 }
 
+// ruleIDCharset is what a rule identifier may contain, and restricting it is what makes identity DECIDABLE rather than
+// approximated.
+//
+// The id is stored in columns collated utf8mb4_0900_ai_ci, so MySQL decides whether two ids are the same, and that collation is
+// accent-insensitive as well as case-insensitive: "naive_rule" and "naïve_rule" are one value to it. Reproducing that judgement in
+// Go means reproducing a UCA collation, and the obvious approximations do not: strings.ToLower handles case and leaves accents
+// alone, while NFD-and-strip-marks handles accents but still misses expansions such as the one that makes ss and the sharp s
+// equal. An approximation here fails in the direction that matters, letting through a pair the database will then merge.
+//
+// So the charset is narrowed instead of the comparison being widened. Over this set, case is the ONLY way two ids can differ and
+// still collate equal, which makes strings.ToLower an exact model of ai_ci rather than a hopeful one. Every rule in the vendored
+// corpus already conforms, and a rule identifier has no need of anything outside it.
+var ruleIDCharset = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// checkDuplicateStems fails when two files resolve to one rule id, whatever directories they sit in.
+//
+// The id is the filename stem, so this is reachable only because the import walks a tree. Whichever file loaded second would
+// otherwise win silently, and which rule an operator gets would depend on directory order.
 func checkDuplicateStems(names []string) error {
-	seen := make(map[string]string, len(names))
+	type claim struct{ file, id string }
+	seen := make(map[string]claim, len(names))
 	for _, name := range names {
 		id := strings.TrimSuffix(path.Base(name), path.Ext(name))
-		if prev, dup := seen[id]; dup {
-			return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
-				name, id, prev)
+		// Compared CASE-INSENSITIVELY, because Go is not what decides whether two rule ids are the same. The id is persisted in
+		// detection_rule_settings and alerts, whose rule_id columns take the schema default collation (utf8mb4_0900_ai_ci), and
+		// both carry a unique key over it: uk_detection_rule_settings_rule_scope and uk_alerts_dedup. So "Foo" and "foo" are one
+		// value to MySQL however distinct they look here.
+		//
+		// ToLower is EXACT here rather than approximate, and only because checkStemIdentifiers has already run: loadImported calls
+		// it first, deliberately. That collation is also accent-insensitive, which lowercasing does nothing about; over unaccented
+		// ASCII letters, digits, underscore and hyphen there are no accents to be insensitive to, so case is the only way two ids
+		// can differ and still collate equal.
+		//
+		// Comparing them as exact Go strings therefore lets a corpus load two rules that the rest of the system cannot tell
+		// apart: tuning one would tune the other, and their alerts would deduplicate into a single row. The corpus path column is
+		// deliberately BINARY (see the rulecontent migration), so storage will happily hold both files, which is what makes this
+		// reachable rather than theoretical once operators author content.
+		folded := strings.ToLower(id)
+		if prev, dup := seen[folded]; dup {
+			if prev.id == id {
+				return fmt.Errorf("%s: rule id %q is already claimed by %s; the later file would silently replace the earlier rule",
+					name, id, prev.file)
+			}
+			return fmt.Errorf("%s: rule id %q collides with %q claimed by %s; rule ids are compared case-insensitively where they "+
+				"are stored, so these two would share one row of per-rule settings and one alert dedup key", name, id, prev.id, prev.file)
 		}
-		seen[id] = name
+		seen[folded] = claim{file: name, id: id}
 	}
 	return nil
 }
@@ -178,17 +218,27 @@ func loadImported(fsys fs.FS, dir string) ([]api.Rule, []rejection, error) {
 		return nil, nil, err
 	}
 
-	// Stems are checked BEFORE anything is parsed. Recording an id only after a successful parse would let a rejected file leave
+	// Identifiers are checked BEFORE duplicates. checkDuplicateStems folds case to decide whether two ids collide, and that fold
+	// is only an exact model of the storage collation over the character set checkStemIdentifiers enforces. Run the other way
+	// round, the fold is asked about identifiers that can still carry accents, where it silently disagrees with the database.
+	// Review caught the comment claiming this ordering before the code actually had it.
+	//
+	// Swapping them back is a MISSED mutation, measured, and that is worth stating rather than leaving someone to assume the
+	// order is covered. Either way an accented corpus is refused: the fold does not notice it and the charset check then does, so
+	// only WHICH error comes back changes. The order earns its place by making the fold's precondition true where the fold is
+	// written, so a later change to either check cannot quietly invalidate the other, not by altering any outcome today.
+	// Both are preflights, run before anything is parsed, and that was NOT true of the length check at first, which was a defect.
+	// parseImported returns soft rejections for a rule using a field the binder cannot map, and those are recorded and skipped
+	// rather than failing the load. So an over-long filename whose rule also used an unsupported field exited early as a soft
+	// rejection, and the hard refusal this is meant to be never happened (issue #835 review). Checking the names up front means
+	// the refusal does not depend on what else is wrong with the file.
+	//
+	// Recording an id only after a successful parse would have the matching problem for duplicates: a rejected file would leave
 	// its id unclaimed, so a second file with the same stem would import and the collision would go unreported.
-	if err := checkDuplicateStems(names); err != nil {
+	if err := checkStemIdentifiers(names); err != nil {
 		return nil, nil, err
 	}
-	// Length is a preflight for the same reason, and it was NOT one at first, which was a defect. parseImported returns soft
-	// rejections for a rule using a field the binder cannot map, and those are recorded and skipped rather than failing the load.
-	// So an over-long filename whose rule also used an unsupported field exited early as a soft rejection, and the hard refusal
-	// this is meant to be never happened (issue #835 review). Checking the names up front means the refusal does not depend on
-	// what else is wrong with the file.
-	if err := checkStemLengths(names); err != nil {
+	if err := checkDuplicateStems(names); err != nil {
 		return nil, nil, err
 	}
 

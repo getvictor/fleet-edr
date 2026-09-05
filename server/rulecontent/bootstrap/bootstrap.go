@@ -41,7 +41,23 @@ func New(deps Deps) (*RuleContent, error) {
 }
 
 // Corpus exposes the published read surface consumers hold.
-func (r *RuleContent) Corpus() api.Corpus { return r.store }
+func (r *RuleContent) Corpus() api.Corpus { return readOnlyCorpus{inner: r.store} }
+
+// readOnlyCorpus narrows the store to the read surface, and the wrapper is the point rather than ceremony.
+//
+// Returning the store directly typed as api.Corpus does NOT make the write methods unreachable: the dynamic type still carries
+// PutDocument and DeleteDocument, so any consumer holding a Corpus can type-assert to api.Writer, or to a local interface with
+// the same shape, and persist whatever it likes. Every guarantee the authoring path makes about validation would then hold only
+// for callers that chose to go through it, which is not a guarantee at all.
+//
+// A struct with only the two read methods has nothing to assert to. The write surface reaches its caller by being handed over
+// deliberately, not by being discoverable on something handed over for another purpose.
+type readOnlyCorpus struct{ inner api.Corpus }
+
+func (c readOnlyCorpus) Documents(ctx context.Context) ([]api.Document, error) {
+	return c.inner.Documents(ctx)
+}
+func (c readOnlyCorpus) Version(ctx context.Context) (int64, error) { return c.inner.Version(ctx) }
 
 // Replace installs a corpus wholesale, returning the version it now carries.
 //
