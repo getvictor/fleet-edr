@@ -28,6 +28,24 @@ A document written through the authoring surface SHALL be recorded as the operat
 - **WHEN** an operator writes over it
 - **THEN** it is recorded as written by an operator, because it now is
 
+### Requirement: An unrecognised provenance is refused
+
+The system SHALL refuse rule content whose recorded provenance it does not recognise, both when storing it and when reading it back, rather than interpreting it as either known provenance.
+
+An unrecognised value is not "written by an operator", so attribution would credit it upstream, and it is not "shipped with the product", so the pack identity would exclude it. Treating one as shipped would state a licence claim about content the system cannot vouch for.
+
+#### Scenario: Content declaring an unrecognised provenance is not stored
+
+- **GIVEN** a corpus holding rule content
+- **WHEN** a replacement declares a provenance the system does not recognise
+- **THEN** the replacement is refused and the stored content is unchanged
+
+#### Scenario: A stored document with an unrecognised provenance is not interpreted
+
+- **GIVEN** a stored document whose recorded provenance the system does not recognise
+- **WHEN** the corpus is read
+- **THEN** the read fails rather than crediting the document to an upstream project
+
 ### Requirement: Attribution follows recorded provenance
 
 The system SHALL credit a rule according to where its document came from.
@@ -77,3 +95,9 @@ The identity SHALL be derived from the shipped content itself, so that a deploym
 - **GIVEN** a corpus holding shipped content
 - **WHEN** an operator adds a rule of their own
 - **THEN** the pack identity is unchanged, because the shipped content is unchanged
+
+#### Scenario: Changing a shipped rule changes the pack identity
+
+- **GIVEN** a corpus holding shipped content
+- **WHEN** an operator writes their own version of one of those rules, or deletes one
+- **THEN** the pack identity changes, because the corpus no longer holds the shipped content it did

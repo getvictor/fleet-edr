@@ -21,20 +21,12 @@ func New(db *sqlx.DB) *Store { return &Store{db: db} }
 
 // Documents returns every document in the corpus, ordered by path so every replica loads the same corpus in the same order.
 func (s *Store) Documents(ctx context.Context) ([]api.Document, error) {
-	var rows []struct {
-		Path    string `db:"path"`
-		Content string `db:"content"`
-		Source  string `db:"source"`
-	}
+	var rows []corpusRow
 	if err := s.db.SelectContext(ctx, &rows,
 		"SELECT path, content, source FROM rule_corpus_documents ORDER BY path"); err != nil {
 		return nil, fmt.Errorf("select rule corpus documents: %w", err)
 	}
-	docs := make([]api.Document, 0, len(rows))
-	for _, r := range rows {
-		docs = append(docs, api.Document{Path: r.Path, Content: []byte(r.Content), Source: api.Source(r.Source)})
-	}
-	return docs, nil
+	return documentsFromRows(rows)
 }
 
 // Version returns the corpus version counter.
@@ -94,6 +86,14 @@ func (s *Store) Replace(ctx context.Context, docs []api.Document) (int64, error)
 // Fixing the ORDER rather than retrying the deadlock, because a retry would paper over a cycle this code creates itself. The
 // deadlock retry that other stores here use is for contention this code does not control.
 func replaceWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document) (int64, error) {
+	// Refused BEFORE the first row changes, and before the version moves, so a corpus carrying a source this version cannot
+	// interpret is rejected whole rather than half-applied. Empty is not checked here: it is a supported input meaning "the
+	// caller did not say", which withDefaultSource resolves to vendored below.
+	for _, d := range docs {
+		if d.Source != "" && !d.Source.Valid() {
+			return 0, fmt.Errorf("%w: %s declares %q", api.ErrUnknownSource, d.Path, d.Source)
+		}
+	}
 	if _, err := tx.ExecContext(ctx, "UPDATE rule_corpus_meta SET version = version + 1 WHERE id = 1"); err != nil {
 		return 0, fmt.Errorf("bump rule corpus version: %w", err)
 	}
@@ -104,17 +104,13 @@ func replaceWithin(ctx context.Context, tx *sqlx.Tx, docs []api.Document) (int64
 	if _, err := tx.ExecContext(ctx, "DELETE FROM rule_corpus_documents"); err != nil {
 		return 0, fmt.Errorf("clear rule corpus: %w", err)
 	}
-	for _, d := range docs {
-		// A document with no source declared is vendored: this path is the seed and the whole-corpus publish, both of which carry
-		// content shipped with the product. A caller that has one keeps it, which is what lets a corpus be restored with its
-		// provenance intact rather than relabelled by the restore.
-		source := d.Source
-		if source == "" {
-			source = api.SourceVendored
-		}
+	// Defaulted through the one helper the digest also uses, rather than inline here. Two copies of "empty means vendored" is the
+	// semantic duplication this codebase is most prone to, and the drift is silent in the worst direction: the rows would say one
+	// thing about provenance and the recorded pack identity another.
+	for _, d := range withDefaultSource(docs) {
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO rule_corpus_documents (path, content, source) VALUES (?, ?, ?)",
-			d.Path, string(d.Content), string(source)); err != nil {
+			d.Path, string(d.Content), string(d.Source)); err != nil {
 			return 0, fmt.Errorf("insert rule corpus document %q: %w", d.Path, err)
 		}
 	}
@@ -259,6 +255,17 @@ func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion 
 	if err := write(tx); err != nil {
 		return 0, err
 	}
+	// Re-derived here rather than in each mutation, for the same reason the version bump is: neither single-document path can
+	// forget it. Both of them can change the VENDORED set even though neither looks like it does. PutDocument over a shipped
+	// document reclassifies that row as authored, and DeleteDocument can remove a shipped one; in both cases the corpus no
+	// longer holds the pack it did, and a digest left alone would keep asserting it does. That assertion is the one thing the
+	// digest exists to make, so a stale one is worse than none.
+	//
+	// Recomputed unconditionally instead of only when the vendored set moved. Deciding whether it moved means reading the
+	// documents anyway, so the branch would buy nothing but a way to be wrong.
+	if err := recordPackDigestWithin(ctx, tx); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit corpus %s: %w", op, err)
 	}
@@ -270,12 +277,38 @@ func (s *Store) withVersionBump(ctx context.Context, op string, expectedVersion 
 // Empty is a real answer rather than a missing one: a corpus seeded before provenance was recorded holds SOME vendored
 // generation and nothing wrote down which, so reporting a digest would be inventing one. A caller comparing against the build's
 // pack has to treat empty as "unknown, therefore not known to be current" rather than as a mismatch or a match.
+//
+// No production caller yet: the writes record the digest, and the surface that READS it to decide whether a deployment is running
+// the current pack is the upgrade path (issue #768). It ships here rather than with that work because the value is only
+// trustworthy if it has been recorded from the first write onward; adding the reader later is additive, whereas backfilling a
+// digest nobody wrote is not possible.
 func (s *Store) PackDigest(ctx context.Context) (string, error) {
 	var digest string
 	if err := s.db.GetContext(ctx, &digest, "SELECT pack_digest FROM rule_corpus_meta WHERE id = 1"); err != nil {
 		return "", fmt.Errorf("select rule corpus pack digest: %w", err)
 	}
 	return digest, nil
+}
+
+// recordPackDigestWithin re-derives the pack identity from the documents the transaction will commit, and records it.
+//
+// It reads the rows back rather than taking them from the caller because the single-document mutations only know their own
+// document: what the digest describes is the whole vendored set AFTER the change, which only the table has. The read is inside
+// the caller's transaction, so it sees that change and nothing else's.
+//
+// An unknown source is refused here too, and deliberately so rather than skipped: the mutation would otherwise be the one path
+// that can commit while a row this version cannot interpret sits in the corpus it just re-identified.
+func recordPackDigestWithin(ctx context.Context, tx *sqlx.Tx) error {
+	var rows []corpusRow
+	if err := tx.SelectContext(ctx, &rows,
+		"SELECT path, content, source FROM rule_corpus_documents ORDER BY path"); err != nil {
+		return fmt.Errorf("read rule corpus documents for pack digest: %w", err)
+	}
+	docs, err := documentsFromRows(rows)
+	if err != nil {
+		return err
+	}
+	return setPackDigest(ctx, tx, api.PackDigest(api.VendoredDocuments(docs)))
 }
 
 // setPackDigest records which vendored pack the corpus now holds, inside the caller's transaction.
@@ -305,4 +338,31 @@ func withDefaultSource(docs []api.Document) []api.Document {
 		out = append(out, d)
 	}
 	return out
+}
+
+// documentsFromRows turns stored rows into documents, refusing any whose provenance this version does not recognise.
+//
+// One implementation for both readers. Written twice it was already drifting in its error type alone, and the mutation run said
+// so: the same guard appearing twice means a mutant cannot be aimed at it, which is the same ambiguity a maintainer would face.
+//
+// The refusal is on the way OUT, and it guards something the write-side check cannot. That one stops THIS version from storing a
+// value it does not understand; this one stops a row written by a version that knew more, or edited by hand, from being
+// half-interpreted: credited to upstream by attribution while excluded from the pack digest.
+func documentsFromRows(rows []corpusRow) ([]api.Document, error) {
+	docs := make([]api.Document, 0, len(rows))
+	for _, r := range rows {
+		source := api.Source(r.Source)
+		if !source.Valid() {
+			return nil, fmt.Errorf("%w: %s has source %q", api.ErrUnknownSource, r.Path, r.Source)
+		}
+		docs = append(docs, api.Document{Path: r.Path, Content: []byte(r.Content), Source: source})
+	}
+	return docs, nil
+}
+
+// corpusRow is one stored rule-content row, shared by the queries that read them so the column set is stated once.
+type corpusRow struct {
+	Path    string `db:"path"`
+	Content string `db:"content"`
+	Source  string `db:"source"`
 }

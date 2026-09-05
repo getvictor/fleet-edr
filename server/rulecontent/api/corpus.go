@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"sort"
 	"strings"
@@ -86,3 +87,12 @@ const (
 func (s Source) Valid() bool {
 	return s == SourceVendored || s == SourceAuthored
 }
+
+// ErrUnknownSource reports a provenance value this version does not recognise, on the way in or on the way out.
+//
+// Refusing is the only safe direction, and the asymmetry is why. An unrecognised value is not SourceAuthored, so attribution
+// treats it as vendored and credits the upstream project; it is also not SourceVendored, so the pack digest excludes it. One
+// unknown row would therefore be credited to SigmaHQ while being left out of the identity of the pack it is claimed to belong to.
+// The first half is a licence claim about content nobody here can vouch for, which is the failure this whole change exists to
+// prevent, so a corpus carrying one is refused rather than half-interpreted.
+var ErrUnknownSource = errors.New("rule content: unknown document source")
