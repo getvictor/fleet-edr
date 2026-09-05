@@ -741,7 +741,7 @@ var _ rulecontentapi.Validator = CorpusValidator{}
 // is an expected outcome for a corpus written for a fleet of sensors, and refusing the write over one would mean an operator
 // cannot store a rule that the deployment would simply not run. Those come back as warnings so the operator learns the rule will
 // not fire, rather than being told the document is broken.
-func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]string, error) {
+func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Document) ([]rulecontentapi.ContentWarning, error) {
 	// Every check below runs BEFORE the corpus is parsed, and each one exists because the loader would otherwise not object.
 	// They are separate functions rather than a run of conditions because each carries a different reason, and a reader tracing
 	// a refusal needs the reason more than the sequence.
@@ -760,9 +760,42 @@ func (CorpusValidator) Validate(_ context.Context, docs []rulecontentapi.Documen
 	if err != nil {
 		return nil, err
 	}
-	warnings := make([]string, 0, len(rejected))
+	// Each warning carries the document it is about, so the authoring path can report the ones concerning the change it is making
+	// (#876). Validation is corpus-wide and that is deliberate; attributing its findings to an unrelated write was not.
+	warnings := make([]rulecontentapi.ContentWarning, 0, len(rejected))
 	for _, r := range rejected {
-		warnings = append(warnings, fmt.Sprintf("%s will not run: %s", r.File, r.Reason))
+		warnings = append(warnings, rulecontentapi.ContentWarning{
+			Path:    r.File,
+			Message: fmt.Sprintf("%s will not run: %s", r.File, r.Reason),
+		})
+	}
+
+	// A loaded rule cannot say which path it came from, so the breadth warnings below have to be mapped back through the id.
+	// Both sides go through catalog.RuleIDForPath, which is the point: if the two derived the id independently they would agree
+	// until one changed, and then this lookup would simply miss and the warning would carry no path, which WarningsFor then drops.
+	// An operator's own warning disappearing silently is a worse outcome than a loud mismatch.
+	pathByStem := make(map[string]string, len(docs))
+	for _, d := range docs {
+		pathByStem[catalog.RuleIDForPath(d.Path)] = d.Path
+	}
+	// A rule that matches everything is the foot-gun issue #767 names: it fires on every event of its type, so it buries real
+	// detections and costs evaluation on every batch to tell an operator nothing.
+	//
+	// Warned about rather than refused, and that is the design rather than caution. An operator writing a deliberately broad
+	// hunting rule is doing something legitimate, and refusing it would substitute our judgement for theirs on the one question
+	// we cannot answer, which is whether they meant it.
+	//
+	// Worded as "matches every event carrying its fields" because that is what it is: a field test still requires the field to be
+	// PRESENT. For an exec event's Image that is a distinction without a difference; for a field only some events carry, it is not.
+	for _, loadedRule := range loaded {
+		for _, searchName := range api.UndiscriminatingSearchesOf(loadedRule) {
+			warnings = append(warnings, rulecontentapi.ContentWarning{
+				Path: pathByStem[loadedRule.ID()],
+				Message: fmt.Sprintf(
+					"%s: search %q matches every event carrying its fields, so it discriminates nothing",
+					loadedRule.ID(), searchName),
+			})
+		}
 	}
 	if len(loaded) == 0 {
 		// Nothing in the proposed corpus can run, which includes the proposal to store NOTHING. Both cases have the same
@@ -839,7 +872,7 @@ func checkIdentifiersAgainstBuiltIns(docs []rulecontentapi.Document) error {
 		builtIn[strings.ToLower(id)] = id
 	}
 	for _, d := range docs {
-		stem := strings.TrimSuffix(path.Base(d.Path), path.Ext(d.Path))
+		stem := catalog.RuleIDForPath(d.Path)
 		if claimed, taken := builtIn[strings.ToLower(stem)]; taken {
 			return fmt.Errorf("%s: rule id %q is already the id of a rule this deployment ships (%q); "+
 				"per-rule settings and alert deduplication are keyed by it, so the two could not be told apart",

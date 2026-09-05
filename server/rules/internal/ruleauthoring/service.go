@@ -61,7 +61,11 @@ func (s *Service) Put(
 	if strings.TrimSpace(reason) == "" {
 		return 0, nil, ErrReasonRequired
 	}
-	version, warnings, err := s.author.Put(ctx, doc)
+	version, found, err := s.author.Put(ctx, doc)
+	// Flattened to messages here, and this is the right boundary for it. The lifecycle narrowed the findings to the document
+	// under change, so the path is no longer carrying information: both consumers downstream, the HTTP response and the audit
+	// row, are already about that one document.
+	warnings := rulecontentapi.WarningMessages(found)
 	if err != nil {
 		return 0, warnings, err
 	}
@@ -76,7 +80,8 @@ func (s *Service) Delete(
 	if strings.TrimSpace(reason) == "" {
 		return 0, nil, ErrReasonRequired
 	}
-	version, warnings, err := s.author.Delete(ctx, path)
+	version, found, err := s.author.Delete(ctx, path)
+	warnings := rulecontentapi.WarningMessages(found)
 	if err != nil {
 		return 0, warnings, err
 	}
@@ -89,7 +94,11 @@ func (s *Service) Delete(
 // Not audited, and that is not an oversight: nothing happened to the thing being audited. It is also why this takes no reason.
 // An operator checking their work before publishing has nothing to justify yet.
 func (s *Service) Check(ctx context.Context, doc rulecontentapi.Document) ([]string, error) {
-	return s.validate.Validate(ctx, []rulecontentapi.Document{doc})
+	// A check validates the submitted document ALONE rather than the corpus it would join, so every finding is already about it
+	// and there is nothing to narrow. That is also why a check cannot report a collision with the stored corpus: it answers "is
+	// this document itself loadable", and Put answers the corpus question.
+	found, err := s.validate.Validate(ctx, []rulecontentapi.Document{doc})
+	return rulecontentapi.WarningMessages(found), err
 }
 
 // record writes the audit row for a change that took effect.

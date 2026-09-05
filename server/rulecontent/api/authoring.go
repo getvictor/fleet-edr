@@ -51,6 +51,46 @@ type Writer interface {
 	DeleteDocument(ctx context.Context, path string, expectedVersion int64) (int64, error)
 }
 
+// ContentWarning is one advisory finding about ONE document.
+//
+// Carrying the path is what makes the warning attributable, and its absence was a real defect (#876). Validation is corpus-wide
+// by design, so a validator handed a proposed corpus reports findings about every document in it, including the ones the operator
+// did not touch. With warnings as bare strings a caller could not tell those apart without matching on message text, so an
+// operator writing one rule was told about unrelated files, and worse, the audit row for their change recorded findings about
+// documents they never edited.
+//
+// A reviewer reading an audit row has to be able to trust that what it says is about the change it names. That is the whole
+// reason this is a struct rather than a string.
+type ContentWarning struct {
+	// Path is the document the finding is about, as stored.
+	Path string
+	// Message is what to tell the operator, in the words of whatever decided it.
+	Message string
+}
+
+// WarningsFor returns the warnings about one document, dropping findings about every other.
+//
+// Lives here rather than in each caller because "which warnings belong to this change" is a property of the contract, not a
+// judgement each consumer should make differently.
+func WarningsFor(warnings []ContentWarning, path string) []ContentWarning {
+	var out []ContentWarning
+	for _, w := range warnings {
+		if w.Path == path {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// WarningMessages flattens warnings to their messages, for a caller that has already decided which ones it is reporting.
+func WarningMessages(warnings []ContentWarning) []string {
+	out := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		out = append(out, w.Message)
+	}
+	return out
+}
+
 // Validator decides whether a proposed corpus may replace the one in force.
 //
 // It takes the whole document SET rather than the one document being written, and that is the correction that matters here. A
@@ -72,7 +112,10 @@ type Writer interface {
 type Validator interface {
 	// Validate reports whether docs would load as a corpus. A non-nil error means refused, and its message is shown to the
 	// operator. Warnings are advisory: a corpus with warnings is still written.
-	Validate(ctx context.Context, docs []Document) (warnings []string, err error)
+	//
+	// Warnings cover the WHOLE proposed corpus, because that is what was validated, and each carries the document it is about so
+	// a caller can report the ones concerning the change it is making.
+	Validate(ctx context.Context, docs []Document) (warnings []ContentWarning, err error)
 }
 
 // Author is the authoring lifecycle: validate a proposed change, then apply it.
@@ -88,8 +131,9 @@ type Validator interface {
 // delete named a path that holds nothing, and ErrCorpusChanged when the corpus moved between validation and the write, which the
 // caller resolves by retrying rather than by reporting a failure.
 type Author interface {
-	// Put creates or replaces the document at doc.Path.
-	Put(ctx context.Context, doc Document) (version int64, warnings []string, err error)
-	// Delete removes the document at path.
-	Delete(ctx context.Context, path string) (version int64, warnings []string, err error)
+	// Put creates or replaces the document at doc.Path. Warnings are about that document only.
+	Put(ctx context.Context, doc Document) (version int64, warnings []ContentWarning, err error)
+	// Delete removes the document at path. Warnings are about that document only, which in practice means none: a document that
+	// is gone has nothing left to warn about.
+	Delete(ctx context.Context, path string) (version int64, warnings []ContentWarning, err error)
 }

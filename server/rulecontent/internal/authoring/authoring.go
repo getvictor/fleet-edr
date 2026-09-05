@@ -37,14 +37,21 @@ func New(corpus api.Corpus, writer api.Writer, validator api.Validator) (*Servic
 //
 // Returns the new corpus version and any advisory warnings. A refusal comes back wrapped in api.ErrRefused with the validator's
 // own reason, and nothing is written.
-func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []string, error) {
+func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []api.ContentWarning, error) {
 	proposed, base, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
 		return upsert(docs, doc)
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	warnings, err := s.validator.Validate(ctx, proposed)
+	all, err := s.validator.Validate(ctx, proposed)
+	// Narrowed to the document being written. Validation is corpus-wide, so `all` describes every document in the proposed set
+	// including the ones this change did not touch; reporting those would tell an operator about files they cannot fix and, since
+	// the caller records warnings on the audit row, would attribute them to a change they are not about (#876).
+	//
+	// The corpus-wide findings are not lost, they are simply not this change's. Somewhere reporting corpus health is where they
+	// belong.
+	warnings := api.WarningsFor(all, doc.Path)
 	if err != nil {
 		return 0, warnings, fmt.Errorf("%w: %w", api.ErrRefused, err)
 	}
@@ -60,7 +67,7 @@ func (s *Service) Put(ctx context.Context, doc api.Document) (int64, []string, e
 // Deleting is validated for the same reason writing is, which is less obvious and worth stating: removing a rule can be the thing
 // that breaks a corpus, because what remains still has to load. Reporting api.ErrDocumentNotFound when the path holds nothing
 // comes from the writer, so a delete of something absent is refused before it can move the version.
-func (s *Service) Delete(ctx context.Context, path string) (int64, []string, error) {
+func (s *Service) Delete(ctx context.Context, path string) (int64, []api.ContentWarning, error) {
 	var found bool
 	proposed, base, err := s.proposed(ctx, func(docs []api.Document) []api.Document {
 		kept := make([]api.Document, 0, len(docs))
@@ -81,7 +88,11 @@ func (s *Service) Delete(ctx context.Context, path string) (int64, []string, err
 		// the writer would return, so a caller branches on one thing either way.
 		return 0, nil, fmt.Errorf("%w: %s", api.ErrDocumentNotFound, path)
 	}
-	warnings, err := s.validator.Validate(ctx, proposed)
+	all, err := s.validator.Validate(ctx, proposed)
+	// Narrowed the same way, which for a delete means empty: the proposed corpus no longer contains this path, so nothing in the
+	// findings is about it. That is the correct answer rather than a degenerate one. A deletion that BREAKS the corpus is an
+	// error, not a warning, and comes back through err below.
+	warnings := api.WarningsFor(all, path)
 	if err != nil {
 		return 0, warnings, fmt.Errorf("%w: %w", api.ErrRefused, err)
 	}
