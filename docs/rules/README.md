@@ -26,7 +26,7 @@ Some values stay in Go on purpose. A parameter that bounds **retrieval** rather 
 
 A rule's identifier is its **file stem**: `keychain_dump.yml` defines the rule `keychain_dump`. The identifier is not written inside the file, so renaming the file renames the rule, and everything keyed by it (per-rule mode and severity overrides, alert deduplication, exclusions) follows the new name rather than the old one.
 
-Three constraints apply, and a corpus that breaks any of them is refused as a whole rather than partially loaded.
+These constraints apply, and a corpus that breaks any of them is refused as a whole rather than partially loaded.
 
 **Letters, digits, underscore and hyphen only.** Not because anything else is hard to parse, but because identifiers are stored in columns whose collation is case- and accent-insensitive. Over a wider character set, `naive_rule` and `naïve_rule` are one identifier to the database and two to the corpus, and there is no comparison that can be written here that reliably agrees with the database's. Narrowing the character set makes the question decidable instead.
 
